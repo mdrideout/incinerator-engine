@@ -88,6 +88,11 @@ pub const Renderer = struct {
     window: *c.SDL_Window,
     pipeline: *c.SDL_GPUGraphicsPipeline,
 
+    // Depth buffer for proper 3D rendering (closer pixels occlude farther ones)
+    depth_texture: *c.SDL_GPUTexture,
+    depth_width: u32,
+    depth_height: u32,
+
     // Frame state (valid between beginFrame and endFrame)
     current_cmd: ?*c.SDL_GPUCommandBuffer = null,
     current_render_pass: ?*c.SDL_GPURenderPass = null,
@@ -117,20 +122,38 @@ pub const Renderer = struct {
         }
 
         // Create the graphics pipeline (shaders + vertex layout + render state)
-        const pipeline = try createPipeline(device, window);
+        const pipeline = try createPipeline(device);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline);
 
-        std.debug.print("Renderer initialized successfully\n", .{});
+        // Get initial window size for depth buffer
+        var w: c_int = 0;
+        var h: c_int = 0;
+        _ = c.SDL_GetWindowSize(window, &w, &h);
+        const width: u32 = @intCast(w);
+        const height: u32 = @intCast(h);
+
+        // Create depth texture (same size as window)
+        const depth_texture = createDepthTexture(device, width, height) orelse {
+            std.debug.print("Failed to create depth texture: {s}\n", .{c.SDL_GetError()});
+            return error.DepthTextureCreationFailed;
+        };
+        errdefer c.SDL_ReleaseGPUTexture(device, depth_texture);
+
+        std.debug.print("Renderer initialized successfully (with depth buffer)\n", .{});
 
         return Renderer{
             .device = device,
             .window = window,
             .pipeline = pipeline,
+            .depth_texture = depth_texture,
+            .depth_width = width,
+            .depth_height = height,
         };
     }
 
     /// Clean up GPU resources
     pub fn deinit(self: *Renderer) void {
+        c.SDL_ReleaseGPUTexture(self.device, self.depth_texture);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline);
         c.SDL_ReleaseWindowFromGPUDevice(self.device, self.window);
         c.SDL_DestroyGPUDevice(self.device);
@@ -156,7 +179,9 @@ pub const Renderer = struct {
 
         // Step 2: Acquire the swapchain texture (what we render to)
         var swapchain_texture: ?*c.SDL_GPUTexture = null;
-        if (!c.SDL_AcquireGPUSwapchainTexture(cmd, self.window, &swapchain_texture, null, null)) {
+        var swapchain_width: u32 = 0;
+        var swapchain_height: u32 = 0;
+        if (!c.SDL_AcquireGPUSwapchainTexture(cmd, self.window, &swapchain_texture, &swapchain_width, &swapchain_height)) {
             std.debug.print("SDL_AcquireGPUSwapchainTexture failed: {s}\n", .{c.SDL_GetError()});
             _ = c.SDL_SubmitGPUCommandBuffer(cmd);
             return false;
@@ -168,7 +193,19 @@ pub const Renderer = struct {
             return false;
         }
 
-        // Step 3: Begin render pass with clear color
+        // Step 3: Recreate depth buffer if window was resized
+        if (swapchain_width != self.depth_width or swapchain_height != self.depth_height) {
+            c.SDL_ReleaseGPUTexture(self.device, self.depth_texture);
+            self.depth_texture = createDepthTexture(self.device, swapchain_width, swapchain_height) orelse {
+                std.debug.print("Failed to recreate depth texture: {s}\n", .{c.SDL_GetError()});
+                _ = c.SDL_SubmitGPUCommandBuffer(cmd);
+                return false;
+            };
+            self.depth_width = swapchain_width;
+            self.depth_height = swapchain_height;
+        }
+
+        // Step 4: Set up color target (what we see on screen)
         const color_target = c.SDL_GPUColorTargetInfo{
             .texture = swapchain_texture,
             .mip_level = 0,
@@ -190,11 +227,26 @@ pub const Renderer = struct {
             .padding2 = 0,
         };
 
+        // Step 5: Set up depth target (for depth testing)
+        const depth_target = c.SDL_GPUDepthStencilTargetInfo{
+            .texture = self.depth_texture,
+            .clear_depth = 1.0, // Clear to far plane (max depth)
+            .load_op = c.SDL_GPU_LOADOP_CLEAR,
+            .store_op = c.SDL_GPU_STOREOP_DONT_CARE, // Don't need to preserve after frame
+            .stencil_load_op = c.SDL_GPU_LOADOP_DONT_CARE,
+            .stencil_store_op = c.SDL_GPU_STOREOP_DONT_CARE,
+            .cycle = false,
+            .clear_stencil = 0,
+            .padding1 = 0,
+            .padding2 = 0,
+        };
+
+        // Step 6: Begin render pass with both color and depth targets
         const render_pass = c.SDL_BeginGPURenderPass(
             cmd,
             &color_target,
             1,
-            null,
+            &depth_target, // Now passing depth target!
         ) orelse {
             std.debug.print("SDL_BeginGPURenderPass failed: {s}\n", .{c.SDL_GetError()});
             _ = c.SDL_SubmitGPUCommandBuffer(cmd);
@@ -270,7 +322,10 @@ pub const Renderer = struct {
 // Pipeline Creation
 // ============================================================================
 
-fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGraphicsPipeline {
+/// Depth texture format used throughout the renderer
+const DEPTH_FORMAT = c.SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
+
+fn createPipeline(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
     const shaders = getShaderCode();
 
     // Create vertex shader
@@ -310,9 +365,6 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
     };
     defer c.SDL_ReleaseGPUShader(device, fragment_shader);
 
-    // Get swapchain texture format
-    const swapchain_format = c.SDL_GetGPUSwapchainTextureFormat(device, window);
-
     // Define vertex buffer layout (must match Vertex struct in mesh.zig)
     const vertex_buffer_desc = c.SDL_GPUVertexBufferDescription{
         .slot = 0,
@@ -339,9 +391,9 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
         },
     };
 
-    // Color target description
+    // Color target description (using BGRA8 which is common swapchain format)
     const color_target_desc = c.SDL_GPUColorTargetDescription{
-        .format = swapchain_format,
+        .format = c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,
         .blend_state = .{
             .src_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ONE,
             .dst_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ZERO,
@@ -370,8 +422,8 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
         .primitive_type = c.SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         .rasterizer_state = .{
             .fill_mode = c.SDL_GPU_FILLMODE_FILL,
-            .cull_mode = c.SDL_GPU_CULLMODE_NONE,
-            .front_face = c.SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE,
+            .cull_mode = c.SDL_GPU_CULLMODE_BACK, // Cull back faces (interior)
+            .front_face = c.SDL_GPU_FRONTFACE_CLOCKWISE, // Our vertices are CW when viewed from outside
             .depth_bias_constant_factor = 0,
             .depth_bias_clamp = 0,
             .depth_bias_slope_factor = 0,
@@ -389,13 +441,13 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
             .padding3 = 0,
         },
         .depth_stencil_state = .{
-            .compare_op = c.SDL_GPU_COMPAREOP_LESS,
+            .compare_op = c.SDL_GPU_COMPAREOP_LESS, // Closer pixels win
             .back_stencil_state = std.mem.zeroes(c.SDL_GPUStencilOpState),
             .front_stencil_state = std.mem.zeroes(c.SDL_GPUStencilOpState),
             .compare_mask = 0,
             .write_mask = 0,
-            .enable_depth_test = false,
-            .enable_depth_write = false,
+            .enable_depth_test = true, // ENABLED: test depth before writing
+            .enable_depth_write = true, // ENABLED: write depth when test passes
             .enable_stencil_test = false,
             .padding1 = 0,
             .padding2 = 0,
@@ -404,8 +456,8 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
         .target_info = .{
             .color_target_descriptions = &color_target_desc,
             .num_color_targets = 1,
-            .depth_stencil_format = c.SDL_GPU_TEXTUREFORMAT_INVALID,
-            .has_depth_stencil_target = false,
+            .depth_stencil_format = DEPTH_FORMAT, // Must match depth texture
+            .has_depth_stencil_target = true, // ENABLED: we have a depth buffer
             .padding1 = 0,
             .padding2 = 0,
             .padding3 = 0,
@@ -417,6 +469,21 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
     };
 
     return pipeline;
+}
+
+/// Create a depth texture for the given dimensions
+fn createDepthTexture(device: *c.SDL_GPUDevice, width: u32, height: u32) ?*c.SDL_GPUTexture {
+    return c.SDL_CreateGPUTexture(device, &c.SDL_GPUTextureCreateInfo{
+        .type = c.SDL_GPU_TEXTURETYPE_2D,
+        .format = DEPTH_FORMAT,
+        .usage = c.SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+        .width = width,
+        .height = height,
+        .layer_count_or_depth = 1,
+        .num_levels = 1,
+        .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
+        .props = 0,
+    });
 }
 
 // ============================================================================
