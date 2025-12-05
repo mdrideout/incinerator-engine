@@ -1,4 +1,4 @@
-# Incinerator Engine - Initial Setup Plan
+# Incinerator Engine - Development Plan
 
 ## Goal
 Build a GTA III-style MMO game engine using Zig, SDL3, Jolt Physics, and ImGui.
@@ -11,26 +11,46 @@ Build a GTA III-style MMO game engine using Zig, SDL3, Jolt Physics, and ImGui.
 
 ---
 
-## Phase 1: Foundation (Start Here)
+## Phase 1: Foundation ✅ COMPLETE
 
-### Step 1.1: Window + Game Loop
-Create `src/main.zig` with:
-- SDL3 window initialization (1280x720, resizable)
-- Proper game loop with fixed timestep (60 Hz physics, uncapped render)
-- Basic input handling (ESC to quit)
-- Clean shutdown
+### ✅ Step 1.1: Window + Canonical Game Loop
+**Status: COMPLETE**
 
-**Key concepts to learn:**
-- SDL3 initialization and event polling
-- Fixed timestep pattern (accumulator-based)
-- Delta time for frame-independent updates
+Files created:
+- `src/main.zig` - Entry point with canonical game loop
+- `src/timing.zig` - High-precision frame timer (120Hz fixed timestep)
+- `src/input.zig` - Buffered input system (keyboard, mouse, events)
 
-### Step 1.2: SDL3 GPU Initialization
-- Create GPU device
+Architecture implemented:
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Phase 1: INPUT PUMP (Per-Frame / Uncapped)                  │
+│ - SDL_PollEvent drains OS events                            │
+│ - Latches input state to InputBuffer struct                 │
+├─────────────────────────────────────────────────────────────┤
+│ Phase 2: SIMULATION TICK (Fixed 120Hz = 8.333ms)            │
+│ - Accumulator pattern: while (accumulator >= TICK_RATE)     │
+│ - Physics, gameplay logic consume buffered input            │
+├─────────────────────────────────────────────────────────────┤
+│ Phase 3: PRESENTATION (Interpolated)                        │
+│ - alpha = accumulator / TICK_RATE                           │
+│ - Ready for lerp(previous, current, alpha) when needed      │
+└─────────────────────────────────────────────────────────────┘
+```
+
+Features working:
+- SDL3 window (1280x720, resizable)
+- Fixed 120Hz simulation tick rate
+- Input buffering (keys_down, keys_pressed, keys_released)
+- Mouse tracking (position, delta, buttons, wheel)
+- Debug output (FPS, frame time, tick count)
+- Clean shutdown with stats
+
+### ⏳ Step 1.2: SDL3 GPU Initialization ← **UP NEXT**
+- Replace SDL_Renderer with SDL_GPU device
 - Create swapchain for the window
-- Basic clear-to-color each frame (cornflower blue like the original instructions)
-
-**This proves GPU rendering works before adding complexity.**
+- Basic clear-to-color each frame
+- Proves GPU rendering pipeline works before adding shaders
 
 ---
 
@@ -44,7 +64,7 @@ Create `src/main.zig` with:
 ### Step 2.2: 3D Camera
 - Perspective projection matrix
 - View matrix (camera position/rotation)
-- Render a 3D cube with camera controls
+- Render a 3D cube with camera controls (WASD + mouse look)
 
 ### Step 2.3: Mesh Loading
 - Basic OBJ or glTF loader
@@ -57,12 +77,12 @@ Create `src/main.zig` with:
 
 ### Step 3.1: ImGui Integration
 - zgui with SDL3 GPU backend
-- Debug windows (FPS, entity inspector, console)
+- Debug windows (FPS graph, entity inspector, console)
 
 ### Step 3.2: Physics Integration
 - Jolt physics world setup
 - Ground plane + falling objects
-- Debug visualization
+- Debug visualization (wireframe colliders)
 
 ### Step 3.3: Entity/Component System
 - Simple archetypal ECS or component bags
@@ -80,74 +100,29 @@ Create `src/main.zig` with:
 
 ---
 
-## First Task: Canonical Game Loop with SDL3
-
-### Architecture: Fixed Timestep with Interpolation
+## Current File Structure
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│ Phase 1: INPUT PUMP (Per-Frame / Uncapped)                  │
-│ - SDL_PollEvent drains OS events                            │
-│ - Latches input state to InputBuffer struct                 │
-├─────────────────────────────────────────────────────────────┤
-│ Phase 2: SIMULATION TICK (Fixed 120Hz = 8.333ms)            │
-│ - Accumulator pattern: while (accumulator >= TICK_RATE)     │
-│ - Physics, gameplay logic consume buffered input            │
-│ - Store previous state for interpolation                    │
-├─────────────────────────────────────────────────────────────┤
-│ Phase 3: PRESENTATION (Interpolated)                        │
-│ - alpha = accumulator / TICK_RATE                           │
-│ - Render state = lerp(previous, current, alpha)             │
-│ - Smooth visuals at any framerate                           │
-└─────────────────────────────────────────────────────────────┘
+src/
+├── main.zig      # Entry point, App struct, game loop
+├── timing.zig    # FrameTimer, TICK_RATE, TICK_DURATION
+├── input.zig     # InputBuffer, Key constants, MouseButton
+└── root.zig      # Library root (unused for now)
 ```
 
-### Why 120Hz tick rate?
-- Lower input latency than 60Hz
-- Smoother physics simulation
-- MMO server can run different rate (20-60Hz) for network sync
-- Local simulation stays responsive
+---
 
-### SDL3 APIs we'll use:
-- `SDL_GetPerformanceCounter()` / `SDL_GetPerformanceFrequency()` - High-precision timing
-- `SDL_PollEvent()` - Drain event queue
-- `SDL_GetKeyboardState()` - Continuous key polling
-- `SDL_GetMouseState()` - Mouse position/buttons
+## Next Task: Step 1.2 - SDL3 GPU Setup
 
-### Files to create/modify:
+### What we'll do:
+1. Replace `SDL_Renderer` with `SDL_GPUDevice`
+2. Create swapchain attached to window
+3. Each frame: acquire texture → begin render pass → clear → end → present
+4. This is the foundation for all 3D rendering
 
-1. **`src/main.zig`** - Entry point, owns the loop
-2. **`src/input.zig`** - InputBuffer struct, event processing
-3. **`src/timing.zig`** - FrameTimer, accumulator, delta calculations
-
-### Debug/Test Tools (Phase 1):
-- Frame time graph (via ImGui later, console print for now)
-- Tick count per frame counter
-- Input event log (debug print keypresses)
-
-### Implementation approach:
-1. Create timing module with high-precision frame timer
-2. Create input module with buffered input state
-3. Main loop structure:
-   ```
-   while running:
-       frame_timer.begin_frame()
-
-       // Phase 1: Input
-       input.pump_events()  // SDL_PollEvent loop
-       if input.quit_requested(): break
-
-       // Phase 2: Simulation (fixed timestep)
-       accumulator += frame_timer.delta
-       while accumulator >= TICK_DURATION:
-           simulation.tick(input.consume())
-           accumulator -= TICK_DURATION
-
-       // Phase 3: Render
-       alpha = accumulator / TICK_DURATION
-       renderer.present(alpha)  // interpolated
-
-       frame_timer.end_frame()
-   ```
-4. For now, simulation.tick() and renderer.present() are stubs
-5. Debug output: FPS, tick count, input events to console
+### SDL3 GPU APIs to learn:
+- `SDL_CreateGPUDevice()` - Create the GPU device
+- `SDL_ClaimWindowForGPUDevice()` - Attach swapchain to window
+- `SDL_AcquireGPUSwapchainTexture()` - Get texture to render to
+- `SDL_BeginGPURenderPass()` / `SDL_EndGPURenderPass()` - Render pass
+- `SDL_SubmitGPUCommandBuffer()` - Submit work to GPU

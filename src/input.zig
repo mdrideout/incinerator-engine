@@ -9,10 +9,10 @@
 //! - Mouse delta is accumulated between ticks for smooth camera movement
 
 const std = @import("std");
+const sdl = @import("sdl.zig");
 
-const c = @cImport({
-    @cInclude("SDL3/SDL.h");
-});
+// Use shared SDL bindings to avoid opaque type conflicts
+const c = sdl.c;
 
 /// Maximum number of keys we track (SDL scancodes go up to ~512)
 const MAX_KEYS = 512;

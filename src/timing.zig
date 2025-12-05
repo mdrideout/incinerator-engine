@@ -10,11 +10,10 @@
 //! - `alpha`: Interpolation factor for smooth rendering between ticks
 
 const std = @import("std");
+const sdl = @import("sdl.zig");
 
-// Import SDL3 for high-precision timing
-const c = @cImport({
-    @cInclude("SDL3/SDL.h");
-});
+// Use shared SDL bindings to avoid opaque type conflicts
+const c = sdl.c;
 
 /// The fixed simulation tick rate (120 Hz = 8.333... ms per tick)
 /// This determines how often physics and gameplay logic update.

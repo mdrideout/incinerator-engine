@@ -10,17 +10,17 @@
 //! │ - Physics, gameplay logic, consume buffered input           │
 //! ├─────────────────────────────────────────────────────────────┤
 //! │ Phase 3: PRESENTATION (Interpolated)                        │
-//! │ - Renders visual state blended between two ticks            │
+//! │ - Renders visual state via SDL3 GPU API                     │
 //! └─────────────────────────────────────────────────────────────┘
 
 const std = @import("std");
 const timing = @import("timing.zig");
 const input = @import("input.zig");
+const renderer = @import("renderer.zig");
+const sdl = @import("sdl.zig");
 
-// SDL3 C bindings
-const c = @cImport({
-    @cInclude("SDL3/SDL.h");
-});
+// Use shared SDL bindings to avoid opaque type conflicts
+const c = sdl.c;
 
 // ============================================================================
 // Configuration
@@ -39,7 +39,7 @@ const DEBUG_PRINT_INTERVAL = 120; // Every ~1 second at 120 FPS
 
 const App = struct {
     window: *c.SDL_Window,
-    renderer: *c.SDL_Renderer,
+    gpu_renderer: renderer.Renderer,
     frame_timer: timing.FrameTimer,
     input_buffer: input.InputBuffer,
 
@@ -69,12 +69,9 @@ const App = struct {
         };
         errdefer c.SDL_DestroyWindow(window);
 
-        // Create a renderer (for now we use SDL_Renderer; will switch to SDL_GPU later)
-        const renderer = c.SDL_CreateRenderer(window, null) orelse {
-            std.debug.print("SDL_CreateRenderer failed: {s}\n", .{c.SDL_GetError()});
-            return error.SDLRendererFailed;
-        };
-        errdefer c.SDL_DestroyRenderer(renderer);
+        // Create GPU renderer (replaces SDL_Renderer with modern GPU API)
+        var gpu_renderer = try renderer.Renderer.init(window);
+        errdefer gpu_renderer.deinit();
 
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Incinerator Engine initialized\n", .{});
@@ -88,7 +85,7 @@ const App = struct {
 
         return App{
             .window = window,
-            .renderer = renderer,
+            .gpu_renderer = gpu_renderer,
             .frame_timer = timing.FrameTimer.init(),
             .input_buffer = input.InputBuffer.init(),
             .debug_frame_counter = 0,
@@ -97,7 +94,7 @@ const App = struct {
     }
 
     pub fn deinit(self: *App) void {
-        c.SDL_DestroyRenderer(self.renderer);
+        self.gpu_renderer.deinit();
         c.SDL_DestroyWindow(self.window);
         c.SDL_Quit();
 
@@ -186,19 +183,11 @@ const App = struct {
         }
     }
 
-    /// Render the current frame
+    /// Render the current frame using SDL3 GPU API
     /// `alpha` is the interpolation factor (0.0 to 1.0) for smooth visuals.
     fn render(self: *App, alpha: f32) void {
-        _ = alpha; // Will use for interpolation later
-
-        // Clear to cornflower blue (the classic XNA/DirectX test color)
-        _ = c.SDL_SetRenderDrawColor(self.renderer, 100, 149, 237, 255);
-        _ = c.SDL_RenderClear(self.renderer);
-
-        // TODO: Render game objects here
-
-        // Present the frame
-        _ = c.SDL_RenderPresent(self.renderer);
+        // Render frame with cornflower blue clear color
+        _ = self.gpu_renderer.renderFrame(renderer.Colors.CORNFLOWER_BLUE, alpha);
     }
 
     /// Print debug statistics
