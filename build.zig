@@ -120,6 +120,12 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("zgui", zgui.module("root"));
     exe.linkLibrary(zgui.artifact("imgui"));
 
+    // ---------------------------------------------------------
+    // Math (zmath)
+    // ---------------------------------------------------------
+    const zmath = b.dependency("zmath", .{});
+    exe.root_module.addImport("zmath", zmath.module("root"));
+
     // unsure if need these
     // { // Needed for glfw/wgpu rendering backend
     //     const zglfw = b.dependency("zglfw", .{});

@@ -29,12 +29,14 @@
 //! └─────────────────────────────────────────────────────────────┘
 
 const std = @import("std");
+const zm = @import("zmath");
 const timing = @import("timing.zig");
 const input = @import("input.zig");
 const renderer = @import("renderer.zig");
 const mesh = @import("mesh.zig");
 const primitives = @import("primitives.zig");
 const world = @import("world.zig");
+const camera = @import("camera.zig");
 const sdl = @import("sdl.zig");
 
 // Use shared SDL bindings to avoid opaque type conflicts
@@ -63,7 +65,8 @@ const App = struct {
 
     // Scene
     game_world: world.World,
-    triangle_mesh: mesh.Mesh, // Owned mesh for the test triangle
+    cube_mesh: mesh.Mesh, // Owned mesh for the test cube
+    game_camera: camera.Camera, // Player camera
 
     // Debug counters
     debug_frame_counter: u32,
@@ -95,14 +98,14 @@ const App = struct {
         var gpu_renderer = try renderer.Renderer.init(window);
         errdefer gpu_renderer.deinit();
 
-        // Create the test triangle mesh
-        var triangle_mesh = try primitives.createTriangle(gpu_renderer.getDevice());
-        errdefer triangle_mesh.deinit();
+        // Create the test cube mesh
+        var cube_mesh = try primitives.createCube(gpu_renderer.getDevice());
+        errdefer cube_mesh.deinit();
 
         // Create the world and spawn our test entity
         var game_world = world.World.init();
         _ = try game_world.spawn(.{
-            .mesh = &triangle_mesh,
+            .mesh = &cube_mesh,
             .transform = world.Transform.identity,
         });
 
@@ -114,7 +117,10 @@ const App = struct {
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Controls:\n", .{});
         std.debug.print("   ESC - Quit\n", .{});
-        std.debug.print("   WASD - (placeholder) movement\n", .{});
+        std.debug.print("   WASD - Move camera\n", .{});
+        std.debug.print("   Q/E - Move down/up\n", .{});
+        std.debug.print("   Right-click + drag - Look around\n", .{});
+        std.debug.print("   SPACE - Print camera position\n", .{});
         std.debug.print("===========================================\n\n", .{});
 
         return App{
@@ -123,7 +129,8 @@ const App = struct {
             .frame_timer = timing.FrameTimer.init(),
             .input_buffer = input.InputBuffer.init(),
             .game_world = game_world,
-            .triangle_mesh = triangle_mesh,
+            .cube_mesh = cube_mesh,
+            .game_camera = camera.Camera.lookingAtOrigin(3.0), // Camera 3 units back
             .debug_frame_counter = 0,
             .sim_tick_count = 0,
         };
@@ -131,7 +138,7 @@ const App = struct {
 
     pub fn deinit(self: *App) void {
         self.game_world.deinit();
-        self.triangle_mesh.deinit();
+        self.cube_mesh.deinit();
         self.gpu_renderer.deinit();
         c.SDL_DestroyWindow(self.window);
         c.SDL_Quit();
@@ -192,31 +199,43 @@ const App = struct {
     fn simulateTick(self: *App) void {
         self.sim_tick_count += 1;
 
-        // Example: Check for WASD input (placeholder for movement)
+        // Camera movement speed (units per tick at 120Hz)
+        const move_speed = self.game_camera.move_speed * @as(f32, @floatCast(timing.TICK_DURATION));
+
+        // WASD camera movement
         if (self.input_buffer.isKeyDown(input.Key.W)) {
-            // Would move forward here
+            self.game_camera.moveForward(move_speed);
         }
         if (self.input_buffer.isKeyDown(input.Key.S)) {
-            // Would move backward here
+            self.game_camera.moveForward(-move_speed);
         }
         if (self.input_buffer.isKeyDown(input.Key.A)) {
-            // Would strafe left here
+            self.game_camera.moveRight(-move_speed);
         }
         if (self.input_buffer.isKeyDown(input.Key.D)) {
-            // Would strafe right here
+            self.game_camera.moveRight(move_speed);
+        }
+
+        // Q/E for vertical movement (up/down)
+        if (self.input_buffer.isKeyDown(input.Key.Q)) {
+            self.game_camera.moveUp(-move_speed);
+        }
+        if (self.input_buffer.isKeyDown(input.Key.E)) {
+            self.game_camera.moveUp(move_speed);
+        }
+
+        // Mouse look (when right mouse button is held)
+        if (self.input_buffer.isMouseButtonDown(input.MouseButton.RIGHT)) {
+            self.game_camera.rotate(self.input_buffer.mouse_delta_x, self.input_buffer.mouse_delta_y);
         }
 
         // Debug: Print when space is pressed (single trigger)
         if (self.input_buffer.isKeyPressed(input.Key.SPACE)) {
-            std.debug.print("[Tick {d}] SPACE pressed!\n", .{self.sim_tick_count});
-        }
-
-        // Debug: Print mouse clicks
-        if (self.input_buffer.isMouseButtonPressed(input.MouseButton.LEFT)) {
-            std.debug.print("[Tick {d}] Left mouse clicked at ({d:.0}, {d:.0})\n", .{
+            std.debug.print("[Tick {d}] Camera pos: ({d:.2}, {d:.2}, {d:.2})\n", .{
                 self.sim_tick_count,
-                self.input_buffer.mouse_x,
-                self.input_buffer.mouse_y,
+                self.game_camera.position[0],
+                self.game_camera.position[1],
+                self.game_camera.position[2],
             });
         }
     }
@@ -231,9 +250,21 @@ const App = struct {
             return; // Frame skipped (e.g., window minimized)
         }
 
+        // Calculate aspect ratio from window dimensions
+        const window_size = self.gpu_renderer.getWindowSize();
+        const aspect_ratio = @as(f32, @floatFromInt(window_size.width)) /
+            @as(f32, @floatFromInt(window_size.height));
+
+        // Get view-projection matrix from camera
+        const view_proj = self.game_camera.getViewProjectionMatrix(aspect_ratio);
+
         // Draw all entities in the world
         for (self.game_world.iterator()) |entity| {
-            self.gpu_renderer.drawMesh(entity.mesh);
+            // For now, model matrix is identity (entities at origin)
+            // TODO: Use entity.transform to generate model matrix
+            const model = zm.identity();
+            const mvp = zm.mul(model, view_proj);
+            self.gpu_renderer.drawMesh(entity.mesh, mvp);
         }
 
         // End the frame (submits to GPU)

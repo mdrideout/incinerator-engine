@@ -1,19 +1,26 @@
 #version 450
 
 // ============================================================================
-// triangle.vert - Vertex Shader for colored triangle
+// triangle.vert - Vertex Shader with MVP transform
 // ============================================================================
 //
-// This shader runs once per vertex. It receives vertex attributes from the
-// vertex buffer and outputs the final screen position plus any data needed
-// by the fragment shader.
+// This shader transforms vertices from local object space to clip space
+// using the Model-View-Projection (MVP) matrix pipeline.
 //
 // Compilation: glslc triangle.vert -o triangle.vert.spv
 
 // ---------------------------------------------------------------------------
+// UNIFORM BUFFER: Shared data from CPU (updated per-object)
+// ---------------------------------------------------------------------------
+// set = 0: First descriptor set
+// binding = 0: First binding within that set
+layout(set = 0, binding = 0) uniform Uniforms {
+    mat4 mvp;  // Model-View-Projection matrix (combined)
+};
+
+// ---------------------------------------------------------------------------
 // INPUT: Vertex attributes from vertex buffer
 // ---------------------------------------------------------------------------
-// location = N must match the vertex buffer layout we define in Zig
 layout(location = 0) in vec3 in_position;  // Vertex position (x, y, z)
 layout(location = 1) in vec3 in_color;     // Vertex color (r, g, b)
 
@@ -27,20 +34,14 @@ layout(location = 0) out vec3 frag_color;
 // ---------------------------------------------------------------------------
 void main() {
     // Pass the vertex color to the fragment shader.
-    // The GPU will automatically interpolate this across the triangle face,
-    // so pixels between vertices get blended colors.
+    // The GPU will automatically interpolate this across the triangle face.
     frag_color = in_color;
 
-    // Set the vertex position in clip space.
-    // gl_Position is a built-in output that MUST be set.
+    // Transform vertex position through the MVP pipeline:
+    //   1. Model matrix: object space → world space
+    //   2. View matrix: world space → camera space
+    //   3. Projection matrix: camera space → clip space
     //
-    // Clip space coordinates:
-    //   X: -1 (left) to +1 (right)
-    //   Y: -1 (bottom) to +1 (top)
-    //   Z: 0 (near) to 1 (far)
-    //   W: 1.0 for standard positions
-    //
-    // Later we'll multiply by a Model-View-Projection matrix here.
-    // For now, we pass through directly (identity transform).
-    gl_Position = vec4(in_position, 1.0);
+    // These are pre-multiplied on the CPU into a single MVP matrix.
+    gl_Position = mvp * vec4(in_position, 1.0);
 }

@@ -36,12 +36,19 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const zm = @import("zmath");
 const sdl = @import("sdl.zig");
 const mesh_module = @import("mesh.zig");
 
 const c = sdl.c;
 const Mesh = mesh_module.Mesh;
 const Vertex = mesh_module.Vertex;
+
+/// MVP matrix uniform data sent to vertex shader.
+/// Uses [16]f32 layout for direct compatibility with zmath's matToArr().
+pub const Uniforms = extern struct {
+    mvp: [16]f32,
+};
 
 // ============================================================================
 // Shader Loading (Platform-Aware)
@@ -204,19 +211,23 @@ pub const Renderer = struct {
         return true;
     }
 
-    /// Draw a mesh. Must be called between beginFrame() and endFrame().
+    /// Draw a mesh with the given MVP matrix.
+    /// Must be called between beginFrame() and endFrame().
     ///
-    /// NOTE: Transform is currently ignored! We need uniform buffers to pass
-    /// the transform matrix to the shader. For now, meshes render at their
-    /// original vertex positions.
-    pub fn drawMesh(self: *Renderer, m: *const Mesh) void {
+    /// The MVP (Model-View-Projection) matrix transforms vertices from
+    /// local object space to clip space for rendering.
+    pub fn drawMesh(self: *Renderer, m: *const Mesh, mvp: zm.Mat) void {
         const render_pass = self.current_render_pass orelse {
             std.debug.print("drawMesh called outside of beginFrame/endFrame\n", .{});
             return;
         };
 
-        // Future: Update uniform buffer with transform matrix here
-        // c.SDL_PushGPUVertexUniformData(cmd, 0, &transform_matrix, @sizeOf(Mat4));
+        const cmd = self.current_cmd orelse return;
+
+        // Push MVP matrix to vertex shader uniform buffer (slot 0)
+        // zmath stores matrices in row-major order, which matches our shader
+        const uniforms = Uniforms{ .mvp = zm.matToArr(mvp) };
+        c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(Uniforms));
 
         // Bind vertex buffer
         const buffer_binding = c.SDL_GPUBufferBinding{
@@ -263,6 +274,7 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
     const shaders = getShaderCode();
 
     // Create vertex shader
+    // NOTE: num_uniform_buffers = 1 tells SDL_GPU we have a uniform buffer at binding 0
     const vertex_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
         .code = shaders.vertex.ptr,
         .code_size = shaders.vertex.len,
@@ -272,7 +284,7 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
         .num_samplers = 0,
         .num_storage_textures = 0,
         .num_storage_buffers = 0,
-        .num_uniform_buffers = 0,
+        .num_uniform_buffers = 1, // MVP matrix uniform buffer
         .props = 0,
     }) orelse {
         std.debug.print("Failed to create vertex shader: {s}\n", .{c.SDL_GetError()});

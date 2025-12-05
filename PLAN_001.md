@@ -38,33 +38,61 @@ Architecture implemented:
 └─────────────────────────────────────────────────────────────┘
 ```
 
-Features working:
-- SDL3 window (1280x720, resizable)
-- Fixed 120Hz simulation tick rate
-- Input buffering (keys_down, keys_pressed, keys_released)
-- Mouse tracking (position, delta, buttons, wheel)
-- Debug output (FPS, frame time, tick count)
-- Clean shutdown with stats
+### ✅ Step 1.2: SDL3 GPU Initialization
+**Status: COMPLETE**
 
-### ⏳ Step 1.2: SDL3 GPU Initialization ← **UP NEXT**
-- Replace SDL_Renderer with SDL_GPU device
-- Create swapchain for the window
-- Basic clear-to-color each frame
-- Proves GPU rendering pipeline works before adding shaders
+- Created `src/renderer.zig` with SDL_GPU device
+- Created `src/sdl.zig` for shared C bindings
+- Swapchain attached to window
+- Command buffer / render pass pattern working
+- Clear-to-color each frame
 
 ---
 
 ## Phase 2: 3D Rendering Basics
 
-### Step 2.1: Shader Pipeline
-- Write basic vertex + fragment shaders (SDL_GPU shader format)
-- Create graphics pipeline
-- Render a colored triangle
+### ✅ Step 2.1: Shader Pipeline
+**Status: COMPLETE**
 
-### Step 2.2: 3D Camera
-- Perspective projection matrix
-- View matrix (camera position/rotation)
-- Render a 3D cube with camera controls (WASD + mouse look)
+Files created:
+- `shaders/triangle.vert` - GLSL vertex shader
+- `shaders/triangle.frag` - GLSL fragment shader
+- `src/mesh.zig` - Vertex format, GPU buffer management
+- `src/primitives.zig` - Built-in shape factories
+- `src/world.zig` - Entity and scene management
+
+Architecture documented in:
+- `docs/adr/001-shader-language-and-compilation.md` - Shader strategy
+- `docs/adr/002-module-architecture-and-layering.md` - Module organization
+
+Features working:
+- GLSL 4.50 shaders with Vulkan semantics
+- Build-time compilation: GLSL → SPIR-V → Metal/HLSL
+- Platform-aware shader loading via @embedFile
+- Graphics pipeline with vertex layout
+- Vertex buffer upload to GPU
+- RGB gradient triangle rendering
+- Layered module architecture (renderer/mesh/primitives/world)
+
+### ✅ Step 2.2: 3D Camera
+**Status: COMPLETE**
+
+Files created/modified:
+- `src/camera.zig` - First-person camera with yaw/pitch, view/projection matrices
+- `src/primitives.zig` - Added createCube() with colored faces
+- `src/renderer.zig` - Added uniform buffer support, drawMesh takes MVP matrix
+- `src/main.zig` - Camera controls wired up
+- `shaders/triangle.vert` - Added MVP uniform buffer
+
+Features working:
+- zmath integration for SIMD-optimized math
+- Perspective projection with configurable FOV
+- View matrix generation from camera position/orientation
+- Uniform buffer pushing MVP matrix to shader
+- WASD movement (forward/back/strafe)
+- Q/E for vertical movement
+- Right-click + drag for mouse look
+- Unit cube with colored faces (6 colors, one per face)
 
 ### Step 2.3: Mesh Loading
 - Basic OBJ or glTF loader
@@ -104,25 +132,32 @@ Features working:
 
 ```
 src/
-├── main.zig      # Entry point, App struct, game loop
-├── timing.zig    # FrameTimer, TICK_RATE, TICK_DURATION
-├── input.zig     # InputBuffer, Key constants, MouseButton
-└── root.zig      # Library root (unused for now)
+├── main.zig          # Entry point, App struct, game loop
+├── renderer.zig      # SDL3 GPU device, pipelines, uniform buffers
+├── camera.zig        # First-person camera, view/projection matrices
+├── mesh.zig          # Vertex struct, Mesh type, buffer upload
+├── primitives.zig    # Built-in shapes (triangle, cube)
+├── world.zig         # Entity, Transform, World (scene management)
+├── timing.zig        # FrameTimer, TICK_RATE, TICK_DURATION
+├── input.zig         # InputBuffer, Key constants, MouseButton
+├── sdl.zig           # Shared SDL3 C bindings
+└── root.zig          # Library root (unused for now)
+
+shaders/
+├── triangle.vert     # GLSL vertex shader (with MVP uniform)
+├── triangle.frag     # GLSL fragment shader
+└── compiled/         # (gitignored) SPIR-V + Metal output
+
+docs/adr/
+├── 001-shader-language-and-compilation.md
+└── 002-module-architecture-and-layering.md
 ```
 
 ---
 
-## Next Task: Step 1.2 - SDL3 GPU Setup
+## Next Task: Step 2.3 - Mesh Loading
 
-### What we'll do:
-1. Replace `SDL_Renderer` with `SDL_GPUDevice`
-2. Create swapchain attached to window
-3. Each frame: acquire texture → begin render pass → clear → end → present
-4. This is the foundation for all 3D rendering
+Add support for loading 3D models from files (OBJ or glTF format).
 
-### SDL3 GPU APIs to learn:
-- `SDL_CreateGPUDevice()` - Create the GPU device
-- `SDL_ClaimWindowForGPUDevice()` - Attach swapchain to window
-- `SDL_AcquireGPUSwapchainTexture()` - Get texture to render to
-- `SDL_BeginGPURenderPass()` / `SDL_EndGPURenderPass()` - Render pass
-- `SDL_SubmitGPUCommandBuffer()` - Submit work to GPU
+**Note:** Depth testing should be added before mesh loading to ensure
+proper 3D rendering (back faces shouldn't render in front of front faces).
