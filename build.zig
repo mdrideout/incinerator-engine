@@ -126,6 +126,15 @@ pub fn build(b: *std.Build) void {
     const zmath = b.dependency("zmath", .{});
     exe.root_module.addImport("zmath", zmath.module("root"));
 
+    // ---------------------------------------------------------
+    // Mesh Loading (zmesh) - glTF/GLB loader + mesh utilities
+    // ---------------------------------------------------------
+    // zmesh wraps cgltf for glTF loading and meshoptimizer for optimization.
+    // Used to load 3D models exported from Blender, AI generators, etc.
+    const zmesh = b.dependency("zmesh", .{});
+    exe.root_module.addImport("zmesh", zmesh.module("root"));
+    exe.linkLibrary(zmesh.artifact("zmesh"));
+
     // unsure if need these
     // { // Needed for glfw/wgpu rendering backend
     //     const zglfw = b.dependency("zglfw", .{});
@@ -228,7 +237,8 @@ pub fn build(b: *std.Build) void {
 
 /// List of shaders to compile (without extension)
 const shader_sources = [_][]const u8{
-    "triangle",
+    "triangle", // Colored primitives (pos + color)
+    "model", // Loaded 3D models (pos + normal + uv)
 };
 
 /// Shader stages and their file extensions

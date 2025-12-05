@@ -94,10 +94,36 @@ Features working:
 - Right-click + drag for mouse look
 - Unit cube with colored faces (6 colors, one per face)
 
-### Step 2.3: Mesh Loading
-- Basic OBJ or glTF loader
-- Vertex buffers, index buffers
-- Texture loading and sampling
+### ✅ Step 2.3: Mesh Loading (Geometry)
+**Status: COMPLETE**
+
+Files created/modified:
+- `src/gltf_loader.zig` - GLB/glTF loader using zmesh (wraps cgltf)
+- `src/mesh.zig` - Added VertexPNU format, indexed rendering, VertexFormat enum
+- `src/renderer.zig` - Dual pipeline (pos_color + pos_normal_uv), depth buffer, indexed draw support
+- `shaders/model.vert` - Vertex shader for loaded models (position + normal + UV)
+- `shaders/model.frag` - Fragment shader (currently visualizes normals as colors)
+- `build.zig` - Added zmesh dependency and model shader compilation
+- `build.zig.zon` - Added zmesh from zig-gamedev
+
+Features working:
+- GLB binary format loading via zmesh/cgltf
+- Indexed mesh rendering (shared vertices with index buffer)
+- Two graphics pipelines: primitives (pos+color) and models (pos+normal+uv)
+- Depth buffer for proper 3D occlusion
+- Multiple model rendering with transforms
+- UVs extracted and passed to shader (ready for textures)
+
+Test models loaded:
+- `assets/models/blonde-woman.glb` - 32,870 vertices, 50K triangles
+- `assets/models/blonde-woman-hunyuan.glb` - 1,544 vertices, 1.8K triangles
+
+### Step 2.4: Texture Loading
+- Add zstbi dependency (zig-gamedev's stb_image wrapper)
+- Extract embedded textures from GLB files
+- Create `src/texture.zig` for GPU texture utilities
+- Update model.frag to sample diffuse texture
+- Enable sampler binding in renderer pipeline
 
 ---
 
@@ -133,9 +159,10 @@ Features working:
 ```
 src/
 ├── main.zig          # Entry point, App struct, game loop
-├── renderer.zig      # SDL3 GPU device, pipelines, uniform buffers
+├── renderer.zig      # SDL3 GPU device, dual pipelines, depth buffer, uniform buffers
 ├── camera.zig        # First-person camera, view/projection matrices
-├── mesh.zig          # Vertex struct, Mesh type, buffer upload
+├── mesh.zig          # Vertex/VertexPNU structs, indexed Mesh type, buffer upload
+├── gltf_loader.zig   # GLB/glTF loader using zmesh/cgltf
 ├── primitives.zig    # Built-in shapes (triangle, cube)
 ├── world.zig         # Entity, Transform, World (scene management)
 ├── timing.zig        # FrameTimer, TICK_RATE, TICK_DURATION
@@ -144,9 +171,16 @@ src/
 └── root.zig          # Library root (unused for now)
 
 shaders/
-├── triangle.vert     # GLSL vertex shader (with MVP uniform)
-├── triangle.frag     # GLSL fragment shader
+├── triangle.vert     # GLSL vertex shader for primitives (pos + color)
+├── triangle.frag     # GLSL fragment shader for primitives
+├── model.vert        # GLSL vertex shader for models (pos + normal + uv)
+├── model.frag        # GLSL fragment shader for models (normal visualization)
 └── compiled/         # (gitignored) SPIR-V + Metal output
+
+assets/
+└── models/           # GLB model files for testing
+    ├── blonde-woman.glb
+    └── blonde-woman-hunyuan.glb
 
 docs/adr/
 ├── 001-shader-language-and-compilation.md
@@ -155,9 +189,6 @@ docs/adr/
 
 ---
 
-## Next Task: Step 2.3 - Mesh Loading
+## Next Task: Step 2.4 - Texture Loading
 
-Add support for loading 3D models from files (OBJ or glTF format).
-
-**Note:** Depth testing should be added before mesh loading to ensure
-proper 3D rendering (back faces shouldn't render in front of front faces).
+Add texture support for GLB models using zstbi from zig-gamedev.

@@ -43,6 +43,8 @@ const mesh_module = @import("mesh.zig");
 const c = sdl.c;
 const Mesh = mesh_module.Mesh;
 const Vertex = mesh_module.Vertex;
+const VertexPNU = mesh_module.VertexPNU;
+const VertexFormat = mesh_module.VertexFormat;
 
 /// MVP matrix uniform data sent to vertex shader.
 /// Uses [16]f32 layout for direct compatibility with zmath's matToArr().
@@ -62,7 +64,8 @@ const ShaderCode = struct {
     format: c.SDL_GPUShaderFormat,
 };
 
-fn getShaderCode() ShaderCode {
+/// Get triangle shaders (pos + color vertex format) for primitives
+fn getTriangleShaderCode() ShaderCode {
     return switch (builtin.os.tag) {
         .macos, .ios => .{
             .vertex = @embedFile("shaders/compiled/triangle.vert.metal"),
@@ -78,6 +81,23 @@ fn getShaderCode() ShaderCode {
     };
 }
 
+/// Get model shaders (pos + normal + uv vertex format) for loaded 3D models
+fn getModelShaderCode() ShaderCode {
+    return switch (builtin.os.tag) {
+        .macos, .ios => .{
+            .vertex = @embedFile("shaders/compiled/model.vert.metal"),
+            .fragment = @embedFile("shaders/compiled/model.frag.metal"),
+            .format = c.SDL_GPU_SHADERFORMAT_MSL,
+        },
+        // Linux and others use SPIR-V
+        else => .{
+            .vertex = @embedFile("shaders/compiled/model.vert.spv"),
+            .fragment = @embedFile("shaders/compiled/model.frag.spv"),
+            .format = c.SDL_GPU_SHADERFORMAT_SPIRV,
+        },
+    };
+}
+
 // ============================================================================
 // Renderer
 // ============================================================================
@@ -86,7 +106,10 @@ fn getShaderCode() ShaderCode {
 pub const Renderer = struct {
     device: *c.SDL_GPUDevice,
     window: *c.SDL_Window,
-    pipeline: *c.SDL_GPUGraphicsPipeline,
+
+    // Graphics pipelines for different vertex formats
+    pipeline_pos_color: *c.SDL_GPUGraphicsPipeline, // For primitives (Vertex)
+    pipeline_pos_normal_uv: *c.SDL_GPUGraphicsPipeline, // For loaded models (VertexPNU)
 
     // Depth buffer for proper 3D rendering (closer pixels occlude farther ones)
     depth_texture: *c.SDL_GPUTexture,
@@ -121,9 +144,14 @@ pub const Renderer = struct {
             return error.GPUWindowClaimFailed;
         }
 
-        // Create the graphics pipeline (shaders + vertex layout + render state)
-        const pipeline = try createPipeline(device);
-        errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline);
+        // Create graphics pipelines for different vertex formats
+        // Pipeline 1: pos_color for primitives (triangle, cube, etc.)
+        const pipeline_pos_color = try createPipelinePosColor(device);
+        errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_color);
+
+        // Pipeline 2: pos_normal_uv for loaded 3D models (GLB files)
+        const pipeline_pos_normal_uv = try createPipelinePosNormalUv(device);
+        errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_normal_uv);
 
         // Get initial window size for depth buffer
         var w: c_int = 0;
@@ -144,7 +172,8 @@ pub const Renderer = struct {
         return Renderer{
             .device = device,
             .window = window,
-            .pipeline = pipeline,
+            .pipeline_pos_color = pipeline_pos_color,
+            .pipeline_pos_normal_uv = pipeline_pos_normal_uv,
             .depth_texture = depth_texture,
             .depth_width = width,
             .depth_height = height,
@@ -154,7 +183,8 @@ pub const Renderer = struct {
     /// Clean up GPU resources
     pub fn deinit(self: *Renderer) void {
         c.SDL_ReleaseGPUTexture(self.device, self.depth_texture);
-        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline);
+        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_color);
+        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv);
         c.SDL_ReleaseWindowFromGPUDevice(self.device, self.window);
         c.SDL_DestroyGPUDevice(self.device);
     }
@@ -253,8 +283,7 @@ pub const Renderer = struct {
             return false;
         };
 
-        // Bind the pipeline once at the start of the frame
-        c.SDL_BindGPUGraphicsPipeline(render_pass, self.pipeline);
+        // Note: Pipeline is bound per-draw in drawMesh() based on mesh vertex format
 
         // Store frame state
         self.current_cmd = cmd;
@@ -266,6 +295,9 @@ pub const Renderer = struct {
     /// Draw a mesh with the given MVP matrix.
     /// Must be called between beginFrame() and endFrame().
     ///
+    /// Automatically selects the correct pipeline based on mesh vertex format
+    /// and handles both indexed and non-indexed rendering.
+    ///
     /// The MVP (Model-View-Projection) matrix transforms vertices from
     /// local object space to clip space for rendering.
     pub fn drawMesh(self: *Renderer, m: *const Mesh, mvp: zm.Mat) void {
@@ -276,20 +308,51 @@ pub const Renderer = struct {
 
         const cmd = self.current_cmd orelse return;
 
-        // Push MVP matrix to vertex shader uniform buffer (slot 0)
-        // zmath stores matrices in row-major order, which matches our shader
+        // =====================================================================
+        // Step 1: Bind the correct pipeline based on vertex format
+        // =====================================================================
+        // Each pipeline has a different vertex layout configured, so we must
+        // bind the one that matches the mesh's vertex data.
+        const pipeline = switch (m.vertex_format) {
+            .pos_color => self.pipeline_pos_color,
+            .pos_normal_uv => self.pipeline_pos_normal_uv,
+        };
+        c.SDL_BindGPUGraphicsPipeline(render_pass, pipeline);
+
+        // =====================================================================
+        // Step 2: Push MVP matrix to vertex shader uniform buffer
+        // =====================================================================
         const uniforms = Uniforms{ .mvp = zm.matToArr(mvp) };
         c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(Uniforms));
 
-        // Bind vertex buffer
+        // =====================================================================
+        // Step 3: Bind vertex buffer
+        // =====================================================================
         const buffer_binding = c.SDL_GPUBufferBinding{
             .buffer = m.vertex_buffer,
             .offset = 0,
         };
         c.SDL_BindGPUVertexBuffers(render_pass, 0, &buffer_binding, 1);
 
-        // Draw vertices
-        c.SDL_DrawGPUPrimitives(render_pass, m.vertex_count, 1, 0, 0);
+        // =====================================================================
+        // Step 4: Draw (indexed or non-indexed)
+        // =====================================================================
+        if (m.isIndexed()) {
+            // Indexed rendering: Use index buffer to look up vertices
+            // This is more memory-efficient as vertices can be shared
+            c.SDL_BindGPUIndexBuffer(
+                render_pass,
+                &c.SDL_GPUBufferBinding{
+                    .buffer = m.index_buffer.?, // We know it's non-null from isIndexed()
+                    .offset = 0,
+                },
+                c.SDL_GPU_INDEXELEMENTSIZE_32BIT, // u32 indices
+            );
+            c.SDL_DrawGPUIndexedPrimitives(render_pass, m.index_count, 1, 0, 0, 0);
+        } else {
+            // Non-indexed rendering: Every 3 vertices form a triangle
+            c.SDL_DrawGPUPrimitives(render_pass, m.vertex_count, 1, 0, 0);
+        }
     }
 
     /// End the current frame and present to screen.
@@ -325,8 +388,9 @@ pub const Renderer = struct {
 /// Depth texture format used throughout the renderer
 const DEPTH_FORMAT = c.SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
 
-fn createPipeline(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
-    const shaders = getShaderCode();
+/// Create pipeline for pos_color vertex format (primitives like cube, triangle)
+fn createPipelinePosColor(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
+    const shaders = getTriangleShaderCode();
 
     // Create vertex shader
     // NOTE: num_uniform_buffers = 1 tells SDL_GPU we have a uniform buffer at binding 0
@@ -465,6 +529,159 @@ fn createPipeline(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
         .props = 0,
     }) orelse {
         std.debug.print("Failed to create graphics pipeline: {s}\n", .{c.SDL_GetError()});
+        return error.PipelineCreationFailed;
+    };
+
+    return pipeline;
+}
+
+/// Create pipeline for pos_normal_uv vertex format (loaded 3D models)
+fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
+    const shaders = getModelShaderCode();
+
+    // Create vertex shader
+    const vertex_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
+        .code = shaders.vertex.ptr,
+        .code_size = shaders.vertex.len,
+        .entrypoint = "main0",
+        .format = shaders.format,
+        .stage = c.SDL_GPU_SHADERSTAGE_VERTEX,
+        .num_samplers = 0,
+        .num_storage_textures = 0,
+        .num_storage_buffers = 0,
+        .num_uniform_buffers = 1, // MVP matrix uniform buffer
+        .props = 0,
+    }) orelse {
+        std.debug.print("Failed to create model vertex shader: {s}\n", .{c.SDL_GetError()});
+        return error.ShaderCreationFailed;
+    };
+    defer c.SDL_ReleaseGPUShader(device, vertex_shader);
+
+    // Create fragment shader
+    const fragment_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
+        .code = shaders.fragment.ptr,
+        .code_size = shaders.fragment.len,
+        .entrypoint = "main0",
+        .format = shaders.format,
+        .stage = c.SDL_GPU_SHADERSTAGE_FRAGMENT,
+        .num_samplers = 0,
+        .num_storage_textures = 0,
+        .num_storage_buffers = 0,
+        .num_uniform_buffers = 0,
+        .props = 0,
+    }) orelse {
+        std.debug.print("Failed to create model fragment shader: {s}\n", .{c.SDL_GetError()});
+        return error.ShaderCreationFailed;
+    };
+    defer c.SDL_ReleaseGPUShader(device, fragment_shader);
+
+    // Define vertex buffer layout for VertexPNU (32 bytes per vertex)
+    const vertex_buffer_desc = c.SDL_GPUVertexBufferDescription{
+        .slot = 0,
+        .pitch = @sizeOf(VertexPNU), // 32 bytes: pos(12) + normal(12) + uv(8)
+        .input_rate = c.SDL_GPU_VERTEXINPUTRATE_VERTEX,
+        .instance_step_rate = 0,
+    };
+
+    // Define vertex attributes matching VertexPNU and model.vert shader
+    const vertex_attributes = [_]c.SDL_GPUVertexAttribute{
+        // layout(location = 0) in vec3 in_position
+        .{
+            .location = 0,
+            .buffer_slot = 0,
+            .format = c.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
+            .offset = @offsetOf(VertexPNU, "position"),
+        },
+        // layout(location = 1) in vec3 in_normal
+        .{
+            .location = 1,
+            .buffer_slot = 0,
+            .format = c.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
+            .offset = @offsetOf(VertexPNU, "normal"),
+        },
+        // layout(location = 2) in vec2 in_texcoord
+        .{
+            .location = 2,
+            .buffer_slot = 0,
+            .format = c.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT2,
+            .offset = @offsetOf(VertexPNU, "texcoord"),
+        },
+    };
+
+    // Color target description (same as pos_color pipeline)
+    const color_target_desc = c.SDL_GPUColorTargetDescription{
+        .format = c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,
+        .blend_state = .{
+            .src_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ONE,
+            .dst_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ZERO,
+            .color_blend_op = c.SDL_GPU_BLENDOP_ADD,
+            .src_alpha_blendfactor = c.SDL_GPU_BLENDFACTOR_ONE,
+            .dst_alpha_blendfactor = c.SDL_GPU_BLENDFACTOR_ZERO,
+            .alpha_blend_op = c.SDL_GPU_BLENDOP_ADD,
+            .color_write_mask = 0xF,
+            .enable_blend = false,
+            .enable_color_write_mask = false,
+            .padding1 = 0,
+            .padding2 = 0,
+        },
+    };
+
+    // Create the graphics pipeline
+    const pipeline = c.SDL_CreateGPUGraphicsPipeline(device, &c.SDL_GPUGraphicsPipelineCreateInfo{
+        .vertex_shader = vertex_shader,
+        .fragment_shader = fragment_shader,
+        .vertex_input_state = .{
+            .vertex_buffer_descriptions = &vertex_buffer_desc,
+            .num_vertex_buffers = 1,
+            .vertex_attributes = &vertex_attributes,
+            .num_vertex_attributes = vertex_attributes.len,
+        },
+        .primitive_type = c.SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
+        .rasterizer_state = .{
+            .fill_mode = c.SDL_GPU_FILLMODE_FILL,
+            .cull_mode = c.SDL_GPU_CULLMODE_BACK,
+            .front_face = c.SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE, // glTF uses CCW winding
+            .depth_bias_constant_factor = 0,
+            .depth_bias_clamp = 0,
+            .depth_bias_slope_factor = 0,
+            .enable_depth_bias = false,
+            .enable_depth_clip = false,
+            .padding1 = 0,
+            .padding2 = 0,
+        },
+        .multisample_state = .{
+            .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
+            .sample_mask = 0,
+            .enable_mask = false,
+            .padding1 = 0,
+            .padding2 = 0,
+            .padding3 = 0,
+        },
+        .depth_stencil_state = .{
+            .compare_op = c.SDL_GPU_COMPAREOP_LESS,
+            .back_stencil_state = std.mem.zeroes(c.SDL_GPUStencilOpState),
+            .front_stencil_state = std.mem.zeroes(c.SDL_GPUStencilOpState),
+            .compare_mask = 0,
+            .write_mask = 0,
+            .enable_depth_test = true,
+            .enable_depth_write = true,
+            .enable_stencil_test = false,
+            .padding1 = 0,
+            .padding2 = 0,
+            .padding3 = 0,
+        },
+        .target_info = .{
+            .color_target_descriptions = &color_target_desc,
+            .num_color_targets = 1,
+            .depth_stencil_format = DEPTH_FORMAT,
+            .has_depth_stencil_target = true,
+            .padding1 = 0,
+            .padding2 = 0,
+            .padding3 = 0,
+        },
+        .props = 0,
+    }) orelse {
+        std.debug.print("Failed to create model graphics pipeline: {s}\n", .{c.SDL_GetError()});
         return error.PipelineCreationFailed;
     };
 

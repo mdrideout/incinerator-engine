@@ -38,6 +38,7 @@ const primitives = @import("primitives.zig");
 const world = @import("world.zig");
 const camera = @import("camera.zig");
 const sdl = @import("sdl.zig");
+const gltf_loader = @import("gltf_loader.zig");
 
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
@@ -62,10 +63,13 @@ const App = struct {
     gpu_renderer: renderer.Renderer,
     frame_timer: timing.FrameTimer,
     input_buffer: input.InputBuffer,
+    allocator: std.mem.Allocator, // For GLB loading
 
     // Scene
     game_world: world.World,
     cube_mesh: mesh.Mesh, // Owned mesh for the test cube
+    loaded_model_1: ?gltf_loader.LoadedModel, // First GLB model
+    loaded_model_2: ?gltf_loader.LoadedModel, // Second GLB model
     game_camera: camera.Camera, // Player camera
 
     // Debug counters
@@ -102,7 +106,32 @@ const App = struct {
         var cube_mesh = try primitives.createCube(gpu_renderer.getDevice());
         errdefer cube_mesh.deinit();
 
-        // Create the world and spawn our test entity
+        // Load the GLB models
+        const allocator = std.heap.page_allocator;
+
+        // Load first model (blonde-woman.glb)
+        var loaded_model_1: ?gltf_loader.LoadedModel = null;
+        loaded_model_1 = gltf_loader.loadGlb(
+            allocator,
+            gpu_renderer.getDevice(),
+            "assets/models/blonde-woman.glb",
+        ) catch |err| blk: {
+            std.debug.print("Warning: Failed to load blonde-woman.glb: {any}\n", .{err});
+            break :blk null;
+        };
+
+        // Load second model (blonde-woman-hunyuan.glb)
+        var loaded_model_2: ?gltf_loader.LoadedModel = null;
+        loaded_model_2 = gltf_loader.loadGlb(
+            allocator,
+            gpu_renderer.getDevice(),
+            "assets/models/blonde-woman-hunyuan.glb",
+        ) catch |err| blk: {
+            std.debug.print("Warning: Failed to load blonde-woman-hunyuan.glb: {any}\n", .{err});
+            break :blk null;
+        };
+
+        // Create the world and spawn our test entity (cube for reference)
         var game_world = world.World.init();
         _ = try game_world.spawn(.{
             .mesh = &cube_mesh,
@@ -128,15 +157,25 @@ const App = struct {
             .gpu_renderer = gpu_renderer,
             .frame_timer = timing.FrameTimer.init(),
             .input_buffer = input.InputBuffer.init(),
+            .allocator = allocator,
             .game_world = game_world,
             .cube_mesh = cube_mesh,
-            .game_camera = camera.Camera.lookingAtOrigin(3.0), // Camera 3 units back
+            .loaded_model_1 = loaded_model_1,
+            .loaded_model_2 = loaded_model_2,
+            .game_camera = camera.Camera.lookingAtOrigin(5.0), // Camera 5 units back (model is bigger)
             .debug_frame_counter = 0,
             .sim_tick_count = 0,
         };
     }
 
     pub fn deinit(self: *App) void {
+        // Clean up loaded models if present
+        if (self.loaded_model_1) |*model| {
+            model.deinit();
+        }
+        if (self.loaded_model_2) |*model| {
+            model.deinit();
+        }
         self.game_world.deinit();
         self.cube_mesh.deinit();
         self.gpu_renderer.deinit();
@@ -258,13 +297,40 @@ const App = struct {
         // Get view-projection matrix from camera
         const view_proj = self.game_camera.getViewProjectionMatrix(aspect_ratio);
 
-        // Draw all entities in the world
+        // Draw all entities in the world (cube for reference)
         for (self.game_world.iterator()) |entity| {
             // For now, model matrix is identity (entities at origin)
             // TODO: Use entity.transform to generate model matrix
             const model = zm.identity();
             const mvp = zm.mul(model, view_proj);
             self.gpu_renderer.drawMesh(entity.mesh, mvp);
+        }
+
+        // Draw the first GLB model (if present) - positioned to the right
+        if (self.loaded_model_1) |loaded| {
+            // Model matrix: rotate to stand upright and offset from cube
+            // GLB models often export with Y-up but laying on their back
+            const rotation = zm.rotationX(std.math.pi / 2.0); // Rotate +90° around X to stand up
+            const translation = zm.translation(2.0, 0.0, 0.0); // Move 2 units to the right
+            const model = zm.mul(rotation, translation); // First rotate, then translate
+            const mvp = zm.mul(model, view_proj);
+
+            // Draw each mesh in the loaded model
+            for (loaded.meshes) |*m| {
+                self.gpu_renderer.drawMesh(m, mvp);
+            }
+        }
+
+        // Draw the second GLB model (if present) - positioned to the left
+        if (self.loaded_model_2) |loaded| {
+            const rotation = zm.rotationX(std.math.pi / 2.0); // Rotate +90° around X to stand up
+            const translation = zm.translation(-2.0, 0.0, 0.0); // Move 2 units to the left
+            const model = zm.mul(rotation, translation);
+            const mvp = zm.mul(model, view_proj);
+
+            for (loaded.meshes) |*m| {
+                self.gpu_renderer.drawMesh(m, mvp);
+            }
         }
 
         // End the frame (submits to GPU)
