@@ -16,8 +16,9 @@ Ensure you check what we get for free in these libraries, especially raylib, bef
 
 ## Review docs:
 
-- [AGENTS.md](AGENTS.md)
 - [README.md](README.md)
+- ADRs:
+  - [ADR-001: Shader Language and Cross-Compilation Strategy](docs/adr/001-shader-language-and-compilation.md)
 
 ## Review dependencies:
 
