@@ -1,47 +1,47 @@
 //! renderer.zig - SDL3 GPU Rendering Backend
 //!
-//! This module wraps SDL3's GPU API to provide a clean rendering interface.
+//! DOMAIN: Rendering Layer (low-level)
+//!
+//! This module manages the GPU device and provides rendering operations.
+//! It's the "how to render" layer - it knows about GPU pipelines, shaders,
+//! and draw calls, but not about what's in the scene.
+//!
+//! Responsibilities:
+//! - GPU device lifecycle (create, destroy)
+//! - Graphics pipeline management (shaders, render state)
+//! - Frame rendering (command buffers, render passes)
+//! - Draw operations (drawMesh, etc.)
+//!
+//! This module does NOT:
+//! - Know what entities exist (that's world.zig)
+//! - Own mesh data (meshes are passed in for drawing)
+//! - Contain game logic or scene management
+//!
 //! SDL_GPU automatically selects the best backend for your platform:
 //! - macOS: Metal
 //! - Windows: D3D12 or Vulkan
 //! - Linux: Vulkan
 //!
 //! The render loop follows the modern GPU pattern:
-//! 1. Acquire command buffer
-//! 2. Acquire swapchain texture (the screen)
-//! 3. Begin render pass (clears the screen)
-//! 4. Record draw commands
-//! 5. End render pass
-//! 6. Submit command buffer
+//! 1. beginFrame() - acquire command buffer, start render pass
+//! 2. drawMesh() - record draw commands (call multiple times)
+//! 3. endFrame() - end render pass, submit commands
+//!
+//! Future additions:
+//! - Multiple pipelines (different shaders/materials)
+//! - Uniform buffer updates (for transforms)
+//! - Texture binding
+//! - Instanced rendering
+//! - Depth buffer
 
 const std = @import("std");
 const builtin = @import("builtin");
 const sdl = @import("sdl.zig");
+const mesh_module = @import("mesh.zig");
 
-// Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
-
-// ============================================================================
-// Vertex Definition
-// ============================================================================
-
-/// Vertex structure matching our shader inputs:
-///   layout(location = 0) in vec3 in_position;
-///   layout(location = 1) in vec3 in_color;
-const Vertex = extern struct {
-    position: [3]f32, // x, y, z
-    color: [3]f32, // r, g, b
-};
-
-/// Triangle vertex data - the classic RGB triangle
-const triangle_vertices = [_]Vertex{
-    // Bottom-left: Red
-    .{ .position = .{ -0.5, -0.5, 0.0 }, .color = .{ 1.0, 0.0, 0.0 } },
-    // Bottom-right: Green
-    .{ .position = .{ 0.5, -0.5, 0.0 }, .color = .{ 0.0, 1.0, 0.0 } },
-    // Top-center: Blue
-    .{ .position = .{ 0.0, 0.5, 0.0 }, .color = .{ 0.0, 0.0, 1.0 } },
-};
+const Mesh = mesh_module.Mesh;
+const Vertex = mesh_module.Vertex;
 
 // ============================================================================
 // Shader Loading (Platform-Aware)
@@ -80,10 +80,13 @@ pub const Renderer = struct {
     device: *c.SDL_GPUDevice,
     window: *c.SDL_Window,
     pipeline: *c.SDL_GPUGraphicsPipeline,
-    vertex_buffer: *c.SDL_GPUBuffer,
+
+    // Frame state (valid between beginFrame and endFrame)
+    current_cmd: ?*c.SDL_GPUCommandBuffer = null,
+    current_render_pass: ?*c.SDL_GPURenderPass = null,
 
     /// Initialize the GPU renderer for a window.
-    /// This creates the GPU device, pipeline, and vertex buffer.
+    /// This creates the GPU device and graphics pipeline.
     pub fn init(window: *c.SDL_Window) !Renderer {
         // Create GPU device - SDL chooses the best backend automatically
         const device = c.SDL_CreateGPUDevice(
@@ -110,32 +113,34 @@ pub const Renderer = struct {
         const pipeline = try createPipeline(device, window);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline);
 
-        // Create and upload vertex buffer
-        const vertex_buffer = try createVertexBuffer(device);
-        errdefer c.SDL_ReleaseGPUBuffer(device, vertex_buffer);
-
-        std.debug.print("Triangle pipeline created successfully\n", .{});
+        std.debug.print("Renderer initialized successfully\n", .{});
 
         return Renderer{
             .device = device,
             .window = window,
             .pipeline = pipeline,
-            .vertex_buffer = vertex_buffer,
         };
     }
 
     /// Clean up GPU resources
     pub fn deinit(self: *Renderer) void {
-        c.SDL_ReleaseGPUBuffer(self.device, self.vertex_buffer);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline);
         c.SDL_ReleaseWindowFromGPUDevice(self.device, self.window);
         c.SDL_DestroyGPUDevice(self.device);
     }
 
-    /// Render a frame with the triangle.
-    pub fn renderFrame(self: *Renderer, clear_color: [4]f32, alpha: f32) bool {
-        _ = alpha; // Will use for interpolation later
+    /// Get the GPU device (needed for creating meshes).
+    pub fn getDevice(self: *Renderer) *c.SDL_GPUDevice {
+        return self.device;
+    }
 
+    // ========================================================================
+    // Frame Rendering
+    // ========================================================================
+
+    /// Begin a new frame. Must call endFrame() after drawing.
+    /// Returns false if frame should be skipped (e.g., window minimized).
+    pub fn beginFrame(self: *Renderer, clear_color: [4]f32) bool {
         // Step 1: Acquire a command buffer
         const cmd = c.SDL_AcquireGPUCommandBuffer(self.device) orelse {
             std.debug.print("SDL_AcquireGPUCommandBuffer failed: {s}\n", .{c.SDL_GetError()});
@@ -150,10 +155,10 @@ pub const Renderer = struct {
             return false;
         }
 
-        // If swapchain_texture is null, window might be minimized - skip rendering
+        // If swapchain_texture is null, window might be minimized - skip frame
         if (swapchain_texture == null) {
             _ = c.SDL_SubmitGPUCommandBuffer(cmd);
-            return true;
+            return false;
         }
 
         // Step 3: Begin render pass with clear color
@@ -189,29 +194,56 @@ pub const Renderer = struct {
             return false;
         };
 
-        // Step 4: Draw the triangle!
+        // Bind the pipeline once at the start of the frame
         c.SDL_BindGPUGraphicsPipeline(render_pass, self.pipeline);
+
+        // Store frame state
+        self.current_cmd = cmd;
+        self.current_render_pass = render_pass;
+
+        return true;
+    }
+
+    /// Draw a mesh. Must be called between beginFrame() and endFrame().
+    ///
+    /// NOTE: Transform is currently ignored! We need uniform buffers to pass
+    /// the transform matrix to the shader. For now, meshes render at their
+    /// original vertex positions.
+    pub fn drawMesh(self: *Renderer, m: *const Mesh) void {
+        const render_pass = self.current_render_pass orelse {
+            std.debug.print("drawMesh called outside of beginFrame/endFrame\n", .{});
+            return;
+        };
+
+        // Future: Update uniform buffer with transform matrix here
+        // c.SDL_PushGPUVertexUniformData(cmd, 0, &transform_matrix, @sizeOf(Mat4));
 
         // Bind vertex buffer
         const buffer_binding = c.SDL_GPUBufferBinding{
-            .buffer = self.vertex_buffer,
+            .buffer = m.vertex_buffer,
             .offset = 0,
         };
         c.SDL_BindGPUVertexBuffers(render_pass, 0, &buffer_binding, 1);
 
-        // Draw 3 vertices (1 triangle)
-        c.SDL_DrawGPUPrimitives(render_pass, 3, 1, 0, 0);
+        // Draw vertices
+        c.SDL_DrawGPUPrimitives(render_pass, m.vertex_count, 1, 0, 0);
+    }
 
-        // Step 5: End render pass
-        c.SDL_EndGPURenderPass(render_pass);
-
-        // Step 6: Submit command buffer
-        if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
-            std.debug.print("SDL_SubmitGPUCommandBuffer failed: {s}\n", .{c.SDL_GetError()});
-            return false;
+    /// End the current frame and present to screen.
+    pub fn endFrame(self: *Renderer) void {
+        if (self.current_render_pass) |render_pass| {
+            c.SDL_EndGPURenderPass(render_pass);
         }
 
-        return true;
+        if (self.current_cmd) |cmd| {
+            if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
+                std.debug.print("SDL_SubmitGPUCommandBuffer failed: {s}\n", .{c.SDL_GetError()});
+            }
+        }
+
+        // Clear frame state
+        self.current_cmd = null;
+        self.current_render_pass = null;
     }
 
     /// Get the window dimensions
@@ -269,8 +301,7 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
     // Get swapchain texture format
     const swapchain_format = c.SDL_GetGPUSwapchainTextureFormat(device, window);
 
-    // Define vertex buffer layout
-    // This tells the GPU how to read our Vertex struct
+    // Define vertex buffer layout (must match Vertex struct in mesh.zig)
     const vertex_buffer_desc = c.SDL_GPUVertexBufferDescription{
         .slot = 0,
         .pitch = @sizeOf(Vertex), // Bytes between vertices
@@ -327,7 +358,7 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
         .primitive_type = c.SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         .rasterizer_state = .{
             .fill_mode = c.SDL_GPU_FILLMODE_FILL,
-            .cull_mode = c.SDL_GPU_CULLMODE_NONE, // No backface culling for now
+            .cull_mode = c.SDL_GPU_CULLMODE_NONE,
             .front_face = c.SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE,
             .depth_bias_constant_factor = 0,
             .depth_bias_clamp = 0,
@@ -339,7 +370,7 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
         },
         .multisample_state = .{
             .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
-            .sample_mask = 0, // Must be 0 when not using multisampling
+            .sample_mask = 0,
             .enable_mask = false,
             .padding1 = 0,
             .padding2 = 0,
@@ -377,79 +408,6 @@ fn createPipeline(device: *c.SDL_GPUDevice, window: *c.SDL_Window) !*c.SDL_GPUGr
 }
 
 // ============================================================================
-// Vertex Buffer Creation
-// ============================================================================
-
-fn createVertexBuffer(device: *c.SDL_GPUDevice) !*c.SDL_GPUBuffer {
-    const buffer_size = @sizeOf(Vertex) * triangle_vertices.len;
-
-    // Create GPU buffer
-    const vertex_buffer = c.SDL_CreateGPUBuffer(device, &c.SDL_GPUBufferCreateInfo{
-        .usage = c.SDL_GPU_BUFFERUSAGE_VERTEX,
-        .size = buffer_size,
-        .props = 0,
-    }) orelse {
-        std.debug.print("Failed to create vertex buffer: {s}\n", .{c.SDL_GetError()});
-        return error.BufferCreationFailed;
-    };
-    errdefer c.SDL_ReleaseGPUBuffer(device, vertex_buffer);
-
-    // Create transfer buffer to upload data
-    const transfer_buffer = c.SDL_CreateGPUTransferBuffer(device, &c.SDL_GPUTransferBufferCreateInfo{
-        .usage = c.SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
-        .size = buffer_size,
-        .props = 0,
-    }) orelse {
-        std.debug.print("Failed to create transfer buffer: {s}\n", .{c.SDL_GetError()});
-        return error.TransferBufferCreationFailed;
-    };
-    defer c.SDL_ReleaseGPUTransferBuffer(device, transfer_buffer);
-
-    // Map transfer buffer and copy vertex data
-    const mapped: *[triangle_vertices.len]Vertex = @ptrCast(@alignCast(
-        c.SDL_MapGPUTransferBuffer(device, transfer_buffer, false) orelse {
-            std.debug.print("Failed to map transfer buffer: {s}\n", .{c.SDL_GetError()});
-            return error.TransferBufferMapFailed;
-        },
-    ));
-    mapped.* = triangle_vertices;
-    c.SDL_UnmapGPUTransferBuffer(device, transfer_buffer);
-
-    // Upload to GPU
-    const copy_cmd = c.SDL_AcquireGPUCommandBuffer(device) orelse {
-        return error.CommandBufferFailed;
-    };
-
-    const copy_pass = c.SDL_BeginGPUCopyPass(copy_cmd) orelse {
-        _ = c.SDL_SubmitGPUCommandBuffer(copy_cmd);
-        return error.CopyPassFailed;
-    };
-
-    c.SDL_UploadToGPUBuffer(
-        copy_pass,
-        &c.SDL_GPUTransferBufferLocation{
-            .transfer_buffer = transfer_buffer,
-            .offset = 0,
-        },
-        &c.SDL_GPUBufferRegion{
-            .buffer = vertex_buffer,
-            .offset = 0,
-            .size = buffer_size,
-        },
-        false,
-    );
-
-    c.SDL_EndGPUCopyPass(copy_pass);
-
-    // Submit and wait for upload to complete
-    const fence = c.SDL_SubmitGPUCommandBufferAndAcquireFence(copy_cmd);
-    _ = c.SDL_WaitForGPUFences(device, true, &fence, 1);
-    c.SDL_ReleaseGPUFence(device, fence);
-
-    return vertex_buffer;
-}
-
-// ============================================================================
 // Color Constants
 // ============================================================================
 
@@ -463,11 +421,6 @@ pub const Colors = struct {
 // ============================================================================
 // Tests
 // ============================================================================
-
-test "Vertex size is correct" {
-    // 3 floats for position + 3 floats for color = 6 floats = 24 bytes
-    try std.testing.expectEqual(@as(usize, 24), @sizeOf(Vertex));
-}
 
 test "Colors are valid" {
     for (Colors.CORNFLOWER_BLUE) |component| {

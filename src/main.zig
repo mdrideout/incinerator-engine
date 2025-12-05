@@ -1,6 +1,21 @@
 //! main.zig - Incinerator Engine Entry Point
 //!
-//! This is the main entry point for the engine. It implements the Canonical Game Loop:
+//! DOMAIN: Application Layer (top-level orchestration)
+//!
+//! This module is the entry point and main orchestrator for the engine.
+//! It owns the game loop and coordinates between all other systems.
+//!
+//! Responsibilities:
+//! - Application lifecycle (init, run, shutdown)
+//! - Game loop orchestration (input → simulation → render)
+//! - Owning and wiring together engine systems
+//!
+//! This module does NOT:
+//! - Contain game-specific logic (future: that's game.zig)
+//! - Perform low-level rendering (that's renderer.zig)
+//! - Define assets or entities (that's primitives.zig, world.zig)
+//!
+//! The Canonical Game Loop:
 //!
 //! ┌─────────────────────────────────────────────────────────────┐
 //! │ Phase 1: INPUT PUMP (Per-Frame / Uncapped)                  │
@@ -17,6 +32,9 @@ const std = @import("std");
 const timing = @import("timing.zig");
 const input = @import("input.zig");
 const renderer = @import("renderer.zig");
+const mesh = @import("mesh.zig");
+const primitives = @import("primitives.zig");
+const world = @import("world.zig");
 const sdl = @import("sdl.zig");
 
 // Use shared SDL bindings to avoid opaque type conflicts
@@ -42,6 +60,10 @@ const App = struct {
     gpu_renderer: renderer.Renderer,
     frame_timer: timing.FrameTimer,
     input_buffer: input.InputBuffer,
+
+    // Scene
+    game_world: world.World,
+    triangle_mesh: mesh.Mesh, // Owned mesh for the test triangle
 
     // Debug counters
     debug_frame_counter: u32,
@@ -69,14 +91,26 @@ const App = struct {
         };
         errdefer c.SDL_DestroyWindow(window);
 
-        // Create GPU renderer (replaces SDL_Renderer with modern GPU API)
+        // Create GPU renderer
         var gpu_renderer = try renderer.Renderer.init(window);
         errdefer gpu_renderer.deinit();
+
+        // Create the test triangle mesh
+        var triangle_mesh = try primitives.createTriangle(gpu_renderer.getDevice());
+        errdefer triangle_mesh.deinit();
+
+        // Create the world and spawn our test entity
+        var game_world = world.World.init();
+        _ = try game_world.spawn(.{
+            .mesh = &triangle_mesh,
+            .transform = world.Transform.identity,
+        });
 
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Incinerator Engine initialized\n", .{});
         std.debug.print(" Window: {d}x{d}\n", .{ INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT });
         std.debug.print(" Tick rate: {d} Hz ({d:.3} ms)\n", .{ timing.TICK_RATE, timing.TICK_DURATION * 1000.0 });
+        std.debug.print(" Entities: {d}\n", .{game_world.count()});
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Controls:\n", .{});
         std.debug.print("   ESC - Quit\n", .{});
@@ -88,12 +122,16 @@ const App = struct {
             .gpu_renderer = gpu_renderer,
             .frame_timer = timing.FrameTimer.init(),
             .input_buffer = input.InputBuffer.init(),
+            .game_world = game_world,
+            .triangle_mesh = triangle_mesh,
             .debug_frame_counter = 0,
             .sim_tick_count = 0,
         };
     }
 
     pub fn deinit(self: *App) void {
+        self.game_world.deinit();
+        self.triangle_mesh.deinit();
         self.gpu_renderer.deinit();
         c.SDL_DestroyWindow(self.window);
         c.SDL_Quit();
@@ -186,8 +224,20 @@ const App = struct {
     /// Render the current frame using SDL3 GPU API
     /// `alpha` is the interpolation factor (0.0 to 1.0) for smooth visuals.
     fn render(self: *App, alpha: f32) void {
-        // Render frame with cornflower blue clear color
-        _ = self.gpu_renderer.renderFrame(renderer.Colors.CORNFLOWER_BLUE, alpha);
+        _ = alpha; // Will use for interpolation when transforms work
+
+        // Begin the frame (clears screen)
+        if (!self.gpu_renderer.beginFrame(renderer.Colors.CORNFLOWER_BLUE)) {
+            return; // Frame skipped (e.g., window minimized)
+        }
+
+        // Draw all entities in the world
+        for (self.game_world.iterator()) |entity| {
+            self.gpu_renderer.drawMesh(entity.mesh);
+        }
+
+        // End the frame (submits to GPU)
+        self.gpu_renderer.endFrame();
     }
 
     /// Print debug statistics
