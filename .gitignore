@@ -16,3 +16,7 @@ zig-out/
 /build/
 /build-*/
 /docgen_tmp/
+
+# Compiled shaders (generated from GLSL sources in shaders/)
+# These are build artifacts - run `zig build` to regenerate
+src/shaders/compiled/

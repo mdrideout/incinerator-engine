@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2024-12-05
-**Updated:** 2024-12-05
+**Updated:** 2025-12-05
 **Decision Makers:** Matt, Claude
 
 ## Context
@@ -64,31 +64,55 @@ This ensures:
 ### Build Output Structure
 
 ```
-shaders/
-├── triangle.vert              # GLSL source
-├── triangle.frag              # GLSL source
-└── compiled/
-    ├── triangle.vert.spv      # SPIR-V (Vulkan - Linux, Windows)
-    ├── triangle.frag.spv
-    ├── triangle.vert.metal    # MSL (macOS, iOS)
-    ├── triangle.frag.metal
-    ├── triangle.vert.hlsl     # HLSL (Windows DirectX) - future
-    └── triangle.frag.hlsl
+shaders/                           # GLSL source files (version controlled)
+├── triangle.vert
+├── triangle.frag
+└── ...
+
+src/shaders/compiled/              # Compiled shaders (gitignored, generated)
+├── triangle.vert.spv              # SPIR-V (Vulkan - Linux, Windows)
+├── triangle.frag.spv
+├── triangle.vert.metal            # MSL (macOS, iOS)
+├── triangle.frag.metal
+├── triangle.vert.hlsl             # HLSL (Windows DirectX) - future
+└── triangle.frag.hlsl
 ```
+
+**Note:** Compiled shaders are placed in `src/shaders/compiled/` rather than `shaders/compiled/` because Zig's `@embedFile` can only access files within the module's package root (`src/`). This is a Zig language constraint.
 
 ### Runtime Selection
 
+The renderer uses compile-time platform detection to embed the correct shader format:
+
 ```zig
+// src/renderer.zig
 const std = @import("std");
 const builtin = @import("builtin");
 
-const vertex_shader = switch (builtin.os.tag) {
-    .macos, .ios => @embedFile("shaders/compiled/triangle.vert.metal"),
-    .linux => @embedFile("shaders/compiled/triangle.vert.spv"),
-    .windows => @embedFile("shaders/compiled/triangle.vert.spv"), // or .hlsl for DX12
-    else => @compileError("Unsupported platform"),
+const ShaderCode = struct {
+    vertex: []const u8,
+    fragment: []const u8,
+    format: c.SDL_GPUShaderFormat,
 };
+
+fn getShaderCode() ShaderCode {
+    return switch (builtin.os.tag) {
+        .macos, .ios => .{
+            .vertex = @embedFile("shaders/compiled/triangle.vert.metal"),
+            .fragment = @embedFile("shaders/compiled/triangle.frag.metal"),
+            .format = c.SDL_GPU_SHADERFORMAT_MSL,
+        },
+        // Linux and Windows use SPIR-V (Vulkan)
+        else => .{
+            .vertex = @embedFile("shaders/compiled/triangle.vert.spv"),
+            .fragment = @embedFile("shaders/compiled/triangle.frag.spv"),
+            .format = c.SDL_GPU_SHADERFORMAT_SPIRV,
+        },
+    };
+}
 ```
+
+This compiles the correct shader format directly into the binary at build time - no runtime file loading required.
 
 ### Tools Required
 
@@ -168,30 +192,46 @@ SDL3 GPU **requires** pre-compiled shaders. There is no runtime GLSL interpretat
 ### Compilation Commands
 
 ```bash
-# GLSL → SPIR-V
-glslc triangle.vert -o compiled/triangle.vert.spv
-glslc triangle.frag -o compiled/triangle.frag.spv
+# GLSL → SPIR-V (output to src/ for @embedFile access)
+glslc shaders/triangle.vert -o src/shaders/compiled/triangle.vert.spv
+glslc shaders/triangle.frag -o src/shaders/compiled/triangle.frag.spv
 
 # SPIR-V → MSL (always, for macOS/iOS)
-spirv-cross --msl compiled/triangle.vert.spv --output compiled/triangle.vert.metal
-spirv-cross --msl compiled/triangle.frag.spv --output compiled/triangle.frag.metal
+spirv-cross --msl src/shaders/compiled/triangle.vert.spv --output src/shaders/compiled/triangle.vert.metal
+spirv-cross --msl src/shaders/compiled/triangle.frag.spv --output src/shaders/compiled/triangle.frag.metal
 
 # SPIR-V → HLSL (always, for Windows DirectX) - future
-spirv-cross --hlsl compiled/triangle.vert.spv --output compiled/triangle.vert.hlsl
-spirv-cross --hlsl compiled/triangle.frag.spv --output compiled/triangle.frag.hlsl
+spirv-cross --hlsl src/shaders/compiled/triangle.vert.spv --output src/shaders/compiled/triangle.vert.hlsl
+spirv-cross --hlsl src/shaders/compiled/triangle.frag.spv --output src/shaders/compiled/triangle.frag.hlsl
 ```
 
 ### Build Integration
 
-Shader compilation will be integrated into `build.zig` as a custom build step:
+Shader compilation is integrated into `build.zig` as a dependency of the main executable:
 
-1. Find all `.vert` and `.frag` files in `shaders/`
-2. Run `glslc` to produce `.spv` files
-3. Run `spirv-cross --msl` to produce `.metal` files
-4. Run `spirv-cross --hlsl` to produce `.hlsl` files (future)
-5. Continue with Zig compilation
+```zig
+// build.zig - shader compilation step
+const shader_step = buildShaders(b);
+exe.step.dependOn(shader_step);
+```
 
-The Zig code uses `@embedFile` to include the correct compiled shader at compile time based on target platform.
+The `buildShaders()` function:
+
+1. Creates `src/shaders/compiled/` directory
+2. For each shader in `shader_sources` (e.g., "triangle"):
+   - Runs `glslc` on `.vert` and `.frag` files → produces `.spv`
+   - Runs `spirv-cross --msl` on `.spv` files → produces `.metal`
+3. Returns a step that the executable depends on
+
+Shaders are compiled automatically on every `zig build`. The Zig compiler then uses `@embedFile` to include the correct compiled shader at compile time based on target platform.
+
+### Adding New Shaders
+
+To add a new shader:
+
+1. Create `shaders/myshader.vert` and `shaders/myshader.frag`
+2. Add `"myshader"` to the `shader_sources` array in `build.zig`
+3. Reference in code: `@embedFile("shaders/compiled/myshader.vert.metal")`
 
 ## References
 

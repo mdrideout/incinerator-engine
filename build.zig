@@ -134,6 +134,14 @@ pub fn build(b: *std.Build) void {
     //     exe.linkLibrary(zgpu.artifact("zdawn"));
     // }
 
+    // ---------------------------------------------------------
+    // Shader Compilation (GLSL → SPIR-V → MSL/HLSL)
+    // ---------------------------------------------------------
+    // Compiles all shader formats at build time for cross-platform support.
+    // See docs/adr/001-shader-language-and-compilation.md for rationale.
+    const shader_step = buildShaders(b);
+    exe.step.dependOn(shader_step);
+
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
     // step). By default the install prefix is `zig-out/` but can be overridden
@@ -204,4 +212,84 @@ pub fn build(b: *std.Build) void {
     //
     // Lastly, the Zig build system is relatively simple and self-contained,
     // and reading its source code will allow you to master it.
+}
+
+// =============================================================================
+// Shader Compilation
+// =============================================================================
+// Compiles GLSL shaders to all platform formats (SPIR-V, MSL, HLSL).
+// This runs at build time so all formats are always available.
+
+/// List of shaders to compile (without extension)
+const shader_sources = [_][]const u8{
+    "triangle",
+};
+
+/// Shader stages and their file extensions
+const ShaderStage = enum {
+    vertex,
+    fragment,
+
+    fn extension(self: ShaderStage) []const u8 {
+        return switch (self) {
+            .vertex => ".vert",
+            .fragment => ".frag",
+        };
+    }
+};
+
+const shader_stages = [_]ShaderStage{ .vertex, .fragment };
+
+/// Build all shaders and return a step that depends on all compilation commands
+fn buildShaders(b: *std.Build) *std.Build.Step {
+    const shader_compile_step = b.step("shaders", "Compile GLSL shaders to SPIR-V and platform formats");
+
+    // Create output directory inside src/ (required for @embedFile to work)
+    const mkdir_cmd = b.addSystemCommand(&.{
+        "mkdir",
+        "-p",
+        "src/shaders/compiled",
+    });
+    shader_compile_step.dependOn(&mkdir_cmd.step);
+
+    // Process each shader
+    for (shader_sources) |shader_name| {
+        // Process each stage (vertex, fragment)
+        for (shader_stages) |stage| {
+            const ext = stage.extension();
+
+            // Input: shaders/triangle.vert
+            const input_path = b.fmt("shaders/{s}{s}", .{ shader_name, ext });
+
+            // Output paths (inside src/ for @embedFile access)
+            const spv_output = b.fmt("src/shaders/compiled/{s}{s}.spv", .{ shader_name, ext });
+            const msl_output = b.fmt("src/shaders/compiled/{s}{s}.metal", .{ shader_name, ext });
+
+            // Step 1: GLSL → SPIR-V (using glslc)
+            const glslc_cmd = b.addSystemCommand(&.{
+                "glslc",
+                input_path,
+                "-o",
+                spv_output,
+            });
+            // Ensure directory exists before compiling
+            glslc_cmd.step.dependOn(&mkdir_cmd.step);
+
+            // Step 2: SPIR-V → MSL (using spirv-cross)
+            const spirv_cross_msl = b.addSystemCommand(&.{
+                "spirv-cross",
+                "--msl",
+                spv_output,
+                "--output",
+                msl_output,
+            });
+            // MSL depends on SPIR-V being generated first
+            spirv_cross_msl.step.dependOn(&glslc_cmd.step);
+
+            // Add to the shader compile step
+            shader_compile_step.dependOn(&spirv_cross_msl.step);
+        }
+    }
+
+    return shader_compile_step;
 }
