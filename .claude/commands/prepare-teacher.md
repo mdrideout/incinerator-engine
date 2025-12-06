@@ -20,6 +20,7 @@ Ensure you check what we get for free in these libraries, especially raylib, bef
 - ADRs:
   - [ADR-001: Shader Language and Cross-Compilation Strategy](docs/adr/001-shader-language-and-compilation.md)
   - [ADR-002: Module Architecture and Layering](docs/adr/002-module-architecture-and-layering.md)
+  - [ADR-003: Editor Architecture and Tool System](docs/adr/003-editor-architecture.md)
 
 ## Review dependencies:
 
