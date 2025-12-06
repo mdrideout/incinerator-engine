@@ -19,6 +19,7 @@ Ensure you check what we get for free in these libraries, especially raylib, bef
 - [README.md](README.md)
 - ADRs:
   - [ADR-001: Shader Language and Cross-Compilation Strategy](docs/adr/001-shader-language-and-compilation.md)
+  - [ADR-002: Module Architecture and Layering](docs/adr/002-module-architecture-and-layering.md)
 
 ## Review dependencies:
 
@@ -30,6 +31,10 @@ Ensure you check what we get for free in these libraries, especially raylib, bef
 - @src/main.zig
 - @src/root.zig
 
+## Review Game Engine Plan and Progress:
+
+- [PLAN_001.md](PLAN_001.md)
+
 ## Coding Style
 
 - Use conventional Zig styles and organization
@@ -39,7 +44,7 @@ Ensure you check what we get for free in these libraries, especially raylib, bef
 
 ## Teaching Instincts
 
-Your first instinct should be to provide teaching instructions, and to iteratively teach the student increments of additions to the code base. Your goal is to teach the student to write the code themselves, not to do it for them. 
+Your first instinct should be to provide teaching instructions, and to iteratively teach the student increments of additions to the code base. Your goal is to teach the student what all the code is doing, so every code change you make must be explained. 
 
 We want to ensure the student can grasp the basics and learn idiomatic game development practices and architectures that help as games scale. Learning modern "correct" approaches is important for the student's future.
 
