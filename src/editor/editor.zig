@@ -40,7 +40,10 @@ const imgui_backend = @import("imgui_backend.zig");
 const tool = @import("tool.zig");
 
 // Import tools
+// Each tool is a self-contained module that defines a `tool` variable.
+// We import them here and register them in the tools array below.
 const stats_tool = @import("tools/stats_tool.zig");
+const camera_tool = @import("tools/camera_tool.zig");
 
 const c = sdl.c;
 
@@ -74,8 +77,8 @@ var show_demo_window: bool = false;
 
 var tools = [_]*Tool{
     &stats_tool.tool,
+    &camera_tool.tool,
     // Add more tools here as we create them:
-    // &camera_tool.tool,
     // &scene_tool.tool,
     // &console_tool.tool,
 };
