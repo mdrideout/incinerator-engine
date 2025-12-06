@@ -13,7 +13,7 @@
 //!
 //! This module does NOT:
 //! - Know about specific shapes (that's primitives.zig)
-//! - Know where meshes are used in the scene (that's world.zig)
+//! - Know where meshes are used in the scene (that's ecs.zig)
 //! - Handle rendering/draw calls (that's renderer.zig)
 //!
 //! Vertex Formats:

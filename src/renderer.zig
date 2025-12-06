@@ -13,7 +13,7 @@
 //! - Draw operations (drawMesh, etc.)
 //!
 //! This module does NOT:
-//! - Know what entities exist (that's world.zig)
+//! - Know what entities exist (that's ecs.zig)
 //! - Own mesh data (meshes are passed in for drawing)
 //! - Contain game logic or scene management
 //!

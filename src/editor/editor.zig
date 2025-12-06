@@ -33,7 +33,7 @@ const zgui = @import("zgui");
 const sdl = @import("../sdl.zig");
 const renderer_module = @import("../renderer.zig");
 const camera_module = @import("../camera.zig");
-const world_module = @import("../world.zig");
+const ecs_module = @import("../ecs.zig");
 const timing_module = @import("../timing.zig");
 
 const imgui_backend = @import("imgui_backend.zig");
@@ -44,6 +44,7 @@ const tool = @import("tool.zig");
 // We import them here and register them in the tools array below.
 const stats_tool = @import("tools/stats_tool.zig");
 const camera_tool = @import("tools/camera_tool.zig");
+const scene_tool = @import("tools/scene_tool.zig");
 
 const c = sdl.c;
 
@@ -69,6 +70,16 @@ var show_demo_window: bool = false;
 /// Defaults to true so you can move the camera immediately without toggling.
 var input_passthrough: bool = true;
 
+/// Currently selected entity (persists across frames)
+/// Used by Scene tool for entity selection/inspection
+var selected_entity: ?u64 = null;
+
+/// Current gizmo operation mode (for future gizmo tool)
+var gizmo_mode: GizmoMode = .translate;
+
+/// Gizmo coordinate space (for future gizmo tool)
+var gizmo_space: GizmoSpace = .world;
+
 // ============================================================================
 // Tool Registry
 // ============================================================================
@@ -85,8 +96,8 @@ var input_passthrough: bool = true;
 var tools = [_]*Tool{
     &stats_tool.tool,
     &camera_tool.tool,
+    &scene_tool.tool,
     // Add more tools here as we create them:
-    // &scene_tool.tool,
     // &console_tool.tool,
 };
 
@@ -200,7 +211,7 @@ pub fn processEvent(event: *const c.SDL_Event) bool {
 pub fn draw(
     gpu_renderer: *renderer_module.Renderer,
     camera: *const camera_module.Camera,
-    world: *const world_module.World,
+    world: *const ecs_module.GameWorld,
     frame_timer: *const timing_module.FrameTimer,
 ) void {
     if (!build_options.editor_enabled) return;
@@ -234,10 +245,14 @@ pub fn draw(
     // ========================================================================
 
     // Create the editor context that tools will use
+    // Note: selected_entity, gizmo_mode, gizmo_space are module-level vars that persist
     var ctx = EditorContext{
         .camera = camera,
         .world = world,
         .frame_timer = frame_timer,
+        .selected_entity = selected_entity,
+        .gizmo_mode = gizmo_mode,
+        .gizmo_space = gizmo_space,
         .wants_mouse = imgui_backend.wantsMouse(),
         .wants_keyboard = imgui_backend.wantsKeyboard(),
     };
@@ -249,6 +264,11 @@ pub fn draw(
     for (&tools) |t| {
         t.draw(&ctx);
     }
+
+    // Persist editor state changes back to module-level vars
+    selected_entity = ctx.selected_entity;
+    gizmo_mode = ctx.gizmo_mode;
+    gizmo_space = ctx.gizmo_space;
 
     // Draw demo window if enabled (great for learning ImGui!)
     if (show_demo_window) {

@@ -176,6 +176,16 @@ pub fn build(b: *std.Build) void {
     const zstbi = b.dependency("zstbi", .{});
     exe.root_module.addImport("zstbi", zstbi.module("root"));
 
+    // ---------------------------------------------------------
+    // ECS (zflecs) - Entity Component System
+    // ---------------------------------------------------------
+    // zflecs wraps the flecs ECS library for high-performance entity management.
+    // Used for all game entities: vehicles, NPCs, props, debris, particles.
+    // Archetype-based storage provides cache-friendly iteration for physics sync.
+    const zflecs = b.dependency("zflecs", .{});
+    exe.root_module.addImport("zflecs", zflecs.module("root"));
+    exe.linkLibrary(zflecs.artifact("flecs"));
+
     // unsure if need these
     // { // Needed for glfw/wgpu rendering backend
     //     const zglfw = b.dependency("zglfw", .{});

@@ -144,7 +144,7 @@ Test results:
 
 ---
 
-## Phase 3: Engine Systems
+## Phase 3: Engine Systems (2/3 Complete)
 
 ### ✅ Step 3.1: ImGui Integration
 **Status: COMPLETE**
@@ -172,9 +172,14 @@ Features working:
 - Proper two-pass rendering (scene pass → ImGui copy pass → ImGui render pass)
 - Input handling: editor consumes events before game
 
+**Additional tools implemented:**
+- ✅ Camera tool (position, rotation, FOV, direction vectors)
+- ✅ Input passthrough mode (F3 toggle) - move camera while editor visible
+- ✅ F1 toggle fix - properly shows/hides editor
+- ✅ "Press F1" hint when editor hidden
+
 **Remaining for Step 3.1 (optional enhancements):**
-- Camera tool (position, rotation inspector)
-- Scene tool (entity hierarchy, inspector)
+- ✅ Scene tool (entity hierarchy, inspector) - MOVED TO Step 3.3
 - Wireframe mode toggle
 - Texture rendering toggle
 
@@ -183,10 +188,28 @@ Features working:
 - Ground plane + falling objects
 - Debug visualization (wireframe colliders)
 
-### Step 3.3: Entity/Component System
-- Simple archetypal ECS or component bags
-- Transform, Mesh, Physics components
-- Scene graph for hierarchical transforms
+### ✅ Step 3.3: Entity/Component System
+**Status: COMPLETE**
+
+Files created/modified:
+- `src/ecs.zig` - GameWorld, components (Position, Rotation, Scale, Renderable), cached queries
+- `src/main.zig` - Migrated to ECS, entity spawning after App construction
+- `src/editor/tool.zig` - Updated EditorContext for ECS (GameWorld, u64 entity IDs)
+- `src/editor/tools/scene_tool.zig` - Entity hierarchy browser with selection and inspector
+- `docs/adr/004-ecs-architecture.md` - Architecture decision record
+- `build.zig` / `build.zig.zon` - Added zflecs dependency
+
+Files deleted:
+- `src/world.zig` - Replaced by ecs.zig
+
+Features working:
+- flecs ECS via zflecs (archetype storage, high-performance queries)
+- Components: Position, Rotation, Scale, Renderable (mesh pointer)
+- Tags: Static, Vehicle, Debris (zero-size markers for filtering)
+- Cached query system for efficient iteration
+- RenderableIterator with proper cleanup (handles early break and full consumption)
+- Scene tool: entity list, selection, transform/mesh inspector
+- Entity spawning with stable mesh pointer handling
 
 ---
 
@@ -210,17 +233,19 @@ src/
 ├── texture.zig       # GPU texture creation utilities
 ├── gltf_loader.zig   # GLB/glTF loader with texture extraction
 ├── primitives.zig    # Built-in shapes (triangle, cube)
-├── world.zig         # Entity, Transform, World (scene management)
+├── ecs.zig           # ECS via zflecs (GameWorld, components, queries)
 ├── timing.zig        # FrameTimer, TICK_RATE, TICK_DURATION
 ├── input.zig         # InputBuffer, Key constants, MouseButton, editor event integration
 ├── sdl.zig           # Shared SDL3 C bindings
 ├── root.zig          # Library root (unused for now)
 └── editor/           # ImGui debug UI system
-    ├── editor.zig        # Main orchestrator, tool registry, menu bar
+    ├── editor.zig        # Main orchestrator, tool registry, menu bar, input passthrough
     ├── imgui_backend.zig # SDL3 GPU backend wrapper
     ├── tool.zig          # Tool interface, EditorContext
     └── tools/
-        └── stats_tool.zig # FPS, frame time, graph
+        ├── stats_tool.zig  # FPS, frame time, graph
+        ├── camera_tool.zig # Camera position, rotation, FOV inspector
+        └── scene_tool.zig  # Entity hierarchy, selection, inspector
 
 shaders/
 ├── triangle.vert     # GLSL vertex shader for primitives (pos + color)
@@ -237,7 +262,8 @@ assets/
 docs/adr/
 ├── 001-shader-language-and-compilation.md
 ├── 002-module-architecture-and-layering.md
-└── 003-editor-architecture.md
+├── 003-editor-architecture.md
+└── 004-ecs-architecture.md
 ```
 
 ---
@@ -258,21 +284,46 @@ ImGui debug UI is now integrated:
 - Stats tool with FPS, frame time, and graph
 - Conditional compilation (Debug = editor on, Release = editor off)
 
+## Step 3.3 Complete!
+
+Entity Component System is now implemented:
+- flecs ECS via zflecs (archetype storage for cache efficiency)
+- Components: Position, Rotation, Scale, Renderable
+- Tags: Static, Vehicle, Debris
+- Cached queries for efficient iteration
+- Scene tool: entity hierarchy, selection, transform/mesh inspector
+- Proper iterator cleanup (handles early break and full consumption)
+
 ---
 
 ## What's Next?
 
-**Option A: More Editor Tools (Step 3.1 continuation)**
-- Camera tool: Position, rotation, FOV inspector
-- Scene tool: Entity hierarchy, property inspector
-- Wireframe/texture toggles
-
-**Option B: Physics Integration (Step 3.2)**
+**Option A: Physics Integration (Step 3.2)**
 - Jolt physics world setup via zphysics
 - Ground plane + falling objects
 - Debug visualization (wireframe colliders)
+- Physics components integrated with ECS
 
-**Option C: Entity/Component System (Step 3.3)**
-- Simple archetypal ECS or component bags
-- Transform, Mesh, Physics components
-- Scene graph for hierarchical transforms
+**Option B: More Editor Tools**
+- Wireframe mode toggle
+- Texture rendering toggle
+- ImGuizmo 3D gizmos for transform manipulation
+
+**Option C: Rendering Enhancements**
+- Shadow mapping
+- Normal mapping
+- PBR materials
+
+---
+
+## Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| WASD | Move camera |
+| Q/E | Move down/up |
+| Right-click + drag | Look around |
+| F1 | Toggle editor visibility |
+| F2 | Toggle ImGui demo window |
+| F3 | Toggle input passthrough (camera works while editor visible) |
+| ESC | Quit |

@@ -13,7 +13,7 @@
 //! This module does NOT:
 //! - Contain game-specific logic (future: that's game.zig)
 //! - Perform low-level rendering (that's renderer.zig)
-//! - Define assets or entities (that's primitives.zig, world.zig)
+//! - Define assets or entities (that's primitives.zig, ecs.zig)
 //!
 //! The Canonical Game Loop:
 //!
@@ -35,7 +35,7 @@ const input = @import("input.zig");
 const renderer = @import("renderer.zig");
 const mesh = @import("mesh.zig");
 const primitives = @import("primitives.zig");
-const world = @import("world.zig");
+const ecs = @import("ecs.zig");
 const camera = @import("camera.zig");
 const sdl = @import("sdl.zig");
 const gltf_loader = @import("gltf_loader.zig");
@@ -66,12 +66,14 @@ const App = struct {
     input_buffer: input.InputBuffer,
     allocator: std.mem.Allocator, // For GLB loading
 
-    // Scene
-    game_world: world.World,
-    cube_mesh: mesh.Mesh, // Owned mesh for the test cube
-    loaded_model_1: ?gltf_loader.LoadedModel, // First GLB model
-    loaded_model_2: ?gltf_loader.LoadedModel, // Second GLB model
+    // Scene - now using ECS!
+    game_world: ecs.GameWorld,
     game_camera: camera.Camera, // Player camera
+
+    // Owned mesh/model data (entities reference these, ECS doesn't own the data)
+    cube_mesh: mesh.Mesh,
+    loaded_model_1: ?gltf_loader.LoadedModel,
+    loaded_model_2: ?gltf_loader.LoadedModel,
 
     // Debug counters
     debug_frame_counter: u32,
@@ -132,22 +134,17 @@ const App = struct {
             break :blk null;
         };
 
-        // Create the world and spawn our test entity (cube for reference)
-        var game_world = world.World.init();
-        _ = try game_world.spawn(.{
-            .mesh = &cube_mesh,
-            .transform = world.Transform.identity,
-        });
+        // Create the ECS world (entities spawned in spawnEntities after App construction)
+        const game_world = ecs.GameWorld.init();
 
         // Initialize editor (ImGui debug UI)
         // This sets up ImGui with our SDL3 GPU device
         editor.init(window, gpu_renderer.getDevice());
 
         std.debug.print("===========================================\n", .{});
-        std.debug.print(" Incinerator Engine initialized\n", .{});
+        std.debug.print(" Incinerator Engine initialized (ECS)\n", .{});
         std.debug.print(" Window: {d}x{d}\n", .{ INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT });
         std.debug.print(" Tick rate: {d} Hz ({d:.3} ms)\n", .{ timing.TICK_RATE, timing.TICK_DURATION * 1000.0 });
-        std.debug.print(" Entities: {d}\n", .{game_world.count()});
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Controls:\n", .{});
         std.debug.print("   ESC - Quit\n", .{});
@@ -197,6 +194,49 @@ const App = struct {
         std.debug.print(" Total frames: {d}\n", .{self.frame_timer.total_frames});
         std.debug.print(" Total simulation ticks: {d}\n", .{self.sim_tick_count});
         std.debug.print("===========================================\n", .{});
+    }
+
+    /// Spawn initial entities into the ECS world.
+    /// IMPORTANT: Must be called AFTER App construction to ensure mesh pointers
+    /// point to stable memory (App's fields, not stack locals).
+    pub fn spawnEntities(self: *App) void {
+        // Spawn the cube as an ECS entity at the origin
+        // Use &self.cube_mesh to get a pointer to the App's owned mesh
+        _ = self.game_world.spawnRenderable(
+            "Cube",
+            .{ .x = 0, .y = 0, .z = 0 },
+            .{ .x = 0, .y = 0, .z = 0 },
+            .{ .x = 1, .y = 1, .z = 1 },
+            &self.cube_mesh,
+        );
+
+        // Spawn loaded model meshes as ECS entities
+        // The meshes slice is heap-allocated so pointers into it are stable
+        if (self.loaded_model_1) |*loaded| {
+            for (loaded.meshes) |*m| {
+                _ = self.game_world.spawnRenderable(
+                    "Woman1",
+                    .{ .x = 2.0, .y = 0, .z = 0 }, // Right of cube
+                    .{ .x = std.math.pi / 2.0, .y = 0, .z = 0 }, // Rotate to stand up
+                    .{ .x = 1, .y = 1, .z = 1 },
+                    m,
+                );
+            }
+        }
+
+        if (self.loaded_model_2) |*loaded| {
+            for (loaded.meshes) |*m| {
+                _ = self.game_world.spawnRenderable(
+                    "Woman2",
+                    .{ .x = -2.0, .y = 0, .z = 0 }, // Left of cube
+                    .{ .x = std.math.pi / 2.0, .y = 0, .z = 0 }, // Rotate to stand up
+                    .{ .x = 1, .y = 1, .z = 1 },
+                    m,
+                );
+            }
+        }
+
+        std.debug.print(" Entities spawned: {d}\n", .{self.game_world.entityCount()});
     }
 
     /// Run the main game loop
@@ -307,40 +347,15 @@ const App = struct {
         // Get view-projection matrix from camera
         const view_proj = self.game_camera.getViewProjectionMatrix(aspect_ratio);
 
-        // Draw all entities in the world (cube for reference)
-        for (self.game_world.iterator()) |entity| {
-            // For now, model matrix is identity (entities at origin)
-            // TODO: Use entity.transform to generate model matrix
-            const model = zm.identity();
-            const mvp = zm.mul(model, view_proj);
+        // Draw all renderable entities from the ECS
+        // This is the unified rendering loop - no more special-casing loaded models!
+        var iter = self.game_world.renderables();
+        defer iter.deinit(); // Finalize flecs iterator
+        while (iter.next()) |entity| {
+            // Each entity computes its own model matrix from Position/Rotation/Scale
+            const model_matrix = entity.getModelMatrix();
+            const mvp = zm.mul(model_matrix, view_proj);
             self.gpu_renderer.drawMesh(entity.mesh, mvp);
-        }
-
-        // Draw the first GLB model (if present) - positioned to the right
-        if (self.loaded_model_1) |loaded| {
-            // Model matrix: rotate to stand upright and offset from cube
-            // GLB models often export with Y-up but laying on their back
-            const rotation = zm.rotationX(std.math.pi / 2.0); // Rotate +90° around X to stand up
-            const translation = zm.translation(2.0, 0.0, 0.0); // Move 2 units to the right
-            const model = zm.mul(rotation, translation); // First rotate, then translate
-            const mvp = zm.mul(model, view_proj);
-
-            // Draw each mesh in the loaded model
-            for (loaded.meshes) |*m| {
-                self.gpu_renderer.drawMesh(m, mvp);
-            }
-        }
-
-        // Draw the second GLB model (if present) - positioned to the left
-        if (self.loaded_model_2) |loaded| {
-            const rotation = zm.rotationX(std.math.pi / 2.0); // Rotate +90° around X to stand up
-            const translation = zm.translation(-2.0, 0.0, 0.0); // Move 2 units to the left
-            const model = zm.mul(rotation, translation);
-            const mvp = zm.mul(model, view_proj);
-
-            for (loaded.meshes) |*m| {
-                self.gpu_renderer.drawMesh(m, mvp);
-            }
         }
 
         // ================================================================
@@ -384,6 +399,9 @@ const App = struct {
 pub fn main() !void {
     var app = try App.init();
     defer app.deinit();
+
+    // Spawn entities AFTER App is constructed (mesh pointers must be stable)
+    app.spawnEntities();
 
     app.run();
 }

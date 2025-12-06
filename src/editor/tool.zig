@@ -29,9 +29,8 @@ const std = @import("std");
 const zm = @import("zmath");
 
 // Forward declarations for engine types
-// These will be the actual types once we wire everything up
 const Camera = @import("../camera.zig").Camera;
-const World = @import("../world.zig").World;
+const GameWorld = @import("../ecs.zig").GameWorld;
 const FrameTimer = @import("../timing.zig").FrameTimer;
 
 // ============================================================================
@@ -52,7 +51,7 @@ pub const EditorContext = struct {
     camera: *const Camera,
 
     /// The game world - tools can enumerate entities and inspect transforms
-    world: *const World,
+    world: *const GameWorld,
 
     /// Frame timing information - for FPS display, profiling, etc.
     frame_timer: *const FrameTimer,
@@ -62,8 +61,8 @@ pub const EditorContext = struct {
     // -------------------------------------------------------------------------
 
     /// Currently selected entity (if any). Used by inspector, gizmos, etc.
-    /// null means nothing is selected.
-    selected_entity: ?usize = null,
+    /// Stores a flecs entity ID (u64). null means nothing is selected.
+    selected_entity: ?u64 = null,
 
     /// Current gizmo operation mode
     gizmo_mode: GizmoMode = .translate,

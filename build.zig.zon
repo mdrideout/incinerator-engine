@@ -56,6 +56,10 @@
             .url = "git+https://github.com/zig-gamedev/zstbi#2c4b3100ccb7aed90ecc9439030899764e2a8d47",
             .hash = "zstbi-0.11.0-dev-L0Ea_yaWBwAHwFoCuyjkFyaiSsbjt4UOrkntR0c_nmzz",
         },
+        .zflecs = .{
+            .url = "git+https://github.com/zig-gamedev/zflecs.git#9c484724d7245f585a1a7d8ac67e91f0d764951d",
+            .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
+        },
     },
     .paths = .{
         "build.zig",
