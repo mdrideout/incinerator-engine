@@ -40,6 +40,7 @@ const camera = @import("camera.zig");
 const sdl = @import("sdl.zig");
 const gltf_loader = @import("gltf_loader.zig");
 const editor = @import("editor/editor.zig");
+const physics = @import("physics.zig");
 
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
@@ -69,6 +70,9 @@ const App = struct {
     // Scene - now using ECS!
     game_world: ecs.GameWorld,
     game_camera: camera.Camera, // Player camera
+
+    // Physics simulation
+    physics_world: physics.Physics,
 
     // Owned mesh/model data (entities reference these, ECS doesn't own the data)
     cube_mesh: mesh.Mesh,
@@ -137,6 +141,10 @@ const App = struct {
         // Create the ECS world (entities spawned in spawnEntities after App construction)
         const game_world = ecs.GameWorld.init();
 
+        // Initialize physics system (Jolt Physics via zphysics)
+        var physics_world = try physics.Physics.init(allocator);
+        errdefer physics_world.deinit();
+
         // Initialize editor (ImGui debug UI)
         // This sets up ImGui with our SDL3 GPU device
         editor.init(window, gpu_renderer.getDevice());
@@ -163,10 +171,11 @@ const App = struct {
             .input_buffer = input.InputBuffer.init(),
             .allocator = allocator,
             .game_world = game_world,
+            .physics_world = physics_world,
             .cube_mesh = cube_mesh,
             .loaded_model_1 = loaded_model_1,
             .loaded_model_2 = loaded_model_2,
-            .game_camera = camera.Camera.lookingAtOrigin(5.0), // Camera 5 units back (model is bigger)
+            .game_camera = camera.Camera.lookingAtOrigin(15.0), // Camera 15 units back for physics demo
             .debug_frame_counter = 0,
             .sim_tick_count = 0,
         };
@@ -184,6 +193,7 @@ const App = struct {
             model.deinit();
         }
         self.game_world.deinit();
+        self.physics_world.deinit();
         self.cube_mesh.deinit();
         self.gpu_renderer.deinit();
         c.SDL_DestroyWindow(self.window);
@@ -200,6 +210,33 @@ const App = struct {
     /// IMPORTANT: Must be called AFTER App construction to ensure mesh pointers
     /// point to stable memory (App's fields, not stack locals).
     pub fn spawnEntities(self: *App) void {
+        // ================================================================
+        // Physics Demo: Ground plane and falling cubes
+        // ================================================================
+
+        // Create a static ground plane (large flat box)
+        // This is in the physics world only for now (no visual representation yet)
+        _ = self.physics_world.createStaticBox(
+            .{ 0, -1, 0 }, // Position (slightly below origin)
+            .{ 50, 1, 50 }, // Half-extents (100x2x100 units)
+        );
+
+        // Create some falling dynamic cubes
+        // These will fall and land on the ground plane
+        _ = self.physics_world.createDynamicBox(.{ 0, 5, 0 }, .{ 0.5, 0.5, 0.5 });
+        _ = self.physics_world.createDynamicBox(.{ 0.3, 8, 0.2 }, .{ 0.5, 0.5, 0.5 });
+        _ = self.physics_world.createDynamicBox(.{ -0.2, 11, -0.1 }, .{ 0.5, 0.5, 0.5 });
+        _ = self.physics_world.createDynamicSphere(.{ 1, 10, 0 }, 0.5);
+
+        // Optimize broad phase after batch creation
+        self.physics_world.optimizeBroadPhase();
+
+        std.debug.print(" Physics bodies: {d}\n", .{self.physics_world.getBodyCount()});
+
+        // ================================================================
+        // Visual Entities (existing)
+        // ================================================================
+
         // Spawn the cube as an ECS entity at the origin
         // Use &self.cube_mesh to get a pointer to the App's owned mesh
         _ = self.game_world.spawnRenderable(
@@ -236,7 +273,7 @@ const App = struct {
             }
         }
 
-        std.debug.print(" Entities spawned: {d}\n", .{self.game_world.entityCount()});
+        std.debug.print(" Visual entities: {d}\n", .{self.game_world.entityCount()});
     }
 
     /// Run the main game loop
@@ -287,6 +324,9 @@ const App = struct {
     /// This is where physics, gameplay logic, and AI would run.
     fn simulateTick(self: *App) void {
         self.sim_tick_count += 1;
+
+        // Step physics simulation at fixed timestep
+        self.physics_world.update(@floatCast(timing.TICK_DURATION));
 
         // Camera movement speed (units per tick at 120Hz)
         const move_speed = self.game_camera.move_speed * @as(f32, @floatCast(timing.TICK_DURATION));

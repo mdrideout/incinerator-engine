@@ -22,6 +22,7 @@ Ensure you check what we get for free in these libraries, especially raylib, bef
   - [ADR-002: Module Architecture and Layering](docs/adr/002-module-architecture-and-layering.md)
   - [ADR-003: Editor Architecture and Tool System](docs/adr/003-editor-architecture.md)
   - [ADR-004: Entity Component System Architecture](docs/adr/004-ecs-architecture.md)
+  - [ADR-005: Physics-ECS Integration Strategy](docs/adr/005-physics-ecs-integration.md)
 
 ## Review dependencies:
 
