@@ -23,12 +23,15 @@
 
 const std = @import("std");
 const zmesh = @import("zmesh");
+const zstbi = @import("zstbi");
 const mesh_module = @import("mesh.zig");
+const texture_module = @import("texture.zig");
 const sdl = @import("sdl.zig");
 
 const Allocator = std.mem.Allocator;
 const Mesh = mesh_module.Mesh;
 const VertexPNU = mesh_module.VertexPNU;
+const Texture = texture_module.Texture;
 const c = sdl.c;
 
 // ============================================================================
@@ -74,10 +77,13 @@ pub const LoadedModel = struct {
 /// The caller owns the returned model and must call deinit() to release resources.
 pub fn loadGlb(allocator: Allocator, device: *c.SDL_GPUDevice, path: [:0]const u8) !LoadedModel {
     // =========================================================================
-    // Step 0: Initialize zmesh (required before any zmesh calls)
+    // Step 0: Initialize zmesh and zstbi (required before any calls)
     // =========================================================================
     zmesh.init(allocator);
     defer zmesh.deinit();
+
+    zstbi.init(allocator);
+    defer zstbi.deinit();
 
     // =========================================================================
     // Step 1: Parse the GLB file
@@ -194,6 +200,30 @@ pub fn loadGlb(allocator: Allocator, device: *c.SDL_GPUDevice, path: [:0]const u
             // Step 6: Create GPU mesh
             // =========================================================================
             meshes[mesh_idx] = try Mesh.initIndexed(device, vertices, indices.items);
+
+            // =========================================================================
+            // Step 7: Extract texture from material (if present)
+            // =========================================================================
+            const primitive = gltf_mesh.primitives[pi];
+
+            // Check if primitive has a material with a base color texture
+            if (primitive.material) |material| {
+                if (material.has_pbr_metallic_roughness != 0) {
+                    const pbr = material.pbr_metallic_roughness;
+                    if (pbr.base_color_texture.texture) |tex| {
+                        if (tex.image) |image| {
+                            // Try to load the texture
+                            if (loadTextureFromImage(allocator, device, data, image)) |texture| {
+                                meshes[mesh_idx].diffuse_texture = texture;
+                                std.debug.print("    Loaded diffuse texture: {d}x{d}\n", .{ texture.width, texture.height });
+                            } else |err| {
+                                std.debug.print("    Warning: Failed to load texture: {any}\n", .{err});
+                            }
+                        }
+                    }
+                }
+            }
+
             mesh_idx += 1;
         }
     }
@@ -204,6 +234,58 @@ pub fn loadGlb(allocator: Allocator, device: *c.SDL_GPUDevice, path: [:0]const u
         .meshes = meshes,
         .allocator = allocator,
     };
+}
+
+// ============================================================================
+// Internal Helpers
+// ============================================================================
+
+/// Load a texture from a glTF image structure.
+/// Handles both embedded (buffer view) and external (URI) images.
+fn loadTextureFromImage(
+    allocator: Allocator,
+    device: *c.SDL_GPUDevice,
+    data: *zmesh.io.zcgltf.Data,
+    image: *zmesh.io.zcgltf.Image,
+) !Texture {
+    _ = data; // Reserved for future external URI support
+
+    // Get image data - either from buffer view (embedded) or URI
+    const image_data: []const u8 = blk: {
+        if (image.buffer_view) |buffer_view| {
+            // Embedded image in GLB buffer
+            const buffer = buffer_view.buffer;
+            const buffer_data_ptr: [*]const u8 = @ptrCast(buffer.data orelse return error.NoBufferData);
+            const offset = buffer_view.offset;
+            const size = buffer_view.size;
+            break :blk buffer_data_ptr[offset .. offset + size];
+        } else if (image.uri) |_| {
+            // External image file - not supported for now
+            std.debug.print("External texture URIs not yet supported\n", .{});
+            return error.ExternalTextureNotSupported;
+        } else {
+            return error.NoImageData;
+        }
+    };
+
+    // Decode image using zstbi (handles PNG, JPEG, etc.)
+    // Second parameter is desired_channels: 4 = RGBA
+    var img = zstbi.Image.loadFromMemory(image_data, 4) catch |err| {
+        std.debug.print("Failed to decode image: {any}\n", .{err});
+        return error.ImageDecodeFailed;
+    };
+    defer img.deinit();
+
+    // Create GPU texture from decoded pixels
+    const width: u32 = @intCast(img.width);
+    const height: u32 = @intCast(img.height);
+
+    // Allocate a separate buffer for the texture data since zstbi data will be freed
+    const pixels = allocator.alloc(u8, width * height * 4) catch return error.OutOfMemory;
+    defer allocator.free(pixels);
+    @memcpy(pixels, img.data);
+
+    return texture_module.createTexture(device, width, height, pixels);
 }
 
 // ============================================================================

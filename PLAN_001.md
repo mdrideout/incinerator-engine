@@ -49,7 +49,7 @@ Architecture implemented:
 
 ---
 
-## Phase 2: 3D Rendering Basics
+## Phase 2: 3D Rendering Basics ✅ COMPLETE
 
 ### ✅ Step 2.1: Shader Pipeline
 **Status: COMPLETE**
@@ -118,12 +118,29 @@ Test models loaded:
 - `assets/models/blonde-woman.glb` - 32,870 vertices, 50K triangles
 - `assets/models/blonde-woman-hunyuan.glb` - 1,544 vertices, 1.8K triangles
 
-### Step 2.4: Texture Loading
-- Add zstbi dependency (zig-gamedev's stb_image wrapper)
-- Extract embedded textures from GLB files
-- Create `src/texture.zig` for GPU texture utilities
-- Update model.frag to sample diffuse texture
-- Enable sampler binding in renderer pipeline
+### ✅ Step 2.4: Texture Loading
+**Status: COMPLETE**
+
+Files created/modified:
+- `src/texture.zig` - GPU texture creation utilities (createTexture, createPlaceholderTexture)
+- `src/gltf_loader.zig` - Extract textures from GLB materials via zstbi
+- `src/mesh.zig` - Added `diffuse_texture: ?Texture` field
+- `src/renderer.zig` - Added sampler, placeholder texture, texture binding in drawMesh
+- `shaders/model.frag` - Added texture sampler and basic diffuse lighting
+- `build.zig` - Added zstbi dependency
+- `build.zig.zon` - Added zstbi from zig-gamedev
+
+Features working:
+- PNG/JPEG texture decoding via zstbi (stb_image wrapper)
+- Embedded GLB textures extracted from buffer views
+- Texture upload to GPU via transfer buffer pattern
+- Linear filtering sampler for smooth texture sampling
+- Placeholder white texture for untextured meshes
+- Basic ambient + diffuse lighting in fragment shader
+
+Test results:
+- `assets/models/blonde-woman.glb` - 4096x4096 diffuse texture
+- `assets/models/blonde-woman-hunyuan.glb` - 4096x4096 diffuse texture
 
 ---
 
@@ -132,6 +149,10 @@ Test models loaded:
 ### Step 3.1: ImGui Integration
 - zgui with SDL3 GPU backend
 - Debug windows (FPS graph, entity inspector, console)
+
+**Debug UI - Mesh Rendering Controls:**
+- Wireframe mode toggle (on/off)
+- Texture rendering toggle (on/off)
 
 ### Step 3.2: Physics Integration
 - Jolt physics world setup
@@ -159,10 +180,11 @@ Test models loaded:
 ```
 src/
 ├── main.zig          # Entry point, App struct, game loop
-├── renderer.zig      # SDL3 GPU device, dual pipelines, depth buffer, uniform buffers
+├── renderer.zig      # SDL3 GPU device, dual pipelines, depth buffer, texture binding
 ├── camera.zig        # First-person camera, view/projection matrices
-├── mesh.zig          # Vertex/VertexPNU structs, indexed Mesh type, buffer upload
-├── gltf_loader.zig   # GLB/glTF loader using zmesh/cgltf
+├── mesh.zig          # Vertex/VertexPNU structs, indexed Mesh type, texture field
+├── texture.zig       # GPU texture creation utilities
+├── gltf_loader.zig   # GLB/glTF loader with texture extraction
 ├── primitives.zig    # Built-in shapes (triangle, cube)
 ├── world.zig         # Entity, Transform, World (scene management)
 ├── timing.zig        # FrameTimer, TICK_RATE, TICK_DURATION
@@ -174,7 +196,7 @@ shaders/
 ├── triangle.vert     # GLSL vertex shader for primitives (pos + color)
 ├── triangle.frag     # GLSL fragment shader for primitives
 ├── model.vert        # GLSL vertex shader for models (pos + normal + uv)
-├── model.frag        # GLSL fragment shader for models (normal visualization)
+├── model.frag        # GLSL fragment shader for models (texture + lighting)
 └── compiled/         # (gitignored) SPIR-V + Metal output
 
 assets/
@@ -189,6 +211,14 @@ docs/adr/
 
 ---
 
-## Next Task: Step 2.4 - Texture Loading
+## Phase 2 Complete!
 
-Add texture support for GLB models using zstbi from zig-gamedev.
+All 3D rendering basics are now implemented:
+- Shader pipeline with GLSL → SPIR-V → Metal cross-compilation
+- First-person camera with WASD + mouse look
+- GLB mesh loading with indexed rendering
+- Texture loading with diffuse sampling and basic lighting
+
+## Next Task: Step 3.1 - ImGui Integration
+
+Add debug UI using zgui with SDL3 GPU backend.

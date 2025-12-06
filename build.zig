@@ -135,6 +135,13 @@ pub fn build(b: *std.Build) void {
     exe.root_module.addImport("zmesh", zmesh.module("root"));
     exe.linkLibrary(zmesh.artifact("zmesh"));
 
+    // ---------------------------------------------------------
+    // Image Loading (zstbi) - stb_image wrapper
+    // ---------------------------------------------------------
+    // Used to decode PNG/JPEG textures embedded in GLB files.
+    const zstbi = b.dependency("zstbi", .{});
+    exe.root_module.addImport("zstbi", zstbi.module("root"));
+
     // unsure if need these
     // { // Needed for glfw/wgpu rendering backend
     //     const zglfw = b.dependency("zglfw", .{});

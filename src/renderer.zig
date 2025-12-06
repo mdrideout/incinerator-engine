@@ -39,12 +39,14 @@ const builtin = @import("builtin");
 const zm = @import("zmath");
 const sdl = @import("sdl.zig");
 const mesh_module = @import("mesh.zig");
+const texture_module = @import("texture.zig");
 
 const c = sdl.c;
 const Mesh = mesh_module.Mesh;
 const Vertex = mesh_module.Vertex;
 const VertexPNU = mesh_module.VertexPNU;
 const VertexFormat = mesh_module.VertexFormat;
+const Texture = texture_module.Texture;
 
 /// MVP matrix uniform data sent to vertex shader.
 /// Uses [16]f32 layout for direct compatibility with zmath's matToArr().
@@ -116,6 +118,10 @@ pub const Renderer = struct {
     depth_width: u32,
     depth_height: u32,
 
+    // Texture sampling resources
+    default_sampler: *c.SDL_GPUSampler,
+    placeholder_texture: Texture, // 1x1 white texture for untextured meshes
+
     // Frame state (valid between beginFrame and endFrame)
     current_cmd: ?*c.SDL_GPUCommandBuffer = null,
     current_render_pass: ?*c.SDL_GPURenderPass = null,
@@ -167,7 +173,35 @@ pub const Renderer = struct {
         };
         errdefer c.SDL_ReleaseGPUTexture(device, depth_texture);
 
-        std.debug.print("Renderer initialized successfully (with depth buffer)\n", .{});
+        // Create default sampler for texture sampling (linear filtering)
+        const default_sampler = c.SDL_CreateGPUSampler(device, &c.SDL_GPUSamplerCreateInfo{
+            .min_filter = c.SDL_GPU_FILTER_LINEAR,
+            .mag_filter = c.SDL_GPU_FILTER_LINEAR,
+            .mipmap_mode = c.SDL_GPU_SAMPLERMIPMAPMODE_LINEAR,
+            .address_mode_u = c.SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
+            .address_mode_v = c.SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
+            .address_mode_w = c.SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
+            .mip_lod_bias = 0.0,
+            .max_anisotropy = 1.0,
+            .compare_op = c.SDL_GPU_COMPAREOP_INVALID,
+            .min_lod = 0.0,
+            .max_lod = 1000.0,
+            .enable_anisotropy = false,
+            .enable_compare = false,
+            .padding1 = 0,
+            .padding2 = 0,
+            .props = 0,
+        }) orelse {
+            std.debug.print("Failed to create sampler: {s}\n", .{c.SDL_GetError()});
+            return error.SamplerCreationFailed;
+        };
+        errdefer c.SDL_ReleaseGPUSampler(device, default_sampler);
+
+        // Create placeholder texture (1x1 white) for untextured meshes
+        var placeholder_texture = try texture_module.createPlaceholderTexture(device);
+        errdefer placeholder_texture.deinit();
+
+        std.debug.print("Renderer initialized successfully (with depth buffer and texture support)\n", .{});
 
         return Renderer{
             .device = device,
@@ -177,11 +211,15 @@ pub const Renderer = struct {
             .depth_texture = depth_texture,
             .depth_width = width,
             .depth_height = height,
+            .default_sampler = default_sampler,
+            .placeholder_texture = placeholder_texture,
         };
     }
 
     /// Clean up GPU resources
     pub fn deinit(self: *Renderer) void {
+        self.placeholder_texture.deinit();
+        c.SDL_ReleaseGPUSampler(self.device, self.default_sampler);
         c.SDL_ReleaseGPUTexture(self.device, self.depth_texture);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_color);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv);
@@ -326,7 +364,24 @@ pub const Renderer = struct {
         c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(Uniforms));
 
         // =====================================================================
-        // Step 3: Bind vertex buffer
+        // Step 3: Bind texture and sampler for textured meshes
+        // =====================================================================
+        if (m.vertex_format == .pos_normal_uv) {
+            // Use mesh's texture if available, otherwise use placeholder (white)
+            const texture_handle = if (m.diffuse_texture) |*tex|
+                tex.getHandle()
+            else
+                self.placeholder_texture.getHandle();
+
+            const sampler_binding = c.SDL_GPUTextureSamplerBinding{
+                .texture = texture_handle,
+                .sampler = self.default_sampler,
+            };
+            c.SDL_BindGPUFragmentSamplers(render_pass, 0, &sampler_binding, 1);
+        }
+
+        // =====================================================================
+        // Step 4: Bind vertex buffer
         // =====================================================================
         const buffer_binding = c.SDL_GPUBufferBinding{
             .buffer = m.vertex_buffer,
@@ -335,7 +390,7 @@ pub const Renderer = struct {
         c.SDL_BindGPUVertexBuffers(render_pass, 0, &buffer_binding, 1);
 
         // =====================================================================
-        // Step 4: Draw (indexed or non-indexed)
+        // Step 5: Draw (indexed or non-indexed)
         // =====================================================================
         if (m.isIndexed()) {
             // Indexed rendering: Use index buffer to look up vertices
@@ -557,14 +612,14 @@ fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeli
     };
     defer c.SDL_ReleaseGPUShader(device, vertex_shader);
 
-    // Create fragment shader
+    // Create fragment shader (with 1 texture sampler for diffuse texture)
     const fragment_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
         .code = shaders.fragment.ptr,
         .code_size = shaders.fragment.len,
         .entrypoint = "main0",
         .format = shaders.format,
         .stage = c.SDL_GPU_SHADERSTAGE_FRAGMENT,
-        .num_samplers = 0,
+        .num_samplers = 1, // Diffuse texture sampler
         .num_storage_textures = 0,
         .num_storage_buffers = 0,
         .num_uniform_buffers = 0,

@@ -22,7 +22,9 @@
 
 const std = @import("std");
 const sdl = @import("sdl.zig");
+const texture_module = @import("texture.zig");
 const c = sdl.c;
+const Texture = texture_module.Texture;
 
 // ============================================================================
 // Vertex Definition
@@ -83,6 +85,10 @@ pub const Mesh = struct {
     // Index buffer (optional - null for non-indexed meshes like primitives)
     index_buffer: ?*c.SDL_GPUBuffer = null,
     index_count: u32 = 0,
+
+    // Diffuse texture (optional - null for untextured meshes)
+    // When null, renderer uses placeholder white texture
+    diffuse_texture: ?Texture = null,
 
     /// Returns true if this mesh uses indexed rendering.
     /// When true, renderer should use SDL_DrawGPUIndexedPrimitives.
@@ -302,6 +308,10 @@ pub const Mesh = struct {
 
     /// Release GPU resources.
     pub fn deinit(self: *Mesh) void {
+        // Release texture if this mesh owns one
+        if (self.diffuse_texture) |*tex| {
+            tex.deinit();
+        }
         // Release index buffer if this is an indexed mesh
         if (self.index_buffer) |idx_buf| {
             c.SDL_ReleaseGPUBuffer(self.device, idx_buf);
