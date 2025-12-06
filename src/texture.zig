@@ -169,6 +169,66 @@ pub fn createPlaceholderTexture(device: *c.SDL_GPUDevice) !Texture {
     return createTexture(device, 1, 1, &white_pixel);
 }
 
+/// Create a checkerboard debug texture.
+/// Classic pattern for physics/debug visualization - shows scale, rotation, UV mapping.
+/// comptime tile_size: pixels per tile (e.g., 64 for 64x64 pixel tiles)
+/// comptime tiles: number of tiles per side (e.g., 2 for 2x2 = 4 tiles)
+pub fn createCheckerboardTexture(
+    device: *c.SDL_GPUDevice,
+    comptime tile_size: u32,
+    comptime tiles: u32,
+    color_a: [3]u8,
+    color_b: [3]u8,
+) !Texture {
+    const size = tile_size * tiles;
+    var pixels: [size * size * 4]u8 = undefined;
+
+    for (0..size) |y| {
+        for (0..size) |x| {
+            const tile_x = x / tile_size;
+            const tile_y = y / tile_size;
+            const is_light = (tile_x + tile_y) % 2 == 0;
+            const color = if (is_light) color_a else color_b;
+
+            const idx = (y * size + x) * 4;
+            pixels[idx + 0] = color[0]; // R
+            pixels[idx + 1] = color[1]; // G
+            pixels[idx + 2] = color[2]; // B
+            pixels[idx + 3] = 255; // A
+        }
+    }
+
+    return createTexture(device, size, size, &pixels);
+}
+
+/// Create a standard debug checkerboard (gray/white, 128x128, 2x2 tiles).
+/// Good default for physics debug visualization.
+pub fn createDebugCheckerboard(device: *c.SDL_GPUDevice) !Texture {
+    return createCheckerboardTexture(
+        device,
+        64, // 64 pixels per tile
+        2, // 2x2 tiles = 128x128 texture
+        .{ 220, 220, 220 }, // Light gray
+        .{ 140, 140, 140 }, // Dark gray
+    );
+}
+
+/// Create a colored debug checkerboard for distinguishing objects.
+pub fn createColoredCheckerboard(
+    device: *c.SDL_GPUDevice,
+    hue: enum { red, green, blue, yellow, cyan, magenta },
+) !Texture {
+    const colors = switch (hue) {
+        .red => .{ .{ 255, 180, 180 }, .{ 200, 100, 100 } },
+        .green => .{ .{ 180, 255, 180 }, .{ 100, 200, 100 } },
+        .blue => .{ .{ 180, 180, 255 }, .{ 100, 100, 200 } },
+        .yellow => .{ .{ 255, 255, 180 }, .{ 200, 200, 100 } },
+        .cyan => .{ .{ 180, 255, 255 }, .{ 100, 200, 200 } },
+        .magenta => .{ .{ 255, 180, 255 }, .{ 200, 100, 200 } },
+    };
+    return createCheckerboardTexture(device, 64, 2, colors[0], colors[1]);
+}
+
 // ============================================================================
 // Tests
 // ============================================================================

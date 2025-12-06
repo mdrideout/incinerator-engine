@@ -306,6 +306,81 @@ pub const Mesh = struct {
         };
     }
 
+    /// Create a non-indexed textured mesh from VertexPNU data.
+    /// Use for simple textured primitives (cubes, cylinders, etc.)
+    pub fn initTextured(device: *c.SDL_GPUDevice, vertices: []const VertexPNU) !Mesh {
+        const buffer_size: u32 = @intCast(@sizeOf(VertexPNU) * vertices.len);
+
+        // Create GPU buffer
+        const vertex_buffer = c.SDL_CreateGPUBuffer(device, &c.SDL_GPUBufferCreateInfo{
+            .usage = c.SDL_GPU_BUFFERUSAGE_VERTEX,
+            .size = buffer_size,
+            .props = 0,
+        }) orelse {
+            std.debug.print("Failed to create vertex buffer: {s}\n", .{c.SDL_GetError()});
+            return error.BufferCreationFailed;
+        };
+        errdefer c.SDL_ReleaseGPUBuffer(device, vertex_buffer);
+
+        // Create transfer buffer to upload data
+        const transfer_buffer = c.SDL_CreateGPUTransferBuffer(device, &c.SDL_GPUTransferBufferCreateInfo{
+            .usage = c.SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
+            .size = buffer_size,
+            .props = 0,
+        }) orelse {
+            std.debug.print("Failed to create transfer buffer: {s}\n", .{c.SDL_GetError()});
+            return error.TransferBufferCreationFailed;
+        };
+        defer c.SDL_ReleaseGPUTransferBuffer(device, transfer_buffer);
+
+        // Map transfer buffer and copy vertex data
+        const mapped_ptr = c.SDL_MapGPUTransferBuffer(device, transfer_buffer, false) orelse {
+            std.debug.print("Failed to map transfer buffer: {s}\n", .{c.SDL_GetError()});
+            return error.TransferBufferMapFailed;
+        };
+        const mapped: [*]VertexPNU = @ptrCast(@alignCast(mapped_ptr));
+        @memcpy(mapped[0..vertices.len], vertices);
+        c.SDL_UnmapGPUTransferBuffer(device, transfer_buffer);
+
+        // Upload to GPU
+        const copy_cmd = c.SDL_AcquireGPUCommandBuffer(device) orelse {
+            return error.CommandBufferFailed;
+        };
+
+        const copy_pass = c.SDL_BeginGPUCopyPass(copy_cmd) orelse {
+            _ = c.SDL_SubmitGPUCommandBuffer(copy_cmd);
+            return error.CopyPassFailed;
+        };
+
+        c.SDL_UploadToGPUBuffer(
+            copy_pass,
+            &c.SDL_GPUTransferBufferLocation{
+                .transfer_buffer = transfer_buffer,
+                .offset = 0,
+            },
+            &c.SDL_GPUBufferRegion{
+                .buffer = vertex_buffer,
+                .offset = 0,
+                .size = buffer_size,
+            },
+            false,
+        );
+
+        c.SDL_EndGPUCopyPass(copy_pass);
+
+        // Submit and wait for upload to complete
+        const fence = c.SDL_SubmitGPUCommandBufferAndAcquireFence(copy_cmd);
+        _ = c.SDL_WaitForGPUFences(device, true, &fence, 1);
+        c.SDL_ReleaseGPUFence(device, fence);
+
+        return Mesh{
+            .vertex_buffer = vertex_buffer,
+            .vertex_count = @intCast(vertices.len),
+            .vertex_format = .pos_normal_uv,
+            .device = device,
+        };
+    }
+
     /// Release GPU resources.
     pub fn deinit(self: *Mesh) void {
         // Release texture if this mesh owns one

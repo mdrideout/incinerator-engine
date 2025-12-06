@@ -35,6 +35,7 @@ const input = @import("input.zig");
 const renderer = @import("renderer.zig");
 const mesh = @import("mesh.zig");
 const primitives = @import("primitives.zig");
+const texture = @import("texture.zig");
 const ecs = @import("ecs.zig");
 const camera = @import("camera.zig");
 const sdl = @import("sdl.zig");
@@ -75,8 +76,10 @@ const App = struct {
     physics_world: physics.Physics,
 
     // Owned mesh/model data (entities reference these, ECS doesn't own the data)
-    cube_mesh: mesh.Mesh,
     ground_mesh: mesh.Mesh,
+    textured_cube_mesh: mesh.Mesh,
+    cylinder_mesh: mesh.Mesh,
+    debug_texture: texture.Texture,
     loaded_model_1: ?gltf_loader.LoadedModel,
     loaded_model_2: ?gltf_loader.LoadedModel,
 
@@ -110,13 +113,21 @@ const App = struct {
         var gpu_renderer = try renderer.Renderer.init(window);
         errdefer gpu_renderer.deinit();
 
-        // Create the test cube mesh
-        var cube_mesh = try primitives.createCube(gpu_renderer.getDevice());
-        errdefer cube_mesh.deinit();
-
         // Create ground plane mesh
         var ground_mesh = try primitives.createGroundPlane(gpu_renderer.getDevice());
         errdefer ground_mesh.deinit();
+
+        // Create debug visualization primitives (textured with checkerboard)
+        var debug_texture = try texture.createDebugCheckerboard(gpu_renderer.getDevice());
+        errdefer debug_texture.deinit();
+
+        var textured_cube_mesh = try primitives.createTexturedCube(gpu_renderer.getDevice());
+        errdefer textured_cube_mesh.deinit();
+        textured_cube_mesh.diffuse_texture = debug_texture;
+
+        var cylinder_mesh = try primitives.createCylinder(gpu_renderer.getDevice(), 24);
+        errdefer cylinder_mesh.deinit();
+        cylinder_mesh.diffuse_texture = debug_texture;
 
         // Load the GLB models
         const allocator = std.heap.page_allocator;
@@ -177,8 +188,10 @@ const App = struct {
             .allocator = allocator,
             .game_world = game_world,
             .physics_world = physics_world,
-            .cube_mesh = cube_mesh,
             .ground_mesh = ground_mesh,
+            .textured_cube_mesh = textured_cube_mesh,
+            .cylinder_mesh = cylinder_mesh,
+            .debug_texture = debug_texture,
             .loaded_model_1 = loaded_model_1,
             .loaded_model_2 = loaded_model_2,
             .game_camera = camera.Camera.aboveLookingDown(12.0, 20.0), // Above and back, looking at falling cubes
@@ -200,8 +213,14 @@ const App = struct {
         }
         self.game_world.deinit();
         self.physics_world.deinit();
-        self.cube_mesh.deinit();
         self.ground_mesh.deinit();
+        // Note: debug_texture is shared, don't deinit here (meshes don't own it)
+        // Clear references before deinit to avoid double-free
+        self.textured_cube_mesh.diffuse_texture = null;
+        self.cylinder_mesh.diffuse_texture = null;
+        self.textured_cube_mesh.deinit();
+        self.cylinder_mesh.deinit();
+        self.debug_texture.deinit();
         self.gpu_renderer.deinit();
         c.SDL_DestroyWindow(self.window);
         c.SDL_Quit();
@@ -243,6 +262,7 @@ const App = struct {
 
         // Create falling physics cubes WITH visual representation
         // Each entity has both RigidBody (physics) and Renderable (visuals)
+        // Using textured cubes for proper debug visualization
         const falling_cube_positions = [_][3]f32{
             .{ 0, 5, 0 },
             .{ 0.3, 8, 0.2 },
@@ -253,16 +273,26 @@ const App = struct {
             // Create physics body
             if (self.physics_world.createDynamicBox(pos, .{ 0.5, 0.5, 0.5 })) |body_id| {
                 // Create ECS entity with BOTH Renderable and RigidBody
+                // Use textured cube for checkerboard debug visualization
                 const entity = self.game_world.spawn(.{
                     .position = .{ .x = pos[0], .y = pos[1], .z = pos[2] },
                     .rotation = .{},
                     .scale = .{ .x = 1, .y = 1, .z = 1 },
-                    .mesh = &self.cube_mesh,
+                    .mesh = &self.textured_cube_mesh,
                 });
                 // Add RigidBody component to link physics
                 self.game_world.set(entity, ecs.RigidBody, .{ .body_id = body_id });
             }
         }
+
+        // Add a textured cylinder for debug visualization demo
+        _ = self.game_world.spawnRenderable(
+            "Cylinder",
+            .{ .x = 4, .y = 0.5, .z = 0 }, // Right side, sitting on ground
+            .{}, // No rotation
+            .{ .x = 1, .y = 1, .z = 1 }, // 1m diameter, 1m tall
+            &self.cylinder_mesh,
+        );
 
         // Optimize broad phase after batch creation
         self.physics_world.optimizeBroadPhase();
@@ -270,18 +300,10 @@ const App = struct {
         std.debug.print(" Physics bodies: {d}\n", .{self.physics_world.getBodyCount()});
 
         // ================================================================
-        // Visual Entities (existing)
+        // Visual-Only Entities (no physics)
         // ================================================================
-
-        // Spawn the cube as an ECS entity at the origin
-        // Use &self.cube_mesh to get a pointer to the App's owned mesh
-        _ = self.game_world.spawnRenderable(
-            "Cube",
-            .{ .x = 0, .y = 0, .z = 0 },
-            .{ .x = 0, .y = 0, .z = 0 },
-            .{ .x = 1, .y = 1, .z = 1 },
-            &self.cube_mesh,
-        );
+        // These are for things that don't need collision: loaded models,
+        // decorations, particles, skybox, etc.
 
         // Spawn loaded model meshes as ECS entities
         // Scale depends on how model was exported. Try 1.0 first, adjust if needed.
