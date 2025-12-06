@@ -27,12 +27,16 @@
 //! 2. drawMesh() - record draw commands (call multiple times)
 //! 3. endFrame() - end render pass, submit commands
 //!
+//! Currently implemented:
+//! - Multiple pipelines (pos_color for primitives, pos_normal_uv for models)
+//! - Uniform buffer for MVP transforms
+//! - Texture binding with sampler
+//! - Depth buffer for proper occlusion
+//!
 //! Future additions:
-//! - Multiple pipelines (different shaders/materials)
-//! - Uniform buffer updates (for transforms)
-//! - Texture binding
 //! - Instanced rendering
-//! - Depth buffer
+//! - Shadow mapping
+//! - Multiple render targets
 
 const std = @import("std");
 const builtin = @import("builtin");
@@ -787,9 +791,6 @@ fn createDepthTexture(device: *c.SDL_GPUDevice, width: u32, height: u32) ?*c.SDL
 
 pub const Colors = struct {
     pub const CORNFLOWER_BLUE = [4]f32{ 0.392, 0.584, 0.929, 1.0 };
-    pub const BLACK = [4]f32{ 0.0, 0.0, 0.0, 1.0 };
-    pub const DARK_GRAY = [4]f32{ 0.1, 0.1, 0.1, 1.0 };
-    pub const FOREST_GREEN = [4]f32{ 0.133, 0.545, 0.133, 1.0 };
 };
 
 // ============================================================================

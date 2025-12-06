@@ -38,7 +38,6 @@ pub var tool = Tool{
     .name = "Scene",
     .enabled = false, // Start hidden
     .draw_fn = draw,
-    .shortcut = null,
 };
 
 // ============================================================================

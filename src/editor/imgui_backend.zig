@@ -199,8 +199,3 @@ pub fn wantsKeyboard() bool {
     if (!initialized) return false;
     return zgui.io.getWantCaptureKeyboard();
 }
-
-/// Check if the backend is initialized
-pub fn isInitialized() bool {
-    return initialized;
-}

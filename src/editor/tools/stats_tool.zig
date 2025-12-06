@@ -28,7 +28,6 @@ pub var tool = Tool{
     .name = "Stats",
     .enabled = true, // Enabled by default - always useful!
     .draw_fn = draw,
-    .shortcut = null, // Could add F3 or similar
 };
 
 // ============================================================================

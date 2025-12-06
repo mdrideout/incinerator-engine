@@ -169,13 +169,6 @@ pub fn createPlaceholderTexture(device: *c.SDL_GPUDevice) !Texture {
     return createTexture(device, 1, 1, &white_pixel);
 }
 
-/// Create a 1x1 magenta debug texture.
-/// Used to visualize missing textures (bright magenta stands out).
-pub fn createDebugTexture(device: *c.SDL_GPUDevice) !Texture {
-    const magenta_pixel = [_]u8{ 255, 0, 255, 255 };
-    return createTexture(device, 1, 1, &magenta_pixel);
-}
-
 // ============================================================================
 // Tests
 // ============================================================================

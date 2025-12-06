@@ -51,15 +51,6 @@ pub const LoadedModel = struct {
         }
         self.allocator.free(self.meshes);
     }
-
-    /// Get the total number of triangles across all meshes.
-    pub fn triangleCount(self: *const LoadedModel) u32 {
-        var total: u32 = 0;
-        for (self.meshes) |m| {
-            total += if (m.index_count > 0) m.index_count / 3 else m.vertex_count / 3;
-        }
-        return total;
-    }
 };
 
 // ============================================================================
@@ -292,7 +283,7 @@ fn loadTextureFromImage(
 // Tests
 // ============================================================================
 
-test "LoadedModel.triangleCount" {
-    // This is a compile-time check that the struct is valid
+test "LoadedModel struct is valid" {
+    // Compile-time check that the struct is valid
     _ = LoadedModel;
 }

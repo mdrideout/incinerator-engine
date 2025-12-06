@@ -26,7 +26,6 @@
 //!     }
 
 const std = @import("std");
-const zm = @import("zmath");
 
 // Forward declarations for engine types
 const Camera = @import("../camera.zig").Camera;
@@ -115,10 +114,6 @@ pub const Tool = struct {
     /// The draw function - called every frame when enabled.
     /// Should use zgui to render the tool's UI.
     draw_fn: *const fn (ctx: *EditorContext) void,
-
-    /// Optional shortcut key to toggle this tool
-    /// Uses SDL scancode values (e.g., SDL_SCANCODE_F1)
-    shortcut: ?u32 = null,
 
     /// Draw this tool if enabled
     pub fn draw(self: *const Tool, ctx: *EditorContext) void {

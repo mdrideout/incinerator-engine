@@ -41,7 +41,6 @@ pub var tool = Tool{
     .name = "Camera", // Window title and menu item name
     .enabled = false, // Start hidden - enable from Tools menu
     .draw_fn = draw, // Function pointer to our draw implementation
-    .shortcut = null, // Could assign F4 or similar
 };
 
 // ============================================================================
