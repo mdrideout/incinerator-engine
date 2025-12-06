@@ -179,6 +179,20 @@ pub const Camera = struct {
             .pitch = 0.0,
         };
     }
+
+    /// Create a camera positioned above and behind the origin, looking down at the scene.
+    /// Good default for viewing physics demos with falling objects.
+    /// height: how high above the ground (Y position)
+    /// back: how far back (Z position)
+    pub fn aboveLookingDown(height: f32, back: f32) Camera {
+        // Calculate pitch to look at origin from position (0, height, back)
+        const pitch = -std.math.atan2(height, back); // negative = look down
+        return Camera{
+            .position = zm.f32x4(0.0, height, back, 1.0),
+            .yaw = 0.0,
+            .pitch = pitch,
+        };
+    }
 };
 
 // ============================================================================

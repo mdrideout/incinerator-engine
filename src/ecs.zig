@@ -44,7 +44,9 @@
 const std = @import("std");
 const flecs = @import("zflecs");
 const zm = @import("zmath");
+const zphysics = @import("zphysics");
 const mesh_module = @import("mesh.zig");
+const physics_module = @import("physics.zig");
 
 // ============================================================================
 // Components
@@ -106,6 +108,14 @@ pub const Renderable = struct {
     mesh: *mesh_module.Mesh,
 };
 
+/// Links an entity to a physics rigid body.
+/// The sync system reads the body's transform and writes to Position/Rotation.
+/// See ADR-005 for the physics-ECS integration pattern.
+pub const RigidBody = struct {
+    body_id: zphysics.BodyId,
+    sync_rotation: bool = true, // Set false for objects that only need position sync
+};
+
 /// Optional name for debugging (stored as a flecs built-in)
 pub const Name = struct {
     value: [:0]const u8,
@@ -134,6 +144,8 @@ pub const Debris = struct {};
 pub const GameWorld = struct {
     world: *flecs.world_t,
     renderable_query: *flecs.query_t,
+    physics_query: *flecs.query_t, // Query for physics-enabled entities
+    physics_world: ?*physics_module.Physics = null, // Reference to physics system for sync
     entity_count: i32 = 0, // Track manually since flecs doesn't expose this directly
 
     /// Initialize the ECS world and register all components
@@ -146,6 +158,7 @@ pub const GameWorld = struct {
         flecs.COMPONENT(world, Rotation);
         flecs.COMPONENT(world, Scale);
         flecs.COMPONENT(world, Renderable);
+        flecs.COMPONENT(world, RigidBody);
 
         // Register tags
         flecs.TAG(world, Static);
@@ -164,20 +177,39 @@ pub const GameWorld = struct {
             @panic("ECS query init failed");
         };
 
+        // Create physics query for entities with Position, Rotation, and RigidBody
+        var physics_query_desc = flecs.query_desc_t{};
+        physics_query_desc.terms[0] = .{ .id = flecs.id(Position) };
+        physics_query_desc.terms[1] = .{ .id = flecs.id(Rotation) };
+        physics_query_desc.terms[2] = .{ .id = flecs.id(RigidBody) };
+
+        const physics_query = flecs.query_init(world, &physics_query_desc) catch {
+            std.debug.print("Failed to create physics query\n", .{});
+            @panic("ECS physics query init failed");
+        };
+
         std.debug.print("ECS World initialized (flecs)\n", .{});
 
         return .{
             .world = world,
             .renderable_query = renderable_query,
+            .physics_query = physics_query,
             .entity_count = 0,
         };
     }
 
     /// Shutdown the ECS world
     pub fn deinit(self: *GameWorld) void {
+        flecs.query_fini(self.physics_query);
         flecs.query_fini(self.renderable_query);
         _ = flecs.fini(self.world);
         std.debug.print("ECS World shutdown\n", .{});
+    }
+
+    /// Set the physics world reference for sync operations.
+    /// Must be called before syncPhysicsToECS().
+    pub fn setPhysicsWorld(self: *GameWorld, pw: *physics_module.Physics) void {
+        self.physics_world = pw;
     }
 
     // ========================================================================
@@ -375,7 +407,85 @@ pub const GameWorld = struct {
     pub fn entityCount(self: *GameWorld) i32 {
         return self.entity_count;
     }
+
+    // ========================================================================
+    // Physics Sync
+    // ========================================================================
+
+    /// Sync physics body transforms to ECS components.
+    /// Call this each tick AFTER physics.update() and BEFORE rendering.
+    /// See ADR-005 for the physics-ECS integration pattern.
+    pub fn syncPhysicsToECS(self: *GameWorld) void {
+        const pw = self.physics_world orelse {
+            // No physics world set - nothing to sync
+            return;
+        };
+
+        var iter = flecs.query_iter(self.world, self.physics_query);
+        while (flecs.query_next(&iter)) {
+            const count = iter.count();
+
+            // Get mutable component arrays
+            const positions = flecs.field(&iter, Position, 0);
+            const rotations = flecs.field(&iter, Rotation, 1);
+            const rigid_bodies = flecs.field(&iter, RigidBody, 2);
+
+            if (positions == null or rotations == null or rigid_bodies == null) continue;
+
+            // Update each entity's transform from physics
+            for (0..count) |i| {
+                const body_id = rigid_bodies.?[i].body_id;
+
+                // Get position from physics
+                const phys_pos = pw.getBodyPosition(body_id);
+                positions.?[i] = .{
+                    .x = phys_pos[0],
+                    .y = phys_pos[1],
+                    .z = phys_pos[2],
+                };
+
+                // Get rotation from physics (quaternion) and convert to Euler
+                if (rigid_bodies.?[i].sync_rotation) {
+                    const quat = pw.getBodyRotation(body_id);
+                    // Convert quaternion [x,y,z,w] to Euler angles
+                    rotations.?[i] = quaternionToEuler(quat);
+                }
+            }
+        }
+    }
 };
+
+/// Convert a quaternion [x,y,z,w] to Euler angles (radians).
+/// Uses YXZ rotation order (pitch, yaw, roll) matching our Rotation component.
+fn quaternionToEuler(q: [4]f32) Rotation {
+    const x = q[0];
+    const y = q[1];
+    const z = q[2];
+    const w = q[3];
+
+    // Roll (z-axis rotation)
+    const sinr_cosp = 2.0 * (w * x + y * z);
+    const cosr_cosp = 1.0 - 2.0 * (x * x + y * y);
+    const roll = std.math.atan2(sinr_cosp, cosr_cosp);
+
+    // Pitch (x-axis rotation)
+    const sinp = 2.0 * (w * y - z * x);
+    const pitch = if (@abs(sinp) >= 1.0)
+        if (sinp > 0) @as(f32, std.math.pi / 2.0) else @as(f32, -std.math.pi / 2.0)
+    else
+        std.math.asin(sinp);
+
+    // Yaw (y-axis rotation)
+    const siny_cosp = 2.0 * (w * z + x * y);
+    const cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
+    const yaw = std.math.atan2(siny_cosp, cosy_cosp);
+
+    return .{
+        .x = roll, // Pitch in our naming (rotation about X)
+        .y = yaw, // Yaw (rotation about Y)
+        .z = pitch, // Roll (rotation about Z)
+    };
+}
 
 // ============================================================================
 // Tests

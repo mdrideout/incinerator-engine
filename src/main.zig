@@ -76,6 +76,7 @@ const App = struct {
 
     // Owned mesh/model data (entities reference these, ECS doesn't own the data)
     cube_mesh: mesh.Mesh,
+    ground_mesh: mesh.Mesh,
     loaded_model_1: ?gltf_loader.LoadedModel,
     loaded_model_2: ?gltf_loader.LoadedModel,
 
@@ -112,6 +113,10 @@ const App = struct {
         // Create the test cube mesh
         var cube_mesh = try primitives.createCube(gpu_renderer.getDevice());
         errdefer cube_mesh.deinit();
+
+        // Create ground plane mesh
+        var ground_mesh = try primitives.createGroundPlane(gpu_renderer.getDevice());
+        errdefer ground_mesh.deinit();
 
         // Load the GLB models
         const allocator = std.heap.page_allocator;
@@ -173,9 +178,10 @@ const App = struct {
             .game_world = game_world,
             .physics_world = physics_world,
             .cube_mesh = cube_mesh,
+            .ground_mesh = ground_mesh,
             .loaded_model_1 = loaded_model_1,
             .loaded_model_2 = loaded_model_2,
-            .game_camera = camera.Camera.lookingAtOrigin(15.0), // Camera 15 units back for physics demo
+            .game_camera = camera.Camera.aboveLookingDown(12.0, 20.0), // Above and back, looking at falling cubes
             .debug_frame_counter = 0,
             .sim_tick_count = 0,
         };
@@ -195,6 +201,7 @@ const App = struct {
         self.game_world.deinit();
         self.physics_world.deinit();
         self.cube_mesh.deinit();
+        self.ground_mesh.deinit();
         self.gpu_renderer.deinit();
         c.SDL_DestroyWindow(self.window);
         c.SDL_Quit();
@@ -210,23 +217,52 @@ const App = struct {
     /// IMPORTANT: Must be called AFTER App construction to ensure mesh pointers
     /// point to stable memory (App's fields, not stack locals).
     pub fn spawnEntities(self: *App) void {
+        // Link physics world to ECS for sync operations
+        self.game_world.setPhysicsWorld(&self.physics_world);
+
         // ================================================================
         // Physics Demo: Ground plane and falling cubes
         // ================================================================
 
         // Create a static ground plane (large flat box)
-        // This is in the physics world only for now (no visual representation yet)
+        // Physics ground: center at y=-1, half-extents 50x1x50 means surface at y=0
         _ = self.physics_world.createStaticBox(
-            .{ 0, -1, 0 }, // Position (slightly below origin)
+            .{ 0, -1, 0 }, // Position (center of box)
             .{ 50, 1, 50 }, // Half-extents (100x2x100 units)
         );
 
-        // Create some falling dynamic cubes
-        // These will fall and land on the ground plane
-        _ = self.physics_world.createDynamicBox(.{ 0, 5, 0 }, .{ 0.5, 0.5, 0.5 });
-        _ = self.physics_world.createDynamicBox(.{ 0.3, 8, 0.2 }, .{ 0.5, 0.5, 0.5 });
-        _ = self.physics_world.createDynamicBox(.{ -0.2, 11, -0.1 }, .{ 0.5, 0.5, 0.5 });
-        _ = self.physics_world.createDynamicSphere(.{ 1, 10, 0 }, 0.5);
+        // Create visual ground plane entity
+        // Checkerboard: 32x32 tiles at 2m each = 64m x 64m, 1 unit = 1 meter
+        _ = self.game_world.spawnRenderable(
+            "Ground",
+            .{ .x = 0, .y = 0, .z = 0 }, // At origin (top of physics ground)
+            .{}, // No rotation
+            .{ .x = 1, .y = 1, .z = 1 }, // No scaling needed - native size is correct
+            &self.ground_mesh,
+        );
+
+        // Create falling physics cubes WITH visual representation
+        // Each entity has both RigidBody (physics) and Renderable (visuals)
+        const falling_cube_positions = [_][3]f32{
+            .{ 0, 5, 0 },
+            .{ 0.3, 8, 0.2 },
+            .{ -0.2, 11, -0.1 },
+        };
+
+        for (falling_cube_positions) |pos| {
+            // Create physics body
+            if (self.physics_world.createDynamicBox(pos, .{ 0.5, 0.5, 0.5 })) |body_id| {
+                // Create ECS entity with BOTH Renderable and RigidBody
+                const entity = self.game_world.spawn(.{
+                    .position = .{ .x = pos[0], .y = pos[1], .z = pos[2] },
+                    .rotation = .{},
+                    .scale = .{ .x = 1, .y = 1, .z = 1 },
+                    .mesh = &self.cube_mesh,
+                });
+                // Add RigidBody component to link physics
+                self.game_world.set(entity, ecs.RigidBody, .{ .body_id = body_id });
+            }
+        }
 
         // Optimize broad phase after batch creation
         self.physics_world.optimizeBroadPhase();
@@ -248,14 +284,17 @@ const App = struct {
         );
 
         // Spawn loaded model meshes as ECS entities
-        // The meshes slice is heap-allocated so pointers into it are stable
+        // Scale depends on how model was exported. Try 1.0 first, adjust if needed.
+        // For cm→meters use 0.01, for already-in-meters use 1.0
+        const human_scale: f32 = 1.0; // Adjust based on model export settings
+
         if (self.loaded_model_1) |*loaded| {
             for (loaded.meshes) |*m| {
                 _ = self.game_world.spawnRenderable(
                     "Woman1",
-                    .{ .x = 2.0, .y = 0, .z = 0 }, // Right of cube
+                    .{ .x = 3.0, .y = 0, .z = 0 }, // Right of center
                     .{ .x = std.math.pi / 2.0, .y = 0, .z = 0 }, // Rotate to stand up
-                    .{ .x = 1, .y = 1, .z = 1 },
+                    .{ .x = human_scale, .y = human_scale, .z = human_scale },
                     m,
                 );
             }
@@ -265,9 +304,9 @@ const App = struct {
             for (loaded.meshes) |*m| {
                 _ = self.game_world.spawnRenderable(
                     "Woman2",
-                    .{ .x = -2.0, .y = 0, .z = 0 }, // Left of cube
+                    .{ .x = -3.0, .y = 0, .z = 0 }, // Left of center
                     .{ .x = std.math.pi / 2.0, .y = 0, .z = 0 }, // Rotate to stand up
-                    .{ .x = 1, .y = 1, .z = 1 },
+                    .{ .x = human_scale, .y = human_scale, .z = human_scale },
                     m,
                 );
             }
@@ -327,6 +366,10 @@ const App = struct {
 
         // Step physics simulation at fixed timestep
         self.physics_world.update(@floatCast(timing.TICK_DURATION));
+
+        // Sync physics transforms to ECS components
+        // This copies positions/rotations from Jolt bodies to ECS Position/Rotation
+        self.game_world.syncPhysicsToECS();
 
         // Camera movement speed (units per tick at 120Hz)
         const move_speed = self.game_camera.move_speed * @as(f32, @floatCast(timing.TICK_DURATION));

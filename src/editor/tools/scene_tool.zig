@@ -22,6 +22,7 @@
 
 const std = @import("std");
 const zgui = @import("zgui");
+const flecs = @import("zflecs");
 const tool_module = @import("../tool.zig");
 const ecs = @import("../../ecs.zig");
 
@@ -97,9 +98,17 @@ fn draw(ctx: *EditorContext) void {
             defer iter2.deinit(); // Clean up iterator when done
             var display_idx: u32 = 0;
             while (iter2.next()) |entity| {
+                // Get entity name from flecs (or use ID as fallback)
+                const flecs_world = @constCast(ctx.world).world;
+                const name_ptr = flecs.get_name(flecs_world, entity.entity);
+                const name: []const u8 = if (name_ptr) |ptr| std.mem.span(ptr) else "";
+
                 // Create a unique label for each entity
                 var label_buf: [64]u8 = undefined;
-                const label = std.fmt.bufPrintZ(&label_buf, "Entity {d}##ent{d}", .{ entity.entity, display_idx }) catch "Entity";
+                const label = if (name.len > 0)
+                    std.fmt.bufPrintZ(&label_buf, "{s}##ent{d}", .{ name, display_idx }) catch "Entity"
+                else
+                    std.fmt.bufPrintZ(&label_buf, "Entity {d}##ent{d}", .{ entity.entity, display_idx }) catch "Entity";
 
                 // Check if this entity is currently selected
                 const is_selected = if (ctx.selected_entity) |sel| sel == entity.entity else false;
