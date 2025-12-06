@@ -122,9 +122,10 @@ pub const Renderer = struct {
     default_sampler: *c.SDL_GPUSampler,
     placeholder_texture: Texture, // 1x1 white texture for untextured meshes
 
-    // Frame state (valid between beginFrame and endFrame)
+    // Frame state (valid between beginFrame and endFrame/submitFrame)
     current_cmd: ?*c.SDL_GPUCommandBuffer = null,
     current_render_pass: ?*c.SDL_GPURenderPass = null,
+    current_swapchain: ?*c.SDL_GPUTexture = null, // Swapchain texture for this frame
 
     /// Initialize the GPU renderer for a window.
     /// This creates the GPU device and graphics pipeline.
@@ -326,6 +327,7 @@ pub const Renderer = struct {
         // Store frame state
         self.current_cmd = cmd;
         self.current_render_pass = render_pass;
+        self.current_swapchain = swapchain_texture; // Store for editor overlay
 
         return true;
     }
@@ -410,12 +412,19 @@ pub const Renderer = struct {
         }
     }
 
-    /// End the current frame and present to screen.
-    pub fn endFrame(self: *Renderer) void {
+    /// End just the render pass (without submitting).
+    /// Use this when you need to do GPU work between the scene render pass
+    /// and frame submission (e.g., ImGui rendering needs a copy pass first).
+    pub fn endRenderPass(self: *Renderer) void {
         if (self.current_render_pass) |render_pass| {
             c.SDL_EndGPURenderPass(render_pass);
+            self.current_render_pass = null;
         }
+    }
 
+    /// Submit the command buffer and present to screen.
+    /// Call this after endRenderPass() and any additional rendering (like ImGui).
+    pub fn submitFrame(self: *Renderer) void {
         if (self.current_cmd) |cmd| {
             if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
                 std.debug.print("SDL_SubmitGPUCommandBuffer failed: {s}\n", .{c.SDL_GetError()});
@@ -424,7 +433,21 @@ pub const Renderer = struct {
 
         // Clear frame state
         self.current_cmd = null;
-        self.current_render_pass = null;
+        self.current_swapchain = null;
+    }
+
+    /// End the current frame and present to screen.
+    /// Convenience method that calls endRenderPass() and submitFrame().
+    pub fn endFrame(self: *Renderer) void {
+        self.endRenderPass();
+        self.submitFrame();
+    }
+
+    /// Get the swapchain texture for additional render passes (e.g., ImGui overlay).
+    /// Returns the texture that was acquired in beginFrame().
+    /// Returns null if no frame is in progress.
+    pub fn getSwapchainTexture(self: *Renderer) ?*c.SDL_GPUTexture {
+        return self.current_swapchain;
     }
 
     /// Get the window dimensions

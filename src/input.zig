@@ -10,6 +10,17 @@
 
 const std = @import("std");
 const sdl = @import("sdl.zig");
+const build_options = @import("build_options");
+
+// Conditionally import editor for event processing
+const editor = if (build_options.editor_enabled)
+    @import("editor/editor.zig")
+else
+    struct {
+        pub fn processEvent(_: anytype) bool {
+            return false;
+        }
+    };
 
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
@@ -119,6 +130,17 @@ pub const InputBuffer = struct {
         var event: c.SDL_Event = undefined;
 
         while (c.SDL_PollEvent(&event)) {
+            // Let editor process events first (for ImGui input handling)
+            // If editor consumed the event, skip game input processing
+            const editor_consumed = editor.processEvent(&event);
+            if (editor_consumed) {
+                // Still check for quit even if editor consumed the event
+                if (event.type == c.SDL_EVENT_QUIT) {
+                    self.quit_requested = true;
+                }
+                continue;
+            }
+
             switch (event.type) {
                 // Window close requested
                 c.SDL_EVENT_QUIT => {

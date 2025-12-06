@@ -16,6 +16,26 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+
+    // ---------------------------------------------------------
+    // Editor Build Option
+    // ---------------------------------------------------------
+    // The editor (ImGui debug UI, gizmos, tools) is enabled by default in Debug
+    // builds but can be explicitly disabled. In Release builds, it defaults to
+    // off but can be explicitly enabled for profiling/debugging release builds.
+    //
+    // Usage:
+    //   zig build                    # Debug with editor
+    //   zig build -Deditor=false     # Debug without editor
+    //   zig build -Doptimize=ReleaseFast              # Release without editor
+    //   zig build -Doptimize=ReleaseFast -Deditor=true # Release with editor
+    const default_editor_enabled = optimize == .Debug;
+    const editor_enabled = b.option(
+        bool,
+        "editor",
+        "Enable the editor UI (ImGui tools, gizmos). Defaults to true in Debug, false in Release.",
+    ) orelse default_editor_enabled;
+
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -57,6 +77,14 @@ pub fn build(b: *std.Build) void {
     //
     // If neither case applies to you, feel free to delete the declaration you
     // don't need and to put everything under a single module.
+    // ---------------------------------------------------------
+    // Build Options Module
+    // ---------------------------------------------------------
+    // Creates an importable module containing build-time configuration.
+    // Code can access these via: const options = @import("build_options");
+    const options = b.addOptions();
+    options.addOption(bool, "editor_enabled", editor_enabled);
+
     const exe = b.addExecutable(.{
         .name = "incinerator_engine",
         .root_module = b.createModule(.{
@@ -79,6 +107,8 @@ pub fn build(b: *std.Build) void {
                 // can be extremely useful in case of collisions (which can happen
                 // importing modules from different packages).
                 .{ .name = "incinerator_engine", .module = mod },
+                // Build options module - provides compile-time access to build flags
+                .{ .name = "build_options", .module = options.createModule() },
             },
         }),
     });
@@ -113,9 +143,13 @@ pub fn build(b: *std.Build) void {
     // ---------------------------------------------------------
     // ImGui (zgui)
     // ---------------------------------------------------------
+    // zgui wraps Dear ImGui for immediate-mode debug UI.
+    // We use the SDL3 GPU backend to integrate with our existing renderer.
+    // Available backends: no_backend, glfw_opengl3, glfw_wgpu, sdl3_gpu, etc.
     const zgui = b.dependency("zgui", .{
         .shared = false,
         .with_implot = true,
+        .backend = .sdl3_gpu, // Use SDL3's GPU API for rendering ImGui
     });
     exe.root_module.addImport("zgui", zgui.module("root"));
     exe.linkLibrary(zgui.artifact("imgui"));

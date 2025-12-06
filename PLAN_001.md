@@ -146,13 +146,37 @@ Test results:
 
 ## Phase 3: Engine Systems
 
-### Step 3.1: ImGui Integration
-- zgui with SDL3 GPU backend
-- Debug windows (FPS graph, entity inspector, console)
+### ✅ Step 3.1: ImGui Integration
+**Status: COMPLETE**
 
-**Debug UI - Mesh Rendering Controls:**
-- Wireframe mode toggle (on/off)
-- Texture rendering toggle (on/off)
+Files created:
+- `src/editor/editor.zig` - Main editor orchestrator, tool registry, menu bar
+- `src/editor/imgui_backend.zig` - SDL3 GPU backend wrapper
+- `src/editor/tool.zig` - Tool interface and EditorContext definition
+- `src/editor/tools/stats_tool.zig` - FPS, frame time, graph
+- `docs/adr/003-editor-architecture.md` - Architecture decision record
+
+Files modified:
+- `build.zig` - Added `-Deditor` build option, `build_options` module, zgui SDL3 GPU backend
+- `src/main.zig` - Editor init/deinit, split render pass flow for ImGui
+- `src/input.zig` - Editor event processing before game input
+- `src/renderer.zig` - Added `endRenderPass()`, `submitFrame()`, `getSwapchainTexture()`
+
+Features working:
+- zgui with SDL3 GPU backend (`.backend = .sdl3_gpu`)
+- Conditional compilation: editor on by default in Debug, off in Release
+- Tool-first architecture with manual registration
+- Stats tool showing FPS, frame time, tick info, frame time graph
+- Main menu bar with Tools and View menus
+- F1 to toggle editor, F2 to toggle ImGui demo window
+- Proper two-pass rendering (scene pass → ImGui copy pass → ImGui render pass)
+- Input handling: editor consumes events before game
+
+**Remaining for Step 3.1 (optional enhancements):**
+- Camera tool (position, rotation inspector)
+- Scene tool (entity hierarchy, inspector)
+- Wireframe mode toggle
+- Texture rendering toggle
 
 ### Step 3.2: Physics Integration
 - Jolt physics world setup
@@ -188,9 +212,15 @@ src/
 ├── primitives.zig    # Built-in shapes (triangle, cube)
 ├── world.zig         # Entity, Transform, World (scene management)
 ├── timing.zig        # FrameTimer, TICK_RATE, TICK_DURATION
-├── input.zig         # InputBuffer, Key constants, MouseButton
+├── input.zig         # InputBuffer, Key constants, MouseButton, editor event integration
 ├── sdl.zig           # Shared SDL3 C bindings
-└── root.zig          # Library root (unused for now)
+├── root.zig          # Library root (unused for now)
+└── editor/           # ImGui debug UI system
+    ├── editor.zig        # Main orchestrator, tool registry, menu bar
+    ├── imgui_backend.zig # SDL3 GPU backend wrapper
+    ├── tool.zig          # Tool interface, EditorContext
+    └── tools/
+        └── stats_tool.zig # FPS, frame time, graph
 
 shaders/
 ├── triangle.vert     # GLSL vertex shader for primitives (pos + color)
@@ -206,7 +236,8 @@ assets/
 
 docs/adr/
 ├── 001-shader-language-and-compilation.md
-└── 002-module-architecture-and-layering.md
+├── 002-module-architecture-and-layering.md
+└── 003-editor-architecture.md
 ```
 
 ---
@@ -219,6 +250,29 @@ All 3D rendering basics are now implemented:
 - GLB mesh loading with indexed rendering
 - Texture loading with diffuse sampling and basic lighting
 
-## Next Task: Step 3.1 - ImGui Integration
+## Step 3.1 Complete!
 
-Add debug UI using zgui with SDL3 GPU backend.
+ImGui debug UI is now integrated:
+- zgui with SDL3 GPU backend
+- Tool-first architecture for extensible debug panels
+- Stats tool with FPS, frame time, and graph
+- Conditional compilation (Debug = editor on, Release = editor off)
+
+---
+
+## What's Next?
+
+**Option A: More Editor Tools (Step 3.1 continuation)**
+- Camera tool: Position, rotation, FOV inspector
+- Scene tool: Entity hierarchy, property inspector
+- Wireframe/texture toggles
+
+**Option B: Physics Integration (Step 3.2)**
+- Jolt physics world setup via zphysics
+- Ground plane + falling objects
+- Debug visualization (wireframe colliders)
+
+**Option C: Entity/Component System (Step 3.3)**
+- Simple archetypal ECS or component bags
+- Transform, Mesh, Physics components
+- Scene graph for hierarchical transforms

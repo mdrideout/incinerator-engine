@@ -39,6 +39,7 @@ const world = @import("world.zig");
 const camera = @import("camera.zig");
 const sdl = @import("sdl.zig");
 const gltf_loader = @import("gltf_loader.zig");
+const editor = @import("editor/editor.zig");
 
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
@@ -138,6 +139,10 @@ const App = struct {
             .transform = world.Transform.identity,
         });
 
+        // Initialize editor (ImGui debug UI)
+        // This sets up ImGui with our SDL3 GPU device
+        editor.init(window, gpu_renderer.getDevice());
+
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Incinerator Engine initialized\n", .{});
         std.debug.print(" Window: {d}x{d}\n", .{ INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT });
@@ -150,6 +155,8 @@ const App = struct {
         std.debug.print("   Q/E - Move down/up\n", .{});
         std.debug.print("   Right-click + drag - Look around\n", .{});
         std.debug.print("   SPACE - Print camera position\n", .{});
+        std.debug.print("   F1 - Toggle editor UI\n", .{});
+        std.debug.print("   F2 - Toggle ImGui demo\n", .{});
         std.debug.print("===========================================\n\n", .{});
 
         return App{
@@ -169,6 +176,9 @@ const App = struct {
     }
 
     pub fn deinit(self: *App) void {
+        // Clean up editor first (needs GPU device to still be valid)
+        editor.deinit();
+
         // Clean up loaded models if present
         if (self.loaded_model_1) |*model| {
             model.deinit();
@@ -333,8 +343,27 @@ const App = struct {
             }
         }
 
-        // End the frame (submits to GPU)
-        self.gpu_renderer.endFrame();
+        // ================================================================
+        // End scene render pass BEFORE editor drawing
+        // ================================================================
+        // ImGui needs to upload vertex data via a copy pass, which can't
+        // happen inside a render pass. So we split the frame:
+        // 1. End the scene render pass
+        // 2. Let editor do its thing (copy pass + its own render pass)
+        // 3. Submit everything together
+        self.gpu_renderer.endRenderPass();
+
+        // Draw editor overlay (ImGui debug UI)
+        // This creates its own render pass with LOAD to preserve the scene
+        editor.draw(
+            &self.gpu_renderer,
+            &self.game_camera,
+            &self.game_world,
+            &self.frame_timer,
+        );
+
+        // Submit the frame (both scene and editor render passes)
+        self.gpu_renderer.submitFrame();
     }
 
     /// Print debug statistics
