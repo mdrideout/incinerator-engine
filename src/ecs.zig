@@ -71,21 +71,53 @@ pub const Position = struct {
     }
 };
 
-/// 3D rotation as Euler angles (radians)
-/// For physics, we'll eventually use quaternions, but Euler is easier to debug
+/// 3D rotation stored as quaternion [x, y, z, w].
+/// Identity rotation is (0, 0, 0, 1).
+/// See ADR-005 for why we use quaternions (no gimbal lock, direct physics sync).
 pub const Rotation = struct {
-    x: f32 = 0, // Pitch
-    y: f32 = 0, // Yaw
-    z: f32 = 0, // Roll
+    x: f32 = 0,
+    y: f32 = 0,
+    z: f32 = 0,
+    w: f32 = 1,
 
     pub fn toMatrix(self: Rotation) zm.Mat {
-        // Build rotation matrix from Euler angles (XYZ intrinsic order)
-        // Must match the extraction order in quaternionToEuler()
-        const rot_x = zm.rotationX(self.x);
-        const rot_y = zm.rotationY(self.y);
-        const rot_z = zm.rotationZ(self.z);
-        return zm.mul(zm.mul(rot_x, rot_y), rot_z);
+        return zm.quatToMat(zm.f32x4(self.x, self.y, self.z, self.w));
     }
+
+    /// Convert to Euler angles for editor display (radians, XYZ intrinsic order)
+    pub fn toEuler(self: Rotation) [3]f32 {
+        const qx = self.x;
+        const qy = self.y;
+        const qz = self.z;
+        const qw = self.w;
+
+        // Rotation about X axis
+        const sin_x = 2.0 * (qw * qx + qy * qz);
+        const cos_x = 1.0 - 2.0 * (qx * qx + qy * qy);
+        const rot_x = std.math.atan2(sin_x, cos_x);
+
+        // Rotation about Y axis (clamped to avoid NaN at poles)
+        const sin_y = 2.0 * (qw * qy - qz * qx);
+        const rot_y = if (@abs(sin_y) >= 1.0)
+            if (sin_y > 0) @as(f32, std.math.pi / 2.0) else @as(f32, -std.math.pi / 2.0)
+        else
+            std.math.asin(sin_y);
+
+        // Rotation about Z axis
+        const sin_z = 2.0 * (qw * qz + qx * qy);
+        const cos_z = 1.0 - 2.0 * (qy * qy + qz * qz);
+        const rot_z = std.math.atan2(sin_z, cos_z);
+
+        return .{ rot_x, rot_y, rot_z };
+    }
+
+    /// Create rotation from Euler angles (for manual entity placement)
+    pub fn fromEuler(pitch: f32, yaw: f32, roll: f32) Rotation {
+        const quat = zm.quatFromRollPitchYaw(roll, pitch, yaw);
+        return .{ .x = quat[0], .y = quat[1], .z = quat[2], .w = quat[3] };
+    }
+
+    pub const identity = Rotation{ .x = 0, .y = 0, .z = 0, .w = 1 };
 };
 
 /// 3D scale (uniform or non-uniform)
@@ -445,48 +477,20 @@ pub const GameWorld = struct {
                     .z = phys_pos[2],
                 };
 
-                // Get rotation from physics (quaternion) and convert to Euler
+                // Get rotation from physics - direct quaternion copy (no conversion)
                 if (rigid_bodies.?[i].sync_rotation) {
                     const quat = pw.getBodyRotation(body_id);
-                    // Convert quaternion [x,y,z,w] to Euler angles
-                    rotations.?[i] = quaternionToEuler(quat);
+                    rotations.?[i] = .{
+                        .x = quat[0],
+                        .y = quat[1],
+                        .z = quat[2],
+                        .w = quat[3],
+                    };
                 }
             }
         }
     }
 };
-
-/// Convert a quaternion [x,y,z,w] to Euler angles (radians).
-/// Extracts rotations about each axis to match our Rotation component.
-fn quaternionToEuler(q: [4]f32) Rotation {
-    const qx = q[0];
-    const qy = q[1];
-    const qz = q[2];
-    const qw = q[3];
-
-    // Rotation about X axis
-    const sin_x = 2.0 * (qw * qx + qy * qz);
-    const cos_x = 1.0 - 2.0 * (qx * qx + qy * qy);
-    const rot_x = std.math.atan2(sin_x, cos_x);
-
-    // Rotation about Y axis (clamped to avoid NaN at poles)
-    const sin_y = 2.0 * (qw * qy - qz * qx);
-    const rot_y = if (@abs(sin_y) >= 1.0)
-        if (sin_y > 0) @as(f32, std.math.pi / 2.0) else @as(f32, -std.math.pi / 2.0)
-    else
-        std.math.asin(sin_y);
-
-    // Rotation about Z axis
-    const sin_z = 2.0 * (qw * qz + qx * qy);
-    const cos_z = 1.0 - 2.0 * (qy * qy + qz * qz);
-    const rot_z = std.math.atan2(sin_z, cos_z);
-
-    return .{
-        .x = rot_x,
-        .y = rot_y,
-        .z = rot_z,
-    };
-}
 
 // ============================================================================
 // Tests

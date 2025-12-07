@@ -144,7 +144,7 @@ Test results:
 
 ---
 
-## Phase 3: Engine Systems (2/3 Complete)
+## Phase 3: Engine Systems ✅ COMPLETE
 
 ### ✅ Step 3.1: ImGui Integration
 **Status: COMPLETE**
@@ -183,10 +183,26 @@ Features working:
 - Wireframe mode toggle
 - Texture rendering toggle
 
-### Step 3.2: Physics Integration
-- Jolt physics world setup
-- Ground plane + falling objects
-- Debug visualization (wireframe colliders)
+### ✅ Step 3.2: Physics Integration
+**Status: COMPLETE**
+
+Files created/modified:
+- `src/physics.zig` - Jolt physics world wrapper via zphysics
+- `src/physics_debug.zig` - PhysicsDebugRenderer implementing Jolt's VTable interface
+- `src/ecs.zig` - RigidBody component, physics-ECS sync, quaternion-based Rotation
+- `src/editor/tools/physics_tool.zig` - Debug visualization toggles
+- `docs/adr/005-physics-ecs-integration.md` - Physics-ECS sync architecture
+- `docs/adr/006-physics-debug-rendering.md` - Debug renderer architecture
+- `build.zig` / `build.zig.zon` - Added zphysics dependency
+
+Features working:
+- Jolt physics world with ground plane
+- Falling cubes with tumbling physics
+- Debug wireframe rendering (collision shapes, AABBs, velocity vectors)
+- Physics-ECS sync with direct quaternion copy (no Euler conversion)
+- RigidBody component linking entities to physics bodies
+- Editor UI toggles for debug visualization layers
+- CPU-side vertex transformation for debug geometry
 
 ### ✅ Step 3.3: Entity/Component System
 **Status: COMPLETE**
@@ -233,7 +249,9 @@ src/
 ├── texture.zig       # GPU texture creation utilities
 ├── gltf_loader.zig   # GLB/glTF loader with texture extraction
 ├── primitives.zig    # Built-in shapes (triangle, cube)
-├── ecs.zig           # ECS via zflecs (GameWorld, components, queries)
+├── ecs.zig           # ECS via zflecs (GameWorld, components, queries, physics sync)
+├── physics.zig       # Jolt physics world wrapper via zphysics
+├── physics_debug.zig # PhysicsDebugRenderer (Jolt VTable implementation)
 ├── timing.zig        # FrameTimer, TICK_RATE, TICK_DURATION
 ├── input.zig         # InputBuffer, Key constants, MouseButton, editor event integration
 ├── sdl.zig           # Shared SDL3 C bindings
@@ -243,9 +261,10 @@ src/
     ├── imgui_backend.zig # SDL3 GPU backend wrapper
     ├── tool.zig          # Tool interface, EditorContext
     └── tools/
-        ├── stats_tool.zig  # FPS, frame time, graph
-        ├── camera_tool.zig # Camera position, rotation, FOV inspector
-        └── scene_tool.zig  # Entity hierarchy, selection, inspector
+        ├── stats_tool.zig   # FPS, frame time, graph
+        ├── camera_tool.zig  # Camera position, rotation, FOV inspector
+        ├── scene_tool.zig   # Entity hierarchy, selection, inspector
+        └── physics_tool.zig # Physics debug visualization toggles
 
 shaders/
 ├── triangle.vert     # GLSL vertex shader for primitives (pos + color)
@@ -263,7 +282,9 @@ docs/adr/
 ├── 001-shader-language-and-compilation.md
 ├── 002-module-architecture-and-layering.md
 ├── 003-editor-architecture.md
-└── 004-ecs-architecture.md
+├── 004-ecs-architecture.md
+├── 005-physics-ecs-integration.md
+└── 006-physics-debug-rendering.md
 ```
 
 ---
@@ -294,25 +315,38 @@ Entity Component System is now implemented:
 - Scene tool: entity hierarchy, selection, transform/mesh inspector
 - Proper iterator cleanup (handles early break and full consumption)
 
+## Phase 3 Complete!
+
+All engine systems are now implemented:
+- Jolt physics via zphysics with ground plane + falling objects
+- Debug wireframe rendering (collision shapes, AABBs, velocities)
+- Physics-ECS sync with direct quaternion copy
+- RigidBody component linking entities to physics bodies
+- Editor UI for debug visualization toggles
+
 ---
 
 ## What's Next?
 
-**Option A: Physics Integration (Step 3.2)**
-- Jolt physics world setup via zphysics
-- Ground plane + falling objects
-- Debug visualization (wireframe colliders)
-- Physics components integrated with ECS
-
-**Option B: More Editor Tools**
-- Wireframe mode toggle
+**Option A: More Editor Tools**
+- Wireframe mode toggle for meshes
 - Texture rendering toggle
 - ImGuizmo 3D gizmos for transform manipulation
 
-**Option C: Rendering Enhancements**
+**Option B: Rendering Enhancements**
 - Shadow mapping
 - Normal mapping
 - PBR materials
+
+**Option C: Character Controller**
+- Player entity with physics capsule
+- WASD movement with physics response
+- Jump, ground detection
+
+**Option D: Vehicles**
+- Jolt vehicle constraint system
+- Wheel physics, suspension
+- Basic car handling
 
 ---
 

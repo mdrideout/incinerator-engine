@@ -40,6 +40,34 @@ pub const RigidBody = struct {
 
 A sync system queries all entities with `(Position, Rotation, RigidBody)` and copies transforms from physics to ECS each tick.
 
+### Quaternion Storage (Direct Sync)
+
+The ECS `Rotation` component stores quaternions directly (x, y, z, w), matching the physics engine's internal representation. This enables:
+
+1. **Direct copy from physics** - No conversion needed during sync:
+```zig
+const quat = physics.getBodyRotation(body_id);
+rotation.* = .{ .x = quat[0], .y = quat[1], .z = quat[2], .w = quat[3] };
+```
+
+2. **Single matrix conversion** - `Rotation.toMatrix()` uses `zm.quatToMat()` directly:
+```zig
+pub fn toMatrix(self: Rotation) zm.Mat {
+    return zm.quatToMat(zm.f32x4(self.x, self.y, self.z, self.w));
+}
+```
+
+3. **Euler conversion for UI** - `Rotation.toEuler()` extracts human-readable angles when needed (editor display only):
+```zig
+const euler = rotation.toEuler();  // Returns [3]f32 {pitch, yaw, roll}
+```
+
+**Benefits over Euler storage:**
+- No gimbal lock issues
+- No extraction/application order mismatch bugs
+- Faster sync (direct copy vs trig functions)
+- More accurate (no round-trip conversion errors)
+
 ## Rationale
 
 ### Alternatives Considered

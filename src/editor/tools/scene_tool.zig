@@ -173,12 +173,13 @@ fn draw(ctx: *EditorContext) void {
 
                     zgui.spacing();
 
-                    // Rotation (Euler angles in radians)
+                    // Rotation (convert quaternion to Euler for display)
                     const rad_to_deg = 180.0 / std.math.pi;
+                    const euler = entity.rotation.toEuler();
                     zgui.text("Rotation (Euler)", .{});
-                    zgui.text("  X: {d:.1} deg ({d:.3} rad)", .{ entity.rotation.x * rad_to_deg, entity.rotation.x });
-                    zgui.text("  Y: {d:.1} deg ({d:.3} rad)", .{ entity.rotation.y * rad_to_deg, entity.rotation.y });
-                    zgui.text("  Z: {d:.1} deg ({d:.3} rad)", .{ entity.rotation.z * rad_to_deg, entity.rotation.z });
+                    zgui.text("  X: {d:.1} deg ({d:.3} rad)", .{ euler[0] * rad_to_deg, euler[0] });
+                    zgui.text("  Y: {d:.1} deg ({d:.3} rad)", .{ euler[1] * rad_to_deg, euler[1] });
+                    zgui.text("  Z: {d:.1} deg ({d:.3} rad)", .{ euler[2] * rad_to_deg, euler[2] });
 
                     zgui.spacing();
 

@@ -342,7 +342,7 @@ const App = struct {
                 _ = self.game_world.spawnRenderable(
                     "Woman1",
                     .{ .x = 3.0, .y = 0, .z = 0 }, // Right of center
-                    .{ .x = std.math.pi / 2.0, .y = 0, .z = 0 }, // Rotate to stand up
+                    ecs.Rotation.fromEuler(std.math.pi / 2.0, 0, 0), // Rotate to stand up
                     .{ .x = human_scale, .y = human_scale, .z = human_scale },
                     m,
                 );
@@ -354,7 +354,7 @@ const App = struct {
                 _ = self.game_world.spawnRenderable(
                     "Woman2",
                     .{ .x = -3.0, .y = 0, .z = 0 }, // Left of center
-                    .{ .x = std.math.pi / 2.0, .y = 0, .z = 0 }, // Rotate to stand up
+                    ecs.Rotation.fromEuler(std.math.pi / 2.0, 0, 0), // Rotate to stand up
                     .{ .x = human_scale, .y = human_scale, .z = human_scale },
                     m,
                 );
