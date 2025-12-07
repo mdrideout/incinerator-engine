@@ -456,34 +456,34 @@ pub const GameWorld = struct {
 };
 
 /// Convert a quaternion [x,y,z,w] to Euler angles (radians).
-/// Uses YXZ rotation order (pitch, yaw, roll) matching our Rotation component.
+/// Extracts rotations about each axis to match our Rotation component.
 fn quaternionToEuler(q: [4]f32) Rotation {
-    const x = q[0];
-    const y = q[1];
-    const z = q[2];
-    const w = q[3];
+    const qx = q[0];
+    const qy = q[1];
+    const qz = q[2];
+    const qw = q[3];
 
-    // Roll (z-axis rotation)
-    const sinr_cosp = 2.0 * (w * x + y * z);
-    const cosr_cosp = 1.0 - 2.0 * (x * x + y * y);
-    const roll = std.math.atan2(sinr_cosp, cosr_cosp);
+    // Rotation about X axis
+    const sin_x = 2.0 * (qw * qx + qy * qz);
+    const cos_x = 1.0 - 2.0 * (qx * qx + qy * qy);
+    const rot_x = std.math.atan2(sin_x, cos_x);
 
-    // Pitch (x-axis rotation)
-    const sinp = 2.0 * (w * y - z * x);
-    const pitch = if (@abs(sinp) >= 1.0)
-        if (sinp > 0) @as(f32, std.math.pi / 2.0) else @as(f32, -std.math.pi / 2.0)
+    // Rotation about Y axis (clamped to avoid NaN at poles)
+    const sin_y = 2.0 * (qw * qy - qz * qx);
+    const rot_y = if (@abs(sin_y) >= 1.0)
+        if (sin_y > 0) @as(f32, std.math.pi / 2.0) else @as(f32, -std.math.pi / 2.0)
     else
-        std.math.asin(sinp);
+        std.math.asin(sin_y);
 
-    // Yaw (y-axis rotation)
-    const siny_cosp = 2.0 * (w * z + x * y);
-    const cosy_cosp = 1.0 - 2.0 * (y * y + z * z);
-    const yaw = std.math.atan2(siny_cosp, cosy_cosp);
+    // Rotation about Z axis
+    const sin_z = 2.0 * (qw * qz + qx * qy);
+    const cos_z = 1.0 - 2.0 * (qy * qy + qz * qz);
+    const rot_z = std.math.atan2(sin_z, cos_z);
 
     return .{
-        .x = roll, // Pitch in our naming (rotation about X)
-        .y = yaw, // Yaw (rotation about Y)
-        .z = pitch, // Roll (rotation about Z)
+        .x = rot_x,
+        .y = rot_y,
+        .z = rot_z,
     };
 }
 

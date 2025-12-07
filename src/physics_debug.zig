@@ -419,12 +419,21 @@ pub const PhysicsDebugRenderer = extern struct {
     }
 
     fn rmatrixToZmMat(m: *const zphysics.RMatrix) zm.Mat {
-        // RMatrix is column-major, zmath uses row-major
+        // Jolt: column-major storage, column-vector math (M * v)
+        // zmath: row-major storage, row-vector math (v * M)
+        //
+        // For equivalent transform: zmath_mat = transpose(jolt_mat)
+        // This means: zmath row i = jolt column i
+        //
+        // zmath row 0 = Jolt column 0 = [col0[0], col0[1], col0[2], 0]
+        // zmath row 1 = Jolt column 1 = [col1[0], col1[1], col1[2], 0]
+        // zmath row 2 = Jolt column 2 = [col2[0], col2[1], col2[2], 0]
+        // zmath row 3 = translation    = [col3[0], col3[1], col3[2], 1]
         return zm.Mat{
-            .{ m.column_0[0], m.column_1[0], m.column_2[0], @as(f32, @floatCast(m.column_3[0])) },
-            .{ m.column_0[1], m.column_1[1], m.column_2[1], @as(f32, @floatCast(m.column_3[1])) },
-            .{ m.column_0[2], m.column_1[2], m.column_2[2], @as(f32, @floatCast(m.column_3[2])) },
-            .{ m.column_0[3], m.column_1[3], m.column_2[3], @as(f32, @floatCast(m.column_3[3])) },
+            .{ m.column_0[0], m.column_0[1], m.column_0[2], 0 },
+            .{ m.column_1[0], m.column_1[1], m.column_1[2], 0 },
+            .{ m.column_2[0], m.column_2[1], m.column_2[2], 0 },
+            .{ @as(f32, @floatCast(m.column_3[0])), @as(f32, @floatCast(m.column_3[1])), @as(f32, @floatCast(m.column_3[2])), 1 },
         };
     }
 
