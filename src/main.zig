@@ -210,7 +210,11 @@ const App = struct {
             .debug_texture = debug_texture,
             .loaded_model_1 = loaded_model_1,
             .loaded_model_2 = loaded_model_2,
-            .game_camera = camera.Camera.aboveLookingDown(12.0, 20.0), // Above and back, looking at falling cubes
+            .game_camera = .{
+                .position = .{ -5.18, 4.96, 7.57, 1.0 },
+                .yaw = 0.59,    // 33.6 degrees
+                .pitch = -0.36, // -20.6 degrees
+            },
             .debug_frame_counter = 0,
             .sim_tick_count = 0,
         };

@@ -17,6 +17,7 @@
 //! stored separately in RendererData, accessed via a pointer.
 
 const std = @import("std");
+const build_options = @import("build_options");
 const zphysics = @import("zphysics");
 const zm = @import("zmath");
 const mesh_module = @import("mesh.zig");
@@ -42,42 +43,52 @@ const INITIAL_TRIANGLE_CAPACITY: usize = 30_000;
 /// Settings for physics debug visualization.
 /// These control what gets drawn when debug rendering is enabled.
 /// Must be extern struct for C ABI since it's embedded in PhysicsDebugRenderer.
+///
+/// When built with `-Dphysics_debug=true`, all options default to ON.
 pub const DebugDrawSettings = extern struct {
+    const defaults_on = build_options.physics_debug_enabled;
+
     /// Master toggle - when false, nothing is drawn
-    enabled: bool = false,
+    enabled: bool = defaults_on,
 
     /// Draw collision shapes via drawGeometry callback
-    /// NOTE: Currently not rendered - requires implementing geometry batch extraction
-    draw_shapes: bool = false,
+    draw_shapes: bool = defaults_on,
 
     /// Draw shapes as wireframe instead of solid
-    /// NOTE: Requires draw_shapes to work first
     wireframe: bool = true,
 
     /// Draw axis-aligned bounding boxes (AABBs) around bodies
     /// AABBs are ALWAYS axis-aligned and expand when objects rotate
-    /// This is the main working visualization - shows broad-phase bounds
-    draw_bounding_boxes: bool = true,
+    draw_bounding_boxes: bool = defaults_on,
 
     /// Draw velocity vectors as arrows from center of mass
     /// Only visible on MOVING bodies
-    draw_velocity: bool = false,
+    draw_velocity: bool = defaults_on,
 
     /// Draw center of mass transform as RGB coordinate axes (X=red, Y=green, Z=blue)
-    draw_center_of_mass: bool = false,
+    draw_center_of_mass: bool = defaults_on,
 
     /// Draw the world transform as RGB coordinate axes
-    draw_world_transform: bool = false,
+    draw_world_transform: bool = defaults_on,
 };
 
 // ============================================================================
-// Render Primitive (extern-compatible, stored in pool)
+// Render Primitive (stores batch geometry)
 // ============================================================================
 
-/// Simple marker for allocated primitives in the pool.
-/// The actual geometry data is captured in drawLine/drawTriangle callbacks.
-const RenderPrimitive = extern struct {
-    allocated: bool = false,
+/// Stores vertex data for a triangle batch created by Jolt.
+/// Batches are created once per unique shape and reused across frames.
+const RenderPrimitive = struct {
+    vertices: ?[]Vertex = null,
+    allocator: ?std.mem.Allocator = null,
+
+    pub fn deinit(self: *RenderPrimitive) void {
+        if (self.vertices) |verts| {
+            if (self.allocator) |alloc| alloc.free(verts);
+        }
+        self.vertices = null;
+        self.allocator = null;
+    }
 };
 
 // ============================================================================
@@ -96,6 +107,10 @@ pub const RendererData = struct {
     triangle_buffer_capacity: usize = 0,
     device: *c.SDL_GPUDevice,
 
+    // Batch storage - persists across frames (created once per unique shape)
+    primitives: [64]RenderPrimitive = [_]RenderPrimitive{.{}} ** 64,
+    prim_head: usize = 0,
+
     pub fn init(allocator: std.mem.Allocator, device: *c.SDL_GPUDevice) RendererData {
         return .{
             .allocator = allocator,
@@ -106,10 +121,15 @@ pub const RendererData = struct {
     }
 
     pub fn deinit(self: *RendererData) void {
+        // Release GPU buffers
         if (self.line_buffer) |buf| c.SDL_ReleaseGPUBuffer(self.device, buf);
         if (self.triangle_buffer) |buf| c.SDL_ReleaseGPUBuffer(self.device, buf);
         self.line_vertices.deinit(self.allocator);
         self.triangle_vertices.deinit(self.allocator);
+        // Free all primitive batch data
+        for (&self.primitives) |*prim| {
+            prim.deinit();
+        }
     }
 };
 
@@ -123,15 +143,12 @@ pub const PhysicsDebugRenderer = extern struct {
     // VTable pointer - MUST be first field (offset 0) for C ABI!
     vtable: *const zphysics.DebugRenderer.VTable(PhysicsDebugRenderer) = zphysics.DebugRenderer.initVTable(PhysicsDebugRenderer),
 
-    // Pre-allocated primitive pool (matches zphysics test pattern)
-    primitives: [64]RenderPrimitive = [_]RenderPrimitive{.{}} ** 64,
-    prim_head: i32 = -1,
-
     // Debug stats
     draw_geometry_count: usize = 0,
 
     // Pointer to non-extern rendering data (set via setData)
-    data_ptr: usize = 0, // Use usize to store pointer in extern struct
+    // Primitives are stored in RendererData, not here (extern struct can't have non-trivial types)
+    data_ptr: usize = 0,
 
     // User-configurable settings
     settings: DebugDrawSettings = .{},
@@ -250,32 +267,85 @@ pub const PhysicsDebugRenderer = extern struct {
         triangles: [*]zphysics.DebugRenderer.Triangle,
         triangle_count: u32,
     ) callconv(.c) *zphysics.DebugRenderer.TriangleBatch {
-        _ = triangles;
-        _ = triangle_count;
-        // Use pre-allocated primitive from pool (like zphysics test)
-        self.prim_head += 1;
-        const idx: usize = @intCast(@mod(self.prim_head, 64));
-        const prim = &self.primitives[idx];
-        prim.allocated = true;
+        const data = self.getData() orelse {
+            // No data - this shouldn't happen, but return empty batch
+            @panic("PhysicsDebugRenderer: getData() returned null in createTriangleBatch");
+        };
+
+        // Allocate slot from pool (circular)
+        const idx = data.prim_head % 64;
+        data.prim_head +%= 1;
+        var prim = &data.primitives[idx];
+
+        // Free old data if slot was reused
+        prim.deinit();
+
+        // Convert Jolt triangles to our Vertex format
+        const vertex_count = triangle_count * 3;
+        const vertices = data.allocator.alloc(Vertex, vertex_count) catch {
+            return zphysics.DebugRenderer.createTriangleBatch(prim);
+        };
+
+        for (0..triangle_count) |i| {
+            const tri = triangles[i];
+            for (0..3) |j| {
+                const v = tri.v[j];
+                vertices[i * 3 + j] = .{
+                    .position = v.position,
+                    .color = .{
+                        @as(f32, @floatFromInt(v.color.comp.r)) / 255.0,
+                        @as(f32, @floatFromInt(v.color.comp.g)) / 255.0,
+                        @as(f32, @floatFromInt(v.color.comp.b)) / 255.0,
+                    },
+                };
+            }
+        }
+
+        prim.vertices = vertices;
+        prim.allocator = data.allocator;
         return zphysics.DebugRenderer.createTriangleBatch(prim);
     }
 
     pub fn createTriangleBatchIndexed(
         self: *PhysicsDebugRenderer,
-        vertices: [*]zphysics.DebugRenderer.Vertex,
+        src_vertices: [*]zphysics.DebugRenderer.Vertex,
         vertex_count: u32,
         indices: [*]u32,
         index_count: u32,
     ) callconv(.c) *zphysics.DebugRenderer.TriangleBatch {
-        _ = vertices;
-        _ = vertex_count;
-        _ = indices;
-        _ = index_count;
-        // Use pre-allocated primitive from pool
-        self.prim_head += 1;
-        const idx: usize = @intCast(@mod(self.prim_head, 64));
-        const prim = &self.primitives[idx];
-        prim.allocated = true;
+        _ = vertex_count; // We use indices to expand triangles
+
+        const data = self.getData() orelse {
+            @panic("PhysicsDebugRenderer: getData() returned null in createTriangleBatchIndexed");
+        };
+
+        // Allocate slot from pool (circular)
+        const idx = data.prim_head % 64;
+        data.prim_head +%= 1;
+        var prim = &data.primitives[idx];
+
+        // Free old data if slot was reused
+        prim.deinit();
+
+        // Expand indexed triangles to flat vertex list
+        const vertices = data.allocator.alloc(Vertex, index_count) catch {
+            return zphysics.DebugRenderer.createTriangleBatch(prim);
+        };
+
+        for (0..index_count) |i| {
+            const v = src_vertices[indices[i]];
+            vertices[i] = .{
+                .position = v.position,
+                .color = .{
+                    @as(f32, @floatFromInt(v.color.comp.r)) / 255.0,
+                    @as(f32, @floatFromInt(v.color.comp.g)) / 255.0,
+                    @as(f32, @floatFromInt(v.color.comp.b)) / 255.0,
+                },
+            };
+        }
+
+        prim.vertices = vertices;
+        prim.allocator = data.allocator;
         return zphysics.DebugRenderer.createTriangleBatch(prim);
     }
 
@@ -285,7 +355,7 @@ pub const PhysicsDebugRenderer = extern struct {
     ) callconv(.c) void {
         _ = self;
         const prim: *RenderPrimitive = @ptrCast(@alignCast(batch));
-        prim.allocated = false;
+        prim.deinit();
     }
 
     pub fn drawGeometry(
@@ -299,17 +369,72 @@ pub const PhysicsDebugRenderer = extern struct {
         cast_shadow: zphysics.DebugRenderer.CastShadow,
         draw_mode: zphysics.DebugRenderer.DrawMode,
     ) callconv(.c) void {
-        // Ignore all parameters - we capture geometry via drawLine/drawTriangle instead
-        // This matches the zphysics test's approach
-        _ = model_matrix;
         _ = world_space_bound;
         _ = lod_scale_sq;
-        _ = color;
-        _ = geometry;
         _ = cull_mode;
         _ = cast_shadow;
-        _ = draw_mode;
+
         self.draw_geometry_count += 1;
+
+        // Only render if shapes are enabled
+        if (!self.settings.draw_shapes) return;
+        const data = self.getData() orelse return;
+
+        // Get first LOD's batch
+        if (geometry.num_LODs == 0) return;
+        const batch = geometry.LODs[0].batch;
+        const prim_ptr = zphysics.DebugRenderer.getPrimitiveFromBatch(batch);
+        const prim: *const RenderPrimitive = @ptrCast(@alignCast(prim_ptr));
+
+        const stored_verts = prim.vertices orelse return;
+        const tint = colorToRgb(color);
+
+        // Convert RMatrix to zmath Mat for transformation
+        const mat = rmatrixToZmMat(model_matrix);
+
+        const use_wireframe = (draw_mode == .draw_mode_wireframe) or self.settings.wireframe;
+
+        if (use_wireframe) {
+            // Emit as lines (3 edges per triangle)
+            var i: usize = 0;
+            while (i + 2 < stored_verts.len) : (i += 3) {
+                const v0 = transformVertex(stored_verts[i], mat, tint);
+                const v1 = transformVertex(stored_verts[i + 1], mat, tint);
+                const v2 = transformVertex(stored_verts[i + 2], mat, tint);
+
+                // 3 edges: v0-v1, v1-v2, v2-v0
+                data.line_vertices.append(data.allocator, v0) catch return;
+                data.line_vertices.append(data.allocator, v1) catch return;
+                data.line_vertices.append(data.allocator, v1) catch return;
+                data.line_vertices.append(data.allocator, v2) catch return;
+                data.line_vertices.append(data.allocator, v2) catch return;
+                data.line_vertices.append(data.allocator, v0) catch return;
+            }
+        } else {
+            // Emit as solid triangles
+            for (stored_verts) |v| {
+                data.triangle_vertices.append(data.allocator, transformVertex(v, mat, tint)) catch return;
+            }
+        }
+    }
+
+    fn rmatrixToZmMat(m: *const zphysics.RMatrix) zm.Mat {
+        // RMatrix is column-major, zmath uses row-major
+        return zm.Mat{
+            .{ m.column_0[0], m.column_1[0], m.column_2[0], @as(f32, @floatCast(m.column_3[0])) },
+            .{ m.column_0[1], m.column_1[1], m.column_2[1], @as(f32, @floatCast(m.column_3[1])) },
+            .{ m.column_0[2], m.column_1[2], m.column_2[2], @as(f32, @floatCast(m.column_3[2])) },
+            .{ m.column_0[3], m.column_1[3], m.column_2[3], @as(f32, @floatCast(m.column_3[3])) },
+        };
+    }
+
+    fn transformVertex(v: Vertex, mat: zm.Mat, tint: [3]f32) Vertex {
+        const pos = zm.f32x4(v.position[0], v.position[1], v.position[2], 1.0);
+        const transformed = zm.mul(pos, mat);
+        return .{
+            .position = .{ transformed[0], transformed[1], transformed[2] },
+            .color = .{ v.color[0] * tint[0], v.color[1] * tint[1], v.color[2] * tint[2] },
+        };
     }
 
     pub fn drawText3D(

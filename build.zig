@@ -36,6 +36,13 @@ pub fn build(b: *std.Build) void {
         "Enable the editor UI (ImGui tools, gizmos). Defaults to true in Debug, false in Release.",
     ) orelse default_editor_enabled;
 
+    // Physics debug option - enables all physics debug visualization by default
+    const physics_debug_enabled = b.option(
+        bool,
+        "physics_debug",
+        "Enable all physics debug visualization options by default (collision shapes, AABBs, etc).",
+    ) orelse false;
+
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -84,6 +91,7 @@ pub fn build(b: *std.Build) void {
     // Code can access these via: const options = @import("build_options");
     const options = b.addOptions();
     options.addOption(bool, "editor_enabled", editor_enabled);
+    options.addOption(bool, "physics_debug_enabled", physics_debug_enabled);
 
     const exe = b.addExecutable(.{
         .name = "incinerator_engine",

@@ -107,16 +107,14 @@ fn drawSettingsUI(settings: *DebugDrawSettings) void {
     _ = zgui.checkbox("Center of Mass", .{ .v = &settings.draw_center_of_mass });
     _ = zgui.checkbox("World Transform", .{ .v = &settings.draw_world_transform });
 
-    // Not-yet-implemented options (disabled)
+    // Collision shapes (now working!)
     zgui.separator();
-    zgui.textColored(.{ 0.6, 0.6, 0.6, 1.0 }, "Not Yet Implemented:", .{});
-    zgui.beginDisabled(.{});
-    _ = zgui.checkbox("Collision Shapes", .{ .v = &settings.draw_shapes });
+    zgui.text("Collision Shapes", .{});
+    _ = zgui.checkbox("Shapes", .{ .v = &settings.draw_shapes });
     zgui.indent(.{ .indent_w = 20.0 });
     _ = zgui.checkbox("Wireframe", .{ .v = &settings.wireframe });
     zgui.unindent(.{ .indent_w = 20.0 });
-    zgui.endDisabled();
-    zgui.textColored(.{ 0.5, 0.5, 0.5, 1.0 }, "  Requires drawGeometry impl", .{});
+    zgui.textColored(.{ 0.6, 0.6, 0.6, 1.0 }, "  Shows actual collision geometry", .{});
 
     if (!settings.enabled) {
         zgui.endDisabled();
