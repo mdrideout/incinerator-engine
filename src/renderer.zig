@@ -58,6 +58,20 @@ pub const Uniforms = extern struct {
     mvp: [16]f32,
 };
 
+/// Fragment shader settings (for texture toggle, etc.)
+/// Passed as uniform buffer to fragment shader.
+pub const FragmentSettings = extern struct {
+    use_texture: f32, // 1.0 = use texture, 0.0 = use white
+    _padding: [3]f32 = .{ 0, 0, 0 }, // Pad to 16 bytes for GPU alignment
+};
+
+/// Render settings that can be toggled at runtime.
+/// These control debug visualization modes.
+pub const RenderSettings = struct {
+    wireframe_mode: bool = false, // Draw meshes as wireframes
+    show_textures: bool = true, // Sample textures (false = white)
+};
+
 // ============================================================================
 // Shader Loading (Platform-Aware)
 // ============================================================================
@@ -116,7 +130,11 @@ pub const Renderer = struct {
     // Graphics pipelines for different vertex formats
     pipeline_pos_color: *c.SDL_GPUGraphicsPipeline, // For primitives (Vertex)
     pipeline_pos_normal_uv: *c.SDL_GPUGraphicsPipeline, // For loaded models (VertexPNU)
+    pipeline_pos_normal_uv_wireframe: *c.SDL_GPUGraphicsPipeline, // For models in wireframe mode
     pipeline_lines: *c.SDL_GPUGraphicsPipeline, // For debug lines (Vertex format, LINELIST primitive)
+
+    // Runtime render settings (wireframe, textures, etc.)
+    render_settings: RenderSettings = .{},
 
     // Depth buffer for proper 3D rendering (closer pixels occlude farther ones)
     depth_texture: *c.SDL_GPUTexture,
@@ -162,10 +180,14 @@ pub const Renderer = struct {
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_color);
 
         // Pipeline 2: pos_normal_uv for loaded 3D models (GLB files)
-        const pipeline_pos_normal_uv = try createPipelinePosNormalUv(device);
+        const pipeline_pos_normal_uv = try createPipelinePosNormalUv(device, false);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_normal_uv);
 
-        // Pipeline 3: lines for debug visualization (physics colliders, etc.)
+        // Pipeline 3: pos_normal_uv wireframe variant for debug visualization
+        const pipeline_pos_normal_uv_wireframe = try createPipelinePosNormalUv(device, true);
+        errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_normal_uv_wireframe);
+
+        // Pipeline 4: lines for debug visualization (physics colliders, etc.)
         const pipeline_lines = try createPipelineLines(device);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_lines);
 
@@ -218,6 +240,7 @@ pub const Renderer = struct {
             .window = window,
             .pipeline_pos_color = pipeline_pos_color,
             .pipeline_pos_normal_uv = pipeline_pos_normal_uv,
+            .pipeline_pos_normal_uv_wireframe = pipeline_pos_normal_uv_wireframe,
             .pipeline_lines = pipeline_lines,
             .depth_texture = depth_texture,
             .depth_width = width,
@@ -234,6 +257,7 @@ pub const Renderer = struct {
         c.SDL_ReleaseGPUTexture(self.device, self.depth_texture);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_color);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv);
+        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv_wireframe);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_lines);
         c.SDL_ReleaseWindowFromGPUDevice(self.device, self.window);
         c.SDL_DestroyGPUDevice(self.device);
@@ -360,13 +384,17 @@ pub const Renderer = struct {
         const cmd = self.current_cmd orelse return;
 
         // =====================================================================
-        // Step 1: Bind the correct pipeline based on vertex format
+        // Step 1: Bind the correct pipeline based on vertex format and settings
         // =====================================================================
         // Each pipeline has a different vertex layout configured, so we must
         // bind the one that matches the mesh's vertex data.
+        // Wireframe mode uses a variant pipeline with FILLMODE_LINE.
         const pipeline = switch (m.vertex_format) {
             .pos_color => self.pipeline_pos_color,
-            .pos_normal_uv => self.pipeline_pos_normal_uv,
+            .pos_normal_uv => if (self.render_settings.wireframe_mode)
+                self.pipeline_pos_normal_uv_wireframe
+            else
+                self.pipeline_pos_normal_uv,
         };
         c.SDL_BindGPUGraphicsPipeline(render_pass, pipeline);
 
@@ -377,7 +405,7 @@ pub const Renderer = struct {
         c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(Uniforms));
 
         // =====================================================================
-        // Step 3: Bind texture and sampler for textured meshes
+        // Step 3: Bind texture, sampler, and push fragment settings
         // =====================================================================
         if (m.vertex_format == .pos_normal_uv) {
             // Use mesh's texture if available, otherwise use placeholder (white)
@@ -391,6 +419,12 @@ pub const Renderer = struct {
                 .sampler = self.default_sampler,
             };
             c.SDL_BindGPUFragmentSamplers(render_pass, 0, &sampler_binding, 1);
+
+            // Push fragment settings (texture toggle)
+            const frag_settings = FragmentSettings{
+                .use_texture = if (self.render_settings.show_textures) 1.0 else 0.0,
+            };
+            c.SDL_PushGPUFragmentUniformData(cmd, 0, &frag_settings, @sizeOf(FragmentSettings));
         }
 
         // =====================================================================
@@ -689,7 +723,8 @@ fn createPipelinePosColor(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline 
 }
 
 /// Create pipeline for pos_normal_uv vertex format (loaded 3D models)
-fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
+/// Set wireframe=true to create a wireframe variant using FILLMODE_LINE
+fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice, wireframe: bool) !*c.SDL_GPUGraphicsPipeline {
     const shaders = getModelShaderCode();
 
     // Create vertex shader
@@ -710,7 +745,7 @@ fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeli
     };
     defer c.SDL_ReleaseGPUShader(device, vertex_shader);
 
-    // Create fragment shader (with 1 texture sampler for diffuse texture)
+    // Create fragment shader (with 1 texture sampler and 1 uniform buffer)
     const fragment_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
         .code = shaders.fragment.ptr,
         .code_size = shaders.fragment.len,
@@ -720,7 +755,7 @@ fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeli
         .num_samplers = 1, // Diffuse texture sampler
         .num_storage_textures = 0,
         .num_storage_buffers = 0,
-        .num_uniform_buffers = 0,
+        .num_uniform_buffers = 1, // FragmentSettings uniform buffer
         .props = 0,
     }) orelse {
         std.debug.print("Failed to create model fragment shader: {s}\n", .{c.SDL_GetError()});
@@ -791,8 +826,8 @@ fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeli
         },
         .primitive_type = c.SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         .rasterizer_state = .{
-            .fill_mode = c.SDL_GPU_FILLMODE_FILL,
-            .cull_mode = c.SDL_GPU_CULLMODE_BACK,
+            .fill_mode = if (wireframe) c.SDL_GPU_FILLMODE_LINE else c.SDL_GPU_FILLMODE_FILL,
+            .cull_mode = if (wireframe) c.SDL_GPU_CULLMODE_NONE else c.SDL_GPU_CULLMODE_BACK,
             .front_face = c.SDL_GPU_FRONTFACE_COUNTER_CLOCKWISE, // glTF uses CCW winding
             .depth_bias_constant_factor = 0,
             .depth_bias_clamp = 0,

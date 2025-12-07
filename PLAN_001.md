@@ -180,8 +180,8 @@ Features working:
 
 **Remaining for Step 3.1 (optional enhancements):**
 - ✅ Scene tool (entity hierarchy, inspector) - MOVED TO Step 3.3
-- Wireframe mode toggle
-- Texture rendering toggle
+- ✅ Wireframe mode toggle (F4 toggle, render_tool.zig)
+- ✅ Texture rendering toggle (render_tool.zig)
 
 ### ✅ Step 3.2: Physics Integration
 **Status: COMPLETE**
@@ -264,7 +264,8 @@ src/
         ├── stats_tool.zig   # FPS, frame time, graph
         ├── camera_tool.zig  # Camera position, rotation, FOV inspector
         ├── scene_tool.zig   # Entity hierarchy, selection, inspector
-        └── physics_tool.zig # Physics debug visualization toggles
+        ├── physics_tool.zig # Physics debug visualization toggles
+        └── render_tool.zig  # Wireframe mode, texture toggle
 
 shaders/
 ├── triangle.vert     # GLSL vertex shader for primitives (pos + color)
@@ -329,8 +330,8 @@ All engine systems are now implemented:
 ## What's Next?
 
 **Option A: More Editor Tools**
-- Wireframe mode toggle for meshes
-- Texture rendering toggle
+- ✅ Wireframe mode toggle for meshes
+- ✅ Texture rendering toggle
 - ImGuizmo 3D gizmos for transform manipulation
 
 **Option B: Rendering Enhancements**
@@ -348,6 +349,14 @@ All engine systems are now implemented:
 - Wheel physics, suspension
 - Basic car handling
 
+**Option E: Ragdoll / Skeleton Physics**
+- Skinned mesh rendering (vertex skinning in shader)
+- Jolt ragdoll constraint system for articulated bodies
+- Skeleton extraction from GLB armature data
+- Bone hierarchy with joint limits
+- Physics-driven character death/ragdoll transitions
+- Potential for procedural animation blending
+
 ---
 
 ## Keyboard Shortcuts
@@ -360,4 +369,5 @@ All engine systems are now implemented:
 | F1 | Toggle editor visibility |
 | F2 | Toggle ImGui demo window |
 | F3 | Toggle input passthrough (camera works while editor visible) |
+| F4 | Toggle physics debug rendering |
 | ESC | Quit |

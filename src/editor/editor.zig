@@ -46,6 +46,7 @@ const stats_tool = @import("tools/stats_tool.zig");
 const camera_tool = @import("tools/camera_tool.zig");
 const scene_tool = @import("tools/scene_tool.zig");
 const physics_tool = @import("tools/physics_tool.zig");
+const render_tool = @import("tools/render_tool.zig");
 
 const c = sdl.c;
 
@@ -99,6 +100,7 @@ var tools = [_]*Tool{
     &camera_tool.tool,
     &scene_tool.tool,
     &physics_tool.tool,
+    &render_tool.tool,
     // Add more tools here as we create them:
     // &console_tool.tool,
 };

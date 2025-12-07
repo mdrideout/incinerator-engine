@@ -44,6 +44,7 @@ const editor = @import("editor/editor.zig");
 const physics = @import("physics.zig");
 const physics_debug = @import("physics_debug.zig");
 const physics_tool = @import("editor/tools/physics_tool.zig");
+const render_tool = @import("editor/tools/render_tool.zig");
 
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
@@ -549,6 +550,9 @@ pub fn main() !void {
 
     // Wire up physics debug settings to editor tool (pointer must be to stable App memory)
     physics_tool.setDebugSettings(&app.physics_debug_renderer.settings);
+
+    // Wire up render settings to editor tool
+    render_tool.setRenderSettings(&app.gpu_renderer.render_settings);
 
     // Spawn entities AFTER App is constructed (mesh pointers must be stable)
     app.spawnEntities();
