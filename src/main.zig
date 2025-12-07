@@ -287,10 +287,13 @@ const App = struct {
         // Create falling physics cubes WITH visual representation
         // Each entity has both RigidBody (physics) and Renderable (visuals)
         // Using textured cubes for proper debug visualization
+        // 5 cubes from high up with staggered positions to create tumbling
         const falling_cube_positions = [_][3]f32{
-            .{ 0, 5, 0 },
-            .{ 0.3, 8, 0.2 },
-            .{ -0.2, 11, -0.1 },
+            .{ 0.0, 12, 0.0 }, // Center, highest
+            .{ 0.4, 14, 0.3 }, // Offset to land on edge
+            .{ -0.3, 16, -0.2 }, // Opposite offset
+            .{ 0.2, 18, -0.4 }, // More diagonal
+            .{ -0.5, 20, 0.1 }, // Highest, most offset
         };
 
         for (falling_cube_positions) |pos| {
