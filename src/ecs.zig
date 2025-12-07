@@ -79,11 +79,12 @@ pub const Rotation = struct {
     z: f32 = 0, // Roll
 
     pub fn toMatrix(self: Rotation) zm.Mat {
-        // Build rotation matrix from Euler angles (YXZ order for typical FPS camera)
+        // Build rotation matrix from Euler angles (XYZ intrinsic order)
+        // Must match the extraction order in quaternionToEuler()
         const rot_x = zm.rotationX(self.x);
         const rot_y = zm.rotationY(self.y);
         const rot_z = zm.rotationZ(self.z);
-        return zm.mul(zm.mul(rot_z, rot_x), rot_y);
+        return zm.mul(zm.mul(rot_x, rot_y), rot_z);
     }
 };
 
