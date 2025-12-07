@@ -45,6 +45,7 @@ const tool = @import("tool.zig");
 const stats_tool = @import("tools/stats_tool.zig");
 const camera_tool = @import("tools/camera_tool.zig");
 const scene_tool = @import("tools/scene_tool.zig");
+const physics_tool = @import("tools/physics_tool.zig");
 
 const c = sdl.c;
 
@@ -97,6 +98,7 @@ var tools = [_]*Tool{
     &stats_tool.tool,
     &camera_tool.tool,
     &scene_tool.tool,
+    &physics_tool.tool,
     // Add more tools here as we create them:
     // &console_tool.tool,
 };
@@ -137,6 +139,7 @@ pub fn deinit() void {
 /// - F1: Toggle editor visibility (always works, even when hidden)
 /// - F2: Toggle ImGui demo window (only when editor visible)
 /// - F3: Toggle input passthrough mode (always works)
+/// - F4: Toggle physics debug rendering (always works)
 ///
 /// Input passthrough mode: When enabled, ALL input passes through to the game
 /// even when hovering ImGui windows. This allows camera control while monitoring
@@ -159,6 +162,11 @@ pub fn processEvent(event: *const c.SDL_Event) bool {
         if (event.key.scancode == c.SDL_SCANCODE_F3) {
             input_passthrough = !input_passthrough;
             return true; // Consume F3 - game doesn't need it
+        }
+        // F4: Toggle physics debug rendering
+        if (event.key.scancode == c.SDL_SCANCODE_F4) {
+            physics_tool.toggleEnabled();
+            return true; // Consume F4 - game doesn't need it
         }
     }
 

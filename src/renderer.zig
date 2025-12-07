@@ -116,6 +116,7 @@ pub const Renderer = struct {
     // Graphics pipelines for different vertex formats
     pipeline_pos_color: *c.SDL_GPUGraphicsPipeline, // For primitives (Vertex)
     pipeline_pos_normal_uv: *c.SDL_GPUGraphicsPipeline, // For loaded models (VertexPNU)
+    pipeline_lines: *c.SDL_GPUGraphicsPipeline, // For debug lines (Vertex format, LINELIST primitive)
 
     // Depth buffer for proper 3D rendering (closer pixels occlude farther ones)
     depth_texture: *c.SDL_GPUTexture,
@@ -163,6 +164,10 @@ pub const Renderer = struct {
         // Pipeline 2: pos_normal_uv for loaded 3D models (GLB files)
         const pipeline_pos_normal_uv = try createPipelinePosNormalUv(device);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_normal_uv);
+
+        // Pipeline 3: lines for debug visualization (physics colliders, etc.)
+        const pipeline_lines = try createPipelineLines(device);
+        errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_lines);
 
         // Get initial window size for depth buffer
         var w: c_int = 0;
@@ -213,6 +218,7 @@ pub const Renderer = struct {
             .window = window,
             .pipeline_pos_color = pipeline_pos_color,
             .pipeline_pos_normal_uv = pipeline_pos_normal_uv,
+            .pipeline_lines = pipeline_lines,
             .depth_texture = depth_texture,
             .depth_width = width,
             .depth_height = height,
@@ -228,6 +234,7 @@ pub const Renderer = struct {
         c.SDL_ReleaseGPUTexture(self.device, self.depth_texture);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_color);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv);
+        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_lines);
         c.SDL_ReleaseWindowFromGPUDevice(self.device, self.window);
         c.SDL_DestroyGPUDevice(self.device);
     }
@@ -414,6 +421,70 @@ pub const Renderer = struct {
             // Non-indexed rendering: Every 3 vertices form a triangle
             c.SDL_DrawGPUPrimitives(render_pass, m.vertex_count, 1, 0, 0);
         }
+    }
+
+    /// Draw debug lines with the given MVP matrix.
+    /// Used for physics debug visualization (collision shapes, velocities, etc.)
+    ///
+    /// vertex_buffer: GPU buffer containing Vertex data (pos + color)
+    /// vertex_count: Number of vertices (must be even - each pair forms a line)
+    /// mvp: Model-View-Projection matrix for transforming vertices
+    pub fn drawLines(self: *Renderer, vertex_buffer: *c.SDL_GPUBuffer, vertex_count: u32, mvp: zm.Mat) void {
+        const render_pass = self.current_render_pass orelse {
+            std.debug.print("drawLines called outside of beginFrame/endFrame\n", .{});
+            return;
+        };
+
+        const cmd = self.current_cmd orelse return;
+
+        // Bind the line pipeline (uses LINELIST primitive type)
+        c.SDL_BindGPUGraphicsPipeline(render_pass, self.pipeline_lines);
+
+        // Push MVP matrix to vertex shader
+        const uniforms = Uniforms{ .mvp = zm.matToArr(mvp) };
+        c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(Uniforms));
+
+        // Bind vertex buffer
+        const buffer_binding = c.SDL_GPUBufferBinding{
+            .buffer = vertex_buffer,
+            .offset = 0,
+        };
+        c.SDL_BindGPUVertexBuffers(render_pass, 0, &buffer_binding, 1);
+
+        // Draw lines (every 2 vertices form a line segment)
+        c.SDL_DrawGPUPrimitives(render_pass, vertex_count, 1, 0, 0);
+    }
+
+    /// Draw debug triangles with the given MVP matrix.
+    /// Used for physics debug visualization (solid collision shapes).
+    ///
+    /// vertex_buffer: GPU buffer containing Vertex data (pos + color)
+    /// vertex_count: Number of vertices (must be multiple of 3)
+    /// mvp: Model-View-Projection matrix for transforming vertices
+    pub fn drawDebugTriangles(self: *Renderer, vertex_buffer: *c.SDL_GPUBuffer, vertex_count: u32, mvp: zm.Mat) void {
+        const render_pass = self.current_render_pass orelse {
+            std.debug.print("drawDebugTriangles called outside of beginFrame/endFrame\n", .{});
+            return;
+        };
+
+        const cmd = self.current_cmd orelse return;
+
+        // Bind the pos_color pipeline (uses TRIANGLELIST primitive type)
+        c.SDL_BindGPUGraphicsPipeline(render_pass, self.pipeline_pos_color);
+
+        // Push MVP matrix to vertex shader
+        const uniforms = Uniforms{ .mvp = zm.matToArr(mvp) };
+        c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(Uniforms));
+
+        // Bind vertex buffer
+        const buffer_binding = c.SDL_GPUBufferBinding{
+            .buffer = vertex_buffer,
+            .offset = 0,
+        };
+        c.SDL_BindGPUVertexBuffers(render_pass, 0, &buffer_binding, 1);
+
+        // Draw triangles
+        c.SDL_DrawGPUPrimitives(render_pass, vertex_count, 1, 0, 0);
     }
 
     /// End just the render pass (without submitting).
@@ -764,6 +835,160 @@ fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeli
         .props = 0,
     }) orelse {
         std.debug.print("Failed to create model graphics pipeline: {s}\n", .{c.SDL_GetError()});
+        return error.PipelineCreationFailed;
+    };
+
+    return pipeline;
+}
+
+/// Create pipeline for debug line rendering (physics colliders, velocities, etc.)
+/// Uses the same vertex format as pos_color (Vertex) but with LINELIST primitive type.
+///
+/// Key differences from pos_color pipeline:
+/// - Primitive type: LINELIST (every 2 vertices form a line segment)
+/// - Cull mode: NONE (lines have no faces to cull)
+/// - Depth write: false (lines overlay scene, don't occlude each other)
+/// - Depth test: LESS_OR_EQUAL (slightly reduced z-fighting)
+fn createPipelineLines(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
+    const shaders = getTriangleShaderCode(); // Reuse triangle shaders (same vertex format)
+
+    // Create vertex shader
+    const vertex_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
+        .code = shaders.vertex.ptr,
+        .code_size = shaders.vertex.len,
+        .entrypoint = "main0",
+        .format = shaders.format,
+        .stage = c.SDL_GPU_SHADERSTAGE_VERTEX,
+        .num_samplers = 0,
+        .num_storage_textures = 0,
+        .num_storage_buffers = 0,
+        .num_uniform_buffers = 1, // MVP matrix uniform buffer
+        .props = 0,
+    }) orelse {
+        std.debug.print("Failed to create line vertex shader: {s}\n", .{c.SDL_GetError()});
+        return error.ShaderCreationFailed;
+    };
+    defer c.SDL_ReleaseGPUShader(device, vertex_shader);
+
+    // Create fragment shader
+    const fragment_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
+        .code = shaders.fragment.ptr,
+        .code_size = shaders.fragment.len,
+        .entrypoint = "main0",
+        .format = shaders.format,
+        .stage = c.SDL_GPU_SHADERSTAGE_FRAGMENT,
+        .num_samplers = 0,
+        .num_storage_textures = 0,
+        .num_storage_buffers = 0,
+        .num_uniform_buffers = 0,
+        .props = 0,
+    }) orelse {
+        std.debug.print("Failed to create line fragment shader: {s}\n", .{c.SDL_GetError()});
+        return error.ShaderCreationFailed;
+    };
+    defer c.SDL_ReleaseGPUShader(device, fragment_shader);
+
+    // Vertex layout (same as pos_color pipeline - Vertex struct)
+    const vertex_buffer_desc = c.SDL_GPUVertexBufferDescription{
+        .slot = 0,
+        .pitch = @sizeOf(Vertex), // 24 bytes: pos(12) + color(12)
+        .input_rate = c.SDL_GPU_VERTEXINPUTRATE_VERTEX,
+        .instance_step_rate = 0,
+    };
+
+    const vertex_attributes = [_]c.SDL_GPUVertexAttribute{
+        // layout(location = 0) in vec3 in_position
+        .{
+            .location = 0,
+            .buffer_slot = 0,
+            .format = c.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
+            .offset = @offsetOf(Vertex, "position"),
+        },
+        // layout(location = 1) in vec3 in_color
+        .{
+            .location = 1,
+            .buffer_slot = 0,
+            .format = c.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
+            .offset = @offsetOf(Vertex, "color"),
+        },
+    };
+
+    // Color target (same as other pipelines)
+    const color_target_desc = c.SDL_GPUColorTargetDescription{
+        .format = c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,
+        .blend_state = .{
+            .src_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ONE,
+            .dst_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ZERO,
+            .color_blend_op = c.SDL_GPU_BLENDOP_ADD,
+            .src_alpha_blendfactor = c.SDL_GPU_BLENDFACTOR_ONE,
+            .dst_alpha_blendfactor = c.SDL_GPU_BLENDFACTOR_ZERO,
+            .alpha_blend_op = c.SDL_GPU_BLENDOP_ADD,
+            .color_write_mask = 0xF,
+            .enable_blend = false,
+            .enable_color_write_mask = false,
+            .padding1 = 0,
+            .padding2 = 0,
+        },
+    };
+
+    // Create the line pipeline
+    const pipeline = c.SDL_CreateGPUGraphicsPipeline(device, &c.SDL_GPUGraphicsPipelineCreateInfo{
+        .vertex_shader = vertex_shader,
+        .fragment_shader = fragment_shader,
+        .vertex_input_state = .{
+            .vertex_buffer_descriptions = &vertex_buffer_desc,
+            .num_vertex_buffers = 1,
+            .vertex_attributes = &vertex_attributes,
+            .num_vertex_attributes = vertex_attributes.len,
+        },
+        // KEY DIFFERENCE: LINELIST primitive type (every 2 vertices = 1 line)
+        .primitive_type = c.SDL_GPU_PRIMITIVETYPE_LINELIST,
+        .rasterizer_state = .{
+            .fill_mode = c.SDL_GPU_FILLMODE_FILL, // No effect for lines, but required
+            .cull_mode = c.SDL_GPU_CULLMODE_NONE, // Lines have no faces to cull
+            .front_face = c.SDL_GPU_FRONTFACE_CLOCKWISE,
+            .depth_bias_constant_factor = 0,
+            .depth_bias_clamp = 0,
+            .depth_bias_slope_factor = 0,
+            .enable_depth_bias = false,
+            .enable_depth_clip = false,
+            .padding1 = 0,
+            .padding2 = 0,
+        },
+        .multisample_state = .{
+            .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
+            .sample_mask = 0,
+            .enable_mask = false,
+            .padding1 = 0,
+            .padding2 = 0,
+            .padding3 = 0,
+        },
+        .depth_stencil_state = .{
+            // LESS_OR_EQUAL reduces z-fighting for lines on surfaces
+            .compare_op = c.SDL_GPU_COMPAREOP_LESS_OR_EQUAL,
+            .back_stencil_state = std.mem.zeroes(c.SDL_GPUStencilOpState),
+            .front_stencil_state = std.mem.zeroes(c.SDL_GPUStencilOpState),
+            .compare_mask = 0,
+            .write_mask = 0,
+            .enable_depth_test = true, // Test against scene depth
+            .enable_depth_write = false, // Don't write to depth (lines overlay)
+            .enable_stencil_test = false,
+            .padding1 = 0,
+            .padding2 = 0,
+            .padding3 = 0,
+        },
+        .target_info = .{
+            .color_target_descriptions = &color_target_desc,
+            .num_color_targets = 1,
+            .depth_stencil_format = DEPTH_FORMAT,
+            .has_depth_stencil_target = true,
+            .padding1 = 0,
+            .padding2 = 0,
+            .padding3 = 0,
+        },
+        .props = 0,
+    }) orelse {
+        std.debug.print("Failed to create line graphics pipeline: {s}\n", .{c.SDL_GetError()});
         return error.PipelineCreationFailed;
     };
 

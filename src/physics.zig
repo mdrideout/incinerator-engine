@@ -28,8 +28,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const zphysics = @import("zphysics");
+const physics_debug = @import("physics_debug.zig");
 
 const Allocator = std.mem.Allocator;
+const PhysicsDebugRenderer = physics_debug.PhysicsDebugRenderer;
 
 // ============================================================================
 // Object Layers
@@ -479,6 +481,35 @@ pub const Physics = struct {
     /// Call this after batch body creation for better performance.
     pub fn optimizeBroadPhase(self: *Physics) void {
         self.physics_system.optimizeBroadPhase();
+    }
+
+    // ========================================================================
+    // Debug Visualization
+    // ========================================================================
+
+    /// Draw physics debug visualization (collision shapes, velocities, etc.)
+    /// Call this after update() and after beginFrame() on the debug renderer.
+    ///
+    /// This triggers Jolt to iterate all bodies and call the debug renderer's
+    /// VTable callbacks (drawLine, drawGeometry, etc.) to buffer geometry.
+    ///
+    /// After calling this, call debug_renderer.render() to upload and draw.
+    pub fn drawDebug(self: *Physics, debug_renderer: *PhysicsDebugRenderer) void {
+        // Only draw if enabled
+        if (!debug_renderer.settings.enabled) return;
+
+        // Get draw settings from our debug renderer's configuration
+        const draw_settings = debug_renderer.getBodyDrawSettings();
+
+        // Call Jolt's drawBodies - this triggers callbacks to our VTable
+        // The second parameter is an optional body filter (null = draw all)
+        self.physics_system.drawBodies(&draw_settings, null);
+    }
+
+    /// Draw constraint debug visualization (joints, springs, etc.)
+    /// Call after drawDebug() for complete physics visualization.
+    pub fn drawConstraints(self: *Physics) void {
+        self.physics_system.drawConstraints();
     }
 };
 

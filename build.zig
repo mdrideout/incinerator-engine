@@ -136,6 +136,7 @@ pub fn build(b: *std.Build) void {
     const zphysics = b.dependency("zphysics", .{
         .use_double_precision = false,
         .enable_cross_platform_determinism = true,
+        .enable_debug_renderer = true, // Enable Jolt's debug visualization callbacks
     });
     exe.root_module.addImport("zphysics", zphysics.module("root"));
     exe.linkLibrary(zphysics.artifact("joltc"));

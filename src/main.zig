@@ -42,6 +42,8 @@ const sdl = @import("sdl.zig");
 const gltf_loader = @import("gltf_loader.zig");
 const editor = @import("editor/editor.zig");
 const physics = @import("physics.zig");
+const physics_debug = @import("physics_debug.zig");
+const physics_tool = @import("editor/tools/physics_tool.zig");
 
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
@@ -74,6 +76,10 @@ const App = struct {
 
     // Physics simulation
     physics_world: physics.Physics,
+
+    // Physics debug visualization (draws collider wireframes)
+    physics_debug_renderer: physics_debug.PhysicsDebugRenderer,
+    physics_debug_data: physics_debug.RendererData,
 
     // Owned mesh/model data (entities reference these, ECS doesn't own the data)
     ground_mesh: mesh.Mesh,
@@ -161,6 +167,13 @@ const App = struct {
         var physics_world = try physics.Physics.init(allocator);
         errdefer physics_world.deinit();
 
+        // Initialize physics debug renderer (draws collider wireframes)
+        // The renderer is an extern struct for C ABI, with separate data storage
+        // NOTE: Singleton registration MUST happen in main() after App is at stable memory,
+        // not here where the structs are on the stack and will be copied to App.
+        const physics_debug_renderer: physics_debug.PhysicsDebugRenderer = .{};
+        const physics_debug_data = physics_debug.RendererData.init(allocator, gpu_renderer.getDevice());
+
         // Initialize editor (ImGui debug UI)
         // This sets up ImGui with our SDL3 GPU device
         editor.init(window, gpu_renderer.getDevice());
@@ -178,6 +191,7 @@ const App = struct {
         std.debug.print("   SPACE - Print camera position\n", .{});
         std.debug.print("   F1 - Toggle editor UI\n", .{});
         std.debug.print("   F2 - Toggle ImGui demo\n", .{});
+        std.debug.print("   F4 - Toggle physics debug\n", .{});
         std.debug.print("===========================================\n\n", .{});
 
         return App{
@@ -188,6 +202,8 @@ const App = struct {
             .allocator = allocator,
             .game_world = game_world,
             .physics_world = physics_world,
+            .physics_debug_renderer = physics_debug_renderer,
+            .physics_debug_data = physics_debug_data,
             .ground_mesh = ground_mesh,
             .textured_cube_mesh = textured_cube_mesh,
             .cylinder_mesh = cylinder_mesh,
@@ -203,6 +219,10 @@ const App = struct {
     pub fn deinit(self: *App) void {
         // Clean up editor first (needs GPU device to still be valid)
         editor.deinit();
+
+        // Clean up physics debug renderer (unregister singleton first)
+        physics_debug.PhysicsDebugRenderer.unregisterSingleton();
+        self.physics_debug_data.deinit();
 
         // Clean up loaded models if present
         if (self.loaded_model_1) |*model| {
@@ -464,6 +484,15 @@ const App = struct {
         }
 
         // ================================================================
+        // Physics Debug Rendering (F4 toggle)
+        // ================================================================
+        // Draw physics collider wireframes when enabled. This must happen
+        // BEFORE ending the render pass since it draws lines/triangles.
+        self.physics_debug_renderer.beginFrame();
+        self.physics_world.drawDebug(&self.physics_debug_renderer);
+        self.physics_debug_renderer.render(&self.gpu_renderer, view_proj);
+
+        // ================================================================
         // End scene render pass BEFORE editor drawing
         // ================================================================
         // ImGui needs to upload vertex data via a copy pass, which can't
@@ -504,6 +533,15 @@ const App = struct {
 pub fn main() !void {
     var app = try App.init();
     defer app.deinit();
+
+    // IMPORTANT: Set up physics debug renderer now that App is at a stable memory location.
+    // The singleton MUST be registered with stable pointers, not stack locals from init().
+    app.physics_debug_renderer.setData(&app.physics_debug_data);
+    try app.physics_debug_renderer.registerSingleton();
+    // Note: unregisterSingleton is called in App.deinit()
+
+    // Wire up physics debug settings to editor tool (pointer must be to stable App memory)
+    physics_tool.setDebugSettings(&app.physics_debug_renderer.settings);
 
     // Spawn entities AFTER App is constructed (mesh pointers must be stable)
     app.spawnEntities();
