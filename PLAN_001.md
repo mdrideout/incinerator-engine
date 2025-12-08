@@ -236,6 +236,57 @@ Features working:
 - Character controller
 - Vehicles (GTA-style)
 
+### Discussion Needed: NPC Character Strategy
+Before implementing NPC systems, need to decide on asset strategy for large NPC populations:
+- **Base mesh approach**: Few body types (male/female, thin/average/heavy) with texture variations
+- **Texture atlas**: Clothing/skin variations via texture swapping on shared geometry
+- **LOD considerations**: Simpler meshes for distant NPCs
+- **Instancing**: GPU instancing for crowds with per-instance texture/color data
+- **Memory budget**: Trade-off between mesh variety and texture variety
+
+This affects skinned mesh implementation, asset pipeline, and rendering architecture.
+
+---
+
+## Phase 5: Generative AI Interface (Future)
+
+LLM-powered world manipulation and content generation system.
+
+### Core Capabilities
+- **Entity Spawning**: Natural language commands to spawn objects, NPCs, vehicles
+  - "Spawn 10 pedestrians walking down the street"
+  - "Add a red sports car at the intersection"
+  - "Create a stack of physics crates here"
+- **World Manipulation**: Modify existing entities via conversation
+  - "Make all the cars blue"
+  - "Move the player to the rooftop"
+  - "Delete all debris entities"
+- **Scene Composition**: High-level scene building
+  - "Set up a traffic jam scenario"
+  - "Create an ambush with 5 NPCs behind cover"
+
+### Architecture Considerations
+- **Tool/Function Calling**: LLM invokes typed engine commands (spawn, delete, modify, query)
+- **Context Awareness**: Feed current scene state (entity counts, player position) to LLM
+- **Safety/Sandboxing**: Rate limits, entity caps, restricted operations
+- **Async Execution**: Queue commands, handle streaming responses
+- **Editor Integration**: Chat panel in ImGui, command history, undo support
+
+### Implementation Steps
+1. Define engine command schema (JSON/structured format)
+2. Build command executor that maps LLM output to ECS operations
+3. Implement context serializer (scene → prompt context)
+4. Add HTTP client for LLM API calls (Claude API)
+5. Create editor chat UI with command preview
+6. Add conversation history and multi-turn support
+
+### Use Cases
+- Rapid prototyping and level design
+- Dynamic game master for MMO events
+- Procedural content generation
+- Debugging and testing scenarios
+- In-game NPC dialogue with world awareness
+
 ---
 
 ## Current File Structure
