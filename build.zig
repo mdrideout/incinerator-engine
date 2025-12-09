@@ -150,14 +150,16 @@ pub fn build(b: *std.Build) void {
     exe.linkLibrary(zphysics.artifact("joltc"));
 
     // ---------------------------------------------------------
-    // ImGui (zgui)
+    // ImGui (zgui) with ImGuizmo for 3D transform gizmos
     // ---------------------------------------------------------
     // zgui wraps Dear ImGui for immediate-mode debug UI.
     // We use the SDL3 GPU backend to integrate with our existing renderer.
+    // ImGuizmo provides 3D manipulation gizmos (translate/rotate/scale).
     // Available backends: no_backend, glfw_opengl3, glfw_wgpu, sdl3_gpu, etc.
     const zgui = b.dependency("zgui", .{
         .shared = false,
         .with_implot = true,
+        .with_gizmo = true, // Enable ImGuizmo for 3D transform manipulation
         .backend = .sdl3_gpu, // Use SDL3's GPU API for rendering ImGui
     });
     exe.root_module.addImport("zgui", zgui.module("root"));

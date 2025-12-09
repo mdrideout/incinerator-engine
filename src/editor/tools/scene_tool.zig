@@ -56,11 +56,43 @@ fn draw(ctx: *EditorContext) void {
     });
     zgui.setNextWindowSize(.{
         .w = 280,
-        .h = 400,
+        .h = 450, // Slightly taller to accommodate gizmo controls
         .cond = .first_use_ever,
     });
 
     if (zgui.begin("Scene", .{})) {
+        // ====================================================================
+        // Gizmo Mode Controls
+        // ====================================================================
+        // Show current mode and allow switching via buttons.
+        // Hotkeys W/E/R also work (handled in editor.zig).
+        {
+            const mode_str = switch (ctx.gizmo_mode) {
+                .translate => "Translate",
+                .rotate => "Rotate",
+                .scale => "Scale",
+            };
+            const space_str = switch (ctx.gizmo_space) {
+                .local => "Local",
+                .world => "World",
+            };
+            zgui.text("Gizmo: {s} ({s})", .{ mode_str, space_str });
+
+            // Mode buttons
+            if (zgui.button("W", .{ .w = 30 })) ctx.gizmo_mode = .translate;
+            zgui.sameLine(.{});
+            if (zgui.button("E", .{ .w = 30 })) ctx.gizmo_mode = .rotate;
+            zgui.sameLine(.{});
+            if (zgui.button("R", .{ .w = 30 })) ctx.gizmo_mode = .scale;
+            zgui.sameLine(.{});
+
+            // Space toggle button
+            const toggle_label = if (ctx.gizmo_space == .world) "World" else "Local";
+            if (zgui.button(toggle_label, .{})) {
+                ctx.gizmo_space = if (ctx.gizmo_space == .world) .local else .world;
+            }
+        }
+        zgui.separator();
         // Cast away const to call query methods (queries don't modify world state)
         const world = @constCast(ctx.world);
         const entity_count = world.entityCount();

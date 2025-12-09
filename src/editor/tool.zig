@@ -55,6 +55,10 @@ pub const EditorContext = struct {
     /// Frame timing information - for FPS display, profiling, etc.
     frame_timer: *const FrameTimer,
 
+    /// Window dimensions - needed for gizmo viewport setup
+    window_width: u32 = 1280,
+    window_height: u32 = 720,
+
     // -------------------------------------------------------------------------
     // Editor State (mutable, shared between tools)
     // -------------------------------------------------------------------------

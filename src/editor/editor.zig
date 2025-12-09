@@ -47,6 +47,7 @@ const camera_tool = @import("tools/camera_tool.zig");
 const scene_tool = @import("tools/scene_tool.zig");
 const physics_tool = @import("tools/physics_tool.zig");
 const render_tool = @import("tools/render_tool.zig");
+const gizmo_tool = @import("tools/gizmo_tool.zig");
 
 const c = sdl.c;
 
@@ -101,6 +102,7 @@ var tools = [_]*Tool{
     &scene_tool.tool,
     &physics_tool.tool,
     &render_tool.tool,
+    &gizmo_tool.tool, // 3D transform manipulation gizmo (W/E/R to switch modes)
     // Add more tools here as we create them:
     // &console_tool.tool,
 };
@@ -169,6 +171,43 @@ pub fn processEvent(event: *const c.SDL_Event) bool {
         if (event.key.scancode == c.SDL_SCANCODE_F4) {
             physics_tool.toggleEnabled();
             return true; // Consume F4 - game doesn't need it
+        }
+
+        // ====================================================================
+        // Gizmo Mode Hotkeys (W/E/R) - Unity convention
+        // ====================================================================
+        // These switch between translate/rotate/scale gizmo modes.
+        // The gizmo mode is a persistent editor state - it stays set even
+        // when nothing is selected, so when you DO select something, the
+        // gizmo appears in the mode you last chose.
+        //
+        // Unity behavior:
+        // - Right-click NOT held: W/E/R switch gizmo modes (always)
+        // - Right-click held: WASD moves camera (keys pass through)
+        //
+        // This means there's never a conflict because camera movement
+        // ONLY happens while right-click is held.
+        if (editor_visible) {
+            // Query current mouse state to check if right-click is held
+            const mouse_state = c.SDL_GetMouseState(null, null);
+            const right_click_held = (mouse_state & c.SDL_BUTTON_RMASK) != 0;
+
+            // Only handle gizmo hotkeys when NOT in camera mode (right-click held)
+            if (!right_click_held) {
+                if (event.key.scancode == c.SDL_SCANCODE_W) {
+                    gizmo_mode = .translate;
+                    return true;
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_E) {
+                    gizmo_mode = .rotate;
+                    return true;
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_R) {
+                    gizmo_mode = .scale;
+                    return true;
+                }
+            }
+            // When right-click is held, W/E/R pass through to game for camera
         }
     }
 
@@ -260,6 +299,8 @@ pub fn draw(
         .camera = camera,
         .world = world,
         .frame_timer = frame_timer,
+        .window_width = @intCast(window_size.width),
+        .window_height = @intCast(window_size.height),
         .selected_entity = selected_entity,
         .gizmo_mode = gizmo_mode,
         .gizmo_space = gizmo_space,

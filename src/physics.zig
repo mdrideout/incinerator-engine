@@ -349,6 +349,9 @@ pub const Physics = struct {
             .shape = shape,
             .motion_type = .dynamic,
             .object_layer = object_layers.moving,
+            // Allow switching to kinematic at runtime (for editor gizmo manipulation)
+            // Without this flag, setMotionType() won't work properly
+            .allow_dynamic_or_kinematic = true,
         }, .activate) catch {
             std.debug.print("Failed to create dynamic body\n", .{});
             shape.release();
@@ -448,6 +451,43 @@ pub const Physics = struct {
     pub fn setLinearVelocity(self: *Physics, body_id: zphysics.BodyId, velocity: [3]f32) void {
         const body_interface = self.physics_system.getBodyInterfaceMut();
         body_interface.setLinearVelocity(body_id, velocity);
+    }
+
+    /// Set the position of a body directly.
+    /// Used by editor gizmos to move physics objects without fighting the simulation.
+    /// Note: This teleports the body - for smooth movement, use velocity or forces.
+    pub fn setBodyPosition(self: *Physics, body_id: zphysics.BodyId, position: [3]f32) void {
+        const body_interface = self.physics_system.getBodyInterfaceMut();
+        body_interface.setPosition(body_id, position, .activate);
+    }
+
+    /// Set the rotation of a body directly (quaternion: [x, y, z, w]).
+    /// Used by editor gizmos to rotate physics objects.
+    pub fn setBodyRotation(self: *Physics, body_id: zphysics.BodyId, rotation: [4]f32) void {
+        const body_interface = self.physics_system.getBodyInterfaceMut();
+        body_interface.setRotation(body_id, rotation, .activate);
+    }
+
+    /// Set the angular velocity of a body directly.
+    /// Used to zero out rotation when unfreezing physics bodies.
+    pub fn setAngularVelocity(self: *Physics, body_id: zphysics.BodyId, velocity: [3]f32) void {
+        const body_interface = self.physics_system.getBodyInterfaceMut();
+        body_interface.setAngularVelocity(body_id, velocity);
+    }
+
+    /// Get the motion type of a body (static, kinematic, or dynamic).
+    pub fn getMotionType(self: *Physics, body_id: zphysics.BodyId) zphysics.MotionType {
+        const body_interface = self.physics_system.getBodyInterface();
+        return body_interface.getMotionType(body_id);
+    }
+
+    /// Set the motion type of a body.
+    /// Use kinematic to freeze a dynamic body while allowing position/rotation updates.
+    /// Requires the body to have been created with allow_dynamic_or_kinematic = true.
+    pub fn setMotionType(self: *Physics, body_id: zphysics.BodyId, motion_type: zphysics.MotionType) void {
+        const body_interface = self.physics_system.getBodyInterfaceMut();
+        // Note: activation parameter determines if body wakes up when becoming dynamic
+        body_interface.setMotionType(body_id, motion_type, .activate);
     }
 
     /// Remove a body from the simulation.

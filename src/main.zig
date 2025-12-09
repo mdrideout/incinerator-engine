@@ -186,9 +186,10 @@ const App = struct {
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Controls:\n", .{});
         std.debug.print("   ESC - Quit\n", .{});
-        std.debug.print("   WASD - Move camera\n", .{});
-        std.debug.print("   Q/E - Move down/up\n", .{});
+        std.debug.print("   Right-click + WASD - Move camera\n", .{});
         std.debug.print("   Right-click + drag - Look around\n", .{});
+        std.debug.print("   Q/E - Move down/up\n", .{});
+        std.debug.print("   W/E/R - Gizmo mode (translate/rotate/scale)\n", .{});
         std.debug.print("   SPACE - Print camera position\n", .{});
         std.debug.print("   F1 - Toggle editor UI\n", .{});
         std.debug.print("   F2 - Toggle ImGui demo\n", .{});
@@ -424,21 +425,35 @@ const App = struct {
         // Camera movement speed (units per tick at 120Hz)
         const move_speed = self.game_camera.move_speed * @as(f32, @floatCast(timing.TICK_DURATION));
 
-        // WASD camera movement
-        if (self.input_buffer.isKeyDown(input.Key.W)) {
-            self.game_camera.moveForward(move_speed);
-        }
-        if (self.input_buffer.isKeyDown(input.Key.S)) {
-            self.game_camera.moveForward(-move_speed);
-        }
-        if (self.input_buffer.isKeyDown(input.Key.A)) {
-            self.game_camera.moveRight(-move_speed);
-        }
-        if (self.input_buffer.isKeyDown(input.Key.D)) {
-            self.game_camera.moveRight(move_speed);
+        // ================================================================
+        // Camera Controls (Unity-style)
+        // ================================================================
+        // WASD movement only works while right mouse button is held.
+        // This frees W/E/R keys for gizmo mode switching (translate/rotate/scale).
+        // Q/E for vertical movement always work (not used by gizmos).
+        //
+        // This matches Unity/Unreal convention where right-click enables
+        // FPS-style camera navigation.
+
+        const right_click_held = self.input_buffer.isMouseButtonDown(input.MouseButton.RIGHT);
+
+        // WASD camera movement (only when right-click held)
+        if (right_click_held) {
+            if (self.input_buffer.isKeyDown(input.Key.W)) {
+                self.game_camera.moveForward(move_speed);
+            }
+            if (self.input_buffer.isKeyDown(input.Key.S)) {
+                self.game_camera.moveForward(-move_speed);
+            }
+            if (self.input_buffer.isKeyDown(input.Key.A)) {
+                self.game_camera.moveRight(-move_speed);
+            }
+            if (self.input_buffer.isKeyDown(input.Key.D)) {
+                self.game_camera.moveRight(move_speed);
+            }
         }
 
-        // Q/E for vertical movement (up/down)
+        // Q/E for vertical movement (always available - not used by gizmos)
         if (self.input_buffer.isKeyDown(input.Key.Q)) {
             self.game_camera.moveUp(-move_speed);
         }
