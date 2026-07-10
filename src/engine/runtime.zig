@@ -15,8 +15,7 @@ const PersistentIdentity = struct { id: PersistentId };
 var runtime_token_mutex: std.atomic.Mutex = .unlocked;
 var next_runtime_token: u64 = 1;
 var owned_world_mutex: std.atomic.Mutex = .unlocked;
-const WorldLease = enum { none, runtime_owned, external_owned };
-var world_lease: WorldLease = .none;
+var owned_world_live: bool = false;
 
 pub const Phase = enum(u8) {
     commands,
@@ -55,7 +54,6 @@ const Lifecycle = enum { registering, ready, ticking, faulted, deinitialized };
 const State = struct {
     gpa: std.mem.Allocator,
     world: *flecs.world_t,
-    owns_world: bool,
     identities: std.AutoHashMap(PersistentId, RuntimeId),
     entities: std.AutoHashMap(u64, flecs.entity_t),
     issued_identities: std.AutoHashMap(PersistentId, void),
@@ -84,38 +82,11 @@ pub const Runtime = struct {
         errdefer releaseOwnedWorldLease();
         const world = flecs.init();
         errdefer _ = flecs.fini(world);
-        const result = try initWithWorld(gpa, world, true, config);
-        flecs.COMPONENT(result.statePtr().world, PersistentIdentity);
-        return result;
-    }
-
-    /// Transitional seam while the visual sandbox and S0 share one Flecs
-    /// world. Public hosts pass an opaque owner context, never a Flecs ID.
-    pub fn initBorrowed(
-        gpa: std.mem.Allocator,
-        world_context: *anyopaque,
-        config: Config,
-    ) !Runtime {
-        try validateConfig(config);
-        try requireExternalWorldLease();
-        const world: *flecs.world_t = @ptrCast(@alignCast(world_context));
-        const result = try initWithWorld(gpa, world, false, config);
-        flecs.COMPONENT(result.statePtr().world, PersistentIdentity);
-        return result;
-    }
-
-    fn initWithWorld(
-        gpa: std.mem.Allocator,
-        world: *flecs.world_t,
-        owns_world: bool,
-        config: Config,
-    ) !Runtime {
         const state = try gpa.create(State);
         errdefer gpa.destroy(state);
         state.* = .{
             .gpa = gpa,
             .world = world,
-            .owns_world = owns_world,
             .identities = std.AutoHashMap(PersistentId, RuntimeId).init(gpa),
             .entities = std.AutoHashMap(u64, flecs.entity_t).init(gpa),
             .issued_identities = std.AutoHashMap(PersistentId, void).init(gpa),
@@ -127,7 +98,9 @@ pub const Runtime = struct {
             .fixed_delta_seconds = config.fixed_delta_seconds,
             .completed_ticks = config.completed_ticks,
         };
-        return .{ .storage = state };
+        const result = Runtime{ .storage = state };
+        flecs.COMPONENT(result.statePtr().world, PersistentIdentity);
+        return result;
     }
 
     pub fn deinit(self: *Runtime) void {
@@ -148,8 +121,8 @@ pub const Runtime = struct {
         self.statePtr().identities.deinit();
         self.statePtr().entities.deinit();
         self.statePtr().issued_identities.deinit();
-        if (self.statePtr().owns_world) _ = flecs.fini(self.statePtr().world);
-        if (self.statePtr().owns_world) releaseOwnedWorldLease();
+        _ = flecs.fini(self.statePtr().world);
+        releaseOwnedWorldLease();
         self.statePtr().lifecycle = .deinitialized;
         const state = self.statePtr();
         state.gpa.destroy(state);
@@ -469,35 +442,15 @@ fn allocateRuntimeToken() !u64 {
 fn acquireOwnedWorldLease() !void {
     while (!owned_world_mutex.tryLock()) std.atomic.spinLoopHint();
     defer owned_world_mutex.unlock();
-    if (world_lease != .none) return error.EngineWorldAlreadyLive;
-    world_lease = .runtime_owned;
+    if (owned_world_live) return error.EngineWorldAlreadyLive;
+    owned_world_live = true;
 }
 
 fn releaseOwnedWorldLease() void {
     while (!owned_world_mutex.tryLock()) std.atomic.spinLoopHint();
     defer owned_world_mutex.unlock();
-    if (world_lease != .runtime_owned) @panic("owned world lease invariant failed");
-    world_lease = .none;
-}
-
-pub fn claimExternalWorld() !void {
-    while (!owned_world_mutex.tryLock()) std.atomic.spinLoopHint();
-    defer owned_world_mutex.unlock();
-    if (world_lease != .none) return error.EngineWorldAlreadyLive;
-    world_lease = .external_owned;
-}
-
-pub fn releaseExternalWorld() void {
-    while (!owned_world_mutex.tryLock()) std.atomic.spinLoopHint();
-    defer owned_world_mutex.unlock();
-    if (world_lease != .external_owned) @panic("external world lease invariant failed");
-    world_lease = .none;
-}
-
-fn requireExternalWorldLease() !void {
-    while (!owned_world_mutex.tryLock()) std.atomic.spinLoopHint();
-    defer owned_world_mutex.unlock();
-    if (world_lease != .external_owned) return error.ExternalWorldLeaseMissing;
+    if (!owned_world_live) @panic("owned world lease invariant failed");
+    owned_world_live = false;
 }
 
 test "runtime separates persistent and live identity" {
@@ -555,32 +508,43 @@ test "registration allocation failure does not consume an automatic identity" {
 }
 
 test "schedule is ordered and freezes before first tick" {
-    const Counter = struct {
-        values: std.ArrayListUnmanaged(u8) = .empty,
-        allocator: std.mem.Allocator,
-        fn run(raw: *anyopaque, _: *Runtime, tick: TickContext) !void {
-            const self: *@This() = @ptrCast(@alignCast(raw));
-            try self.values.append(self.allocator, @intCast(tick.tick_index));
-        }
-    };
-
     var runtime = try Runtime.init(std.testing.allocator, .{
         .namespace = 1,
         .fixed_delta_seconds = 0.25,
     });
     defer runtime.deinit();
-    var counter = Counter{ .allocator = std.testing.allocator };
-    defer counter.values.deinit(std.testing.allocator);
+    var values: std.ArrayListUnmanaged(u8) = .empty;
+    defer values.deinit(std.testing.allocator);
+    const SharedCounter = struct {
+        list: *std.ArrayListUnmanaged(u8),
+        allocator: std.mem.Allocator,
+        marker: u8,
+        fn run(raw: *anyopaque, _: *Runtime, tick: TickContext) !void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            try std.testing.expectEqual(@as(u64, 1), tick.tick_index);
+            try self.list.append(self.allocator, self.marker);
+        }
+    };
+    var first = SharedCounter{ .list = &values, .allocator = std.testing.allocator, .marker = 1 };
+    var second = SharedCounter{ .list = &values, .allocator = std.testing.allocator, .marker = 2 };
+    var pre = SharedCounter{ .list = &values, .allocator = std.testing.allocator, .marker = 3 };
+    var physics_step = SharedCounter{ .list = &values, .allocator = std.testing.allocator, .marker = 4 };
+    var post = SharedCounter{ .list = &values, .allocator = std.testing.allocator, .marker = 5 };
 
     var registry = runtime.registry();
-    try registry.addSystem(.commands, "test.first", &counter, Counter.run);
-    try registry.addSystem(.post_physics, "test.last", &counter, Counter.run);
+    // Register phases out of order to prove phase order is declared by the
+    // runtime, while order inside one phase remains registration order.
+    try registry.addSystem(.post_physics, "test.post", &post, SharedCounter.run);
+    try registry.addSystem(.commands, "test.command.first", &first, SharedCounter.run);
+    try registry.addSystem(.physics, "test.physics", &physics_step, SharedCounter.run);
+    try registry.addSystem(.commands, "test.command.second", &second, SharedCounter.run);
+    try registry.addSystem(.pre_physics, "test.pre", &pre, SharedCounter.run);
     try runtime.tick();
-    try std.testing.expectEqualSlices(u8, &.{ 1, 1 }, counter.values.items);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2, 3, 4, 5 }, values.items);
     try std.testing.expectEqual(@as(u64, 1), runtime.tickIndex());
     try std.testing.expectError(
         error.RegistrationClosed,
-        registry.addSystem(.commands, "test.too-late", &counter, Counter.run),
+        registry.addSystem(.commands, "test.too-late", &first, SharedCounter.run),
     );
 }
 
@@ -604,49 +568,25 @@ test "registry owns system names instead of borrowing caller storage" {
     );
 }
 
-test "borrowed runtime leaves its Flecs world to the owner" {
-    try claimExternalWorld();
-    defer releaseExternalWorld();
-    const world = flecs.init();
-    defer _ = flecs.fini(world);
-    var runtime = try Runtime.initBorrowed(
-        std.testing.allocator,
-        @ptrCast(world),
-        .{ .namespace = 8, .fixed_delta_seconds = 1.0 / 60.0 },
-    );
-    const entity = try runtime.create();
-    try runtime.destroy(entity);
-    runtime.deinit();
-    const owner_entity = flecs.new_id(world);
-    try std.testing.expect(owner_entity != 0);
-    flecs.delete(world, owner_entity);
-}
-
-test "runtime IDs cannot alias another runtime sharing one Flecs world" {
-    try claimExternalWorld();
-    defer releaseExternalWorld();
-    const world = flecs.init();
-    defer _ = flecs.fini(world);
-    var first = try Runtime.initBorrowed(
-        std.testing.allocator,
-        @ptrCast(world),
-        .{ .namespace = 101, .fixed_delta_seconds = 1.0 / 60.0 },
-    );
-    defer first.deinit();
-    var second = try Runtime.initBorrowed(
-        std.testing.allocator,
-        @ptrCast(world),
-        .{ .namespace = 202, .fixed_delta_seconds = 1.0 / 60.0 },
-    );
-    defer second.deinit();
-
+test "runtime IDs cannot alias a later runtime" {
+    var first = try Runtime.init(std.testing.allocator, .{
+        .namespace = 101,
+        .fixed_delta_seconds = 1.0 / 60.0,
+    });
     const first_entity = try first.create();
-    try std.testing.expectError(error.ForeignRuntimeId, second.identity(first_entity));
     try std.testing.expectError(error.UntrackedRuntimeId, first.identity(.{
         .runtime_token = first_entity.runtime_token,
         .serial = first_entity.serial + 1,
     }));
     try first.destroy(first_entity);
+    first.deinit();
+
+    var second = try Runtime.init(std.testing.allocator, .{
+        .namespace = 202,
+        .fixed_delta_seconds = 1.0 / 60.0,
+    });
+    defer second.deinit();
+    try std.testing.expectError(error.ForeignRuntimeId, second.identity(first_entity));
 }
 
 test "a scheduled failure terminally faults the runtime" {

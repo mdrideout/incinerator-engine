@@ -13,7 +13,7 @@
 //! This module does NOT:
 //! - Contain game-specific logic (future: that's game.zig)
 //! - Perform low-level rendering (that's renderer.zig)
-//! - Define assets or entities (that's primitives.zig, ecs.zig)
+//! - Define simulation feature behavior
 //!
 //! The Canonical Game Loop:
 //!
@@ -37,7 +37,6 @@ const renderer = @import("renderer.zig");
 const mesh = @import("mesh.zig");
 const primitives = @import("primitives.zig");
 const crate_visual_resources = @import("crate_visual_resources.zig");
-const ecs = @import("ecs.zig");
 const camera = @import("camera.zig");
 const sdl = @import("sdl.zig");
 const shader_assets = @import("shader_assets");
@@ -45,7 +44,6 @@ const editor = if (build_options.editor_enabled)
     @import("editor/editor.zig")
 else
     @import("editor/disabled.zig");
-const physics = @import("jolt_physics");
 const crate_host = @import("crate_simulation");
 const render_tool = if (build_options.editor_enabled)
     @import("editor/tools/render_tool.zig")
@@ -68,6 +66,122 @@ const INITIAL_WINDOW_HEIGHT = 720;
 /// How often to print debug stats (in frames)
 const DEBUG_PRINT_INTERVAL = 120; // Every ~1 second at 120 FPS
 
+const VisualSmokeConfig = struct {
+    frames: u64 = 480,
+    virtual_render_hz: u32 = 240,
+};
+
+const ProgramMode = union(enum) {
+    normal,
+    verify_install,
+    visual_smoke: VisualSmokeConfig,
+};
+
+const FramePresentation = struct {
+    crate_count: usize,
+    first_id: ?crate_host.PersistentId,
+    first_position: ?[3]f32,
+    first_rotation: ?[4]f32,
+};
+
+const RenderResult = union(enum) {
+    ready: FramePresentation,
+    unavailable,
+};
+
+const RunSummary = struct {
+    attempted_frames: u64 = 0,
+    ready_frames: u64 = 0,
+    unavailable_frames: u64 = 0,
+    crate_presented_frames: u64 = 0,
+    position_changed: bool = false,
+    rotation_changed: bool = false,
+    min_alpha: f32 = 1.0,
+    max_alpha: f32 = 0.0,
+};
+
+const SmokeExpectation = struct {
+    ticks: u64,
+    min_alpha: f32,
+    max_alpha: f32,
+};
+
+fn smokeExpectation(config: VisualSmokeConfig) !SmokeExpectation {
+    var accumulator = timing.FixedStepAccumulator.init();
+    var result = SmokeExpectation{ .ticks = 0, .min_alpha = 1, .max_alpha = 0 };
+    for (0..config.frames) |_| {
+        _ = try accumulator.addElapsedSeconds(
+            1.0 / @as(f64, @floatFromInt(config.virtual_render_hz)),
+        );
+        while (accumulator.consumeTick()) result.ticks += 1;
+        const alpha = accumulator.alpha();
+        result.min_alpha = @min(result.min_alpha, alpha);
+        result.max_alpha = @max(result.max_alpha, alpha);
+    }
+    return result;
+}
+
+fn vectorChanged(comptime count: usize, first: [count]f32, current: [count]f32) bool {
+    for (first, current) |a, b| {
+        if (@abs(a - b) > 0.00001) return true;
+    }
+    return false;
+}
+
+fn parseProgramMode(args: anytype) !ProgramMode {
+    var verify_install = false;
+    var visual_smoke = false;
+    var frames: ?u64 = null;
+    var virtual_render_hz: ?u32 = null;
+
+    for (args[1..args.len]) |raw_arg| {
+        const arg: []const u8 = raw_arg;
+        if (std.mem.eql(u8, arg, "--verify-install")) {
+            if (verify_install) return error.DuplicateArgument;
+            verify_install = true;
+        } else if (std.mem.eql(u8, arg, "--visual-smoke")) {
+            if (visual_smoke) return error.DuplicateArgument;
+            visual_smoke = true;
+        } else if (std.mem.startsWith(u8, arg, "--frames=")) {
+            if (frames != null) return error.DuplicateArgument;
+            const value = arg["--frames=".len..];
+            frames = std.fmt.parseUnsigned(u64, value, 10) catch
+                return error.InvalidFrameCount;
+            if (frames.? == 0) return error.InvalidFrameCount;
+        } else if (std.mem.startsWith(u8, arg, "--virtual-render-hz=")) {
+            if (virtual_render_hz != null) return error.DuplicateArgument;
+            const value = arg["--virtual-render-hz=".len..];
+            virtual_render_hz = std.fmt.parseUnsigned(u32, value, 10) catch
+                return error.InvalidVirtualRenderRate;
+            if (virtual_render_hz.? == 0 or virtual_render_hz.? > 10_000) {
+                return error.InvalidVirtualRenderRate;
+            }
+        } else {
+            return error.UnknownArgument;
+        }
+    }
+
+    if (verify_install) {
+        if (visual_smoke or frames != null or virtual_render_hz != null) {
+            return error.ConflictingProgramModes;
+        }
+        return .verify_install;
+    }
+    if (!visual_smoke and (frames != null or virtual_render_hz != null)) {
+        return error.VisualSmokeOptionWithoutMode;
+    }
+    if (!visual_smoke) return .normal;
+
+    const config = VisualSmokeConfig{
+        .frames = frames orelse 480,
+        .virtual_render_hz = virtual_render_hz orelse 240,
+    };
+    const scaled = std.math.mul(u64, config.frames, 4) catch
+        return error.InvalidFrameCount;
+    _ = std.math.add(u64, scaled, 120) catch return error.InvalidFrameCount;
+    return .{ .visual_smoke = config };
+}
+
 // ============================================================================
 // Application State
 // ============================================================================
@@ -78,25 +192,16 @@ const App = struct {
     frame_timer: timing.FrameTimer,
     input_buffer: input.InputBuffer,
 
-    // Scene - now using ECS!
-    game_world: ecs.GameWorld,
-    game_camera: camera.Camera, // Player camera
+    simulation: crate_host.Simulation,
+    initial_crate_id: ?crate_host.PersistentId,
+    game_camera: camera.Camera,
 
-    // Physics simulation
-    physics_world: physics.Physics,
-    sandbox_ground_body: ?physics.BodyId,
-    crate_slice: ?crate_host.Simulation,
-
-    // Owned mesh/model data (entities reference these, ECS doesn't own the data)
+    // Presentation resources remain owned by the visual host.
     ground_mesh: mesh.Mesh,
     crate_visuals: crate_visual_resources.CrateVisualResources,
-    cylinder_mesh: mesh.Mesh,
 
     // Debug counters
     debug_frame_counter: u32,
-
-    // Placeholder simulation state (will be replaced with actual game state)
-    sim_tick_count: u64,
 
     pub fn init() !App {
         // Initialize SDL3 with video subsystem
@@ -138,17 +243,22 @@ const App = struct {
         );
         errdefer crate_visuals.deinit();
 
-        var cylinder_mesh = try primitives.createCylinder(gpu_renderer.getDevice(), 24);
-        errdefer cylinder_mesh.deinit();
-        cylinder_mesh.diffuse_texture = crate_visuals.borrowTexture();
-
-        // Create the ECS world (entities spawned in spawnEntities after App construction)
-        var game_world = try ecs.GameWorld.init();
-        errdefer game_world.deinit();
-
-        // Initialize physics system (Jolt Physics 5.5 through the JoltC adapter)
-        var physics_world = try physics.Physics.init();
-        errdefer physics_world.deinit();
+        // The visual and headless hosts use the same owned S0 composition.
+        var simulation = try crate_host.Simulation.init(std.heap.page_allocator, .{
+            .namespace = 1,
+            .fixed_delta_seconds = @floatCast(timing.TICK_DURATION),
+            .assets = .{
+                .mesh = crate_visual_resources.mesh_handle,
+                .material = crate_visual_resources.material_handle,
+            },
+            .create_ground = true,
+        });
+        errdefer simulation.deinit();
+        try simulation.submit(.{ .spawn = .{
+            .request_id = 1,
+            .pose = .{ .position = .{ 0, 12, 0 } },
+            .velocity = .{ .angular = .{ 0.2, 0.35, 0.1 } },
+        } });
 
         // Initialize editor (ImGui debug UI)
         // This sets up ImGui with our SDL3 GPU device
@@ -159,7 +269,7 @@ const App = struct {
         );
 
         std.debug.print("===========================================\n", .{});
-        std.debug.print(" Incinerator Engine initialized (ECS)\n", .{});
+        std.debug.print(" Incinerator Engine initialized (owned S0 simulation)\n", .{});
         std.debug.print(" Window: {d}x{d}\n", .{ INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT });
         std.debug.print(" Tick rate: {d} Hz ({d:.3} ms)\n", .{ timing.TICK_RATE, timing.TICK_DURATION * 1000.0 });
         std.debug.print("===========================================\n", .{});
@@ -168,7 +278,6 @@ const App = struct {
         std.debug.print("   Right-click + WASD - Move camera\n", .{});
         std.debug.print("   Right-click + drag - Look around\n", .{});
         std.debug.print("   Q/E - Move down/up\n", .{});
-        std.debug.print("   W/E/R - Gizmo mode (translate/rotate/scale)\n", .{});
         std.debug.print("   SPACE - Print camera position\n", .{});
         std.debug.print("   F1 - Toggle editor UI\n", .{});
         std.debug.print("   F2 - Toggle ImGui demo\n", .{});
@@ -179,44 +288,26 @@ const App = struct {
             .gpu_renderer = gpu_renderer,
             .frame_timer = timing.FrameTimer.init(),
             .input_buffer = input.InputBuffer.init(main_window_id),
-            .game_world = game_world,
-            .physics_world = physics_world,
-            .sandbox_ground_body = null,
-            .crate_slice = null,
+            .simulation = simulation,
+            .initial_crate_id = null,
             .ground_mesh = ground_mesh,
             .crate_visuals = crate_visuals,
-            .cylinder_mesh = cylinder_mesh,
             .game_camera = .{
                 .position = .{ -5.18, 4.96, 7.57, 1.0 },
                 .yaw = 0.59, // 33.6 degrees
                 .pitch = -0.36, // -20.6 degrees
             },
             .debug_frame_counter = 0,
-            .sim_tick_count = 0,
         };
     }
 
     pub fn deinit(self: *App) void {
+        const completed_ticks = self.simulation.tickIndex();
+
         // Clean up editor first (needs GPU device to still be valid)
-        editor.releaseWorld(&self.game_world);
         editor.deinit();
-
-        if (self.crate_slice) |*crate_slice| {
-            crate_slice.deinit();
-            self.crate_slice = null;
-        }
-
-        if (self.sandbox_ground_body) |ground_body| {
-            if (!self.physics_world.removeBody(ground_body)) {
-                @panic("sandbox ground cleanup invariant failed");
-            }
-            self.sandbox_ground_body = null;
-        }
-
-        self.game_world.deinit();
-        self.physics_world.deinit();
+        self.simulation.deinit();
         self.ground_mesh.deinit();
-        self.cylinder_mesh.deinit();
         self.crate_visuals.deinit();
         self.gpu_renderer.deinit();
         c.SDL_DestroyWindow(self.window);
@@ -225,86 +316,21 @@ const App = struct {
         std.debug.print("\n===========================================\n", .{});
         std.debug.print(" Incinerator Engine shutdown\n", .{});
         std.debug.print(" Total frames: {d}\n", .{self.frame_timer.total_frames});
-        std.debug.print(" Total simulation ticks: {d}\n", .{self.sim_tick_count});
+        std.debug.print(" Total simulation ticks: {d}\n", .{completed_ticks});
         std.debug.print("===========================================\n", .{});
     }
 
-    /// Spawn initial entities into the ECS world.
-    /// IMPORTANT: Must be called AFTER App construction to ensure mesh pointers
-    /// point to stable memory (App's fields, not stack locals).
-    pub fn spawnEntities(self: *App) !void {
-        // Link physics world to ECS for sync operations
-        self.game_world.setPhysicsWorld(&self.physics_world);
-
-        // ================================================================
-        // Physics Demo: Ground plane and falling cubes
-        // ================================================================
-
-        // Create a static ground plane (large flat box)
-        // Physics ground: center at y=-1, half-extents 50x1x50 means surface at y=0
-        const ground_body = try self.physics_world.createStaticBox(
-            .{ 0, -1, 0 }, // Position (center of box)
-            .{ 50, 1, 50 }, // Half-extents (100x2x100 units)
-        );
-        errdefer _ = self.physics_world.removeBody(ground_body);
-
-        // Create visual ground plane entity
-        // Checkerboard: 32x32 tiles at 2m each = 64m x 64m, 1 unit = 1 meter
-        _ = try self.game_world.spawnRenderable(
-            "Ground",
-            .{ .x = 0, .y = 0, .z = 0 }, // At origin (top of physics ground)
-            .{}, // No rotation
-            .{ .x = 1, .y = 1, .z = 1 }, // No scaling needed - native size is correct
-            &self.ground_mesh,
-        );
-
-        // S0: the falling crate is now owned by a feature slice. It borrows
-        // the sandbox's one Flecs/Jolt world but imports no SDL or GPU types.
-        var crate_slice = try crate_host.Simulation.initBorrowed(
-            std.heap.page_allocator,
-            self.game_world.borrowWorldContext(),
-            &self.physics_world,
-            .{
-                .namespace = 1,
-                .fixed_delta_seconds = @floatCast(timing.TICK_DURATION),
-                .assets = .{
-                    .mesh = crate_visual_resources.mesh_handle,
-                    .material = crate_visual_resources.material_handle,
-                },
-                .create_ground = false,
-            },
-        );
-        errdefer crate_slice.deinit();
-        try crate_slice.submit(.{ .spawn = .{
-            .request_id = 1,
-            .pose = .{ .position = .{ 0, 12, 0 } },
-            .velocity = .{ .angular = .{ 0.2, 0.35, 0.1 } },
-        } });
-        // Add a textured cylinder for debug visualization demo
-        _ = try self.game_world.spawnRenderable(
-            "Cylinder",
-            .{ .x = 4, .y = 0.5, .z = 0 }, // Right side, sitting on ground
-            .{}, // No rotation
-            .{ .x = 1, .y = 1, .z = 1 }, // 1m diameter, 1m tall
-            &self.cylinder_mesh,
-        );
-
-        // Optimize broad phase after batch creation
-        self.physics_world.optimizeBroadPhase();
-
-        std.debug.print(" Physics bodies: {d}\n", .{self.physics_world.getBodyCount()});
-
-        std.debug.print(" Legacy visual entities: {d}\n", .{self.game_world.entityCount()});
-
-        // Transfer the boxed simulation only after every fallible sandbox
-        // spawn has succeeded; the errdefer above owns it until this point.
-        self.crate_slice = crate_slice;
-        self.sandbox_ground_body = ground_body;
-    }
-
     /// Run the main game loop
-    pub fn run(self: *App) !void {
+    pub fn run(self: *App, smoke: ?VisualSmokeConfig) !RunSummary {
         var running = true;
+        var summary = RunSummary{};
+        var smoke_quit_injected = false;
+        var first_presented_position: ?[3]f32 = null;
+        var first_presented_rotation: ?[4]f32 = null;
+        const smoke_attempt_limit = if (smoke) |config|
+            (std.math.mul(u64, config.frames, 4) catch unreachable) + 120
+        else
+            0;
 
         while (running) {
             // ================================================================
@@ -314,11 +340,17 @@ const App = struct {
             // This runs every frame to ensure responsive input.
             self.input_buffer.beginFrame();
             running = self.input_buffer.pumpEvents();
-            editor.updateLifecycle(&self.game_world);
             if (!running) break;
 
-            // Begin frame timing (must be after input pump for accurate delta)
-            self.frame_timer.beginFrame();
+            // Smoke mode feeds an explicit cadence through the same fixed-step
+            // policy; normal execution adapts the SDL performance clock.
+            if (smoke) |config| {
+                try self.frame_timer.beginFrameWithElapsedSeconds(
+                    1.0 / @as(f64, @floatFromInt(config.virtual_render_hz)),
+                );
+            } else {
+                self.frame_timer.beginFrame();
+            }
 
             // ================================================================
             // PHASE 2: SIMULATION TICK (Fixed 120Hz)
@@ -335,7 +367,67 @@ const App = struct {
             // Render the current state. The alpha value can be used to
             // interpolate between previous and current state for smoothness.
             const alpha = self.frame_timer.alpha();
-            try self.render(alpha);
+            const render_result = try self.render(alpha);
+            const render_ready = switch (render_result) {
+                .ready => true,
+                .unavailable => false,
+            };
+            summary.attempted_frames += 1;
+            summary.min_alpha = @min(summary.min_alpha, alpha);
+            summary.max_alpha = @max(summary.max_alpha, alpha);
+            switch (render_result) {
+                .ready => |presentation| {
+                    summary.ready_frames += 1;
+                    if (presentation.crate_count == 1) {
+                        const presented_id = presentation.first_id orelse
+                            return error.VisualSmokePresentationInvariant;
+                        if (self.initial_crate_id) |spawned_id| {
+                            if (!std.meta.eql(spawned_id, presented_id)) {
+                                return error.VisualSmokePresentedWrongCrate;
+                            }
+                        }
+                        summary.crate_presented_frames += 1;
+                        const position = presentation.first_position orelse
+                            return error.VisualSmokePresentationInvariant;
+                        const rotation = presentation.first_rotation orelse
+                            return error.VisualSmokePresentationInvariant;
+                        if (first_presented_position) |first| {
+                            summary.position_changed = summary.position_changed or
+                                vectorChanged(3, first, position);
+                        } else {
+                            first_presented_position = position;
+                        }
+                        if (first_presented_rotation) |first| {
+                            summary.rotation_changed = summary.rotation_changed or
+                                vectorChanged(4, first, rotation);
+                        } else {
+                            first_presented_rotation = rotation;
+                        }
+                    } else if (self.initial_crate_id != null) {
+                        return error.VisualSmokeCratePresentationMissing;
+                    }
+                },
+                .unavailable => summary.unavailable_frames += 1,
+            }
+
+            if (smoke) |config| {
+                if (render_ready) {
+                    c.SDL_DelayPrecise(
+                        @as(u64, std.time.ns_per_s) / config.virtual_render_hz,
+                    );
+                }
+                if (summary.ready_frames == config.frames and !smoke_quit_injected) {
+                    var quit_event = std.mem.zeroes(c.SDL_Event);
+                    quit_event.type = c.SDL_EVENT_QUIT;
+                    if (!c.SDL_PushEvent(&quit_event)) return error.SDLQuitEventFailed;
+                    smoke_quit_injected = true;
+                }
+                if (summary.attempted_frames >= smoke_attempt_limit and
+                    !smoke_quit_injected)
+                {
+                    return error.VisualSmokeFrameLimit;
+                }
+            }
 
             // ================================================================
             // DEBUG OUTPUT
@@ -346,23 +438,52 @@ const App = struct {
                 self.printDebugStats();
             }
         }
+
+        if (smoke != null and !smoke_quit_injected) {
+            return error.VisualSmokeInterrupted;
+        }
+        if (smoke) |config| {
+            if (summary.unavailable_frames != 0) return error.VisualSmokeUnavailableFrame;
+            if (self.initial_crate_id == null) return error.VisualSmokeSpawnMissing;
+            if (summary.crate_presented_frames == 0) {
+                return error.VisualSmokeCratePresentationMissing;
+            }
+            if (!summary.position_changed) return error.VisualSmokePositionDidNotChange;
+            if (!summary.rotation_changed) return error.VisualSmokeRotationDidNotChange;
+            if (self.simulation.crateCount() != 1 or
+                self.simulation.entityCount() != 1 or
+                self.simulation.bodyCount() != 2)
+            {
+                return error.VisualSmokeLifecycleInvariant;
+            }
+            const expected = try smokeExpectation(config);
+            if (self.simulation.tickIndex() != expected.ticks) {
+                return error.VisualSmokeTickCountMismatch;
+            }
+            if (@abs(summary.min_alpha - expected.min_alpha) > 0.00001 or
+                @abs(summary.max_alpha - expected.max_alpha) > 0.00001)
+            {
+                return error.VisualSmokeAlphaMismatch;
+            }
+        }
+        return summary;
     }
 
     /// Fixed timestep simulation tick
     /// This is where physics, gameplay logic, and AI would run.
     fn simulateTick(self: *App) !void {
-        // The S0 runtime owns the one physics-step schedule entry. Legacy ECS
-        // sync still follows it during the sandbox migration.
-        if (self.crate_slice) |*crate_slice| {
-            try crate_slice.tick();
-        } else {
-            try self.physics_world.update(@floatCast(timing.TICK_DURATION));
+        try self.simulation.tick();
+        while (self.simulation.pollOutcome()) |outcome| {
+            switch (outcome) {
+                .spawned => |spawned| {
+                    if (spawned.request_id != 1 or self.initial_crate_id != null) {
+                        return error.UnexpectedBootstrapOutcome;
+                    }
+                    self.initial_crate_id = spawned.id;
+                },
+                else => return error.UnexpectedBootstrapOutcome,
+            }
         }
-
-        // Sync physics transforms to ECS components
-        // This copies positions/rotations from Jolt bodies to ECS Position/Rotation
-        try self.game_world.syncPhysicsToECS();
-        self.sim_tick_count += 1;
 
         // Camera movement speed (units per tick at 120Hz)
         const move_speed = self.game_camera.move_speed * @as(f32, @floatCast(timing.TICK_DURATION));
@@ -371,9 +492,6 @@ const App = struct {
         // Camera Controls (Unity-style)
         // ================================================================
         // WASD movement only works while right mouse button is held.
-        // This frees W/E/R keys for gizmo mode switching (translate/rotate/scale).
-        // Q/E for vertical movement always work (not used by gizmos).
-        //
         // This matches Unity/Unreal convention where right-click enables
         // FPS-style camera navigation.
 
@@ -395,7 +513,7 @@ const App = struct {
             }
         }
 
-        // Q/E for vertical movement (always available - not used by gizmos)
+        // Q/E for vertical movement.
         if (self.input_buffer.isKeyDown(input.Key.Q)) {
             self.game_camera.moveUp(-move_speed);
         }
@@ -411,7 +529,7 @@ const App = struct {
         // Debug: Print when space is pressed (single trigger)
         if (self.input_buffer.isKeyPressed(input.Key.SPACE)) {
             std.debug.print("[Tick {d}] Camera pos: ({d:.2}, {d:.2}, {d:.2})\n", .{
-                self.sim_tick_count,
+                self.simulation.tickIndex(),
                 self.game_camera.position[0],
                 self.game_camera.position[1],
                 self.game_camera.position[2],
@@ -421,7 +539,7 @@ const App = struct {
 
     /// Render the current frame using SDL3 GPU API
     /// `alpha` is the interpolation factor (0.0 to 1.0) for smooth visuals.
-    fn render(self: *App, alpha: f32) !void {
+    fn render(self: *App, alpha: f32) !RenderResult {
         // Begin the frame (clears screen)
         switch (try self.gpu_renderer.beginFrame(renderer.Colors.CORNFLOWER_BLUE)) {
             .ready => {},
@@ -430,7 +548,7 @@ const App = struct {
                 // queue. This keeps minimized windows responsive without
                 // turning the main loop into a busy spin.
                 _ = c.SDL_WaitEventTimeout(null, 16);
-                return;
+                return .unavailable;
             },
         }
 
@@ -442,40 +560,33 @@ const App = struct {
         // Get view-projection matrix from camera
         const view_proj = self.game_camera.getViewProjectionMatrix(aspect_ratio);
 
-        // Draw all renderable entities from the ECS
-        // This is the unified rendering loop - no more special-casing loaded models!
-        var iter = self.game_world.renderables();
-        defer iter.deinit(); // Finalize flecs iterator
-        while (iter.next()) |entity| {
-            // Each entity computes its own model matrix from Position/Rotation/Scale
-            const model_matrix = entity.getModelMatrix();
-            self.gpu_renderer.drawMesh(entity.mesh, model_matrix, view_proj);
-        }
+        // The ground is a visual-host fixture matching the simulation-owned
+        // static body. Feature-owned entities arrive through extraction below.
+        self.gpu_renderer.drawMesh(&self.ground_mesh, zm.identity(), view_proj);
 
         // CrateFeature extraction is immutable plain data. The visual host is
         // the only layer that resolves its typed handles to GPU resources.
-        if (self.crate_slice) |*crate_slice| {
-            for (try crate_slice.presentation(alpha)) |draw| {
-                const crate_mesh = try self.crate_visuals.resolve(draw.mesh, draw.material);
-                const scale = zm.scaling(
-                    draw.half_extents[0] * 2,
-                    draw.half_extents[1] * 2,
-                    draw.half_extents[2] * 2,
-                );
-                const rotation = zm.quatToMat(zm.f32x4(
-                    draw.pose.rotation[0],
-                    draw.pose.rotation[1],
-                    draw.pose.rotation[2],
-                    draw.pose.rotation[3],
-                ));
-                const translation = zm.translation(
-                    draw.pose.position[0],
-                    draw.pose.position[1],
-                    draw.pose.position[2],
-                );
-                const model_matrix = zm.mul(zm.mul(scale, rotation), translation);
-                self.gpu_renderer.drawMesh(crate_mesh, model_matrix, view_proj);
-            }
+        const crate_draws = try self.simulation.presentation(alpha);
+        for (crate_draws) |draw| {
+            const crate_mesh = try self.crate_visuals.resolve(draw.mesh, draw.material);
+            const scale = zm.scaling(
+                draw.half_extents[0] * 2,
+                draw.half_extents[1] * 2,
+                draw.half_extents[2] * 2,
+            );
+            const rotation = zm.quatToMat(zm.f32x4(
+                draw.pose.rotation[0],
+                draw.pose.rotation[1],
+                draw.pose.rotation[2],
+                draw.pose.rotation[3],
+            ));
+            const translation = zm.translation(
+                draw.pose.position[0],
+                draw.pose.position[1],
+                draw.pose.position[2],
+            );
+            const model_matrix = zm.mul(zm.mul(scale, rotation), translation);
+            self.gpu_renderer.drawMesh(crate_mesh, model_matrix, view_proj);
         }
 
         // ================================================================
@@ -493,12 +604,17 @@ const App = struct {
         editor.draw(
             &self.gpu_renderer,
             &self.game_camera,
-            &self.game_world,
             &self.frame_timer,
         );
 
         // Submit the frame (both scene and editor render passes)
         try self.gpu_renderer.submitFrame();
+        return .{ .ready = .{
+            .crate_count = crate_draws.len,
+            .first_id = if (crate_draws.len > 0) crate_draws[0].persistent_id else null,
+            .first_position = if (crate_draws.len > 0) crate_draws[0].pose.position else null,
+            .first_rotation = if (crate_draws.len > 0) crate_draws[0].pose.rotation else null,
+        } };
     }
 
     /// Print debug statistics
@@ -506,7 +622,7 @@ const App = struct {
         std.debug.print("FPS: {d:.1} | Frame time: {d:.2}ms | Sim ticks: {d} | Ticks/frame: {d}\n", .{
             self.frame_timer.getFps(),
             self.frame_timer.getDeltaTime() * 1000.0,
-            self.sim_tick_count,
+            self.simulation.tickIndex(),
             self.frame_timer.ticks_this_frame,
         });
     }
@@ -518,7 +634,8 @@ const App = struct {
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len == 2 and std.mem.eql(u8, args[1], "--verify-install")) {
+    const mode = try parseProgramMode(args);
+    if (mode == .verify_install) {
         std.debug.print(
             "Incinerator install verified (shader format: {s}, GPU driver: {s}, editor: {})\n",
             .{ @tagName(shader_assets.format), shader_assets.driver, build_options.editor_enabled },
@@ -527,15 +644,44 @@ pub fn main(init: std.process.Init) !void {
     }
 
     var app = try App.init();
-    defer app.deinit();
+    var visual_smoke_succeeded = false;
+    defer {
+        app.deinit();
+        if (visual_smoke_succeeded) {
+            std.debug.print("S0_VISUAL_SMOKE_SHUTDOWN status=clean\n", .{});
+        }
+    }
 
     // Wire up render settings to editor tool
     render_tool.setRenderSettings(&app.gpu_renderer.render_settings);
 
-    // Spawn entities AFTER App is constructed (mesh pointers must be stable)
-    try app.spawnEntities();
-
-    try app.run();
+    switch (mode) {
+        .normal => _ = try app.run(null),
+        .verify_install => unreachable,
+        .visual_smoke => |config| {
+            const summary = try app.run(config);
+            std.debug.print(
+                "S0_VISUAL_SMOKE_RESULT ready_frames={d} unavailable_frames={d} " ++
+                    "attempted_frames={d} crate_frames={d} position_changed={} " ++
+                    "rotation_changed={} ticks={d} alpha_min={d:.6} alpha_max={d:.6} " ++
+                    "virtual_render_hz={d} gpu_driver={s}\n",
+                .{
+                    summary.ready_frames,
+                    summary.unavailable_frames,
+                    summary.attempted_frames,
+                    summary.crate_presented_frames,
+                    summary.position_changed,
+                    summary.rotation_changed,
+                    app.simulation.tickIndex(),
+                    summary.min_alpha,
+                    summary.max_alpha,
+                    config.virtual_render_hz,
+                    shader_assets.driver,
+                },
+            );
+            visual_smoke_succeeded = true;
+        },
+    }
 }
 
 // ============================================================================
@@ -547,17 +693,50 @@ test "app structure exists" {
     _ = App;
 }
 
+test "program mode parsing keeps visual smoke explicit and bounded" {
+    const normal_args = [_][]const u8{"incinerator"};
+    const normal = try parseProgramMode(&normal_args);
+    try std.testing.expect(normal == .normal);
+    const smoke_args = [_][]const u8{
+        "incinerator",
+        "--visual-smoke",
+        "--frames=160",
+        "--virtual-render-hz=80",
+    };
+    const smoke = try parseProgramMode(&smoke_args);
+    try std.testing.expectEqual(@as(u64, 160), smoke.visual_smoke.frames);
+    try std.testing.expectEqual(@as(u32, 80), smoke.visual_smoke.virtual_render_hz);
+    const above = try smokeExpectation(.{ .frames = 480, .virtual_render_hz = 240 });
+    try std.testing.expectEqual(@as(u64, 240), above.ticks);
+    try std.testing.expectEqual(@as(f32, 0), above.min_alpha);
+    try std.testing.expectEqual(@as(f32, 0.5), above.max_alpha);
+    const below = try smokeExpectation(.{ .frames = 160, .virtual_render_hz = 80 });
+    try std.testing.expectEqual(@as(u64, 240), below.ticks);
+    try std.testing.expectEqual(@as(f32, 0), below.min_alpha);
+    try std.testing.expectEqual(@as(f32, 0.5), below.max_alpha);
+    try std.testing.expectError(
+        error.VisualSmokeOptionWithoutMode,
+        parseProgramMode(&[_][]const u8{ "incinerator", "--frames=1" }),
+    );
+    try std.testing.expectError(
+        error.ConflictingProgramModes,
+        parseProgramMode(&[_][]const u8{ "incinerator", "--verify-install", "--visual-smoke" }),
+    );
+    try std.testing.expectError(
+        error.InvalidVirtualRenderRate,
+        parseProgramMode(&[_][]const u8{ "incinerator", "--visual-smoke", "--virtual-render-hz=0" }),
+    );
+}
+
 test "all engine module tests are discovered" {
     // Zig 0.16 analyzes declarations lazily. Explicitly reference each module
     // so its test blocks remain part of the engine test contract.
     std.testing.refAllDecls(@import("camera.zig"));
     std.testing.refAllDecls(@import("crate_visual_resources.zig"));
-    std.testing.refAllDecls(@import("ecs.zig"));
     std.testing.refAllDecls(@import("editor/tool.zig"));
     std.testing.refAllDecls(@import("gltf_loader.zig"));
     std.testing.refAllDecls(@import("input.zig"));
     std.testing.refAllDecls(@import("mesh.zig"));
-    std.testing.refAllDecls(@import("jolt_physics"));
     std.testing.refAllDecls(@import("renderer.zig"));
     std.testing.refAllDecls(@import("texture.zig"));
     std.testing.refAllDecls(@import("timing.zig"));

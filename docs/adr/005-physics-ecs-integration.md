@@ -29,9 +29,6 @@ pub const RuntimeBody = struct { handle: Bodies.Handle };
 // In the Jolt composition: Bodies.Handle == physics.BodyId
 ```
 
-The legacy sandbox still has a `RigidBody` component for its migration-only
-`GameWorld` path; it is not the contract for new features.
-
 `physics.BodyId` is a narrow process-local handle containing an adapter-issued,
 monotonic world token, an engine-issued 64-bit body serial, and Jolt's raw body
 value. Every adapter operation validates the world token and the live
@@ -71,7 +68,10 @@ For dynamic bodies the implemented fixed tick order is:
 commands -> pre-physics inputs -> step Jolt -> publish post-physics state
 ```
 
-The current sandbox exposes immediate physics setters and has not yet implemented the formal command boundary for kinematic/static intent. That boundary is required migration work; immediate setters are not the long-term cross-feature API.
+The S0 sandbox exposes only typed crate commands and immutable queries; it does
+not expose immediate adapter setters. Kinematic/static intent remains deferred
+until a feature defines its command and synchronization policy. Low-level
+adapter mutators are internal implementation/test seams, not a cross-feature API.
 
 Current adapter getters and mutators are checked error unions. Invalid/foreign
 handles and non-finite transforms, velocities, forces, rotations, or time steps
@@ -88,10 +88,10 @@ The sync reads Jolt's body position intentionally, rather than substituting cent
 
 Rotation is stored as a normalized quaternion in ECS using `(x, y, z, w)`. Physics sync copies the quaternion components directly. Euler angles are an editor presentation only and are never the physics interchange format.
 
-Editor scale manipulation replaces a box shape in place, preserving the
-world-qualified `BodyId`. A rejected replacement retains the old collider and
-rolls the visual scale back rather than destroying the body first or allowing
-render/physics dimensions to diverge.
+Future editor scale manipulation must be a typed feature command that updates
+logical dimensions, the collider, persistence state, and both presentation
+history samples transactionally. Direct editor access to Jolt bodies is not an
+accepted integration path.
 
 ### Presentation history
 
@@ -101,10 +101,9 @@ presentation extraction interpolates between them using the host's clamped
 shortest-path interpolation. Spawn and restore initialize both samples to the
 same pose, and extraction never writes authoritative state.
 
-Legacy sandbox entities still use the prototype `GameWorld` synchronization
-path and render their latest completed transform. That borrowed-world bridge is
-migration-only; new feature slices must use transform history rather than
-querying Jolt from rendering.
+The visual sandbox owns the same crate/Jolt `Simulation` composition as the
+headless host. Rendering consumes only feature extraction plus a host-owned
+static ground fixture; there is no second ECS synchronization/render path.
 
 ### Determinism and future networking
 
@@ -135,7 +134,7 @@ Ragdolls, vehicles, and compound objects follow the same rule: a feature slice o
 
 - Each body-mode transition needs an explicit command and synchronization policy.
 - Physics-to-ECS publication remains per-tick work.
-- The legacy sandbox entities still need migration to feature-owned transform history.
+- Future kinematic/static and editor-authoring features still need typed transform commands and coherent history updates.
 - The one-live-owned-world restriction prevents atomic old/new simulation replacement and must be resolved or accepted before multi-world server deployment.
 - Collider origin and center-of-mass conventions need tests as shape complexity grows.
 

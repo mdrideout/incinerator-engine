@@ -33,7 +33,6 @@ const zgui = @import("zgui");
 const sdl = @import("../sdl.zig");
 const renderer_module = @import("../renderer.zig");
 const camera_module = @import("../camera.zig");
-const ecs_module = @import("../ecs.zig");
 const timing_module = @import("../timing.zig");
 
 const imgui_backend = @import("imgui_backend.zig");
@@ -44,16 +43,12 @@ const tool = @import("tool.zig");
 // We import them here and register them in the tools array below.
 const stats_tool = @import("tools/stats_tool.zig");
 const camera_tool = @import("tools/camera_tool.zig");
-const scene_tool = @import("tools/scene_tool.zig");
 const render_tool = @import("tools/render_tool.zig");
-const gizmo_tool = @import("tools/gizmo_tool.zig");
 
 const c = sdl.c;
 
 pub const Tool = tool.Tool;
 pub const EditorContext = tool.EditorContext;
-pub const GizmoMode = tool.GizmoMode;
-pub const GizmoSpace = tool.GizmoSpace;
 
 /// Semantic editor routing for an SDL event.
 ///
@@ -64,10 +59,6 @@ pub const EventRoute = struct {
     keyboard_reserved: bool = false,
     mouse_reserved: bool = false,
 };
-
-fn cameraNavigationActive(mouse_state: c.SDL_MouseButtonFlags, mouse_captured: bool) bool {
-    return !mouse_captured and (mouse_state & c.SDL_BUTTON_RMASK) != 0;
-}
 
 // ============================================================================
 // Editor State
@@ -86,16 +77,6 @@ var show_demo_window: bool = false;
 /// every SDL event regardless of this setting.
 var input_passthrough: bool = false;
 
-/// Currently selected entity (persists across frames)
-/// Used by Scene tool for entity selection/inspection
-var selected_entity: ?u64 = null;
-
-/// Current gizmo operation mode (for future gizmo tool)
-var gizmo_mode: GizmoMode = .translate;
-
-/// Gizmo coordinate space (for future gizmo tool)
-var gizmo_space: GizmoSpace = .world;
-
 // ============================================================================
 // Tool Registry
 // ============================================================================
@@ -112,9 +93,7 @@ var gizmo_space: GizmoSpace = .world;
 var tools = [_]*Tool{
     &stats_tool.tool,
     &camera_tool.tool,
-    &scene_tool.tool,
     &render_tool.tool,
-    &gizmo_tool.tool, // 3D transform manipulation gizmo (W/E/R to switch modes)
     // Add more tools here as we create them:
     // &console_tool.tool,
 };
@@ -144,22 +123,6 @@ pub fn init(
 pub fn deinit() void {
     if (!build_options.editor_enabled) return;
     imgui_backend.deinit();
-}
-
-/// Run editor-owned lifecycle transitions independently of rendering. This is
-/// required while a window is minimized or otherwise has no renderable frame.
-pub fn updateLifecycle(world: *ecs_module.GameWorld) void {
-    if (!build_options.editor_enabled) return;
-    if (!editor_visible or !gizmo_tool.tool.enabled) {
-        gizmo_tool.releaseInteraction(world);
-    }
-}
-
-/// Release world-scoped editor state before the ECS/physics world is destroyed.
-pub fn releaseWorld(world: *ecs_module.GameWorld) void {
-    if (!build_options.editor_enabled) return;
-    gizmo_tool.releaseInteraction(world);
-    selected_entity = null;
 }
 
 /// Process an SDL event for editor input.
@@ -205,45 +168,6 @@ pub fn processEvent(event: *const c.SDL_Event) EventRoute {
             route.keyboard_reserved = true;
             return route;
         }
-        // ====================================================================
-        // Gizmo Mode Hotkeys (W/E/R) - Unity convention
-        // ====================================================================
-        // These switch between translate/rotate/scale gizmo modes.
-        // The gizmo mode is a persistent editor state - it stays set even
-        // when nothing is selected, so when you DO select something, the
-        // gizmo appears in the mode you last chose.
-        //
-        // Unity behavior:
-        // - Right-click NOT held: W/E/R switch gizmo modes (always)
-        // - Right-click held: WASD moves camera (keys pass through)
-        //
-        // This means there's never a conflict because camera movement
-        // ONLY happens while right-click is held.
-        if (editor_visible) {
-            // Query current mouse state to check if right-click is held
-            const mouse_state = c.SDL_GetMouseState(null, null);
-            const right_click_held = cameraNavigationActive(mouse_state, wantsMouse());
-
-            // Only handle gizmo hotkeys when NOT in camera mode (right-click held)
-            if (!right_click_held) {
-                if (event.key.scancode == c.SDL_SCANCODE_W) {
-                    gizmo_mode = .translate;
-                    route.keyboard_reserved = true;
-                    return route;
-                }
-                if (event.key.scancode == c.SDL_SCANCODE_E) {
-                    gizmo_mode = .rotate;
-                    route.keyboard_reserved = true;
-                    return route;
-                }
-                if (event.key.scancode == c.SDL_SCANCODE_R) {
-                    gizmo_mode = .scale;
-                    route.keyboard_reserved = true;
-                    return route;
-                }
-            }
-            // When right-click is held, W/E/R pass through to game for camera
-        }
     }
 
     // A hidden editor still receives backend events, but reserves no local
@@ -287,7 +211,6 @@ pub fn processEvent(event: *const c.SDL_Event) EventRoute {
 pub fn draw(
     gpu_renderer: *renderer_module.Renderer,
     camera: *const camera_module.Camera,
-    world: *const ecs_module.GameWorld,
     frame_timer: *const timing_module.FrameTimer,
 ) void {
     if (!build_options.editor_enabled) return;
@@ -311,7 +234,6 @@ pub fn draw(
     // Hidden state: just draw the hint and return
     // ========================================================================
     if (!editor_visible) {
-        gizmo_tool.releaseInteraction(@constCast(world));
         drawHiddenHint();
         imgui_backend.render(cmd, swapchain_texture);
         return;
@@ -322,16 +244,9 @@ pub fn draw(
     // ========================================================================
 
     // Create the editor context that tools will use
-    // Note: selected_entity, gizmo_mode, gizmo_space are module-level vars that persist
     var ctx = EditorContext{
         .camera = camera,
-        .world = world,
         .frame_timer = frame_timer,
-        .window_width = @intCast(window_size.width),
-        .window_height = @intCast(window_size.height),
-        .selected_entity = selected_entity,
-        .gizmo_mode = gizmo_mode,
-        .gizmo_space = gizmo_space,
         .wants_mouse = wantsMouse(),
         .wants_keyboard = wantsKeyboard(),
     };
@@ -339,21 +254,10 @@ pub fn draw(
     // Draw main menu bar
     drawMainMenuBar();
 
-    // Disabling the gizmo tool is a lifecycle boundary, not just a rendering
-    // choice: release any temporary kinematic body state immediately.
-    if (!gizmo_tool.tool.enabled) {
-        gizmo_tool.releaseInteraction(@constCast(world));
-    }
-
     // Draw all enabled tools
     for (&tools) |t| {
         t.draw(&ctx);
     }
-
-    // Persist editor state changes back to module-level vars
-    selected_entity = ctx.selected_entity;
-    gizmo_mode = ctx.gizmo_mode;
-    gizmo_space = ctx.gizmo_space;
 
     // Draw demo window if enabled (great for learning ImGui!)
     if (show_demo_window) {
@@ -462,10 +366,4 @@ fn drawMainMenuBar() void {
 
         zgui.endMainMenuBar();
     }
-}
-
-test "captured right mouse does not enable camera shortcut mode" {
-    try std.testing.expect(cameraNavigationActive(c.SDL_BUTTON_RMASK, false));
-    try std.testing.expect(!cameraNavigationActive(c.SDL_BUTTON_RMASK, true));
-    try std.testing.expect(!cameraNavigationActive(0, false));
 }

@@ -2,7 +2,7 @@
 
 **Status:** Accepted, amended by ADR-008
 **Date:** 2025-12-06
-**Updated:** 2026-07-09
+**Updated:** 2026-07-10
 **Decision Makers:** Matt, Claude
 
 > Amendment: Flecs remains the ECS implementation, but gameplay data and systems are owned by feature modules rather than a global scene layer. Flecs IDs are runtime implementation details, not persistent identity. Serializable components must not contain owning pointers, GPU handles, or other process-local resources. Rotation storage is quaternion-based as established by ADR-005. Optional Flecs names are unique root lookup identities—not display labels—and spawning rejects duplicates, empty names, and path syntax instead of silently aliasing an existing entity.
@@ -10,9 +10,10 @@
 > Current implementation: ADR-008 supersedes the prototype `GameWorld` as the
 > architecture for new work. The public kernel exposes a type-erased `Runtime`
 > with engine-owned persistent-ID indexing and runtime-token/entity-serial
-> validation; Flecs state remains private. `GameWorld` and its renderable query
-> are a transitional visual-sandbox bridge that borrows the same world during
-> S0. A shared lease currently permits one live owned Flecs world per process,
+> validation; Flecs state remains private. The prototype `GameWorld`, raw
+> renderable query, and borrowed-world bridge were deleted at S0 closure; the
+> visual and headless hosts use the same owned composition. A shared lease
+> currently permits one live owned Flecs world per process,
 > so true atomic old/new world replacement remains open. The historical design
 > below documents the prototype and must not be treated as the feature API.
 

@@ -9,6 +9,14 @@ const transform = @import("../transform.zig");
 
 pub const Pose = transform.Pose;
 
+/// Logical velocity limits shared by persistence, features, and adapters.
+///
+/// These deliberately match Jolt 5.5's default rigid-body limits. Keeping the
+/// limits in the engine contract prevents a snapshot or spawn command from
+/// being accepted and then silently clamped by the production adapter.
+pub const max_linear_velocity: f32 = 500.0;
+pub const max_angular_velocity: f32 = 0.25 * std.math.pi * 60.0;
+
 pub const Velocity = struct {
     linear: [3]f32 = .{ 0, 0, 0 },
     angular: [3]f32 = .{ 0, 0, 0 },
@@ -16,6 +24,12 @@ pub const Velocity = struct {
     pub fn validate(self: Velocity) !void {
         try validateFinite(self.linear);
         try validateFinite(self.angular);
+        if (!magnitudeFits(self.linear, max_linear_velocity)) {
+            return error.LinearVelocityOutOfRange;
+        }
+        if (!magnitudeFits(self.angular, max_angular_velocity)) {
+            return error.AngularVelocityOutOfRange;
+        }
     }
 };
 
@@ -150,6 +164,38 @@ fn validateFinite(values: anytype) !void {
     }
 }
 
+fn magnitudeSquared(values: [3]f32) f64 {
+    var result: f64 = 0;
+    for (values) |value| {
+        const wide: f64 = value;
+        result += wide * wide;
+    }
+    return result;
+}
+
+fn limitSquared(limit: f32) f64 {
+    const wide: f64 = limit;
+    return wide * wide;
+}
+
+/// Require both the exact-ish f64 magnitude and every association of the
+/// backend's three f32 squared terms to fit. Jolt performs its clamp test in
+/// f32 SIMD; checking only f64 can accept a boundary vector whose rounded f32
+/// dot product is just above the limit.
+fn magnitudeFits(values: [3]f32, limit: f32) bool {
+    if (magnitudeSquared(values) > limitSquared(limit)) return false;
+    const squared = [3]f32{
+        values[0] * values[0],
+        values[1] * values[1],
+        values[2] * values[2],
+    };
+    const association_0 = (squared[0] + squared[1]) + squared[2];
+    const association_1 = (squared[0] + squared[2]) + squared[1];
+    const association_2 = (squared[1] + squared[2]) + squared[0];
+    const backend_upper_bound = @max(association_0, @max(association_1, association_2));
+    return backend_upper_bound <= limit * limit;
+}
+
 test "physics state validation and normalization stay upstream-neutral" {
     const state = BodyState{
         .pose = .{ .position = .{ 1, 2, 3 }, .rotation = .{ 0, 0, 0, 2 } },
@@ -168,6 +214,53 @@ test "physics state validation and normalization stay upstream-neutral" {
             .pose = .{},
             .half_extents = .{ 1, 0, 1 },
         }).validate(),
+    );
+}
+
+test "velocity limits accept exact boundaries and reject silent-clamp inputs" {
+    try (Velocity{
+        .linear = .{ 300, 400, 0 },
+        .angular = .{ 0, 0, max_angular_velocity },
+    }).validate();
+    try (Velocity{
+        .linear = .{ -max_linear_velocity, 0, 0 },
+        .angular = .{ -max_angular_velocity, 0, 0 },
+    }).validate();
+
+    const above_linear = std.math.nextAfter(
+        f32,
+        max_linear_velocity,
+        std.math.inf(f32),
+    );
+    try std.testing.expectError(
+        error.LinearVelocityOutOfRange,
+        (Velocity{ .linear = .{ above_linear, 0, 0 } }).validate(),
+    );
+
+    const above_angular = std.math.nextAfter(
+        f32,
+        max_angular_velocity,
+        std.math.inf(f32),
+    );
+    try std.testing.expectError(
+        error.AngularVelocityOutOfRange,
+        (Velocity{ .angular = .{ 0, above_angular, 0 } }).validate(),
+    );
+
+    // These are inside the limit in f64 but exceed it after a possible f32
+    // reduction used by Jolt. They must be rejected rather than restored to a
+    // silently clamped velocity.
+    try std.testing.expectError(
+        error.LinearVelocityOutOfRange,
+        (Velocity{ .linear = .{ 118.4224777, -462.689972, -147.966568 } }).validate(),
+    );
+    try std.testing.expectError(
+        error.AngularVelocityOutOfRange,
+        (Velocity{ .angular = .{ -4.2509985, -29.216375, -36.728645 } }).validate(),
+    );
+    try std.testing.expectError(
+        error.LinearVelocityOutOfRange,
+        (Velocity{ .linear = .{ 400, 400, 0 } }).validate(),
     );
 }
 

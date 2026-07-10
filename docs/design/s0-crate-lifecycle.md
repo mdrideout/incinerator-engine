@@ -1,6 +1,6 @@
 # S0 Crate Lifecycle Design
 
-**Status:** Implemented; acceptance evidence in progress
+**Status:** Complete (2026-07-10)
 **Scope:** S0 only
 **Related decisions:** ADR-004, ADR-005, ADR-007, ADR-008
 
@@ -39,7 +39,6 @@ headless conformance tests. Its surface is no broader than:
 
 ```zig
 init(allocator, config) !Simulation
-initBorrowed(allocator, world_context, physics, config) !Simulation
 deinit() void
 submit(command) !void
 tick() !void
@@ -112,7 +111,7 @@ applyImpulse(body handle, impulse) -> error          # only if used by S0
 step(fixed_delta_seconds) -> error
 ```
 
-`BodyState` contains position, normalized rotation, linear velocity, and angular velocity. The contract's body handle is opaque to the feature except for passing it back to the same physics world. The Jolt adapter validates world ownership and stale handles; Jolt/JoltC types do not cross the adapter boundary.
+`BodyState` contains position, normalized rotation, linear velocity, and angular velocity. The contract's body handle is opaque to the feature except for passing it back to the same physics world. The Jolt adapter validates world ownership and stale handles; Jolt/JoltC types do not cross the adapter boundary. Engine-level velocity validation caps vector magnitude at 500 m/s linear and `0.25*pi*60` rad/s angular, matching the Jolt body settings used by S0. This prevents a structurally valid V1 document from being silently clamped to different restored state.
 
 The contract is intentionally asymmetric: dynamic crates are read from physics after the step. General queries, constraints, character control, collision event routing, multiple worlds, and backend swapping are deferred until a slice needs them.
 
@@ -214,7 +213,7 @@ V1 is a versioned logical JSON document. It contains:
 
 It does not contain Flecs IDs, Jolt handles, allocator addresses, schedule state, GPU handles, cached presentation records, interpolation-only `previous` samples, or backend configuration. After restore, `previous` is set equal to restored `current`, so the first rendered frame is stable.
 
-JSON parsing is strict for required fields and version. All records are parsed and validated into temporary logical data before runtime objects are published. Validation rejects duplicate IDs, non-finite numbers, non-positive extents, invalid or non-normalizable rotations, and unsupported versions. Limits on document size and crate count are explicit configuration, not accidental allocator exhaustion behavior.
+JSON parsing is strict for required fields and version. All records are parsed and validated into temporary logical data before runtime objects are published. Validation rejects duplicate IDs, non-finite numbers, non-positive extents, invalid or non-normalizable rotations, velocities outside the engine/Jolt representable range, and unsupported versions. Limits on document size and crate count are explicit configuration, not accidental allocator exhaustion behavior.
 
 Logical candidate construction is transactional:
 
@@ -250,7 +249,7 @@ headless host
 
 Allowed headless dependencies are Zig's standard library, the public simulation/kernel code, `CrateFeature`, Flecs, the narrow physics contract, the Jolt adapter, JoltC/Jolt, and platform libraries required by Jolt. SDL, SDL GPU, the renderer, shader tooling/runtime assets, zgui/ImGui, zmesh, zstbi, editor modules, and visual resource owners are prohibited from the headless graph and final linkage.
 
-The visual sandbox adds SDL input/window/GPU adapters, the renderer, and a minimal crate visual-resource owner at its composition root. Neither `CrateFeature` nor the headless host imports those modules. Both hosts submit the same public commands and advance the same simulation.
+The visual sandbox owns the same `Simulation.init` composition as headless and adds SDL input/window/GPU adapters, the renderer, a host-only ground mesh, and a minimal crate visual-resource owner. Neither `CrateFeature` nor the headless host imports those modules. Both hosts submit the same public commands and advance the same simulation. There is no borrowed world, second physics tick, legacy ECS synchronization, or direct editor mutation path.
 
 The build verifies the boundary by constructing a dedicated headless module/executable from the allowlist, compiling its tests independently, and inspecting its declared dependencies or linked binary for prohibited libraries. A source-level dependency test guards against prohibited import edges.
 
@@ -268,15 +267,24 @@ S0 is complete only with all of the following:
 8. **Interpolation:** endpoints, midpoint position, shortest-path rotation, clamping, and spawn/restore initialization are covered without mutating authoritative samples.
 9. **Authority:** a physics-driven crate follows body state after each step and has no direct presentation-to-simulation write path.
 10. **Architecture:** the public root and crate feature compile without SDL/editor/renderer imports; the dedicated headless artifact has no prohibited graphical linkage.
-11. **Visual smoke:** the sandbox displays one falling/tumbling crate smoothly when rendering above and below the fixed simulation frequency, and shutdown releases instance and shared visual resources in order.
+11. **Visual smoke:** the sandbox submits one identified falling/tumbling crate through Metal above and below the fixed simulation frequency, validates logical pose change/counts/cadence, and releases instance and shared visual resources in order. Pixel-readback validation is not part of S0.
+12. **Characterization:** ReleaseFast tick, presentation, command/outcome, body-count, and teardown measurements exist at 0, 1, 128, and the exact 1,024-crate S0 cap.
 
 Tests use a small compile-time fake physics implementation for precise failure
 and schedule assertions, plus the real Jolt adapter for integration and
-ownership evidence. Current injected coverage includes body creation, restore
-rollback, and post-physics body-read failure. Remaining all-stage failure,
-non-finite/over-limit persistence, low-rate visual, and initial performance
-evidence stay open in the overhaul plan. The fake implements the same narrow
-operations; it is not a second production backend.
+ownership evidence. Injected coverage includes body creation, restore rollback,
+physics step, body destruction, impulse, and post-physics body-read failures.
+Persistence covers malformed/oversized/over-count/identity/non-finite/shape/
+velocity-limit inputs, sorted byte-stable multi-record restore, live-world
+non-mutation, and allocation-failure unwind. The fake implements the same
+narrow operations; it is not a second production backend.
+
+The platform-independent accumulator proves 240 Hz and 80 Hz presentation
+cadences against the 120 Hz simulation plus the 250 ms anti-spiral clamp. The
+native Metal smoke ran 480 ready frames at virtual 240 Hz and 160 ready frames
+at virtual 80 Hz, producing 240 ticks in each case and returning through normal
+SDL quit/deinitialization. See the [S0 acceptance record](../validation/s0-acceptance.md)
+and [performance baseline](../performance/s0-baseline.md).
 
 ## Explicit non-goals
 

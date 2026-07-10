@@ -9,15 +9,11 @@ pub fn init(_: anytype, _: anytype, _: anytype) void {}
 
 pub fn deinit() void {}
 
-pub fn updateLifecycle(_: anytype) void {}
-
-pub fn releaseWorld(_: anytype) void {}
-
 pub fn processEvent(_: anytype) EventRoute {
     return .{};
 }
 
-pub fn draw(_: anytype, _: anytype, _: anytype, _: anytype) void {}
+pub fn draw(_: anytype, _: anytype, _: anytype) void {}
 
 pub fn wantsMouse() bool {
     return false;

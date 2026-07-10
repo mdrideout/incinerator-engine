@@ -35,10 +35,6 @@ pub const CrateVisualResources = struct {
         self.* = undefined;
     }
 
-    pub fn borrowTexture(self: *const CrateVisualResources) texture.Texture {
-        return self.texture.borrow();
-    }
-
     pub fn resolve(
         self: *CrateVisualResources,
         requested_mesh: engine.rendering.MeshHandle,

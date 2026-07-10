@@ -4,7 +4,7 @@
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-07-09
+**Last reviewed:** 2026-07-10
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -256,19 +256,23 @@ Do not create every directory up front. Slice 0 should establish only the minimu
 
 ## 6. Current Baseline
 
-The repository now contains a small feature-authoring kernel alongside the
-transitional visual demo host:
+The repository now contains a small feature-authoring kernel and one owned S0
+composition shared by visual and headless hosts:
 
 - `src/root.zig` exposes backend-neutral contracts plus the type-erased
   `Runtime`/startup registry used by game features.
-- `src/main.zig` remains the visual composition root and temporarily borrows
-  its legacy Flecs world into the S0 runtime.
+- `src/main.zig` owns the same crate/Jolt `Simulation` as headless plus only
+  visual input, camera, GPU resources, renderer, and debug UI.
 - `src/hosts/headless.zig` and `src/hosts/simulation.zig` prove the same crate
   behavior with no SDL/editor/renderer edge.
-- Assets, renderer, physics, editor, camera, scene construction, and controls are wired directly in `App`.
-- ECS components contain raw pointers to GPU-backed meshes.
+- The prototype `GameWorld`, borrowed Flecs/Jolt path, direct ECS render query,
+  Scene/Gizmo mutation tools, and their compatibility seams are removed.
 - `CrateFeature` has coordinated entity/body lifecycle, V1 logical
   save/restore, typed outcomes, and previous/current presentation extraction.
+- The public pure fixed-step accumulator proves 240/80 Hz presentation cadence
+  and the 250 ms anti-spiral policy independently of SDL's wall clock.
+- ReleaseFast S0 characterization is recorded at 0, 1, 128, and 1,024 active
+  crates; native Metal smoke exits normally above and below 120 Hz.
 - Input events are frame-scoped while simulation consumption is tick-scoped.
 - The upgraded application builds in Debug and ReleaseFast, with and without the editor, and cross-links for the selected Linux and Windows GNU targets.
 - MSL, SPIR-V, and DXIL shader artifacts are generated from cache-backed outputs. Native Vulkan and D3D12 runtime validation remains open.
@@ -364,7 +368,7 @@ Cross-platform deterministic Jolt compilation is explicitly disabled. The future
 | M0 | Reproducible baseline and blocking decisions | Complete |
 | M1 | Trustworthy build, shader, dependency, CI, and packaging gate | In progress |
 | M2 | Immediate ownership and correctness hazards removed | Implemented; deeper failure injection/leak instrumentation and one manual minimize smoke remain evidence gates |
-| S0 | Crate lifecycle slice proves the kernel and feature contract | Implemented; expanded failure/persistence tests, performance and low-rate visual evidence, and multi-world atomic replacement remain open |
+| S0 | Crate lifecycle slice proves the kernel and feature contract | Complete; one-world-per-process and pre-network queue backpressure are accepted follow-on constraints |
 | S1 | Character walks around one block | Not started |
 | S2 | Player enters and drives one vehicle | Not started |
 | S3 | One district/chunk loads and unloads asynchronously | Not started |
@@ -545,8 +549,8 @@ This is the first proof of the engine architecture and replaces a speculative �
 
 - [x] Headless: spawn → tick → serialize → destroy → restore → tick → destroy.
 - [x] Headless: run the same input/command timeline twice and compare expected state.
-- [x] Lifecycle: repeat crate spawn/despawn without leaked shapes, bodies, entities, or assets.
-- [ ] Visual: native Metal renders the interpolated falling/tumbling crate above the simulation rate; below-rate visual evidence remains manual.
+- [x] Lifecycle: repeat crate spawn/despawn returns entity/body counts to baseline; allocation sweeps and visual-owner tests cover owned cleanup boundaries.
+- [x] Visual: native Metal renders the interpolated falling/tumbling crate at virtual 240 Hz and 80 Hz, processes a normal SDL quit, and reports clean shutdown.
 - [x] Architecture: verify prohibited dependency edges are absent.
 
 ### Acceptance criteria
@@ -557,18 +561,19 @@ This is the first proof of the engine architecture and replaces a speculative �
 - [x] Rendering reads an interpolated snapshot and cannot mutate authoritative state.
 - [x] Crate destruction coordinates entity, body, and resource lifetime correctly.
 - [x] No broader interface was added without a use in this slice.
-- [ ] Initial tick, extraction, and queue measurements are recorded at the intended S0 scale.
-- [ ] Remaining all-stage failure and non-finite/over-limit persistence cases are covered.
+- [x] Initial tick, extraction, command/outcome, body-count, and teardown measurements are recorded at 0, 1, 128, and 1,024 crates.
+- [x] Supported adapter-failure and malformed/non-finite/over-limit persistence cases are covered, including allocation-failure unwind and velocity representability.
 
 ### Known S0 limitations
 
 - The current zflecs wrapper permits one owned world per process. A second
   candidate fails cleanly and leaves the live simulation usable, but successful
   atomic old/new world swapping is not yet possible.
-- The sandbox’s borrowed-world bridge is transitional and must be removed
-  before S1 becomes the primary architecture.
 - Command/outcome buffers are allocator-backed and unbounded; add measured
   backpressure before accepting network-originated commands.
+
+Evidence: [`docs/validation/s0-acceptance.md`](docs/validation/s0-acceptance.md)
+and [`docs/performance/s0-baseline.md`](docs/performance/s0-baseline.md).
 
 ---
 
@@ -840,8 +845,8 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-028 | Physics sync mixes center-of-mass and body origin | P1 | M2/S2 | Resolved |
 | F-029 | Model normals are not transformed into lighting space | P2 | M2 | Resolved with an inverse-transpose world-space normal matrix and reflected 128-byte model UBO |
 | F-030 | Main loop can busy-spin minimized/backpressured | P2 | M2 | Resolved in implementation with blocking swapchain acquisition and bounded unavailable-frame event wait; manual minimize evidence pending |
-| F-031 | Editor can leave bodies kinematic while hidden | P1 | M2/S5 | Resolved with render-independent editor lifecycle release and hide/disable/world teardown hooks |
-| F-032 | Scale recreation destroys body before replacement | P1 | M2/S5 | Resolved by in-place shape replacement that preserves `BodyId` and rolls back visual scale on failure |
+| F-031 | Editor can leave bodies kinematic while hidden | P1 | M2/S5 | Superseded by removing direct Scene/Gizmo world mutation; S5 authoring must use typed commands |
+| F-032 | Scale recreation destroys body before replacement | P1 | M2/S5 | Superseded by removing direct Scene/Gizmo world mutation; future scale authoring is transactional feature work |
 | F-033 | CI and behavior coverage are shallow | P0 | M1 | CI implemented; hosted evidence open |
 | F-034 | Engine license is not selected | P0 | Owner/release | Deferred by owner; distribution blocked |
 | F-035 | Accepted ADRs conflict with implementation | P1 | M0 | Resolved by amendments through 2026-07-09 |
@@ -855,7 +860,7 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-043 | Raw body IDs can alias bodies in another/recreated world or after Jolt's 8-bit slot generation wraps | P0 | M2/S0 | Resolved with world qualification, an engine-owned 64-bit body serial map, and >256-reuse stale-handle tests |
 | F-044 | Mesh and decoded-image byte-size arithmetic can overflow before GPU upload | P0 | M2 | Resolved with checked nonzero `usize` arithmetic and SDL `u32` bounds |
 | F-045 | Renderer teardown can release resources with an acquired frame still live | P1 | M2 | Resolved by ending and submitting any live frame before resource teardown |
-| F-046 | zflecs permits one owned world, preventing successful atomic old/new snapshot replacement | P0 | S0/server | Open; a shared lease now returns a defined error before zflecs and preserves the live caller |
+| F-046 | zflecs permits one owned world, preventing successful atomic old/new snapshot replacement | P0 | pre-server/S4 | Accepted for the single-player S0 host; a shared lease returns a defined error and a wrapper decision is required before multi-world server work |
 | F-047 | Flecs/Jolt finite native generations can revive long-lived stale handles | P0 | S0 | Resolved with engine-owned monotonic runtime/body serials and membership validation |
 | F-048 | The headless boundary gate depended on executable shell-script mode and failed from Zig packages/Windows | P0 | M1/S0 | Resolved with a host-built Zig verifier and extracted-package headless test |
 | F-049 | Command deferral/rejection depended on system order and expected stale commands faulted the world | P0 | S0 | Resolved with tick-targeted queue entries and typed rejected outcomes |
@@ -865,6 +870,10 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-053 | Teardown/rollback swallowed body-destruction failures and could discard the only live handle | P0 | S0 | Resolved by preserving body-first ordering and treating cleanup failures as terminal invariant violations before entity removal |
 | F-054 | Public `RuntimeId` exposed the raw Flecs entity value despite the backend-neutral API claim | P0 | S0 | Resolved with a public runtime-token/serial handle and a kernel-private serial-to-Flecs index |
 | F-055 | Side-effecting cleanup inside debug assertions disappeared in ReleaseFast | P0 | M2/S0 | Resolved with unconditional index/body removal, release-safe invariant failures, and an explicitly owned sandbox ground handle |
+| F-056 | A valid V1 velocity could be silently clamped by Jolt during restore | P0 | S0 | Resolved with engine-level linear/angular magnitude limits matching the configured Jolt representation and boundary tests |
+| F-057 | Visual S0 still depended on the prototype `GameWorld` and borrowed Flecs/Jolt ownership | P0 | S0 | Resolved by one owned `Simulation` composition and deletion of the compatibility/editor mutation path |
+| F-058 | Outcome FIFO used quadratic front removal at the measured 1,024-crate cap | P1 | S0 | Resolved with a compacting cursor FIFO; measured bulk drain fell from roughly 0.36–0.38 ms to 0.001–0.004 ms and streaming retention is bounded |
+| F-059 | A cold headless-only build still resolves visual package dependencies even though its source graph and binary are isolated | P2 | M1/pre-server | Open; split build-graph dependency resolution before a server-only distribution workflow |
 
 ---
 
@@ -904,6 +913,11 @@ Every slice must include, as applicable:
 
 ### 21.4 Performance measurements
 
+S0's first reproducible record is
+[`docs/performance/s0-baseline.md`](docs/performance/s0-baseline.md). The
+`measure-s0` target emits versioned JSON and CI gates only schema/completion,
+not noisy wall-time thresholds.
+
 Record evidence rather than relying only on target numbers:
 
 - simulation time per tick;
@@ -928,8 +942,8 @@ Record evidence rather than relying only on target numbers:
 6. [ ] Close M2’s remaining production-path failure-injection and native minimize evidence; the proven implementation hazards are fixed without adding speculative framework.
 7. [x] Write a short S0 design brief naming `CrateFeature` data, commands, systems, required capabilities, and tests.
 8. [x] Implement the S0 kernel/contracts, crate feature, Jolt composition, V1 persistence, typed visual-resource owner, and isolated headless host.
-9. [ ] Decide whether to replace/fork zflecs for multiple simultaneous worlds or accept one simulation world per server process before server architecture begins.
-10. [ ] Record the remaining below-simulation-rate visual smoke and initial tick/extraction queue measurements before closing S0 evidence.
+9. [ ] Decide whether to replace/fork zflecs for multiple simultaneous worlds or accept one simulation world per server process before server architecture begins; this is explicitly not an S0 blocker.
+10. [x] Record below/above-simulation-rate native visual smoke, graceful teardown, and initial tick/extraction/queue measurements at the exact S0 cap.
 
 ---
 
@@ -951,3 +965,6 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-09 | Implemented the S0 crate lifecycle vertical slice and public feature-authoring kernel/contracts | Typed deferred commands/outcomes; Flecs/Jolt transactional lifecycle; V1 logical save/restore; engine-owned stale-handle serials; immutable interpolation; one-slot visual owner; real/fake failure tests |
 | 2026-07-09 | Added a genuinely isolated headless conformance graph and package gate | Native/Linux/Windows GNU headless compile with missing shader tools; no SDL/ImGui/asset symbols; extracted Zig source package runs the headless tests; portable host-built import verifier |
 | 2026-07-09 | Closed the final S0 contract and release-safety audit | 95/95 Debug and ReleaseFast tests; opaque public runtime IDs; motion/layer transition regression; release-safe body/index teardown; native Metal and Linux/Windows GNU build evidence |
+| 2026-07-10 | Cut the visual sandbox fully onto the owned S0 composition and removed the prototype bridge/editor mutation path | `GameWorld`, borrowed runtime/physics, direct render query, Scene/Gizmo tools, ImGuizmo, cylinder demo, and compatibility lease surface deleted |
+| 2026-07-10 | Closed S0 persistence, failure, cadence, performance, and graceful visual evidence | 103/103 Debug and ReleaseFast tests; velocity representability; allocation/fault sweeps; versioned 0/1/128/1,024 measurements; native Metal 240/80 Hz auto-quit smoke |
+| 2026-07-10 | Completed independent S0 architecture, correctness, and build/platform review | Initial edge findings corrected; targeted re-audits passed with no remaining actionable P0/P1/P2 S0 issue; accepted follow-on risks recorded in the acceptance document |

@@ -1,16 +1,16 @@
 //! timing.zig - High-precision frame timing for the canonical game loop
 //!
-//! This module provides the timing infrastructure for fixed-timestep simulation
-//! with interpolated rendering. It uses SDL3's performance counters for
-//! nanosecond-precision timing.
+//! This module adapts SDL3 performance counters to the platform-independent
+//! fixed-step accumulation policy used for simulation and interpolation.
 //!
 //! Key concepts:
-//! - `delta_time`: Raw time since last frame (for FPS calculations)
+//! - `delta_time`: Clamped time since last frame (for FPS calculations)
 //! - `accumulator`: Builds up time for fixed-rate simulation ticks
 //! - `alpha`: Interpolation factor for smooth rendering between ticks
 
 const std = @import("std");
 const sdl = @import("sdl.zig");
+const fixed_step = @import("incinerator_engine").fixed_step;
 
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
@@ -18,15 +18,11 @@ const c = sdl.c;
 /// The fixed simulation tick rate (120 Hz = 8.333... ms per tick)
 /// This determines how often physics and gameplay logic update.
 /// Higher values = lower latency but more CPU usage.
-pub const TICK_RATE: u32 = 120;
+pub const TICK_RATE = fixed_step.tick_rate;
 
 /// Duration of one simulation tick in seconds
-pub const TICK_DURATION: f64 = 1.0 / @as(f64, @floatFromInt(TICK_RATE));
-
-/// Maximum frame time to prevent spiral of death.
-/// If a frame takes longer than this, we clamp it to avoid
-/// the simulation falling further and further behind.
-const MAX_FRAME_TIME: f64 = 0.25; // 250ms = 4 FPS minimum
+pub const TICK_DURATION = fixed_step.tick_duration_seconds;
+pub const FixedStepAccumulator = fixed_step.FixedStepAccumulator;
 
 /// FrameTimer handles all timing for the game loop.
 ///
@@ -55,11 +51,11 @@ pub const FrameTimer = struct {
     /// Counter value at the start of the previous frame
     previous_frame_start: u64,
 
-    /// Raw delta time for this frame in seconds (unclamped)
+    /// Delta time for this frame in seconds after the anti-spiral clamp.
     delta_time: f64,
 
-    /// Accumulated time for fixed timestep simulation
-    accumulator: f64,
+    /// Pure fixed-step policy fed by the SDL clock adapter.
+    fixed_step: FixedStepAccumulator,
 
     /// Number of simulation ticks this frame (for debugging)
     ticks_this_frame: u32,
@@ -83,7 +79,7 @@ pub const FrameTimer = struct {
             .frame_start = now,
             .previous_frame_start = now,
             .delta_time = 0.0,
-            .accumulator = 0.0,
+            .fixed_step = FixedStepAccumulator.init(),
             .ticks_this_frame = 0,
             .total_ticks = 0,
             .total_frames = 0,
@@ -96,17 +92,23 @@ pub const FrameTimer = struct {
         self.previous_frame_start = self.frame_start;
         self.frame_start = c.SDL_GetPerformanceCounter();
 
-        // Calculate raw delta time
+        // Calculate raw elapsed time, then apply the shared fixed-step clamp.
         const elapsed_ticks = self.frame_start - self.previous_frame_start;
-        var dt = @as(f64, @floatFromInt(elapsed_ticks)) / @as(f64, @floatFromInt(self.frequency));
+        const raw_dt = @as(f64, @floatFromInt(elapsed_ticks)) /
+            @as(f64, @floatFromInt(self.frequency));
+        self.beginFrameWithElapsedSeconds(raw_dt) catch unreachable;
+    }
 
-        // Clamp to prevent spiral of death (e.g., during debugging breakpoints)
-        if (dt > MAX_FRAME_TIME) {
-            dt = MAX_FRAME_TIME;
-        }
+    /// Feed an explicit frame duration through the same production cadence
+    /// policy. Visual smoke tests use this to exercise render rates without
+    /// coupling expected tick counts to host scheduling noise.
+    pub fn beginFrameWithElapsedSeconds(
+        self: *FrameTimer,
+        elapsed_seconds: f64,
+    ) error{InvalidElapsedTime}!void {
+        const dt = try self.fixed_step.addElapsedSeconds(elapsed_seconds);
 
         self.delta_time = dt;
-        self.accumulator += dt;
         self.ticks_this_frame = 0;
         self.total_frames += 1;
 
@@ -118,8 +120,7 @@ pub const FrameTimer = struct {
     /// Returns true if there's enough accumulated time for another simulation tick.
     /// Call this in a while loop to process all pending ticks.
     pub fn shouldTick(self: *FrameTimer) bool {
-        if (self.accumulator >= TICK_DURATION) {
-            self.accumulator -= TICK_DURATION;
+        if (self.fixed_step.consumeTick()) {
             self.ticks_this_frame += 1;
             self.total_ticks += 1;
             return true;
@@ -132,7 +133,7 @@ pub const FrameTimer = struct {
     ///
     /// Example: render_pos = lerp(prev_pos, curr_pos, timer.alpha())
     pub fn alpha(self: *const FrameTimer) f32 {
-        return @floatCast(self.accumulator / TICK_DURATION);
+        return self.fixed_step.alpha();
     }
 
     /// Get current FPS (smoothed)
@@ -140,7 +141,7 @@ pub const FrameTimer = struct {
         return self.fps;
     }
 
-    /// Get the raw delta time for this frame in seconds
+    /// Get the clamped delta time for this frame in seconds
     pub fn getDeltaTime(self: *const FrameTimer) f64 {
         return self.delta_time;
     }
@@ -159,7 +160,7 @@ pub const FrameTimer = struct {
                 self.fps,
                 self.delta_time * 1000.0,
                 self.ticks_this_frame,
-                self.accumulator * 1000.0,
+                self.fixed_step.accumulatedSeconds() * 1000.0,
             },
         );
     }
@@ -191,7 +192,7 @@ pub fn lerp(a: f32, b: f32, t: f32) f32 {
 test "FrameTimer initialization" {
     const timer = FrameTimer.init();
     try std.testing.expect(timer.frequency > 0);
-    try std.testing.expect(timer.accumulator == 0.0);
+    try std.testing.expectEqual(@as(f32, 0.0), timer.fixed_step.alpha());
     try std.testing.expect(timer.total_frames == 0);
 }
 

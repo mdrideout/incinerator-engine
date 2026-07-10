@@ -54,7 +54,7 @@ pub fn build(b: *std.Build) void {
     // ---------------------------------------------------------
     // Editor Build Option
     // ---------------------------------------------------------
-    // The editor (ImGui debug UI, gizmos, tools) is enabled by default in Debug
+    // The editor (ImGui debug UI and tools) is enabled by default in Debug
     // builds but can be explicitly disabled. In Release builds, it defaults to
     // off but can be explicitly enabled for profiling/debugging release builds.
     //
@@ -67,7 +67,7 @@ pub fn build(b: *std.Build) void {
     const editor_enabled = b.option(
         bool,
         "editor",
-        "Enable the editor UI (ImGui tools, gizmos). Defaults to true in Debug, false in Release.",
+        "Enable the editor UI (ImGui tools). Defaults to true in Debug, false in Release.",
     ) orelse default_editor_enabled;
 
     // It's also possible to define more custom flags to toggle optional features
@@ -195,14 +195,11 @@ pub fn build(b: *std.Build) void {
             .{ .name = "jolt_c", .module = jolt_c_module },
         },
     });
-    exe.root_module.addImport("jolt_physics", jolt_physics_module);
-
     // ---------------------------------------------------------
-    // ImGui (zgui) with ImGuizmo for 3D transform gizmos
+    // ImGui (zgui) debug UI
     // ---------------------------------------------------------
     // zgui wraps Dear ImGui for immediate-mode debug UI.
     // We use the SDL3 GPU backend to integrate with our existing renderer.
-    // ImGuizmo provides 3D manipulation gizmos (translate/rotate/scale).
     // Available backends: no_backend, glfw_opengl3, glfw_wgpu, sdl3_gpu, etc.
     if (editor_enabled) {
         const zgui = b.lazyDependency("zgui", .{
@@ -210,7 +207,7 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
             .shared = false,
             .with_implot = true,
-            .with_gizmo = true, // Enable ImGuizmo for 3D transform manipulation
+            .with_gizmo = false,
             .with_node_editor = false,
             .with_te = false,
             .with_freetype = false,
@@ -265,9 +262,9 @@ pub fn build(b: *std.Build) void {
     // ---------------------------------------------------------
     // ECS (zflecs) - Entity Component System
     // ---------------------------------------------------------
-    // zflecs wraps the flecs ECS library for high-performance entity management.
-    // Used for all game entities: vehicles, NPCs, props, debris, particles.
-    // Archetype-based storage provides cache-friendly iteration for physics sync.
+    // zflecs is the kernel-private storage implementation used by registered
+    // feature components. Flecs APIs/IDs are not imported by the visual host
+    // or exposed as the engine's identity/persistence contract.
     const zflecs = b.dependency("zflecs", .{
         .target = target,
         .optimize = optimize,
@@ -321,7 +318,6 @@ pub fn build(b: *std.Build) void {
     });
     const zflecs_module = zflecs.module("root");
     mod.addImport("zflecs", zflecs_module);
-    exe.root_module.addImport("zflecs", zflecs_module);
 
     // S0 is composed from one feature and one concrete adapter. The feature
     // sees only the public kernel/contracts module; the simulation host is the
@@ -487,6 +483,29 @@ pub fn build(b: *std.Build) void {
     const run_headless_step = b.step("run-headless", "Run the SDL-free crate simulation host");
     run_headless_step.dependOn(&run_headless_cmd.step);
 
+    // Native, record-only S0 characterization. Timings are intentionally not
+    // test thresholds; CI validates and logs the JSON report for comparison on
+    // stable hardware.
+    const s0_measure_root_module = b.createModule(.{
+        .root_source_file = b.path("tools/s0_measure.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "crate_simulation", .module = crate_simulation_module },
+        },
+    });
+    const s0_measure_exe = b.addExecutable(.{
+        .name = "incinerator_s0_measure",
+        .root_module = s0_measure_root_module,
+    });
+    const run_s0_measure = b.addRunArtifact(s0_measure_exe);
+    if (b.args) |args| run_s0_measure.addArgs(args);
+    const s0_measure_step = b.step(
+        "measure-s0",
+        "Record SDL-free S0 lifecycle timings as versioned JSON",
+    );
+    s0_measure_step.dependOn(&run_s0_measure.step);
+
     const headless_tests = b.addTest(.{ .root_module = headless_root_module });
     const run_headless_tests = b.addRunArtifact(headless_tests);
     const headless_test_step = b.step(
@@ -600,6 +619,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&verify_headless_linkage.step);
     test_step.dependOn(&run_headless_boundary_tests.step);
     test_step.dependOn(&run_headless_linkage_tests.step);
+    test_step.dependOn(&s0_measure_exe.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

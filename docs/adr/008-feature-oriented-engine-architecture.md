@@ -2,6 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-09
+**Amended:** 2026-07-10
 **Decision Maker:** Matt
 
 ## Context
@@ -93,8 +94,8 @@ ticks, command submission, and persistence.
 The current zflecs wrapper permits one live engine-owned world per process. A
 shared lease rejects a second owner before entering zflecs and preserves the
 existing caller, but successful atomic old/new snapshot swapping is not yet
-available. The sandbox's borrowed-world bridge exists only to migrate the
-prototype host and must not become the basis of S1. Pending command and outcome
+available. The visual sandbox now owns that same composition; the prototype
+`GameWorld` and borrowed-world bridge have been removed. Pending command and outcome
 storage is also intentionally unbounded for the single-player sandbox; bounded
 backpressure is required before network-originated work is accepted.
 

@@ -42,7 +42,7 @@ pub fn build(
     options.addOption(bool, "with_te", false);
     options.addOption(bool, "use_wchar32", false);
     options.addOption(bool, "use_32bit_draw_idx", false);
-    options.addOption(bool, "with_gizmo", true);
+    options.addOption(bool, "with_gizmo", false);
     options.addOption(bool, "disable_obsolete", true);
 
     const module = b.createModule(.{
@@ -62,7 +62,6 @@ pub fn build(
     native.addIncludePath(zgui.path("libs"));
     native.addIncludePath(zgui.path("libs/imgui"));
     native.addIncludePath(zgui.path("libs/implot"));
-    native.addIncludePath(zgui.path("libs/imguizmo"));
     native.addIncludePath(sdl.path("include"));
 
     native.addCMacro("IMGUI_DISABLE_OBSOLETE_FUNCTIONS", "");
@@ -86,8 +85,6 @@ pub fn build(
             "libs/implot/implot_demo.cpp",
             "libs/implot/implot.cpp",
             "libs/implot/implot_items.cpp",
-            "src/zgizmo.cpp",
-            "libs/imguizmo/ImGuizmo.cpp",
             "libs/imgui/backends/imgui_impl_sdl3.cpp",
             "libs/imgui/backends/imgui_impl_sdlgpu3.cpp",
         },

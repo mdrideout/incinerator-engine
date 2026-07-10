@@ -67,16 +67,16 @@ zig build run
 zig build test
 
 # Run the SDL-free real Flecs/Jolt crate lifecycle suite
-zig build test-headless
+zig build test-headless -Deditor=false
 
 # Compile the headless artifact without invoking any shader tool
-zig build check-headless \
+zig build check-headless -Deditor=false \
   -Dglslc=/definitely/missing/glslc \
   -Dspirv-cross=/definitely/missing/spirv-cross \
   -Dshadercross=/definitely/missing/shadercross
 
 # Run the SDL-free crate sandbox
-zig build run-headless
+zig build run-headless -Deditor=false
 
 # Run the renderer-free Jolt integration test
 zig build test-physics
@@ -92,6 +92,15 @@ zig build -Deditor=false
 
 # Verify an installed executable without initializing a window or GPU
 zig build run -- --verify-install
+
+# Record the ReleaseFast S0 characterization as versioned JSON
+zig build measure-s0 -Doptimize=ReleaseFast -Deditor=false
+
+# Self-terminating native visual cadence/shutdown checks
+zig build run -Deditor=false -- \
+  --visual-smoke --frames=480 --virtual-render-hz=240
+zig build run -Deditor=false -- \
+  --visual-smoke --frames=160 --virtual-render-hz=80
 ```
 
 ## Content Boundary
@@ -105,8 +114,7 @@ The engine package intentionally excludes `assets`. Any GLB files under the work
 | ESC | Quit |
 | Right mouse + WASD | Move camera |
 | Right mouse + drag | Look around |
-| Right mouse + Q / E | Move camera down / up |
-| W / E / R while using editor tools | Gizmo translate / rotate / scale |
+| Q / E | Move camera down / up |
 | F1 | Toggle editor UI |
 | F2 | Toggle ImGui demo |
 
@@ -120,6 +128,8 @@ The overhaul is converging on a thin kernel, feature-owned vertical slices, narr
 - [`ADR-007: Product, Platform, and Compatibility Scope`](docs/adr/007-product-platform-and-compatibility-scope.md)
 - [`ADR-008: Feature-Oriented Engine Architecture`](docs/adr/008-feature-oriented-engine-architecture.md)
 - [`S0 Crate Lifecycle Design`](docs/design/s0-crate-lifecycle.md)
+- [`S0 Acceptance Record`](docs/validation/s0-acceptance.md)
+- [`S0 Performance Baseline`](docs/performance/s0-baseline.md)
 - the complete [`docs/adr`](docs/adr) directory
 
 The engine loop separates input, fixed-rate simulation, and presentation:
@@ -149,8 +159,12 @@ asset/framework abstraction:
 - the headless artifact and its extracted-package tests contain no SDL, ImGui,
   renderer, asset-loader, or shader-tool edge.
 
-The visual sandbox now renders the S0 crate from previous/current pose history;
-legacy demo entities still use their latest ECS transforms during migration.
+The visual sandbox and headless host now construct the same owned S0
+`Simulation`; the former `GameWorld`, borrowed Flecs/Jolt composition, direct
+ECS render query, and editor mutation path have been removed. The editor keeps
+stats, camera, and render panels. Scene inspection/manipulation returns in a
+later tooling slice through persistent IDs and typed feature commands rather
+than raw Flecs/Jolt access.
 Fixed-rate simulation is not a claim of bitwise or cross-platform deterministic
 lockstep. The current zflecs wrapper permits one owned world per process, so
 successful atomic old/new world replacement remains an explicit open decision

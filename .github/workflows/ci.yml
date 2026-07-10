@@ -110,6 +110,38 @@ jobs:
           zig build -Doptimize=ReleaseFast -Deditor=false \
             -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" --summary all
 
+      - name: S0 measurement schema smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/s0-measure.json"
+          zig build measure-s0 -Doptimize=ReleaseFast -Deditor=false -- \
+            --counts=0,1,128,1024 --warmup=16 --samples=32 --trials=1 \
+            > "$report"
+          jq -e '
+            .schema_version == 1 and
+            .benchmark == "s0_crate_lifecycle" and
+            .optimize == "ReleaseFast" and
+            .config.counts == [0, 1, 128, 1024] and
+            ([.results[].crate_count] == [0, 1, 128, 1024]) and
+            all(.results[];
+              .post_spawn_crates == .crate_count and
+              .post_spawn_entities == .crate_count and
+              .post_spawn_bodies == (.crate_count + 1) and
+              .post_spawn_active_bodies == .crate_count and
+              .steady_tick.samples == 32 and
+              .presentation.samples == 32 and
+              (.steady_tick | has("mean_ns") and has("p50_ns") and
+                has("p95_ns") and has("p99_ns") and has("max_ns")) and
+              (.presentation | has("mean_ns") and has("p50_ns") and
+                has("p95_ns") and has("p99_ns") and has("max_ns")) and
+              .post_despawn_crates == 0 and
+              .post_despawn_entities == 0 and
+              .post_despawn_bodies == 1 and
+              .post_despawn_active_bodies == 0)
+          ' "$report"
+          cat "$report"
+
       - name: Compile-only cross targets
         shell: bash
         run: |

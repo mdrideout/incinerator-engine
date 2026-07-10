@@ -10,6 +10,7 @@ pub const identity = contracts.identity;
 pub const transform = contracts.transform;
 pub const physics = contracts.physics;
 pub const rendering = contracts.rendering;
+pub const fixed_step = @import("engine/fixed_step.zig");
 pub const runtime = @import("engine/runtime.zig");
 
 pub const PersistentId = identity.PersistentId;
@@ -26,5 +27,6 @@ test "public engine surface remains coherent" {
     std.testing.refAllDecls(transform);
     std.testing.refAllDecls(physics);
     std.testing.refAllDecls(rendering);
+    std.testing.refAllDecls(fixed_step);
     std.testing.refAllDecls(runtime);
 }

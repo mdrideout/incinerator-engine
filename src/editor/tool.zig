@@ -29,7 +29,6 @@ const std = @import("std");
 
 // Forward declarations for engine types
 const Camera = @import("../camera.zig").Camera;
-const GameWorld = @import("../ecs.zig").GameWorld;
 const FrameTimer = @import("../timing.zig").FrameTimer;
 
 // ============================================================================
@@ -49,50 +48,16 @@ pub const EditorContext = struct {
     /// The player/debug camera - tools can read position, rotation, etc.
     camera: *const Camera,
 
-    /// The game world - tools can enumerate entities and inspect transforms
-    world: *const GameWorld,
-
     /// Frame timing information - for FPS display, profiling, etc.
     frame_timer: *const FrameTimer,
 
-    /// Window dimensions - needed for gizmo viewport setup
-    window_width: u32 = 1280,
-    window_height: u32 = 720,
-
-    // -------------------------------------------------------------------------
-    // Editor State (mutable, shared between tools)
-    // -------------------------------------------------------------------------
-
-    /// Currently selected entity (if any). Used by inspector, gizmos, etc.
-    /// Stores a flecs entity ID (u64). null means nothing is selected.
-    selected_entity: ?u64 = null,
-
-    /// Current gizmo operation mode
-    gizmo_mode: GizmoMode = .translate,
-
-    /// Whether gizmos operate in local or world space
-    gizmo_space: GizmoSpace = .world,
-
-    /// Whether the editor wants to capture mouse input (e.g., gizmo is being manipulated)
+    /// Whether the editor wants to capture mouse input.
     /// When true, game should not process mouse input
     wants_mouse: bool = false,
 
     /// Whether the editor wants to capture keyboard input (e.g., text input active)
     /// When true, game should not process keyboard input
     wants_keyboard: bool = false,
-};
-
-/// Transform gizmo operation mode
-pub const GizmoMode = enum {
-    translate,
-    rotate,
-    scale,
-};
-
-/// Transform gizmo coordinate space
-pub const GizmoSpace = enum {
-    local,
-    world,
 };
 
 // ============================================================================
@@ -135,14 +100,6 @@ pub const Tool = struct {
 // ============================================================================
 // Tests
 // ============================================================================
-
-test "EditorContext has sensible defaults" {
-    // Can't fully test without actual engine references, but we can check defaults
-    const mode: GizmoMode = .translate;
-    const space: GizmoSpace = .world;
-    try std.testing.expect(mode == .translate);
-    try std.testing.expect(space == .world);
-}
 
 test "Tool toggle works" {
     var tool = Tool{

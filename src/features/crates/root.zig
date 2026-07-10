@@ -157,6 +157,7 @@ pub fn Feature(comptime Bodies: type) type {
         applying_index: usize = 0,
         active: std.ArrayListUnmanaged(engine.RuntimeId) = .empty,
         outcomes: std.ArrayListUnmanaged(Outcome) = .empty,
+        outcomes_head: usize = 0,
         presentations: std.ArrayListUnmanaged(CrateDraw) = .empty,
 
         pub fn init(
@@ -222,8 +223,29 @@ pub fn Feature(comptime Bodies: type) type {
         }
 
         pub fn pollOutcome(self: *Self) ?Outcome {
-            if (self.outcomes.items.len == 0) return null;
-            return self.outcomes.orderedRemove(0);
+            if (self.outcomes_head >= self.outcomes.items.len) {
+                self.outcomes.clearRetainingCapacity();
+                self.outcomes_head = 0;
+                return null;
+            }
+            const outcome = self.outcomes.items[self.outcomes_head];
+            self.outcomes_head += 1;
+            if (self.outcomes_head == self.outcomes.items.len) {
+                self.outcomes.clearRetainingCapacity();
+                self.outcomes_head = 0;
+            } else if (self.outcomes_head >= 64 and
+                self.outcomes_head >= self.outcomes.items.len - self.outcomes_head)
+            {
+                const remaining = self.outcomes.items.len - self.outcomes_head;
+                std.mem.copyForwards(
+                    Outcome,
+                    self.outcomes.items[0..remaining],
+                    self.outcomes.items[self.outcomes_head..],
+                );
+                self.outcomes.items.len = remaining;
+                self.outcomes_head = 0;
+            }
+            return outcome;
         }
 
         pub fn count(self: *const Self) usize {
@@ -588,40 +610,45 @@ fn lessThanRecord(_: void, lhs: CrateV1, rhs: CrateV1) bool {
     return lhs.id.local < rhs.id.local;
 }
 
+fn testCrateRecord(namespace: u64, local: u64) CrateV1 {
+    return .{
+        .id = .{ .namespace = namespace, .local = local },
+        .half_extents = .{ 0.5, 0.5, 0.5 },
+        .pose = .{},
+        .linear_velocity = .{ 0, 0, 0 },
+        .angular_velocity = .{ 0, 0, 0 },
+    };
+}
+
+fn testSnapshot(
+    namespace: u64,
+    next_local_id: u64,
+    records: []const CrateV1,
+) SnapshotV1 {
+    return .{
+        .schema_version = 1,
+        .completed_ticks = 0,
+        .fixed_delta_seconds = 1.0 / 120.0,
+        .namespace = namespace,
+        .next_local_id = next_local_id,
+        .crates = records,
+    };
+}
+
 test "V1 validation rejects duplicate identities and colliding cursor" {
     const records = [_]CrateV1{
-        .{
-            .id = .{ .namespace = 9, .local = 1 },
-            .half_extents = .{ 0.5, 0.5, 0.5 },
-            .pose = .{},
-            .linear_velocity = .{ 0, 0, 0 },
-            .angular_velocity = .{ 0, 0, 0 },
-        },
-        .{
-            .id = .{ .namespace = 9, .local = 1 },
-            .half_extents = .{ 0.5, 0.5, 0.5 },
-            .pose = .{},
-            .linear_velocity = .{ 0, 0, 0 },
-            .angular_velocity = .{ 0, 0, 0 },
-        },
+        testCrateRecord(9, 1),
+        testCrateRecord(9, 1),
     };
-    try std.testing.expectError(error.DuplicatePersistentId, validateSnapshot(.{
-        .schema_version = 1,
-        .completed_ticks = 0,
-        .fixed_delta_seconds = 1.0 / 120.0,
-        .namespace = 9,
-        .next_local_id = 2,
-        .crates = &records,
-    }, 8));
+    try std.testing.expectError(
+        error.DuplicatePersistentId,
+        validateSnapshot(testSnapshot(9, 2, &records), 8),
+    );
 
-    try std.testing.expectError(error.IdentityCursorWouldCollide, validateSnapshot(.{
-        .schema_version = 1,
-        .completed_ticks = 0,
-        .fixed_delta_seconds = 1.0 / 120.0,
-        .namespace = 9,
-        .next_local_id = 1,
-        .crates = records[0..1],
-    }, 8));
+    try std.testing.expectError(
+        error.IdentityCursorWouldCollide,
+        validateSnapshot(testSnapshot(9, 1, records[0..1]), 8),
+    );
 }
 
 test "V1 parser requires an explicit supported schema version" {
@@ -645,6 +672,74 @@ test "V1 parser requires an explicit supported schema version" {
     );
 }
 
+test "V1 parser rejects malformed and oversized documents" {
+    try std.testing.expectError(
+        error.SyntaxError,
+        parseSnapshot(std.testing.allocator, "{]", 8),
+    );
+
+    const oversized = try std.testing.allocator.alloc(u8, max_snapshot_bytes + 1);
+    defer std.testing.allocator.free(oversized);
+    @memset(oversized, ' ');
+    try std.testing.expectError(
+        error.SnapshotTooLarge,
+        parseSnapshot(std.testing.allocator, oversized, 8),
+    );
+}
+
+test "V1 validation rejects limits, invalid identities, and invalid physics" {
+    var record = testCrateRecord(10, 1);
+    var snapshot = testSnapshot(10, 2, (&record)[0..1]);
+
+    try std.testing.expectError(error.TooManyCrates, validateSnapshot(snapshot, 0));
+
+    snapshot.fixed_delta_seconds = std.math.nan(f32);
+    try std.testing.expectError(error.InvalidFixedDelta, validateSnapshot(snapshot, 1));
+    snapshot.fixed_delta_seconds = 1.0 / 120.0;
+
+    snapshot.namespace = 0;
+    try std.testing.expectError(error.InvalidIdentityNamespace, validateSnapshot(snapshot, 1));
+    snapshot.namespace = 10;
+    snapshot.next_local_id = 0;
+    try std.testing.expectError(error.InvalidIdentityCursor, validateSnapshot(snapshot, 1));
+    snapshot.next_local_id = 2;
+
+    record.id.namespace = 11;
+    try std.testing.expectError(error.ForeignIdentityNamespace, validateSnapshot(snapshot, 1));
+    record.id.namespace = 10;
+    record.id.local = 0;
+    try std.testing.expectError(error.InvalidIdentityLocal, validateSnapshot(snapshot, 1));
+    record.id.local = 1;
+
+    record.pose.position[0] = std.math.inf(f32);
+    try std.testing.expectError(error.NonFiniteTransform, validateSnapshot(snapshot, 1));
+    record.pose.position[0] = 0;
+    record.pose.rotation = .{ 0, 0, 0, 0 };
+    try std.testing.expectError(error.DegenerateQuaternion, validateSnapshot(snapshot, 1));
+    record.pose.rotation = .{ 0, 0, 0, 1 };
+
+    record.linear_velocity[0] = std.math.nan(f32);
+    try std.testing.expectError(error.NonFinitePhysicsValue, validateSnapshot(snapshot, 1));
+    record.linear_velocity[0] = 0;
+    record.linear_velocity[0] = std.math.nextAfter(
+        f32,
+        engine.physics.max_linear_velocity,
+        std.math.inf(f32),
+    );
+    try std.testing.expectError(error.LinearVelocityOutOfRange, validateSnapshot(snapshot, 1));
+    record.linear_velocity[0] = 0;
+    record.angular_velocity[0] = std.math.nextAfter(
+        f32,
+        engine.physics.max_angular_velocity,
+        std.math.inf(f32),
+    );
+    try std.testing.expectError(error.AngularVelocityOutOfRange, validateSnapshot(snapshot, 1));
+    record.angular_velocity[0] = 0;
+
+    record.half_extents[1] = 0;
+    try std.testing.expectError(error.InvalidHalfExtents, validateSnapshot(snapshot, 1));
+}
+
 const FakeBodiesForTest = struct {
     pub const Handle = u32;
 
@@ -653,8 +748,13 @@ const FakeBodiesForTest = struct {
     next_handle: u32 = 0,
     live_count: u32 = 0,
     create_calls: u32 = 0,
+    destroy_calls: u32 = 0,
+    impulse_calls: u32 = 0,
+    step_calls: u32 = 0,
     fail_create_call: ?u32 = null,
     fail_body_state: bool = false,
+    fail_destroy: bool = false,
+    fail_impulse: bool = false,
     fail_step: bool = false,
 
     pub fn createDynamicBox(
@@ -675,6 +775,8 @@ const FakeBodiesForTest = struct {
 
     pub fn destroyBody(self: *FakeBodiesForTest, handle: Handle) !void {
         if (handle >= self.live.len or !self.live[handle]) return error.InvalidFakeBody;
+        self.destroy_calls += 1;
+        if (self.fail_destroy) return error.InjectedBodyDestroyFailure;
         self.live[handle] = false;
         self.live_count -= 1;
     }
@@ -694,10 +796,13 @@ const FakeBodiesForTest = struct {
         impulse: [3]f32,
     ) !void {
         if (handle >= self.live.len or !self.live[handle]) return error.InvalidFakeBody;
+        self.impulse_calls += 1;
+        if (self.fail_impulse) return error.InjectedImpulseFailure;
         for (0..3) |axis| self.states[handle].velocity.linear[axis] += impulse[axis];
     }
 
     pub fn step(self: *FakeBodiesForTest, _: f32) !void {
+        self.step_calls += 1;
         if (self.fail_step) return error.InjectedPhysicsStepFailure;
     }
 };
@@ -711,6 +816,87 @@ fn stepFakeBodies(
 ) !void {
     const bodies: *FakeBodiesForTest = @ptrCast(@alignCast(raw));
     try bodies.step(tick.delta_seconds);
+}
+
+fn saveSnapshotThroughFakeFeature(snapshot: SnapshotV1) ![]u8 {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = snapshot.namespace,
+        .fixed_delta_seconds = snapshot.fixed_delta_seconds,
+        .next_local_id = snapshot.next_local_id,
+        .completed_ticks = snapshot.completed_ticks,
+    });
+    defer runtime.deinit();
+    var bodies = FakeBodiesForTest{};
+    var feature = try TestFeature.init(
+        std.testing.allocator,
+        &runtime,
+        &bodies,
+        .{},
+        16,
+    );
+    defer feature.deinit();
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    try feature.restoreSnapshot(snapshot);
+    return feature.save(std.testing.allocator);
+}
+
+test "multi-record V1 restore-save is sorted and byte stable" {
+    const records = [_]CrateV1{
+        .{
+            .id = .{ .namespace = 500, .local = 3 },
+            .half_extents = .{ 3, 3.5, 4 },
+            .pose = .{ .position = .{ 30, 31, 32 } },
+            .linear_velocity = .{ 300, 400, 0 },
+            .angular_velocity = .{ 0, 0, engine.physics.max_angular_velocity },
+        },
+        .{
+            .id = .{ .namespace = 500, .local = 1 },
+            .half_extents = .{ 1, 1.5, 2 },
+            .pose = .{ .position = .{ 10, 11, 12 } },
+            .linear_velocity = .{ 1, 2, 3 },
+            .angular_velocity = .{ 4, 5, 6 },
+        },
+        .{
+            .id = .{ .namespace = 500, .local = 2 },
+            .half_extents = .{ 2, 2.5, 3 },
+            .pose = .{
+                .position = .{ 20, 21, 22 },
+                .rotation = .{ 0, 0, 0, 2 },
+            },
+            .linear_velocity = .{ -1, -2, -3 },
+            .angular_velocity = .{ -4, -5, -6 },
+        },
+    };
+    var source = testSnapshot(500, 4, &records);
+    source.completed_ticks = 37;
+
+    const first = try saveSnapshotThroughFakeFeature(source);
+    defer std.testing.allocator.free(first);
+    var parsed = try parseSnapshot(std.testing.allocator, first, 16);
+    defer parsed.deinit();
+
+    try std.testing.expectEqual(@as(u64, 37), parsed.value.completed_ticks);
+    try std.testing.expectEqual(@as(usize, 3), parsed.value.crates.len);
+    try std.testing.expectEqual(@as(u64, 1), parsed.value.crates[0].id.local);
+    try std.testing.expectEqual(@as(u64, 2), parsed.value.crates[1].id.local);
+    try std.testing.expectEqual(@as(u64, 3), parsed.value.crates[2].id.local);
+    try std.testing.expectEqualDeep(
+        [3]f32{ 10, 11, 12 },
+        parsed.value.crates[0].pose.position,
+    );
+    try std.testing.expectEqualDeep(
+        [4]f32{ 0, 0, 0, 1 },
+        parsed.value.crates[1].pose.rotation,
+    );
+    try std.testing.expectEqualDeep(
+        [3]f32{ 300, 400, 0 },
+        parsed.value.crates[2].linear_velocity,
+    );
+
+    const second = try saveSnapshotThroughFakeFeature(parsed.value);
+    defer std.testing.allocator.free(second);
+    try std.testing.expectEqualSlices(u8, first, second);
 }
 
 test "body creation failure rolls back the provisional runtime entity" {
@@ -736,7 +922,11 @@ test "body creation failure rolls back the provisional runtime entity" {
     try std.testing.expectError(error.InjectedBodyCreateFailure, runtime.tick());
     try std.testing.expectEqual(@as(usize, 0), feature.count());
     try std.testing.expectEqual(@as(usize, 0), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 0), runtime.persistentCount());
     try std.testing.expectEqual(@as(u32, 0), bodies.live_count);
+    try std.testing.expectEqual(@as(u64, 2), try runtime.nextLocalId());
+    try std.testing.expect(runtime.resolve(.{ .namespace = 501, .local = 1 }) == null);
+    try std.testing.expect(feature.pollOutcome() == null);
 }
 
 test "restore failure rolls back every recreated crate" {
@@ -783,7 +973,12 @@ test "restore failure rolls back every recreated crate" {
     }));
     try std.testing.expectEqual(@as(usize, 0), feature.count());
     try std.testing.expectEqual(@as(usize, 0), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 0), runtime.persistentCount());
     try std.testing.expectEqual(@as(u32, 0), bodies.live_count);
+    try std.testing.expectEqual(@as(u64, 3), try runtime.nextLocalId());
+    try std.testing.expect(runtime.resolve(records[0].id) == null);
+    try std.testing.expect(runtime.resolve(records[1].id) == null);
+    try std.testing.expect(feature.pollOutcome() == null);
 }
 
 const DeferredEmitter = struct {
@@ -832,6 +1027,223 @@ test "a command emitted during the command phase waits for the next tick" {
     try std.testing.expectEqual(@as(usize, 0), feature.count());
 }
 
+test "capacity rejection preserves identity and outcome ordering" {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = 505,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+    var bodies = FakeBodiesForTest{};
+    var feature = try TestFeature.init(
+        std.testing.allocator,
+        &runtime,
+        &bodies,
+        .{},
+        1,
+    );
+    defer feature.deinit();
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+
+    try feature.enqueue(.{ .spawn = .{ .request_id = 11, .pose = .{} } });
+    try feature.enqueue(.{ .spawn = .{ .request_id = 12, .pose = .{} } });
+    try runtime.tick();
+
+    const spawned = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
+        .spawned => |value| value,
+        else => return error.UnexpectedOutcome,
+    };
+    try std.testing.expectEqual(@as(u64, 11), spawned.request_id);
+    try std.testing.expectEqualDeep(
+        engine.PersistentId{ .namespace = 505, .local = 1 },
+        spawned.id,
+    );
+    const rejected = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
+        .rejected => |value| value,
+        else => return error.UnexpectedOutcome,
+    };
+    try std.testing.expectEqual(CommandKind.spawn, rejected.command);
+    try std.testing.expectEqual(RejectionReason.capacity_reached, rejected.reason);
+    try std.testing.expectEqual(@as(?u64, 12), rejected.request_id);
+    try std.testing.expect(rejected.id == null);
+    try std.testing.expect(feature.pollOutcome() == null);
+    try std.testing.expectEqual(@as(usize, 1), feature.count());
+    try std.testing.expectEqual(@as(usize, 1), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 1), runtime.persistentCount());
+    try std.testing.expectEqual(@as(u32, 1), bodies.live_count);
+    try std.testing.expectEqual(@as(u64, 2), try runtime.nextLocalId());
+
+    try feature.enqueue(.{ .despawn = .{ .id = spawned.id } });
+    try runtime.tick();
+    const despawned = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
+        .despawned => |value| value,
+        else => return error.UnexpectedOutcome,
+    };
+    try std.testing.expectEqualDeep(spawned.id, despawned);
+    try std.testing.expect(feature.pollOutcome() == null);
+    try std.testing.expectEqual(@as(usize, 0), feature.count());
+    try std.testing.expectEqual(@as(usize, 0), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 0), runtime.persistentCount());
+    try std.testing.expectEqual(@as(u32, 0), bodies.live_count);
+}
+
+test "physics step failure preserves live state and feature teardown removes it" {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = 506,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+    var bodies = FakeBodiesForTest{};
+    var feature = try TestFeature.init(
+        std.testing.allocator,
+        &runtime,
+        &bodies,
+        .{},
+        4,
+    );
+    var feature_live = true;
+    defer {
+        if (feature_live) feature.deinit();
+    }
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+    try feature.enqueue(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
+    try runtime.tick();
+    const id = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
+        .spawned => |spawned| spawned.id,
+        else => return error.UnexpectedOutcome,
+    };
+
+    bodies.fail_step = true;
+    try std.testing.expectError(error.InjectedPhysicsStepFailure, runtime.tick());
+    try std.testing.expect(runtime.isFaulted());
+    try std.testing.expectEqual(@as(u64, 1), runtime.tickIndex());
+    try std.testing.expectEqual(@as(u32, 2), bodies.step_calls);
+    try std.testing.expectEqual(@as(usize, 1), feature.count());
+    try std.testing.expectEqual(@as(usize, 1), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 1), runtime.persistentCount());
+    try std.testing.expect(runtime.resolve(id) != null);
+    try std.testing.expectEqual(@as(u32, 1), bodies.live_count);
+    try std.testing.expectError(
+        error.RuntimeFaulted,
+        feature.enqueue(.{ .spawn = .{ .request_id = 2, .pose = .{} } }),
+    );
+    try std.testing.expectError(error.RuntimeFaulted, feature.save(std.testing.allocator));
+
+    feature.deinit();
+    feature_live = false;
+    try std.testing.expectEqual(@as(usize, 0), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 0), runtime.persistentCount());
+    try std.testing.expect(runtime.resolve(id) == null);
+    try std.testing.expectEqual(@as(u32, 0), bodies.live_count);
+    try std.testing.expectEqual(@as(u32, 1), bodies.destroy_calls);
+}
+
+test "body destroy failure leaves ownership intact until feature teardown" {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = 507,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+    var bodies = FakeBodiesForTest{};
+    var feature = try TestFeature.init(
+        std.testing.allocator,
+        &runtime,
+        &bodies,
+        .{},
+        4,
+    );
+    var feature_live = true;
+    defer {
+        if (feature_live) feature.deinit();
+    }
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+    try feature.enqueue(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
+    try runtime.tick();
+    const id = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
+        .spawned => |spawned| spawned.id,
+        else => return error.UnexpectedOutcome,
+    };
+
+    bodies.fail_destroy = true;
+    try feature.enqueue(.{ .despawn = .{ .id = id } });
+    try std.testing.expectError(error.InjectedBodyDestroyFailure, runtime.tick());
+    try std.testing.expect(runtime.isFaulted());
+    try std.testing.expectEqual(@as(u64, 1), runtime.tickIndex());
+    try std.testing.expectEqual(@as(usize, 1), feature.count());
+    try std.testing.expectEqual(@as(usize, 1), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 1), runtime.persistentCount());
+    try std.testing.expect(runtime.resolve(id) != null);
+    try std.testing.expectEqual(@as(u32, 1), bodies.live_count);
+    try std.testing.expectEqual(@as(u32, 1), bodies.destroy_calls);
+    try std.testing.expect(feature.pollOutcome() == null);
+
+    bodies.fail_destroy = false;
+    feature.deinit();
+    feature_live = false;
+    try std.testing.expectEqual(@as(usize, 0), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 0), runtime.persistentCount());
+    try std.testing.expect(runtime.resolve(id) == null);
+    try std.testing.expectEqual(@as(u32, 0), bodies.live_count);
+    try std.testing.expectEqual(@as(u32, 2), bodies.destroy_calls);
+}
+
+test "impulse failure does not mutate the body and teardown removes it" {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = 508,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+    var bodies = FakeBodiesForTest{};
+    var feature = try TestFeature.init(
+        std.testing.allocator,
+        &runtime,
+        &bodies,
+        .{},
+        4,
+    );
+    var feature_live = true;
+    defer {
+        if (feature_live) feature.deinit();
+    }
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+    try feature.enqueue(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
+    try runtime.tick();
+    const id = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
+        .spawned => |spawned| spawned.id,
+        else => return error.UnexpectedOutcome,
+    };
+    const before = bodies.states[0];
+
+    bodies.fail_impulse = true;
+    try feature.enqueue(.{ .impulse = .{ .id = id, .impulse = .{ 1, 2, 3 } } });
+    try std.testing.expectError(error.InjectedImpulseFailure, runtime.tick());
+    try std.testing.expect(runtime.isFaulted());
+    try std.testing.expectEqual(@as(u64, 1), runtime.tickIndex());
+    try std.testing.expectEqual(@as(u32, 1), bodies.impulse_calls);
+    try std.testing.expectEqualDeep(before, bodies.states[0]);
+    try std.testing.expectEqual(@as(usize, 1), feature.count());
+    try std.testing.expectEqual(@as(usize, 1), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 1), runtime.persistentCount());
+    try std.testing.expect(runtime.resolve(id) != null);
+    try std.testing.expectEqual(@as(u32, 1), bodies.live_count);
+    try std.testing.expect(feature.pollOutcome() == null);
+
+    feature.deinit();
+    feature_live = false;
+    try std.testing.expectEqual(@as(usize, 0), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 0), runtime.persistentCount());
+    try std.testing.expect(runtime.resolve(id) == null);
+    try std.testing.expectEqual(@as(u32, 0), bodies.live_count);
+    try std.testing.expectEqual(@as(u32, 1), bodies.destroy_calls);
+}
+
 test "a post-physics read failure faults commands and persistence but still tears down" {
     var runtime = try engine.Runtime.init(std.testing.allocator, .{
         .namespace = 504,
@@ -846,7 +1258,10 @@ test "a post-physics read failure faults commands and persistence but still tear
         .{},
         4,
     );
-    defer feature.deinit();
+    var feature_live = true;
+    defer {
+        if (feature_live) feature.deinit();
+    }
     var registry = runtime.registry();
     try feature.register(&registry);
     try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
@@ -855,9 +1270,73 @@ test "a post-physics read failure faults commands and persistence but still tear
     try std.testing.expectError(error.InjectedBodyReadFailure, runtime.tick());
     try std.testing.expect(runtime.isFaulted());
     try std.testing.expectEqual(@as(usize, 1), feature.count());
+    try std.testing.expectEqual(@as(usize, 1), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 1), runtime.persistentCount());
+    try std.testing.expectEqual(@as(u32, 1), bodies.live_count);
+    try std.testing.expect(
+        runtime.resolve(.{ .namespace = 504, .local = 1 }) != null,
+    );
     try std.testing.expectError(
         error.RuntimeFaulted,
         feature.enqueue(.{ .spawn = .{ .request_id = 2, .pose = .{} } }),
     );
     try std.testing.expectError(error.RuntimeFaulted, feature.save(std.testing.allocator));
+
+    feature.deinit();
+    feature_live = false;
+    try std.testing.expectEqual(@as(usize, 0), runtime.entityCount());
+    try std.testing.expectEqual(@as(usize, 0), runtime.persistentCount());
+    try std.testing.expectEqual(@as(u32, 0), bodies.live_count);
+    try std.testing.expectEqual(@as(u32, 1), bodies.destroy_calls);
+}
+
+test "partially drained outcome FIFO compacts while preserving order" {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = 506,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+    var bodies = FakeBodiesForTest{};
+    var feature = try TestFeature.init(
+        std.testing.allocator,
+        &runtime,
+        &bodies,
+        .{},
+        1,
+    );
+    defer feature.deinit();
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+
+    try feature.enqueue(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
+    try runtime.tick();
+    const id = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
+        .spawned => |spawned| spawned.id,
+        else => return error.UnexpectedOutcome,
+    };
+
+    try feature.enqueue(.{ .impulse = .{ .id = id, .impulse = .{ 0, 0, 0 } } });
+    try feature.enqueue(.{ .impulse = .{ .id = id, .impulse = .{ 0, 0, 0 } } });
+    try runtime.tick();
+    _ = feature.pollOutcome() orelse return error.MissingOutcome;
+
+    for (0..512) |_| {
+        try feature.enqueue(.{ .impulse = .{ .id = id, .impulse = .{ 0, 0, 0 } } });
+        try runtime.tick();
+        switch (feature.pollOutcome() orelse return error.MissingOutcome) {
+            .impulse_applied => |applied_id| try std.testing.expectEqual(id, applied_id),
+            else => return error.UnexpectedOutcome,
+        }
+    }
+    try std.testing.expectEqual(
+        @as(usize, 1),
+        feature.outcomes.items.len - feature.outcomes_head,
+    );
+    try std.testing.expect(feature.outcomes.items.len <= 65);
+    switch (feature.pollOutcome() orelse return error.MissingOutcome) {
+        .impulse_applied => |applied_id| try std.testing.expectEqual(id, applied_id),
+        else => return error.UnexpectedOutcome,
+    }
+    try std.testing.expect(feature.pollOutcome() == null);
 }

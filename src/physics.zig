@@ -122,6 +122,10 @@ pub const Physics = struct {
     next_body_serial: u64 = 1,
 
     pub fn init() !Physics {
+        return initWithAllocator(std.heap.page_allocator);
+    }
+
+    pub fn initWithAllocator(allocator: std.mem.Allocator) !Physics {
         const world_token = try acquireRuntimeLease();
         errdefer releaseRuntimeLease();
 
@@ -221,7 +225,7 @@ pub const Physics = struct {
             .body_interface = body_interface,
             .job_system = job_system,
             .temp_allocator = temp_allocator,
-            .body_handles = std.AutoHashMap(u64, u32).init(std.heap.page_allocator),
+            .body_handles = std.AutoHashMap(u64, u32).init(allocator),
         };
     }
 
@@ -341,6 +345,14 @@ pub const Physics = struct {
         // allocate motion properties at creation time for a body to move from
         // static to kinematic/dynamic safely.
         c.JPH_BodyCreationSettings_SetAllowDynamicOrKinematic(settings, true);
+        c.JPH_BodyCreationSettings_SetMaxLinearVelocity(
+            settings,
+            engine.physics.max_linear_velocity,
+        );
+        c.JPH_BodyCreationSettings_SetMaxAngularVelocity(
+            settings,
+            engine.physics.max_angular_velocity,
+        );
 
         const raw_id = c.JPH_BodyInterface_CreateAndAddBody(
             self.body_interface,
@@ -468,6 +480,7 @@ pub const Physics = struct {
     pub fn setLinearVelocity(self: *Physics, body_id: BodyId, velocity: [3]f32) !void {
         try self.validateBody(body_id);
         if (!isFiniteVector(velocity)) return error.InvalidVelocity;
+        try (engine.physics.Velocity{ .linear = velocity }).validate();
         var value = toVec3(velocity);
         c.JPH_BodyInterface_SetLinearVelocity(self.body_interface, body_id.toJolt(), &value);
     }
@@ -504,6 +517,7 @@ pub const Physics = struct {
     pub fn setAngularVelocity(self: *Physics, body_id: BodyId, velocity: [3]f32) !void {
         try self.validateBody(body_id);
         if (!isFiniteVector(velocity)) return error.InvalidVelocity;
+        try (engine.physics.Velocity{ .angular = velocity }).validate();
         var value = toVec3(velocity);
         c.JPH_BodyInterface_SetAngularVelocity(self.body_interface, body_id.toJolt(), &value);
     }
@@ -563,11 +577,6 @@ pub const Physics = struct {
         );
         return checkPhysicsUpdateResult(result);
     }
-
-    pub fn optimizeBroadPhase(self: *Physics) void {
-        self.assertOwnerThread();
-        c.JPH_PhysicsSystem_OptimizeBroadPhase(self.system);
-    }
 };
 
 /// Compile-time physics capability consumed by the crate vertical slice.
@@ -583,17 +592,16 @@ pub const CrateBodies = struct {
         self: *CrateBodies,
         desc: engine.physics.DynamicBoxDesc,
     ) !Handle {
+        const normalized = try desc.normalized();
         const body_id = try self.physics.createDynamicBox(
-            desc.pose.position,
-            desc.half_extents,
+            normalized.pose.position,
+            normalized.half_extents,
         );
         errdefer _ = self.physics.removeBody(body_id);
 
-        // Use the validated public adapter operations for the remainder of
-        // creation. Any rejected rotation or velocity rolls the new body back.
-        try self.physics.setBodyRotation(body_id, desc.pose.rotation);
-        try self.physics.setLinearVelocity(body_id, desc.velocity.linear);
-        try self.physics.setAngularVelocity(body_id, desc.velocity.angular);
+        try self.physics.setBodyRotation(body_id, normalized.pose.rotation);
+        try self.physics.setLinearVelocity(body_id, normalized.velocity.linear);
+        try self.physics.setAngularVelocity(body_id, normalized.velocity.angular);
         return body_id;
     }
 
@@ -634,6 +642,10 @@ pub const CrateBodies = struct {
 
     pub fn bodyCount(self: *CrateBodies) u32 {
         return self.physics.getBodyCount();
+    }
+
+    pub fn activeBodyCount(self: *CrateBodies) u32 {
+        return self.physics.getActiveBodyCount();
     }
 };
 
@@ -1101,14 +1113,35 @@ test "crate capability round-trips Jolt body state transactionally" {
     try std.testing.expectError(error.InvalidBodyId, bodies.destroyBody(body));
     try std.testing.expectError(error.InvalidBodyId, bodies.bodyState(body));
 
-    // Rotation validation happens after Jolt creates the body, so this proves
-    // the capability removes a partially configured body on later failure.
     try std.testing.expectError(
-        error.InvalidRotation,
+        error.DegenerateQuaternion,
         bodies.createDynamicBox(.{
             .pose = .{ .rotation = .{ 0, 0, 0, 0 } },
             .half_extents = .{ 0.5, 0.5, 0.5 },
         }),
     );
     try std.testing.expectEqual(@as(u32, 0), bodies.bodyCount());
+}
+
+test "crate capability preserves accepted boundary velocities without clamping" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    var bodies = physics.crateBodies();
+    const desc = engine.physics.DynamicBoxDesc{
+        .pose = .{ .position = .{ 0, 10, 0 } },
+        .velocity = .{
+            .linear = .{ 300, 400, 0 },
+            .angular = .{ 0, 0, engine.physics.max_angular_velocity },
+        },
+        .half_extents = .{ 0.5, 0.5, 0.5 },
+    };
+    const body = try bodies.createDynamicBox(desc);
+    defer bodies.destroyBody(body) catch @panic("boundary body cleanup failed");
+    const state = try bodies.bodyState(body);
+    for (desc.velocity.linear, state.velocity.linear) |expected, actual| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
+    for (desc.velocity.angular, state.velocity.angular) |expected, actual| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
 }

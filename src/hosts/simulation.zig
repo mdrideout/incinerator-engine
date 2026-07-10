@@ -36,7 +36,6 @@ pub const RestoreConfig = struct {
 const State = struct {
     allocator: std.mem.Allocator,
     physics: *jolt.Physics,
-    owns_physics: bool,
     runtime: engine.Runtime,
     bodies: jolt.CrateBodies,
     crate_feature: CrateFeature,
@@ -50,49 +49,6 @@ pub const Simulation = struct {
         var simulation = try initOwnedUnfrozen(allocator, config, 1, 0);
         simulation.state.runtime.finishRegistration();
         return simulation;
-    }
-
-    /// Compose S0 into the sandbox's existing worlds during migration. The
-    /// caller must keep both borrowed owners alive until `deinit` returns.
-    pub fn initBorrowed(
-        allocator: std.mem.Allocator,
-        world_context: *anyopaque,
-        physics: *jolt.Physics,
-        config: Config,
-    ) !Simulation {
-        const state = try allocator.create(State);
-        errdefer allocator.destroy(state);
-
-        state.allocator = allocator;
-        state.physics = physics;
-        state.owns_physics = false;
-        state.ground = null;
-        state.runtime = try engine.Runtime.initBorrowed(allocator, world_context, .{
-            .namespace = config.namespace,
-            .fixed_delta_seconds = config.fixed_delta_seconds,
-        });
-        errdefer state.runtime.deinit();
-        state.bodies = physics.crateBodies();
-        state.crate_feature = try CrateFeature.init(
-            allocator,
-            &state.runtime,
-            &state.bodies,
-            config.assets,
-            config.max_crates,
-        );
-        errdefer state.crate_feature.deinit();
-
-        var registry = state.runtime.registry();
-        try state.crate_feature.register(&registry);
-        try registry.addSystem(.physics, "physics.step", &state.bodies, stepPhysics);
-        if (config.create_ground) {
-            state.ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 50, 1, 50 });
-            errdefer if (state.ground) |ground| {
-                _ = physics.removeBody(ground);
-            };
-        }
-        state.runtime.finishRegistration();
-        return .{ .state = state };
     }
 
     /// The current zflecs wrapper permits only one live world per module.
@@ -130,12 +86,11 @@ pub const Simulation = struct {
         errdefer allocator.destroy(state);
         const physics = try allocator.create(jolt.Physics);
         errdefer allocator.destroy(physics);
-        physics.* = try jolt.Physics.init();
+        physics.* = try jolt.Physics.initWithAllocator(allocator);
         errdefer physics.deinit();
 
         state.allocator = allocator;
         state.physics = physics;
-        state.owns_physics = true;
         state.ground = null;
         state.runtime = try engine.Runtime.init(allocator, .{
             .namespace = config.namespace,
@@ -176,10 +131,8 @@ pub const Simulation = struct {
             }
         }
         state.runtime.deinit();
-        if (state.owns_physics) {
-            state.physics.deinit();
-            state.allocator.destroy(state.physics);
-        }
+        state.physics.deinit();
+        state.allocator.destroy(state.physics);
         const allocator = state.allocator;
         allocator.destroy(state);
         self.* = undefined;
@@ -222,6 +175,11 @@ pub const Simulation = struct {
 
     pub fn bodyCount(self: *Simulation) u32 {
         return self.state.bodies.bodyCount();
+    }
+
+    /// Adapter diagnostic used by S0 characterization, not feature policy.
+    pub fn activeBodyCount(self: *Simulation) u32 {
+        return self.state.bodies.activeBodyCount();
     }
 
     pub fn tickIndex(self: *const Simulation) u64 {

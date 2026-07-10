@@ -2,10 +2,10 @@
 
 **Status:** Accepted
 **Date:** 2025-12-05
-**Amended:** 2026-07-09
+**Amended:** 2026-07-10
 **Decision Makers:** Matt, Claude
 
-> The tool-oriented editor remains accepted. The 2026 overhaul amendment replaces the old backend-default and “editor consumes events first” assumptions: the engine compiles the exact-pinned zgui SDL3 GPU sources against its selected SDL 3.4.12 headers, passes the actual swapchain format to ImGui, maintains physical input independently, and gates gameplay with ImGui `WantCapture*`. Direct world mutation by current tools is transitional until feature commands land.
+> The tool-oriented editor remains accepted. The 2026 overhaul amendment replaces the old backend-default and “editor consumes events first” assumptions: the engine compiles the exact-pinned zgui SDL3 GPU sources against its selected SDL 3.4.12 headers, passes the actual swapchain format to ImGui, maintains physical input independently, and gates gameplay with ImGui `WantCapture*`. The prototype Scene/Gizmo tools and their direct world mutation were removed at S0 closure. Authoring returns only through persistent IDs and typed feature commands.
 
 ## Context
 
@@ -29,7 +29,7 @@ We use **Dear ImGui** through the **zgui** Zig wrapper with the **SDL3 GPU backe
 
 The root build requests zgui without an upstream backend, then the engine-owned
 `tools/build/zgui_sdl3_gpu.zig` adapter compiles the pinned ImGui, ImPlot,
-ImGuizmo, SDL3, and SDL GPU backend sources against the same SDL 3.4.12 headers
+SDL3, and SDL GPU backend sources against the same SDL 3.4.12 headers
 and target options as the renderer. This avoids a wrapper-owned SDL header split.
 
 ### Architecture: Tool-First Pattern
@@ -45,7 +45,7 @@ src/
 │   └── tools/
 │       ├── stats_tool.zig   # FPS, frame time
 │       ├── camera_tool.zig  # Camera inspector
-│       └── scene_tool.zig   # Entity hierarchy
+│       └── render_tool.zig  # Presentation settings
 ```
 
 ### Tool Interface
@@ -57,7 +57,6 @@ pub const Tool = struct {
     name: [:0]const u8,           // Window title (null-terminated for ImGui)
     enabled: bool = true,          // Visibility toggle
     draw_fn: *const fn (*EditorContext) void,
-    shortcut: ?u32 = null,         // Optional hotkey
 };
 ```
 
@@ -69,13 +68,7 @@ Tools receive an `EditorContext` with read-only engine state and mutable editor 
 pub const EditorContext = struct {
     // Read-only engine references
     camera: *const Camera,
-    world: *const World,
     frame_timer: *const FrameTimer,
-
-    // Mutable editor state
-    selected_entity: ?usize = null,
-    gizmo_mode: GizmoMode = .translate,
-    gizmo_space: GizmoSpace = .world,
 
     // Input capture flags
     wants_mouse: bool = false,
@@ -91,7 +84,7 @@ Tools are **explicitly registered** in `editor.zig`:
 var tools = [_]*Tool{
     &stats_tool.tool,
     &camera_tool.tool,
-    &scene_tool.tool,
+    &render_tool.tool,
 };
 ```
 
@@ -230,7 +223,7 @@ For a small number of tools (< 20), the overhead of one line per tool is negligi
 
 ### Why Conditional Compilation?
 
-Editor code (ImGui, gizmos) adds significant binary size. Release builds typically don't need debug UI. By stripping it at compile time:
+Editor code (ImGui and future authoring extensions) adds significant binary size. Release builds typically don't need debug UI. By stripping it at compile time:
 - Smaller release binaries
 - No runtime overhead checking "is editor enabled"
 - Clear separation of debug vs production code
@@ -289,28 +282,18 @@ var tools = [_]*Tool{
 };
 ```
 
-### Current ImGuizmo Integration
+### Deferred Scene Editing and Gizmos
 
-The editor enables zgui's ImGuizmo support and implements translate, rotate,
-and scale handles in `src/editor/tools/gizmo_tool.zig`. Gizmo activation and
-release are independent of whether the editor panel is visible, so hiding the
-UI cannot leave a selected body in its temporary manipulation mode.
+S0 deliberately excludes Scene and Gizmo tools. Their prototype
+implementations selected raw Flecs IDs and mutated `GameWorld`/Jolt state
+directly, bypassing feature commands, persistent identity, persistence, and
+undo semantics. Those files and ImGuizmo compilation are removed rather than
+kept as a compatibility path.
 
-```zig
-// Simplified shape of the implemented tool boundary.
-pub fn manipulateTransform(
-    transform: *Transform,
-    view: zm.Mat,
-    proj: zm.Mat,
-    mode: GizmoMode,
-) bool {
-    // Render 3D gizmo and return true if user modified transform
-}
-```
-
-The current tool still mutates the transitional `GameWorld`/physics path. ADR-008
-requires future feature-owned transforms to be changed through typed commands
-with explicit undo/save semantics rather than by extending that direct path.
+The tooling slice may restore selection and transform authoring only after it
+can submit the same typed commands used by gameplay, identify targets by
+persistent ID, and define save/undo behavior. Stats, Camera, and Render tools
+remain useful read-only/debug controls in the meantime.
 
 ## References
 
