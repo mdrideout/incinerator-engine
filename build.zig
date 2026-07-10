@@ -1,4 +1,17 @@
 const std = @import("std");
+const zgui_sdl3_gpu = @import("tools/build/zgui_sdl3_gpu.zig");
+
+const WindowsGpu = enum {
+    d3d12,
+    vulkan,
+};
+
+const FlecsDebugMode = enum {
+    sanitize,
+    debug,
+    depends_on_build,
+    none,
+};
 
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
@@ -16,6 +29,27 @@ pub fn build(b: *std.Build) void {
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
+    const flecs_debug_mode: FlecsDebugMode = if (optimize == .Debug) .sanitize else .none;
+    const glslc_path = b.option(
+        []const u8,
+        "glslc",
+        "Path to the host glslc executable",
+    ) orelse "glslc";
+    const spirv_cross_path = b.option(
+        []const u8,
+        "spirv-cross",
+        "Path to the host spirv-cross executable",
+    ) orelse "spirv-cross";
+    const shadercross_path = b.option(
+        []const u8,
+        "shadercross",
+        "Path to the host SDL_shadercross executable used for DXIL",
+    ) orelse "shadercross";
+    const windows_gpu = b.option(
+        WindowsGpu,
+        "windows-gpu",
+        "Windows SDL GPU backend (d3d12 is the support target; vulkan is a bootstrap fallback)",
+    ) orelse .d3d12;
 
     // ---------------------------------------------------------
     // Editor Build Option
@@ -36,13 +70,6 @@ pub fn build(b: *std.Build) void {
         "Enable the editor UI (ImGui tools, gizmos). Defaults to true in Debug, false in Release.",
     ) orelse default_editor_enabled;
 
-    // Physics debug option - enables all physics debug visualization by default
-    const physics_debug_enabled = b.option(
-        bool,
-        "physics_debug",
-        "Enable all physics debug visualization options by default (collision shapes, AABBs, etc).",
-    ) orelse false;
-
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
     // target and optimize options) will be listed when running `zig build --help`
@@ -55,6 +82,12 @@ pub fn build(b: *std.Build) void {
     // to our consumers. We must give it a name because a Zig package can expose
     // multiple modules and consumers will need to be able to specify which
     // module they want to access.
+    const contracts_module = b.createModule(.{
+        .root_source_file = b.path("src/engine/contracts.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
     const mod = b.addModule("incinerator_engine", .{
         // The root source file is the "entry point" of this module. Users of
         // this module will only be able to access public declarations contained
@@ -66,7 +99,9 @@ pub fn build(b: *std.Build) void {
         // Later on we'll use this module as the root module of a test executable
         // which requires us to specify a target.
         .target = target,
+        .optimize = optimize,
     });
+    mod.addImport("engine_contracts", contracts_module);
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
@@ -91,7 +126,6 @@ pub fn build(b: *std.Build) void {
     // Code can access these via: const options = @import("build_options");
     const options = b.addOptions();
     options.addOption(bool, "editor_enabled", editor_enabled);
-    options.addOption(bool, "physics_debug_enabled", physics_debug_enabled);
 
     const exe = b.addExecutable(.{
         .name = "incinerator_engine",
@@ -127,7 +161,7 @@ pub fn build(b: *std.Build) void {
     const sdl_dep = b.dependency("sdl", .{
         .target = target,
         .optimize = optimize,
-        //.preferred_linkage = .static,
+        .preferred_linkage = .static,
         //.strip = null,
         //.sanitize_c = null,
         //.pic = null,
@@ -139,15 +173,29 @@ pub fn build(b: *std.Build) void {
     exe.root_module.linkLibrary(sdl_lib);
 
     // ---------------------------------------------------------
-    // Jolt Physics (zphysics)
+    // Jolt Physics 5.5 through the engine-owned JoltC build package.
     // ---------------------------------------------------------
-    const zphysics = b.dependency("zphysics", .{
-        .use_double_precision = false,
-        .enable_cross_platform_determinism = true,
-        .enable_debug_renderer = true, // Enable Jolt's debug visualization callbacks
+    const joltc = b.dependency("joltc", .{
+        .target = target,
+        .optimize = optimize,
+        .cross_platform_deterministic = false,
     });
-    exe.root_module.addImport("zphysics", zphysics.module("root"));
-    exe.linkLibrary(zphysics.artifact("joltc"));
+    const jolt_c_module = b.createModule(.{
+        .root_source_file = b.path("src/adapters/physics/jolt_c.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    jolt_c_module.linkLibrary(joltc.artifact("joltc"));
+    const jolt_physics_module = b.createModule(.{
+        .root_source_file = b.path("src/physics.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts_module },
+            .{ .name = "jolt_c", .module = jolt_c_module },
+        },
+    });
+    exe.root_module.addImport("jolt_physics", jolt_physics_module);
 
     // ---------------------------------------------------------
     // ImGui (zgui) with ImGuizmo for 3D transform gizmos
@@ -156,19 +204,38 @@ pub fn build(b: *std.Build) void {
     // We use the SDL3 GPU backend to integrate with our existing renderer.
     // ImGuizmo provides 3D manipulation gizmos (translate/rotate/scale).
     // Available backends: no_backend, glfw_opengl3, glfw_wgpu, sdl3_gpu, etc.
-    const zgui = b.dependency("zgui", .{
-        .shared = false,
-        .with_implot = true,
-        .with_gizmo = true, // Enable ImGuizmo for 3D transform manipulation
-        .backend = .sdl3_gpu, // Use SDL3's GPU API for rendering ImGui
-    });
-    exe.root_module.addImport("zgui", zgui.module("root"));
-    exe.linkLibrary(zgui.artifact("imgui"));
+    if (editor_enabled) {
+        const zgui = b.lazyDependency("zgui", .{
+            .target = target,
+            .optimize = optimize,
+            .shared = false,
+            .with_implot = true,
+            .with_gizmo = true, // Enable ImGuizmo for 3D transform manipulation
+            .with_node_editor = false,
+            .with_te = false,
+            .with_freetype = false,
+            .with_knobs = false,
+            .use_wchar32 = false,
+            .use_32bit_draw_idx = false,
+            .disable_obsolete = true,
+            // The engine owns the backend compilation below so it can use the
+            // same SDL 3.4.12 headers as the runtime library. Upstream zgui's
+            // sdl3_gpu option currently pulls an independent SDL 3.2 snapshot.
+            .backend = .no_backend,
+        }) orelse return;
+        const editor_gui = zgui_sdl3_gpu.build(b, zgui, sdl_dep, target, optimize);
+        exe.root_module.addImport("zgui", editor_gui.module);
+        exe.root_module.linkLibrary(editor_gui.library);
+    }
 
     // ---------------------------------------------------------
     // Math (zmath)
     // ---------------------------------------------------------
-    const zmath = b.dependency("zmath", .{});
+    const zmath = b.dependency("zmath", .{
+        .target = target,
+        .optimize = optimize,
+        .enable_cross_platform_determinism = true,
+    });
     exe.root_module.addImport("zmath", zmath.module("root"));
 
     // ---------------------------------------------------------
@@ -176,15 +243,23 @@ pub fn build(b: *std.Build) void {
     // ---------------------------------------------------------
     // zmesh wraps cgltf for glTF loading and meshoptimizer for optimization.
     // Used to load 3D models exported from Blender, AI generators, etc.
-    const zmesh = b.dependency("zmesh", .{});
+    const zmesh = b.dependency("zmesh", .{
+        .target = target,
+        .optimize = optimize,
+        .shape_use_32bit_indices = true,
+        .shared = false,
+    });
     exe.root_module.addImport("zmesh", zmesh.module("root"));
-    exe.linkLibrary(zmesh.artifact("zmesh"));
+    exe.root_module.linkLibrary(zmesh.artifact("zmesh"));
 
     // ---------------------------------------------------------
     // Image Loading (zstbi) - stb_image wrapper
     // ---------------------------------------------------------
     // Used to decode PNG/JPEG textures embedded in GLB files.
-    const zstbi = b.dependency("zstbi", .{});
+    const zstbi = b.dependency("zstbi", .{
+        .target = target,
+        .optimize = optimize,
+    });
     exe.root_module.addImport("zstbi", zstbi.module("root"));
 
     // ---------------------------------------------------------
@@ -193,9 +268,93 @@ pub fn build(b: *std.Build) void {
     // zflecs wraps the flecs ECS library for high-performance entity management.
     // Used for all game entities: vehicles, NPCs, props, debris, particles.
     // Archetype-based storage provides cache-friendly iteration for physics sync.
-    const zflecs = b.dependency("zflecs", .{});
-    exe.root_module.addImport("zflecs", zflecs.module("root"));
-    exe.linkLibrary(zflecs.artifact("flecs"));
+    const zflecs = b.dependency("zflecs", .{
+        .target = target,
+        .optimize = optimize,
+        .shared = false,
+        .debug_mode = flecs_debug_mode,
+        .debug_info = false,
+        .float_t = .fp32,
+        .ftime_t = .fp32,
+        .accurate_counters = false,
+        .disable_counters = false,
+        .soft_assert = false,
+        .keep_assert = false,
+        .default_to_uncached_queries = false,
+        .no_always_inline = false,
+        .custom_build = .whitelist,
+        .toggle_alerts_addon = true,
+        .toggle_app_addon = true,
+        .toggle_doc_addon = true,
+        .toggle_json_addon = true,
+        .toggle_http_addon = true,
+        .toggle_log_addon = true,
+        .toggle_meta_addon = true,
+        .toggle_metrics_addon = true,
+        .toggle_module_addon = true,
+        .toggle_os_api_impl_addon = true,
+        .toggle_pipeline_addon = true,
+        .toggle_rest_addon = true,
+        .toggle_parser_addon = true,
+        .toggle_query_dsl_addon = true,
+        .toggle_script_addon = true,
+        .toggle_system_addon = true,
+        .toggle_stats_addon = true,
+        .toggle_timer_addon = true,
+        .toggle_units_addon = true,
+        .low_footprint = false,
+        // zflecs currently always compiles C with FLECS_USE_OS_ALLOC. Passing
+        // true keeps the generated Zig layout in lockstep with that C ABI.
+        .use_os_alloc = true,
+        .hi_component_id = 256,
+        .hi_id_record_id = 1024,
+        .sparse_page_bits = 6,
+        .entity_page_bits = 10,
+        .id_desc_max = 32,
+        .event_desc_max = 8,
+        .variable_count_max = 64,
+        .term_count_max = 32,
+        .term_arg_count_max = 16,
+        .query_variable_count_max = 64,
+        .query_scope_nesting_max = 8,
+        .dag_depth_max = 128,
+    });
+    const zflecs_module = zflecs.module("root");
+    mod.addImport("zflecs", zflecs_module);
+    exe.root_module.addImport("zflecs", zflecs_module);
+
+    // S0 is composed from one feature and one concrete adapter. The feature
+    // sees only the public kernel/contracts module; the simulation host is the
+    // sole place where that feature is paired with Jolt.
+    const crate_feature_module = b.createModule(.{
+        .root_source_file = b.path("src/features/crates/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+        },
+    });
+    const crate_simulation_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/simulation.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "crate_feature", .module = crate_feature_module },
+            .{ .name = "jolt_physics", .module = jolt_physics_module },
+        },
+    });
+    exe.root_module.addImport("crate_simulation", crate_simulation_module);
+    // zflecs's exported module already owns flecs.c. Linking its library too
+    // compiles the amalgamation twice and relies on archive laziness to hide
+    // duplicate symbols. Keep one C owner and add the library's Windows system
+    // dependencies explicitly.
+    if (target.result.os.tag == .windows) {
+        mod.linkSystemLibrary("ws2_32", .{});
+        mod.linkSystemLibrary("dbghelp", .{});
+        exe.root_module.linkSystemLibrary("ws2_32", .{});
+        exe.root_module.linkSystemLibrary("dbghelp", .{});
+    }
 
     // unsure if need these
     // { // Needed for glfw/wgpu rendering backend
@@ -212,12 +371,133 @@ pub fn build(b: *std.Build) void {
     // }
 
     // ---------------------------------------------------------
-    // Shader Compilation (GLSL → SPIR-V → MSL/HLSL)
+    // Shader Compilation (GLSL → target backend format)
     // ---------------------------------------------------------
-    // Compiles all shader formats at build time for cross-platform support.
-    // See docs/adr/001-shader-language-and-compilation.md for rationale.
-    const shader_step = buildShaders(b);
-    exe.step.dependOn(shader_step);
+    // Shader outputs live in the Zig cache and are exposed as a generated
+    // module. This makes the exact generated files dependencies of every
+    // executable/test compilation that embeds them without mutating `src/`.
+    const shaders = buildShaders(b, target, optimize, .{
+        .glslc = glslc_path,
+        .spirv_cross = spirv_cross_path,
+        .shadercross = shadercross_path,
+        .windows_gpu = windows_gpu,
+    });
+    exe.root_module.addImport("shader_assets", shaders.module);
+    exe.step.dependOn(shaders.step);
+
+    const shader_contract_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/shader_contract_test.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "shader_reflections", .module = shaders.reflection_module },
+                .{ .name = "shader_assets", .module = shaders.validation_module },
+            },
+        }),
+    });
+    const run_shader_contract_tests = b.addRunArtifact(shader_contract_tests);
+    const shader_test_step = b.step("test-shaders", "Validate SDL GPU shader contracts");
+    shader_test_step.dependOn(&run_shader_contract_tests.step);
+
+    // The headless host is intentionally not installed by the default build.
+    // Its allowlisted module graph has no SDL, editor, asset, or shader edge.
+    const headless_root_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/headless.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "crate_simulation", .module = crate_simulation_module },
+        },
+    });
+    const headless_exe = b.addExecutable(.{
+        .name = "incinerator_headless",
+        .root_module = headless_root_module,
+    });
+    const check_headless_step = b.step(
+        "check-headless",
+        "Compile the SDL-free crate simulation host",
+    );
+    check_headless_step.dependOn(&headless_exe.step);
+
+    const install_headless_artifact = b.addInstallArtifact(headless_exe, .{});
+    const install_headless_step = b.step(
+        "install-headless",
+        "Install only the SDL-free crate simulation host",
+    );
+    install_headless_step.dependOn(&install_headless_artifact.step);
+
+    const headless_boundary_exe = b.addExecutable(.{
+        .name = "headless_boundary_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/headless_boundary_test.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const verify_headless_boundary = b.addRunArtifact(headless_boundary_exe);
+    verify_headless_boundary.setCwd(b.path("."));
+    const verify_headless_boundary_step = b.step(
+        "verify-headless-boundary",
+        "Reject visual imports from the headless source graph",
+    );
+    verify_headless_boundary_step.dependOn(&verify_headless_boundary.step);
+
+    const headless_linkage_exe = b.addExecutable(.{
+        .name = "headless_linkage_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/headless_linkage_test.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const verify_headless_linkage = b.addRunArtifact(headless_linkage_exe);
+    verify_headless_linkage.addFileArg(headless_exe.getEmittedBin());
+    const verify_headless_linkage_step = b.step(
+        "verify-headless-linkage",
+        "Reject visual dependencies from the final headless binary",
+    );
+    verify_headless_linkage_step.dependOn(&verify_headless_linkage.step);
+
+    const headless_boundary_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/headless_boundary_test.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const run_headless_boundary_tests = b.addRunArtifact(headless_boundary_tests);
+    const headless_linkage_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/headless_linkage_test.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const run_headless_linkage_tests = b.addRunArtifact(headless_linkage_tests);
+    const headless_tool_test_step = b.step(
+        "test-headless-tools",
+        "Run portable headless boundary verifier tests",
+    );
+    headless_tool_test_step.dependOn(&run_headless_boundary_tests.step);
+    headless_tool_test_step.dependOn(&run_headless_linkage_tests.step);
+
+    const run_headless_cmd = b.addRunArtifact(headless_exe);
+    if (b.args) |args| run_headless_cmd.addArgs(args);
+    const run_headless_step = b.step("run-headless", "Run the SDL-free crate simulation host");
+    run_headless_step.dependOn(&run_headless_cmd.step);
+
+    const headless_tests = b.addTest(.{ .root_module = headless_root_module });
+    const run_headless_tests = b.addRunArtifact(headless_tests);
+    const headless_test_step = b.step(
+        "test-headless",
+        "Run the isolated Flecs and Jolt crate lifecycle tests",
+    );
+    headless_test_step.dependOn(&run_headless_tests.step);
+    headless_test_step.dependOn(&verify_headless_boundary.step);
+    headless_test_step.dependOn(&verify_headless_linkage.step);
+    headless_test_step.dependOn(&run_headless_boundary_tests.step);
+    headless_test_step.dependOn(&run_headless_linkage_tests.step);
 
     // This declares intent for the executable to be installed into the
     // install prefix when running `zig build` (i.e. when executing the default
@@ -258,8 +538,34 @@ pub fn build(b: *std.Build) void {
         .root_module = mod,
     });
 
+    const contracts_tests = b.addTest(.{ .root_module = contracts_module });
+    const run_contracts_tests = b.addRunArtifact(contracts_tests);
+    const contracts_test_step = b.step(
+        "test-contracts",
+        "Run backend-neutral contract tests",
+    );
+    contracts_test_step.dependOn(&run_contracts_tests.step);
+
     // A run step that will run the test executable.
     const run_mod_tests = b.addRunArtifact(mod_tests);
+    const kernel_test_step = b.step("test-kernel", "Run the SDL-free public kernel tests");
+    kernel_test_step.dependOn(&run_mod_tests.step);
+
+    const crate_feature_tests = b.addTest(.{ .root_module = crate_feature_module });
+    const run_crate_feature_tests = b.addRunArtifact(crate_feature_tests);
+    const crate_feature_test_step = b.step(
+        "test-crate-feature",
+        "Run the backend-neutral crate feature tests",
+    );
+    crate_feature_test_step.dependOn(&run_crate_feature_tests.step);
+
+    const crate_simulation_tests = b.addTest(.{ .root_module = crate_simulation_module });
+    const run_crate_simulation_tests = b.addRunArtifact(crate_simulation_tests);
+    const crate_simulation_test_step = b.step(
+        "test-simulation",
+        "Run the concrete crate/Jolt composition tests",
+    );
+    crate_simulation_test_step.dependOn(&run_crate_simulation_tests.step);
 
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
@@ -271,12 +577,29 @@ pub fn build(b: *std.Build) void {
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
+    // Keep the Jolt adapter independently testable. This target intentionally
+    // links no SDL, renderer, shader, or editor dependencies.
+    const physics_tests = b.addTest(.{ .root_module = jolt_physics_module });
+    const run_physics_tests = b.addRunArtifact(physics_tests);
+    const physics_test_step = b.step("test-physics", "Run isolated Jolt adapter tests");
+    physics_test_step.dependOn(&run_physics_tests.step);
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_mod_tests.step);
+    test_step.dependOn(&run_contracts_tests.step);
+    test_step.dependOn(&run_crate_feature_tests.step);
+    test_step.dependOn(&run_crate_simulation_tests.step);
     test_step.dependOn(&run_exe_tests.step);
+    test_step.dependOn(&run_physics_tests.step);
+    test_step.dependOn(&run_headless_tests.step);
+    test_step.dependOn(&run_shader_contract_tests.step);
+    test_step.dependOn(&verify_headless_boundary.step);
+    test_step.dependOn(&verify_headless_linkage.step);
+    test_step.dependOn(&run_headless_boundary_tests.step);
+    test_step.dependOn(&run_headless_linkage_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
@@ -294,80 +617,209 @@ pub fn build(b: *std.Build) void {
 // =============================================================================
 // Shader Compilation
 // =============================================================================
-// Compiles GLSL shaders to all platform formats (SPIR-V, MSL, HLSL).
-// This runs at build time so all formats are always available.
+// Compiles GLSL shaders into the format consumed by the selected target's SDL
+// GPU backend. Windows defaults to D3D12/DXIL and exposes Vulkan/SPIR-V only as
+// an explicit fallback; the renderer advertises only the format built.
 
-/// List of shaders to compile (without extension)
-const shader_sources = [_][]const u8{
-    "triangle", // Colored primitives (pos + color)
-    "model", // Loaded 3D models (pos + normal + uv)
-};
+const ShaderFormat = enum {
+    msl,
+    spirv,
+    dxil,
 
-/// Shader stages and their file extensions
-const ShaderStage = enum {
-    vertex,
-    fragment,
-
-    fn extension(self: ShaderStage) []const u8 {
+    fn fileExtension(self: ShaderFormat) []const u8 {
         return switch (self) {
-            .vertex => ".vert",
-            .fragment => ".frag",
+            .msl => "metal",
+            .spirv => "spv",
+            .dxil => "dxil",
+        };
+    }
+
+    fn entrypoint(self: ShaderFormat) []const u8 {
+        return switch (self) {
+            .msl => "main0",
+            .spirv, .dxil => "main",
+        };
+    }
+
+    fn driver(self: ShaderFormat) []const u8 {
+        return switch (self) {
+            .msl => "metal",
+            .spirv => "vulkan",
+            .dxil => "direct3d12",
         };
     }
 };
 
-const shader_stages = [_]ShaderStage{ .vertex, .fragment };
+const ShaderStage = enum {
+    vertex,
+    fragment,
 
-/// Build all shaders and return a step that depends on all compilation commands
-fn buildShaders(b: *std.Build) *std.Build.Step {
-    const shader_compile_step = b.step("shaders", "Compile GLSL shaders to SPIR-V and platform formats");
+    fn shadercrossName(self: ShaderStage) []const u8 {
+        return switch (self) {
+            .vertex => "vertex",
+            .fragment => "fragment",
+        };
+    }
+};
 
-    // Create output directory inside src/ (required for @embedFile to work)
-    const mkdir_cmd = b.addSystemCommand(&.{
-        "mkdir",
-        "-p",
-        "src/shaders/compiled",
-    });
-    shader_compile_step.dependOn(&mkdir_cmd.step);
+const ShaderBuild = struct {
+    module: *std.Build.Module,
+    validation_module: *std.Build.Module,
+    reflection_module: *std.Build.Module,
+    step: *std.Build.Step,
+};
 
-    // Process each shader
-    for (shader_sources) |shader_name| {
-        // Process each stage (vertex, fragment)
-        for (shader_stages) |stage| {
-            const ext = stage.extension();
+const ShaderTools = struct {
+    glslc: []const u8,
+    spirv_cross: []const u8,
+    shadercross: []const u8,
+    windows_gpu: WindowsGpu,
+};
 
-            // Input: shaders/triangle.vert
-            const input_path = b.fmt("shaders/{s}{s}", .{ shader_name, ext });
+const CompiledShader = struct {
+    spirv: std.Build.LazyPath,
+    target: std.Build.LazyPath,
+};
 
-            // Output paths (inside src/ for @embedFile access)
-            const spv_output = b.fmt("src/shaders/compiled/{s}{s}.spv", .{ shader_name, ext });
-            const msl_output = b.fmt("src/shaders/compiled/{s}{s}.metal", .{ shader_name, ext });
+fn buildShaders(
+    b: *std.Build,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    tools: ShaderTools,
+) ShaderBuild {
+    const format: ShaderFormat = switch (target.result.os.tag) {
+        .macos => .msl,
+        .linux => .spirv,
+        .windows => switch (tools.windows_gpu) {
+            .d3d12 => .dxil,
+            .vulkan => .spirv,
+        },
+        else => @panic("unsupported target: Incinerator shaders support macOS, Linux, and Windows only"),
+    };
 
-            // Step 1: GLSL → SPIR-V (using glslc)
-            const glslc_cmd = b.addSystemCommand(&.{
-                "glslc",
-                input_path,
-                "-o",
-                spv_output,
-            });
-            // Ensure directory exists before compiling
-            glslc_cmd.step.dependOn(&mkdir_cmd.step);
+    const shader_step = b.step("shaders", "Compile shaders for the selected target backend");
+    const generated = b.addWriteFiles();
 
-            // Step 2: SPIR-V → MSL (using spirv-cross)
-            const spirv_cross_msl = b.addSystemCommand(&.{
-                "spirv-cross",
-                "--msl",
-                spv_output,
-                "--output",
-                msl_output,
-            });
-            // MSL depends on SPIR-V being generated first
-            spirv_cross_msl.step.dependOn(&glslc_cmd.step);
+    const triangle_vertex = compileShader(b, tools, "shaders/triangle.vert", "triangle.vert", .vertex, format);
+    const triangle_fragment = compileShader(b, tools, "shaders/triangle.frag", "triangle.frag", .fragment, format);
+    const model_vertex = compileShader(b, tools, "shaders/model.vert", "model.vert", .vertex, format);
+    const model_fragment = compileShader(b, tools, "shaders/model.frag", "model.frag", .fragment, format);
 
-            // Add to the shader compile step
-            shader_compile_step.dependOn(&spirv_cross_msl.step);
-        }
+    const extension = format.fileExtension();
+    _ = generated.addCopyFile(triangle_vertex.target, b.fmt("triangle.vert.{s}", .{extension}));
+    _ = generated.addCopyFile(triangle_fragment.target, b.fmt("triangle.frag.{s}", .{extension}));
+    _ = generated.addCopyFile(model_vertex.target, b.fmt("model.vert.{s}", .{extension}));
+    _ = generated.addCopyFile(model_fragment.target, b.fmt("model.frag.{s}", .{extension}));
+
+    _ = generated.addCopyFile(reflectShader(b, tools, triangle_vertex.spirv, "triangle.vert"), "triangle.vert.json");
+    _ = generated.addCopyFile(reflectShader(b, tools, triangle_fragment.spirv, "triangle.frag"), "triangle.frag.json");
+    _ = generated.addCopyFile(reflectShader(b, tools, model_vertex.spirv, "model.vert"), "model.vert.json");
+    _ = generated.addCopyFile(reflectShader(b, tools, model_fragment.spirv, "model.frag"), "model.frag.json");
+
+    const module_source = generated.add("shader_assets.zig", b.fmt(
+        \\pub const Format = enum {{ msl, spirv, dxil }};
+        \\pub const format: Format = .{s};
+        \\pub const entrypoint = "{s}";
+        \\pub const driver = "{s}";
+        \\pub const triangle_vertex = @embedFile("triangle.vert.{s}");
+        \\pub const triangle_fragment = @embedFile("triangle.frag.{s}");
+        \\pub const model_vertex = @embedFile("model.vert.{s}");
+        \\pub const model_fragment = @embedFile("model.frag.{s}");
+        \\
+    , .{
+        @tagName(format),
+        format.entrypoint(),
+        format.driver(),
+        extension,
+        extension,
+        extension,
+        extension,
+    }));
+
+    const reflection_source = generated.add("shader_reflections.zig",
+        \\pub const triangle_vertex = @embedFile("triangle.vert.json");
+        \\pub const triangle_fragment = @embedFile("triangle.frag.json");
+        \\pub const model_vertex = @embedFile("model.vert.json");
+        \\pub const model_fragment = @embedFile("model.frag.json");
+        \\
+    );
+
+    shader_step.dependOn(&generated.step);
+
+    return .{
+        .module = b.createModule(.{
+            .root_source_file = module_source,
+            .target = target,
+            .optimize = optimize,
+        }),
+        .validation_module = b.createModule(.{
+            .root_source_file = module_source,
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+        .reflection_module = b.createModule(.{
+            .root_source_file = reflection_source,
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+        .step = shader_step,
+    };
+}
+
+fn compileShader(
+    b: *std.Build,
+    tools: ShaderTools,
+    source_path: []const u8,
+    output_name: []const u8,
+    stage: ShaderStage,
+    format: ShaderFormat,
+) CompiledShader {
+    const glslc = b.addSystemCommand(&.{tools.glslc});
+    glslc.addFileArg(b.path(source_path));
+    glslc.addArg("-o");
+    const spirv = glslc.addOutputFileArg(b.fmt("{s}.spv", .{output_name}));
+
+    if (format == .spirv) return .{ .spirv = spirv, .target = spirv };
+
+    if (format == .dxil) {
+        const shadercross = b.addSystemCommand(&.{tools.shadercross});
+        shadercross.addFileArg(spirv);
+        shadercross.addArgs(&.{
+            "-s",
+            "SPIRV",
+            "-d",
+            "DXIL",
+            "-t",
+            stage.shadercrossName(),
+            "-e",
+            "main",
+            "-o",
+        });
+        return .{
+            .spirv = spirv,
+            .target = shadercross.addOutputFileArg(b.fmt("{s}.dxil", .{output_name})),
+        };
     }
 
-    return shader_compile_step;
+    const spirv_cross = b.addSystemCommand(&.{tools.spirv_cross});
+    spirv_cross.addFileArg(spirv);
+    spirv_cross.addArg("--msl");
+    spirv_cross.addArg("--output");
+    return .{
+        .spirv = spirv,
+        .target = spirv_cross.addOutputFileArg(b.fmt("{s}.metal", .{output_name})),
+    };
+}
+
+fn reflectShader(
+    b: *std.Build,
+    tools: ShaderTools,
+    spirv: std.Build.LazyPath,
+    output_name: []const u8,
+) std.Build.LazyPath {
+    const spirv_cross = b.addSystemCommand(&.{tools.spirv_cross});
+    spirv_cross.addFileArg(spirv);
+    spirv_cross.addArg("--reflect");
+    spirv_cross.addArg("--output");
+    return spirv_cross.addOutputFileArg(b.fmt("{s}.json", .{output_name}));
 }

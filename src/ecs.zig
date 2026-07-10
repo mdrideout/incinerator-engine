@@ -23,11 +23,11 @@
 //!
 //! Usage:
 //! ```zig
-//! var game = GameWorld.init();
+//! var game = try GameWorld.init();
 //! defer game.deinit();
 //!
 //! // Spawn an entity with components
-//! const car = game.spawn(.{
+//! const car = try game.spawn(.{
 //!     .position = .{ 0, 0, 0 },
 //!     .rotation = .{ 0, 0, 0, 1 },
 //!     .scale = .{ 1, 1, 1 },
@@ -37,16 +37,16 @@
 //! // Query all renderable entities
 //! var iter = game.renderables();
 //! while (iter.next()) |entity| {
-//!     renderer.drawMesh(entity.mesh, entity.transform);
+//!     renderer.drawMesh(entity.mesh, entity.model, view_projection);
 //! }
 //! ```
 
 const std = @import("std");
+const engine = @import("incinerator_engine");
 const flecs = @import("zflecs");
 const zm = @import("zmath");
-const zphysics = @import("zphysics");
 const mesh_module = @import("mesh.zig");
-const physics_module = @import("physics.zig");
+const physics_module = @import("jolt_physics");
 
 // ============================================================================
 // Components
@@ -84,36 +84,15 @@ pub const Rotation = struct {
         return zm.quatToMat(zm.f32x4(self.x, self.y, self.z, self.w));
     }
 
-    /// Convert to Euler angles for editor display (radians, XYZ intrinsic order)
+    /// Convert to zmath's pitch/yaw/roll convention (radians, Y-X-Z order).
+    /// Euler values are editor presentation only; quaternions remain canonical.
     pub fn toEuler(self: Rotation) [3]f32 {
-        const qx = self.x;
-        const qy = self.y;
-        const qz = self.z;
-        const qw = self.w;
-
-        // Rotation about X axis
-        const sin_x = 2.0 * (qw * qx + qy * qz);
-        const cos_x = 1.0 - 2.0 * (qx * qx + qy * qy);
-        const rot_x = std.math.atan2(sin_x, cos_x);
-
-        // Rotation about Y axis (clamped to avoid NaN at poles)
-        const sin_y = 2.0 * (qw * qy - qz * qx);
-        const rot_y = if (@abs(sin_y) >= 1.0)
-            if (sin_y > 0) @as(f32, std.math.pi / 2.0) else @as(f32, -std.math.pi / 2.0)
-        else
-            std.math.asin(sin_y);
-
-        // Rotation about Z axis
-        const sin_z = 2.0 * (qw * qz + qx * qy);
-        const cos_z = 1.0 - 2.0 * (qy * qy + qz * qz);
-        const rot_z = std.math.atan2(sin_z, cos_z);
-
-        return .{ rot_x, rot_y, rot_z };
+        return zm.quatToRollPitchYaw(zm.f32x4(self.x, self.y, self.z, self.w));
     }
 
-    /// Create rotation from Euler angles (for manual entity placement)
+    /// Create rotation from Euler angles around X, Y, and Z respectively.
     pub fn fromEuler(pitch: f32, yaw: f32, roll: f32) Rotation {
-        const quat = zm.quatFromRollPitchYaw(roll, pitch, yaw);
+        const quat = zm.quatFromRollPitchYaw(pitch, yaw, roll);
         return .{ .x = quat[0], .y = quat[1], .z = quat[2], .w = quat[3] };
     }
 
@@ -145,7 +124,7 @@ pub const Renderable = struct {
 /// The sync system reads the body's transform and writes to Position/Rotation.
 /// See ADR-005 for the physics-ECS integration pattern.
 pub const RigidBody = struct {
-    body_id: zphysics.BodyId,
+    body_id: physics_module.BodyId,
     sync_rotation: bool = true, // Set false for objects that only need position sync
 };
 
@@ -182,7 +161,9 @@ pub const GameWorld = struct {
     entity_count: i32 = 0, // Track manually since flecs doesn't expose this directly
 
     /// Initialize the ECS world and register all components
-    pub fn init() GameWorld {
+    pub fn init() !GameWorld {
+        try engine.runtime.claimExternalWorld();
+        errdefer engine.runtime.releaseExternalWorld();
         const world = flecs.init();
 
         // Register components - this tells flecs about our data types
@@ -236,7 +217,16 @@ pub const GameWorld = struct {
         flecs.query_fini(self.physics_query);
         flecs.query_fini(self.renderable_query);
         _ = flecs.fini(self.world);
+        engine.runtime.releaseExternalWorld();
         std.debug.print("ECS World shutdown\n", .{});
+    }
+
+    /// Transitional S0 composition seam. The new runtime borrows the legacy
+    /// sandbox's one live Flecs world without exposing Flecs types through the
+    /// public engine API. Remove this when the sandbox finishes migrating to
+    /// the feature runtime as its sole world owner.
+    pub fn borrowWorldContext(self: *GameWorld) *anyopaque {
+        return @ptrCast(self.world);
     }
 
     /// Set the physics world reference for sync operations.
@@ -251,7 +241,9 @@ pub const GameWorld = struct {
 
     /// Spawn options - which components to add to a new entity
     pub const SpawnOptions = struct {
-        name: ?[:0]const u8 = null,
+        /// Optional unique Flecs lookup identity. This is not a display label:
+        /// attempting to reuse it is an error instead of aliasing an entity.
+        unique_name: ?[:0]const u8 = null,
         position: ?Position = null,
         rotation: ?Rotation = null,
         scale: ?Scale = null,
@@ -260,12 +252,23 @@ pub const GameWorld = struct {
     };
 
     /// Spawn a new entity with the given components
-    pub fn spawn(self: *GameWorld, opts: SpawnOptions) flecs.entity_t {
-        // Create entity (optionally with name)
-        const entity = if (opts.name) |name|
-            flecs.new_entity(self.world, name)
-        else
-            flecs.new_id(self.world);
+    pub fn spawn(self: *GameWorld, opts: SpawnOptions) !flecs.entity_t {
+        if (opts.unique_name) |name| {
+            try validateUniqueEntityName(name);
+            if (flecs.lookup_child(self.world, 0, name) != 0) {
+                return error.DuplicateEntityName;
+            }
+        }
+
+        const entity = flecs.new_id(self.world);
+        if (entity == 0) return error.EntityCreationFailed;
+        errdefer flecs.delete(self.world, entity);
+
+        if (opts.unique_name) |name| {
+            if (flecs.set_name(self.world, entity, name) == 0) {
+                return error.EntityNamingFailed;
+            }
+        }
 
         // Add components based on options
         if (opts.position) |pos| {
@@ -300,9 +303,9 @@ pub const GameWorld = struct {
         rot: Rotation,
         scl: Scale,
         m: *mesh_module.Mesh,
-    ) flecs.entity_t {
+    ) !flecs.entity_t {
         return self.spawn(.{
-            .name = name,
+            .unique_name = name,
             .position = pos,
             .rotation = rot,
             .scale = scl,
@@ -448,7 +451,7 @@ pub const GameWorld = struct {
     /// Sync physics body transforms to ECS components.
     /// Call this each tick AFTER physics.update() and BEFORE rendering.
     /// See ADR-005 for the physics-ECS integration pattern.
-    pub fn syncPhysicsToECS(self: *GameWorld) void {
+    pub fn syncPhysicsToECS(self: *GameWorld) !void {
         const pw = self.physics_world orelse {
             // No physics world set - nothing to sync
             return;
@@ -470,7 +473,7 @@ pub const GameWorld = struct {
                 const body_id = rigid_bodies.?[i].body_id;
 
                 // Get position from physics
-                const phys_pos = pw.getBodyPosition(body_id);
+                const phys_pos = try pw.getBodyPosition(body_id);
                 positions.?[i] = .{
                     .x = phys_pos[0],
                     .y = phys_pos[1],
@@ -479,7 +482,7 @@ pub const GameWorld = struct {
 
                 // Get rotation from physics - direct quaternion copy (no conversion)
                 if (rigid_bodies.?[i].sync_rotation) {
-                    const quat = pw.getBodyRotation(body_id);
+                    const quat = try pw.getBodyRotation(body_id);
                     rotations.?[i] = .{
                         .x = quat[0],
                         .y = quat[1],
@@ -492,17 +495,32 @@ pub const GameWorld = struct {
     }
 };
 
+fn validateUniqueEntityName(name: [:0]const u8) !void {
+    // This API creates one root identity, not a Flecs path. Rejecting path
+    // syntax keeps validation and assignment semantics identical and prevents
+    // Flecs from aborting on a duplicate literal name missed by path lookup.
+    if (name.len == 0 or std.mem.indexOfScalar(u8, name, '.') != null) {
+        return error.InvalidEntityName;
+    }
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
 
+fn expectMatrixApproxEq(expected: zm.Mat, actual: zm.Mat, tolerance: f32) !void {
+    inline for (0..4) |row| {
+        try zm.expectVecApproxEqAbs(expected[row], actual[row], tolerance);
+    }
+}
+
 test "GameWorld basic operations" {
-    var world = GameWorld.init();
+    var world = try GameWorld.init();
     defer world.deinit();
 
     // Note: Can't fully test without a real mesh, but we can test the API
-    const entity = world.spawn(.{
-        .name = "TestEntity",
+    const entity = try world.spawn(.{
+        .unique_name = "TestEntity",
         .position = .{ .x = 1, .y = 2, .z = 3 },
         .rotation = .{ .x = 0, .y = std.math.pi, .z = 0 },
         .scale = .{ .x = 1, .y = 1, .z = 1 },
@@ -515,6 +533,12 @@ test "GameWorld basic operations" {
     try std.testing.expectApproxEqAbs(@as(f32, 3.0), pos.?.z, 0.001);
 }
 
+test "a second legacy world returns a defined lease error" {
+    var world = try GameWorld.init();
+    defer world.deinit();
+    try std.testing.expectError(error.EngineWorldAlreadyLive, GameWorld.init());
+}
+
 test "Position toVec" {
     const pos = Position{ .x = 1, .y = 2, .z = 3 };
     const vec = pos.toVec();
@@ -522,4 +546,58 @@ test "Position toVec" {
     try std.testing.expectApproxEqAbs(@as(f32, 2.0), vec[1], 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 3.0), vec[2], 0.001);
     try std.testing.expectApproxEqAbs(@as(f32, 1.0), vec[3], 0.001); // w = 1 for positions
+}
+
+test "Rotation.fromEuler maps pitch yaw roll to X Y Z axes" {
+    const angle: f32 = 0.37;
+    try expectMatrixApproxEq(zm.rotationX(angle), Rotation.fromEuler(angle, 0, 0).toMatrix(), 0.0001);
+    try expectMatrixApproxEq(zm.rotationY(angle), Rotation.fromEuler(0, angle, 0).toMatrix(), 0.0001);
+    try expectMatrixApproxEq(zm.rotationZ(angle), Rotation.fromEuler(0, 0, angle).toMatrix(), 0.0001);
+}
+
+test "Rotation Euler conversion roundtrips combined non-singular angles" {
+    const expected = [3]f32{ 0.3, -0.4, 0.5 };
+    const actual = Rotation.fromEuler(expected[0], expected[1], expected[2]).toEuler();
+    for (expected, actual) |expected_angle, actual_angle| {
+        try std.testing.expectApproxEqAbs(expected_angle, actual_angle, 0.0001);
+    }
+}
+
+test "unique entity names reject aliasing without mutating the original" {
+    var world = try GameWorld.init();
+    defer world.deinit();
+
+    const original = try world.spawn(.{
+        .unique_name = "UniqueEntity",
+        .position = .{ .x = 1, .y = 2, .z = 3 },
+    });
+    try std.testing.expectError(error.DuplicateEntityName, world.spawn(.{
+        .unique_name = "UniqueEntity",
+        .position = .{ .x = 99, .y = 99, .z = 99 },
+    }));
+
+    try std.testing.expectEqual(@as(i32, 1), world.entityCount());
+    const position = world.get(original, Position).?;
+    try std.testing.expectApproxEqAbs(@as(f32, 1), position.x, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), position.y, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 3), position.z, 0.0001);
+}
+
+test "unique entity names reject empty and path syntax without mutation" {
+    var world = try GameWorld.init();
+    defer world.deinit();
+
+    try std.testing.expectError(error.InvalidEntityName, world.spawn(.{ .unique_name = "" }));
+    try std.testing.expectError(error.InvalidEntityName, world.spawn(.{ .unique_name = "parent.child" }));
+    try std.testing.expectEqual(@as(i32, 0), world.entityCount());
+}
+
+test "unnamed entity spawns always allocate distinct identities" {
+    var world = try GameWorld.init();
+    defer world.deinit();
+
+    const first = try world.spawn(.{});
+    const second = try world.spawn(.{});
+    try std.testing.expect(first != second);
+    try std.testing.expectEqual(@as(i32, 2), world.entityCount());
 }

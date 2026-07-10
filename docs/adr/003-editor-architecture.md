@@ -2,7 +2,10 @@
 
 **Status:** Accepted
 **Date:** 2025-12-05
+**Amended:** 2026-07-09
 **Decision Makers:** Matt, Claude
+
+> The tool-oriented editor remains accepted. The 2026 overhaul amendment replaces the old backend-default and “editor consumes events first” assumptions: the engine compiles the exact-pinned zgui SDL3 GPU sources against its selected SDL 3.4.12 headers, passes the actual swapchain format to ImGui, maintains physical input independently, and gates gameplay with ImGui `WantCapture*`. Direct world mutation by current tools is transitional until feature commands land.
 
 ## Context
 
@@ -24,14 +27,10 @@ We need to decide:
 
 We use **Dear ImGui** through the **zgui** Zig wrapper with the **SDL3 GPU backend**.
 
-```zig
-// build.zig
-const zgui = b.dependency("zgui", .{
-    .shared = false,
-    .with_implot = true,
-    .backend = .sdl3_gpu,  // Uses SDL3's GPU API for rendering
-});
-```
+The root build requests zgui without an upstream backend, then the engine-owned
+`tools/build/zgui_sdl3_gpu.zig` adapter compiles the pinned ImGui, ImPlot,
+ImGuizmo, SDL3, and SDL GPU backend sources against the same SDL 3.4.12 headers
+and target options as the renderer. This avoids a wrapper-owned SDL header split.
 
 ### Architecture: Tool-First Pattern
 
@@ -124,7 +123,7 @@ Code uses `@import("build_options").editor_enabled` for compile-time branching:
 const editor = if (build_options.editor_enabled)
     @import("editor/editor.zig")
 else
-    struct { pub fn init() void {} pub fn draw() void {} };
+    @import("editor/disabled.zig");
 ```
 
 ### Render Integration
@@ -164,21 +163,31 @@ SDL3 GPU doesn't allow starting a copy pass inside a render pass. So we must:
 
 This adds minimal overhead since both passes use the same command buffer.
 
+The ImGui pipeline uses `SDL_GetGPUSwapchainTextureFormat` from the claimed
+window; it does not assume BGRA8. Scene and editor pipelines therefore agree on
+the active backend's real color target format.
+
 ### Event Processing
 
-Editor gets first chance to handle input events:
+Every event is forwarded to ImGui, but backend recognition is not a routing
+decision. The input layer first preserves physical state, including releases
+and focus loss, and separately maintains gameplay-visible state:
 
 ```zig
 // input.zig
 while (c.SDL_PollEvent(&event)) {
-    // Editor sees events first
-    if (editor.processEvent(&event)) {
-        continue;  // Editor consumed it
-    }
-    // Otherwise game processes it
-    switch (event.type) { ... }
+    const route = editor.processEvent(&event); // always feeds ImGui
+    applyCapture(editor.wantsKeyboard(), editor.wantsMouse());
+    updatePhysicalState(event);                // never skipped
+    updateGameplayState(event, route);         // capture-filtered
 }
 ```
+
+Reserved editor shortcuts are reported explicitly through `EventRoute`.
+Gameplay capture uses `WantCaptureKeyboard` and `WantCaptureMouse`; a held input
+that becomes captured stays suppressed until its physical release. Main-window
+focus loss clears held state, while secondary editor-window lifecycle events do
+not masquerade as game-window events.
 
 ## Rationale
 
@@ -234,6 +243,7 @@ Editor code (ImGui, gizmos) adds significant binary size. Release builds typical
 - **Familiar**: Developers with Unity/Unreal experience know ImGui patterns
 - **Lightweight**: Only compiled into debug builds by default
 - **Integrated**: Same command buffer as scene, proper input handling
+- **No stuck controls**: physical releases and focus transitions survive capture changes
 
 ### Negative
 
@@ -279,12 +289,15 @@ var tools = [_]*Tool{
 };
 ```
 
-### Future: ImGuizmo Integration
+### Current ImGuizmo Integration
 
-For 3D gizmos (translate, rotate, scale handles), we'll add ImGuizmo:
+The editor enables zgui's ImGuizmo support and implements translate, rotate,
+and scale handles in `src/editor/tools/gizmo_tool.zig`. Gizmo activation and
+release are independent of whether the editor panel is visible, so hiding the
+UI cannot leave a selected body in its temporary manipulation mode.
 
 ```zig
-// Future: in gizmos.zig
+// Simplified shape of the implemented tool boundary.
 pub fn manipulateTransform(
     transform: *Transform,
     view: zm.Mat,
@@ -295,7 +308,9 @@ pub fn manipulateTransform(
 }
 ```
 
-This requires adding `with_gizmo = true` to the zgui dependency.
+The current tool still mutates the transitional `GameWorld`/physics path. ADR-008
+requires future feature-owned transforms to be changed through typed commands
+with explicit undo/save semantics rather than by extending that direct path.
 
 ## References
 

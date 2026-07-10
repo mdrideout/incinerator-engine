@@ -29,22 +29,30 @@
 //! └─────────────────────────────────────────────────────────────┘
 
 const std = @import("std");
+const build_options = @import("build_options");
 const zm = @import("zmath");
 const timing = @import("timing.zig");
 const input = @import("input.zig");
 const renderer = @import("renderer.zig");
 const mesh = @import("mesh.zig");
 const primitives = @import("primitives.zig");
-const texture = @import("texture.zig");
+const crate_visual_resources = @import("crate_visual_resources.zig");
 const ecs = @import("ecs.zig");
 const camera = @import("camera.zig");
 const sdl = @import("sdl.zig");
-const gltf_loader = @import("gltf_loader.zig");
-const editor = @import("editor/editor.zig");
-const physics = @import("physics.zig");
-const physics_debug = @import("physics_debug.zig");
-const physics_tool = @import("editor/tools/physics_tool.zig");
-const render_tool = @import("editor/tools/render_tool.zig");
+const shader_assets = @import("shader_assets");
+const editor = if (build_options.editor_enabled)
+    @import("editor/editor.zig")
+else
+    @import("editor/disabled.zig");
+const physics = @import("jolt_physics");
+const crate_host = @import("crate_simulation");
+const render_tool = if (build_options.editor_enabled)
+    @import("editor/tools/render_tool.zig")
+else
+    struct {
+        pub fn setRenderSettings(_: anytype) void {}
+    };
 
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
@@ -69,7 +77,6 @@ const App = struct {
     gpu_renderer: renderer.Renderer,
     frame_timer: timing.FrameTimer,
     input_buffer: input.InputBuffer,
-    allocator: std.mem.Allocator, // For GLB loading
 
     // Scene - now using ECS!
     game_world: ecs.GameWorld,
@@ -77,18 +84,13 @@ const App = struct {
 
     // Physics simulation
     physics_world: physics.Physics,
-
-    // Physics debug visualization (draws collider wireframes)
-    physics_debug_renderer: physics_debug.PhysicsDebugRenderer,
-    physics_debug_data: physics_debug.RendererData,
+    sandbox_ground_body: ?physics.BodyId,
+    crate_slice: ?crate_host.Simulation,
 
     // Owned mesh/model data (entities reference these, ECS doesn't own the data)
     ground_mesh: mesh.Mesh,
-    textured_cube_mesh: mesh.Mesh,
+    crate_visuals: crate_visual_resources.CrateVisualResources,
     cylinder_mesh: mesh.Mesh,
-    debug_texture: texture.Texture,
-    loaded_model_1: ?gltf_loader.LoadedModel,
-    loaded_model_2: ?gltf_loader.LoadedModel,
 
     // Debug counters
     debug_frame_counter: u32,
@@ -116,6 +118,12 @@ const App = struct {
         };
         errdefer c.SDL_DestroyWindow(window);
 
+        const main_window_id = c.SDL_GetWindowID(window);
+        if (main_window_id == 0) {
+            std.debug.print("SDL_GetWindowID failed: {s}\n", .{c.SDL_GetError()});
+            return error.SDLWindowIdFailed;
+        }
+
         // Create GPU renderer
         var gpu_renderer = try renderer.Renderer.init(window);
         errdefer gpu_renderer.deinit();
@@ -124,60 +132,31 @@ const App = struct {
         var ground_mesh = try primitives.createGroundPlane(gpu_renderer.getDevice());
         errdefer ground_mesh.deinit();
 
-        // Create debug visualization primitives (textured with checkerboard)
-        var debug_texture = try texture.createDebugCheckerboard(gpu_renderer.getDevice());
-        errdefer debug_texture.deinit();
-
-        var textured_cube_mesh = try primitives.createTexturedCube(gpu_renderer.getDevice());
-        errdefer textured_cube_mesh.deinit();
-        textured_cube_mesh.diffuse_texture = debug_texture;
+        // S0 visual resources are owned by a one-slot typed resource table.
+        var crate_visuals = try crate_visual_resources.CrateVisualResources.init(
+            gpu_renderer.getDevice(),
+        );
+        errdefer crate_visuals.deinit();
 
         var cylinder_mesh = try primitives.createCylinder(gpu_renderer.getDevice(), 24);
         errdefer cylinder_mesh.deinit();
-        cylinder_mesh.diffuse_texture = debug_texture;
-
-        // Load the GLB models
-        const allocator = std.heap.page_allocator;
-
-        // Load first model (blonde-woman.glb)
-        var loaded_model_1: ?gltf_loader.LoadedModel = null;
-        loaded_model_1 = gltf_loader.loadGlb(
-            allocator,
-            gpu_renderer.getDevice(),
-            "assets/models/blonde-woman.glb",
-        ) catch |err| blk: {
-            std.debug.print("Warning: Failed to load blonde-woman.glb: {any}\n", .{err});
-            break :blk null;
-        };
-
-        // Load second model (blonde-woman-hunyuan.glb)
-        var loaded_model_2: ?gltf_loader.LoadedModel = null;
-        loaded_model_2 = gltf_loader.loadGlb(
-            allocator,
-            gpu_renderer.getDevice(),
-            "assets/models/blonde-woman-hunyuan.glb",
-        ) catch |err| blk: {
-            std.debug.print("Warning: Failed to load blonde-woman-hunyuan.glb: {any}\n", .{err});
-            break :blk null;
-        };
+        cylinder_mesh.diffuse_texture = crate_visuals.borrowTexture();
 
         // Create the ECS world (entities spawned in spawnEntities after App construction)
-        const game_world = ecs.GameWorld.init();
+        var game_world = try ecs.GameWorld.init();
+        errdefer game_world.deinit();
 
-        // Initialize physics system (Jolt Physics via zphysics)
-        var physics_world = try physics.Physics.init(allocator);
+        // Initialize physics system (Jolt Physics 5.5 through the JoltC adapter)
+        var physics_world = try physics.Physics.init();
         errdefer physics_world.deinit();
-
-        // Initialize physics debug renderer (draws collider wireframes)
-        // The renderer is an extern struct for C ABI, with separate data storage
-        // NOTE: Singleton registration MUST happen in main() after App is at stable memory,
-        // not here where the structs are on the stack and will be copied to App.
-        const physics_debug_renderer: physics_debug.PhysicsDebugRenderer = .{};
-        const physics_debug_data = physics_debug.RendererData.init(allocator, gpu_renderer.getDevice());
 
         // Initialize editor (ImGui debug UI)
         // This sets up ImGui with our SDL3 GPU device
-        editor.init(window, gpu_renderer.getDevice());
+        editor.init(
+            window,
+            gpu_renderer.getDevice(),
+            gpu_renderer.getSwapchainFormat(),
+        );
 
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Incinerator Engine initialized (ECS)\n", .{});
@@ -193,28 +172,23 @@ const App = struct {
         std.debug.print("   SPACE - Print camera position\n", .{});
         std.debug.print("   F1 - Toggle editor UI\n", .{});
         std.debug.print("   F2 - Toggle ImGui demo\n", .{});
-        std.debug.print("   F4 - Toggle physics debug\n", .{});
         std.debug.print("===========================================\n\n", .{});
 
         return App{
             .window = window,
             .gpu_renderer = gpu_renderer,
             .frame_timer = timing.FrameTimer.init(),
-            .input_buffer = input.InputBuffer.init(),
-            .allocator = allocator,
+            .input_buffer = input.InputBuffer.init(main_window_id),
             .game_world = game_world,
             .physics_world = physics_world,
-            .physics_debug_renderer = physics_debug_renderer,
-            .physics_debug_data = physics_debug_data,
+            .sandbox_ground_body = null,
+            .crate_slice = null,
             .ground_mesh = ground_mesh,
-            .textured_cube_mesh = textured_cube_mesh,
+            .crate_visuals = crate_visuals,
             .cylinder_mesh = cylinder_mesh,
-            .debug_texture = debug_texture,
-            .loaded_model_1 = loaded_model_1,
-            .loaded_model_2 = loaded_model_2,
             .game_camera = .{
                 .position = .{ -5.18, 4.96, 7.57, 1.0 },
-                .yaw = 0.59,    // 33.6 degrees
+                .yaw = 0.59, // 33.6 degrees
                 .pitch = -0.36, // -20.6 degrees
             },
             .debug_frame_counter = 0,
@@ -224,29 +198,26 @@ const App = struct {
 
     pub fn deinit(self: *App) void {
         // Clean up editor first (needs GPU device to still be valid)
+        editor.releaseWorld(&self.game_world);
         editor.deinit();
 
-        // Clean up physics debug renderer (unregister singleton first)
-        physics_debug.PhysicsDebugRenderer.unregisterSingleton();
-        self.physics_debug_data.deinit();
+        if (self.crate_slice) |*crate_slice| {
+            crate_slice.deinit();
+            self.crate_slice = null;
+        }
 
-        // Clean up loaded models if present
-        if (self.loaded_model_1) |*model| {
-            model.deinit();
+        if (self.sandbox_ground_body) |ground_body| {
+            if (!self.physics_world.removeBody(ground_body)) {
+                @panic("sandbox ground cleanup invariant failed");
+            }
+            self.sandbox_ground_body = null;
         }
-        if (self.loaded_model_2) |*model| {
-            model.deinit();
-        }
+
         self.game_world.deinit();
         self.physics_world.deinit();
         self.ground_mesh.deinit();
-        // Note: debug_texture is shared, don't deinit here (meshes don't own it)
-        // Clear references before deinit to avoid double-free
-        self.textured_cube_mesh.diffuse_texture = null;
-        self.cylinder_mesh.diffuse_texture = null;
-        self.textured_cube_mesh.deinit();
         self.cylinder_mesh.deinit();
-        self.debug_texture.deinit();
+        self.crate_visuals.deinit();
         self.gpu_renderer.deinit();
         c.SDL_DestroyWindow(self.window);
         c.SDL_Quit();
@@ -261,7 +232,7 @@ const App = struct {
     /// Spawn initial entities into the ECS world.
     /// IMPORTANT: Must be called AFTER App construction to ensure mesh pointers
     /// point to stable memory (App's fields, not stack locals).
-    pub fn spawnEntities(self: *App) void {
+    pub fn spawnEntities(self: *App) !void {
         // Link physics world to ECS for sync operations
         self.game_world.setPhysicsWorld(&self.physics_world);
 
@@ -271,14 +242,15 @@ const App = struct {
 
         // Create a static ground plane (large flat box)
         // Physics ground: center at y=-1, half-extents 50x1x50 means surface at y=0
-        _ = self.physics_world.createStaticBox(
+        const ground_body = try self.physics_world.createStaticBox(
             .{ 0, -1, 0 }, // Position (center of box)
             .{ 50, 1, 50 }, // Half-extents (100x2x100 units)
         );
+        errdefer _ = self.physics_world.removeBody(ground_body);
 
         // Create visual ground plane entity
         // Checkerboard: 32x32 tiles at 2m each = 64m x 64m, 1 unit = 1 meter
-        _ = self.game_world.spawnRenderable(
+        _ = try self.game_world.spawnRenderable(
             "Ground",
             .{ .x = 0, .y = 0, .z = 0 }, // At origin (top of physics ground)
             .{}, // No rotation
@@ -286,36 +258,30 @@ const App = struct {
             &self.ground_mesh,
         );
 
-        // Create falling physics cubes WITH visual representation
-        // Each entity has both RigidBody (physics) and Renderable (visuals)
-        // Using textured cubes for proper debug visualization
-        // 5 cubes from high up with staggered positions to create tumbling
-        const falling_cube_positions = [_][3]f32{
-            .{ 0.0, 12, 0.0 }, // Center, highest
-            .{ 0.4, 14, 0.3 }, // Offset to land on edge
-            .{ -0.3, 16, -0.2 }, // Opposite offset
-            .{ 0.2, 18, -0.4 }, // More diagonal
-            .{ -0.5, 20, 0.1 }, // Highest, most offset
-        };
-
-        for (falling_cube_positions) |pos| {
-            // Create physics body
-            if (self.physics_world.createDynamicBox(pos, .{ 0.5, 0.5, 0.5 })) |body_id| {
-                // Create ECS entity with BOTH Renderable and RigidBody
-                // Use textured cube for checkerboard debug visualization
-                const entity = self.game_world.spawn(.{
-                    .position = .{ .x = pos[0], .y = pos[1], .z = pos[2] },
-                    .rotation = .{},
-                    .scale = .{ .x = 1, .y = 1, .z = 1 },
-                    .mesh = &self.textured_cube_mesh,
-                });
-                // Add RigidBody component to link physics
-                self.game_world.set(entity, ecs.RigidBody, .{ .body_id = body_id });
-            }
-        }
-
+        // S0: the falling crate is now owned by a feature slice. It borrows
+        // the sandbox's one Flecs/Jolt world but imports no SDL or GPU types.
+        var crate_slice = try crate_host.Simulation.initBorrowed(
+            std.heap.page_allocator,
+            self.game_world.borrowWorldContext(),
+            &self.physics_world,
+            .{
+                .namespace = 1,
+                .fixed_delta_seconds = @floatCast(timing.TICK_DURATION),
+                .assets = .{
+                    .mesh = crate_visual_resources.mesh_handle,
+                    .material = crate_visual_resources.material_handle,
+                },
+                .create_ground = false,
+            },
+        );
+        errdefer crate_slice.deinit();
+        try crate_slice.submit(.{ .spawn = .{
+            .request_id = 1,
+            .pose = .{ .position = .{ 0, 12, 0 } },
+            .velocity = .{ .angular = .{ 0.2, 0.35, 0.1 } },
+        } });
         // Add a textured cylinder for debug visualization demo
-        _ = self.game_world.spawnRenderable(
+        _ = try self.game_world.spawnRenderable(
             "Cylinder",
             .{ .x = 4, .y = 0.5, .z = 0 }, // Right side, sitting on ground
             .{}, // No rotation
@@ -328,46 +294,16 @@ const App = struct {
 
         std.debug.print(" Physics bodies: {d}\n", .{self.physics_world.getBodyCount()});
 
-        // ================================================================
-        // Visual-Only Entities (no physics)
-        // ================================================================
-        // These are for things that don't need collision: loaded models,
-        // decorations, particles, skybox, etc.
+        std.debug.print(" Legacy visual entities: {d}\n", .{self.game_world.entityCount()});
 
-        // Spawn loaded model meshes as ECS entities
-        // Scale depends on how model was exported. Try 1.0 first, adjust if needed.
-        // For cm→meters use 0.01, for already-in-meters use 1.0
-        const human_scale: f32 = 1.0; // Adjust based on model export settings
-
-        if (self.loaded_model_1) |*loaded| {
-            for (loaded.meshes) |*m| {
-                _ = self.game_world.spawnRenderable(
-                    "Woman1",
-                    .{ .x = 3.0, .y = 0, .z = 0 }, // Right of center
-                    ecs.Rotation.fromEuler(std.math.pi / 2.0, 0, 0), // Rotate to stand up
-                    .{ .x = human_scale, .y = human_scale, .z = human_scale },
-                    m,
-                );
-            }
-        }
-
-        if (self.loaded_model_2) |*loaded| {
-            for (loaded.meshes) |*m| {
-                _ = self.game_world.spawnRenderable(
-                    "Woman2",
-                    .{ .x = -3.0, .y = 0, .z = 0 }, // Left of center
-                    ecs.Rotation.fromEuler(std.math.pi / 2.0, 0, 0), // Rotate to stand up
-                    .{ .x = human_scale, .y = human_scale, .z = human_scale },
-                    m,
-                );
-            }
-        }
-
-        std.debug.print(" Visual entities: {d}\n", .{self.game_world.entityCount()});
+        // Transfer the boxed simulation only after every fallible sandbox
+        // spawn has succeeded; the errdefer above owns it until this point.
+        self.crate_slice = crate_slice;
+        self.sandbox_ground_body = ground_body;
     }
 
     /// Run the main game loop
-    pub fn run(self: *App) void {
+    pub fn run(self: *App) !void {
         var running = true;
 
         while (running) {
@@ -378,6 +314,8 @@ const App = struct {
             // This runs every frame to ensure responsive input.
             self.input_buffer.beginFrame();
             running = self.input_buffer.pumpEvents();
+            editor.updateLifecycle(&self.game_world);
+            if (!running) break;
 
             // Begin frame timing (must be after input pump for accurate delta)
             self.frame_timer.beginFrame();
@@ -388,7 +326,7 @@ const App = struct {
             // Run simulation at fixed timestep. Multiple ticks may run per frame
             // if we're behind, or zero ticks if we're ahead.
             while (self.frame_timer.shouldTick()) {
-                self.simulateTick();
+                try self.simulateTick();
             }
 
             // ================================================================
@@ -397,7 +335,7 @@ const App = struct {
             // Render the current state. The alpha value can be used to
             // interpolate between previous and current state for smoothness.
             const alpha = self.frame_timer.alpha();
-            self.render(alpha);
+            try self.render(alpha);
 
             // ================================================================
             // DEBUG OUTPUT
@@ -412,15 +350,19 @@ const App = struct {
 
     /// Fixed timestep simulation tick
     /// This is where physics, gameplay logic, and AI would run.
-    fn simulateTick(self: *App) void {
-        self.sim_tick_count += 1;
-
-        // Step physics simulation at fixed timestep
-        self.physics_world.update(@floatCast(timing.TICK_DURATION));
+    fn simulateTick(self: *App) !void {
+        // The S0 runtime owns the one physics-step schedule entry. Legacy ECS
+        // sync still follows it during the sandbox migration.
+        if (self.crate_slice) |*crate_slice| {
+            try crate_slice.tick();
+        } else {
+            try self.physics_world.update(@floatCast(timing.TICK_DURATION));
+        }
 
         // Sync physics transforms to ECS components
         // This copies positions/rotations from Jolt bodies to ECS Position/Rotation
-        self.game_world.syncPhysicsToECS();
+        try self.game_world.syncPhysicsToECS();
+        self.sim_tick_count += 1;
 
         // Camera movement speed (units per tick at 120Hz)
         const move_speed = self.game_camera.move_speed * @as(f32, @floatCast(timing.TICK_DURATION));
@@ -479,12 +421,17 @@ const App = struct {
 
     /// Render the current frame using SDL3 GPU API
     /// `alpha` is the interpolation factor (0.0 to 1.0) for smooth visuals.
-    fn render(self: *App, alpha: f32) void {
-        _ = alpha; // Will use for interpolation when transforms work
-
+    fn render(self: *App, alpha: f32) !void {
         // Begin the frame (clears screen)
-        if (!self.gpu_renderer.beginFrame(renderer.Colors.CORNFLOWER_BLUE)) {
-            return; // Frame skipped (e.g., window minimized)
+        switch (try self.gpu_renderer.beginFrame(renderer.Colors.CORNFLOWER_BLUE)) {
+            .ready => {},
+            .unavailable => {
+                // Wait briefly without removing the next event from SDL's
+                // queue. This keeps minimized windows responsive without
+                // turning the main loop into a busy spin.
+                _ = c.SDL_WaitEventTimeout(null, 16);
+                return;
+            },
         }
 
         // Calculate aspect ratio from window dimensions
@@ -502,18 +449,34 @@ const App = struct {
         while (iter.next()) |entity| {
             // Each entity computes its own model matrix from Position/Rotation/Scale
             const model_matrix = entity.getModelMatrix();
-            const mvp = zm.mul(model_matrix, view_proj);
-            self.gpu_renderer.drawMesh(entity.mesh, mvp);
+            self.gpu_renderer.drawMesh(entity.mesh, model_matrix, view_proj);
         }
 
-        // ================================================================
-        // Physics Debug Rendering (F4 toggle)
-        // ================================================================
-        // Draw physics collider wireframes when enabled. This must happen
-        // BEFORE ending the render pass since it draws lines/triangles.
-        self.physics_debug_renderer.beginFrame();
-        self.physics_world.drawDebug(&self.physics_debug_renderer);
-        self.physics_debug_renderer.render(&self.gpu_renderer, view_proj);
+        // CrateFeature extraction is immutable plain data. The visual host is
+        // the only layer that resolves its typed handles to GPU resources.
+        if (self.crate_slice) |*crate_slice| {
+            for (try crate_slice.presentation(alpha)) |draw| {
+                const crate_mesh = try self.crate_visuals.resolve(draw.mesh, draw.material);
+                const scale = zm.scaling(
+                    draw.half_extents[0] * 2,
+                    draw.half_extents[1] * 2,
+                    draw.half_extents[2] * 2,
+                );
+                const rotation = zm.quatToMat(zm.f32x4(
+                    draw.pose.rotation[0],
+                    draw.pose.rotation[1],
+                    draw.pose.rotation[2],
+                    draw.pose.rotation[3],
+                ));
+                const translation = zm.translation(
+                    draw.pose.position[0],
+                    draw.pose.position[1],
+                    draw.pose.position[2],
+                );
+                const model_matrix = zm.mul(zm.mul(scale, rotation), translation);
+                self.gpu_renderer.drawMesh(crate_mesh, model_matrix, view_proj);
+            }
+        }
 
         // ================================================================
         // End scene render pass BEFORE editor drawing
@@ -535,7 +498,7 @@ const App = struct {
         );
 
         // Submit the frame (both scene and editor render passes)
-        self.gpu_renderer.submitFrame();
+        try self.gpu_renderer.submitFrame();
     }
 
     /// Print debug statistics
@@ -553,26 +516,26 @@ const App = struct {
 // Entry Point
 // ============================================================================
 
-pub fn main() !void {
+pub fn main(init: std.process.Init) !void {
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    if (args.len == 2 and std.mem.eql(u8, args[1], "--verify-install")) {
+        std.debug.print(
+            "Incinerator install verified (shader format: {s}, GPU driver: {s}, editor: {})\n",
+            .{ @tagName(shader_assets.format), shader_assets.driver, build_options.editor_enabled },
+        );
+        return;
+    }
+
     var app = try App.init();
     defer app.deinit();
-
-    // IMPORTANT: Set up physics debug renderer now that App is at a stable memory location.
-    // The singleton MUST be registered with stable pointers, not stack locals from init().
-    app.physics_debug_renderer.setData(&app.physics_debug_data);
-    try app.physics_debug_renderer.registerSingleton();
-    // Note: unregisterSingleton is called in App.deinit()
-
-    // Wire up physics debug settings to editor tool (pointer must be to stable App memory)
-    physics_tool.setDebugSettings(&app.physics_debug_renderer.settings);
 
     // Wire up render settings to editor tool
     render_tool.setRenderSettings(&app.gpu_renderer.render_settings);
 
     // Spawn entities AFTER App is constructed (mesh pointers must be stable)
-    app.spawnEntities();
+    try app.spawnEntities();
 
-    app.run();
+    try app.run();
 }
 
 // ============================================================================
@@ -582,4 +545,20 @@ pub fn main() !void {
 test "app structure exists" {
     // Basic compile-time check that App struct is valid
     _ = App;
+}
+
+test "all engine module tests are discovered" {
+    // Zig 0.16 analyzes declarations lazily. Explicitly reference each module
+    // so its test blocks remain part of the engine test contract.
+    std.testing.refAllDecls(@import("camera.zig"));
+    std.testing.refAllDecls(@import("crate_visual_resources.zig"));
+    std.testing.refAllDecls(@import("ecs.zig"));
+    std.testing.refAllDecls(@import("editor/tool.zig"));
+    std.testing.refAllDecls(@import("gltf_loader.zig"));
+    std.testing.refAllDecls(@import("input.zig"));
+    std.testing.refAllDecls(@import("mesh.zig"));
+    std.testing.refAllDecls(@import("jolt_physics"));
+    std.testing.refAllDecls(@import("renderer.zig"));
+    std.testing.refAllDecls(@import("texture.zig"));
+    std.testing.refAllDecls(@import("timing.zig"));
 }

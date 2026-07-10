@@ -1,8 +1,10 @@
 # ADR-002: Module Architecture and Layering
 
-**Status:** Accepted
+**Status:** Superseded by ADR-008
 **Date:** 2025-12-05
 **Decision Makers:** Matt, Claude
+
+> Superseded on 2026-07-09. Low-level implementation modules may still use layering, but top-level ownership and delivery now follow the thin-kernel and feature-slice model in ADR-008.
 
 ## Context
 

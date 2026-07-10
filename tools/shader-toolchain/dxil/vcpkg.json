@@ -1,0 +1,36 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "incinerator-dxil-shader-toolchain",
+  "version-string": "2026-07-09",
+  "builtin-baseline": "cd61e1e26a038e82d6550a3ebbe0fbbfe7da78e3",
+  "dependencies": [
+    "shaderc",
+    "spirv-cross",
+    "sdl3-shadercross",
+    {
+      "name": "sdl3",
+      "default-features": false,
+      "features": [
+        "vulkan"
+      ]
+    }
+  ],
+  "overrides": [
+    {
+      "name": "shaderc",
+      "version": "2026.2"
+    },
+    {
+      "name": "spirv-cross",
+      "version": "1.4.350.0"
+    },
+    {
+      "name": "sdl3-shadercross",
+      "version": "3.0.0-preview2"
+    },
+    {
+      "name": "directx-dxc",
+      "version-date": "2026-05-27"
+    }
+  ]
+}

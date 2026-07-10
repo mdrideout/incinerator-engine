@@ -1,10 +1,29 @@
 # ADR-004: Entity Component System Architecture
 
-**Status:** Accepted
+**Status:** Accepted, amended by ADR-008
 **Date:** 2025-12-06
+**Updated:** 2026-07-09
 **Decision Makers:** Matt, Claude
 
-## Context
+> Amendment: Flecs remains the ECS implementation, but gameplay data and systems are owned by feature modules rather than a global scene layer. Flecs IDs are runtime implementation details, not persistent identity. Serializable components must not contain owning pointers, GPU handles, or other process-local resources. Rotation storage is quaternion-based as established by ADR-005. Optional Flecs names are unique root lookup identities—not display labels—and spawning rejects duplicates, empty names, and path syntax instead of silently aliasing an existing entity.
+
+> Current implementation: ADR-008 supersedes the prototype `GameWorld` as the
+> architecture for new work. The public kernel exposes a type-erased `Runtime`
+> with engine-owned persistent-ID indexing and runtime-token/entity-serial
+> validation; Flecs state remains private. `GameWorld` and its renderable query
+> are a transitional visual-sandbox bridge that borrows the same world during
+> S0. A shared lease currently permits one live owned Flecs world per process,
+> so true atomic old/new world replacement remains open. The historical design
+> below documents the prototype and must not be treated as the feature API.
+
+## Historical prototype record
+
+The remainder of this ADR is retained to explain the original prototype
+choice. Its `GameWorld`, raw mesh-pointer render components, direct render
+query, and file layout are not current acceptance criteria; ADR-008 and the
+amendment above govern all new feature work.
+
+### Original context
 
 Incinerator Engine is targeting a GTA III-style open world with:
 - Hundreds of vehicles on screen simultaneously
@@ -75,9 +94,10 @@ pub const Position = struct {
 };
 
 pub const Rotation = struct {
-    x: f32 = 0,  // Euler angles (radians)
+    x: f32 = 0,
     y: f32 = 0,
     z: f32 = 0,
+    w: f32 = 1,  // normalized quaternion (x, y, z, w)
 };
 
 pub const Scale = struct {
@@ -122,8 +142,8 @@ pub const GameWorld = struct {
     pub fn deinit(self: *GameWorld) void { ... }
 
     // Spawning
-    pub fn spawn(self: *GameWorld, opts: SpawnOptions) flecs.entity_t { ... }
-    pub fn spawnRenderable(...) flecs.entity_t { ... }
+    pub fn spawn(self: *GameWorld, opts: SpawnOptions) !flecs.entity_t { ... }
+    pub fn spawnRenderable(...) !flecs.entity_t { ... }
 
     // Queries
     pub fn renderables(self: *GameWorld) RenderableIterator { ... }
@@ -192,8 +212,8 @@ while (iter.next()) |entity| {
 Entities are spawned with optional components:
 
 ```zig
-const entity = world.spawnRenderable(
-    "Cube",                        // Debug name
+const entity = try world.spawnRenderable(
+    "Cube",                        // Unique root lookup identity
     .{ .x = 0, .y = 0, .z = 0 },  // Position
     .{ .x = 0, .y = 0, .z = 0 },  // Rotation
     .{ .x = 1, .y = 1, .z = 1 },  // Scale
@@ -207,8 +227,8 @@ const entity = world.spawnRenderable(
 pub fn main() !void {
     var app = try App.init();    // App owns meshes
     defer app.deinit();
-    app.spawnEntities();          // NOW safe - app.cube_mesh has stable address
-    app.run();
+    try app.spawnEntities();      // NOW safe - app.cube_mesh has stable address
+    try app.run();
 }
 ```
 
@@ -217,15 +237,14 @@ pub fn main() !void {
 The main render loop queries all renderables:
 
 ```zig
-fn render(self: *App, alpha: f32) void {
+fn render(self: *App, alpha: f32) !void {
     // ... setup ...
 
     var iter = self.game_world.renderables();
     defer iter.deinit();
     while (iter.next()) |entity| {
         const model_matrix = entity.getModelMatrix();
-        const mvp = zm.mul(model_matrix, view_proj);
-        self.gpu_renderer.drawMesh(entity.mesh, mvp);
+        self.gpu_renderer.drawMesh(entity.mesh, model_matrix, view_proj);
     }
 }
 ```
@@ -311,7 +330,7 @@ The `finished` flag lets `deinit()` handle both cases safely.
 
 - **Performance** - Archetype storage enables cache-efficient iteration over thousands of entities
 - **Flexibility** - Components can be added/removed at runtime
-- **Scalability** - Architecture ready for GTA-scale worlds (vehicles, NPCs, debris)
+- **Scalability hypothesis** - Archetype storage is suitable for the intended scale, subject to D-010 measurements
 - **Query Efficiency** - Cached queries make render loops fast
 - **Industry Standard** - ECS is the modern game architecture pattern
 
@@ -329,7 +348,7 @@ The `finished` flag lets `deinit()` handle both cases safely.
 
 ## Future Work
 
-### Systems (Not Yet Implemented)
+### Flecs-native declarative systems (not used by the prototype)
 
 flecs supports declarative systems that run automatically:
 
@@ -342,7 +361,9 @@ flecs.system(world, "PhysicsUpdate", .{
 });
 ```
 
-Currently we iterate manually; systems will be added when complexity warrants.
+The S0 runtime now executes named systems through its own fixed phase schedule.
+It does not use Flecs-native declarative systems; adopting those remains a
+separate measured decision.
 
 ### Relationships
 
@@ -375,7 +396,7 @@ const vehicle_prefab = flecs.prefab(world, "Vehicle", .{
 const car = flecs.instantiate(world, vehicle_prefab);
 ```
 
-## File Structure
+## Prototype File Structure
 
 ```
 src/

@@ -25,7 +25,7 @@
     .fingerprint = 0x7d9ce1ec11f5f67f, // Changing this has security and trust implications.
     // Tracks the earliest Zig version that the package considers to be a
     // supported use case.
-    .minimum_zig_version = "0.15.2",
+    .minimum_zig_version = "0.16.0",
     // This field is optional.
     // Each dependency must either provide a `url` and `hash`, or a `path`.
     // `zig build --fetch` can be used to fetch all dependencies of a package, recursively.
@@ -33,40 +33,46 @@
     // internet connectivity.
     .dependencies = .{
         .sdl = .{
-            .url = "git+https://github.com/castholm/SDL.git#f103a1439670c35be756d4491b296a6e3ccffaed",
-            .hash = "sdl-0.3.2+3.2.26-7uIn9BNgfwHaS0qXiSIBLkJf8Jfrh5P6gSWdQvtnvxEp",
+            .url = "git+https://github.com/castholm/SDL.git#1b67d371a531ecb0499d4b80a865631c299f472a",
+            .hash = "sdl-0.5.2+3.4.12-SDL--qPKpwHc40bqAlYs7W9pXJVyLwsGDNa4shNXbOZr",
         },
-        .zphysics = .{
-            .url = "git+https://github.com/zig-gamedev/zphysics.git#87dbfd003e31623cede1137aa8a70f86619b5d5b",
-            .hash = "zphysics-0.2.0-dev-nZDEAOXUQgCrjn_iSZke7zpWwqRUe_BRlrzRrDdXXPEz",
+        .joltc = .{
+            .path = "third_party/joltc-zig",
         },
         .zgui = .{
-            .url = "git+https://github.com/zig-gamedev/zgui.git#7d3fb3302b90bf71dbc93eb02bb208e6f37d555b",
-            .hash = "zgui-0.6.0-dev--L6sZBHybQAZLl719GjSlogZC3MhuGRf4wI48tjbnW3z",
+            .url = "git+https://github.com/zig-gamedev/zgui.git#bfbebed372723d1f585f86fc0a550232b3427f4d",
+            .hash = "zgui-0.6.0-dev--L6sZJhIbgAjWdK5h6xuVUrsOcD-RdqEOEPf03Zgi4mF",
+            .lazy = true,
         },
         .zmath = .{
-            .url = "git+https://github.com/zig-gamedev/zmath.git#3a5955b2b72cd081563fbb084eff05bffd1e3fbb",
-            .hash = "zmath-0.11.0-dev-wjwivdMsAwD-xaLj76YHUq3t9JDH-X16xuMTmnDzqbu2",
+            .url = "git+https://github.com/zig-gamedev/zmath.git#9e42b04a24c970a297b365f3d3022f92dbf3219d",
+            .hash = "zmath-0.11.0-dev-wjwivTwtAwDOjG2_KGP-HLtHrONfsFfHttalmxFAGVAK",
         },
         .zmesh = .{
-            .url = "git+https://github.com/zig-gamedev/zmesh#36ec42e7e77b2cade7776eb3e91e3e290293a864",
-            .hash = "zmesh-0.11.0-dev-oO3A5rR7CgCTMzfdKOhWW-OIyL4-7mlxXzBef_62fbHb",
+            .url = "git+https://github.com/zig-gamedev/zmesh#a0efcc452eab17550ad5525df2293009e9cbaf66",
+            .hash = "zmesh-0.11.0-dev-oO3A5kqTCgAF9nWzOGHywV6-07-wJRUIMm1RH7BlCTHb",
         },
         .zstbi = .{
-            .url = "git+https://github.com/zig-gamedev/zstbi#2c4b3100ccb7aed90ecc9439030899764e2a8d47",
-            .hash = "zstbi-0.11.0-dev-L0Ea_yaWBwAHwFoCuyjkFyaiSsbjt4UOrkntR0c_nmzz",
+            .url = "git+https://github.com/zig-gamedev/zstbi#3813f5f113b26f644cfa01a30155cc76b3526e91",
+            .hash = "zstbi-0.11.0-dev-L0Ea_3GWBwAh7m54XX055vwLKPTPij5hyqyeq92MXPE2",
         },
         .zflecs = .{
-            .url = "git+https://github.com/zig-gamedev/zflecs.git#9c484724d7245f585a1a7d8ac67e91f0d764951d",
-            .hash = "zflecs-0.2.0-dev-1PN3ym9mOgCyE8w0DdK_Uf7FAob-nm0Dp_lZKR3QyJaC",
+            .url = "git+https://github.com/zig-gamedev/zflecs.git#9c2771cf0cae508db622821bb7deac6e9370a9de",
+            .hash = "zflecs-0.2.0-dev-1PN3yvUPQQBUdlukoUPPTpW5NLhkagNIEtOq0C0S3bmf",
         },
     },
     .paths = .{
+        ".zigversion",
+        ".github",
+        "README.md",
+        "OVERHAUL_PLAN.md",
+        "PLAN_001.md",
         "build.zig",
         "build.zig.zon",
+        "docs",
+        "shaders",
         "src",
-        // For example...
-        //"LICENSE",
-        //"README.md",
+        "third_party",
+        "tools",
     },
 }

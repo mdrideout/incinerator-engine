@@ -6,7 +6,7 @@
 // For loaded 3D models (GLB/glTF). Receives interpolated normal and UV.
 // Samples diffuse texture and applies basic lighting.
 
-// Inputs from vertex shader
+// Inputs from vertex shader (normal is in world space)
 layout(location = 0) in vec3 frag_normal;
 layout(location = 1) in vec2 frag_texcoord;
 
@@ -36,7 +36,7 @@ void main() {
     // Normalize the interpolated normal (interpolation can denormalize it)
     vec3 normal = normalize(frag_normal);
 
-    // Simple directional light from above-right-front
+    // Simple world-space directional light from above-right-front
     vec3 light_dir = normalize(vec3(0.5, 1.0, 0.3));
     float ndotl = max(dot(normal, light_dir), 0.0);
 

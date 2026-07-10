@@ -12,9 +12,9 @@
 // ---------------------------------------------------------------------------
 // UNIFORM BUFFER: Shared data from CPU (updated per-object)
 // ---------------------------------------------------------------------------
-// set = 0: First descriptor set
-// binding = 0: First binding within that set
-layout(set = 0, binding = 0) uniform Uniforms {
+// SDL_GPU reserves descriptor set 1 for vertex uniform buffers.
+// binding = 0: First vertex uniform buffer slot.
+layout(set = 1, binding = 0) uniform Uniforms {
     mat4 mvp;  // Model-View-Projection matrix (combined)
 };
 

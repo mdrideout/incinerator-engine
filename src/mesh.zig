@@ -26,6 +26,22 @@ const texture_module = @import("texture.zig");
 const c = sdl.c;
 const Texture = texture_module.Texture;
 
+/// SDL GPU buffer sizes are u32. Validate all CPU-side counts before any
+/// allocation, mapping, or narrowing cast reaches the backend.
+fn checkedGpuBufferSize(element_size: usize, element_count: usize) !u32 {
+    if (element_size == 0 or element_count == 0) return error.EmptyBufferData;
+
+    const byte_count = std.math.mul(usize, element_size, element_count) catch
+        return error.GPUBufferTooLarge;
+    if (byte_count > std.math.maxInt(u32)) return error.GPUBufferTooLarge;
+    return @intCast(byte_count);
+}
+
+fn checkedGpuBufferTotal(first: u32, second: u32) !u32 {
+    if (first == 0 or second == 0) return error.EmptyBufferData;
+    return std.math.add(u32, first, second) catch error.GPUBufferTooLarge;
+}
+
 // ============================================================================
 // Vertex Definition
 // ============================================================================
@@ -86,8 +102,9 @@ pub const Mesh = struct {
     index_buffer: ?*c.SDL_GPUBuffer = null,
     index_count: u32 = 0,
 
-    // Diffuse texture (optional - null for untextured meshes)
-    // When null, renderer uses placeholder white texture
+    // Non-owning diffuse texture view (optional - null for untextured meshes).
+    // The texture owner must outlive this mesh. When null, the renderer uses
+    // its placeholder white texture.
     diffuse_texture: ?Texture = null,
 
     /// Returns true if this mesh uses indexed rendering.
@@ -98,7 +115,7 @@ pub const Mesh = struct {
 
     /// Upload vertex data to the GPU and create a Mesh (non-indexed).
     pub fn init(device: *c.SDL_GPUDevice, vertices: []const Vertex) !Mesh {
-        const buffer_size: u32 = @intCast(@sizeOf(Vertex) * vertices.len);
+        const buffer_size = try checkedGpuBufferSize(@sizeOf(Vertex), vertices.len);
 
         // Create GPU buffer
         const vertex_buffer = c.SDL_CreateGPUBuffer(device, &c.SDL_GPUBufferCreateInfo{
@@ -133,11 +150,15 @@ pub const Mesh = struct {
 
         // Upload to GPU
         const copy_cmd = c.SDL_AcquireGPUCommandBuffer(device) orelse {
+            std.debug.print("Failed to acquire mesh upload command buffer: {s}\n", .{c.SDL_GetError()});
             return error.CommandBufferFailed;
         };
 
         const copy_pass = c.SDL_BeginGPUCopyPass(copy_cmd) orelse {
-            _ = c.SDL_SubmitGPUCommandBuffer(copy_cmd);
+            std.debug.print("Failed to begin mesh upload copy pass: {s}\n", .{c.SDL_GetError()});
+            if (!c.SDL_CancelGPUCommandBuffer(copy_cmd)) {
+                std.debug.print("Failed to cancel mesh upload command buffer: {s}\n", .{c.SDL_GetError()});
+            }
             return error.CopyPassFailed;
         };
 
@@ -157,10 +178,8 @@ pub const Mesh = struct {
 
         c.SDL_EndGPUCopyPass(copy_pass);
 
-        // Submit and wait for upload to complete
-        const fence = c.SDL_SubmitGPUCommandBufferAndAcquireFence(copy_cmd);
-        _ = c.SDL_WaitForGPUFences(device, true, &fence, 1);
-        c.SDL_ReleaseGPUFence(device, fence);
+        // Submit and wait for upload to complete.
+        try submitUploadAndWait(device, copy_cmd);
 
         return Mesh{
             .vertex_buffer = vertex_buffer,
@@ -182,11 +201,14 @@ pub const Mesh = struct {
         vertices: []const VertexPNU,
         indices: []const u32,
     ) !Mesh {
+        // Validate the complete upload before creating any GPU resource.
+        const vertex_size = try checkedGpuBufferSize(@sizeOf(VertexPNU), vertices.len);
+        const index_size = try checkedGpuBufferSize(@sizeOf(u32), indices.len);
+        const total_size = try checkedGpuBufferTotal(vertex_size, index_size);
+
         // =====================================================================
         // Create Vertex Buffer
         // =====================================================================
-        const vertex_size: u32 = @intCast(@sizeOf(VertexPNU) * vertices.len);
-
         const vertex_buffer = c.SDL_CreateGPUBuffer(device, &c.SDL_GPUBufferCreateInfo{
             .usage = c.SDL_GPU_BUFFERUSAGE_VERTEX,
             .size = vertex_size,
@@ -200,8 +222,6 @@ pub const Mesh = struct {
         // =====================================================================
         // Create Index Buffer
         // =====================================================================
-        const index_size: u32 = @intCast(@sizeOf(u32) * indices.len);
-
         const index_buffer = c.SDL_CreateGPUBuffer(device, &c.SDL_GPUBufferCreateInfo{
             .usage = c.SDL_GPU_BUFFERUSAGE_INDEX,
             .size = index_size,
@@ -215,8 +235,6 @@ pub const Mesh = struct {
         // =====================================================================
         // Create Transfer Buffer (big enough for both vertex + index data)
         // =====================================================================
-        const total_size = vertex_size + index_size;
-
         const transfer_buffer = c.SDL_CreateGPUTransferBuffer(device, &c.SDL_GPUTransferBufferCreateInfo{
             .usage = c.SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
             .size = total_size,
@@ -251,11 +269,15 @@ pub const Mesh = struct {
         // Upload to GPU
         // =====================================================================
         const copy_cmd = c.SDL_AcquireGPUCommandBuffer(device) orelse {
+            std.debug.print("Failed to acquire mesh upload command buffer: {s}\n", .{c.SDL_GetError()});
             return error.CommandBufferFailed;
         };
 
         const copy_pass = c.SDL_BeginGPUCopyPass(copy_cmd) orelse {
-            _ = c.SDL_SubmitGPUCommandBuffer(copy_cmd);
+            std.debug.print("Failed to begin mesh upload copy pass: {s}\n", .{c.SDL_GetError()});
+            if (!c.SDL_CancelGPUCommandBuffer(copy_cmd)) {
+                std.debug.print("Failed to cancel mesh upload command buffer: {s}\n", .{c.SDL_GetError()});
+            }
             return error.CopyPassFailed;
         };
 
@@ -291,10 +313,8 @@ pub const Mesh = struct {
 
         c.SDL_EndGPUCopyPass(copy_pass);
 
-        // Submit and wait for upload to complete
-        const fence = c.SDL_SubmitGPUCommandBufferAndAcquireFence(copy_cmd);
-        _ = c.SDL_WaitForGPUFences(device, true, &fence, 1);
-        c.SDL_ReleaseGPUFence(device, fence);
+        // Submit and wait for upload to complete.
+        try submitUploadAndWait(device, copy_cmd);
 
         return Mesh{
             .vertex_buffer = vertex_buffer,
@@ -309,7 +329,7 @@ pub const Mesh = struct {
     /// Create a non-indexed textured mesh from VertexPNU data.
     /// Use for simple textured primitives (cubes, cylinders, etc.)
     pub fn initTextured(device: *c.SDL_GPUDevice, vertices: []const VertexPNU) !Mesh {
-        const buffer_size: u32 = @intCast(@sizeOf(VertexPNU) * vertices.len);
+        const buffer_size = try checkedGpuBufferSize(@sizeOf(VertexPNU), vertices.len);
 
         // Create GPU buffer
         const vertex_buffer = c.SDL_CreateGPUBuffer(device, &c.SDL_GPUBufferCreateInfo{
@@ -344,11 +364,15 @@ pub const Mesh = struct {
 
         // Upload to GPU
         const copy_cmd = c.SDL_AcquireGPUCommandBuffer(device) orelse {
+            std.debug.print("Failed to acquire mesh upload command buffer: {s}\n", .{c.SDL_GetError()});
             return error.CommandBufferFailed;
         };
 
         const copy_pass = c.SDL_BeginGPUCopyPass(copy_cmd) orelse {
-            _ = c.SDL_SubmitGPUCommandBuffer(copy_cmd);
+            std.debug.print("Failed to begin mesh upload copy pass: {s}\n", .{c.SDL_GetError()});
+            if (!c.SDL_CancelGPUCommandBuffer(copy_cmd)) {
+                std.debug.print("Failed to cancel mesh upload command buffer: {s}\n", .{c.SDL_GetError()});
+            }
             return error.CopyPassFailed;
         };
 
@@ -368,10 +392,8 @@ pub const Mesh = struct {
 
         c.SDL_EndGPUCopyPass(copy_pass);
 
-        // Submit and wait for upload to complete
-        const fence = c.SDL_SubmitGPUCommandBufferAndAcquireFence(copy_cmd);
-        _ = c.SDL_WaitForGPUFences(device, true, &fence, 1);
-        c.SDL_ReleaseGPUFence(device, fence);
+        // Submit and wait for upload to complete.
+        try submitUploadAndWait(device, copy_cmd);
 
         return Mesh{
             .vertex_buffer = vertex_buffer,
@@ -383,10 +405,8 @@ pub const Mesh = struct {
 
     /// Release GPU resources.
     pub fn deinit(self: *Mesh) void {
-        // Release texture if this mesh owns one
-        if (self.diffuse_texture) |*tex| {
-            tex.deinit();
-        }
+        // `diffuse_texture` is a borrowed view; its aggregate owner releases it.
+        self.diffuse_texture = null;
         // Release index buffer if this is an indexed mesh
         if (self.index_buffer) |idx_buf| {
             c.SDL_ReleaseGPUBuffer(self.device, idx_buf);
@@ -394,6 +414,21 @@ pub const Mesh = struct {
         c.SDL_ReleaseGPUBuffer(self.device, self.vertex_buffer);
     }
 };
+
+/// Finish a synchronous resource upload and surface submission/wait failures.
+/// SDL consumes the command buffer even when fence acquisition fails.
+fn submitUploadAndWait(device: *c.SDL_GPUDevice, copy_cmd: *c.SDL_GPUCommandBuffer) !void {
+    const fence = c.SDL_SubmitGPUCommandBufferAndAcquireFence(copy_cmd) orelse {
+        std.debug.print("Failed to submit mesh upload command buffer: {s}\n", .{c.SDL_GetError()});
+        return error.CommandBufferSubmitFailed;
+    };
+    defer c.SDL_ReleaseGPUFence(device, fence);
+
+    if (!c.SDL_WaitForGPUFences(device, true, &fence, 1)) {
+        std.debug.print("Failed to wait for mesh upload fence: {s}\n", .{c.SDL_GetError()});
+        return error.FenceWaitFailed;
+    }
+}
 
 // ============================================================================
 // Tests
@@ -412,4 +447,33 @@ test "VertexPNU size is correct" {
 test "VertexFormat stride returns correct sizes" {
     try std.testing.expectEqual(@as(u32, 24), VertexFormat.pos_color.stride());
     try std.testing.expectEqual(@as(u32, 32), VertexFormat.pos_normal_uv.stride());
+}
+
+test "GPU buffer sizes reject empty and oversized inputs" {
+    try std.testing.expectError(error.EmptyBufferData, checkedGpuBufferSize(@sizeOf(Vertex), 0));
+    try std.testing.expectEqual(@as(u32, @sizeOf(Vertex)), try checkedGpuBufferSize(@sizeOf(Vertex), 1));
+
+    const largest_vertex_count = std.math.maxInt(u32) / @sizeOf(Vertex);
+    const largest_vertex_bytes: u32 = @intCast(largest_vertex_count * @sizeOf(Vertex));
+    try std.testing.expectEqual(
+        largest_vertex_bytes,
+        try checkedGpuBufferSize(@sizeOf(Vertex), largest_vertex_count),
+    );
+    try std.testing.expectError(
+        error.GPUBufferTooLarge,
+        checkedGpuBufferSize(@sizeOf(Vertex), largest_vertex_count + 1),
+    );
+    try std.testing.expectError(
+        error.GPUBufferTooLarge,
+        checkedGpuBufferSize(std.math.maxInt(usize), 2),
+    );
+}
+
+test "combined GPU upload size rejects overflow" {
+    try std.testing.expectError(error.EmptyBufferData, checkedGpuBufferTotal(0, 1));
+    try std.testing.expectEqual(@as(u32, 3), try checkedGpuBufferTotal(1, 2));
+    try std.testing.expectError(
+        error.GPUBufferTooLarge,
+        checkedGpuBufferTotal(std.math.maxInt(u32), 1),
+    );
 }

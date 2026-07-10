@@ -45,7 +45,6 @@ const tool = @import("tool.zig");
 const stats_tool = @import("tools/stats_tool.zig");
 const camera_tool = @import("tools/camera_tool.zig");
 const scene_tool = @import("tools/scene_tool.zig");
-const physics_tool = @import("tools/physics_tool.zig");
 const render_tool = @import("tools/render_tool.zig");
 const gizmo_tool = @import("tools/gizmo_tool.zig");
 
@@ -55,6 +54,20 @@ pub const Tool = tool.Tool;
 pub const EditorContext = tool.EditorContext;
 pub const GizmoMode = tool.GizmoMode;
 pub const GizmoSpace = tool.GizmoSpace;
+
+/// Semantic editor routing for an SDL event.
+///
+/// This reports only shortcuts that the editor itself reserved. It is
+/// intentionally separate from ImGui's `WantCapture*` state: the boolean
+/// returned by the SDL backend only means that it recognized an event.
+pub const EventRoute = struct {
+    keyboard_reserved: bool = false,
+    mouse_reserved: bool = false,
+};
+
+fn cameraNavigationActive(mouse_state: c.SDL_MouseButtonFlags, mouse_captured: bool) bool {
+    return !mouse_captured and (mouse_state & c.SDL_BUTTON_RMASK) != 0;
+}
 
 // ============================================================================
 // Editor State
@@ -66,12 +79,12 @@ var editor_visible: bool = true;
 /// Show the ImGui demo window (for learning/reference)
 var show_demo_window: bool = false;
 
-/// Input passthrough mode (F3 toggle)
-/// When true, ALL input passes through to the game even when editor is visible.
-/// This allows camera movement while keeping editor windows open for monitoring.
-/// ImGui still receives events for hover detection and drawing, but doesn't consume them.
-/// Defaults to true so you can move the camera immediately without toggling.
-var input_passthrough: bool = true;
+/// Input passthrough mode (F3 toggle).
+///
+/// Passthrough is an explicit debugging override. It defaults to false so the
+/// editor honors ImGui's capture requests during normal use. ImGui always sees
+/// every SDL event regardless of this setting.
+var input_passthrough: bool = false;
 
 /// Currently selected entity (persists across frames)
 /// Used by Scene tool for entity selection/inspection
@@ -100,7 +113,6 @@ var tools = [_]*Tool{
     &stats_tool.tool,
     &camera_tool.tool,
     &scene_tool.tool,
-    &physics_tool.tool,
     &render_tool.tool,
     &gizmo_tool.tool, // 3D transform manipulation gizmo (W/E/R to switch modes)
     // Add more tools here as we create them:
@@ -117,13 +129,13 @@ var tools = [_]*Tool{
 pub fn init(
     window: *c.SDL_Window,
     device: *c.SDL_GPUDevice,
+    swapchain_format: c.SDL_GPUTextureFormat,
 ) void {
     // Skip if editor is disabled at build time
     if (!build_options.editor_enabled) return;
 
-    // Initialize ImGui backend
-    // We use BGRA8 which is the common swapchain format
-    imgui_backend.init(window, device, c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM);
+    // ImGui's pipeline must match the actual claimed-window swapchain format.
+    imgui_backend.init(window, device, swapchain_format);
 
     std.debug.print("Editor initialized with {} tools\n", .{tools.len});
 }
@@ -134,45 +146,65 @@ pub fn deinit() void {
     imgui_backend.deinit();
 }
 
+/// Run editor-owned lifecycle transitions independently of rendering. This is
+/// required while a window is minimized or otherwise has no renderable frame.
+pub fn updateLifecycle(world: *ecs_module.GameWorld) void {
+    if (!build_options.editor_enabled) return;
+    if (!editor_visible or !gizmo_tool.tool.enabled) {
+        gizmo_tool.releaseInteraction(world);
+    }
+}
+
+/// Release world-scoped editor state before the ECS/physics world is destroyed.
+pub fn releaseWorld(world: *ecs_module.GameWorld) void {
+    if (!build_options.editor_enabled) return;
+    gizmo_tool.releaseInteraction(world);
+    selected_entity = null;
+}
+
 /// Process an SDL event for editor input.
 ///
-/// Returns true if the editor consumed the event (game won't see it).
-/// Returns false if the event should also be processed by the game.
+/// Every event is forwarded to the ImGui backend, including events received
+/// while the overlay is hidden. The returned route contains only explicit
+/// editor shortcuts; gameplay capture is queried separately through
+/// wantsMouse() and wantsKeyboard().
 ///
 /// Key behavior:
 /// - F1: Toggle editor visibility (always works, even when hidden)
 /// - F2: Toggle ImGui demo window (only when editor visible)
 /// - F3: Toggle input passthrough mode (always works)
-/// - F4: Toggle physics debug rendering (always works)
 ///
-/// Input passthrough mode: When enabled, ALL input passes through to the game
-/// even when hovering ImGui windows. This allows camera control while monitoring
-/// editor panels. ImGui still receives events for drawing/hover state.
-pub fn processEvent(event: *const c.SDL_Event) bool {
-    if (!build_options.editor_enabled) return false;
+/// Input passthrough mode disables ImGui capture as an explicit debugging
+/// override. It does not stop ImGui from receiving events.
+pub fn processEvent(event: *const c.SDL_Event) EventRoute {
+    if (!build_options.editor_enabled) return .{};
+
+    // Backend recognition is not capture. ImGui must observe every event so
+    // key/button releases and focus transitions cannot become unbalanced.
+    _ = imgui_backend.processEvent(event);
+
+    var route = EventRoute{};
 
     // ========================================================================
     // Global hotkeys - these work regardless of editor visibility or passthrough
     // ========================================================================
-    // IMPORTANT: Check these BEFORE the !editor_visible early return!
-    // This fixes the bug where F1 couldn't re-show the editor after hiding.
     if (event.type == c.SDL_EVENT_KEY_DOWN) {
         // F1: Toggle editor visibility
         if (event.key.scancode == c.SDL_SCANCODE_F1) {
-            editor_visible = !editor_visible;
-            return true; // Consume F1 - game doesn't need it
+            if (!event.key.repeat) {
+                editor_visible = !editor_visible;
+            }
+            route.keyboard_reserved = true;
+            return route;
         }
         // F3: Toggle input passthrough mode
         if (event.key.scancode == c.SDL_SCANCODE_F3) {
-            input_passthrough = !input_passthrough;
-            return true; // Consume F3 - game doesn't need it
+            if (!event.key.repeat) {
+                input_passthrough = !input_passthrough;
+            }
+            route.keyboard_reserved = true;
+            return route;
         }
-        // F4: Toggle physics debug rendering
-        if (event.key.scancode == c.SDL_SCANCODE_F4) {
-            physics_tool.toggleEnabled();
-            return true; // Consume F4 - game doesn't need it
-        }
-
         // ====================================================================
         // Gizmo Mode Hotkeys (W/E/R) - Unity convention
         // ====================================================================
@@ -190,29 +222,33 @@ pub fn processEvent(event: *const c.SDL_Event) bool {
         if (editor_visible) {
             // Query current mouse state to check if right-click is held
             const mouse_state = c.SDL_GetMouseState(null, null);
-            const right_click_held = (mouse_state & c.SDL_BUTTON_RMASK) != 0;
+            const right_click_held = cameraNavigationActive(mouse_state, wantsMouse());
 
             // Only handle gizmo hotkeys when NOT in camera mode (right-click held)
             if (!right_click_held) {
                 if (event.key.scancode == c.SDL_SCANCODE_W) {
                     gizmo_mode = .translate;
-                    return true;
+                    route.keyboard_reserved = true;
+                    return route;
                 }
                 if (event.key.scancode == c.SDL_SCANCODE_E) {
                     gizmo_mode = .rotate;
-                    return true;
+                    route.keyboard_reserved = true;
+                    return route;
                 }
                 if (event.key.scancode == c.SDL_SCANCODE_R) {
                     gizmo_mode = .scale;
-                    return true;
+                    route.keyboard_reserved = true;
+                    return route;
                 }
             }
             // When right-click is held, W/E/R pass through to game for camera
         }
     }
 
-    // If editor is hidden, don't process any other events
-    if (!editor_visible) return false;
+    // A hidden editor still receives backend events, but reserves no local
+    // shortcuts other than the global toggles above.
+    if (!editor_visible) return route;
 
     // ========================================================================
     // Editor-only hotkeys - only work when editor is visible
@@ -220,24 +256,15 @@ pub fn processEvent(event: *const c.SDL_Event) bool {
     if (event.type == c.SDL_EVENT_KEY_DOWN) {
         // F2: Toggle demo window
         if (event.key.scancode == c.SDL_SCANCODE_F2) {
-            show_demo_window = !show_demo_window;
-            return true;
+            if (!event.key.repeat) {
+                show_demo_window = !show_demo_window;
+            }
+            route.keyboard_reserved = true;
+            return route;
         }
     }
 
-    // ========================================================================
-    // Input passthrough mode
-    // ========================================================================
-    // When passthrough is ON:
-    // - Let ImGui see the event (so it can update hover state, draw correctly)
-    // - But return false so the game ALSO gets the input
-    if (input_passthrough) {
-        _ = imgui_backend.processEvent(event); // ImGui sees it for drawing
-        return false; // Game also gets it
-    }
-
-    // Normal mode: ImGui decides whether to consume
-    return imgui_backend.processEvent(event);
+    return route;
 }
 
 /// Draw the editor overlay.
@@ -284,6 +311,7 @@ pub fn draw(
     // Hidden state: just draw the hint and return
     // ========================================================================
     if (!editor_visible) {
+        gizmo_tool.releaseInteraction(@constCast(world));
         drawHiddenHint();
         imgui_backend.render(cmd, swapchain_texture);
         return;
@@ -304,12 +332,18 @@ pub fn draw(
         .selected_entity = selected_entity,
         .gizmo_mode = gizmo_mode,
         .gizmo_space = gizmo_space,
-        .wants_mouse = imgui_backend.wantsMouse(),
-        .wants_keyboard = imgui_backend.wantsKeyboard(),
+        .wants_mouse = wantsMouse(),
+        .wants_keyboard = wantsKeyboard(),
     };
 
     // Draw main menu bar
     drawMainMenuBar();
+
+    // Disabling the gizmo tool is a lifecycle boundary, not just a rendering
+    // choice: release any temporary kinematic body state immediately.
+    if (!gizmo_tool.tool.enabled) {
+        gizmo_tool.releaseInteraction(@constCast(world));
+    }
 
     // Draw all enabled tools
     for (&tools) |t| {
@@ -334,6 +368,7 @@ pub fn draw(
 pub fn wantsMouse() bool {
     if (!build_options.editor_enabled) return false;
     if (!editor_visible) return false;
+    if (input_passthrough) return false;
     return imgui_backend.wantsMouse();
 }
 
@@ -341,6 +376,7 @@ pub fn wantsMouse() bool {
 pub fn wantsKeyboard() bool {
     if (!build_options.editor_enabled) return false;
     if (!editor_visible) return false;
+    if (input_passthrough) return false;
     return imgui_backend.wantsKeyboard();
 }
 
@@ -426,4 +462,10 @@ fn drawMainMenuBar() void {
 
         zgui.endMainMenuBar();
     }
+}
+
+test "captured right mouse does not enable camera shortcut mode" {
+    try std.testing.expect(cameraNavigationActive(c.SDL_BUTTON_RMASK, false));
+    try std.testing.expect(!cameraNavigationActive(c.SDL_BUTTON_RMASK, true));
+    try std.testing.expect(!cameraNavigationActive(0, false));
 }

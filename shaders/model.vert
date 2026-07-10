@@ -22,16 +22,15 @@ layout(location = 1) out vec2 frag_texcoord;
 // Uniform buffer (slot 0 in set 1, same convention as triangle.vert)
 layout(set = 1, binding = 0) uniform Uniforms {
     mat4 mvp;  // Model-View-Projection matrix
+    mat4 normal_matrix;  // Inverse-transpose model matrix (world space)
 };
 
 void main() {
     // Transform vertex position from object space to clip space
     gl_Position = mvp * vec4(in_position, 1.0);
 
-    // Pass normal and UV to fragment shader
-    // Note: For correct lighting with non-uniform scaling, normal should be
-    // transformed by inverse-transpose of model matrix. For now, we pass
-    // it directly (works correctly for uniform scaling and rotation).
-    frag_normal = in_normal;
+    // Transform object-space normals into the fragment shader's declared
+    // world-space lighting frame. w=0 prevents translation from contributing.
+    frag_normal = normalize((normal_matrix * vec4(in_normal, 0.0)).xyz);
     frag_texcoord = in_texcoord;
 }

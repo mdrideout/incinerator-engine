@@ -101,8 +101,8 @@ pub fn deinit() void {
 /// ImGui needs to see input events to handle mouse clicks, keyboard input, etc.
 /// Call this for every SDL event before your game processes it.
 ///
-/// Returns true if ImGui "consumed" the event (e.g., mouse was over a window).
-/// When true, you may want to skip game input processing.
+/// Returns whether the backend recognized the event. This is not ImGui capture;
+/// gameplay routing must use `WantCaptureMouse`/`WantCaptureKeyboard` instead.
 pub fn processEvent(event: *const c.SDL_Event) bool {
     if (!initialized) return false;
     return zgui.backend.processEvent(@ptrCast(event));

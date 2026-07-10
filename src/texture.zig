@@ -23,22 +23,58 @@ const c = sdl.c;
 // Public Types
 // ============================================================================
 
-/// A GPU texture ready for sampling in shaders.
-/// Call deinit() when done to release GPU resources.
+/// A copy-safe, non-owning GPU texture view.
+///
+/// Copying this value never transfers or duplicates ownership. The
+/// corresponding `OwnedTexture` must outlive every copy of this view.
 pub const Texture = struct {
     gpu_texture: *c.SDL_GPUTexture,
-    device: *c.SDL_GPUDevice,
     width: u32,
     height: u32,
 
-    /// Release GPU resources.
-    pub fn deinit(self: *Texture) void {
-        c.SDL_ReleaseGPUTexture(self.device, self.gpu_texture);
+    /// Get the underlying SDL_GPUTexture pointer for binding.
+    pub fn getHandle(self: Texture) *c.SDL_GPUTexture {
+        return self.gpu_texture;
+    }
+};
+
+/// The unique owner of an SDL GPU texture.
+///
+/// Use `borrow()` to obtain copy-safe `Texture` views. `deinit()` is
+/// idempotent so cleanup paths can converge without releasing the SDL handle
+/// twice. Copying an `OwnedTexture` is still a logical ownership error; owners
+/// belong in resource-owning aggregates, while consumers store `Texture`.
+pub const OwnedTexture = struct {
+    device: *c.SDL_GPUDevice,
+    texture: ?Texture,
+
+    /// Borrow a copy-safe view. Borrowing after deinitialization is a bug.
+    pub fn borrow(self: *const OwnedTexture) Texture {
+        return self.texture orelse @panic("attempted to borrow a released texture");
     }
 
-    /// Get the underlying SDL_GPUTexture pointer for binding.
-    pub fn getHandle(self: *const Texture) *c.SDL_GPUTexture {
-        return self.gpu_texture;
+    /// Release the owned SDL resource at most once.
+    pub fn deinit(self: *OwnedTexture) void {
+        self.deinitWith({}, releaseSdlTexture);
+    }
+
+    fn releaseSdlTexture(_: void, device: *c.SDL_GPUDevice, texture: *c.SDL_GPUTexture) void {
+        c.SDL_ReleaseGPUTexture(device, texture);
+    }
+
+    /// Private release seam keeps the public type bound to SDL while allowing
+    /// its exactly-once ownership transition to be tested without a GPU.
+    fn deinitWith(self: *OwnedTexture, context: anytype, comptime release_fn: anytype) void {
+        const owned = self.take() orelse return;
+        release_fn(context, self.device, owned.gpu_texture);
+    }
+
+    /// Remove ownership from this value. Kept private so only this module can
+    /// turn an owner into a raw resource scheduled for release.
+    fn take(self: *OwnedTexture) ?Texture {
+        const owned = self.texture orelse return null;
+        self.texture = null;
+        return owned;
     }
 };
 
@@ -54,19 +90,23 @@ pub const Texture = struct {
 /// - height: Texture height in pixels
 /// - pixels: RGBA8 pixel data (4 bytes per pixel, row-major)
 ///
-/// Returns a Texture ready for shader sampling.
+/// Returns an OwnedTexture ready for shader sampling.
 /// The caller owns the texture and must call deinit() to release resources.
 pub fn createTexture(
     device: *c.SDL_GPUDevice,
     width: u32,
     height: u32,
     pixels: []const u8,
-) !Texture {
-    const expected_size = width * height * 4;
+) !OwnedTexture {
+    if (width == 0 or height == 0) return error.InvalidTextureDimensions;
+
+    const pixel_count = std.math.mul(usize, width, height) catch return error.TextureTooLarge;
+    const expected_size = std.math.mul(usize, pixel_count, 4) catch return error.TextureTooLarge;
     if (pixels.len != expected_size) {
         std.debug.print("Texture pixel data size mismatch: expected {d}, got {d}\n", .{ expected_size, pixels.len });
         return error.InvalidPixelData;
     }
+    if (expected_size > std.math.maxInt(u32)) return error.TextureTooLarge;
 
     // =========================================================================
     // Step 1: Create the GPU texture
@@ -90,7 +130,7 @@ pub fn createTexture(
     // =========================================================================
     // Step 2: Create transfer buffer for upload
     // =========================================================================
-    const buffer_size: u32 = @intCast(pixels.len);
+    const buffer_size: u32 = @intCast(expected_size);
 
     const transfer_buffer = c.SDL_CreateGPUTransferBuffer(device, &c.SDL_GPUTransferBufferCreateInfo{
         .usage = c.SDL_GPU_TRANSFERBUFFERUSAGE_UPLOAD,
@@ -117,11 +157,15 @@ pub fn createTexture(
     // Step 4: Upload to GPU
     // =========================================================================
     const copy_cmd = c.SDL_AcquireGPUCommandBuffer(device) orelse {
+        std.debug.print("Failed to acquire texture upload command buffer: {s}\n", .{c.SDL_GetError()});
         return error.CommandBufferFailed;
     };
 
     const copy_pass = c.SDL_BeginGPUCopyPass(copy_cmd) orelse {
-        _ = c.SDL_SubmitGPUCommandBuffer(copy_cmd);
+        std.debug.print("Failed to begin texture upload copy pass: {s}\n", .{c.SDL_GetError()});
+        if (!c.SDL_CancelGPUCommandBuffer(copy_cmd)) {
+            std.debug.print("Failed to cancel texture upload command buffer: {s}\n", .{c.SDL_GetError()});
+        }
         return error.CopyPassFailed;
     };
 
@@ -150,21 +194,30 @@ pub fn createTexture(
     c.SDL_EndGPUCopyPass(copy_pass);
 
     // Submit and wait for upload to complete
-    const fence = c.SDL_SubmitGPUCommandBufferAndAcquireFence(copy_cmd);
-    _ = c.SDL_WaitForGPUFences(device, true, &fence, 1);
-    c.SDL_ReleaseGPUFence(device, fence);
+    const fence = c.SDL_SubmitGPUCommandBufferAndAcquireFence(copy_cmd) orelse {
+        std.debug.print("Failed to submit texture upload command buffer: {s}\n", .{c.SDL_GetError()});
+        return error.CommandBufferSubmitFailed;
+    };
+    defer c.SDL_ReleaseGPUFence(device, fence);
 
-    return Texture{
-        .gpu_texture = gpu_texture,
+    if (!c.SDL_WaitForGPUFences(device, true, &fence, 1)) {
+        std.debug.print("Failed to wait for texture upload fence: {s}\n", .{c.SDL_GetError()});
+        return error.FenceWaitFailed;
+    }
+
+    return OwnedTexture{
         .device = device,
-        .width = width,
-        .height = height,
+        .texture = .{
+            .gpu_texture = gpu_texture,
+            .width = width,
+            .height = height,
+        },
     };
 }
 
 /// Create a 1x1 white placeholder texture.
 /// Used for meshes that don't have textures (renders as white).
-pub fn createPlaceholderTexture(device: *c.SDL_GPUDevice) !Texture {
+pub fn createPlaceholderTexture(device: *c.SDL_GPUDevice) !OwnedTexture {
     const white_pixel = [_]u8{ 255, 255, 255, 255 };
     return createTexture(device, 1, 1, &white_pixel);
 }
@@ -179,7 +232,7 @@ pub fn createCheckerboardTexture(
     comptime tiles: u32,
     color_a: [3]u8,
     color_b: [3]u8,
-) !Texture {
+) !OwnedTexture {
     const size = tile_size * tiles;
     var pixels: [size * size * 4]u8 = undefined;
 
@@ -203,7 +256,7 @@ pub fn createCheckerboardTexture(
 
 /// Create a standard debug checkerboard (gray/white, 128x128, 2x2 tiles).
 /// Good default for physics debug visualization.
-pub fn createDebugCheckerboard(device: *c.SDL_GPUDevice) !Texture {
+pub fn createDebugCheckerboard(device: *c.SDL_GPUDevice) !OwnedTexture {
     return createCheckerboardTexture(
         device,
         64, // 64 pixels per tile
@@ -217,8 +270,8 @@ pub fn createDebugCheckerboard(device: *c.SDL_GPUDevice) !Texture {
 pub fn createColoredCheckerboard(
     device: *c.SDL_GPUDevice,
     hue: enum { red, green, blue, yellow, cyan, magenta },
-) !Texture {
-    const colors = switch (hue) {
+) !OwnedTexture {
+    const colors: [2][3]u8 = switch (hue) {
         .red => .{ .{ 255, 180, 180 }, .{ 200, 100, 100 } },
         .green => .{ .{ 180, 255, 180 }, .{ 100, 200, 100 } },
         .blue => .{ .{ 180, 180, 255 }, .{ 100, 100, 200 } },
@@ -233,7 +286,47 @@ pub fn createColoredCheckerboard(
 // Tests
 // ============================================================================
 
-test "Texture struct size" {
-    // Compile-time check that struct is valid
-    _ = Texture;
+test "Texture is a copy-safe non-owning view" {
+    try std.testing.expect(!@hasDecl(Texture, "deinit"));
+
+    const handle: *c.SDL_GPUTexture = @ptrFromInt(0x1000);
+    const original = Texture{
+        .gpu_texture = handle,
+        .width = 16,
+        .height = 8,
+    };
+    const copied = original;
+
+    try std.testing.expectEqual(original.getHandle(), copied.getHandle());
+    try std.testing.expectEqual(original.width, copied.width);
+    try std.testing.expectEqual(original.height, copied.height);
+}
+
+test "OwnedTexture relinquishes ownership at most once" {
+    const device: *c.SDL_GPUDevice = @ptrFromInt(0x1000);
+    const handle: *c.SDL_GPUTexture = @ptrFromInt(0x2000);
+    var owned = OwnedTexture{
+        .device = device,
+        .texture = .{
+            .gpu_texture = handle,
+            .width = 4,
+            .height = 2,
+        },
+    };
+
+    const ReleaseCounter = struct {
+        fn release(count: *usize, _: *c.SDL_GPUDevice, _: *c.SDL_GPUTexture) void {
+            count.* += 1;
+        }
+    };
+
+    const view = owned.borrow();
+    try std.testing.expectEqual(handle, view.getHandle());
+
+    var release_count: usize = 0;
+    owned.deinitWith(&release_count, ReleaseCounter.release);
+    owned.deinitWith(&release_count, ReleaseCounter.release);
+
+    try std.testing.expectEqual(@as(usize, 1), release_count);
+    try std.testing.expect(owned.texture == null);
 }

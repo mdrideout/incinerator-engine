@@ -1,23 +1,30 @@
-//! By convention, root.zig is the root source file when making a library.
+//! Intentional public surface for Incinerator's thin simulation kernel.
+//!
+//! Backend adapters, SDL, renderer objects, editor state, Flecs identifiers,
+//! and gameplay feature implementations are deliberately not re-exported.
+
 const std = @import("std");
 
-pub fn bufferedPrint() !void {
-    // Stdout is for the actual output of your application, for example if you
-    // are implementing gzip, then only the compressed bytes should be sent to
-    // stdout, not any debugging messages.
-    var stdout_buffer: [1024]u8 = undefined;
-    var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
-    const stdout = &stdout_writer.interface;
+pub const contracts = @import("engine_contracts");
+pub const identity = contracts.identity;
+pub const transform = contracts.transform;
+pub const physics = contracts.physics;
+pub const rendering = contracts.rendering;
+pub const runtime = @import("engine/runtime.zig");
 
-    try stdout.print("Run `zig build test` to run the tests.\n", .{});
+pub const PersistentId = identity.PersistentId;
+pub const Pose = transform.Pose;
+pub const Runtime = runtime.Runtime;
+pub const RuntimeConfig = runtime.Config;
+pub const RuntimeId = runtime.RuntimeId;
+pub const FeatureRegistry = runtime.FeatureRegistry;
+pub const Phase = runtime.Phase;
+pub const TickContext = runtime.TickContext;
 
-    try stdout.flush(); // Don't forget to flush!
-}
-
-pub fn add(a: i32, b: i32) i32 {
-    return a + b;
-}
-
-test "basic add functionality" {
-    try std.testing.expect(add(3, 7) == 10);
+test "public engine surface remains coherent" {
+    std.testing.refAllDecls(identity);
+    std.testing.refAllDecls(transform);
+    std.testing.refAllDecls(physics);
+    std.testing.refAllDecls(rendering);
+    std.testing.refAllDecls(runtime);
 }

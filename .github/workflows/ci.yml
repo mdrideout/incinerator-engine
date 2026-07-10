@@ -1,0 +1,321 @@
+name: Upgrade gate
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upgrade-gate-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  ZIG_VERSION: 0.16.0
+  VCPKG_DISABLE_METRICS: "1"
+
+jobs:
+  macos:
+    name: macOS 15 / Apple Silicon
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install exact Zig
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/zig.tar.xz"
+          curl --fail --location --retry 3 \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-aarch64-macos-${ZIG_VERSION}.tar.xz" \
+            --output "$archive"
+          echo "b23d70deaa879b5c2d486ed3316f7eaa53e84acf6fc9cc747de152450d401489  $archive" | shasum -a 256 --check
+          tar -xf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-aarch64-macos-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Install locked shader tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_root="$RUNNER_TEMP/shader-tools"
+          vcpkg install \
+            --x-manifest-root=tools/shader-toolchain \
+            --x-install-root="$install_root" \
+            --triplet=arm64-osx \
+            --clean-after-build
+          echo "GLSLC=$install_root/arm64-osx/tools/shaderc/glslc" >> "$GITHUB_ENV"
+          echo "SPIRV_CROSS=$install_root/arm64-osx/tools/spirv-cross/spirv-cross" >> "$GITHUB_ENV"
+
+      - name: Verify exact tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(zig version)" = "$ZIG_VERSION"
+          "$GLSLC" --version
+          "$SPIRV_CROSS" --revision
+
+      - name: Formatting
+        shell: bash
+        run: zig fmt --check build.zig build.zig.zon src tools third_party/joltc-zig
+
+      - name: Headless dependency boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          zig build verify-headless-boundary -Deditor=false
+          zig build check-headless -Deditor=false \
+            -Dglslc=/definitely/missing/glslc \
+            -Dspirv-cross=/definitely/missing/spirv-cross \
+            -Dshadercross=/definitely/missing/shadercross --summary all
+          zig build verify-headless-linkage -Deditor=false \
+            -Dglslc=/definitely/missing/glslc \
+            -Dspirv-cross=/definitely/missing/spirv-cross \
+            -Dshadercross=/definitely/missing/shadercross --summary all
+          prefix="$RUNNER_TEMP/incinerator-headless"
+          zig build install-headless -Deditor=false \
+            -Dglslc=/definitely/missing/glslc \
+            -Dspirv-cross=/definitely/missing/spirv-cross \
+            -Dshadercross=/definitely/missing/shadercross --prefix "$prefix"
+          nm "$prefix/bin/incinerator_headless" > "$RUNNER_TEMP/headless-nm.txt"
+          ! grep -E 'SDL_|ImGui|cgltf|stbi_|meshopt_' "$RUNNER_TEMP/headless-nm.txt"
+          otool -L "$prefix/bin/incinerator_headless" > "$RUNNER_TEMP/headless-libraries.txt"
+          ! grep -E 'SDL|Metal|QuartzCore|AppKit' "$RUNNER_TEMP/headless-libraries.txt"
+          "$prefix/bin/incinerator_headless"
+
+      - name: Tests without editor
+        shell: bash
+        run: >-
+          zig build test -Deditor=false
+          -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS"
+          --summary all
+
+      - name: Debug build with editor
+        shell: bash
+        run: >-
+          zig build
+          -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS"
+          --summary all
+
+      - name: ReleaseFast build without editor
+        shell: bash
+        run: |
+          set -euo pipefail
+          zig build test -Doptimize=ReleaseFast -Deditor=false \
+            -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" --summary all
+          zig build -Doptimize=ReleaseFast -Deditor=false \
+            -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" --summary all
+
+      - name: Compile-only cross targets
+        shell: bash
+        run: |
+          set -euo pipefail
+          zig build -Dtarget=x86_64-linux-gnu -Deditor=false \
+            -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" --summary all
+          zig build -Dtarget=x86_64-windows-gnu -Dwindows-gpu=vulkan -Deditor=false \
+            -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" --summary all
+          zig build check-headless -Dtarget=x86_64-linux-gnu -Deditor=false \
+            -Dglslc=/definitely/missing/glslc \
+            -Dspirv-cross=/definitely/missing/spirv-cross \
+            -Dshadercross=/definitely/missing/shadercross --summary all
+          zig build check-headless -Dtarget=x86_64-windows-gnu -Deditor=false \
+            -Dglslc=/definitely/missing/glslc \
+            -Dspirv-cross=/definitely/missing/spirv-cross \
+            -Dshadercross=/definitely/missing/shadercross --summary all
+          zig build verify-headless-linkage -Dtarget=x86_64-linux-gnu -Deditor=false \
+            -Dglslc=/definitely/missing/glslc \
+            -Dspirv-cross=/definitely/missing/spirv-cross \
+            -Dshadercross=/definitely/missing/shadercross --summary all
+          zig build verify-headless-linkage -Dtarget=x86_64-windows-gnu -Deditor=false \
+            -Dglslc=/definitely/missing/glslc \
+            -Dspirv-cross=/definitely/missing/spirv-cross \
+            -Dshadercross=/definitely/missing/shadercross --summary all
+
+      - name: Relocatable install smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/incinerator-install"
+          zig build -Deditor=false \
+            -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" \
+            --prefix "$prefix"
+          cd "$RUNNER_TEMP"
+          "$prefix/bin/incinerator_engine" --verify-install
+
+      - name: Verify filtered source package
+        shell: bash
+        run: tools/verify_source_package.sh
+
+      - name: Build leaves source tree unchanged
+        shell: bash
+        run: |
+          set -euo pipefail
+          test ! -e src/shaders/compiled
+          git diff --exit-code
+          test -z "$(git status --porcelain --untracked-files=all)"
+
+  linux:
+    name: Linux x86_64 / Vulkan contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install exact Zig
+        shell: bash
+        run: |
+          set -euo pipefail
+          archive="$RUNNER_TEMP/zig.tar.xz"
+          curl --fail --location --retry 3 \
+            "https://ziglang.org/download/${ZIG_VERSION}/zig-x86_64-linux-${ZIG_VERSION}.tar.xz" \
+            --output "$archive"
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $archive" | sha256sum --check
+          tar -xf "$archive" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/zig-x86_64-linux-${ZIG_VERSION}" >> "$GITHUB_PATH"
+
+      - name: Install locked shader tools
+        shell: bash
+        run: |
+          set -euo pipefail
+          install_root="$RUNNER_TEMP/shader-tools"
+          vcpkg install \
+            --x-manifest-root=tools/shader-toolchain \
+            --x-install-root="$install_root" \
+            --triplet=x64-linux \
+            --clean-after-build
+          echo "GLSLC=$install_root/x64-linux/tools/shaderc/glslc" >> "$GITHUB_ENV"
+          echo "SPIRV_CROSS=$install_root/x64-linux/tools/spirv-cross/spirv-cross" >> "$GITHUB_ENV"
+
+      - name: Headless dependency boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(zig version)" = "$ZIG_VERSION"
+          zig build verify-headless-boundary -Deditor=false
+          zig build check-headless -Deditor=false \
+            -Dglslc=/definitely/missing/glslc \
+            -Dspirv-cross=/definitely/missing/spirv-cross \
+            -Dshadercross=/definitely/missing/shadercross --summary all
+          zig build verify-headless-linkage -Deditor=false \
+            -Dglslc=/definitely/missing/glslc \
+            -Dspirv-cross=/definitely/missing/spirv-cross \
+            -Dshadercross=/definitely/missing/shadercross --summary all
+          prefix="$RUNNER_TEMP/incinerator-headless"
+          zig build install-headless -Deditor=false \
+            -Dglslc=/definitely/missing/glslc \
+            -Dspirv-cross=/definitely/missing/spirv-cross \
+            -Dshadercross=/definitely/missing/shadercross --prefix "$prefix"
+          nm "$prefix/bin/incinerator_headless" > "$RUNNER_TEMP/headless-nm.txt"
+          ! grep -E 'SDL_|ImGui|cgltf|stbi_|meshopt_' "$RUNNER_TEMP/headless-nm.txt"
+          ldd "$prefix/bin/incinerator_headless" > "$RUNNER_TEMP/headless-libraries.txt"
+          ! grep -Ei 'SDL|vulkan|libX11|wayland|libGL' "$RUNNER_TEMP/headless-libraries.txt"
+          "$prefix/bin/incinerator_headless"
+
+      - name: Native tests and builds
+        shell: bash
+        run: |
+          set -euo pipefail
+          zig build test -Deditor=false \
+            -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" --summary all
+          zig build \
+            -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" --summary all
+          zig build test -Doptimize=ReleaseFast -Deditor=false \
+            -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" --summary all
+          zig build -Doptimize=ReleaseFast -Deditor=false \
+            -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" --summary all
+
+      - name: Relocatable install smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          prefix="$RUNNER_TEMP/incinerator-install"
+          zig build -Deditor=false \
+            -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" \
+            --prefix "$prefix"
+          cd "$RUNNER_TEMP"
+          "$prefix/bin/incinerator_engine" --verify-install
+
+  windows:
+    name: Windows x86_64 / D3D12 contract
+    runs-on: windows-2025
+    timeout-minutes: 60
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+
+      - name: Install exact Zig
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $archive = Join-Path $env:RUNNER_TEMP 'zig.zip'
+          Invoke-WebRequest `
+            -Uri "https://ziglang.org/download/$env:ZIG_VERSION/zig-x86_64-windows-$env:ZIG_VERSION.zip" `
+            -OutFile $archive
+          $actual = (Get-FileHash -Algorithm SHA256 $archive).Hash.ToLowerInvariant()
+          $expected = '68659eb5f1e4eb1437a722f1dd889c5a322c9954607f5edcf337bc3684a75a7e'
+          if ($actual -ne $expected) { throw "Zig archive checksum mismatch: $actual" }
+          Expand-Archive -Path $archive -DestinationPath $env:RUNNER_TEMP
+          Add-Content $env:GITHUB_PATH (Join-Path $env:RUNNER_TEMP "zig-x86_64-windows-$env:ZIG_VERSION")
+
+      - name: Install locked shader tools
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $installRoot = Join-Path $env:RUNNER_TEMP 'shader-tools'
+          & (Join-Path $env:VCPKG_INSTALLATION_ROOT 'vcpkg.exe') install `
+            --x-manifest-root=tools/shader-toolchain/dxil `
+            "--x-install-root=$installRoot" `
+            --triplet=x64-windows `
+            --clean-after-build
+          Add-Content $env:GITHUB_ENV "GLSLC=$(Join-Path $installRoot 'x64-windows/tools/shaderc/glslc.exe')"
+          Add-Content $env:GITHUB_ENV "SPIRV_CROSS=$(Join-Path $installRoot 'x64-windows/tools/spirv-cross/spirv-cross.exe')"
+          Add-Content $env:GITHUB_ENV "SHADERCROSS=$(Join-Path $installRoot 'x64-windows/tools/sdl3-shadercross/shadercross.exe')"
+          Add-Content $env:GITHUB_PATH (Join-Path $installRoot 'x64-windows/bin')
+
+      - name: Headless dependency boundary
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          if ((zig version) -ne $env:ZIG_VERSION) { throw 'Wrong Zig version' }
+          zig build verify-headless-boundary -Dtarget=x86_64-windows-gnu -Deditor=false
+          zig build check-headless -Dtarget=x86_64-windows-gnu -Deditor=false "-Dglslc=Z:\definitely\missing\glslc.exe" "-Dspirv-cross=Z:\definitely\missing\spirv-cross.exe" "-Dshadercross=Z:\definitely\missing\shadercross.exe" --summary all
+          zig build verify-headless-linkage -Dtarget=x86_64-windows-gnu -Deditor=false "-Dglslc=Z:\definitely\missing\glslc.exe" "-Dspirv-cross=Z:\definitely\missing\spirv-cross.exe" "-Dshadercross=Z:\definitely\missing\shadercross.exe" --summary all
+          $prefix = Join-Path $env:RUNNER_TEMP 'incinerator-headless'
+          zig build install-headless -Dtarget=x86_64-windows-gnu -Deditor=false "-Dglslc=Z:\definitely\missing\glslc.exe" "-Dspirv-cross=Z:\definitely\missing\spirv-cross.exe" "-Dshadercross=Z:\definitely\missing\shadercross.exe" --prefix $prefix
+          $binary = Join-Path $prefix 'bin/incinerator_headless.exe'
+          & $binary
+
+      - name: Native tests and builds
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          zig build test -Dtarget=x86_64-windows-gnu -Deditor=false "-Dglslc=$env:GLSLC" "-Dspirv-cross=$env:SPIRV_CROSS" "-Dshadercross=$env:SHADERCROSS" --summary all
+          zig build -Dtarget=x86_64-windows-gnu "-Dglslc=$env:GLSLC" "-Dspirv-cross=$env:SPIRV_CROSS" "-Dshadercross=$env:SHADERCROSS" --summary all
+          zig build test -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseFast -Deditor=false "-Dglslc=$env:GLSLC" "-Dspirv-cross=$env:SPIRV_CROSS" "-Dshadercross=$env:SHADERCROSS" --summary all
+          zig build -Dtarget=x86_64-windows-gnu -Doptimize=ReleaseFast -Deditor=false "-Dglslc=$env:GLSLC" "-Dspirv-cross=$env:SPIRV_CROSS" "-Dshadercross=$env:SHADERCROSS" --summary all
+
+      - name: Relocatable install smoke
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          $prefix = Join-Path $env:RUNNER_TEMP 'incinerator-install'
+          zig build -Dtarget=x86_64-windows-gnu -Deditor=false "-Dglslc=$env:GLSLC" "-Dspirv-cross=$env:SPIRV_CROSS" "-Dshadercross=$env:SHADERCROSS" --prefix $prefix
+          Push-Location $env:RUNNER_TEMP
+          try {
+            & (Join-Path $prefix 'bin/incinerator_engine.exe') --verify-install
+          } finally {
+            Pop-Location
+          }

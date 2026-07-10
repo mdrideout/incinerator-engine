@@ -1,4 +1,6 @@
-# Incinerator Engine - Development Plan
+# Incinerator Engine - Historical Development Plan
+
+> **Historical:** This document records the original learning-project plan and is not current architecture or status. [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md) is the authoritative plan.
 
 ## Goal
 Build a GTA III-style MMO game engine using Zig, SDL3, Jolt Physics, and ImGui.

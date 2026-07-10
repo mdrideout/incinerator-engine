@@ -17,10 +17,9 @@
 //! - Own mesh data (meshes are passed in for drawing)
 //! - Contain game logic or scene management
 //!
-//! SDL_GPU automatically selects the best backend for your platform:
-//! - macOS: Metal
-//! - Windows: D3D12 or Vulkan
-//! - Linux: Vulkan
+//! The target build embeds one shader format and requests its matching backend:
+//! Metal on macOS, Vulkan on Linux, and D3D12 by default on Windows (with an
+//! explicit Vulkan fallback). Render-target formats are queried at runtime.
 //!
 //! The render loop follows the modern GPU pattern:
 //! 1. beginFrame() - acquire command buffer, start render pass
@@ -39,8 +38,8 @@
 //! - Multiple render targets
 
 const std = @import("std");
-const builtin = @import("builtin");
 const zm = @import("zmath");
+const shader_assets = @import("shader_assets");
 const sdl = @import("sdl.zig");
 const mesh_module = @import("mesh.zig");
 const texture_module = @import("texture.zig");
@@ -50,12 +49,19 @@ const Mesh = mesh_module.Mesh;
 const Vertex = mesh_module.Vertex;
 const VertexPNU = mesh_module.VertexPNU;
 const VertexFormat = mesh_module.VertexFormat;
-const Texture = texture_module.Texture;
+const OwnedTexture = texture_module.OwnedTexture;
 
 /// MVP matrix uniform data sent to vertex shader.
 /// Uses [16]f32 layout for direct compatibility with zmath's matToArr().
 pub const Uniforms = extern struct {
     mvp: [16]f32,
+};
+
+/// Per-model vertex data. Normals are lit in world space, so they require the
+/// inverse-transpose of the model transform in addition to clip-space MVP.
+pub const ModelUniforms = extern struct {
+    mvp: [16]f32,
+    normal_matrix: [16]f32,
 };
 
 /// Fragment shader settings (for texture toggle, etc.)
@@ -72,6 +78,70 @@ pub const RenderSettings = struct {
     show_textures: bool = true, // Sample textures (false = white)
 };
 
+/// A frame is either ready for draw commands or temporarily unavailable
+/// because the window cannot currently provide a swapchain texture.
+/// All GPU/SDL failures are returned as errors instead of being conflated with
+/// the benign unavailable state.
+pub const FrameStatus = enum {
+    ready,
+    unavailable,
+};
+
+const DepthTarget = struct {
+    texture: *c.SDL_GPUTexture,
+    width: u32,
+    height: u32,
+};
+
+const ReleaseTextureFn = *const fn (*anyopaque, *c.SDL_GPUTexture) void;
+
+fn releaseGpuTexture(context: *anyopaque, gpu_texture: *c.SDL_GPUTexture) void {
+    const device: *c.SDL_GPUDevice = @ptrCast(@alignCast(context));
+    c.SDL_ReleaseGPUTexture(device, gpu_texture);
+}
+
+/// Commit a replacement only after creation succeeds. Keeping this small seam
+/// separate makes the lifetime transition testable without creating a GPU.
+fn commitDepthReplacement(
+    target: *DepthTarget,
+    replacement: ?*c.SDL_GPUTexture,
+    width: u32,
+    height: u32,
+    release_context: *anyopaque,
+    release_texture: ReleaseTextureFn,
+) !void {
+    const next = replacement orelse return error.DepthTextureCreationFailed;
+    const previous = target.texture;
+    target.* = .{
+        .texture = next,
+        .width = width,
+        .height = height,
+    };
+    release_texture(release_context, previous);
+}
+
+fn cancelCommandBuffer(cmd: *c.SDL_GPUCommandBuffer) !void {
+    if (!c.SDL_CancelGPUCommandBuffer(cmd)) {
+        std.debug.print("SDL_CancelGPUCommandBuffer failed: {s}\n", .{c.SDL_GetError()});
+        return error.CommandBufferCancelFailed;
+    }
+}
+
+/// Once a non-null swapchain texture has been acquired SDL requires the
+/// command buffer to be submitted, even when later frame setup fails.
+fn retireAcquiredSwapchain(cmd: *c.SDL_GPUCommandBuffer) !void {
+    if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
+        std.debug.print("SDL_SubmitGPUCommandBuffer failed while retiring a swapchain texture: {s}\n", .{c.SDL_GetError()});
+        return error.CommandBufferSubmissionFailed;
+    }
+}
+
+const AcquireFailureCleanup = enum { cancel, submit };
+
+fn acquireFailureCleanup(swapchain_texture: ?*c.SDL_GPUTexture) AcquireFailureCleanup {
+    return if (swapchain_texture == null) .cancel else .submit;
+}
+
 // ============================================================================
 // Shader Loading (Platform-Aware)
 // ============================================================================
@@ -82,39 +152,38 @@ const ShaderCode = struct {
     vertex: []const u8,
     fragment: []const u8,
     format: c.SDL_GPUShaderFormat,
+    entrypoint: [*:0]const u8,
 };
+
+fn embeddedShaderFormat() c.SDL_GPUShaderFormat {
+    return switch (shader_assets.format) {
+        .msl => c.SDL_GPU_SHADERFORMAT_MSL,
+        .spirv => c.SDL_GPU_SHADERFORMAT_SPIRV,
+        .dxil => c.SDL_GPU_SHADERFORMAT_DXIL,
+    };
+}
+
+fn normalMatrix(model: zm.Mat) zm.Mat {
+    return zm.transpose(zm.inverse(model));
+}
 
 /// Get triangle shaders (pos + color vertex format) for primitives
 fn getTriangleShaderCode() ShaderCode {
-    return switch (builtin.os.tag) {
-        .macos, .ios => .{
-            .vertex = @embedFile("shaders/compiled/triangle.vert.metal"),
-            .fragment = @embedFile("shaders/compiled/triangle.frag.metal"),
-            .format = c.SDL_GPU_SHADERFORMAT_MSL,
-        },
-        // Linux and others use SPIR-V
-        else => .{
-            .vertex = @embedFile("shaders/compiled/triangle.vert.spv"),
-            .fragment = @embedFile("shaders/compiled/triangle.frag.spv"),
-            .format = c.SDL_GPU_SHADERFORMAT_SPIRV,
-        },
+    return .{
+        .vertex = shader_assets.triangle_vertex,
+        .fragment = shader_assets.triangle_fragment,
+        .format = embeddedShaderFormat(),
+        .entrypoint = shader_assets.entrypoint,
     };
 }
 
 /// Get model shaders (pos + normal + uv vertex format) for loaded 3D models
 fn getModelShaderCode() ShaderCode {
-    return switch (builtin.os.tag) {
-        .macos, .ios => .{
-            .vertex = @embedFile("shaders/compiled/model.vert.metal"),
-            .fragment = @embedFile("shaders/compiled/model.frag.metal"),
-            .format = c.SDL_GPU_SHADERFORMAT_MSL,
-        },
-        // Linux and others use SPIR-V
-        else => .{
-            .vertex = @embedFile("shaders/compiled/model.vert.spv"),
-            .fragment = @embedFile("shaders/compiled/model.frag.spv"),
-            .format = c.SDL_GPU_SHADERFORMAT_SPIRV,
-        },
+    return .{
+        .vertex = shader_assets.model_vertex,
+        .fragment = shader_assets.model_fragment,
+        .format = embeddedShaderFormat(),
+        .entrypoint = shader_assets.entrypoint,
     };
 }
 
@@ -126,6 +195,8 @@ fn getModelShaderCode() ShaderCode {
 pub const Renderer = struct {
     device: *c.SDL_GPUDevice,
     window: *c.SDL_Window,
+    swapchain_format: c.SDL_GPUTextureFormat,
+    depth_format: c.SDL_GPUTextureFormat,
 
     // Graphics pipelines for different vertex formats
     pipeline_pos_color: *c.SDL_GPUGraphicsPipeline, // For primitives (Vertex)
@@ -137,13 +208,11 @@ pub const Renderer = struct {
     render_settings: RenderSettings = .{},
 
     // Depth buffer for proper 3D rendering (closer pixels occlude farther ones)
-    depth_texture: *c.SDL_GPUTexture,
-    depth_width: u32,
-    depth_height: u32,
+    depth_target: DepthTarget,
 
     // Texture sampling resources
     default_sampler: *c.SDL_GPUSampler,
-    placeholder_texture: Texture, // 1x1 white texture for untextured meshes
+    placeholder_texture: OwnedTexture, // 1x1 white texture for untextured meshes
 
     // Frame state (valid between beginFrame and endFrame/submitFrame)
     current_cmd: ?*c.SDL_GPUCommandBuffer = null,
@@ -153,11 +222,22 @@ pub const Renderer = struct {
     /// Initialize the GPU renderer for a window.
     /// This creates the GPU device and graphics pipeline.
     pub fn init(window: *c.SDL_Window) !Renderer {
-        // Create GPU device - SDL chooses the best backend automatically
+        // Advertise only the format embedded in this target binary. SDL uses
+        // that contract to select a compatible backend; claiming a format for
+        // which no bytecode exists can select an unusable device.
+        const shader_format = embeddedShaderFormat();
+        if (!c.SDL_GPUSupportsShaderFormats(shader_format, shader_assets.driver)) {
+            std.debug.print(
+                "SDL GPU driver {s} does not support the embedded shader format: {s}\n",
+                .{ shader_assets.driver, c.SDL_GetError() },
+            );
+            return error.UnsupportedShaderFormat;
+        }
+
         const device = c.SDL_CreateGPUDevice(
-            c.SDL_GPU_SHADERFORMAT_SPIRV | c.SDL_GPU_SHADERFORMAT_MSL | c.SDL_GPU_SHADERFORMAT_DXIL,
+            shader_format,
             true, // debug_mode: enables validation layers
-            null, // No specific device preference
+            shader_assets.driver,
         ) orelse {
             std.debug.print("SDL_CreateGPUDevice failed: {s}\n", .{c.SDL_GetError()});
             return error.GPUDeviceCreationFailed;
@@ -168,38 +248,58 @@ pub const Renderer = struct {
         const driver_name = c.SDL_GetGPUDeviceDriver(device);
         std.debug.print("GPU Device created: {s}\n", .{driver_name});
 
+        if (c.SDL_GetGPUShaderFormats(device) & shader_format == 0) {
+            std.debug.print("GPU backend {s} does not accept the embedded shader format\n", .{driver_name});
+            return error.UnsupportedShaderFormat;
+        }
+
         // Claim the window for GPU rendering (creates the swapchain)
         if (!c.SDL_ClaimWindowForGPUDevice(device, window)) {
             std.debug.print("SDL_ClaimWindowForGPUDevice failed: {s}\n", .{c.SDL_GetError()});
             return error.GPUWindowClaimFailed;
         }
+        errdefer c.SDL_ReleaseWindowFromGPUDevice(device, window);
+
+        const swapchain_format = c.SDL_GetGPUSwapchainTextureFormat(device, window);
+        if (swapchain_format == c.SDL_GPU_TEXTUREFORMAT_INVALID) {
+            std.debug.print("SDL_GetGPUSwapchainTextureFormat failed: {s}\n", .{c.SDL_GetError()});
+            return error.SwapchainFormatUnavailable;
+        }
+
+        const depth_format = selectDepthFormat(device) orelse {
+            std.debug.print("No supported SDL GPU depth-target format is available\n", .{});
+            return error.DepthFormatUnavailable;
+        };
 
         // Create graphics pipelines for different vertex formats
         // Pipeline 1: pos_color for primitives (triangle, cube, etc.)
-        const pipeline_pos_color = try createPipelinePosColor(device);
+        const pipeline_pos_color = try createPipelinePosColor(device, swapchain_format, depth_format);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_color);
 
         // Pipeline 2: pos_normal_uv for loaded 3D models (GLB files)
-        const pipeline_pos_normal_uv = try createPipelinePosNormalUv(device, false);
+        const pipeline_pos_normal_uv = try createPipelinePosNormalUv(device, swapchain_format, depth_format, false);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_normal_uv);
 
         // Pipeline 3: pos_normal_uv wireframe variant for debug visualization
-        const pipeline_pos_normal_uv_wireframe = try createPipelinePosNormalUv(device, true);
+        const pipeline_pos_normal_uv_wireframe = try createPipelinePosNormalUv(device, swapchain_format, depth_format, true);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_normal_uv_wireframe);
 
         // Pipeline 4: lines for debug visualization (physics colliders, etc.)
-        const pipeline_lines = try createPipelineLines(device);
+        const pipeline_lines = try createPipelineLines(device, swapchain_format, depth_format);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_lines);
 
         // Get initial window size for depth buffer
         var w: c_int = 0;
         var h: c_int = 0;
-        _ = c.SDL_GetWindowSize(window, &w, &h);
+        if (!c.SDL_GetWindowSizeInPixels(window, &w, &h) or w <= 0 or h <= 0) {
+            std.debug.print("SDL_GetWindowSizeInPixels failed or returned an empty drawable: {s}\n", .{c.SDL_GetError()});
+            return error.InvalidDrawableSize;
+        }
         const width: u32 = @intCast(w);
         const height: u32 = @intCast(h);
 
         // Create depth texture (same size as window)
-        const depth_texture = createDepthTexture(device, width, height) orelse {
+        const depth_texture = createDepthTexture(device, depth_format, width, height) orelse {
             std.debug.print("Failed to create depth texture: {s}\n", .{c.SDL_GetError()});
             return error.DepthTextureCreationFailed;
         };
@@ -233,18 +333,25 @@ pub const Renderer = struct {
         var placeholder_texture = try texture_module.createPlaceholderTexture(device);
         errdefer placeholder_texture.deinit();
 
-        std.debug.print("Renderer initialized successfully (with depth buffer and texture support)\n", .{});
+        std.debug.print(
+            "Renderer initialized (swapchain format {d}, depth format {d})\n",
+            .{ swapchain_format, depth_format },
+        );
 
         return Renderer{
             .device = device,
             .window = window,
+            .swapchain_format = swapchain_format,
+            .depth_format = depth_format,
             .pipeline_pos_color = pipeline_pos_color,
             .pipeline_pos_normal_uv = pipeline_pos_normal_uv,
             .pipeline_pos_normal_uv_wireframe = pipeline_pos_normal_uv_wireframe,
             .pipeline_lines = pipeline_lines,
-            .depth_texture = depth_texture,
-            .depth_width = width,
-            .depth_height = height,
+            .depth_target = .{
+                .texture = depth_texture,
+                .width = width,
+                .height = height,
+            },
             .default_sampler = default_sampler,
             .placeholder_texture = placeholder_texture,
         };
@@ -252,9 +359,21 @@ pub const Renderer = struct {
 
     /// Clean up GPU resources
     pub fn deinit(self: *Renderer) void {
+        // A ready frame owns a non-cancellable swapchain acquisition. Retire it
+        // before releasing any pipeline/target resources, including during
+        // error unwinding from future fallible draw work.
+        self.endRenderPass();
+        if (self.current_cmd) |cmd| {
+            if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
+                std.debug.print("SDL_SubmitGPUCommandBuffer failed during renderer teardown: {s}\n", .{c.SDL_GetError()});
+            }
+            self.current_cmd = null;
+            self.current_swapchain = null;
+        }
+
         self.placeholder_texture.deinit();
         c.SDL_ReleaseGPUSampler(self.device, self.default_sampler);
-        c.SDL_ReleaseGPUTexture(self.device, self.depth_texture);
+        c.SDL_ReleaseGPUTexture(self.device, self.depth_target.texture);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_color);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv_wireframe);
@@ -268,50 +387,80 @@ pub const Renderer = struct {
         return self.device;
     }
 
+    /// Actual format selected for this claimed window's swapchain.
+    pub fn getSwapchainFormat(self: *const Renderer) c.SDL_GPUTextureFormat {
+        return self.swapchain_format;
+    }
+
     // ========================================================================
     // Frame Rendering
     // ========================================================================
 
-    /// Begin a new frame. Must call endFrame() after drawing.
-    /// Returns false if frame should be skipped (e.g., window minimized).
-    pub fn beginFrame(self: *Renderer, clear_color: [4]f32) bool {
+    /// Begin a new frame. A ready frame must eventually be submitted.
+    /// `.unavailable` is reserved for a benign missing swapchain texture, such
+    /// as a minimized window; all SDL/GPU failures are returned as errors.
+    pub fn beginFrame(self: *Renderer, clear_color: [4]f32) !FrameStatus {
+        if (self.current_cmd != null or self.current_render_pass != null) {
+            return error.FrameAlreadyInProgress;
+        }
+
         // Step 1: Acquire a command buffer
         const cmd = c.SDL_AcquireGPUCommandBuffer(self.device) orelse {
             std.debug.print("SDL_AcquireGPUCommandBuffer failed: {s}\n", .{c.SDL_GetError()});
-            return false;
+            return error.CommandBufferAcquisitionFailed;
         };
 
-        // Step 2: Acquire the swapchain texture (what we render to)
+        // Step 2: Wait for normal GPU backpressure, then acquire the swapchain
+        // texture. A null texture after a successful call is benign (usually a
+        // minimized window) and leaves the command buffer safe to cancel.
         var swapchain_texture: ?*c.SDL_GPUTexture = null;
         var swapchain_width: u32 = 0;
         var swapchain_height: u32 = 0;
-        if (!c.SDL_AcquireGPUSwapchainTexture(cmd, self.window, &swapchain_texture, &swapchain_width, &swapchain_height)) {
-            std.debug.print("SDL_AcquireGPUSwapchainTexture failed: {s}\n", .{c.SDL_GetError()});
-            _ = c.SDL_SubmitGPUCommandBuffer(cmd);
-            return false;
+        if (!c.SDL_WaitAndAcquireGPUSwapchainTexture(cmd, self.window, &swapchain_texture, &swapchain_width, &swapchain_height)) {
+            std.debug.print("SDL_WaitAndAcquireGPUSwapchainTexture failed: {s}\n", .{c.SDL_GetError()});
+            switch (acquireFailureCleanup(swapchain_texture)) {
+                .cancel => try cancelCommandBuffer(cmd),
+                .submit => try retireAcquiredSwapchain(cmd),
+            }
+            return error.SwapchainAcquisitionFailed;
         }
 
-        // If swapchain_texture is null, window might be minimized - skip frame
         if (swapchain_texture == null) {
-            _ = c.SDL_SubmitGPUCommandBuffer(cmd);
-            return false;
+            try cancelCommandBuffer(cmd);
+            return .unavailable;
+        }
+        const acquired_swapchain = swapchain_texture.?;
+
+        if (swapchain_width == 0 or swapchain_height == 0) {
+            try retireAcquiredSwapchain(cmd);
+            return error.InvalidSwapchainSize;
         }
 
         // Step 3: Recreate depth buffer if window was resized
-        if (swapchain_width != self.depth_width or swapchain_height != self.depth_height) {
-            c.SDL_ReleaseGPUTexture(self.device, self.depth_texture);
-            self.depth_texture = createDepthTexture(self.device, swapchain_width, swapchain_height) orelse {
+        if (swapchain_width != self.depth_target.width or swapchain_height != self.depth_target.height) {
+            const replacement = createDepthTexture(
+                self.device,
+                self.depth_format,
+                swapchain_width,
+                swapchain_height,
+            );
+            commitDepthReplacement(
+                &self.depth_target,
+                replacement,
+                swapchain_width,
+                swapchain_height,
+                @ptrCast(self.device),
+                releaseGpuTexture,
+            ) catch |err| {
                 std.debug.print("Failed to recreate depth texture: {s}\n", .{c.SDL_GetError()});
-                _ = c.SDL_SubmitGPUCommandBuffer(cmd);
-                return false;
+                try retireAcquiredSwapchain(cmd);
+                return err;
             };
-            self.depth_width = swapchain_width;
-            self.depth_height = swapchain_height;
         }
 
         // Step 4: Set up color target (what we see on screen)
         const color_target = c.SDL_GPUColorTargetInfo{
-            .texture = swapchain_texture,
+            .texture = acquired_swapchain,
             .mip_level = 0,
             .layer_or_depth_plane = 0,
             .clear_color = c.SDL_FColor{
@@ -333,7 +482,7 @@ pub const Renderer = struct {
 
         // Step 5: Set up depth target (for depth testing)
         const depth_target = c.SDL_GPUDepthStencilTargetInfo{
-            .texture = self.depth_texture,
+            .texture = self.depth_target.texture,
             .clear_depth = 1.0, // Clear to far plane (max depth)
             .load_op = c.SDL_GPU_LOADOP_CLEAR,
             .store_op = c.SDL_GPU_STOREOP_DONT_CARE, // Don't need to preserve after frame
@@ -341,8 +490,8 @@ pub const Renderer = struct {
             .stencil_store_op = c.SDL_GPU_STOREOP_DONT_CARE,
             .cycle = false,
             .clear_stencil = 0,
-            .padding1 = 0,
-            .padding2 = 0,
+            .mip_level = 0,
+            .layer = 0,
         };
 
         // Step 6: Begin render pass with both color and depth targets
@@ -353,8 +502,8 @@ pub const Renderer = struct {
             &depth_target, // Now passing depth target!
         ) orelse {
             std.debug.print("SDL_BeginGPURenderPass failed: {s}\n", .{c.SDL_GetError()});
-            _ = c.SDL_SubmitGPUCommandBuffer(cmd);
-            return false;
+            try retireAcquiredSwapchain(cmd);
+            return error.RenderPassBeginFailed;
         };
 
         // Note: Pipeline is bound per-draw in drawMesh() based on mesh vertex format
@@ -362,20 +511,18 @@ pub const Renderer = struct {
         // Store frame state
         self.current_cmd = cmd;
         self.current_render_pass = render_pass;
-        self.current_swapchain = swapchain_texture; // Store for editor overlay
+        self.current_swapchain = acquired_swapchain; // Store for editor overlay
 
-        return true;
+        return .ready;
     }
 
-    /// Draw a mesh with the given MVP matrix.
+    /// Draw a mesh with its model and view-projection matrices.
     /// Must be called between beginFrame() and endFrame().
     ///
     /// Automatically selects the correct pipeline based on mesh vertex format
     /// and handles both indexed and non-indexed rendering.
     ///
-    /// The MVP (Model-View-Projection) matrix transforms vertices from
-    /// local object space to clip space for rendering.
-    pub fn drawMesh(self: *Renderer, m: *const Mesh, mvp: zm.Mat) void {
+    pub fn drawMesh(self: *Renderer, m: *const Mesh, model: zm.Mat, view_projection: zm.Mat) void {
         const render_pass = self.current_render_pass orelse {
             std.debug.print("drawMesh called outside of beginFrame/endFrame\n", .{});
             return;
@@ -399,10 +546,24 @@ pub const Renderer = struct {
         c.SDL_BindGPUGraphicsPipeline(render_pass, pipeline);
 
         // =====================================================================
-        // Step 2: Push MVP matrix to vertex shader uniform buffer
+        // Step 2: Push vertex uniforms. Models additionally receive an
+        // inverse-transpose normal matrix so lighting stays in world space
+        // under rotation and non-uniform scale.
         // =====================================================================
-        const uniforms = Uniforms{ .mvp = zm.matToArr(mvp) };
-        c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(Uniforms));
+        const mvp = zm.mul(model, view_projection);
+        switch (m.vertex_format) {
+            .pos_color => {
+                const uniforms = Uniforms{ .mvp = zm.matToArr(mvp) };
+                c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(Uniforms));
+            },
+            .pos_normal_uv => {
+                const uniforms = ModelUniforms{
+                    .mvp = zm.matToArr(mvp),
+                    .normal_matrix = zm.matToArr(normalMatrix(model)),
+                };
+                c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(ModelUniforms));
+            },
+        }
 
         // =====================================================================
         // Step 3: Bind texture, sampler, and push fragment settings
@@ -412,7 +573,7 @@ pub const Renderer = struct {
             const texture_handle = if (m.diffuse_texture) |*tex|
                 tex.getHandle()
             else
-                self.placeholder_texture.getHandle();
+                self.placeholder_texture.borrow().getHandle();
 
             const sampler_binding = c.SDL_GPUTextureSamplerBinding{
                 .texture = texture_handle,
@@ -533,23 +694,26 @@ pub const Renderer = struct {
 
     /// Submit the command buffer and present to screen.
     /// Call this after endRenderPass() and any additional rendering (like ImGui).
-    pub fn submitFrame(self: *Renderer) void {
-        if (self.current_cmd) |cmd| {
-            if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
-                std.debug.print("SDL_SubmitGPUCommandBuffer failed: {s}\n", .{c.SDL_GetError()});
-            }
+    pub fn submitFrame(self: *Renderer) !void {
+        const cmd = self.current_cmd orelse return error.NoFrameInProgress;
+        if (self.current_render_pass != null) return error.RenderPassStillActive;
+
+        defer {
+            self.current_cmd = null;
+            self.current_swapchain = null;
         }
 
-        // Clear frame state
-        self.current_cmd = null;
-        self.current_swapchain = null;
+        if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
+            std.debug.print("SDL_SubmitGPUCommandBuffer failed: {s}\n", .{c.SDL_GetError()});
+            return error.CommandBufferSubmissionFailed;
+        }
     }
 
     /// End the current frame and present to screen.
     /// Convenience method that calls endRenderPass() and submitFrame().
-    pub fn endFrame(self: *Renderer) void {
+    pub fn endFrame(self: *Renderer) !void {
         self.endRenderPass();
-        self.submitFrame();
+        try self.submitFrame();
     }
 
     /// Get the swapchain texture for additional render passes (e.g., ImGui overlay).
@@ -572,11 +736,30 @@ pub const Renderer = struct {
 // Pipeline Creation
 // ============================================================================
 
-/// Depth texture format used throughout the renderer
-const DEPTH_FORMAT = c.SDL_GPU_TEXTUREFORMAT_D32_FLOAT;
+const preferred_depth_formats = [_]c.SDL_GPUTextureFormat{
+    c.SDL_GPU_TEXTUREFORMAT_D32_FLOAT,
+    c.SDL_GPU_TEXTUREFORMAT_D24_UNORM,
+    c.SDL_GPU_TEXTUREFORMAT_D16_UNORM,
+};
+
+fn selectDepthFormat(device: *c.SDL_GPUDevice) ?c.SDL_GPUTextureFormat {
+    for (preferred_depth_formats) |format| {
+        if (c.SDL_GPUTextureSupportsFormat(
+            device,
+            format,
+            c.SDL_GPU_TEXTURETYPE_2D,
+            c.SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+        )) return format;
+    }
+    return null;
+}
 
 /// Create pipeline for pos_color vertex format (primitives like cube, triangle)
-fn createPipelinePosColor(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
+fn createPipelinePosColor(
+    device: *c.SDL_GPUDevice,
+    swapchain_format: c.SDL_GPUTextureFormat,
+    depth_format: c.SDL_GPUTextureFormat,
+) !*c.SDL_GPUGraphicsPipeline {
     const shaders = getTriangleShaderCode();
 
     // Create vertex shader
@@ -584,7 +767,7 @@ fn createPipelinePosColor(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline 
     const vertex_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
         .code = shaders.vertex.ptr,
         .code_size = shaders.vertex.len,
-        .entrypoint = "main0", // spirv-cross generates "main0" for MSL
+        .entrypoint = shaders.entrypoint,
         .format = shaders.format,
         .stage = c.SDL_GPU_SHADERSTAGE_VERTEX,
         .num_samplers = 0,
@@ -602,7 +785,7 @@ fn createPipelinePosColor(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline 
     const fragment_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
         .code = shaders.fragment.ptr,
         .code_size = shaders.fragment.len,
-        .entrypoint = "main0",
+        .entrypoint = shaders.entrypoint,
         .format = shaders.format,
         .stage = c.SDL_GPU_SHADERSTAGE_FRAGMENT,
         .num_samplers = 0,
@@ -642,9 +825,9 @@ fn createPipelinePosColor(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline 
         },
     };
 
-    // Color target description (using BGRA8 which is common swapchain format)
+    // Color target description must match the claimed window's swapchain.
     const color_target_desc = c.SDL_GPUColorTargetDescription{
-        .format = c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,
+        .format = swapchain_format,
         .blend_state = .{
             .src_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ONE,
             .dst_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ZERO,
@@ -687,7 +870,7 @@ fn createPipelinePosColor(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline 
             .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
             .sample_mask = 0,
             .enable_mask = false,
-            .padding1 = 0,
+            .enable_alpha_to_coverage = false,
             .padding2 = 0,
             .padding3 = 0,
         },
@@ -707,7 +890,7 @@ fn createPipelinePosColor(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline 
         .target_info = .{
             .color_target_descriptions = &color_target_desc,
             .num_color_targets = 1,
-            .depth_stencil_format = DEPTH_FORMAT, // Must match depth texture
+            .depth_stencil_format = depth_format, // Must match depth texture
             .has_depth_stencil_target = true, // ENABLED: we have a depth buffer
             .padding1 = 0,
             .padding2 = 0,
@@ -724,14 +907,19 @@ fn createPipelinePosColor(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline 
 
 /// Create pipeline for pos_normal_uv vertex format (loaded 3D models)
 /// Set wireframe=true to create a wireframe variant using FILLMODE_LINE
-fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice, wireframe: bool) !*c.SDL_GPUGraphicsPipeline {
+fn createPipelinePosNormalUv(
+    device: *c.SDL_GPUDevice,
+    swapchain_format: c.SDL_GPUTextureFormat,
+    depth_format: c.SDL_GPUTextureFormat,
+    wireframe: bool,
+) !*c.SDL_GPUGraphicsPipeline {
     const shaders = getModelShaderCode();
 
     // Create vertex shader
     const vertex_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
         .code = shaders.vertex.ptr,
         .code_size = shaders.vertex.len,
-        .entrypoint = "main0",
+        .entrypoint = shaders.entrypoint,
         .format = shaders.format,
         .stage = c.SDL_GPU_SHADERSTAGE_VERTEX,
         .num_samplers = 0,
@@ -749,7 +937,7 @@ fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice, wireframe: bool) !*c.SDL_
     const fragment_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
         .code = shaders.fragment.ptr,
         .code_size = shaders.fragment.len,
-        .entrypoint = "main0",
+        .entrypoint = shaders.entrypoint,
         .format = shaders.format,
         .stage = c.SDL_GPU_SHADERSTAGE_FRAGMENT,
         .num_samplers = 1, // Diffuse texture sampler
@@ -798,7 +986,7 @@ fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice, wireframe: bool) !*c.SDL_
 
     // Color target description (same as pos_color pipeline)
     const color_target_desc = c.SDL_GPUColorTargetDescription{
-        .format = c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,
+        .format = swapchain_format,
         .blend_state = .{
             .src_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ONE,
             .dst_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ZERO,
@@ -841,7 +1029,7 @@ fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice, wireframe: bool) !*c.SDL_
             .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
             .sample_mask = 0,
             .enable_mask = false,
-            .padding1 = 0,
+            .enable_alpha_to_coverage = false,
             .padding2 = 0,
             .padding3 = 0,
         },
@@ -861,7 +1049,7 @@ fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice, wireframe: bool) !*c.SDL_
         .target_info = .{
             .color_target_descriptions = &color_target_desc,
             .num_color_targets = 1,
-            .depth_stencil_format = DEPTH_FORMAT,
+            .depth_stencil_format = depth_format,
             .has_depth_stencil_target = true,
             .padding1 = 0,
             .padding2 = 0,
@@ -884,14 +1072,18 @@ fn createPipelinePosNormalUv(device: *c.SDL_GPUDevice, wireframe: bool) !*c.SDL_
 /// - Cull mode: NONE (lines have no faces to cull)
 /// - Depth write: false (lines overlay scene, don't occlude each other)
 /// - Depth test: LESS_OR_EQUAL (slightly reduced z-fighting)
-fn createPipelineLines(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
+fn createPipelineLines(
+    device: *c.SDL_GPUDevice,
+    swapchain_format: c.SDL_GPUTextureFormat,
+    depth_format: c.SDL_GPUTextureFormat,
+) !*c.SDL_GPUGraphicsPipeline {
     const shaders = getTriangleShaderCode(); // Reuse triangle shaders (same vertex format)
 
     // Create vertex shader
     const vertex_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
         .code = shaders.vertex.ptr,
         .code_size = shaders.vertex.len,
-        .entrypoint = "main0",
+        .entrypoint = shaders.entrypoint,
         .format = shaders.format,
         .stage = c.SDL_GPU_SHADERSTAGE_VERTEX,
         .num_samplers = 0,
@@ -909,7 +1101,7 @@ fn createPipelineLines(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
     const fragment_shader = c.SDL_CreateGPUShader(device, &c.SDL_GPUShaderCreateInfo{
         .code = shaders.fragment.ptr,
         .code_size = shaders.fragment.len,
-        .entrypoint = "main0",
+        .entrypoint = shaders.entrypoint,
         .format = shaders.format,
         .stage = c.SDL_GPU_SHADERSTAGE_FRAGMENT,
         .num_samplers = 0,
@@ -950,7 +1142,7 @@ fn createPipelineLines(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
 
     // Color target (same as other pipelines)
     const color_target_desc = c.SDL_GPUColorTargetDescription{
-        .format = c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM,
+        .format = swapchain_format,
         .blend_state = .{
             .src_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ONE,
             .dst_color_blendfactor = c.SDL_GPU_BLENDFACTOR_ZERO,
@@ -994,7 +1186,7 @@ fn createPipelineLines(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
             .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
             .sample_mask = 0,
             .enable_mask = false,
-            .padding1 = 0,
+            .enable_alpha_to_coverage = false,
             .padding2 = 0,
             .padding3 = 0,
         },
@@ -1015,7 +1207,7 @@ fn createPipelineLines(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
         .target_info = .{
             .color_target_descriptions = &color_target_desc,
             .num_color_targets = 1,
-            .depth_stencil_format = DEPTH_FORMAT,
+            .depth_stencil_format = depth_format,
             .has_depth_stencil_target = true,
             .padding1 = 0,
             .padding2 = 0,
@@ -1031,10 +1223,15 @@ fn createPipelineLines(device: *c.SDL_GPUDevice) !*c.SDL_GPUGraphicsPipeline {
 }
 
 /// Create a depth texture for the given dimensions
-fn createDepthTexture(device: *c.SDL_GPUDevice, width: u32, height: u32) ?*c.SDL_GPUTexture {
+fn createDepthTexture(
+    device: *c.SDL_GPUDevice,
+    depth_format: c.SDL_GPUTextureFormat,
+    width: u32,
+    height: u32,
+) ?*c.SDL_GPUTexture {
     return c.SDL_CreateGPUTexture(device, &c.SDL_GPUTextureCreateInfo{
         .type = c.SDL_GPU_TEXTURETYPE_2D,
-        .format = DEPTH_FORMAT,
+        .format = depth_format,
         .usage = c.SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
         .width = width,
         .height = height,
@@ -1061,4 +1258,81 @@ test "Colors are valid" {
     for (Colors.CORNFLOWER_BLUE) |component| {
         try std.testing.expect(component >= 0.0 and component <= 1.0);
     }
+}
+
+test "failed swapchain acquisition cleanup never cancels an acquired texture" {
+    try std.testing.expectEqual(AcquireFailureCleanup.cancel, acquireFailureCleanup(null));
+    const texture: *c.SDL_GPUTexture = @ptrFromInt(0x1000);
+    try std.testing.expectEqual(AcquireFailureCleanup.submit, acquireFailureCleanup(texture));
+}
+
+test "model normal matrix preserves perpendicularity under non-uniform scale" {
+    try std.testing.expectEqual(@as(usize, 128), @sizeOf(ModelUniforms));
+
+    const model = zm.mul(
+        zm.scaling(2.0, 0.5, 3.0),
+        zm.rotationZ(0.63),
+    );
+    const object_tangent = zm.normalize3(zm.f32x4(1, 1, 0, 0));
+    const object_normal = zm.normalize3(zm.f32x4(1, -1, 0, 0));
+    const tangent = zm.normalize3(zm.mul(object_tangent, model));
+    const incorrect_normal = zm.normalize3(zm.mul(object_normal, model));
+    const normal = zm.normalize3(zm.mul(object_normal, normalMatrix(model)));
+
+    // This fixture must fail if the model matrix is accidentally used directly.
+    try std.testing.expect(@abs(zm.dot3(tangent, incorrect_normal)[0]) > 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, 0), zm.dot3(tangent, normal)[0], 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), zm.length3(normal)[0], 0.0001);
+}
+
+test "depth replacement preserves old target on failure and commits atomically" {
+    const Recorder = struct {
+        release_count: usize = 0,
+        released: ?*c.SDL_GPUTexture = null,
+
+        fn release(context: *anyopaque, gpu_texture: *c.SDL_GPUTexture) void {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.release_count += 1;
+            self.released = gpu_texture;
+        }
+    };
+
+    const old_texture: *c.SDL_GPUTexture = @ptrFromInt(0x1000);
+    const new_texture: *c.SDL_GPUTexture = @ptrFromInt(0x2000);
+    var target = DepthTarget{
+        .texture = old_texture,
+        .width = 640,
+        .height = 480,
+    };
+    var recorder = Recorder{};
+
+    try std.testing.expectError(
+        error.DepthTextureCreationFailed,
+        commitDepthReplacement(
+            &target,
+            null,
+            1280,
+            720,
+            @ptrCast(&recorder),
+            Recorder.release,
+        ),
+    );
+    try std.testing.expectEqual(old_texture, target.texture);
+    try std.testing.expectEqual(@as(u32, 640), target.width);
+    try std.testing.expectEqual(@as(u32, 480), target.height);
+    try std.testing.expectEqual(@as(usize, 0), recorder.release_count);
+
+    try commitDepthReplacement(
+        &target,
+        new_texture,
+        1280,
+        720,
+        @ptrCast(&recorder),
+        Recorder.release,
+    );
+    try std.testing.expectEqual(new_texture, target.texture);
+    try std.testing.expectEqual(@as(u32, 1280), target.width);
+    try std.testing.expectEqual(@as(u32, 720), target.height);
+    try std.testing.expectEqual(@as(usize, 1), recorder.release_count);
+    try std.testing.expectEqual(old_texture, recorder.released.?);
 }

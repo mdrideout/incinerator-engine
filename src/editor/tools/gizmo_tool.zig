@@ -41,11 +41,10 @@ const flecs = @import("zflecs");
 
 const tool_module = @import("../tool.zig");
 const ecs = @import("../../ecs.zig");
-const physics_module = @import("../../physics.zig");
+const physics = @import("jolt_physics");
 
 const Tool = tool_module.Tool;
 const EditorContext = tool_module.EditorContext;
-const zphysics = @import("zphysics");
 
 // ============================================================================
 // Tool Definition
@@ -69,7 +68,7 @@ pub var tool = Tool{
 var previously_selected_entity: ?u64 = null;
 
 /// The body ID of the currently frozen physics body (if any)
-var frozen_body_id: ?zphysics.BodyId = null;
+var frozen_body_id: ?physics.BodyId = null;
 
 /// Whether the frozen body was originally dynamic (vs kinematic/static)
 /// We only restore to dynamic if it was dynamic before freezing.
@@ -158,7 +157,7 @@ fn extractRotationFromMatrix(model: [16]f32) ecs.Rotation {
 /// Handle entity selection changes for physics freezing.
 /// When an entity is selected, freeze its physics body (switch to kinematic).
 /// When deselected, unfreeze it (switch back to dynamic with zeroed velocities).
-/// If scale changed during manipulation, recreate the physics body with new dimensions.
+/// If scale changed during manipulation, replace the body's shape in place.
 fn handleSelectionChange(world: *ecs.GameWorld, current_selection: ?u64) void {
     // Check if selection has changed
     if (current_selection == previously_selected_entity) {
@@ -169,30 +168,37 @@ fn handleSelectionChange(world: *ecs.GameWorld, current_selection: ?u64) void {
     if (frozen_body_id) |body_id| {
         if (world.physics_world) |pw| {
             if (was_originally_dynamic) {
+                // Motion state restoration must happen even if collider resizing
+                // fails, otherwise closing/changing selection can strand a body
+                // in the editor's temporary kinematic state.
+                defer {
+                    pw.setMotionType(body_id, .dynamic) catch |err| {
+                        std.log.err("could not restore editor body motion type: {s}", .{@errorName(err)});
+                    };
+                    pw.setLinearVelocity(body_id, .{ 0, 0, 0 }) catch |err| {
+                        std.log.err("could not reset editor body linear velocity: {s}", .{@errorName(err)});
+                    };
+                    pw.setAngularVelocity(body_id, .{ 0, 0, 0 }) catch |err| {
+                        std.log.err("could not reset editor body angular velocity: {s}", .{@errorName(err)});
+                    };
+                }
+
                 // Check if scale changed during manipulation
                 if (frozen_entity_id) |entity_id| {
                     if (world.get(@intCast(entity_id), ecs.Scale)) |current_scale| {
                         if (!scaleEquals(original_scale, current_scale.*)) {
-                            // Scale changed - need to recreate the physics body
-                            recreatePhysicsBody(world, @intCast(entity_id), current_scale.*);
-                            // Body was recreated, don't try to modify the old one
-                            frozen_body_id = null;
-                            frozen_entity_id = null;
-                            was_originally_dynamic = false;
-                            original_scale = .{};
-                            previously_selected_entity = current_selection;
-                            // Continue to freeze the new selection if any
-                            freezeNewSelection(world, current_selection);
-                            return;
+                            resizePhysicsBox(pw, body_id, current_scale.*) catch |err| {
+                                // Rendering and collision dimensions must not
+                                // diverge if the shape replacement is rejected.
+                                world.set(@intCast(entity_id), ecs.Scale, original_scale);
+                                std.log.err(
+                                    "could not resize physics body for entity {d}: {s}",
+                                    .{ entity_id, @errorName(err) },
+                                );
+                            };
                         }
                     }
                 }
-
-                // Scale didn't change - just restore to dynamic mode
-                pw.setMotionType(body_id, .dynamic);
-                // Zero velocities so it doesn't continue with old momentum
-                pw.setLinearVelocity(body_id, .{ 0, 0, 0 });
-                pw.setAngularVelocity(body_id, .{ 0, 0, 0 });
             }
         }
         frozen_body_id = null;
@@ -208,6 +214,12 @@ fn handleSelectionChange(world: *ecs.GameWorld, current_selection: ?u64) void {
     previously_selected_entity = current_selection;
 }
 
+/// Release any temporary kinematic edit state when the gizmo cannot run (for
+/// example when its tool or the entire editor is hidden).
+pub fn releaseInteraction(world: *ecs.GameWorld) void {
+    handleSelectionChange(world, null);
+}
+
 /// Freeze a newly selected entity's physics body.
 fn freezeNewSelection(world: *ecs.GameWorld, selection: ?u64) void {
     const selected_id = selection orelse return;
@@ -215,10 +227,16 @@ fn freezeNewSelection(world: *ecs.GameWorld, selection: ?u64) void {
     if (world.get(@intCast(selected_id), ecs.RigidBody)) |rb| {
         if (world.physics_world) |pw| {
             // Check if it's currently dynamic
-            const motion_type = pw.getMotionType(rb.body_id);
+            const motion_type = pw.getMotionType(rb.body_id) catch |err| {
+                std.log.err("could not inspect selected physics body: {s}", .{@errorName(err)});
+                return;
+            };
             if (motion_type == .dynamic) {
                 // Switch to kinematic to freeze physics
-                pw.setMotionType(rb.body_id, .kinematic);
+                pw.setMotionType(rb.body_id, .kinematic) catch |err| {
+                    std.log.err("could not freeze selected physics body: {s}", .{@errorName(err)});
+                    return;
+                };
                 frozen_body_id = rb.body_id;
                 frozen_entity_id = selected_id;
                 was_originally_dynamic = true;
@@ -242,20 +260,12 @@ fn scaleEquals(a: ecs.Scale, b: ecs.Scale) bool {
         @abs(a.z - b.z) < epsilon;
 }
 
-/// Recreate a physics body with new dimensions based on the entity's current scale.
-/// This is called when scale changes during gizmo manipulation.
-fn recreatePhysicsBody(world: *ecs.GameWorld, entity: flecs.entity_t, new_scale: ecs.Scale) void {
-    const rb = world.get(entity, ecs.RigidBody) orelse return;
-    const pw = world.physics_world orelse return;
-
-    // Get current position and rotation from physics body
-    const body_pos = pw.getBodyPosition(rb.body_id);
-    const body_rot = pw.getBodyRotation(rb.body_id);
-
-    // Remove the old body
-    pw.removeBody(rb.body_id);
-
-    // Create new body with scaled dimensions
+/// Resize a box collider without replacing the body or its ECS handle.
+fn resizePhysicsBox(
+    pw: *physics.Physics,
+    body_id: physics.BodyId,
+    new_scale: ecs.Scale,
+) !void {
     // The original box was created with half_extents of 0.5 (1 unit cube)
     // Scale that by the new scale values
     const base_half_extent: f32 = 0.5;
@@ -265,25 +275,7 @@ fn recreatePhysicsBody(world: *ecs.GameWorld, entity: flecs.entity_t, new_scale:
         base_half_extent * new_scale.z,
     };
 
-    if (pw.createDynamicBox(body_pos, half_extents)) |new_body_id| {
-        // Set the rotation on the new body
-        pw.setBodyRotation(new_body_id, body_rot);
-
-        // Update the ECS component with new body ID
-        world.set(entity, ecs.RigidBody, .{ .body_id = new_body_id });
-
-        // Update ECS position/rotation to match (they should already be close)
-        world.set(entity, ecs.Position, .{ .x = body_pos[0], .y = body_pos[1], .z = body_pos[2] });
-        world.set(entity, ecs.Rotation, .{ .x = body_rot[0], .y = body_rot[1], .z = body_rot[2], .w = body_rot[3] });
-
-        // Keep the ECS scale at the new values - the mesh rendering uses this scale,
-        // and now the physics body also has matching scaled dimensions.
-        // (Scale is already set from the gizmo manipulation, no need to change it)
-
-        std.debug.print("Recreated physics body with scale ({d:.2}, {d:.2}, {d:.2})\n", .{
-            new_scale.x, new_scale.y, new_scale.z,
-        });
-    }
+    try pw.setBoxHalfExtents(body_id, half_extents);
 }
 
 // ============================================================================
@@ -397,7 +389,9 @@ fn draw(ctx: *EditorContext) void {
             new_translation,
             new_rot,
             new_scale,
-        );
+        ) catch |err| {
+            std.log.err("could not apply gizmo transform: {s}", .{@errorName(err)});
+        };
     }
 }
 
@@ -414,7 +408,7 @@ fn applyTransform(
     pos: [3]f32,
     rot: ecs.Rotation,
     scl: [3]f32,
-) void {
+) !void {
     // Check if entity has a physics body
     if (world.get(entity, ecs.RigidBody)) |rb| {
         // ====================================================================
@@ -424,8 +418,8 @@ fn applyTransform(
         // updated ECS, the physics simulation would immediately override our
         // changes on the next tick (rubber-banding).
         if (world.physics_world) |pw| {
-            pw.setBodyPosition(rb.body_id, pos);
-            pw.setBodyRotation(rb.body_id, .{ rot.x, rot.y, rot.z, rot.w });
+            try pw.setBodyPosition(rb.body_id, pos);
+            try pw.setBodyRotation(rb.body_id, .{ rot.x, rot.y, rot.z, rot.w });
         }
 
         // Also update ECS for immediate visual feedback
@@ -445,4 +439,23 @@ fn applyTransform(
 
     // Scale is always stored in ECS (physics bodies don't have runtime scale)
     world.set(entity, ecs.Scale, .{ .x = scl[0], .y = scl[1], .z = scl[2] });
+}
+
+test "suspending the gizmo restores a selected dynamic body" {
+    var physics_world = try physics.Physics.init();
+    defer physics_world.deinit();
+
+    var world = try ecs.GameWorld.init();
+    defer world.deinit();
+    world.setPhysicsWorld(&physics_world);
+
+    const body_id = try physics_world.createDynamicBox(.{ 0, 2, 0 }, .{ 0.5, 0.5, 0.5 });
+    const entity = try world.spawn(.{ .scale = .{} });
+    world.set(entity, ecs.RigidBody, .{ .body_id = body_id });
+
+    handleSelectionChange(&world, @intCast(entity));
+    try std.testing.expectEqual(physics.MotionType.kinematic, try physics_world.getMotionType(body_id));
+
+    releaseInteraction(&world);
+    try std.testing.expectEqual(physics.MotionType.dynamic, try physics_world.getMotionType(body_id));
 }

@@ -1,153 +1,147 @@
 # ADR-005: Physics-ECS Integration Strategy
 
 ## Status
-Accepted
+
+Accepted, amended 2026-07-09
 
 ## Context
 
-The engine uses two separate systems for game objects:
-- **ECS (flecs)**: Manages entities, components, and queries for rendering
-- **Physics (Jolt via zphysics)**: Simulates rigid body dynamics, collisions, constraints
+The engine uses Flecs for entity and logical world state and Jolt Physics 5.5.0 through an engine-owned JoltC adapter for rigid-body simulation. The boundary must answer three different questions without conflating them:
 
-These systems must be connected so that physics simulation results are reflected in rendered visuals. The core question: **who owns the transform, and how does data flow between systems?**
+1. Which system owns a transform at each point in a simulation tick?
+2. Which data may rendering and gameplay consume?
+3. Which identifiers and state may cross persistence or future network boundaries?
+
+The former integration was described in terms of `zphysics` and claimed that ECS was always the single transform authority. That is incompatible with dynamic simulation: Jolt necessarily owns a dynamic body's simulated pose while it steps.
 
 ## Decision
 
-We adopt **Approach 2: RigidBody Component in ECS** with explicit sync.
+### Narrow engine physics types
 
-### Pattern
-
-```
-simulateTick() {
-    physics.update(dt)      // Physics steps forward
-    syncPhysicsToECS()      // Copy physics transforms → ECS components
-}
-
-render() {
-    // Render from ECS (already updated)
-}
-```
-
-### Component Design
-
-Entities with physics have a `RigidBody` component storing the physics body ID:
+ECS, gameplay, editor, and rendering code depend on engine-owned physics types
+and capabilities, not JoltC declarations. New feature slices use the
+compile-time `Bodies` contract; the crate feature stores the capability's
+opaque handle in a feature-private runtime component. The concrete Jolt
+adapter's handle is `physics.BodyId`:
 
 ```zig
-pub const RigidBody = struct {
-    body_id: zphysics.BodyId,
-};
+pub const RuntimeBody = struct { handle: Bodies.Handle };
+// In the Jolt composition: Bodies.Handle == physics.BodyId
 ```
 
-A sync system queries all entities with `(Position, Rotation, RigidBody)` and copies transforms from physics to ECS each tick.
+The legacy sandbox still has a `RigidBody` component for its migration-only
+`GameWorld` path; it is not the contract for new features.
 
-### Quaternion Storage (Direct Sync)
+`physics.BodyId` is a narrow process-local handle containing an adapter-issued,
+monotonic world token, an engine-issued 64-bit body serial, and Jolt's raw body
+value. Every adapter operation validates the world token and the live
+serial-to-raw mapping before entering Jolt. This prevents handles from another
+or recreated physics world from aliasing a live body and prevents Jolt's finite
+native generation field from reviving a stale handle after repeated slot reuse.
+It must not be serialized, used as a persistent entity identity, or exposed as
+a future network identity. The Jolt C import and ABI details remain private to
+the physics adapter.
 
-The ECS `Rotation` component stores quaternions directly (x, y, z, w), matching the physics engine's internal representation. This enables:
+### Runtime and thread lifetime
 
-1. **Direct copy from physics** - No conversion needed during sync:
-```zig
-const quat = physics.getBodyRotation(body_id);
-rotation.* = .{ .x = quat[0], .y = quat[1], .z = quat[2], .w = quat[3] };
+JoltC initialization is process-global and not reference-counted. The adapter
+therefore owns a runtime lease count: the first `Physics` world calls
+`JPH_Init`, and only the final world calls `JPH_Shutdown`. Per-world systems,
+allocators, filters, and jobs remain independently owned and transactionally
+unwind on initialization failure.
+
+Physics world lifecycle and adapter calls are confined to the thread that
+created the first runtime lease. Jolt worlds can coexist on that thread, but
+the current zflecs-backed simulation composition permits only one live owned
+ECS world per process. Concurrent world mutation/lifecycle is deliberately
+unsupported. This matches ADR-008's main-thread simulation ownership until a
+real worker-facing command boundary is designed.
+
+### Transform authority is explicit by body mode
+
+| Body mode | Authority | Direction at the boundary |
+|---|---|---|
+| Dynamic | Jolt during simulation | Jolt body pose -> physics sync -> ECS logical transform |
+| Kinematic | Gameplay/ECS intent | Command boundary -> Jolt; simulated result may then be published to ECS |
+| Static | Authored/gameplay state | Creation or explicit command -> Jolt; no per-frame write-back is required unless queried |
+
+For dynamic bodies the implemented fixed tick order is:
+
+```text
+commands -> pre-physics inputs -> step Jolt -> publish post-physics state
 ```
 
-2. **Single matrix conversion** - `Rotation.toMatrix()` uses `zm.quatToMat()` directly:
-```zig
-pub fn toMatrix(self: Rotation) zm.Mat {
-    return zm.quatToMat(zm.f32x4(self.x, self.y, self.z, self.w));
-}
-```
+The current sandbox exposes immediate physics setters and has not yet implemented the formal command boundary for kinematic/static intent. That boundary is required migration work; immediate setters are not the long-term cross-feature API.
 
-3. **Euler conversion for UI** - `Rotation.toEuler()` extracts human-readable angles when needed (editor display only):
-```zig
-const euler = rotation.toEuler();  // Returns [3]f32 {pitch, yaw, roll}
-```
+Current adapter getters and mutators are checked error unions. Invalid/foreign
+handles and non-finite transforms, velocities, forces, rotations, or time steps
+do not silently cross the boundary. Physics-step capacity failures propagate
+before ECS publication or completed-tick accounting.
 
-**Benefits over Euler storage:**
-- No gimbal lock issues
-- No extraction/application order mismatch bugs
-- Faster sync (direct copy vs trig functions)
-- More accurate (no round-trip conversion errors)
+Rendering never queries Jolt directly. It consumes presentation data derived from ECS so the renderer remains independent of the physics backend and future server/headless hosts do not acquire graphics dependencies.
 
-## Rationale
+ECS remains authoritative for entity identity, component composition, gameplay state, persistence inputs, and the logical transform published after a step. This does not make ECS authoritative for a dynamic body's in-progress simulated pose.
 
-### Alternatives Considered
+### Coordinate and rotation contract
 
-**Approach 1: Physics-Owned Transforms**
-- Physics engine is authoritative; rendering queries physics directly
-- Problem: No unified entity model. "Where is entity X?" has two answers depending on whether it has physics.
+The sync reads Jolt's body position intentionally, rather than substituting center-of-mass coordinates. Collider offsets and future compound shapes must preserve the distinction between entity/body origin and center of mass.
 
-**Approach 3: Physics Writes Directly to ECS**
-- Physics system holds entity IDs and writes components during simulation
-- Problem: Tight coupling. Physics must understand ECS structure. Harder to debug.
+Rotation is stored as a normalized quaternion in ECS using `(x, y, z, w)`. Physics sync copies the quaternion components directly. Euler angles are an editor presentation only and are never the physics interchange format.
 
-### Why Approach 2
+Editor scale manipulation replaces a box shape in place, preserving the
+world-qualified `BodyId`. A rejected replacement retains the old collider and
+rolls the visual scale back rather than destroying the body first or allowing
+render/physics dimensions to diverge.
 
-1. **Single source of truth for game state**: ECS owns all entity data. Physics is an input, not the authority.
+### Presentation history
 
-2. **Unified entity model**: Static props, animated characters, physics objects, and vehicles are all entities with different component combinations. Same queries, same inspector, same serialization.
+The S0 crate feature publishes previous/current logical poses and immutable
+presentation extraction interpolates between them using the host's clamped
+`alpha`. Position is interpolated linearly and rotation uses normalized
+shortest-path interpolation. Spawn and restore initialize both samples to the
+same pose, and extraction never writes authoritative state.
 
-3. **Clear data flow**: Physics → sync → ECS → Rendering. Easy to reason about, easy to debug.
+Legacy sandbox entities still use the prototype `GameWorld` synchronization
+path and render their latest completed transform. That borrowed-world bridge is
+migration-only; new feature slices must use transform history rather than
+querying Jolt from rendering.
 
-4. **Mode switching**: A character can transition from animation-driven to ragdoll by swapping components. The entity persists; only its physics representation changes.
+### Determinism and future networking
 
-5. **Editor compatibility**: The Scene inspector (already implemented) shows ECS state. Physics entities appear automatically with correct positions.
+The fixed 120 Hz step and explicit authority boundaries support repeatable scheduling, but they do not promise bitwise or cross-platform lockstep determinism. Jolt's cross-platform deterministic compile mode is deliberately disabled. The intended future multiplayer model is an authoritative server that publishes state, not peers or clients independently reproducing an identical simulation.
+
+Persistent identities, serializable logical state, commands, and presentation snapshots must therefore remain distinct from process-local Jolt handles even though replication itself is deferred.
 
 ## Complex Scenarios
 
-### Ragdolls
+Ragdolls, vehicles, and compound objects follow the same rule: a feature slice owns its engine-level components and commands while a physics adapter owns Jolt-specific handles and calls. Features must not leak raw JoltC structs or pointers into ECS components.
 
-A ragdoll is multiple physics bodies (one per bone) connected by joints. Two options:
-
-**A) One entity per bone**: Each bone entity has `RigidBody`. Hierarchy via ECS parent-child. Sync updates each bone's transform.
-
-**B) Single entity with RagdollController**: One entity holds an array of body IDs. Sync writes to a bone transform buffer consumed by skinned mesh rendering.
-
-Option B is preferred for characters since:
-- Character is conceptually one entity
-- Switching between animation and ragdoll is component swap
-- Skinned meshes already consume bone arrays
-
-### Vehicles
-
-Vehicles use specialized physics (chassis + wheel constraints). The pattern:
-
-```zig
-pub const VehiclePhysics = struct {
-    chassis_body: BodyId,
-    vehicle_constraint: *VehicleConstraint,
-};
-```
-
-Sync reads chassis transform → entity Position/Rotation. Wheel positions come from the constraint and update child entities or a wheel transform array.
-
-### Partial Physics
-
-Some objects need physics for part of their lifetime:
-- Debris: spawns with physics, comes to rest, becomes static
-- Doors: kinematic until broken, then dynamic
-- Characters: animation-driven until death, then ragdoll
-
-Component composition handles this: add/remove `RigidBody` or swap controller components. The entity persists through mode changes.
+- A ragdoll may keep engine `BodyId` values in a process-local runtime component and publish a bone-pose buffer.
+- A vehicle feature may keep a chassis handle and constraint handle behind a vehicle physics capability, then publish chassis and wheel presentation transforms.
+- A body changing static, kinematic, or dynamic mode changes authority at an explicit command boundary; ownership must not be inferred from whichever system wrote last.
 
 ## Consequences
 
 ### Positive
-- Consistent entity model across all object types
-- Existing tools (Scene inspector) work automatically
-- Physics is decoupled from rendering
-- Easy to add/remove physics at runtime
+
+- Dynamic simulation authority is unambiguous.
+- Rendering, persistence, and future networking do not depend on JoltC.
+- Quaternions cross the physics/ECS boundary without lossy Euler conversion.
+- Process-local physics handles cannot accidentally become saved or replicated identities.
+- Foreign and stale-world body handles cannot alias a live body in another world.
+- Headless physics tests can link Jolt without SDL, renderer, shader, or editor dependencies.
 
 ### Negative
-- One frame of latency between physics and rendering (acceptable at 120Hz)
-- Sync system must run every tick (minimal overhead)
-- Must be careful about modifying Position directly on physics entities (sync will overwrite)
 
-### Future Considerations
-- Interpolation between physics frames for smoother rendering
-- Kinematic bodies (ECS → physics for animated objects that affect physics)
-- Compound colliders (multiple shapes per entity)
+- Each body-mode transition needs an explicit command and synchronization policy.
+- Physics-to-ECS publication remains per-tick work.
+- The legacy sandbox entities still need migration to feature-owned transform history.
+- The one-live-owned-world restriction prevents atomic old/new simulation replacement and must be resolved or accepted before multi-world server deployment.
+- Collider origin and center-of-mass conventions need tests as shape complexity grows.
 
 ## References
+
 - ADR-004: ECS Architecture
-- Jolt Physics documentation on body management
-- Unity/Unreal physics-rendering patterns
+- ADR-007: Product, Platform, and Compatibility Scope
+- [Jolt Physics documentation](https://jrouwe.github.io/JoltPhysics/)
+- [`third_party/joltc-zig/README.md`](../../third_party/joltc-zig/README.md)

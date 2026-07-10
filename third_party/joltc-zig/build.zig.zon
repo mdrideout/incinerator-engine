@@ -1,0 +1,22 @@
+.{
+    .name = .incinerator_joltc,
+    .version = "0.1.0",
+    .fingerprint = 0x23712238d06584c2,
+    .minimum_zig_version = "0.16.0",
+    .dependencies = .{
+        .joltc = .{
+            .url = "https://github.com/amerkoleci/joltc/archive/52d8c98df523f449eb3e01b1060a0fde052970d1.zip",
+            .hash = "N-V-__8AAFm0CwB4d7JHat1Ls6yxrb93UCz_oH4G6VLxEFVv",
+        },
+        .jolt_physics = .{
+            .url = "https://github.com/jrouwe/JoltPhysics/archive/23dadd0e603f1b321142d4c74df07fce85064989.zip",
+            .hash = "N-V-__8AAAPKDAINa53XiVzIJ2I4V3AAjPxzQ_bJ9TD7TOOS",
+        },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+        "README.md",
+    },
+}
