@@ -99,6 +99,17 @@ pub const FrameTimer = struct {
         self.beginFrameWithElapsedSeconds(raw_dt) catch unreachable;
     }
 
+    /// Reset the host-clock baseline without advancing simulation time.
+    /// Window suspension uses this after waiting so time spent minimized does
+    /// not become a large catch-up frame when presentation resumes.
+    pub fn resyncClock(self: *FrameTimer) void {
+        const now = c.SDL_GetPerformanceCounter();
+        self.frame_start = now;
+        self.previous_frame_start = now;
+        self.delta_time = 0;
+        self.ticks_this_frame = 0;
+    }
+
     /// Feed an explicit frame duration through the same production cadence
     /// policy. Visual smoke tests use this to exercise render rates without
     /// coupling expected tick counts to host scheduling noise.
@@ -190,10 +201,13 @@ pub fn lerp(a: f32, b: f32, t: f32) f32 {
 // ============================================================================
 
 test "FrameTimer initialization" {
-    const timer = FrameTimer.init();
+    var timer = FrameTimer.init();
     try std.testing.expect(timer.frequency > 0);
     try std.testing.expectEqual(@as(f32, 0.0), timer.fixed_step.alpha());
     try std.testing.expect(timer.total_frames == 0);
+    timer.resyncClock();
+    try std.testing.expectEqual(@as(f64, 0), timer.delta_time);
+    try std.testing.expectEqual(@as(u32, 0), timer.ticks_this_frame);
 }
 
 test "TICK_DURATION calculation" {

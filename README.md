@@ -114,6 +114,19 @@ zig build run -Deditor=false -- \
   --s1-visual-smoke --frames=480 --virtual-render-hz=240
 zig build run -Deditor=false -- \
   --s1-visual-smoke --frames=160 --virtual-render-hz=80
+
+# Run the serialized Tier-1 installed-runtime readiness gate. This launches
+# the installed ReleaseFast Mach-O from /tmp, not Zig's cache artifact.
+zig build test-macos-readiness \
+  -Doptimize=ReleaseFast -Deditor=false
+
+# The three native gates can also be run independently.
+zig build smoke-installed-s1-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-window-lifecycle-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-init-failures-macos \
+  -Doptimize=ReleaseFast -Deditor=false
 ```
 
 ## Content Boundary
@@ -146,6 +159,7 @@ The overhaul is converging on a thin kernel, feature-owned vertical slices, narr
 - [`S1 Character Slice Design`](docs/design/s1-character-slice.md)
 - [`S1 Acceptance Record`](docs/validation/s1-acceptance.md)
 - [`S1 Performance Baseline`](docs/performance/s1-baseline.md)
+- [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 
 The engine loop separates input, fixed-rate simulation, and presentation:

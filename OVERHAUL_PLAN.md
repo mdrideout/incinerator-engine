@@ -298,8 +298,8 @@ sandbox composition shared by visual and headless hosts:
 | Zig 0.16.0 ReleaseFast, editor excluded | Pass | Preserve in CI |
 | `x86_64-linux-gnu` cross-link from macOS | Pass with editor enabled and excluded | Preserve as a Tier 2 portability gate; reconsider native client validation before S3 content/streaming contracts are finalized |
 | `x86_64-windows-gnu` cross-link from macOS | Pass for default D3D12/DXIL and explicit Vulkan/SPIR-V fallback, with editor enabled and excluded | Preserve as a Tier 2 portability gate; native client validation resumes only after selecting Windows for playtesting/release |
-| macOS Metal runtime smoke | Pass | Installed visual smoke outside the repository |
-| Relocatable non-GPU install probe | Pass from an unrelated working directory | Installed macOS visual-runtime evidence; secondary platform packaging is deferred |
+| macOS Metal runtime smoke | Pass, including the installed ReleaseFast Mach-O launched from `/tmp` | Preserve the serialized local Tier-1 readiness gate; do not promote graphical smokes to hosted CI until WindowServer/Metal reliability is proven |
+| Relocatable non-GPU install probe | Pass from an unrelated working directory | Preserve as the deterministic hosted relocation check; secondary platform packaging is deferred |
 
 ### 6.2 Dependency baseline
 
@@ -402,8 +402,8 @@ targets to compete with the current macOS-first gameplay roadmap.
 | Stage | End-to-end outcome | Status |
 |---|---|---|
 | M0 | Reproducible baseline and blocking decisions | Complete |
-| M1 | Trustworthy macOS build, shader, dependency, CI, and packaging gate plus secondary-platform portability guards | In progress; native Vulkan/D3D12 client validation is deliberately deferred |
-| M2 | Immediate ownership and correctness hazards removed | Implemented; deeper failure injection/leak instrumentation and one manual minimize smoke remain evidence gates |
+| M1 | Trustworthy macOS build, shader, dependency, CI, and packaging gate plus secondary-platform portability guards | Local Tier-1 closeout complete; first hosted macOS run remains to be recorded after push, and native Vulkan/D3D12 client validation is deliberately deferred |
+| M2 | Immediate ownership and correctness hazards removed | Complete for the pre-S2 scope; content-upload failure/cancellation policy remains slice-owned by S3 |
 | S0 | Crate lifecycle slice proves the kernel and feature contract | Complete; one-world-per-process and pre-network queue backpressure are accepted follow-on constraints |
 | S1 | Character walks around one block | Complete; independent architecture, correctness, and build/evidence reviews pass with no remaining P0/P1/P2 finding |
 | S2 | Player enters and drives one vehicle | Not started |
@@ -477,8 +477,8 @@ M0–M2 are limited cross-cutting gates. S0 onward are vertical slices. Shared e
 ### 11.4 CI and packaging
 
 - [x] Define formatting, Debug, ReleaseFast, clean-test, primary macOS, and
-  compile-only secondary-target workflow gates; the first hosted macOS run
-  remains required evidence.
+  compile-only secondary-target workflow gates; record the first hosted macOS
+  run after the closeout commit is pushed.
 - [x] Add compile-only Linux and Windows cross-target jobs.
 - [x] Add reflected shader-contract validation.
 - [x] Add a non-GPU package/install probe that runs outside the repository root.
@@ -507,9 +507,10 @@ M0–M2 are limited cross-cutting gates. S0 onward are vertical slices. Shared e
 - [x] Tier 1 macOS passes offline MSL and native Metal validation; Tier 2
   Linux/Windows pass their current offline shader, cross-build, and headless
   portability contracts.
-- [ ] The installed macOS visual runtime launches outside the repository. The
-  non-GPU relocation probe already passes; secondary-platform installed-runtime
-  validation is deferred until that platform is selected.
+- [x] The installed macOS visual runtime launches outside the repository from
+  `/tmp`, completes the S1 Metal behavior contract, and tears down cleanly.
+  Secondary-platform installed-runtime validation is deferred until that
+  platform is selected.
 - [x] Zig support is an exact tested contract.
 
 ---
@@ -538,18 +539,25 @@ M2 fixes proven hazards. It does not attempt to finish the future engine archite
 - [x] Stop named Flecs spawns from aliasing multi-primitive entities; root lookup identities are validated and unique.
 - [x] Use body-origin position rather than center-of-mass position for synchronization.
 - [x] Transform normals into the declared lighting space.
-- [x] Prevent minimized/backpressured rendering from busy-spinning in implementation; retain a native minimize/restore CPU smoke as manual evidence.
+- [x] Prevent minimized/backpressured rendering from busy-spinning; track the
+  main-window minimized/restored state, suspend simulation/presentation while
+  minimized, resynchronize the clock, and pass the installed native lifecycle
+  smoke across a measured 750 ms dwell.
 
 ### 12.3 Error policy and tests
 
 - [x] Distinguish skipped/minimized frames from fatal renderer failures.
 - [x] Propagate or centrally report physics and GPU submission failures.
-- [ ] Add full failure-injection tests through production SDL/Jolt initialization and upload paths. Narrow depth-commit, initialized-prefix, ownership, and invalid-input seams are covered.
+- [x] Add focused failure injection at real production SDL/Metal and Jolt
+  initialization ownership transitions, then prove a healthy lifecycle can
+  restart in the same process. Per-upload GPU cancellation/failure seams are
+  deferred to S3, where the upload queue and asset cancellation policy exist.
 - [x] Add create/destroy/recreate tests for bodies and resources, including cross-world/stale body handles.
 
 ### Acceptance criteria
 
-- [ ] Allocator-backed tests find no known shape, mesh, texture, or partial-init leaks.
+- [x] Allocator-backed/fault-sweep tests and real same-process restart smokes
+  find no known shape, mesh, texture, or covered partial-initialization leak.
 - [x] Resize/resource failures preserve valid subsystem state.
 - [x] Repeated body/resource lifecycle tests do not produce stale handles or double release at covered boundaries.
 - [x] Input capture/focus transitions do not leave stuck state.
@@ -906,7 +914,7 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-027 | Named Flecs spawns alias multi-primitive entities | P1 | M2 | Resolved with fallible, validated root lookup identities and duplicate rejection |
 | F-028 | Physics sync mixes center-of-mass and body origin | P1 | M2/S2 | Resolved |
 | F-029 | Model normals are not transformed into lighting space | P2 | M2 | Resolved with an inverse-transpose world-space normal matrix and reflected 128-byte model UBO |
-| F-030 | Main loop can busy-spin minimized/backpressured | P2 | M2 | Resolved in implementation with blocking swapchain acquisition and bounded unavailable-frame event wait; manual minimize evidence pending |
+| F-030 | Main loop can busy-spin minimized/backpressured | P2 | M2 | Resolved with explicit main-window suspension, bounded SDL waits, clock resynchronization, the independent unavailable-swapchain path, and installed native minimize/restore evidence |
 | F-031 | Editor can leave bodies kinematic while hidden | P1 | M2/S5 | Superseded by removing direct Scene/Gizmo world mutation; S5 authoring must use typed commands |
 | F-032 | Scale recreation destroys body before replacement | P1 | M2/S5 | Superseded by removing direct Scene/Gizmo world mutation; future scale authoring is transactional feature work |
 | F-033 | CI and behavior coverage are shallow | P0 | M1 | CI implemented; hosted macOS evidence remains open, while Linux/Windows native-client evidence is deferred by D-009 |
@@ -1008,11 +1016,13 @@ Record evidence rather than relying only on target numbers:
 2. [x] Write the D-011/D-012 ADR describing feature registration, dependency rules, and commands/events/queries.
 3. [x] Choose the exact Zig baseline/migration policy under D-003.
 4. [x] Complete the focused Jolt binding spike and select the engine-owned JoltC 5.5 path under D-004.
-5. [ ] Complete the macOS-first M1 closeout: record hosted macOS evidence and
-   launch the installed visual runtime outside the repository. Keep existing
-   Linux/Windows cross-build, offline shader, and headless guards green; native
-   Vulkan/D3D12 client validation is not a current gate.
-6. [ ] Close M2’s remaining production-path failure-injection and native minimize evidence; the proven implementation hazards are fixed without adding speculative framework.
+5. [ ] Complete the final macOS-first M1 environment check by recording the
+   first hosted macOS workflow after push. The installed native visual runtime
+   now passes outside the repository. Keep existing Linux/Windows cross-build,
+   offline shader, and headless guards green; native Vulkan/D3D12 client
+   validation is not a current gate.
+6. [x] Close M2’s production-path initialization failure-injection and native
+   minimize/restore evidence without adding speculative backend frameworks.
 7. [x] Write a short S0 design brief naming `CrateFeature` data, commands, systems, required capabilities, and tests.
 8. [x] Implement the S0 kernel/contracts, crate feature, Jolt composition, V1 persistence, typed visual-resource owner, and isolated headless host.
 9. [ ] Decide whether to replace/fork zflecs for multiple simultaneous worlds or accept one simulation world per server process before server architecture begins; this is explicitly not an S0 blocker.
@@ -1021,8 +1031,8 @@ Record evidence rather than relying only on target numbers:
     including action latching, shared-world collision, interpolation,
     authoritative tuning persistence, headless/visual evidence, and a fresh
     ReleaseFast characterization.
-12. [ ] Create the reviewed S1 milestone commit before beginning the next slice.
-13. [ ] Close the small macOS-focused M1/M2 evidence set: installed visual
+12. [x] Create the reviewed S1 milestone commit before beginning the next slice.
+13. [x] Close the small local macOS-focused M1/M2 evidence set: installed visual
     launch, native minimize/restore behavior, and the highest-value production
     initialization/failure seams.
 14. [ ] Begin S2 with a bounded vehicle capability/design spike, followed by
@@ -1053,3 +1063,4 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-10 | Completed independent S0 architecture, correctness, and build/platform review | Initial edge findings corrected; targeted re-audits passed with no remaining actionable P0/P1/P2 S0 issue; accepted follow-on risks recorded in the acceptance document |
 | 2026-07-12 | Completed and independently reviewed the S1 character vertical slice | 139/139 Debug, ReleaseFast, and editor-enabled tests; authoritative V2 character tuning/canonical yaw; terminal-fall and grounded-restore regressions; source package and Linux/Windows cross-builds; four native Metal cadence smokes; architecture/correctness/build reviews pass with no remaining P0/P1/P2 finding |
 | 2026-07-12 | Prioritized Apple Silicon macOS/Metal as the sole current runtime-quality platform | ADR-007/D-009 amended: Linux/Windows retain cross-build, offline shader, and headless portability guards; native client investment becomes trigger-based before S3 content lock-in, secondary-client playtesting/release, or server work |
+| 2026-07-12 | Closed the local Apple Silicon runtime-readiness and M2 evidence set | Installed ReleaseFast S1 Metal runtime launched from `/tmp`; real minimize/restore events with a 750 ms suspended dwell, authoritative input release, and clean resume; six SDL/Metal plus four Jolt initialization ownership failpoints followed by healthy same-process restarts; 146/146 Debug and ReleaseFast tests |

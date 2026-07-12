@@ -559,6 +559,93 @@ pub fn build(b: *std.Build) void {
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
 
+    // Native Tier-1 runtime gates execute the installed Mach-O directly from
+    // outside the repository. They intentionally reject cross builds so a
+    // successful compile cannot be mistaken for macOS/Metal runtime evidence.
+    const native_apple_silicon = target.query.isNative() and
+        target.result.os.tag == .macos and target.result.cpu.arch == .aarch64;
+    const installed_exe_path = b.getInstallPath(.bin, exe.out_filename);
+
+    const installed_s1_smoke_step = b.step(
+        "smoke-installed-s1-macos",
+        "Run the installed S1 Metal smoke from /tmp (native Apple Silicon only)",
+    );
+    const window_lifecycle_smoke_step = b.step(
+        "smoke-window-lifecycle-macos",
+        "Exercise installed macOS minimize/restore suspension (native Apple Silicon only)",
+    );
+    const init_failure_smoke_step = b.step(
+        "smoke-init-failures-macos",
+        "Exercise installed SDL/Metal init cleanup and restart (native Apple Silicon only)",
+    );
+    const macos_readiness_step = b.step(
+        "test-macos-readiness",
+        "Run installed visual, window lifecycle, and init cleanup Tier-1 gates",
+    );
+
+    if (native_apple_silicon) {
+        const installed_s1_smoke = b.addSystemCommand(&.{
+            installed_exe_path,
+            "--s1-visual-smoke",
+            "--frames=160",
+            "--virtual-render-hz=80",
+        });
+        installed_s1_smoke.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s1_smoke.step.dependOn(b.getInstallStep());
+        installed_s1_smoke_step.dependOn(&installed_s1_smoke.step);
+
+        const window_lifecycle_smoke = b.addSystemCommand(&.{
+            installed_exe_path,
+            "--window-lifecycle-smoke",
+        });
+        window_lifecycle_smoke.setCwd(.{ .cwd_relative = "/tmp" });
+        window_lifecycle_smoke.step.dependOn(b.getInstallStep());
+        window_lifecycle_smoke_step.dependOn(&window_lifecycle_smoke.step);
+
+        const init_failure_smoke = b.addSystemCommand(&.{
+            installed_exe_path,
+            "--init-failure-smoke",
+        });
+        init_failure_smoke.setCwd(.{ .cwd_relative = "/tmp" });
+        init_failure_smoke.step.dependOn(b.getInstallStep());
+        init_failure_smoke_step.dependOn(&init_failure_smoke.step);
+
+        // The aggregate gate is serialized deliberately. Concurrent GUI
+        // processes would make WindowServer/Metal failures environmental and
+        // weaken the signal from these native checks.
+        const readiness_s1 = b.addSystemCommand(&.{
+            installed_exe_path,
+            "--s1-visual-smoke",
+            "--frames=160",
+            "--virtual-render-hz=80",
+        });
+        readiness_s1.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s1.step.dependOn(b.getInstallStep());
+
+        const readiness_window = b.addSystemCommand(&.{
+            installed_exe_path,
+            "--window-lifecycle-smoke",
+        });
+        readiness_window.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_window.step.dependOn(&readiness_s1.step);
+
+        const readiness_init = b.addSystemCommand(&.{
+            installed_exe_path,
+            "--init-failure-smoke",
+        });
+        readiness_init.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_init.step.dependOn(&readiness_window.step);
+        macos_readiness_step.dependOn(&readiness_init.step);
+    } else {
+        const native_only = b.addFail(
+            "macOS readiness smokes require a native aarch64-macos target",
+        );
+        installed_s1_smoke_step.dependOn(&native_only.step);
+        window_lifecycle_smoke_step.dependOn(&native_only.step);
+        init_failure_smoke_step.dependOn(&native_only.step);
+        macos_readiness_step.dependOn(&native_only.step);
+    }
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.
@@ -575,8 +662,8 @@ pub fn build(b: *std.Build) void {
     const run_cmd = b.addRunArtifact(exe);
     run_step.dependOn(&run_cmd.step);
 
-    // By making the run step depend on the default step, it will be run from the
-    // installation directory rather than directly from within the cache directory.
+    // Keep the installation current before launching the cache artifact. Use
+    // the dedicated installed-smoke steps above when cwd/relocation matters.
     run_cmd.step.dependOn(b.getInstallStep());
 
     // This allows the user to pass arguments to the application in the build

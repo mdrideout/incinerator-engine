@@ -61,6 +61,16 @@ const broad_phase_layers = struct {
     const count: u32 = 2;
 };
 
+/// Deterministic checkpoints for testing cleanup across Jolt's real ownership
+/// transitions. This stays private to the adapter: production callers cannot
+/// request a partially initialized world.
+const InitFailurePoint = enum {
+    after_runtime_lease,
+    after_job_and_temp_allocators,
+    after_filter_bundle,
+    after_physics_system_transfer,
+};
+
 fn acquireRuntimeLease() !u64 {
     lockRuntime();
     defer runtime_mutex.unlock();
@@ -113,6 +123,13 @@ fn lockRuntime() void {
     }
 }
 
+fn failInitAt(
+    requested: ?InitFailurePoint,
+    reached: InitFailurePoint,
+) !void {
+    if (requested == reached) return error.InjectedInitFailure;
+}
+
 pub const Physics = struct {
     /// All per-world methods are confined to the thread that created the world.
     /// Multiple worlds may coexist on that one thread; concurrent world
@@ -133,8 +150,16 @@ pub const Physics = struct {
     }
 
     pub fn initWithAllocator(allocator: std.mem.Allocator) !Physics {
+        return initWithAllocatorAndFailurePoint(allocator, null);
+    }
+
+    fn initWithAllocatorAndFailurePoint(
+        allocator: std.mem.Allocator,
+        failure_point: ?InitFailurePoint,
+    ) !Physics {
         const world_token = try acquireRuntimeLease();
         errdefer releaseRuntimeLease();
+        try failInitAt(failure_point, .after_runtime_lease);
 
         const job_system = c.JPH_JobSystemThreadPool_Create(null) orelse
             return error.JobSystemCreationFailed;
@@ -143,6 +168,7 @@ pub const Physics = struct {
         const temp_allocator = c.JPH_TempAllocator_Create(temp_allocator_bytes) orelse
             return error.TempAllocatorCreationFailed;
         errdefer c.JPH_TempAllocator_Destroy(temp_allocator);
+        try failInitAt(failure_point, .after_job_and_temp_allocators);
 
         var object_layer_filter: ?*c.JPH_ObjectLayerPairFilter =
             c.JPH_ObjectLayerPairFilterTable_Create(object_layers.count);
@@ -196,6 +222,7 @@ pub const Physics = struct {
         errdefer if (object_vs_broad_phase_filter) |filter| {
             c.JPH_ObjectVsBroadPhaseLayerFilter_Destroy(filter);
         };
+        try failInitAt(failure_point, .after_filter_bundle);
 
         const settings = c.JPH_PhysicsSystemSettings{
             .maxBodies = 10_240,
@@ -218,6 +245,7 @@ pub const Physics = struct {
         object_layer_filter = null;
         object_vs_broad_phase_filter = null;
         errdefer c.JPH_PhysicsSystem_Destroy(system);
+        try failInitAt(failure_point, .after_physics_system_transfer);
 
         // A created system always exposes a body interface.
         const body_interface = c.JPH_PhysicsSystem_GetBodyInterface(system) orelse unreachable;
@@ -1310,6 +1338,43 @@ test "Jolt runtime lease keeps a surviving world usable" {
     try first.update(1.0 / 60.0);
     try std.testing.expect(first.isBodyAdded(body));
     try std.testing.expect(first.removeBody(body));
+}
+
+test "physics init failure checkpoints unwind and permit healthy restart" {
+    const leases_before = runtimeLeaseCount();
+    const failure_points = [_]InitFailurePoint{
+        .after_runtime_lease,
+        .after_job_and_temp_allocators,
+        .after_filter_bundle,
+        .after_physics_system_transfer,
+    };
+
+    for (failure_points) |failure_point| {
+        try std.testing.expectError(
+            error.InjectedInitFailure,
+            Physics.initWithAllocatorAndFailurePoint(
+                std.heap.page_allocator,
+                failure_point,
+            ),
+        );
+        try std.testing.expectEqual(leases_before, runtimeLeaseCount());
+
+        {
+            var healthy = try Physics.init();
+            defer healthy.deinit();
+            try std.testing.expectEqual(leases_before + 1, runtimeLeaseCount());
+
+            const body = try healthy.createDynamicBox(
+                .{ 0, 2, 0 },
+                .{ 0.5, 0.5, 0.5 },
+            );
+            try healthy.update(1.0 / 60.0);
+            try std.testing.expect(healthy.isBodyAdded(body));
+            try std.testing.expect(healthy.removeBody(body));
+        }
+
+        try std.testing.expectEqual(leases_before, runtimeLeaseCount());
+    }
 }
 
 test "body IDs cannot cross live physics worlds" {

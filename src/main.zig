@@ -77,6 +77,8 @@ const ProgramMode = union(enum) {
     verify_install,
     visual_smoke: VisualSmokeConfig,
     s1_visual_smoke: VisualSmokeConfig,
+    window_lifecycle_smoke,
+    init_failure_smoke,
 };
 
 const BootstrapProfile = enum { sandbox, s0_smoke };
@@ -115,6 +117,51 @@ const RunSummary = struct {
     max_alpha: f32 = 0.0,
 };
 
+const WindowLifecycleSummary = struct {
+    warmup_ready_frames: u64 = 0,
+    restored_ready_frames: u64 = 0,
+    unavailable_frames: u64 = 0,
+    minimized_wait_iterations: u64 = 0,
+    minimized_dwell_ns: u64 = 0,
+};
+
+const AppInitFailurePoint = enum {
+    renderer_after_window_claim,
+    renderer_after_pipelines,
+    renderer_after_placeholder_resources,
+    after_renderer,
+    after_visual_resources,
+    after_simulation,
+};
+
+fn rendererFailurePoint(point: ?AppInitFailurePoint) ?renderer.InitFailurePoint {
+    return switch (point orelse return null) {
+        .renderer_after_window_claim => .after_window_claim,
+        .renderer_after_pipelines => .after_pipelines,
+        .renderer_after_placeholder_resources => .after_placeholder_resources,
+        .after_renderer, .after_visual_resources, .after_simulation => null,
+    };
+}
+
+fn injectAppInitFailure(
+    configured: ?AppInitFailurePoint,
+    reached: AppInitFailurePoint,
+) !void {
+    if (configured == reached) return error.InjectedAppInitFailure;
+}
+
+fn suspendGameplayForWindowState(
+    input_buffer: *const input.InputBuffer,
+    action_latch: *sandbox_controls.ActionLatch,
+) bool {
+    if (!input_buffer.window_minimized) return false;
+    // A focus-loss reset can arrive while the render/simulation loop is
+    // suspended. Clear unconsumed frame edges and deltas here so they cannot
+    // replay when the window is restored.
+    action_latch.clear();
+    return true;
+}
+
 const SmokeExpectation = struct {
     ticks: u64,
     min_alpha: f32,
@@ -147,6 +194,8 @@ fn parseProgramMode(args: anytype) !ProgramMode {
     var verify_install = false;
     var visual_smoke = false;
     var s1_visual_smoke = false;
+    var window_lifecycle_smoke = false;
+    var init_failure_smoke = false;
     var frames: ?u64 = null;
     var virtual_render_hz: ?u32 = null;
 
@@ -161,6 +210,12 @@ fn parseProgramMode(args: anytype) !ProgramMode {
         } else if (std.mem.eql(u8, arg, "--s1-visual-smoke")) {
             if (s1_visual_smoke) return error.DuplicateArgument;
             s1_visual_smoke = true;
+        } else if (std.mem.eql(u8, arg, "--window-lifecycle-smoke")) {
+            if (window_lifecycle_smoke) return error.DuplicateArgument;
+            window_lifecycle_smoke = true;
+        } else if (std.mem.eql(u8, arg, "--init-failure-smoke")) {
+            if (init_failure_smoke) return error.DuplicateArgument;
+            init_failure_smoke = true;
         } else if (std.mem.startsWith(u8, arg, "--frames=")) {
             if (frames != null) return error.DuplicateArgument;
             const value = arg["--frames=".len..];
@@ -181,17 +236,25 @@ fn parseProgramMode(args: anytype) !ProgramMode {
     }
 
     if (verify_install) {
-        if (visual_smoke or s1_visual_smoke or frames != null or virtual_render_hz != null) {
+        if (visual_smoke or s1_visual_smoke or window_lifecycle_smoke or
+            init_failure_smoke or frames != null or virtual_render_hz != null)
+        {
             return error.ConflictingProgramModes;
         }
         return .verify_install;
     }
-    if (visual_smoke and s1_visual_smoke) return error.ConflictingProgramModes;
+    const explicit_mode_count = @as(u8, @intFromBool(visual_smoke)) +
+        @as(u8, @intFromBool(s1_visual_smoke)) +
+        @as(u8, @intFromBool(window_lifecycle_smoke)) +
+        @as(u8, @intFromBool(init_failure_smoke));
+    if (explicit_mode_count > 1) return error.ConflictingProgramModes;
     if (!visual_smoke and !s1_visual_smoke and
         (frames != null or virtual_render_hz != null))
     {
         return error.VisualSmokeOptionWithoutMode;
     }
+    if (window_lifecycle_smoke) return .window_lifecycle_smoke;
+    if (init_failure_smoke) return .init_failure_smoke;
     if (!visual_smoke and !s1_visual_smoke) return .normal;
 
     const config = VisualSmokeConfig{
@@ -233,6 +296,13 @@ const App = struct {
     debug_frame_counter: u32,
 
     pub fn init(profile: BootstrapProfile) !App {
+        return initWithFailurePoint(profile, null);
+    }
+
+    fn initWithFailurePoint(
+        profile: BootstrapProfile,
+        failure_point: ?AppInitFailurePoint,
+    ) !App {
         // Initialize SDL3 with video subsystem
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
             std.debug.print("SDL_Init failed: {s}\n", .{c.SDL_GetError()});
@@ -259,8 +329,12 @@ const App = struct {
         }
 
         // Create GPU renderer
-        var gpu_renderer = try renderer.Renderer.init(window);
+        var gpu_renderer = try renderer.Renderer.initWithFailurePoint(
+            window,
+            rendererFailurePoint(failure_point),
+        );
         errdefer gpu_renderer.deinit();
+        try injectAppInitFailure(failure_point, .after_renderer);
 
         // Create ground plane mesh
         var ground_mesh = try primitives.createGroundPlane(gpu_renderer.getDevice());
@@ -281,6 +355,7 @@ const App = struct {
             character_config.half_height,
         );
         errdefer visuals.deinit();
+        try injectAppInitFailure(failure_point, .after_visual_resources);
 
         // The visual and headless hosts use the same owned sandbox composition.
         var simulation = try sandbox_host.Simulation.init(std.heap.page_allocator, .{
@@ -295,6 +370,7 @@ const App = struct {
             .block = if (profile == .sandbox) sandbox_block else null,
         });
         errdefer simulation.deinit();
+        try injectAppInitFailure(failure_point, .after_simulation);
         try simulation.submit(.{ .spawn = .{
             .request_id = 1,
             .pose = .{ .position = .{ 0, 12, 0 } },
@@ -397,6 +473,7 @@ const App = struct {
             self.input_buffer.beginFrame();
             running = self.input_buffer.pumpEvents();
             if (!running) break;
+            if (self.waitForWindowSuspension()) continue;
             if (self.profile == .sandbox) try self.captureFrameActions();
 
             // Smoke mode feeds an explicit cadence through the same fixed-step
@@ -571,6 +648,150 @@ const App = struct {
             }
         }
         return summary;
+    }
+
+    /// Exercise the production window-suspension path against a real SDL/Metal
+    /// window. This is deliberately real-clock and event-driven: a synthetic
+    /// flag would not prove that the platform emits the lifecycle transitions
+    /// the host relies on.
+    pub fn runWindowLifecycleSmoke(self: *App) !WindowLifecycleSummary {
+        const Phase = enum {
+            warmup,
+            await_minimized,
+            dwell,
+            await_restored,
+            restored,
+        };
+        const ready_frames_per_side = 8;
+        const required_dwell_ns = 750 * std.time.ns_per_ms;
+        const overall_timeout_ns = 10 * std.time.ns_per_s;
+        const max_minimized_wait_iterations = 512;
+
+        var phase: Phase = .warmup;
+        var summary = WindowLifecycleSummary{};
+        var running = true;
+        var quit_injected = false;
+        var saw_minimized_event = false;
+        var saw_restored_event = false;
+        var minimized_started_ns: u64 = 0;
+        const smoke_started_ns = c.SDL_GetTicksNS();
+
+        while (running) {
+            self.input_buffer.beginFrame();
+            running = self.input_buffer.pumpEvents();
+            if (!running) break;
+
+            const now_ns = c.SDL_GetTicksNS();
+            if (now_ns - smoke_started_ns > overall_timeout_ns) {
+                return error.WindowLifecycleSmokeTimeout;
+            }
+
+            if (self.input_buffer.window_minimized_this_frame) {
+                if (phase != .await_minimized) {
+                    return error.UnexpectedWindowMinimizedEvent;
+                }
+                saw_minimized_event = true;
+                minimized_started_ns = now_ns;
+                phase = .dwell;
+            }
+            if (self.input_buffer.window_restored_this_frame) {
+                if (phase != .await_restored) {
+                    return error.UnexpectedWindowRestoredEvent;
+                }
+                saw_restored_event = true;
+                phase = .restored;
+                self.frame_timer.resyncClock();
+            }
+
+            if (phase == .dwell and now_ns - minimized_started_ns >= required_dwell_ns) {
+                summary.minimized_dwell_ns = now_ns - minimized_started_ns;
+                if (!c.SDL_RestoreWindow(self.window)) {
+                    std.debug.print("SDL_RestoreWindow failed: {s}\n", .{c.SDL_GetError()});
+                    return error.WindowRestoreFailed;
+                }
+                if (!c.SDL_SyncWindow(self.window)) {
+                    std.debug.print("SDL_SyncWindow after restore failed: {s}\n", .{c.SDL_GetError()});
+                    return error.WindowRestoreSyncFailed;
+                }
+                phase = .await_restored;
+            }
+
+            if (phase == .await_minimized or phase == .dwell or phase == .await_restored) {
+                summary.minimized_wait_iterations += 1;
+                if (summary.minimized_wait_iterations > max_minimized_wait_iterations) {
+                    return error.WindowLifecycleBusyLoop;
+                }
+                if (self.waitForWindowSuspension()) continue;
+                _ = c.SDL_WaitEventTimeout(null, 16);
+                self.frame_timer.resyncClock();
+                continue;
+            }
+
+            self.frame_timer.beginFrame();
+            while (self.frame_timer.shouldTick()) {
+                try self.simulateTick(true);
+            }
+
+            switch (try self.render(self.frame_timer.alpha())) {
+                .ready => {
+                    switch (phase) {
+                        .warmup => {
+                            summary.warmup_ready_frames += 1;
+                            if (summary.warmup_ready_frames == ready_frames_per_side) {
+                                if (!c.SDL_MinimizeWindow(self.window)) {
+                                    std.debug.print("SDL_MinimizeWindow failed: {s}\n", .{c.SDL_GetError()});
+                                    return error.WindowMinimizeFailed;
+                                }
+                                if (!c.SDL_SyncWindow(self.window)) {
+                                    std.debug.print("SDL_SyncWindow after minimize failed: {s}\n", .{c.SDL_GetError()});
+                                    return error.WindowMinimizeSyncFailed;
+                                }
+                                phase = .await_minimized;
+                            }
+                        },
+                        .restored => {
+                            summary.restored_ready_frames += 1;
+                            if (summary.restored_ready_frames == ready_frames_per_side and
+                                !quit_injected)
+                            {
+                                var quit_event = std.mem.zeroes(c.SDL_Event);
+                                quit_event.type = c.SDL_EVENT_QUIT;
+                                if (!c.SDL_PushEvent(&quit_event)) {
+                                    return error.SDLQuitEventFailed;
+                                }
+                                quit_injected = true;
+                            }
+                        },
+                        .await_minimized, .dwell, .await_restored => unreachable,
+                    }
+                },
+                .unavailable => summary.unavailable_frames += 1,
+            }
+        }
+
+        if (!quit_injected or !saw_minimized_event or !saw_restored_event) {
+            return error.WindowLifecycleSmokeInterrupted;
+        }
+        if (summary.minimized_dwell_ns < required_dwell_ns or
+            summary.warmup_ready_frames < ready_frames_per_side or
+            summary.restored_ready_frames < ready_frames_per_side)
+        {
+            return error.WindowLifecycleSmokeInvariant;
+        }
+        return summary;
+    }
+
+    /// Apply the canonical main-window suspension policy. Both the normal loop
+    /// and the native lifecycle smoke use this path.
+    fn waitForWindowSuspension(self: *App) bool {
+        if (!suspendGameplayForWindowState(&self.input_buffer, &self.action_latch)) {
+            return false;
+        }
+        // Do not advance simulation or request a GPU frame. Waiting without an
+        // output event preserves SDL's queue for the next input-pump phase.
+        _ = c.SDL_WaitEventTimeout(null, 16);
+        self.frame_timer.resyncClock();
+        return true;
     }
 
     fn captureFrameActions(self: *App) !void {
@@ -790,6 +1011,37 @@ const App = struct {
 // Entry Point
 // ============================================================================
 
+fn runInitFailureSmoke() !RunSummary {
+    const failure_points = [_]AppInitFailurePoint{
+        .renderer_after_window_claim,
+        .renderer_after_pipelines,
+        .renderer_after_placeholder_resources,
+        .after_renderer,
+        .after_visual_resources,
+        .after_simulation,
+    };
+
+    for (failure_points) |failure_point| {
+        var unexpected = App.initWithFailurePoint(.sandbox, failure_point) catch |err| {
+            const expected: anyerror = if (rendererFailurePoint(failure_point) != null)
+                error.InjectedRendererInitFailure
+            else
+                error.InjectedAppInitFailure;
+            if (err != expected) return err;
+            continue;
+        };
+        unexpected.deinit();
+        return error.InitFailureInjectionMissed;
+    }
+
+    // A successful lifecycle in the same process proves that each injected
+    // unwind released the SDL video runtime, window, Metal device, Jolt world,
+    // and all intermediate resources needed by a later initialization.
+    var healthy = try App.init(.sandbox);
+    defer healthy.deinit();
+    return healthy.run(.{ .frames = 160, .virtual_render_hz = 80 }, true);
+}
+
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     const mode = try parseProgramMode(args);
@@ -804,12 +1056,31 @@ pub fn main(init: std.process.Init) !void {
     const profile: BootstrapProfile = switch (mode) {
         .normal => .sandbox,
         .visual_smoke => .s0_smoke,
-        .s1_visual_smoke => .sandbox,
+        .s1_visual_smoke, .window_lifecycle_smoke => .sandbox,
+        .init_failure_smoke => {
+            const summary = try runInitFailureSmoke();
+            const expected = try smokeExpectation(.{
+                .frames = 160,
+                .virtual_render_hz = 80,
+            });
+            std.debug.print(
+                "INIT_FAILURE_SMOKE_RESULT checkpoints=6 ready_frames={d} " ++
+                    "ticks={d} gpu_driver={s}\n",
+                .{
+                    summary.ready_frames,
+                    expected.ticks,
+                    shader_assets.driver,
+                },
+            );
+            std.debug.print("INIT_FAILURE_SMOKE_SHUTDOWN status=clean\n", .{});
+            return;
+        },
         .verify_install => unreachable,
     };
     var app = try App.init(profile);
     var visual_smoke_succeeded = false;
     var s1_visual_smoke_succeeded = false;
+    var window_lifecycle_smoke_succeeded = false;
     defer {
         app.deinit();
         if (visual_smoke_succeeded) {
@@ -817,6 +1088,9 @@ pub fn main(init: std.process.Init) !void {
         }
         if (s1_visual_smoke_succeeded) {
             std.debug.print("S1_VISUAL_SMOKE_SHUTDOWN status=clean\n", .{});
+        }
+        if (window_lifecycle_smoke_succeeded) {
+            std.debug.print("WINDOW_LIFECYCLE_SMOKE_SHUTDOWN status=clean\n", .{});
         }
     }
 
@@ -873,6 +1147,25 @@ pub fn main(init: std.process.Init) !void {
             );
             s1_visual_smoke_succeeded = true;
         },
+        .window_lifecycle_smoke => {
+            const summary = try app.runWindowLifecycleSmoke();
+            std.debug.print(
+                "WINDOW_LIFECYCLE_SMOKE_RESULT warmup_ready={d} restored_ready={d} " ++
+                    "unavailable_frames={d} minimized_wait_iterations={d} " ++
+                    "minimized_dwell_ms={d:.3} gpu_driver={s}\n",
+                .{
+                    summary.warmup_ready_frames,
+                    summary.restored_ready_frames,
+                    summary.unavailable_frames,
+                    summary.minimized_wait_iterations,
+                    @as(f64, @floatFromInt(summary.minimized_dwell_ns)) /
+                        std.time.ns_per_ms,
+                    shader_assets.driver,
+                },
+            );
+            window_lifecycle_smoke_succeeded = true;
+        },
+        .init_failure_smoke => unreachable,
     }
 }
 
@@ -883,6 +1176,26 @@ pub fn main(init: std.process.Init) !void {
 test "app structure exists" {
     // Basic compile-time check that App struct is valid
     _ = App;
+}
+
+test "window suspension discards pending and held gameplay actions" {
+    var input_buffer = input.InputBuffer.init(1);
+    input_buffer.window_minimized = true;
+    var action_latch = sandbox_controls.ActionLatch{};
+    try action_latch.captureFrame(.{
+        .move = .{ 1, -1 },
+        .look_delta = .{ 3, -2 },
+        .jump_pressed = true,
+    });
+
+    try std.testing.expect(suspendGameplayForWindowState(
+        &input_buffer,
+        &action_latch,
+    ));
+    const after_restore = action_latch.takeTick();
+    try std.testing.expectEqual([2]f32{ 0, 0 }, after_restore.move);
+    try std.testing.expectEqual([2]f32{ 0, 0 }, after_restore.look_delta);
+    try std.testing.expect(!after_restore.jump_pressed);
 }
 
 test "program mode parsing keeps visual smoke explicit and bounded" {
@@ -905,6 +1218,16 @@ test "program mode parsing keeps visual smoke explicit and bounded" {
         "--virtual-render-hz=120",
     });
     try std.testing.expectEqual(@as(u64, 240), s1_smoke.s1_visual_smoke.frames);
+    const window_smoke = try parseProgramMode(&[_][]const u8{
+        "incinerator",
+        "--window-lifecycle-smoke",
+    });
+    try std.testing.expect(window_smoke == .window_lifecycle_smoke);
+    const init_failure_smoke = try parseProgramMode(&[_][]const u8{
+        "incinerator",
+        "--init-failure-smoke",
+    });
+    try std.testing.expect(init_failure_smoke == .init_failure_smoke);
     const above = try smokeExpectation(.{ .frames = 480, .virtual_render_hz = 240 });
     try std.testing.expectEqual(@as(u64, 240), above.ticks);
     try std.testing.expectEqual(@as(f32, 0), above.min_alpha);
@@ -927,6 +1250,22 @@ test "program mode parsing keeps visual smoke explicit and bounded" {
             "incinerator",
             "--visual-smoke",
             "--s1-visual-smoke",
+        }),
+    );
+    try std.testing.expectError(
+        error.ConflictingProgramModes,
+        parseProgramMode(&[_][]const u8{
+            "incinerator",
+            "--window-lifecycle-smoke",
+            "--init-failure-smoke",
+        }),
+    );
+    try std.testing.expectError(
+        error.VisualSmokeOptionWithoutMode,
+        parseProgramMode(&[_][]const u8{
+            "incinerator",
+            "--window-lifecycle-smoke",
+            "--frames=8",
         }),
     );
     try std.testing.expectError(

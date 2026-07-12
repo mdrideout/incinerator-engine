@@ -115,6 +115,13 @@ pub const InputBuffer = struct {
     window_width: i32,
     window_height: i32,
 
+    /// Stable visibility state for the main window.
+    window_minimized: bool,
+
+    /// Main-window minimize/restore events observed during this frame.
+    window_minimized_this_frame: bool,
+    window_restored_this_frame: bool,
+
     /// Initialize with all inputs cleared
     pub fn init(main_window_id: c.SDL_WindowID) InputBuffer {
         return InputBuffer{
@@ -148,6 +155,9 @@ pub const InputBuffer = struct {
             .window_resized = false,
             .window_width = 0,
             .window_height = 0,
+            .window_minimized = false,
+            .window_minimized_this_frame = false,
+            .window_restored_this_frame = false,
         };
     }
 
@@ -172,6 +182,8 @@ pub const InputBuffer = struct {
 
         // Clear per-frame flags
         self.window_resized = false;
+        self.window_minimized_this_frame = false;
+        self.window_restored_this_frame = false;
         self.gameplay_reset_requested = false;
     }
 
@@ -261,6 +273,14 @@ pub const InputBuffer = struct {
                         self.window_width = event.window.data1;
                         self.window_height = event.window.data2;
                     }
+                },
+
+                c.SDL_EVENT_WINDOW_MINIMIZED => {
+                    self.handleWindowMinimized(event.window.windowID);
+                },
+
+                c.SDL_EVENT_WINDOW_RESTORED => {
+                    self.handleWindowRestored(event.window.windowID);
                 },
 
                 c.SDL_EVENT_WINDOW_FOCUS_LOST => {
@@ -462,6 +482,21 @@ pub const InputBuffer = struct {
         }
     }
 
+    fn handleWindowMinimized(self: *InputBuffer, window_id: c.SDL_WindowID) void {
+        if (!self.isMainWindow(window_id)) return;
+        // Minimize is an authoritative gameplay-input release boundary even
+        // on window managers that do not also emit a focus-lost event.
+        self.handleFocusLost();
+        self.window_minimized = true;
+        self.window_minimized_this_frame = true;
+    }
+
+    fn handleWindowRestored(self: *InputBuffer, window_id: c.SDL_WindowID) void {
+        if (!self.isMainWindow(window_id)) return;
+        self.window_minimized = false;
+        self.window_restored_this_frame = true;
+    }
+
     fn isMainWindow(self: *const InputBuffer, window_id: c.SDL_WindowID) bool {
         return window_id == self.main_window_id;
     }
@@ -572,6 +607,9 @@ test "InputBuffer initialization" {
     try std.testing.expect(input.mouse_x == 0);
     try std.testing.expect(!input.keyboard_captured);
     try std.testing.expect(!input.mouse_captured);
+    try std.testing.expect(!input.window_minimized);
+    try std.testing.expect(!input.window_minimized_this_frame);
+    try std.testing.expect(!input.window_restored_this_frame);
 }
 
 test "physical key release is observed during keyboard capture" {
@@ -690,6 +728,75 @@ test "secondary window events are not gameplay window events" {
     const input = InputBuffer.init(42);
     try std.testing.expect(input.isMainWindow(42));
     try std.testing.expect(!input.isMainWindow(99));
+}
+
+test "main window minimize and restore update stable and frame state" {
+    var input = InputBuffer.init(42);
+
+    input.handleWindowMinimized(42);
+    try std.testing.expect(input.window_minimized);
+    try std.testing.expect(input.window_minimized_this_frame);
+    try std.testing.expect(!input.window_restored_this_frame);
+
+    input.handleWindowRestored(42);
+    try std.testing.expect(!input.window_minimized);
+    try std.testing.expect(input.window_minimized_this_frame);
+    try std.testing.expect(input.window_restored_this_frame);
+}
+
+test "main window minimize releases held gameplay input without focus event" {
+    var input = InputBuffer.init(42);
+    const key: usize = @intCast(Key.W);
+    const button: usize = MouseButton.RIGHT;
+
+    input.handleKeyDown(key, false);
+    input.handleMouseButtonDown(button, false);
+    input.beginFrame();
+    input.handleWindowMinimized(42);
+
+    try std.testing.expect(input.gameplayActionsMustReset());
+    try std.testing.expect(input.isKeyReleased(Key.W));
+    try std.testing.expect(input.mouse_buttons_released[button]);
+    try std.testing.expect(!input.physical_keys_down[key]);
+    try std.testing.expect(!input.isKeyDown(Key.W));
+    try std.testing.expect(!input.physical_mouse_buttons[button]);
+    try std.testing.expect(!input.isMouseButtonDown(MouseButton.RIGHT));
+}
+
+test "window lifecycle frame flags clear without clearing stable state" {
+    var input = InputBuffer.init(42);
+
+    input.handleWindowMinimized(42);
+    input.beginFrame();
+    try std.testing.expect(input.window_minimized);
+    try std.testing.expect(!input.window_minimized_this_frame);
+    try std.testing.expect(!input.window_restored_this_frame);
+
+    input.handleWindowRestored(42);
+    input.beginFrame();
+    try std.testing.expect(!input.window_minimized);
+    try std.testing.expect(!input.window_minimized_this_frame);
+    try std.testing.expect(!input.window_restored_this_frame);
+}
+
+test "secondary window minimize and restore do not affect main window state" {
+    var input = InputBuffer.init(42);
+
+    input.handleWindowMinimized(42);
+    input.beginFrame();
+    input.handleWindowRestored(99);
+
+    try std.testing.expect(input.window_minimized);
+    try std.testing.expect(!input.window_minimized_this_frame);
+    try std.testing.expect(!input.window_restored_this_frame);
+
+    input.handleWindowRestored(42);
+    input.beginFrame();
+    input.handleWindowMinimized(99);
+
+    try std.testing.expect(!input.window_minimized);
+    try std.testing.expect(!input.window_minimized_this_frame);
+    try std.testing.expect(!input.window_restored_this_frame);
 }
 
 test "secondary window key release preserves main window hold" {

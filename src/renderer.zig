@@ -87,6 +87,19 @@ pub const FrameStatus = enum {
     unavailable,
 };
 
+/// Explicit checkpoints for native teardown validation. These are intentionally
+/// aligned with real SDL GPU ownership transitions so an injected failure runs
+/// the same `errdefer` cleanup as a production initialization error.
+pub const InitFailurePoint = enum {
+    after_window_claim,
+    after_pipelines,
+    after_placeholder_resources,
+};
+
+fn injectInitFailure(configured: ?InitFailurePoint, reached: InitFailurePoint) !void {
+    if (configured == reached) return error.InjectedRendererInitFailure;
+}
+
 const DepthTarget = struct {
     texture: *c.SDL_GPUTexture,
     width: u32,
@@ -222,6 +235,15 @@ pub const Renderer = struct {
     /// Initialize the GPU renderer for a window.
     /// This creates the GPU device and graphics pipeline.
     pub fn init(window: *c.SDL_Window) !Renderer {
+        return initWithFailurePoint(window, null);
+    }
+
+    /// Initialize with a deliberate failure at a real ownership boundary.
+    /// Intended for bounded native lifecycle smokes; normal callers use init.
+    pub fn initWithFailurePoint(
+        window: *c.SDL_Window,
+        failure_point: ?InitFailurePoint,
+    ) !Renderer {
         // Advertise only the format embedded in this target binary. SDL uses
         // that contract to select a compatible backend; claiming a format for
         // which no bytecode exists can select an unusable device.
@@ -259,6 +281,7 @@ pub const Renderer = struct {
             return error.GPUWindowClaimFailed;
         }
         errdefer c.SDL_ReleaseWindowFromGPUDevice(device, window);
+        try injectInitFailure(failure_point, .after_window_claim);
 
         const swapchain_format = c.SDL_GetGPUSwapchainTextureFormat(device, window);
         if (swapchain_format == c.SDL_GPU_TEXTUREFORMAT_INVALID) {
@@ -287,6 +310,7 @@ pub const Renderer = struct {
         // Pipeline 4: lines for debug visualization (physics colliders, etc.)
         const pipeline_lines = try createPipelineLines(device, swapchain_format, depth_format);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_lines);
+        try injectInitFailure(failure_point, .after_pipelines);
 
         // Get initial window size for depth buffer
         var w: c_int = 0;
@@ -332,6 +356,7 @@ pub const Renderer = struct {
         // Create placeholder texture (1x1 white) for untextured meshes
         var placeholder_texture = try texture_module.createPlaceholderTexture(device);
         errdefer placeholder_texture.deinit();
+        try injectInitFailure(failure_point, .after_placeholder_resources);
 
         std.debug.print(
             "Renderer initialized (swapchain format {d}, depth format {d})\n",
@@ -1258,6 +1283,15 @@ test "Colors are valid" {
     for (Colors.CORNFLOWER_BLUE) |component| {
         try std.testing.expect(component >= 0.0 and component <= 1.0);
     }
+}
+
+test "renderer init failure injection triggers only at the selected boundary" {
+    try injectInitFailure(null, .after_window_claim);
+    try injectInitFailure(.after_pipelines, .after_window_claim);
+    try std.testing.expectError(
+        error.InjectedRendererInitFailure,
+        injectInitFailure(.after_pipelines, .after_pipelines),
+    );
 }
 
 test "failed swapchain acquisition cleanup never cancels an acquired texture" {
