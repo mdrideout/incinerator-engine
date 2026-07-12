@@ -159,6 +159,7 @@ The overhaul is converging on a thin kernel, feature-owned vertical slices, narr
 - [`S1 Character Slice Design`](docs/design/s1-character-slice.md)
 - [`S1 Acceptance Record`](docs/validation/s1-acceptance.md)
 - [`S1 Performance Baseline`](docs/performance/s1-baseline.md)
+- [`S2 Vehicle Slice Design`](docs/design/s2-vehicle-slice.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 

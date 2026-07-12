@@ -43,6 +43,24 @@ pub const CharacterId = struct {
     serial: u64,
 };
 
+pub const VehicleId = struct {
+    world_token: u64,
+    serial: u64,
+};
+
+const VehicleHandleRecord = struct {
+    body_id: c.JPH_BodyID,
+    constraint: *c.JPH_VehicleConstraint,
+};
+
+const VehicleCreateFailurePoint = enum {
+    after_body,
+    after_settings,
+    after_constraint,
+    after_collision_tester,
+    after_registration,
+};
+
 pub const MotionType = enum {
     static,
     kinematic,
@@ -142,8 +160,10 @@ pub const Physics = struct {
     temp_allocator: *c.JPH_TempAllocator,
     body_handles: std.AutoHashMap(u64, u32),
     character_handles: std.AutoHashMap(u64, *c.JPH_CharacterVirtual),
+    vehicle_handles: std.AutoHashMap(u64, VehicleHandleRecord),
     next_body_serial: u64 = 1,
     next_character_serial: u64 = 1,
+    next_vehicle_serial: u64 = 1,
 
     pub fn init() !Physics {
         return initWithAllocator(std.heap.page_allocator);
@@ -262,6 +282,7 @@ pub const Physics = struct {
             .temp_allocator = temp_allocator,
             .body_handles = std.AutoHashMap(u64, u32).init(allocator),
             .character_handles = std.AutoHashMap(u64, *c.JPH_CharacterVirtual).init(allocator),
+            .vehicle_handles = std.AutoHashMap(u64, VehicleHandleRecord).init(allocator),
         };
     }
 
@@ -273,11 +294,15 @@ pub const Physics = struct {
         if (self.character_handles.count() != 0) {
             @panic("physics world deinitialized with live character handles");
         }
+        if (self.vehicle_handles.count() != 0) {
+            @panic("physics world deinitialized with live vehicle handles");
+        }
         c.JPH_PhysicsSystem_Destroy(self.system);
         c.JPH_TempAllocator_Destroy(self.temp_allocator);
         c.JPH_JobSystem_Destroy(self.job_system);
         self.body_handles.deinit();
         self.character_handles.deinit();
+        self.vehicle_handles.deinit();
         releaseRuntimeLease();
         self.* = undefined;
     }
@@ -291,6 +316,11 @@ pub const Physics = struct {
 
     /// Expose only the controller operations required by CharacterFeature.
     pub fn characterControllers(self: *Physics) CharacterControllers {
+        return .{ .physics = self };
+    }
+
+    /// Expose only the four-wheel operations required by the S2 capability.
+    pub fn vehicles(self: *Physics) Vehicles {
         return .{ .physics = self };
     }
 
@@ -493,6 +523,381 @@ pub const Physics = struct {
         );
         try ensureCharacterContactCapacity(character);
         return self.virtualCharacterState(character_id);
+    }
+
+    fn vehicleRecord(
+        self: *Physics,
+        vehicle_id: VehicleId,
+    ) !VehicleHandleRecord {
+        self.assertOwnerThread();
+        if (self.world_token != vehicle_id.world_token) {
+            return error.ForeignVehicleId;
+        }
+        const record = self.vehicle_handles.get(vehicle_id.serial) orelse
+            return error.InvalidVehicleId;
+        if (!c.JPH_BodyInterface_IsAdded(self.body_interface, record.body_id)) {
+            return error.InvalidVehicleId;
+        }
+        return record;
+    }
+
+    fn createFourWheelVehicle(
+        self: *Physics,
+        desc: engine.physics.VehicleDesc,
+        failure_point: ?VehicleCreateFailurePoint,
+    ) !VehicleId {
+        self.assertOwnerThread();
+        const normalized = try desc.normalized();
+        if (self.next_vehicle_serial == 0) {
+            return error.VehicleHandleSerialExhausted;
+        }
+        try self.vehicle_handles.ensureUnusedCapacity(1);
+
+        var half_extents = toVec3(normalized.chassis_half_extents);
+        const box = c.JPH_BoxShape_Create(
+            &half_extents,
+            c.JPH_DEFAULT_CONVEX_RADIUS,
+        ) orelse return error.VehicleShapeCreationFailed;
+        const box_shape: *c.JPH_Shape = @ptrCast(box);
+        defer c.JPH_Shape_Destroy(box_shape);
+
+        var center_of_mass_offset = toVec3(normalized.center_of_mass_offset);
+        const offset_shape_raw = c.JPH_OffsetCenterOfMassShape_Create(
+            &center_of_mass_offset,
+            box_shape,
+        ) orelse return error.VehicleShapeCreationFailed;
+        const offset_shape: *c.JPH_Shape = @ptrCast(offset_shape_raw);
+        defer c.JPH_Shape_Destroy(offset_shape);
+
+        var position = toRVec3(normalized.chassis.pose.position);
+        var rotation = toJoltQuat(normalized.chassis.pose.rotation);
+        const body_settings = c.JPH_BodyCreationSettings_Create3(
+            offset_shape,
+            &position,
+            &rotation,
+            c.JPH_MotionType_Dynamic,
+            object_layers.moving,
+        ) orelse return error.VehicleBodySettingsCreationFailed;
+        defer c.JPH_BodyCreationSettings_Destroy(body_settings);
+        c.JPH_BodyCreationSettings_SetMaxLinearVelocity(
+            body_settings,
+            engine.physics.max_linear_velocity,
+        );
+        c.JPH_BodyCreationSettings_SetMaxAngularVelocity(
+            body_settings,
+            engine.physics.max_angular_velocity,
+        );
+        c.JPH_BodyCreationSettings_SetOverrideMassProperties(
+            body_settings,
+            c.JPH_OverrideMassProperties_CalculateInertia,
+        );
+        var mass_properties: c.JPH_MassProperties = undefined;
+        c.JPH_BodyCreationSettings_GetMassPropertiesOverride(
+            body_settings,
+            &mass_properties,
+        );
+        mass_properties.mass = normalized.mass;
+        c.JPH_BodyCreationSettings_SetMassPropertiesOverride(
+            body_settings,
+            &mass_properties,
+        );
+
+        const body = c.JPH_BodyInterface_CreateBody(
+            self.body_interface,
+            body_settings,
+        ) orelse return error.VehicleBodyCreationFailed;
+        const raw_body_id = c.JPH_Body_GetID(body);
+        if (raw_body_id == invalid_body_id) {
+            c.JPH_BodyInterface_DestroyBodyWithoutID(self.body_interface, body);
+            return error.VehicleBodyCreationFailed;
+        }
+        var body_added = false;
+        errdefer if (body_added) {
+            c.JPH_BodyInterface_RemoveAndDestroyBody(self.body_interface, raw_body_id);
+        } else {
+            c.JPH_BodyInterface_DestroyBody(self.body_interface, raw_body_id);
+        };
+        c.JPH_BodyInterface_AddBody(
+            self.body_interface,
+            raw_body_id,
+            c.JPH_Activation_Activate,
+        );
+        body_added = true;
+        var linear_velocity = toVec3(normalized.chassis.velocity.linear);
+        var angular_velocity = toVec3(normalized.chassis.velocity.angular);
+        c.JPH_BodyInterface_SetLinearAndAngularVelocity(
+            self.body_interface,
+            raw_body_id,
+            &linear_velocity,
+            &angular_velocity,
+        );
+        try injectVehicleCreateFailure(failure_point, .after_body);
+
+        var wheel_settings: [engine.physics.vehicle_wheel_count]*c.JPH_WheelSettings = undefined;
+        var wheel_settings_count: usize = 0;
+        defer {
+            for (wheel_settings[0..wheel_settings_count]) |settings| {
+                c.JPH_WheelSettings_Destroy(settings);
+            }
+        }
+        const suspension_direction = toVec3(.{ 0, -1, 0 });
+        const steering_axis = toVec3(.{ 0, 1, 0 });
+        const wheel_up = toVec3(.{ 0, 1, 0 });
+        const vehicle_forward = toVec3(.{ 0, 0, -1 });
+        for (normalized.wheel_attachment_positions, 0..) |attachment, index| {
+            const settings_wv = c.JPH_WheelSettingsWV_Create() orelse
+                return error.VehicleWheelSettingsCreationFailed;
+            const settings: *c.JPH_WheelSettings = @ptrCast(settings_wv);
+            wheel_settings[index] = settings;
+            wheel_settings_count += 1;
+
+            var attachment_value = toVec3(attachment);
+            c.JPH_WheelSettings_SetPosition(settings, &attachment_value);
+            c.JPH_WheelSettings_SetSuspensionDirection(settings, &suspension_direction);
+            c.JPH_WheelSettings_SetSteeringAxis(settings, &steering_axis);
+            c.JPH_WheelSettings_SetWheelUp(settings, &wheel_up);
+            c.JPH_WheelSettings_SetWheelForward(settings, &vehicle_forward);
+            c.JPH_WheelSettings_SetSuspensionMinLength(
+                settings,
+                normalized.suspension_min_length,
+            );
+            c.JPH_WheelSettings_SetSuspensionMaxLength(
+                settings,
+                normalized.suspension_max_length,
+            );
+            var spring: c.JPH_SpringSettings = undefined;
+            c.JPH_WheelSettings_GetSuspensionSpring(settings, &spring);
+            spring.mode = c.JPH_SpringMode_FrequencyAndDamping;
+            spring.frequencyOrStiffness = normalized.suspension_frequency;
+            spring.damping = normalized.suspension_damping;
+            c.JPH_WheelSettings_SetSuspensionSpring(settings, &spring);
+            c.JPH_WheelSettings_SetRadius(settings, normalized.wheel_radius);
+            c.JPH_WheelSettings_SetWidth(settings, normalized.wheel_width);
+            c.JPH_WheelSettingsWV_SetMaxSteerAngle(
+                settings_wv,
+                if (index < 2) normalized.max_steer_radians else 0,
+            );
+            c.JPH_WheelSettingsWV_SetMaxBrakeTorque(
+                settings_wv,
+                normalized.max_brake_torque,
+            );
+            c.JPH_WheelSettingsWV_SetMaxHandBrakeTorque(
+                settings_wv,
+                if (index < 2) 0 else normalized.max_hand_brake_torque,
+            );
+        }
+
+        const controller_settings =
+            c.JPH_WheeledVehicleControllerSettings_Create() orelse
+            return error.VehicleControllerSettingsCreationFailed;
+        defer c.JPH_VehicleControllerSettings_Destroy(@ptrCast(controller_settings));
+
+        // Do not use pinned JoltC's AddDifferential helper: it leaves
+        // leftRightSplit uninitialized. Populate every field from upstream
+        // defaults and install the differential through SetDifferentials.
+        var differential: c.JPH_VehicleDifferentialSettings = undefined;
+        c.JPH_VehicleDifferentialSettings_Init(&differential);
+        differential.leftWheel = @intFromEnum(engine.physics.VehicleWheelIndex.front_left);
+        differential.rightWheel = @intFromEnum(engine.physics.VehicleWheelIndex.front_right);
+        differential.differentialRatio = normalized.front_differential_ratio;
+        differential.leftRightSplit = 0.5;
+        differential.limitedSlipRatio = normalized.front_limited_slip_ratio;
+        differential.engineTorqueRatio = 1.0;
+        c.JPH_WheeledVehicleControllerSettings_SetDifferentials(
+            controller_settings,
+            &differential,
+            1,
+        );
+
+        var vehicle_settings: c.JPH_VehicleConstraintSettings = undefined;
+        c.JPH_VehicleConstraintSettings_Init(&vehicle_settings);
+        vehicle_settings.up = toVec3(.{ 0, 1, 0 });
+        vehicle_settings.forward = vehicle_forward;
+        vehicle_settings.maxPitchRollAngle = normalized.max_pitch_roll_radians;
+        vehicle_settings.wheelsCount = engine.physics.vehicle_wheel_count;
+        vehicle_settings.wheels = @ptrCast(&wheel_settings);
+        vehicle_settings.controller = @ptrCast(controller_settings);
+        try injectVehicleCreateFailure(failure_point, .after_settings);
+
+        const constraint = c.JPH_VehicleConstraint_Create(
+            body,
+            &vehicle_settings,
+        ) orelse return error.VehicleConstraintCreationFailed;
+        var constraint_added = false;
+        var listener_added = false;
+        errdefer {
+            if (listener_added) {
+                c.JPH_PhysicsSystem_RemoveStepListener(
+                    self.system,
+                    c.JPH_VehicleConstraint_AsPhysicsStepListener(constraint),
+                );
+            }
+            if (constraint_added) {
+                c.JPH_PhysicsSystem_RemoveConstraint(self.system, @ptrCast(constraint));
+            }
+            c.JPH_Constraint_Destroy(@ptrCast(constraint));
+        }
+        for (normalized.initial_wheel_dynamics, 0..) |dynamics, index| {
+            const wheel = c.JPH_VehicleConstraint_GetWheel(
+                constraint,
+                @intCast(index),
+            ) orelse return error.VehicleWheelInvariantBroken;
+            c.JPH_Wheel_SetRotationAngle(wheel, dynamics.rotation_angle);
+            c.JPH_Wheel_SetAngularVelocity(wheel, dynamics.angular_velocity);
+        }
+        try injectVehicleCreateFailure(failure_point, .after_constraint);
+
+        var world_up = toVec3(.{ 0, 1, 0 });
+        const tester_raw = c.JPH_VehicleCollisionTesterCastSphere_Create(
+            object_layers.moving,
+            normalized.wheel_width * 0.5,
+            &world_up,
+            normalized.wheel_collision_max_slope_radians,
+        ) orelse return error.VehicleCollisionTesterCreationFailed;
+        const tester: *c.JPH_VehicleCollisionTester = @ptrCast(tester_raw);
+        defer c.JPH_VehicleCollisionTester_Destroy(tester);
+        c.JPH_VehicleConstraint_SetVehicleCollisionTester(constraint, tester);
+        try injectVehicleCreateFailure(failure_point, .after_collision_tester);
+
+        c.JPH_PhysicsSystem_AddConstraint(self.system, @ptrCast(constraint));
+        constraint_added = true;
+        c.JPH_PhysicsSystem_AddStepListener(
+            self.system,
+            c.JPH_VehicleConstraint_AsPhysicsStepListener(constraint),
+        );
+        listener_added = true;
+        try injectVehicleCreateFailure(failure_point, .after_registration);
+
+        const serial = self.next_vehicle_serial;
+        self.vehicle_handles.putAssumeCapacityNoClobber(serial, .{
+            .body_id = raw_body_id,
+            .constraint = constraint,
+        });
+        self.next_vehicle_serial +%= 1;
+        return .{ .world_token = self.world_token, .serial = serial };
+    }
+
+    fn destroyFourWheelVehicle(self: *Physics, vehicle_id: VehicleId) !void {
+        const record = try self.vehicleRecord(vehicle_id);
+        c.JPH_PhysicsSystem_RemoveStepListener(
+            self.system,
+            c.JPH_VehicleConstraint_AsPhysicsStepListener(record.constraint),
+        );
+        c.JPH_PhysicsSystem_RemoveConstraint(self.system, @ptrCast(record.constraint));
+        c.JPH_Constraint_Destroy(@ptrCast(record.constraint));
+        c.JPH_BodyInterface_RemoveAndDestroyBody(self.body_interface, record.body_id);
+        if (!self.vehicle_handles.remove(vehicle_id.serial)) {
+            @panic("vehicle handle index removal invariant failed");
+        }
+    }
+
+    fn setFourWheelVehicleInput(
+        self: *Physics,
+        vehicle_id: VehicleId,
+        input: engine.physics.VehicleInput,
+    ) !void {
+        try input.validate();
+        const record = try self.vehicleRecord(vehicle_id);
+        const controller_base = c.JPH_VehicleConstraint_GetController(record.constraint) orelse
+            return error.VehicleControllerInvariantBroken;
+        const controller: *c.JPH_WheeledVehicleController = @ptrCast(controller_base);
+        c.JPH_WheeledVehicleController_SetDriverInput(
+            controller,
+            input.throttle,
+            input.steering,
+            input.brake,
+            input.hand_brake,
+        );
+        if (!input.isNeutral()) {
+            c.JPH_BodyInterface_ActivateBody(self.body_interface, record.body_id);
+        }
+    }
+
+    fn fourWheelVehicleState(
+        self: *Physics,
+        vehicle_id: VehicleId,
+    ) !engine.physics.VehicleState {
+        const record = try self.vehicleRecord(vehicle_id);
+        const wheel_count = c.JPH_VehicleConstraint_GetWheelsCount(record.constraint);
+        if (wheel_count != engine.physics.vehicle_wheel_count) {
+            return error.VehicleWheelCountInvariantBroken;
+        }
+
+        var chassis_position: c.JPH_RVec3 = undefined;
+        var chassis_rotation: c.JPH_Quat = undefined;
+        var linear_velocity: c.JPH_Vec3 = undefined;
+        var angular_velocity: c.JPH_Vec3 = undefined;
+        c.JPH_BodyInterface_GetPosition(
+            self.body_interface,
+            record.body_id,
+            &chassis_position,
+        );
+        c.JPH_BodyInterface_GetRotation(
+            self.body_interface,
+            record.body_id,
+            &chassis_rotation,
+        );
+        c.JPH_BodyInterface_GetLinearAndAngularVelocity(
+            self.body_interface,
+            record.body_id,
+            &linear_velocity,
+            &angular_velocity,
+        );
+
+        const canonical_wheel_right = toVec3(.{ 1, 0, 0 });
+        const canonical_wheel_up = toVec3(.{ 0, 1, 0 });
+        var wheels: [engine.physics.vehicle_wheel_count]engine.physics.WheelState = undefined;
+        for (&wheels, 0..) |*result, index| {
+            const wheel = c.JPH_VehicleConstraint_GetWheel(
+                record.constraint,
+                @intCast(index),
+            ) orelse return error.VehicleWheelInvariantBroken;
+            var world_transform: c.JPH_RMat4 = undefined;
+            c.JPH_VehicleConstraint_GetWheelWorldTransform(
+                record.constraint,
+                @intCast(index),
+                &canonical_wheel_right,
+                &canonical_wheel_up,
+                &world_transform,
+            );
+            result.* = .{
+                .pose = try poseFromJoltMatrix(world_transform),
+                .angular_velocity = c.JPH_Wheel_GetAngularVelocity(wheel),
+                .rotation_angle = try engine.physics.canonicalVehicleWheelRotation(
+                    c.JPH_Wheel_GetRotationAngle(wheel),
+                ),
+                // Jolt's positive wheel angle turns left for this -Z-forward
+                // setup; expose the engine's positive-right convention.
+                .steer_angle = -c.JPH_Wheel_GetSteerAngle(wheel),
+                .suspension_length = c.JPH_Wheel_GetSuspensionLength(wheel),
+                .has_contact = c.JPH_Wheel_HasContact(wheel),
+            };
+        }
+
+        const controller_base = c.JPH_VehicleConstraint_GetController(record.constraint) orelse
+            return error.VehicleControllerInvariantBroken;
+        const controller: *c.JPH_WheeledVehicleController = @ptrCast(controller_base);
+        const vehicle_engine = c.JPH_WheeledVehicleController_GetEngine(controller) orelse
+            return error.VehicleControllerInvariantBroken;
+        const transmission = c.JPH_WheeledVehicleController_GetTransmission(controller) orelse
+            return error.VehicleControllerInvariantBroken;
+        const state = engine.physics.VehicleState{
+            .chassis = .{
+                .pose = .{
+                    .position = fromRVec3(chassis_position),
+                    .rotation = fromJoltQuat(chassis_rotation),
+                },
+                .velocity = .{
+                    .linear = fromVec3(linear_velocity),
+                    .angular = fromVec3(angular_velocity),
+                },
+            },
+            .wheels = wheels,
+            .engine_rpm = c.JPH_VehicleEngine_GetCurrentRPM(vehicle_engine),
+            .current_gear = @intCast(c.JPH_VehicleTransmission_GetCurrentGear(transmission)),
+        };
+        try state.validate();
+        return state;
     }
 
     pub fn createStaticBox(
@@ -923,6 +1328,48 @@ pub const CharacterControllers = struct {
     }
 };
 
+/// Compile-time capability consumed by the first four-wheel vehicle slice.
+/// Vehicle constraints advance through the composition-owned shared Jolt step;
+/// this surface intentionally has no per-vehicle update method.
+pub const Vehicles = struct {
+    physics: *Physics,
+
+    pub const Handle = VehicleId;
+
+    pub fn createVehicle(
+        self: *Vehicles,
+        desc: engine.physics.VehicleDesc,
+    ) !Handle {
+        return self.physics.createFourWheelVehicle(desc, null);
+    }
+
+    pub fn destroyVehicle(self: *Vehicles, vehicle_id: Handle) !void {
+        try self.physics.destroyFourWheelVehicle(vehicle_id);
+    }
+
+    pub fn setVehicleInput(
+        self: *Vehicles,
+        vehicle_id: Handle,
+        input: engine.physics.VehicleInput,
+    ) !void {
+        try self.physics.setFourWheelVehicleInput(vehicle_id, input);
+    }
+
+    pub fn vehicleState(
+        self: *Vehicles,
+        vehicle_id: Handle,
+    ) !engine.physics.VehicleState {
+        return self.physics.fourWheelVehicleState(vehicle_id);
+    }
+};
+
+fn injectVehicleCreateFailure(
+    requested: ?VehicleCreateFailurePoint,
+    reached: VehicleCreateFailurePoint,
+) !void {
+    if (requested == reached) return error.InjectedVehicleCreateFailure;
+}
+
 fn isFiniteVector(value: [3]f32) bool {
     return std.math.isFinite(value[0]) and
         std.math.isFinite(value[1]) and
@@ -1012,12 +1459,87 @@ fn toRVec3(value: [3]f32) c.JPH_RVec3 {
     return .{ .x = value[0], .y = value[1], .z = value[2] };
 }
 
+fn toJoltQuat(value: [4]f32) c.JPH_Quat {
+    return .{ .x = value[0], .y = value[1], .z = value[2], .w = value[3] };
+}
+
 fn fromVec3(value: c.JPH_Vec3) [3]f32 {
     return .{ value.x, value.y, value.z };
 }
 
 fn fromRVec3(value: c.JPH_RVec3) [3]f32 {
     return .{ @floatCast(value.x), @floatCast(value.y), @floatCast(value.z) };
+}
+
+fn fromJoltQuat(value: c.JPH_Quat) [4]f32 {
+    return .{ value.x, value.y, value.z, value.w };
+}
+
+/// Convert Jolt's column-major rigid transform into an engine pose. The build
+/// fixes single-precision world coordinates, so JPH_RMat4 aliases JPH_Mat4.
+fn poseFromJoltMatrix(value: c.JPH_RMat4) !engine.physics.Pose {
+    const m00 = value.column[0].x;
+    const m01 = value.column[1].x;
+    const m02 = value.column[2].x;
+    const m10 = value.column[0].y;
+    const m11 = value.column[1].y;
+    const m12 = value.column[2].y;
+    const m20 = value.column[0].z;
+    const m21 = value.column[1].z;
+    const m22 = value.column[2].z;
+
+    var rotation: [4]f32 = undefined;
+    const trace = m00 + m11 + m22;
+    if (trace > 0) {
+        const scale = 2.0 * @sqrt(@max(@as(f32, 0), trace + 1.0));
+        rotation = .{
+            (m21 - m12) / scale,
+            (m02 - m20) / scale,
+            (m10 - m01) / scale,
+            0.25 * scale,
+        };
+    } else if (m00 > m11 and m00 > m22) {
+        const scale = 2.0 * @sqrt(@max(@as(f32, 0), 1.0 + m00 - m11 - m22));
+        rotation = .{
+            0.25 * scale,
+            (m01 + m10) / scale,
+            (m02 + m20) / scale,
+            (m21 - m12) / scale,
+        };
+    } else if (m11 > m22) {
+        const scale = 2.0 * @sqrt(@max(@as(f32, 0), 1.0 + m11 - m00 - m22));
+        rotation = .{
+            (m01 + m10) / scale,
+            0.25 * scale,
+            (m12 + m21) / scale,
+            (m02 - m20) / scale,
+        };
+    } else {
+        const scale = 2.0 * @sqrt(@max(@as(f32, 0), 1.0 + m22 - m00 - m11));
+        rotation = .{
+            (m02 + m20) / scale,
+            (m12 + m21) / scale,
+            0.25 * scale,
+            (m10 - m01) / scale,
+        };
+    }
+
+    return (engine.physics.Pose{
+        .position = .{
+            value.column[3].x,
+            value.column[3].y,
+            value.column[3].z,
+        },
+        .rotation = rotation,
+    }).normalized();
+}
+
+fn expectEquivalentRotation(expected: [4]f32, actual: [4]f32) !void {
+    const dot = expected[0] * actual[0] +
+        expected[1] * actual[1] +
+        expected[2] * actual[2] +
+        expected[3] * actual[3];
+    try std.testing.expectApproxEqAbs(@as(f32, 1), @abs(dot), 0.0001);
 }
 
 fn fromJoltGroundState(value: c.JPH_GroundState) engine.physics.GroundState {
@@ -1068,6 +1590,264 @@ test "Jolt 5.5 falling body lifecycle" {
     try std.testing.expect(physics.removeBody(crate));
     try std.testing.expect(physics.removeBody(ground));
     try std.testing.expectEqual(@as(u32, 0), physics.getBodyCount());
+}
+
+test "Jolt rigid matrix conversion covers identity and 180 degree branches" {
+    const identity_translation = c.JPH_RMat4{ .column = .{
+        .{ .x = 1, .y = 0, .z = 0, .w = 0 },
+        .{ .x = 0, .y = 1, .z = 0, .w = 0 },
+        .{ .x = 0, .y = 0, .z = 1, .w = 0 },
+        .{ .x = 3, .y = -4, .z = 5, .w = 1 },
+    } };
+    const identity_pose = try poseFromJoltMatrix(identity_translation);
+    for ([3]f32{ 3, -4, 5 }, identity_pose.position) |expected, actual| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
+    try expectEquivalentRotation(.{ 0, 0, 0, 1 }, identity_pose.rotation);
+
+    const rotations = [_]struct {
+        matrix: c.JPH_RMat4,
+        quaternion: [4]f32,
+        position: [3]f32,
+    }{
+        .{
+            .matrix = .{ .column = .{
+                .{ .x = 1, .y = 0, .z = 0, .w = 0 },
+                .{ .x = 0, .y = -1, .z = 0, .w = 0 },
+                .{ .x = 0, .y = 0, .z = -1, .w = 0 },
+                .{ .x = 0, .y = 0, .z = 0, .w = 1 },
+            } },
+            .quaternion = .{ 1, 0, 0, 0 },
+            .position = .{ 0, 0, 0 },
+        },
+        .{
+            .matrix = .{ .column = .{
+                .{ .x = -1, .y = 0, .z = 0, .w = 0 },
+                .{ .x = 0, .y = 1, .z = 0, .w = 0 },
+                .{ .x = 0, .y = 0, .z = -1, .w = 0 },
+                .{ .x = 0, .y = 0, .z = 0, .w = 1 },
+            } },
+            .quaternion = .{ 0, 1, 0, 0 },
+            .position = .{ 0, 0, 0 },
+        },
+        .{
+            .matrix = .{ .column = .{
+                .{ .x = -1, .y = 0, .z = 0, .w = 0 },
+                .{ .x = 0, .y = -1, .z = 0, .w = 0 },
+                .{ .x = 0, .y = 0, .z = 1, .w = 0 },
+                .{ .x = 0, .y = 0, .z = 0, .w = 1 },
+            } },
+            .quaternion = .{ 0, 0, 1, 0 },
+            .position = .{ 0, 0, 0 },
+        },
+        .{
+            // A non-self-inverse +90 degree yaw detects row/column and sign
+            // mistakes that all 180 degree matrices necessarily hide.
+            .matrix = .{ .column = .{
+                .{ .x = 0, .y = 0, .z = -1, .w = 0 },
+                .{ .x = 0, .y = 1, .z = 0, .w = 0 },
+                .{ .x = 1, .y = 0, .z = 0, .w = 0 },
+                .{ .x = 7, .y = 8, .z = 9, .w = 1 },
+            } },
+            .quaternion = .{ 0, @sqrt(0.5), 0, @sqrt(0.5) },
+            .position = .{ 7, 8, 9 },
+        },
+    };
+    for (rotations) |rotation| {
+        const pose = try poseFromJoltMatrix(rotation.matrix);
+        try expectEquivalentRotation(rotation.quaternion, pose.rotation);
+        for (rotation.position, pose.position) |expected, actual| {
+            try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+        }
+    }
+}
+
+test "Jolt 5.5 four-wheel vehicle settles drives toward minus Z and brakes" {
+    comptime engine.physics.assertVehicleImplementation(Vehicles);
+
+    var physics = try Physics.init();
+    defer physics.deinit();
+    const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 100, 1, 100 });
+    defer _ = physics.removeBody(ground);
+    var vehicles = physics.vehicles();
+    const vehicle = try vehicles.createVehicle(.{
+        .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
+    });
+    defer vehicles.destroyVehicle(vehicle) catch unreachable;
+
+    try std.testing.expectEqual(@as(u32, 2), physics.getBodyCount());
+    try std.testing.expectEqual(
+        @as(u32, 1),
+        c.JPH_PhysicsSystem_GetNumConstraints(physics.system),
+    );
+
+    for (0..240) |_| try physics.update(1.0 / 120.0);
+    const settled = try vehicles.vehicleState(vehicle);
+    for (settled.wheels) |wheel| {
+        try std.testing.expect(wheel.has_contact);
+        try wheel.validate();
+    }
+
+    try vehicles.setVehicleInput(vehicle, .{ .throttle = 1 });
+    for (0..240) |_| try physics.update(1.0 / 120.0);
+    const driven = try vehicles.vehicleState(vehicle);
+    try std.testing.expect(driven.chassis.pose.position[2] < settled.chassis.pose.position[2] - 1);
+    try std.testing.expect(driven.current_gear > 0);
+    try std.testing.expect(driven.engine_rpm > 0);
+    var wheel_spinning = false;
+    for (driven.wheels) |wheel| {
+        wheel_spinning = wheel_spinning or @abs(wheel.angular_velocity) > 0.1;
+    }
+    try std.testing.expect(wheel_spinning);
+
+    try vehicles.setVehicleInput(vehicle, .{ .brake = 1 });
+    for (0..600) |_| try physics.update(1.0 / 120.0);
+    const stopped = try vehicles.vehicleState(vehicle);
+    const horizontal_speed = @sqrt(
+        stopped.chassis.velocity.linear[0] * stopped.chassis.velocity.linear[0] +
+            stopped.chassis.velocity.linear[2] * stopped.chassis.velocity.linear[2],
+    );
+    try std.testing.expect(horizontal_speed < 0.5);
+}
+
+test "four-wheel vehicle positive steering follows engine right convention" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 100, 1, 100 });
+    defer _ = physics.removeBody(ground);
+    var vehicles = physics.vehicles();
+    const vehicle = try vehicles.createVehicle(.{
+        .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
+    });
+    defer vehicles.destroyVehicle(vehicle) catch unreachable;
+    for (0..240) |_| try physics.update(1.0 / 120.0);
+
+    try vehicles.setVehicleInput(vehicle, .{ .throttle = 1, .steering = 0.7 });
+    for (0..300) |_| try physics.update(1.0 / 120.0);
+    const turned = try vehicles.vehicleState(vehicle);
+    try std.testing.expect(turned.chassis.pose.position[0] > 0.25);
+    try std.testing.expect(turned.chassis.pose.position[2] < -0.5);
+    try std.testing.expect(turned.wheels[@intFromEnum(engine.physics.VehicleWheelIndex.front_left)].steer_angle > 0);
+    try std.testing.expect(turned.wheels[@intFromEnum(engine.physics.VehicleWheelIndex.front_right)].steer_angle > 0);
+}
+
+test "four-wheel vehicle handles are stale safe world qualified and repeatable" {
+    var first = try Physics.init();
+    defer first.deinit();
+    var second = try Physics.init();
+    defer second.deinit();
+    var first_vehicles = first.vehicles();
+    var second_vehicles = second.vehicles();
+
+    const yaw: f32 = 0.4;
+    const first_vehicle = try first_vehicles.createVehicle(.{
+        .chassis = .{ .pose = .{
+            .position = .{ 3, 4, -2 },
+            .rotation = .{ 0, @sin(yaw * 0.5), 0, @cos(yaw * 0.5) },
+        } },
+        .initial_wheel_dynamics = .{
+            .{ .rotation_angle = 0.1, .angular_velocity = 1 },
+            .{ .rotation_angle = 0.2, .angular_velocity = 2 },
+            .{ .rotation_angle = 0.3, .angular_velocity = 3 },
+            .{ .rotation_angle = 0.4, .angular_velocity = 4 },
+        },
+    });
+    const initial = try first_vehicles.vehicleState(first_vehicle);
+    for ([3]f32{ 3, 4, -2 }, initial.chassis.pose.position) |expected, actual| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
+    for ([4]f32{ 0, @sin(yaw * 0.5), 0, @cos(yaw * 0.5) }, initial.chassis.pose.rotation) |expected, actual| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
+    for (initial.wheels, 0..) |wheel, index| {
+        const ordinal: f32 = @floatFromInt(index + 1);
+        try std.testing.expectApproxEqAbs(ordinal * 0.1, wheel.rotation_angle, 0.0001);
+        try std.testing.expectApproxEqAbs(ordinal, wheel.angular_velocity, 0.0001);
+    }
+    try std.testing.expectError(
+        error.ForeignVehicleId,
+        second_vehicles.vehicleState(first_vehicle),
+    );
+    try first_vehicles.destroyVehicle(first_vehicle);
+    try std.testing.expectError(
+        error.InvalidVehicleId,
+        first_vehicles.vehicleState(first_vehicle),
+    );
+    try std.testing.expectError(
+        error.InvalidVehicleId,
+        first_vehicles.destroyVehicle(first_vehicle),
+    );
+
+    // Cross Jolt's 8-bit body-generation range while the engine handle serial
+    // remains monotonic, proving native slot reuse cannot revive a stale ID.
+    for (0..300) |_| {
+        const vehicle = try first_vehicles.createVehicle(.{
+            .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
+        });
+        try first_vehicles.destroyVehicle(vehicle);
+    }
+    try std.testing.expectEqual(@as(usize, 0), first.vehicle_handles.count());
+    try std.testing.expectEqual(@as(u32, 0), first.getBodyCount());
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        c.JPH_PhysicsSystem_GetNumConstraints(first.system),
+    );
+}
+
+test "four-wheel vehicle handles reject after sequential world recreation" {
+    var stale: VehicleId = undefined;
+    {
+        var original = try Physics.init();
+        defer original.deinit();
+        var original_vehicles = original.vehicles();
+        stale = try original_vehicles.createVehicle(.{});
+        try original_vehicles.destroyVehicle(stale);
+    }
+
+    var recreated = try Physics.init();
+    defer recreated.deinit();
+    var recreated_vehicles = recreated.vehicles();
+    const current = try recreated_vehicles.createVehicle(.{});
+    defer recreated_vehicles.destroyVehicle(current) catch unreachable;
+    try std.testing.expectError(
+        error.ForeignVehicleId,
+        recreated_vehicles.vehicleState(stale),
+    );
+}
+
+test "four-wheel vehicle creation failures roll back every native owner" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    const failure_points = [_]VehicleCreateFailurePoint{
+        .after_body,
+        .after_settings,
+        .after_constraint,
+        .after_collision_tester,
+        .after_registration,
+    };
+
+    for (failure_points) |failure_point| {
+        try std.testing.expectError(
+            error.InjectedVehicleCreateFailure,
+            physics.createFourWheelVehicle(.{
+                .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
+            }, failure_point),
+        );
+        try std.testing.expectEqual(@as(usize, 0), physics.vehicle_handles.count());
+        try std.testing.expectEqual(@as(u32, 0), physics.getBodyCount());
+        try std.testing.expectEqual(
+            @as(u32, 0),
+            c.JPH_PhysicsSystem_GetNumConstraints(physics.system),
+        );
+
+        var vehicles = physics.vehicles();
+        const healthy = try vehicles.createVehicle(.{
+            .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
+        });
+        try physics.update(1.0 / 120.0);
+        _ = try vehicles.vehicleState(healthy);
+        try vehicles.destroyVehicle(healthy);
+    }
 }
 
 test "Jolt 5.5 virtual character walks, lands, and releases its shape" {

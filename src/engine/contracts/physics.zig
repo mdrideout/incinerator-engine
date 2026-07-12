@@ -164,6 +164,228 @@ pub const CharacterState = struct {
     }
 };
 
+/// Fixed wheel ordering used by the first wheeled-vehicle capability.
+///
+/// Incinerator uses +Y up, -Z forward, and +X right. Front wheel attachment
+/// points therefore have negative Z and left wheel attachment points have
+/// negative X.
+pub const vehicle_wheel_count: usize = 4;
+pub const VehicleWheelIndex = enum(usize) {
+    front_left = 0,
+    front_right = 1,
+    rear_left = 2,
+    rear_right = 3,
+};
+
+/// Minimal wheel motion restored during logical vehicle reconstruction.
+/// Contact, suspension, tire, and solver caches remain backend-owned and are
+/// deliberately rebuilt by the first shared physics step.
+pub const VehicleWheelDynamics = struct {
+    /// Canonical state uses [0, 2π). Construction accepts any finite angle and
+    /// `VehicleDesc.normalized` wraps it before it reaches an adapter.
+    rotation_angle: f32 = 0,
+    angular_velocity: f32 = 0,
+
+    pub fn validate(self: VehicleWheelDynamics) !void {
+        try validateFinite([2]f32{ self.rotation_angle, self.angular_velocity });
+    }
+
+    pub fn normalized(self: VehicleWheelDynamics) !VehicleWheelDynamics {
+        try self.validate();
+        var result = self;
+        result.rotation_angle = try canonicalVehicleWheelRotation(self.rotation_angle);
+        return result;
+    }
+};
+
+/// Normalize a finite wheel rotation into the engine's unique [0, 2π) range.
+/// Exact negative zero is collapsed so logical snapshots can remain byte-stable.
+pub fn canonicalVehicleWheelRotation(angle: f32) !f32 {
+    if (!std.math.isFinite(angle)) return error.NonFinitePhysicsValue;
+    const wrapped = @mod(angle, std.math.tau);
+    return if (wrapped == 0) 0 else wrapped;
+}
+
+/// Engine-neutral construction data for one conventional four-wheel car.
+/// Jolt settings, constraints, collision testers, and body identifiers never
+/// cross this boundary.
+pub const VehicleDesc = struct {
+    chassis: BodyState = .{},
+    chassis_half_extents: [3]f32 = .{ 0.9, 0.25, 2.0 },
+    center_of_mass_offset: [3]f32 = .{ 0, -0.25, 0 },
+    mass: f32 = 1_500,
+    wheel_attachment_positions: [vehicle_wheel_count][3]f32 = .{
+        .{ -0.8, -0.18, -1.4 },
+        .{ 0.8, -0.18, -1.4 },
+        .{ -0.8, -0.18, 1.4 },
+        .{ 0.8, -0.18, 1.4 },
+    },
+    initial_wheel_dynamics: [vehicle_wheel_count]VehicleWheelDynamics = .{
+        .{}, .{}, .{}, .{},
+    },
+    wheel_radius: f32 = 0.3,
+    wheel_width: f32 = 0.2,
+    suspension_min_length: f32 = 0.2,
+    suspension_max_length: f32 = 0.5,
+    suspension_frequency: f32 = 1.5,
+    suspension_damping: f32 = 0.5,
+    max_steer_radians: f32 = std.math.degreesToRadians(30.0),
+    max_brake_torque: f32 = 1_500,
+    max_hand_brake_torque: f32 = 4_000,
+    /// S2 deliberately supports one front-wheel-drive profile rather than a
+    /// generic drivetrain graph. These values remain authoritative config.
+    front_differential_ratio: f32 = 3.42,
+    front_limited_slip_ratio: f32 = 1.4,
+    max_pitch_roll_radians: f32 = std.math.degreesToRadians(60.0),
+    wheel_collision_max_slope_radians: f32 = std.math.degreesToRadians(60.0),
+
+    pub fn validate(self: VehicleDesc) !void {
+        try self.chassis.validate();
+        try validateFinite(self.chassis_half_extents);
+        for (self.chassis_half_extents) |extent| {
+            if (extent <= 0) return error.InvalidVehicleChassisExtents;
+        }
+        try validateFinite(self.center_of_mass_offset);
+        if (!std.math.isFinite(self.mass) or self.mass <= 0) {
+            return error.InvalidVehicleMass;
+        }
+        for (self.wheel_attachment_positions) |position| try validateFinite(position);
+        for (self.initial_wheel_dynamics) |dynamics| try dynamics.validate();
+        const front_left = self.wheel_attachment_positions[@intFromEnum(VehicleWheelIndex.front_left)];
+        const front_right = self.wheel_attachment_positions[@intFromEnum(VehicleWheelIndex.front_right)];
+        const rear_left = self.wheel_attachment_positions[@intFromEnum(VehicleWheelIndex.rear_left)];
+        const rear_right = self.wheel_attachment_positions[@intFromEnum(VehicleWheelIndex.rear_right)];
+        if (front_left[0] >= 0 or rear_left[0] >= 0 or
+            front_right[0] <= 0 or rear_right[0] <= 0 or
+            front_left[2] >= 0 or front_right[2] >= 0 or
+            rear_left[2] <= 0 or rear_right[2] <= 0)
+        {
+            return error.InvalidVehicleWheelLayout;
+        }
+        if (!positiveFinite(self.wheel_radius)) return error.InvalidVehicleWheelRadius;
+        if (!positiveFinite(self.wheel_width)) return error.InvalidVehicleWheelWidth;
+        if (!std.math.isFinite(self.suspension_min_length) or
+            !std.math.isFinite(self.suspension_max_length) or
+            self.suspension_min_length < 0 or
+            self.suspension_max_length <= self.suspension_min_length)
+        {
+            return error.InvalidVehicleSuspensionRange;
+        }
+        if (!positiveFinite(self.suspension_frequency) or
+            !std.math.isFinite(self.suspension_damping) or
+            self.suspension_damping < 0)
+        {
+            return error.InvalidVehicleSuspensionSpring;
+        }
+        if (!std.math.isFinite(self.max_steer_radians) or
+            self.max_steer_radians <= 0 or
+            self.max_steer_radians >= std.math.pi / 2.0)
+        {
+            return error.InvalidVehicleSteerAngle;
+        }
+        if (!nonNegativeFinite(self.max_brake_torque) or
+            !nonNegativeFinite(self.max_hand_brake_torque))
+        {
+            return error.InvalidVehicleBrakeTorque;
+        }
+        if (!positiveFinite(self.front_differential_ratio) or
+            !std.math.isFinite(self.front_limited_slip_ratio) or
+            self.front_limited_slip_ratio <= 1)
+        {
+            return error.InvalidVehicleDrivetrain;
+        }
+        if (!std.math.isFinite(self.max_pitch_roll_radians) or
+            self.max_pitch_roll_radians <= 0 or
+            self.max_pitch_roll_radians > std.math.pi)
+        {
+            return error.InvalidVehiclePitchRollAngle;
+        }
+        if (!std.math.isFinite(self.wheel_collision_max_slope_radians) or
+            self.wheel_collision_max_slope_radians <= 0 or
+            self.wheel_collision_max_slope_radians >= std.math.pi / 2.0)
+        {
+            return error.InvalidVehicleCollisionSlope;
+        }
+    }
+
+    pub fn normalized(self: VehicleDesc) !VehicleDesc {
+        try self.validate();
+        var result = self;
+        result.chassis = try self.chassis.normalized();
+        for (&result.initial_wheel_dynamics) |*dynamics| {
+            dynamics.* = try dynamics.normalized();
+        }
+        return result;
+    }
+};
+
+pub const VehicleInput = struct {
+    throttle: f32 = 0,
+    steering: f32 = 0,
+    brake: f32 = 0,
+    hand_brake: f32 = 0,
+
+    pub fn validate(self: VehicleInput) !void {
+        try validateFinite([4]f32{ self.throttle, self.steering, self.brake, self.hand_brake });
+        if (@abs(self.throttle) > 1 or @abs(self.steering) > 1 or
+            self.brake < 0 or self.brake > 1 or
+            self.hand_brake < 0 or self.hand_brake > 1)
+        {
+            return error.InvalidVehicleInput;
+        }
+    }
+
+    pub fn isNeutral(self: VehicleInput) bool {
+        return self.throttle == 0 and self.steering == 0 and
+            self.brake == 0 and self.hand_brake == 0;
+    }
+};
+
+/// A wheel pose uses the engine's canonical wheel-model convention: +X is the
+/// axle/right axis and +Y is wheel up. This keeps presentation independent of
+/// Jolt's matrix and model-axis parameters.
+pub const WheelState = struct {
+    pose: Pose,
+    angular_velocity: f32,
+    rotation_angle: f32,
+    /// Steering angle in the engine convention: positive turns toward +X
+    /// (right) when the chassis faces -Z.
+    steer_angle: f32,
+    suspension_length: f32,
+    has_contact: bool,
+
+    pub fn validate(self: WheelState) !void {
+        try self.pose.validate();
+        try validateFinite([4]f32{
+            self.angular_velocity,
+            self.rotation_angle,
+            self.steer_angle,
+            self.suspension_length,
+        });
+        if (self.rotation_angle < 0 or self.rotation_angle >= std.math.tau or
+            @as(u32, @bitCast(self.rotation_angle)) == 0x8000_0000)
+        {
+            return error.NonCanonicalVehicleWheelRotation;
+        }
+        if (self.suspension_length < 0) return error.InvalidVehicleWheelState;
+    }
+};
+
+pub const VehicleState = struct {
+    chassis: BodyState,
+    wheels: [vehicle_wheel_count]WheelState,
+    engine_rpm: f32,
+    current_gear: i32,
+
+    pub fn validate(self: VehicleState) !void {
+        try self.chassis.validate();
+        for (self.wheels) |wheel| try wheel.validate();
+        if (!std.math.isFinite(self.engine_rpm) or self.engine_rpm < 0) {
+            return error.InvalidVehicleEngineState;
+        }
+    }
+};
+
 /// Check the structural contract used by physics-backed features.
 ///
 /// `Bodies.Handle` remains wholly adapter-owned. In particular, this contract
@@ -261,6 +483,43 @@ pub fn assertCharacterImplementation(comptime Controllers: type) void {
     }
 }
 
+/// Check the structural contract consumed by a four-wheel vehicle feature.
+/// The shared world step remains composition-owned.
+pub fn assertVehicleImplementation(comptime Vehicles: type) void {
+    comptime {
+        if (!@hasDecl(Vehicles, "Handle")) {
+            @compileError("vehicle implementation must declare Handle");
+        }
+        if (@TypeOf(Vehicles.Handle) != type) {
+            @compileError("vehicle implementation Handle must be a type");
+        }
+        assertFallibleMethod(
+            Vehicles,
+            "createVehicle",
+            .{ *Vehicles, VehicleDesc },
+            Vehicles.Handle,
+        );
+        assertFallibleMethod(
+            Vehicles,
+            "destroyVehicle",
+            .{ *Vehicles, Vehicles.Handle },
+            void,
+        );
+        assertFallibleMethod(
+            Vehicles,
+            "setVehicleInput",
+            .{ *Vehicles, Vehicles.Handle, VehicleInput },
+            void,
+        );
+        assertFallibleMethod(
+            Vehicles,
+            "vehicleState",
+            .{ *Vehicles, Vehicles.Handle },
+            VehicleState,
+        );
+    }
+}
+
 fn assertFallibleMethod(
     comptime Bodies: type,
     comptime name: []const u8,
@@ -302,6 +561,14 @@ fn validateFinite(values: anytype) !void {
     for (values) |value| {
         if (!std.math.isFinite(value)) return error.NonFinitePhysicsValue;
     }
+}
+
+fn positiveFinite(value: f32) bool {
+    return std.math.isFinite(value) and value > 0;
+}
+
+fn nonNegativeFinite(value: f32) bool {
+    return std.math.isFinite(value) and value >= 0;
 }
 
 fn magnitudeSquared(values: [3]f32) f64 {
@@ -468,5 +735,102 @@ test "character contract validates a bottom-anchored capsule and adapter" {
     try std.testing.expectError(
         error.InvalidStepUpHeight,
         (CharacterUpdate{ .velocity = .{ 0, 0, 0 }, .step_up_height = -1 }).validate(),
+    );
+}
+
+test "vehicle contract validates fixed wheel ordering input and adapter" {
+    const FakeVehicles = struct {
+        pub const Handle = enum(u32) { car = 1 };
+
+        pub fn createVehicle(_: *@This(), _: VehicleDesc) !Handle {
+            return .car;
+        }
+        pub fn destroyVehicle(_: *@This(), _: Handle) !void {}
+        pub fn setVehicleInput(_: *@This(), _: Handle, _: VehicleInput) !void {}
+        pub fn vehicleState(_: *@This(), _: Handle) !VehicleState {
+            const wheel = WheelState{
+                .pose = .{},
+                .angular_velocity = 0,
+                .rotation_angle = 0,
+                .steer_angle = 0,
+                .suspension_length = 0.3,
+                .has_contact = true,
+            };
+            return .{
+                .chassis = .{},
+                .wheels = .{ wheel, wheel, wheel, wheel },
+                .engine_rpm = 1_000,
+                .current_gear = 1,
+            };
+        }
+    };
+
+    comptime assertVehicleImplementation(FakeVehicles);
+    try (VehicleDesc{}).validate();
+    try (VehicleInput{ .throttle = 1, .steering = -1, .brake = 1 }).validate();
+    try std.testing.expectError(
+        error.InvalidVehicleInput,
+        (VehicleInput{ .throttle = 1.01 }).validate(),
+    );
+    try std.testing.expectError(
+        error.InvalidVehicleWheelLayout,
+        (VehicleDesc{
+            .wheel_attachment_positions = .{
+                .{ 0.8, -0.18, -1.4 },
+                .{ -0.8, -0.18, -1.4 },
+                .{ -0.8, -0.18, 1.4 },
+                .{ 0.8, -0.18, 1.4 },
+            },
+        }).validate(),
+    );
+    try std.testing.expectError(
+        error.InvalidVehicleSuspensionRange,
+        (VehicleDesc{
+            .suspension_min_length = 0.5,
+            .suspension_max_length = 0.5,
+        }).validate(),
+    );
+    try std.testing.expectError(
+        error.InvalidVehicleDrivetrain,
+        (VehicleDesc{ .front_differential_ratio = 0 }).validate(),
+    );
+    try std.testing.expectError(
+        error.InvalidVehicleDrivetrain,
+        (VehicleDesc{ .front_limited_slip_ratio = 1 }).validate(),
+    );
+    try std.testing.expectError(
+        error.InvalidVehicleDrivetrain,
+        (VehicleDesc{ .front_limited_slip_ratio = 0.5 }).validate(),
+    );
+    try (VehicleDesc{ .front_limited_slip_ratio = 1.001 }).validate();
+    try std.testing.expectError(
+        error.NonFinitePhysicsValue,
+        (VehicleDesc{
+            .initial_wheel_dynamics = .{
+                .{ .angular_velocity = std.math.nan(f32) }, .{}, .{}, .{},
+            },
+        }).validate(),
+    );
+    const wrapped = try (VehicleDesc{
+        .initial_wheel_dynamics = .{
+            .{ .rotation_angle = -0.25 },
+            .{ .rotation_angle = std.math.tau + 0.5 },
+            .{ .rotation_angle = @bitCast(@as(u32, 0x8000_0000)) },
+            .{},
+        },
+    }).normalized();
+    try std.testing.expectApproxEqAbs(
+        std.math.tau - 0.25,
+        wrapped.initial_wheel_dynamics[0].rotation_angle,
+        0.0001,
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0.5),
+        wrapped.initial_wheel_dynamics[1].rotation_angle,
+        0.0001,
+    );
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        @as(u32, @bitCast(wrapped.initial_wheel_dynamics[2].rotation_angle)),
     );
 }

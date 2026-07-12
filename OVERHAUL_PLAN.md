@@ -339,7 +339,7 @@ sandbox composition shared by visual and headless hosts:
 | D-001 | Product scope: single-player sandbox now; future authoritative online/MMO aspiration | Accepted in ADR-007 | Network/state architecture |
 | D-002 | Initial hosts: sandbox and headless; optional in-process editor; server later | Accepted in ADR-007 | Slice 0 |
 | D-003 | Exact Zig 0.16.0 toolchain and coordinated wrapper cohort | Implemented | Every build/CI change |
-| D-004 | Engine-owned JoltC 5.5 build package plus narrow engine adapter; expand capabilities per slice | Implemented for rigid bodies and CharacterVirtual; vehicle spike pending | Vehicle physics |
+| D-004 | Engine-owned JoltC 5.5 build package plus narrow engine adapter; expand capabilities per slice | Implemented for rigid bodies, CharacterVirtual, and the S2 real-Jolt four-wheel capability; VehicleFeature integration remains | Vehicle feature |
 | D-005 | Main thread owns ECS mutation/GPU submission; callbacks publish bounded data | Accepted in ADR-008 | Async assets/contact events |
 | D-006 | Allocator and memory-budget strategy | Not started | Asset registry/streaming |
 | D-007 | Physics owns dynamic-body simulation transforms; presentation reads interpolated snapshots | Implemented for S0 in amended ADR-005 | Slice 0 scheduling/interpolation |
@@ -366,10 +366,14 @@ If genuine MMO remains the target, authoritative simulation, replication, intere
 The prototype `zphysics` dependency has been removed. `src/adapters/physics/jolt_c.zig` is the only raw C import, and `src/physics.zig` exposes engine-owned rigid-body types. The engine-owned build package exact-pins Jolt 5.5 and JoltC, compiles upstream ABI assertions, and is tested without SDL/editor linkage.
 
 S1 proved a narrow CharacterVirtual capability without exposing raw Jolt
-shapes, filters, pointers, or enums. The adapter deliberately still does not
-expose vehicle or ragdoll APIs; their slices must prove the capability surface
-they need. Logical game state is serialized and reconstructed rather than
-treating opaque Jolt state as a persistence contract.
+shapes, filters, pointers, or enums. S2 Stage A now proves a real four-wheel
+`VehicleConstraint` capability with engine-neutral configuration/state,
+world-qualified handles, explicit native owner rollback, fixed front-drive
+tuning, logical wheel-motion reconstruction, and no per-vehicle step. Stage B
+will integrate it through one neutral composition-owned shared step. The
+adapter still does not expose generic constraints or ragdoll APIs;
+later slices must prove those surfaces. Logical game state is serialized and
+reconstructed rather than treating opaque Jolt state as a persistence contract.
 
 Cross-platform deterministic Jolt compilation is explicitly disabled. The future online direction is an authoritative server, not peer lockstep; enabling the option later requires measured behavior and performance evidence.
 
@@ -406,7 +410,7 @@ targets to compete with the current macOS-first gameplay roadmap.
 | M2 | Immediate ownership and correctness hazards removed | Complete for the pre-S2 scope; content-upload failure/cancellation policy remains slice-owned by S3 |
 | S0 | Crate lifecycle slice proves the kernel and feature contract | Complete; one-world-per-process and pre-network queue backpressure are accepted follow-on constraints |
 | S1 | Character walks around one block | Complete; independent architecture, correctness, and build/evidence reviews pass with no remaining P0/P1/P2 finding |
-| S2 | Player enters and drives one vehicle | Not started |
+| S2 | Player enters and drives one vehicle | Stage A design and real-Jolt capability complete; VehicleFeature is next |
 | S3 | One district/chunk loads and unloads asynchronously | Not started |
 | S4 | Two clients use one authoritative server, if selected | Deferred until multiplayer is selected and scoped |
 | S5 | Transform editing supports command, undo, save, and restore | Not started |
@@ -700,10 +704,11 @@ One vehicle can be spawned, entered, driven, exited, destroyed, and restored. Ch
 
 ### Work pulled by the slice
 
-- [ ] Land or implement the required Jolt Vehicle API capability.
-- [ ] Model body, wheel, constraint, and asset ownership.
-- [ ] Preserve visual origin versus center-of-mass semantics.
-- [ ] Add suspension, tire friction, steering, drivetrain, and braking data.
+- [x] Land or implement the required Jolt Vehicle API capability.
+- [x] Model native body, wheel, constraint, listener, tester, and handle ownership; presentation assets remain with the visual stage.
+- [x] Preserve body-origin versus center-of-mass semantics in construction and state queries.
+- [x] Add validated suspension, wheel, steering, fixed front-drive, and braking data at the engine-neutral boundary.
+- [ ] Extract the shared physics step from the crate capability into a neutral composition-owned capability before registering `VehicleFeature`.
 - [ ] Transfer control authority between character and vehicle explicitly.
 - [ ] Extend persistence only for state the vehicle slice requires.
 - [ ] Extract shared locomotion/possession concepts only if character and vehicle prove the common abstraction.
@@ -900,7 +905,7 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-013 | Debug renderer is destroyed before retained batches | P1 | M2 | Superseded by removal/deferment |
 | F-014 | Depth resize failure leaves a released texture handle | P1 | M2 | Resolved by create-then-commit replacement and state-transition test |
 | F-015 | Process-global Jolt initialization is coupled to each world lifetime | P1 | M2/S0 | Resolved with adapter-private runtime leases and owner-thread contract |
-| F-016 | JoltC exposes character/vehicle/ragdoll APIs, but the narrow engine adapter has not proven those capabilities or opaque state persistence | P0 | D-004/S1/S2 | CharacterVirtual capability and logical reconstruction resolved in S1; vehicle/ragdoll remain slice-scoped |
+| F-016 | JoltC exposes character/vehicle/ragdoll APIs, but the narrow engine adapter has not proven those capabilities or opaque state persistence | P0 | D-004/S1/S2 | CharacterVirtual resolved in S1; S2 Stage A resolves the narrow real-Jolt vehicle capability and declared logical reconstruction limit; ragdoll remains slice-scoped |
 | F-017 | ImGui event recognition is mistaken for input capture | P1 | M2 | Resolved with physical/gameplay state separation and `WantCapture*` routing |
 | F-018 | No safe schedule or mutation boundary | P0 | S0 | Resolved with frozen named phases, tick-targeted typed commands, and terminal infrastructure fault policy |
 | F-019 | Transform authority contradicts ADR-005 | P0 | D-007/S0 | Resolved for dynamic crates with explicit physics authority and post-step publication |
@@ -1035,8 +1040,13 @@ Record evidence rather than relying only on target numbers:
 13. [x] Close the small local macOS-focused M1/M2 evidence set: installed visual
     launch, native minimize/restore behavior, and the highest-value production
     initialization/failure seams.
-14. [ ] Begin S2 with a bounded vehicle capability/design spike, followed by
-    the smallest spawn → enter → drive → exit → destroy → restore slice.
+14. [x] Complete the bounded S2 vehicle design and real-Jolt capability spike,
+    including ownership rollback, world-qualified handles, body-origin state,
+    explicit drivetrain policy, logical wheel-motion reconstruction, and
+    Debug/ReleaseFast/Tier-2 evidence.
+15. [ ] Implement `VehicleFeature` against fake vehicle and driver ports, then
+    compose the smallest spawn → enter → drive → exit → destroy → restore
+    slice over a neutral shared physics step.
 
 ---
 
@@ -1064,3 +1074,4 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-12 | Completed and independently reviewed the S1 character vertical slice | 139/139 Debug, ReleaseFast, and editor-enabled tests; authoritative V2 character tuning/canonical yaw; terminal-fall and grounded-restore regressions; source package and Linux/Windows cross-builds; four native Metal cadence smokes; architecture/correctness/build reviews pass with no remaining P0/P1/P2 finding |
 | 2026-07-12 | Prioritized Apple Silicon macOS/Metal as the sole current runtime-quality platform | ADR-007/D-009 amended: Linux/Windows retain cross-build, offline shader, and headless portability guards; native client investment becomes trigger-based before S3 content lock-in, secondary-client playtesting/release, or server work |
 | 2026-07-12 | Closed the local Apple Silicon runtime-readiness and M2 evidence set | Installed ReleaseFast S1 Metal runtime launched from `/tmp`; real minimize/restore events with a 750 ms suspended dwell, authoritative input release, and clean resume; six SDL/Metal plus four Jolt initialization ownership failpoints followed by healthy same-process restarts; 146/146 Debug and ReleaseFast tests |
+| 2026-07-12 | Completed the S2 Stage A vehicle design and real-Jolt capability | 153/153 Debug, ReleaseFast, and editor-enabled tests; 26/26 focused native adapter tests; narrow four-wheel contract; settle/contact/throttle/steer/brake behavior; body-origin and wheel-motion reconstruction; native ownership failpoints; >256 slot-reuse plus stale/foreign/recreated-world regressions; 16/16 source-package tests; Linux/Windows Vulkan cross-builds; independent review findings corrected |
