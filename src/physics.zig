@@ -79,6 +79,27 @@ const broad_phase_layers = struct {
     const count: u32 = 2;
 };
 
+const CharacterRelocationQuery = struct {
+    body_interface: *c.JPH_BodyInterface,
+    max_penetration_depth: f32,
+    blocked: bool = false,
+};
+
+fn collectCharacterRelocationHit(
+    raw: ?*anyopaque,
+    result: [*c]const c.JPH_CollideShapeResult,
+) callconv(.c) f32 {
+    const query: *CharacterRelocationQuery = @ptrCast(@alignCast(raw.?));
+    const hit = result[0];
+    if (hit.penetrationDepth <= query.max_penetration_depth or
+        c.JPH_BodyInterface_IsSensor(query.body_interface, hit.bodyID2))
+    {
+        return std.math.floatMax(f32);
+    }
+    query.blocked = true;
+    return 0;
+}
+
 /// Deterministic checkpoints for testing cleanup across Jolt's real ownership
 /// transitions. This stays private to the adapter: production callers cannot
 /// request a partially initialized world.
@@ -314,6 +335,12 @@ pub const Physics = struct {
         return .{ .physics = self };
     }
 
+    /// Expose the world step independently from every feature capability. The
+    /// composition root registers exactly one instance for the shared world.
+    pub fn stepper(self: *Physics) PhysicsStepper {
+        return .{ .physics = self };
+    }
+
     /// Expose only the controller operations required by CharacterFeature.
     pub fn characterControllers(self: *Physics) CharacterControllers {
         return .{ .physics = self };
@@ -523,6 +550,96 @@ pub const Physics = struct {
         );
         try ensureCharacterContactCapacity(character);
         return self.virtualCharacterState(character_id);
+    }
+
+    fn tryRelocateVirtualCharacter(
+        self: *Physics,
+        character_id: CharacterId,
+        relocation: engine.physics.CharacterRelocation,
+    ) !?engine.physics.CharacterState {
+        self.assertOwnerThread();
+        try relocation.validate();
+        const character = try self.characterPtr(character_id);
+
+        var original_position: c.JPH_RVec3 = undefined;
+        var original_velocity: c.JPH_Vec3 = undefined;
+        c.JPH_CharacterVirtual_GetPosition(character, &original_position);
+        c.JPH_CharacterVirtual_GetLinearVelocity(character, &original_velocity);
+
+        // Query the candidate transform before mutating CharacterVirtual. This
+        // keeps a blocked exit from changing active contacts or callbacks.
+        var center_of_mass_transform: c.JPH_RMat4 = undefined;
+        c.JPH_CharacterVirtual_GetCenterOfMassTransform(
+            character,
+            &center_of_mass_transform,
+        );
+        center_of_mass_transform.column[3].x +=
+            relocation.position[0] - @as(f32, @floatCast(original_position.x));
+        center_of_mass_transform.column[3].y +=
+            relocation.position[1] - @as(f32, @floatCast(original_position.y));
+        center_of_mass_transform.column[3].z +=
+            relocation.position[2] - @as(f32, @floatCast(original_position.z));
+        var collide_settings: c.JPH_CollideShapeSettings = undefined;
+        c.JPH_CollideShapeSettings_Init(&collide_settings);
+        collide_settings.maxSeparationDistance = 0;
+        var scale = toVec3(.{ 1, 1, 1 });
+        var base_offset = toRVec3(.{ 0, 0, 0 });
+        const shape = c.JPH_CharacterBase_GetShape(@ptrCast(character)) orelse
+            return error.CharacterShapeInvariantBroken;
+        const narrow_phase = c.JPH_PhysicsSystem_GetNarrowPhaseQuery(self.system) orelse
+            return error.CharacterQueryInvariantBroken;
+        var query = CharacterRelocationQuery{
+            .body_interface = self.body_interface,
+            .max_penetration_depth = relocation.max_penetration_depth,
+        };
+        _ = c.JPH_NarrowPhaseQuery_CollideShape(
+            narrow_phase,
+            shape,
+            &scale,
+            &center_of_mass_transform,
+            &collide_settings,
+            &base_offset,
+            collectCharacterRelocationHit,
+            &query,
+            null,
+            null,
+            null,
+            null,
+        );
+        if (query.blocked) return null;
+
+        var committed = false;
+        defer if (!committed) {
+            c.JPH_CharacterVirtual_SetPosition(character, &original_position);
+            c.JPH_CharacterVirtual_SetLinearVelocity(character, &original_velocity);
+            c.JPH_CharacterVirtual_RefreshContacts(
+                character,
+                object_layers.moving,
+                self.system,
+                null,
+                null,
+            );
+            if (c.JPH_CharacterVirtual_GetMaxHitsExceeded(character)) {
+                @panic("character relocation rollback exceeded contact capacity");
+            }
+        };
+
+        var position = toRVec3(relocation.position);
+        var velocity = toVec3(relocation.velocity);
+        c.JPH_CharacterVirtual_SetPosition(character, &position);
+        c.JPH_CharacterVirtual_SetLinearVelocity(character, &velocity);
+        c.JPH_CharacterVirtual_RefreshContacts(
+            character,
+            object_layers.moving,
+            self.system,
+            null,
+            null,
+        );
+        try ensureCharacterContactCapacity(character);
+
+        const state = try self.virtualCharacterState(character_id);
+        committed = true;
+        return state;
     }
 
     fn vehicleRecord(
@@ -1213,6 +1330,14 @@ pub const Physics = struct {
 /// Keeping the handle concrete avoids allocation, type erasure, and a Jolt
 /// dependency in the feature module while still giving the host an explicit
 /// composition seam.
+pub const PhysicsStepper = struct {
+    physics: *Physics,
+
+    pub fn step(self: *PhysicsStepper, delta_time: f32) !void {
+        try self.physics.update(delta_time);
+    }
+};
+
 pub const CrateBodies = struct {
     physics: *Physics,
 
@@ -1264,10 +1389,6 @@ pub const CrateBodies = struct {
         impulse: [3]f32,
     ) !void {
         try self.physics.addImpulse(body_id, impulse);
-    }
-
-    pub fn step(self: *CrateBodies, delta_time: f32) !void {
-        try self.physics.update(delta_time);
     }
 
     pub fn bodyCount(self: *CrateBodies) u32 {
@@ -1325,6 +1446,14 @@ pub const CharacterControllers = struct {
             update_desc,
             delta_time,
         );
+    }
+
+    pub fn tryRelocateCharacter(
+        self: *CharacterControllers,
+        character_id: Handle,
+        relocation: engine.physics.CharacterRelocation,
+    ) !?engine.physics.CharacterState {
+        return self.physics.tryRelocateVirtualCharacter(character_id, relocation);
     }
 };
 
@@ -1904,6 +2033,39 @@ test "virtual character creation reconstructs grounded contacts" {
     try std.testing.expectApproxEqAbs(@as(f32, 0), state.position[1], 0.0001);
 }
 
+test "virtual character relocation is transactional when an exit is blocked" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 20, 1, 20 });
+    defer _ = physics.removeBody(ground);
+    const blocker = try physics.createStaticBox(.{ 5, 1, 0 }, .{ 1, 1, 1 });
+    defer _ = physics.removeBody(blocker);
+    var controllers = physics.characterControllers();
+    const character = try controllers.createCharacter(.{
+        .position = .{ 0, 0, 0 },
+        .velocity = .{ 0.5, 0, 0 },
+    });
+    defer controllers.destroyCharacter(character) catch unreachable;
+    const original = try controllers.characterState(character);
+
+    try std.testing.expect((try controllers.tryRelocateCharacter(character, .{
+        .position = .{ 5, 0, 0 },
+    })) == null);
+    const rolled_back = try controllers.characterState(character);
+    try std.testing.expectEqualDeep(original.position, rolled_back.position);
+    try std.testing.expectEqualDeep(original.velocity, rolled_back.velocity);
+
+    const accepted = (try controllers.tryRelocateCharacter(character, .{
+        .position = .{ 3, 0, 0 },
+        .velocity = .{ 1, 0, -2 },
+    })) orelse return error.ExpectedRelocation;
+    try std.testing.expectEqualDeep([3]f32{ 3, 0, 0 }, accepted.position);
+    try std.testing.expectEqualDeep([3]f32{ 1, 0, -2 }, accepted.velocity);
+    const relocated = try controllers.characterState(character);
+    try std.testing.expectEqualDeep([3]f32{ 3, 0, 0 }, relocated.position);
+    try std.testing.expectEqualDeep([3]f32{ 1, 0, -2 }, relocated.velocity);
+}
+
 test "virtual character handles reject stale and foreign worlds" {
     var first = try Physics.init();
     defer first.deinit();
@@ -2388,7 +2550,8 @@ test "crate capability round-trips Jolt body state transactionally" {
     }
 
     try bodies.applyImpulse(body, .{ 0, 0.25, 0 });
-    try bodies.step(1.0 / 60.0);
+    var stepper = physics.stepper();
+    try stepper.step(1.0 / 60.0);
 
     try bodies.destroyBody(body);
     try std.testing.expectEqual(@as(u32, 0), bodies.bodyCount());

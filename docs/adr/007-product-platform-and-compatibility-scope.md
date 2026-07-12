@@ -1,6 +1,6 @@
 # ADR-007: Product, Platform, and Compatibility Scope
 
-**Status:** Accepted, amended 2026-07-12
+**Status:** Accepted, amended 2026-07-12 (macOS-only scope)
 
 **Date:** 2026-07-09
 
@@ -51,29 +51,29 @@ These dependencies are upgraded and validated as a cohort, not independently und
 
 ### Platform priority and graphics backends
 
-| Tier | Platform | Architecture | Current SDL GPU path | Contract |
+| Status | Platform | Architecture | Expected GPU path | Contract |
 |---|---|---|---|---|
-| 1 | macOS | Apple Silicon (`aarch64`) | Metal with MSL | Sole current runtime-quality, development, performance, editor, and packaging target |
-| 2 | Linux, including SteamOS | `x86_64` | Vulkan with SPIR-V | Portability-preservation target: cross-compile, shader-contract, and headless gates only; native client work deferred |
-| 2 | Windows | `x86_64-windows-gnu` | D3D12 with DXIL by default | Portability-preservation target: cross-compile, shader-contract, and headless gates only; native client work deferred |
+| Current | macOS | Apple Silicon (`aarch64`) | Metal with MSL | The only build, test, runtime, performance, editor, packaging, and CI target |
+| Future/deferred | Linux, including SteamOS | Undecided | Likely Vulkan with SPIR-V | No current gate, compatibility promise, or required abstraction |
+| Future/deferred | Windows | Undecided | Likely D3D12 with DXIL | No current gate, compatibility promise, or required abstraction |
 
-Linux `x86_64` is also the intended future headless/server target. Mobile, web, consoles, and Intel macOS are outside the current support contract.
+Linux/SteamOS and Windows are product possibilities, not current engineering
+targets. Existing backend and build branches are dormant historical work and
+may break without blocking macOS development. The engine will not introduce
+multi-platform abstractions, cross-build constraints, CI jobs, shader gates,
+packaging work, or runtime tests solely to preserve them.
 
-The Windows build owns an offline DXIL path and explicitly selects SDL's D3D12
-backend by default. `-Dwindows-gpu=vulkan` preserves a provisional SPIR-V
-fallback. These paths are maintained to prevent architectural decay, not to
-claim current runtime support. Native Vulkan/D3D12 client validation,
-platform-specific packaging, and editor polish resume only when a secondary
-client platform is selected for playtesting or release.
+A future platform is reactivated only by a new product decision that defines
+its architecture, backend, packaging, and validation contract. Porting work may
+adapt or replace dormant code. Linux headless/server support must be explicitly
+selected before authoritative-server implementation; it is not maintained in
+advance. Mobile, web, consoles, and Intel macOS are also outside the current
+support contract.
 
-Linux headless validation becomes required before an authoritative server host
-is implemented. Linux client portability must be reconsidered before S3's
-cooked-content/streaming contract is finalized, because filesystem, packaging,
-memory, and upload assumptions become more expensive to change after that
-point. Cross-build, headless-linkage, and offline shader gates remain mandatory
-throughout macOS-first development.
-
-Shader generation is target- and backend-specific. Its outputs, reflection JSON, and generated Zig modules live in the Zig cache. Local builds may use shader tools from `PATH`, while CI and release validation use the exact-pinned base or DXIL vcpkg manifest and explicitly selected executable paths.
+Shader outputs, reflection JSON, and generated Zig modules live in the Zig
+cache. macOS CI and release validation use the exact-pinned base manifest and
+explicit tool paths. Historical SPIR-V/DXIL branches and manifests are not
+current validation requirements.
 
 ### Compatibility policy
 
@@ -95,9 +95,9 @@ Before a future stable engine release, the project may deliberately version a pu
 - Near-term architecture is judged by the single-player slice, not hypothetical MMO scale.
 - Persistence and presentation boundaries are established early because they are useful now as well as online later.
 - Cross-platform deterministic physics is not a multiplayer prerequisite for the chosen authoritative-server strategy.
-- Runtime support is explicitly limited to Apple Silicon macOS; secondary
-  platforms retain compile-time portability evidence without a runtime promise.
-- Windows Vulkan/SPIR-V remains an explicit bootstrap fallback rather than the default or release backend.
+- Platform support is explicitly limited to Apple Silicon macOS. Secondary
+  platforms impose no current compile-time, shader, runtime, packaging, or CI
+  requirements.
 - Prototype APIs may be removed directly instead of wrapped.
 - Game-owned GLBs cannot become implicit engine package or runtime dependencies.
 - The repository remains intentionally unlicensed until the owner selects an engine license.

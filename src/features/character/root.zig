@@ -2,6 +2,7 @@
 
 const std = @import("std");
 const engine = @import("incinerator_engine");
+const driver_contract = @import("driver_contract");
 
 pub const Assets = struct {
     mesh: engine.rendering.MeshHandle = .invalid,
@@ -156,6 +157,7 @@ pub const RejectionReason = enum {
     capacity_reached,
     character_not_found,
     not_owned,
+    driving,
 };
 pub const CommandRejected = struct {
     command: CommandKind,
@@ -182,6 +184,7 @@ pub const CharacterView = struct {
     ground_state: engine.physics.GroundState,
     radius: f32,
     half_height: f32,
+    driver_mode: driver_contract.DriverMode,
 };
 
 pub const CharacterDraw = struct {
@@ -228,6 +231,14 @@ pub fn Feature(comptime Controllers: type) type {
             half_height: f32,
         };
         const RuntimeController = struct { handle: Controllers.Handle };
+        const DriveRollback = struct {
+            move: [2]f32,
+            jump_requested: bool,
+        };
+        const DriveState = struct {
+            mode: driver_contract.DriverMode = .on_foot,
+            rollback: ?DriveRollback = null,
+        };
         const Locomotion = struct {
             move: [2]f32 = .{ 0, 0 },
             facing_yaw: f32 = 0,
@@ -259,6 +270,48 @@ pub fn Feature(comptime Controllers: type) type {
         events_head: usize = 0,
         presentations: std.ArrayListUnmanaged(CharacterDraw) = .empty,
 
+        /// Gameplay port consumed by VehicleFeature. It exposes no character
+        /// ECS component, controller handle, or implementation type.
+        pub const DriverAccess = struct {
+            feature: *Self,
+
+            pub fn driverState(
+                self: *DriverAccess,
+                id: engine.PersistentId,
+            ) !?driver_contract.DriverState {
+                return self.feature.driverStateNow(id);
+            }
+
+            pub fn beginDriving(
+                self: *DriverAccess,
+                character_id: engine.PersistentId,
+                vehicle_id: engine.PersistentId,
+            ) !void {
+                try self.feature.beginDrivingNow(character_id, vehicle_id);
+            }
+
+            pub fn attemptEndDriving(
+                self: *DriverAccess,
+                character_id: engine.PersistentId,
+                vehicle_id: engine.PersistentId,
+                exit_pose: engine.physics.Pose,
+            ) !driver_contract.ExitDisposition {
+                return self.feature.attemptEndDrivingNow(
+                    character_id,
+                    vehicle_id,
+                    exit_pose,
+                );
+            }
+
+            pub fn cancelDriving(
+                self: *DriverAccess,
+                character_id: engine.PersistentId,
+                vehicle_id: engine.PersistentId,
+            ) void {
+                self.feature.cancelDrivingNow(character_id, vehicle_id);
+            }
+        };
+
         pub fn init(
             allocator: std.mem.Allocator,
             runtime: *engine.Runtime,
@@ -277,6 +330,7 @@ pub fn Feature(comptime Controllers: type) type {
         pub fn register(self: *Self, registry: *engine.FeatureRegistry) !void {
             try registry.registerComponent(Character);
             try registry.registerComponent(RuntimeController);
+            try registry.registerComponent(DriveState);
             try registry.registerComponent(Locomotion);
             try registry.registerComponent(TransformHistory);
             try registry.addSystem(
@@ -297,6 +351,10 @@ pub fn Feature(comptime Controllers: type) type {
                 self,
                 publishControllerSystem,
             );
+        }
+
+        pub fn driverAccess(self: *Self) DriverAccess {
+            return .{ .feature = self };
         }
 
         pub fn deinit(self: *Self) void {
@@ -396,6 +454,8 @@ pub fn Feature(comptime Controllers: type) type {
                 return error.CharacterLocomotionInvariantBroken;
             const controller = self.runtime.get(runtime_id, RuntimeController) orelse
                 return error.CharacterControllerInvariantBroken;
+            const drive = self.runtime.get(runtime_id, DriveState) orelse
+                return error.CharacterDriveStateInvariantBroken;
             const state = try self.controllers.characterState(controller.handle);
             return .{
                 .id = id,
@@ -405,6 +465,7 @@ pub fn Feature(comptime Controllers: type) type {
                 .ground_state = state.ground_state,
                 .radius = character.radius,
                 .half_height = character.half_height,
+                .driver_mode = drive.mode,
             };
         }
 
@@ -413,6 +474,12 @@ pub fn Feature(comptime Controllers: type) type {
             self.presentations.clearRetainingCapacity();
             try self.presentations.ensureTotalCapacity(self.allocator, self.active.items.len);
             for (self.active.items) |runtime_id| {
+                const drive = self.runtime.get(runtime_id, DriveState) orelse
+                    return error.CharacterDriveStateInvariantBroken;
+                switch (drive.mode) {
+                    .on_foot => {},
+                    .driving => continue,
+                }
                 const character = self.runtime.get(runtime_id, Character) orelse
                     return error.NotACharacter;
                 const history = self.runtime.get(runtime_id, TransformHistory) orelse
@@ -455,6 +522,8 @@ pub fn Feature(comptime Controllers: type) type {
             const records = try allocator.alloc(CharacterV1, self.active.items.len);
             errdefer allocator.free(records);
             for (self.active.items, 0..) |runtime_id, index| {
+                _ = self.runtime.get(runtime_id, DriveState) orelse
+                    return error.CharacterDriveStateInvariantBroken;
                 const locomotion = self.runtime.get(runtime_id, Locomotion) orelse
                     return error.CharacterLocomotionInvariantBroken;
                 const controller = self.runtime.get(runtime_id, RuntimeController) orelse
@@ -554,6 +623,11 @@ pub fn Feature(comptime Controllers: type) type {
                                 .reason = .not_owned,
                                 .id = actions.id,
                             }),
+                            error.CharacterDriving => try self.reject(.{
+                                .command = .actions,
+                                .reason = .driving,
+                                .id = actions.id,
+                            }),
                             else => return err,
                         };
                     },
@@ -567,6 +641,11 @@ pub fn Feature(comptime Controllers: type) type {
                             error.NotACharacter => try self.reject(.{
                                 .command = .despawn,
                                 .reason = .not_owned,
+                                .id = despawn.id,
+                            }),
+                            error.CharacterDriving => try self.reject(.{
+                                .command = .despawn,
+                                .reason = .driving,
                                 .id = despawn.id,
                             }),
                             else => return err,
@@ -586,6 +665,12 @@ pub fn Feature(comptime Controllers: type) type {
             const self: *Self = @ptrCast(@alignCast(raw));
             try self.events.ensureUnusedCapacity(self.allocator, self.active.items.len);
             for (self.active.items) |runtime_id| {
+                const drive = self.runtime.get(runtime_id, DriveState) orelse
+                    return error.CharacterDriveStateInvariantBroken;
+                switch (drive.mode) {
+                    .on_foot => {},
+                    .driving => continue,
+                }
                 const id = try self.runtime.identity(runtime_id);
                 const controller = self.runtime.get(runtime_id, RuntimeController) orelse
                     return error.CharacterControllerInvariantBroken;
@@ -625,6 +710,12 @@ pub fn Feature(comptime Controllers: type) type {
         ) !void {
             const self: *Self = @ptrCast(@alignCast(raw));
             for (self.active.items) |runtime_id| {
+                const drive = self.runtime.get(runtime_id, DriveState) orelse
+                    return error.CharacterDriveStateInvariantBroken;
+                switch (drive.mode) {
+                    .on_foot => {},
+                    .driving => continue,
+                }
                 const controller = self.runtime.get(runtime_id, RuntimeController) orelse
                     return error.CharacterControllerInvariantBroken;
                 const locomotion = self.runtime.get(runtime_id, Locomotion) orelse
@@ -678,6 +769,7 @@ pub fn Feature(comptime Controllers: type) type {
                 .half_height = self.config.half_height,
             });
             try self.runtime.set(runtime_id, RuntimeController, .{ .handle = controller });
+            try self.runtime.set(runtime_id, DriveState, .{});
             try self.runtime.set(runtime_id, Locomotion, .{
                 .facing_yaw = yaw,
                 .velocity = state.velocity,
@@ -698,11 +790,149 @@ pub fn Feature(comptime Controllers: type) type {
             return id;
         }
 
+        fn driverStateNow(
+            self: *Self,
+            id: engine.PersistentId,
+        ) !?driver_contract.DriverState {
+            try id.validate();
+            const runtime_id = self.runtime.resolve(id) orelse return null;
+            _ = self.runtime.get(runtime_id, Character) orelse return null;
+            const drive = self.runtime.get(runtime_id, DriveState) orelse
+                return error.CharacterDriveStateInvariantBroken;
+            const locomotion = self.runtime.get(runtime_id, Locomotion) orelse
+                return error.CharacterLocomotionInvariantBroken;
+            const controller = self.runtime.get(runtime_id, RuntimeController) orelse
+                return error.CharacterControllerInvariantBroken;
+            const state = try self.controllers.characterState(controller.handle);
+            const result = driver_contract.DriverState{
+                .pose = poseFor(state.position, locomotion.facing_yaw),
+                .mode = drive.mode,
+            };
+            try result.validate();
+            return result;
+        }
+
+        fn beginDrivingNow(
+            self: *Self,
+            character_id: engine.PersistentId,
+            vehicle_id: engine.PersistentId,
+        ) !void {
+            try character_id.validate();
+            try vehicle_id.validate();
+            const runtime_id = self.runtime.resolve(character_id) orelse
+                return error.CharacterNotFound;
+            _ = self.runtime.get(runtime_id, Character) orelse
+                return error.NotACharacter;
+            _ = self.runtime.get(runtime_id, RuntimeController) orelse
+                return error.CharacterControllerInvariantBroken;
+            _ = self.runtime.get(runtime_id, TransformHistory) orelse
+                return error.CharacterTransformInvariantBroken;
+            const locomotion = self.runtime.getMut(runtime_id, Locomotion) orelse
+                return error.CharacterLocomotionInvariantBroken;
+            const drive = self.runtime.getMut(runtime_id, DriveState) orelse
+                return error.CharacterDriveStateInvariantBroken;
+            switch (drive.mode) {
+                .on_foot => {},
+                .driving => return error.CharacterAlreadyDriving,
+            }
+            if (drive.rollback != null) {
+                return error.CharacterDriveRollbackInvariantBroken;
+            }
+
+            drive.rollback = .{
+                .move = locomotion.move,
+                .jump_requested = locomotion.jump_requested,
+            };
+            locomotion.move = .{ 0, 0 };
+            locomotion.jump_requested = false;
+            drive.mode = .{ .driving = vehicle_id };
+        }
+
+        fn attemptEndDrivingNow(
+            self: *Self,
+            character_id: engine.PersistentId,
+            vehicle_id: engine.PersistentId,
+            exit_pose: engine.physics.Pose,
+        ) !driver_contract.ExitDisposition {
+            try character_id.validate();
+            try vehicle_id.validate();
+            const normalized_exit = try exit_pose.normalized();
+            const facing_yaw = try yawFromRotation(normalized_exit.rotation);
+            const runtime_id = self.runtime.resolve(character_id) orelse
+                return error.CharacterNotFound;
+            _ = self.runtime.get(runtime_id, Character) orelse
+                return error.NotACharacter;
+            const controller = self.runtime.get(runtime_id, RuntimeController) orelse
+                return error.CharacterControllerInvariantBroken;
+            const locomotion = self.runtime.getMut(runtime_id, Locomotion) orelse
+                return error.CharacterLocomotionInvariantBroken;
+            const history = self.runtime.getMut(runtime_id, TransformHistory) orelse
+                return error.CharacterTransformInvariantBroken;
+            const drive = self.runtime.getMut(runtime_id, DriveState) orelse
+                return error.CharacterDriveStateInvariantBroken;
+            switch (drive.mode) {
+                .driving => |current| if (!std.meta.eql(current, vehicle_id)) {
+                    return error.CharacterDrivingDifferentVehicle;
+                },
+                .on_foot => return error.CharacterNotDriving,
+            }
+
+            const relocated = (try self.controllers.tryRelocateCharacter(
+                controller.handle,
+                .{ .position = normalized_exit.position },
+            )) orelse return .blocked;
+            const character_pose = poseFor(relocated.position, facing_yaw);
+            locomotion.move = .{ 0, 0 };
+            locomotion.facing_yaw = facing_yaw;
+            locomotion.jump_requested = false;
+            locomotion.velocity = relocated.velocity;
+            locomotion.ground_state = relocated.ground_state;
+            history.previous = character_pose;
+            history.current = character_pose;
+            history.current_tick = self.runtime.tickIndex();
+            drive.rollback = null;
+            drive.mode = .on_foot;
+            return .exited;
+        }
+
+        fn cancelDrivingNow(
+            self: *Self,
+            character_id: engine.PersistentId,
+            vehicle_id: engine.PersistentId,
+        ) void {
+            const runtime_id = self.runtime.resolve(character_id) orelse
+                @panic("restore rollback driver no longer exists");
+            _ = self.runtime.get(runtime_id, Character) orelse
+                @panic("restore rollback identity is not a character");
+            const locomotion = self.runtime.getMut(runtime_id, Locomotion) orelse
+                @panic("restore rollback character has no locomotion");
+            const drive = self.runtime.getMut(runtime_id, DriveState) orelse
+                @panic("restore rollback character has no drive state");
+            switch (drive.mode) {
+                .driving => |current| if (!std.meta.eql(current, vehicle_id)) {
+                    @panic("restore rollback character drives a different vehicle");
+                },
+                .on_foot => @panic("restore rollback character is already on foot"),
+            }
+            const rollback = drive.rollback orelse
+                @panic("restore rollback character has no saved driver state");
+            locomotion.move = rollback.move;
+            locomotion.jump_requested = rollback.jump_requested;
+            drive.rollback = null;
+            drive.mode = .on_foot;
+        }
+
         fn applyActionsNow(self: *Self, actions: ApplyActions) !void {
             const runtime_id = self.runtime.resolve(actions.id) orelse
                 return error.CharacterNotFound;
             _ = self.runtime.get(runtime_id, Character) orelse
                 return error.NotACharacter;
+            const drive = self.runtime.get(runtime_id, DriveState) orelse
+                return error.CharacterDriveStateInvariantBroken;
+            switch (drive.mode) {
+                .on_foot => {},
+                .driving => return error.CharacterDriving,
+            }
             const locomotion = self.runtime.getMut(runtime_id, Locomotion) orelse
                 return error.CharacterLocomotionInvariantBroken;
             locomotion.move = normalizeMove(actions.move);
@@ -715,6 +945,12 @@ pub fn Feature(comptime Controllers: type) type {
                 return error.CharacterNotFound;
             _ = self.runtime.get(runtime_id, Character) orelse
                 return error.NotACharacter;
+            const drive = self.runtime.get(runtime_id, DriveState) orelse
+                return error.CharacterDriveStateInvariantBroken;
+            switch (drive.mode) {
+                .on_foot => {},
+                .driving => return error.CharacterDriving,
+            }
             const controller = self.runtime.get(runtime_id, RuntimeController) orelse
                 return error.CharacterControllerInvariantBroken;
             const index = self.activeIndex(runtime_id) orelse
@@ -881,6 +1117,19 @@ fn normalizeYaw(yaw: f32) f32 {
     return @mod(yaw + std.math.pi, std.math.tau) - std.math.pi;
 }
 
+fn yawFromRotation(rotation_value: [4]f32) !f32 {
+    const rotation = try engine.transform.normalizeQuaternion(rotation_value);
+    const x = rotation[0];
+    const y = rotation[1];
+    const z = rotation[2];
+    const w = rotation[3];
+    const yaw = normalizeYaw(std.math.atan2(
+        2 * (w * y + x * z),
+        1 - 2 * (y * y + z * z),
+    ));
+    return if (yaw == 0) 0 else yaw;
+}
+
 fn poseFor(position: [3]f32, yaw: f32) engine.physics.Pose {
     const half_yaw = yaw * 0.5;
     return .{
@@ -900,6 +1149,11 @@ const FakeControllers = struct {
     active: bool = false,
     fail_create: bool = false,
     fail_update: bool = false,
+    fail_relocate: bool = false,
+    block_relocate: bool = false,
+    prepare_calls: usize = 0,
+    update_calls: usize = 0,
+    relocate_calls: usize = 0,
     state: engine.physics.CharacterState = .{
         .position = .{ 0, 0, 0 },
         .velocity = .{ 0, 0, 0 },
@@ -939,6 +1193,7 @@ const FakeControllers = struct {
         self: *FakeControllers,
         handle: Handle,
     ) !engine.physics.CharacterState {
+        self.prepare_calls += 1;
         return self.characterState(handle);
     }
 
@@ -948,6 +1203,7 @@ const FakeControllers = struct {
         update_desc: engine.physics.CharacterUpdate,
         delta_seconds: f32,
     ) !engine.physics.CharacterState {
+        self.update_calls += 1;
         if (!self.active) return error.InvalidCharacterId;
         if (self.fail_update) return error.InjectedCharacterUpdateFailure;
         try update_desc.validate();
@@ -964,7 +1220,147 @@ const FakeControllers = struct {
         }
         return self.state;
     }
+
+    pub fn tryRelocateCharacter(
+        self: *FakeControllers,
+        _: Handle,
+        relocation: engine.physics.CharacterRelocation,
+    ) !?engine.physics.CharacterState {
+        self.relocate_calls += 1;
+        if (!self.active) return error.InvalidCharacterId;
+        if (self.fail_relocate) return error.InjectedCharacterRelocationFailure;
+        try relocation.validate();
+        if (self.block_relocate) return null;
+        self.state.position = relocation.position;
+        self.state.velocity = relocation.velocity;
+        self.state.ground_state = .in_air;
+        return self.state;
+    }
 };
+
+const TestFeature = Feature(FakeControllers);
+comptime {
+    driver_contract.assertImplementation(TestFeature.DriverAccess);
+}
+
+test "driver access makes CharacterVirtual dormant and exits transactionally" {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = 40,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+    var controllers = FakeControllers{};
+    var feature = try TestFeature.init(
+        std.testing.allocator,
+        &runtime,
+        &controllers,
+        .{},
+    );
+    defer feature.deinit();
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    runtime.finishRegistration();
+
+    try feature.enqueue(.{ .spawn = .{
+        .request_id = 1,
+        .position = .{ 0, 0, 0 },
+    } });
+    try runtime.tick();
+    const character_id = feature.pollOutcome().?.spawned.id;
+    while (feature.pollEvent() != null) {}
+    var drivers = feature.driverAccess();
+    try std.testing.expectEqual(
+        driver_contract.DriverMode.on_foot,
+        (try drivers.driverState(character_id)).?.mode,
+    );
+
+    const vehicle_id = engine.PersistentId{ .namespace = 40, .local = 99 };
+    try feature.applyActionsNow(.{
+        .id = character_id,
+        .move = .{ 0, 1 },
+        .facing_yaw = 0,
+        .jump_pressed = true,
+    });
+    const runtime_id = runtime.resolve(character_id) orelse
+        return error.ExpectedCharacterRuntimeId;
+    const before_cancel = (runtime.get(runtime_id, TestFeature.Locomotion) orelse
+        return error.ExpectedCharacterLocomotion).*;
+    try drivers.beginDriving(character_id, vehicle_id);
+    drivers.cancelDriving(character_id, vehicle_id);
+    const after_cancel = (runtime.get(runtime_id, TestFeature.Locomotion) orelse
+        return error.ExpectedCharacterLocomotion).*;
+    try std.testing.expectEqual(before_cancel.move, after_cancel.move);
+    try std.testing.expectEqual(before_cancel.jump_requested, after_cancel.jump_requested);
+
+    try drivers.beginDriving(character_id, vehicle_id);
+    try std.testing.expectEqual(
+        vehicle_id,
+        (try drivers.driverState(character_id)).?.mode.driving,
+    );
+    try std.testing.expectError(
+        error.CharacterAlreadyDriving,
+        drivers.beginDriving(character_id, vehicle_id),
+    );
+
+    const updates_before = controllers.update_calls;
+    try feature.enqueue(.{ .actions = .{
+        .id = character_id,
+        .move = .{ 0, 1 },
+        .facing_yaw = 0,
+        .jump_pressed = true,
+    } });
+    try feature.enqueue(.{ .despawn = .{ .id = character_id } });
+    try runtime.tick();
+    try std.testing.expectEqual(updates_before, controllers.update_calls);
+    try std.testing.expectEqual(
+        RejectionReason.driving,
+        feature.pollOutcome().?.rejected.reason,
+    );
+    try std.testing.expectEqual(
+        RejectionReason.driving,
+        feature.pollOutcome().?.rejected.reason,
+    );
+    try std.testing.expectEqual(@as(usize, 0), (try feature.extract(0.5)).len);
+    try std.testing.expect(controllers.active);
+
+    const exit_pose = engine.physics.Pose{
+        .position = .{ 3, 0, -2 },
+        .rotation = .{ 0, @sin(0.25), 0, @cos(0.25) },
+    };
+    controllers.block_relocate = true;
+    try std.testing.expectEqual(
+        driver_contract.ExitDisposition.blocked,
+        try drivers.attemptEndDriving(character_id, vehicle_id, exit_pose),
+    );
+    try std.testing.expectEqual(
+        vehicle_id,
+        (try drivers.driverState(character_id)).?.mode.driving,
+    );
+
+    controllers.block_relocate = false;
+    controllers.fail_relocate = true;
+    try std.testing.expectError(
+        error.InjectedCharacterRelocationFailure,
+        drivers.attemptEndDriving(character_id, vehicle_id, exit_pose),
+    );
+    try std.testing.expectEqual(
+        vehicle_id,
+        (try drivers.driverState(character_id)).?.mode.driving,
+    );
+
+    controllers.fail_relocate = false;
+    try std.testing.expectEqual(
+        driver_contract.ExitDisposition.exited,
+        try drivers.attemptEndDriving(character_id, vehicle_id, exit_pose),
+    );
+    const on_foot = (try drivers.driverState(character_id)).?;
+    try std.testing.expectEqual(driver_contract.DriverMode.on_foot, on_foot.mode);
+    try std.testing.expectEqual(exit_pose.position, on_foot.pose.position);
+    const draws = try feature.extract(0.5);
+    try std.testing.expectEqual(@as(usize, 1), draws.len);
+    try std.testing.expectEqual(exit_pose.position, draws[0].pose.position);
+    try std.testing.expectEqual(@as(usize, 3), controllers.relocate_calls);
+}
 
 test "typed actions drive a headless character and jump once" {
     var runtime = try engine.Runtime.init(std.testing.allocator, .{

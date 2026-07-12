@@ -1,6 +1,6 @@
 # ADR-001: Shader Language and Target-Specific Compilation
 
-**Status:** Accepted, amended 2026-07-12
+**Status:** Accepted, amended 2026-07-12 (macOS-only validation)
 
 **Date:** 2024-12-05
 
@@ -20,20 +20,19 @@ Shaders are authored in GLSL 4.50 with Vulkan-style explicit locations, descript
 
 ### Target-specific output
 
-The Zig target and, on Windows, the explicit backend option determine both the shader format embedded in the executable and the SDL GPU driver requested by the renderer:
+The current supported target determines both the shader format embedded in the
+executable and the SDL GPU driver requested by the renderer:
 
 | Zig target | Build output | SDL GPU driver | Runtime entry point | Support level |
 |---|---|---|---|---|
-| `aarch64-macos` | MSL generated through SPIR-V | `metal` | `main0` | Tier 1 runtime-quality path |
-| `x86_64-linux` | SPIR-V | `vulkan` | `main` | Tier 2 compile/shader portability path |
-| `x86_64-windows-gnu` (default) | DXIL generated through SPIR-V | `direct3d12` | `main` | Tier 2 compile/shader portability path |
-| `x86_64-windows-gnu -Dwindows-gpu=vulkan` | SPIR-V | `vulkan` | `main` | Tier 2 explicit bootstrap fallback |
+| `aarch64-macos` | MSL generated through SPIR-V | `metal` | `main0` | Current supported path |
+| Linux/SteamOS | Dormant SPIR-V branch | likely `vulkan` | `main` | Future/deferred; untested |
+| Windows | Dormant DXIL/SPIR-V branches | likely `direct3d12` | `main` | Future/deferred; untested |
 
-The build owns an offline DXIL path and defaults Windows to D3D12. The Vulkan
-path remains an explicit fallback when an SDL_shadercross/DXC host tool is
-unavailable. Offline generation and cross-link evidence preserve portability;
-they are not a Windows runtime-support claim. Native D3D12/Vulkan pipeline
-validation resumes when a secondary client platform is selected under ADR-007.
+Historical DXIL and Vulkan paths remain in the build but are not maintained
+contracts. They do not receive CI, cross-build, offline-generation, or runtime
+validation and may break without blocking macOS work. A future platform
+decision under ADR-007 will re-evaluate rather than inherit these choices.
 
 Executables are target-specific. This ADR makes no claim that one binary or one set of embedded shader bytes runs on multiple operating systems.
 
@@ -89,7 +88,10 @@ CI and release validation use the base [`tools/shader-toolchain/vcpkg.json`](../
 - shaderc `2026.2`;
 - SPIRV-Cross `1.4.350.0`.
 
-The Windows [`tools/shader-toolchain/dxil/vcpkg.json`](../../tools/shader-toolchain/dxil/vcpkg.json) manifest adds exact SDL_shadercross `3.0.0-preview2` and DirectX Shader Compiler `2026-05-27` packages. The exact executables are selected with `-Dglslc=...`, `-Dspirv-cross=...`, and, for DXIL, `-Dshadercross=...`. Host-specific vcpkg triplets produce isolated tool directories; those installed binaries are not committed.
+The historical Windows
+[`tools/shader-toolchain/dxil/vcpkg.json`](../../tools/shader-toolchain/dxil/vcpkg.json)
+manifest is retained only as prior exploration. It is not installed by CI or
+part of the current release contract.
 
 ## Rationale
 
@@ -104,7 +106,7 @@ The Windows [`tools/shader-toolchain/dxil/vcpkg.json`](../../tools/shader-toolch
 ### Positive
 
 - Shader source, renderer bindings, and target backend selection are tested together.
-- Cross-compilation does not need to generate irrelevant backend formats.
+- The maintained macOS build does not generate irrelevant backend formats.
 - Normal builds leave the source tree clean.
 - Local setup remains convenient while CI and release validation stay version-controlled.
 
@@ -112,10 +114,10 @@ The Windows [`tools/shader-toolchain/dxil/vcpkg.json`](../../tools/shader-toolch
 
 - Shader tools remain host prerequisites.
 - Errors may arise in GLSL compilation, target translation, or reflection validation.
-- Each new backend needs a real compiler/output path and backend-specific native validation.
-- Tier 2 shader paths can still accumulate driver/runtime issues that compile
-  and reflection checks cannot expose; ADR-007 defines the milestones that
-  reactivate native validation before those paths become supported clients.
+- A future backend needs a fresh compiler/output decision and backend-specific
+  native validation before it becomes supported.
+- Dormant secondary-platform paths may accumulate compile and runtime breakage;
+  this is accepted and must not drive current abstractions.
 
 ## References
 

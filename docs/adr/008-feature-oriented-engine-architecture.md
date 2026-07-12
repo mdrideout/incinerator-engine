@@ -48,8 +48,11 @@ public host interface.
 
 A feature owns its data and behavior end to end: components, commands, events,
 systems, persistence, render extraction, optional editor extension, and tests.
-`CrateFeature` and `CharacterFeature` now independently prove that boundary
-while sharing one runtime and physics world.
+`CrateFeature`, `CharacterFeature`, and `VehicleFeature` now independently
+prove that boundary while sharing one runtime and physics world. Character and
+vehicle interact through the named `DriverAccess` gameplay port rather than
+private components or direct feature imports. This is the narrow common
+authority contract proven by two consumers, not a general possession framework.
 
 Feature registration is deterministic and explicit. Runtime feature unloading, hot reload, a binary plugin ABI, and auto-discovery are deferred until a real use case requires them.
 
@@ -88,15 +91,21 @@ persistence records, and render extraction remain owned by each feature. The ker
 executes four fixed-tick phases—`commands`, `pre_physics`, `physics`, and
 `post_physics`—and
 runs immutable presentation extraction outside that schedule at render
-frequency. CharacterFeature uses `pre_physics` for controller movement before
-the single shared Jolt step. Expected domain rejection is reported as a typed outcome;
+frequency. CharacterFeature uses `pre_physics` for controller movement and
+VehicleFeature applies tick-scoped input before the single composition-owned
+Jolt step. No feature adapter privately advances the shared world. Expected
+domain rejection is reported as a typed outcome;
 infrastructure, adapter, and invariant errors put the runtime into a terminal
 fault state that permits diagnostics and teardown but rejects further normal
-ticks, command submission, and persistence. The composition owns the V2 world
-schema, runtime clock/identity metadata, and cross-feature identity policy;
+ticks, command submission, and persistence. The composition owns the V3 world
+schema, runtime clock/identity metadata, global identity policy, and validated
+character/vehicle driver relationships;
 features own their logical V1 records and feature-specific persisted tuning.
-Character simulation tuning is required in the V2 envelope and authoritative
-on restore; host capacity and presentation assets remain restore-time policy.
+Character and vehicle simulation tuning is required in the V3 envelope and
+authoritative on restore; host capacity and presentation assets remain
+restore-time policy. Occupied restore creates characters and vehicles before
+linking authority, and any partial link failure rolls back before the candidate
+world is discarded.
 
 The current zflecs wrapper permits one live engine-owned world per process. A
 shared lease rejects a second owner before entering zflecs and preserves the

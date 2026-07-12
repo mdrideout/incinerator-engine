@@ -155,7 +155,7 @@ test "real Jolt lifecycle saves destroys restores and destroys" {
     }
 }
 
-test "V2 snapshot composes crate and character records under one runtime envelope" {
+test "V3 snapshot composes crate and character records under one runtime envelope" {
     const allocator = std.testing.allocator;
     var saved: []u8 = undefined;
     var crate_id: simulation.PersistentId = undefined;
@@ -315,21 +315,31 @@ fn captureTimelineSample(
 }
 
 fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
-    const initial_v1 =
-        \\{"schema_version":2,"completed_ticks":10,
-        \\"fixed_delta_seconds":0.008333333,"namespace":99,
-        \\"next_local_id":2,
-        \\"character_config":{"radius":0.4,"half_height":0.5,"move_speed":6,
-        \\"jump_speed":6,"gravity":-20,"terminal_fall_speed":55,
-        \\"max_slope_radians":0.87266463,"mass":70,"max_strength":100,
-        \\"stick_to_floor_distance":0.5,"step_up_height":0.4},
-        \\"crates":[
-        \\{"id":{"namespace":99,"local":1},"half_extents":[0.5,0.75,0.25],
-        \\"pose":{"position":[1,6,-2],"rotation":[0,0.25881904,0,0.9659258]},
-        \\"linear_velocity":[0.5,0.25,-0.25],"angular_velocity":[0.1,0.2,0.3]}],
-        \\"characters":[]}
-    ;
-    var world = try simulation.Simulation.fromSnapshot(allocator, initial_v1, .{});
+    const crate_records = [_]simulation.CrateV1{.{
+        .id = .{ .namespace = 99, .local = 1 },
+        .half_extents = .{ 0.5, 0.75, 0.25 },
+        .pose = .{
+            .position = .{ 1, 6, -2 },
+            .rotation = .{ 0, 0.25881904, 0, 0.9659258 },
+        },
+        .linear_velocity = .{ 0.5, 0.25, -0.25 },
+        .angular_velocity = .{ 0.1, 0.2, 0.3 },
+    }};
+    const initial = simulation.SnapshotV3{
+        .schema_version = 3,
+        .completed_ticks = 10,
+        .fixed_delta_seconds = 1.0 / 120.0,
+        .namespace = 99,
+        .next_local_id = 2,
+        .character_config = simulation.CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = simulation.VehicleConfigV1.fromConfig(.{}),
+        .crates = &crate_records,
+        .characters = &.{},
+        .vehicles = &.{},
+    };
+    const initial_v3 = try std.json.Stringify.valueAlloc(allocator, initial, .{});
+    defer allocator.free(initial_v3);
+    var world = try simulation.Simulation.fromSnapshot(allocator, initial_v3, .{});
     defer world.deinit();
     const id = simulation.PersistentId{ .namespace = 99, .local = 1 };
     var samples: [4]TimelineSample = undefined;
@@ -351,7 +361,7 @@ fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
     return samples;
 }
 
-test "the same V2 command timeline repeats at multiple samples on one target" {
+test "the same V3 command timeline repeats at multiple samples on one target" {
     const first = try runTimeline(std.testing.allocator);
     const second = try runTimeline(std.testing.allocator);
     try std.testing.expectEqual([4]u64{ 10, 15, 16, 36 }, .{
@@ -524,25 +534,44 @@ test "live-world restore fails cleanly and leaves the caller usable" {
     try std.testing.expectEqual(@as(u64, 1), world.tickIndex());
 }
 
-test "multi-record V2 save is sorted and byte-stable across fresh restore" {
+test "multi-record V3 save is sorted and byte-stable across fresh restore" {
     const allocator = std.testing.allocator;
-    const unsorted =
-        \\{"schema_version":2,"completed_ticks":17,
-        \\"fixed_delta_seconds":0.008333333,"namespace":700,
-        \\"next_local_id":42,
-        \\"character_config":{"radius":0.4,"half_height":0.5,"move_speed":6,
-        \\"jump_speed":6,"gravity":-20,"terminal_fall_speed":55,
-        \\"max_slope_radians":0.87266463,"mass":70,"max_strength":100,
-        \\"stick_to_floor_distance":0.5,"step_up_height":0.4},
-        \\"crates":[
-        \\{"id":{"namespace":700,"local":7},"half_extents":[0.25,0.5,0.75],
-        \\"pose":{"position":[3,8,-2],"rotation":[0,0.38268343,0,0.9238795]},
-        \\"linear_velocity":[1.25,-2.5,0.5],"angular_velocity":[0.1,0.2,0.3]},
-        \\{"id":{"namespace":700,"local":2},"half_extents":[1,0.75,0.5],
-        \\"pose":{"position":[-4,6,1],"rotation":[0.25881904,0,0,0.9659258]},
-        \\"linear_velocity":[-0.75,1.5,2.25],"angular_velocity":[-0.3,0.4,-0.2]}],
-        \\"characters":[]}
-    ;
+    const crate_records = [_]simulation.CrateV1{
+        .{
+            .id = .{ .namespace = 700, .local = 7 },
+            .half_extents = .{ 0.25, 0.5, 0.75 },
+            .pose = .{
+                .position = .{ 3, 8, -2 },
+                .rotation = .{ 0, 0.38268343, 0, 0.9238795 },
+            },
+            .linear_velocity = .{ 1.25, -2.5, 0.5 },
+            .angular_velocity = .{ 0.1, 0.2, 0.3 },
+        },
+        .{
+            .id = .{ .namespace = 700, .local = 2 },
+            .half_extents = .{ 1, 0.75, 0.5 },
+            .pose = .{
+                .position = .{ -4, 6, 1 },
+                .rotation = .{ 0.25881904, 0, 0, 0.9659258 },
+            },
+            .linear_velocity = .{ -0.75, 1.5, 2.25 },
+            .angular_velocity = .{ -0.3, 0.4, -0.2 },
+        },
+    };
+    const snapshot = simulation.SnapshotV3{
+        .schema_version = 3,
+        .completed_ticks = 17,
+        .fixed_delta_seconds = 1.0 / 120.0,
+        .namespace = 700,
+        .next_local_id = 42,
+        .character_config = simulation.CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = simulation.VehicleConfigV1.fromConfig(.{}),
+        .crates = &crate_records,
+        .characters = &.{},
+        .vehicles = &.{},
+    };
+    const unsorted = try std.json.Stringify.valueAlloc(allocator, snapshot, .{});
+    defer allocator.free(unsorted);
 
     var first_save: []u8 = undefined;
     {
@@ -569,7 +598,7 @@ test "multi-record V2 save is sorted and byte-stable across fresh restore" {
         .{ .ignore_unknown_fields = true },
     );
     defer parsed.deinit();
-    try std.testing.expectEqual(@as(u16, 2), parsed.value.schema_version);
+    try std.testing.expectEqual(@as(u16, 3), parsed.value.schema_version);
     try std.testing.expectEqual(@as(u64, 17), parsed.value.completed_ticks);
     try std.testing.expectEqual(@as(u64, 700), parsed.value.namespace);
     try std.testing.expectEqual(@as(u64, 42), parsed.value.next_local_id);
@@ -628,16 +657,20 @@ test "failed fresh loads do not mutate a live simulation" {
         error.SnapshotTooLarge,
         simulation.Simulation.fromSnapshot(allocator, oversized, .{}),
     );
-    const valid_empty =
-        \\{"schema_version":2,"completed_ticks":0,
-        \\"fixed_delta_seconds":0.008333333,"namespace":702,
-        \\"next_local_id":1,
-        \\"character_config":{"radius":0.4,"half_height":0.5,"move_speed":6,
-        \\"jump_speed":6,"gravity":-20,"terminal_fall_speed":55,
-        \\"max_slope_radians":0.87266463,"mass":70,"max_strength":100,
-        \\"stick_to_floor_distance":0.5,"step_up_height":0.4},
-        \\"crates":[],"characters":[]}
-    ;
+    const empty_snapshot = simulation.SnapshotV3{
+        .schema_version = 3,
+        .completed_ticks = 0,
+        .fixed_delta_seconds = 1.0 / 120.0,
+        .namespace = 702,
+        .next_local_id = 1,
+        .character_config = simulation.CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = simulation.VehicleConfigV1.fromConfig(.{}),
+        .crates = &.{},
+        .characters = &.{},
+        .vehicles = &.{},
+    };
+    const valid_empty = try std.json.Stringify.valueAlloc(allocator, empty_snapshot, .{});
+    defer allocator.free(valid_empty);
     try std.testing.expectError(
         error.EngineWorldAlreadyLive,
         simulation.Simulation.fromSnapshot(allocator, valid_empty, .{}),
@@ -652,25 +685,42 @@ test "failed fresh loads do not mutate a live simulation" {
 }
 
 fn restoreAllocationCase(allocator: std.mem.Allocator) !void {
-    const snapshot =
-        \\{"schema_version":2,"completed_ticks":3,
-        \\"fixed_delta_seconds":0.008333333,"namespace":703,
-        \\"next_local_id":4,
-        \\"character_config":{"radius":0.4,"half_height":0.5,"move_speed":6,
-        \\"jump_speed":6,"gravity":-20,"terminal_fall_speed":55,
-        \\"max_slope_radians":0.87266463,"mass":70,"max_strength":100,
-        \\"stick_to_floor_distance":0.5,"step_up_height":0.4},
-        \\"crates":[
-        \\{"id":{"namespace":703,"local":1},"half_extents":[0.5,0.5,0.5],
-        \\"pose":{"position":[0,4,0],"rotation":[0,0,0,1]},
-        \\"linear_velocity":[0,0,0],"angular_velocity":[0,0,0]},
-        \\{"id":{"namespace":703,"local":2},"half_extents":[0.75,0.5,0.25],
-        \\"pose":{"position":[2,6,0],"rotation":[0,0,0,1]},
-        \\"linear_velocity":[0.5,0,-0.25],"angular_velocity":[0.1,0.2,0.3]}],
-        \\"characters":[
-        \\{"id":{"namespace":703,"local":3},"position":[-2,0,1],
-        \\"velocity":[0,0,0],"facing_yaw":0.25}]}
-    ;
+    const crate_records = [_]simulation.CrateV1{
+        .{
+            .id = .{ .namespace = 703, .local = 1 },
+            .half_extents = .{ 0.5, 0.5, 0.5 },
+            .pose = .{ .position = .{ 0, 4, 0 } },
+            .linear_velocity = .{ 0, 0, 0 },
+            .angular_velocity = .{ 0, 0, 0 },
+        },
+        .{
+            .id = .{ .namespace = 703, .local = 2 },
+            .half_extents = .{ 0.75, 0.5, 0.25 },
+            .pose = .{ .position = .{ 2, 6, 0 } },
+            .linear_velocity = .{ 0.5, 0, -0.25 },
+            .angular_velocity = .{ 0.1, 0.2, 0.3 },
+        },
+    };
+    const character_records = [_]simulation.CharacterV1{.{
+        .id = .{ .namespace = 703, .local = 3 },
+        .position = .{ -2, 0, 1 },
+        .velocity = .{ 0, 0, 0 },
+        .facing_yaw = 0.25,
+    }};
+    const logical_snapshot = simulation.SnapshotV3{
+        .schema_version = 3,
+        .completed_ticks = 3,
+        .fixed_delta_seconds = 1.0 / 120.0,
+        .namespace = 703,
+        .next_local_id = 4,
+        .character_config = simulation.CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = simulation.VehicleConfigV1.fromConfig(.{}),
+        .crates = &crate_records,
+        .characters = &character_records,
+        .vehicles = &.{},
+    };
+    const snapshot = try std.json.Stringify.valueAlloc(allocator, logical_snapshot, .{});
+    defer allocator.free(snapshot);
     var world = try simulation.Simulation.fromSnapshot(allocator, snapshot, .{});
     defer world.deinit();
     try std.testing.expectEqual(@as(usize, 3), world.entityCount());

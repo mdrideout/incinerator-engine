@@ -329,12 +329,30 @@ pub fn build(b: *std.Build) void {
             .{ .name = "incinerator_engine", .module = mod },
         },
     });
+    const driver_contract_module = b.createModule(.{
+        .root_source_file = b.path("src/features/driver_contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+        },
+    });
     const character_feature_module = b.createModule(.{
         .root_source_file = b.path("src/features/character/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "driver_contract", .module = driver_contract_module },
+        },
+    });
+    const vehicle_feature_module = b.createModule(.{
+        .root_source_file = b.path("src/features/vehicle/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "driver_contract", .module = driver_contract_module },
         },
     });
     const sandbox_controls_module = b.createModule(.{
@@ -350,6 +368,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "incinerator_engine", .module = mod },
             .{ .name = "crate_feature", .module = crate_feature_module },
             .{ .name = "character_feature", .module = character_feature_module },
+            .{ .name = "vehicle_feature", .module = vehicle_feature_module },
             .{ .name = "jolt_physics", .module = jolt_physics_module },
         },
     });
@@ -708,6 +727,22 @@ pub fn build(b: *std.Build) void {
     );
     character_feature_test_step.dependOn(&run_character_feature_tests.step);
 
+    const driver_contract_tests = b.addTest(.{ .root_module = driver_contract_module });
+    const run_driver_contract_tests = b.addRunArtifact(driver_contract_tests);
+    const driver_contract_test_step = b.step(
+        "test-driver-contract",
+        "Run the character/vehicle driver-port contract tests",
+    );
+    driver_contract_test_step.dependOn(&run_driver_contract_tests.step);
+
+    const vehicle_feature_tests = b.addTest(.{ .root_module = vehicle_feature_module });
+    const run_vehicle_feature_tests = b.addRunArtifact(vehicle_feature_tests);
+    const vehicle_feature_test_step = b.step(
+        "test-vehicle-feature",
+        "Run the backend-neutral vehicle feature tests",
+    );
+    vehicle_feature_test_step.dependOn(&run_vehicle_feature_tests.step);
+
     const sandbox_controls_tests = b.addTest(.{ .root_module = sandbox_controls_module });
     const run_sandbox_controls_tests = b.addRunArtifact(sandbox_controls_tests);
     const sandbox_controls_test_step = b.step(
@@ -749,6 +784,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_contracts_tests.step);
     test_step.dependOn(&run_crate_feature_tests.step);
     test_step.dependOn(&run_character_feature_tests.step);
+    test_step.dependOn(&run_driver_contract_tests.step);
+    test_step.dependOn(&run_vehicle_feature_tests.step);
     test_step.dependOn(&run_sandbox_controls_tests.step);
     test_step.dependOn(&run_sandbox_simulation_tests.step);
     test_step.dependOn(&run_exe_tests.step);

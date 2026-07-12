@@ -142,6 +142,24 @@ pub const CharacterUpdate = struct {
     }
 };
 
+/// Transactional CharacterVirtual relocation used by the vehicle exit seam.
+/// `position` remains the character's bottom/feet origin.
+pub const CharacterRelocation = struct {
+    position: [3]f32,
+    velocity: [3]f32 = .{ 0, 0, 0 },
+    max_penetration_depth: f32 = 0.001,
+
+    pub fn validate(self: CharacterRelocation) !void {
+        try validateFinite(self.position);
+        try (Velocity{ .linear = self.velocity }).validate();
+        if (!std.math.isFinite(self.max_penetration_depth) or
+            self.max_penetration_depth < 0)
+        {
+            return error.InvalidCharacterPenetrationDepth;
+        }
+    }
+};
+
 pub const CharacterState = struct {
     position: [3]f32,
     velocity: [3]f32,
@@ -480,6 +498,12 @@ pub fn assertCharacterImplementation(comptime Controllers: type) void {
             .{ *Controllers, Controllers.Handle, CharacterUpdate, f32 },
             CharacterState,
         );
+        assertFallibleMethod(
+            Controllers,
+            "tryRelocateCharacter",
+            .{ *Controllers, Controllers.Handle, CharacterRelocation },
+            ?CharacterState,
+        );
     }
 }
 
@@ -720,6 +744,20 @@ test "character contract validates a bottom-anchored capsule and adapter" {
         ) !CharacterState {
             return self.characterState(handle);
         }
+        pub fn tryRelocateCharacter(
+            _: *@This(),
+            _: Handle,
+            relocation: CharacterRelocation,
+        ) !?CharacterState {
+            try relocation.validate();
+            return .{
+                .position = relocation.position,
+                .velocity = relocation.velocity,
+                .ground_state = .in_air,
+                .ground_velocity = .{ 0, 0, 0 },
+                .ground_normal = .{ 0, 1, 0 },
+            };
+        }
     };
 
     comptime assertCharacterImplementation(FakeControllers);
@@ -735,6 +773,10 @@ test "character contract validates a bottom-anchored capsule and adapter" {
     try std.testing.expectError(
         error.InvalidStepUpHeight,
         (CharacterUpdate{ .velocity = .{ 0, 0, 0 }, .step_up_height = -1 }).validate(),
+    );
+    try std.testing.expectError(
+        error.NonFinitePhysicsValue,
+        (CharacterRelocation{ .position = .{ std.math.nan(f32), 0, 0 } }).validate(),
     );
 }
 

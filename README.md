@@ -20,17 +20,17 @@ The complete dependency identities live in `build.zig.zon` and [`third_party/jol
 
 ## Platform Priority
 
-| Tier | Platform | Architecture | Current graphics path | Status |
+| Status | Platform | Architecture | Graphics path | Contract |
 |---|---|---|---|---|
-| 1 | macOS | Apple Silicon (`aarch64`) | Metal / MSL | Sole current runtime-quality, performance, editor, and packaging target |
-| 2 | Linux / SteamOS | `x86_64` | Vulkan / SPIR-V | Cross-build, shader-contract, and headless portability guard; native client validation deferred |
-| 2 | Windows | `x86_64-windows-gnu` | D3D12 / DXIL by default | Cross-build, shader-contract, and headless portability guard; native client validation deferred |
+| Current | macOS | Apple Silicon (`aarch64`) | Metal / MSL | The only build, test, runtime, performance, editor, packaging, and CI target |
+| Future/deferred | Linux / SteamOS | Undecided | Likely Vulkan / SPIR-V | No current support claim, build gate, CI job, or compatibility requirement |
+| Future/deferred | Windows | Undecided | Likely D3D12 / DXIL | No current support claim, build gate, CI job, or compatibility requirement |
 
-`-Dwindows-gpu=vulkan` selects the provisional Windows Vulkan/SPIR-V fallback.
-Linux `x86_64` is also the intended future headless/server target. Native
-Vulkan/D3D12 client investment resumes only when a secondary client platform is
-selected; native Linux headless validation becomes required before server work.
-Mobile, web, consoles, and Intel macOS are outside the current support contract.
+Existing Linux, Windows, Vulkan, and D3D12 code is dormant prior work, not a
+maintained contract. It may break as the macOS architecture evolves. Porting
+resumes only after a separate product decision selects a second platform; that
+work may adapt or replace dormant paths instead of constraining current design.
+Mobile, web, consoles, and Intel macOS are also outside the current contract.
 
 ## Developer Environment Setup (macOS)
 
@@ -46,7 +46,10 @@ zig version  # Must print 0.16.0
 
 #### 2. Shader Compilation Tools
 
-The build compiles GLSL 4.50 into the selected target format: MSL on macOS, SPIR-V on Linux, and DXIL for the default Windows D3D12 path. The explicit Windows Vulkan fallback uses SPIR-V. Every path also generates canonical SPIR-V reflection data and validates the shader/renderer contract.
+The maintained build compiles GLSL 4.50 to MSL for macOS and generates
+canonical SPIR-V reflection data to validate the shader/renderer contract.
+Dormant SPIR-V/DXIL branches may remain in the build, but they are not currently
+run, tested, or treated as compatibility requirements.
 
 For local convenience on macOS, tools may come from `PATH`:
 
@@ -56,7 +59,11 @@ glslc --version
 spirv-cross --version
 ```
 
-CI and release validation use the exact-pinned base and Windows DXIL vcpkg manifests. The DXIL cohort also pins SDL_shadercross `3.0.0-preview2` and DXC `2026-05-27`; its executable is selected with `-Dshadercross=...` alongside `-Dglslc=...` and `-Dspirv-cross=...`. See [`tools/shader-toolchain/README.md`](tools/shader-toolchain/README.md). Generated shaders, reflection JSON, and embedding modules remain in the Zig cache; builds do not write generated artifacts into the source tree.
+CI and release validation use the exact-pinned macOS base manifest. A historical
+Windows DXIL manifest remains for future porting, but it is not a current gate.
+See [`tools/shader-toolchain/README.md`](tools/shader-toolchain/README.md).
+Generated shaders, reflection JSON, and embedding modules remain in the Zig
+cache; builds do not write generated artifacts into the source tree.
 
 ### Building
 
@@ -160,6 +167,7 @@ The overhaul is converging on a thin kernel, feature-owned vertical slices, narr
 - [`S1 Acceptance Record`](docs/validation/s1-acceptance.md)
 - [`S1 Performance Baseline`](docs/performance/s1-baseline.md)
 - [`S2 Vehicle Slice Design`](docs/design/s2-vehicle-slice.md)
+- [`S2 Headless Acceptance Record`](docs/validation/s2-headless-acceptance.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 
@@ -169,7 +177,7 @@ The engine loop separates input, fixed-rate simulation, and presentation:
 input pump (per frame) -> simulation ticks (fixed 120 Hz) -> presentation
 ```
 
-The current M2/S1 boundary is intentionally concrete rather than a future
+The current M2/S2 boundary is intentionally concrete rather than a future
 asset/framework abstraction:
 
 - GPU textures have explicit `OwnedTexture` owners and copy-safe borrowed views;
@@ -191,16 +199,21 @@ asset/framework abstraction:
   events, Jolt CharacterVirtual lifecycle, canonical V1 records and persisted
   simulation tuning, and interpolated
   capsule/camera presentation without importing crates, SDL, or renderer code;
-- the sandbox composition owns the V2 save envelope, runtime clock and identity
+- `VehicleFeature` owns typed spawn/enter/drive/exit/despawn commands, explicit
+  driver authority, logical vehicle records, and chassis/four-wheel extraction
+  through backend-neutral vehicle and driver ports;
+- the sandbox composition owns the V3 save envelope, runtime clock and identity
   cursor, cross-feature identity validation, and authoritative restoration of
-  feature-owned character tuning;
+  feature-owned character/vehicle tuning and occupied relationships;
+- exactly one composition-owned physics step advances crates, characters, and
+  vehicles; no feature adapter privately advances the shared Jolt world;
 - the public engine module exposes feature-authoring contracts and a type-erased
   startup-only runtime/registry, while the concrete sandbox/Jolt `Simulation`
   remains an internal conformance composition rather than engine API;
 - the headless artifact and its extracted-package tests contain no SDL, ImGui,
   renderer, asset-loader, or shader-tool edge.
 
-The visual sandbox and headless host now construct the same owned S1
+The visual sandbox and headless host now construct the same owned S2
 `Simulation`; the former `GameWorld`, borrowed Flecs/Jolt composition, direct
 ECS render query, and editor mutation path have been removed. The editor keeps
 stats, camera, and render panels. Scene inspection/manipulation returns in a

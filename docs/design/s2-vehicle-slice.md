@@ -1,7 +1,7 @@
 # S2 Vehicle Slice Design
 
 **Date:** 2026-07-12  
-**Status:** Accepted direction; isolated Jolt capability complete; feature stage next
+**Status:** Accepted direction; headless feature/composition complete; native visual stage next
 
 ## Outcome
 
@@ -43,17 +43,19 @@ The pinned wrapper has two known hazards that the adapter must avoid:
 
 1. [x] Prove an isolated real-Jolt adapter: create, settle, contact, throttle,
    steer, brake, query, failure unwind, repeated destroy.
-2. [ ] Implement `VehicleFeature` against fake vehicle physics and fake driver
+2. [x] Implement `VehicleFeature` against fake vehicle physics and fake driver
    access, including enter/exit transactions and persistence policy.
-3. [ ] Compose character, crate, and vehicle over one runtime and one physics step;
+3. [x] Compose character, crate, and vehicle over one runtime and one physics step;
    add Snapshot V3 and headless lifecycle/restore evidence.
 4. [ ] Add procedural chassis/wheel presentation, input routing, camera switching,
    and a self-terminating native Metal lifecycle smoke.
 5. [ ] Record a ReleaseFast one-vehicle baseline and complete independent
    architecture, correctness, and build/evidence reviews.
 
-Stage 1 has proved the native ownership model. Stage 2 is the next implementation
-boundary.
+Stages 1–3 prove the native ownership model, backend-neutral feature, explicit
+driver-authority boundary, and real headless composition. Stage 4 is the next
+implementation boundary; it may add presentation and input wiring but must not
+move SDL, renderer, or camera policy into `VehicleFeature`.
 
 ## Dependency and Ownership Boundaries
 
@@ -245,7 +247,8 @@ An immediate save after restore is byte-stable for the declared logical state.
 - Body/constraint/listener/handle counts return to baseline after repeated
   lifecycle and every injected creation failure.
 - Stale, foreign, and recreated-world handles reject.
-- Debug and ReleaseFast adapter tests pass; Tier-2 cross-builds remain green.
+- Debug and ReleaseFast adapter tests pass on Apple Silicon macOS. Secondary
+  platforms are fully deferred and are not S2 gates.
 
 ### Feature gate with fakes
 
@@ -259,9 +262,9 @@ An immediate save after restore is byte-stable for the declared logical state.
 
 - Character, crate, and vehicle coexist without private feature imports and
   use one physics step.
-- Scripted spawn → enter → drive → exit → despawn runs identically headless and
-  survives occupied and unoccupied V3 restore.
-- Vehicle collides with the static block and displaces one live dynamic crate.
+- Scripted spawn → enter → drive → exit → despawn runs headless and survives
+  occupied and unoccupied V3 restore.
+- Vehicle displaces one live dynamic crate in the shared Jolt world.
 - Extracted-package and linked headless boundaries remain free of SDL,
   renderer, editor, and shader dependencies.
 

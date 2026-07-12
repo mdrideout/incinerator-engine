@@ -1,15 +1,14 @@
 # Apple Silicon macOS Runtime Readiness Record
 
 **Date:** 2026-07-12  
-**Status:** Local Tier-1 runtime closeout complete; hosted CI evidence remains a
-separate M1 check
+**Status:** Local runtime closeout and hosted macOS CI evidence complete
 
 ## Scope
 
 This record closes the pre-S2 macOS runtime evidence gap. Apple Silicon macOS
-with Metal is the sole current runtime-quality target. Linux and Windows remain
-Tier-2 portability targets through cross-build, offline-shader, and headless
-gates; this record makes no native-runtime claim for them.
+with Metal is the sole current platform target. Linux/SteamOS and Windows are
+future/deferred and impose no build, shader, headless, runtime, packaging, CI,
+or compatibility gates.
 
 All native commands below use Zig 0.16.0, `ReleaseFast`, and `-Deditor=false`.
 The dedicated build steps install `incinerator_engine` and launch that installed
@@ -92,7 +91,7 @@ will exist.
 - Native installed ReleaseFast runtime: all three gates above pass.
 - `zig fmt --check` and `git diff --check`: pass.
 
-Hosted macOS CI remains the final M1 environment check after push. Graphical
-smokes stay local until the hosted runner is proven to provide reliable
-WindowServer/Metal access; hosted CI continues to run deterministic build,
-test, shader, headless, and non-GPU relocation checks.
+Hosted run `29211872146` passed every macOS job step. Graphical smokes stay local
+because hosted WindowServer/Metal availability is not a reliable contract;
+hosted CI runs deterministic macOS build, test, shader, headless, source-package,
+and non-GPU relocation checks.

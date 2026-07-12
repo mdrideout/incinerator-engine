@@ -21,10 +21,16 @@ zig build \
   -Dspirv-cross="$PWD/.shader-tools/arm64-osx/tools/spirv-cross/spirv-cross"
 ```
 
-Use `x64-linux` on Linux and `x64-windows` on Windows. `.shader-tools` is an
-example local install root and must not be committed.
+`.shader-tools` is an example local install root and must not be committed.
 
-Windows D3D12/DXIL builds use the sibling `dxil/vcpkg.json` manifest. It adds
+## Deferred platform notes
+
+Linux/SteamOS and Windows are future platforms with no current build, shader,
+runtime, packaging, or CI contract. The remainder of this section records prior
+Windows toolchain exploration only; these commands are not maintained and may
+fail until a future Windows port is explicitly started.
+
+The sibling `dxil/vcpkg.json` manifest adds
 exact-pinned SDL_shadercross and DirectX Shader Compiler packages. The manifest
 also disables SDL's default host window-system features because this SDL copy
 belongs only to the offline shader-cross CLI:
@@ -46,6 +52,5 @@ zig build -Dtarget=x86_64-windows-gnu `
 The `bin` directory must remain on `PATH` while running `shadercross.exe` so its
 exact `dxcompiler.dll` and `dxil.dll` are used rather than a machine-global copy.
 
-Use `-Dwindows-gpu=vulkan` only for a provisional SPIR-V cross-build when a
-DXIL-capable host tool is unavailable. Release-target Windows builds default to
-D3D12 and fail if `shadercross` cannot be executed.
+The dormant build currently contains `-Dwindows-gpu=vulkan` and D3D12 branches.
+They are implementation leftovers, not supported options or release promises.

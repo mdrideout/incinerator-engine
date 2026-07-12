@@ -4,6 +4,7 @@ const std = @import("std");
 const engine = @import("incinerator_engine");
 const crates = @import("crate_feature");
 const characters = @import("character_feature");
+const vehicles = @import("vehicle_feature");
 const jolt = @import("jolt_physics");
 
 pub const Command = crates.Command;
@@ -31,27 +32,43 @@ pub const CharacterConfigV1 = characters.CharacterConfigV1;
 pub const GroundState = engine.physics.GroundState;
 pub const CrateV1 = crates.CrateV1;
 pub const CharacterV1 = characters.CharacterV1;
+pub const VehicleCommand = vehicles.Command;
+pub const VehicleOutcome = vehicles.Outcome;
+pub const VehicleEvent = vehicles.Event;
+pub const SpawnVehicle = vehicles.SpawnVehicle;
+pub const EnterVehicle = vehicles.EnterVehicle;
+pub const DriveVehicle = vehicles.DriveVehicle;
+pub const ExitVehicle = vehicles.ExitVehicle;
+pub const DespawnVehicle = vehicles.DespawnVehicle;
+pub const VehicleView = vehicles.VehicleView;
+pub const VehicleDraw = vehicles.VehicleDraw;
+pub const VehicleConfig = vehicles.Config;
+pub const VehicleConfigV1 = vehicles.VehicleConfigV1;
+pub const VehicleV1 = vehicles.VehicleV1;
 
 pub const StaticBox = struct {
     position: [3]f32,
     half_extents: [3]f32,
 };
 
-pub const SnapshotV2 = struct {
+pub const SnapshotV3 = struct {
     schema_version: u16,
     completed_ticks: u64,
     fixed_delta_seconds: f32,
     namespace: u64,
     next_local_id: u64,
     character_config: CharacterConfigV1,
+    vehicle_config: VehicleConfigV1,
     crates: []const CrateV1,
     characters: []const CharacterV1,
+    vehicles: []const VehicleV1,
 };
 
 pub const max_snapshot_bytes: usize = 8 * 1024 * 1024;
 
 const CrateFeature = crates.Feature(jolt.CrateBodies);
 const CharacterFeature = characters.Feature(jolt.CharacterControllers);
+const VehicleFeature = vehicles.Feature(jolt.Vehicles, CharacterFeature.DriverAccess);
 
 pub const Config = struct {
     namespace: u64,
@@ -60,6 +77,7 @@ pub const Config = struct {
     assets: Assets = .{},
     create_ground: bool = true,
     character: CharacterConfig = .{},
+    vehicle: VehicleConfig = .{},
     block: ?StaticBox = null,
 };
 
@@ -68,11 +86,17 @@ pub const CharacterRestoreOptions = struct {
     assets: characters.Assets = .{},
 };
 
+pub const VehicleRestoreOptions = struct {
+    max_vehicles: usize = 1,
+    assets: vehicles.Assets = .{},
+};
+
 pub const RestoreConfig = struct {
     max_crates: usize = 1024,
     assets: Assets = .{},
     create_ground: bool = true,
     character: CharacterRestoreOptions = .{},
+    vehicle: VehicleRestoreOptions = .{},
     block: ?StaticBox = null,
 };
 
@@ -80,10 +104,14 @@ const State = struct {
     allocator: std.mem.Allocator,
     physics: *jolt.Physics,
     runtime: engine.Runtime,
+    stepper: jolt.PhysicsStepper,
     bodies: jolt.CrateBodies,
     controllers: jolt.CharacterControllers,
+    vehicle_adapter: jolt.Vehicles,
     crate_feature: CrateFeature,
     character_feature: CharacterFeature,
+    driver_access: CharacterFeature.DriverAccess,
+    vehicle_feature: VehicleFeature,
     ground: ?jolt.BodyId,
     block: ?jolt.BodyId,
 };
@@ -110,12 +138,17 @@ pub const Simulation = struct {
             bytes,
             config.max_crates,
             config.character.max_characters,
+            config.vehicle.max_vehicles,
         );
         defer parsed.deinit();
 
         const character_config = try parsed.value.character_config.toConfig(
             config.character.max_characters,
             config.character.assets,
+        );
+        const vehicle_config = try parsed.value.vehicle_config.toConfig(
+            config.vehicle.max_vehicles,
+            config.vehicle.assets,
         );
 
         var simulation = try initOwnedUnfrozen(allocator, .{
@@ -125,11 +158,13 @@ pub const Simulation = struct {
             .assets = config.assets,
             .create_ground = config.create_ground,
             .character = character_config,
+            .vehicle = vehicle_config,
             .block = config.block,
         }, parsed.value.next_local_id, parsed.value.completed_ticks);
         errdefer simulation.deinit();
         try simulation.state.crate_feature.restoreRecords(parsed.value.crates);
         try simulation.state.character_feature.restoreRecords(parsed.value.characters);
+        try simulation.state.vehicle_feature.restoreRecords(parsed.value.vehicles);
         simulation.state.runtime.finishRegistration();
         return simulation;
     }
@@ -159,8 +194,10 @@ pub const Simulation = struct {
             .completed_ticks = completed_ticks,
         });
         errdefer state.runtime.deinit();
+        state.stepper = physics.stepper();
         state.bodies = physics.crateBodies();
         state.controllers = physics.characterControllers();
+        state.vehicle_adapter = physics.vehicles();
         state.crate_feature = try CrateFeature.init(
             allocator,
             &state.runtime,
@@ -176,11 +213,21 @@ pub const Simulation = struct {
             config.character,
         );
         errdefer state.character_feature.deinit();
+        state.driver_access = state.character_feature.driverAccess();
+        state.vehicle_feature = try VehicleFeature.init(
+            allocator,
+            &state.runtime,
+            &state.vehicle_adapter,
+            &state.driver_access,
+            config.vehicle,
+        );
+        errdefer state.vehicle_feature.deinit();
 
         var registry = state.runtime.registry();
         try state.crate_feature.register(&registry);
         try state.character_feature.register(&registry);
-        try registry.addSystem(.physics, "physics.step", &state.bodies, stepPhysics);
+        try state.vehicle_feature.register(&registry);
+        try registry.addSystem(.physics, "physics.step", &state.stepper, stepPhysics);
 
         if (config.create_ground) {
             state.ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 50, 1, 50 });
@@ -199,6 +246,7 @@ pub const Simulation = struct {
 
     pub fn deinit(self: *Simulation) void {
         const state = self.state;
+        state.vehicle_feature.deinit();
         state.character_feature.deinit();
         state.crate_feature.deinit();
         if (state.block) |block| {
@@ -227,6 +275,10 @@ pub const Simulation = struct {
         try self.state.character_feature.enqueue(command);
     }
 
+    pub fn submitVehicle(self: *Simulation, command: VehicleCommand) !void {
+        try self.state.vehicle_feature.enqueue(command);
+    }
+
     pub fn tick(self: *Simulation) !void {
         try self.state.runtime.tick();
     }
@@ -243,6 +295,14 @@ pub const Simulation = struct {
         return self.state.character_feature.pollEvent();
     }
 
+    pub fn pollVehicleOutcome(self: *Simulation) ?VehicleOutcome {
+        return self.state.vehicle_feature.pollOutcome();
+    }
+
+    pub fn pollVehicleEvent(self: *Simulation) ?VehicleEvent {
+        return self.state.vehicle_feature.pollEvent();
+    }
+
     pub fn presentation(
         self: *Simulation,
         alpha: f32,
@@ -257,6 +317,13 @@ pub const Simulation = struct {
         return self.state.character_feature.extract(alpha);
     }
 
+    pub fn vehiclePresentation(
+        self: *Simulation,
+        alpha: f32,
+    ) ![]const VehicleDraw {
+        return self.state.vehicle_feature.extract(alpha);
+    }
+
     pub fn crate(self: *Simulation, id: engine.PersistentId) !CrateView {
         return self.state.crate_feature.view(id);
     }
@@ -265,10 +332,15 @@ pub const Simulation = struct {
         return self.state.character_feature.view(id);
     }
 
+    pub fn vehicle(self: *Simulation, id: engine.PersistentId) !VehicleView {
+        return self.state.vehicle_feature.view(id);
+    }
+
     pub fn save(self: *Simulation, allocator: std.mem.Allocator) ![]u8 {
         try self.state.runtime.ensureSnapshotBoundary();
         if (self.state.crate_feature.hasPendingCommands() or
-            self.state.character_feature.hasPendingCommands())
+            self.state.character_feature.hasPendingCommands() or
+            self.state.vehicle_feature.hasPendingCommands())
         {
             return error.CommandsPending;
         }
@@ -276,8 +348,10 @@ pub const Simulation = struct {
         defer allocator.free(crate_records);
         const character_records = try self.state.character_feature.snapshotRecords(allocator);
         defer allocator.free(character_records);
-        return std.json.Stringify.valueAlloc(allocator, SnapshotV2{
-            .schema_version = 2,
+        const vehicle_records = try self.state.vehicle_feature.snapshotRecords(allocator);
+        defer allocator.free(vehicle_records);
+        return std.json.Stringify.valueAlloc(allocator, SnapshotV3{
+            .schema_version = 3,
             .completed_ticks = self.state.runtime.tickIndex(),
             .fixed_delta_seconds = self.state.runtime.fixedDelta(),
             .namespace = self.state.runtime.namespace(),
@@ -285,8 +359,12 @@ pub const Simulation = struct {
             .character_config = CharacterConfigV1.fromConfig(
                 self.state.character_feature.config,
             ),
+            .vehicle_config = VehicleConfigV1.fromConfig(
+                self.state.vehicle_feature.config,
+            ),
             .crates = crate_records,
             .characters = character_records,
+            .vehicles = vehicle_records,
         }, .{});
     }
 
@@ -296,6 +374,10 @@ pub const Simulation = struct {
 
     pub fn characterCount(self: *const Simulation) usize {
         return self.state.character_feature.count();
+    }
+
+    pub fn vehicleCount(self: *const Simulation) usize {
+        return self.state.vehicle_feature.count();
     }
 
     pub fn entityCount(self: *const Simulation) usize {
@@ -321,20 +403,22 @@ pub fn parseSnapshot(
     bytes: []const u8,
     max_crates: usize,
     max_characters: usize,
-) !std.json.Parsed(SnapshotV2) {
+    max_vehicles: usize,
+) !std.json.Parsed(SnapshotV3) {
     if (bytes.len > max_snapshot_bytes) return error.SnapshotTooLarge;
-    var parsed = try std.json.parseFromSlice(SnapshotV2, allocator, bytes, .{});
+    var parsed = try std.json.parseFromSlice(SnapshotV3, allocator, bytes, .{});
     errdefer parsed.deinit();
-    try validateSnapshot(parsed.value, max_crates, max_characters);
+    try validateSnapshot(parsed.value, max_crates, max_characters, max_vehicles);
     return parsed;
 }
 
 pub fn validateSnapshot(
-    snapshot: SnapshotV2,
+    snapshot: SnapshotV3,
     max_crates: usize,
     max_characters: usize,
+    max_vehicles: usize,
 ) !void {
-    if (snapshot.schema_version != 2) return error.UnsupportedSchemaVersion;
+    if (snapshot.schema_version != 3) return error.UnsupportedSchemaVersion;
     if (snapshot.namespace == 0) return error.InvalidIdentityNamespace;
     if (snapshot.next_local_id == 0) return error.InvalidIdentityCursor;
     if (!std.math.isFinite(snapshot.fixed_delta_seconds) or
@@ -343,8 +427,10 @@ pub fn validateSnapshot(
         return error.InvalidFixedDelta;
     }
     try snapshot.character_config.validate();
+    try snapshot.vehicle_config.validate();
     try crates.validateRecords(snapshot.crates, max_crates);
     if (snapshot.characters.len > max_characters) return error.TooManyCharacters;
+    try vehicles.validateRecords(snapshot.vehicles, max_vehicles);
 
     for (snapshot.crates) |record| {
         try validateSnapshotIdentity(record.id, snapshot);
@@ -361,9 +447,40 @@ pub fn validateSnapshot(
             }
         }
     }
+    for (snapshot.vehicles, 0..) |record, index| {
+        try validateSnapshotIdentity(record.id, snapshot);
+        for (snapshot.crates) |crate_record| {
+            if (std.meta.eql(crate_record.id, record.id)) {
+                return error.DuplicatePersistentId;
+            }
+        }
+        for (snapshot.characters) |character_record| {
+            if (std.meta.eql(character_record.id, record.id)) {
+                return error.DuplicatePersistentId;
+            }
+        }
+        if (record.driver_id) |driver_id| {
+            try validateSnapshotIdentity(driver_id, snapshot);
+            var found = false;
+            for (snapshot.characters) |character_record| {
+                if (std.meta.eql(character_record.id, driver_id)) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return error.VehicleDriverNotFound;
+            for (snapshot.vehicles[0..index]) |earlier| {
+                if (earlier.driver_id) |earlier_driver| {
+                    if (std.meta.eql(earlier_driver, driver_id)) {
+                        return error.DuplicateVehicleDriver;
+                    }
+                }
+            }
+        }
+    }
 }
 
-fn validateSnapshotIdentity(id: engine.PersistentId, snapshot: SnapshotV2) !void {
+fn validateSnapshotIdentity(id: engine.PersistentId, snapshot: SnapshotV3) !void {
     if (id.namespace != snapshot.namespace) return error.ForeignIdentityNamespace;
     if (id.local >= snapshot.next_local_id) return error.IdentityCursorWouldCollide;
 }
@@ -373,14 +490,17 @@ fn stepPhysics(
     _: *engine.Runtime,
     tick: engine.TickContext,
 ) !void {
-    const bodies: *jolt.CrateBodies = @ptrCast(@alignCast(raw));
-    try bodies.step(tick.delta_seconds);
+    const stepper: *jolt.PhysicsStepper = @ptrCast(@alignCast(raw));
+    try stepper.step(tick.delta_seconds);
 }
 
 test "simulation type composes crate and character features with Jolt" {
     comptime engine.physics.assertImplementation(jolt.CrateBodies);
-    comptime engine.physics.assertWorldStepImplementation(jolt.CrateBodies);
+    comptime engine.physics.assertWorldStepImplementation(jolt.PhysicsStepper);
     comptime engine.physics.assertCharacterImplementation(jolt.CharacterControllers);
+    comptime if (@hasDecl(jolt.CrateBodies, "step")) {
+        @compileError("crate capability must not own the shared physics step");
+    };
     _ = Simulation;
 }
 
@@ -428,6 +548,212 @@ test "real Jolt character walks, jumps, and stops at the composed block" {
     } });
     try simulation.tick();
     try std.testing.expect((try simulation.character(spawned.id)).position[1] > 0);
+}
+
+test "real Jolt vehicle enter drive collision exit and teardown share one world" {
+    var simulation = try Simulation.init(std.testing.allocator, .{ .namespace = 91 });
+    defer simulation.deinit();
+    try simulation.submit(.{ .spawn = .{
+        .request_id = 1,
+        .pose = .{ .position = .{ 0, 0.5, -9 } },
+    } });
+    try simulation.submitCharacter(.{ .spawn = .{
+        .request_id = 2,
+        .position = .{ 0, 0, 2 },
+    } });
+    try simulation.submitVehicle(.{ .spawn = .{
+        .request_id = 3,
+        .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
+    } });
+    try simulation.tick();
+    const crate_id = simulation.pollOutcome().?.spawned.id;
+    const character_id = simulation.pollCharacterOutcome().?.spawned.id;
+    const vehicle_id = simulation.pollVehicleOutcome().?.spawned.id;
+    while (simulation.pollCharacterEvent() != null) {}
+    while (simulation.pollVehicleEvent() != null) {}
+
+    for (0..240) |_| try simulation.tick();
+    const crate_before = (try simulation.crate(crate_id)).state.pose.position;
+    try simulation.submitVehicle(.{ .enter = .{
+        .vehicle_id = vehicle_id,
+        .driver_id = character_id,
+    } });
+    try simulation.tick();
+    try std.testing.expectEqual(
+        character_id,
+        simulation.pollVehicleOutcome().?.entered.driver_id,
+    );
+    try std.testing.expectEqual(
+        character_id,
+        (try simulation.vehicle(vehicle_id)).driver_id.?,
+    );
+    try std.testing.expectEqual(@as(usize, 0), (try simulation.characterPresentation(1)).len);
+
+    for (0..360) |_| {
+        try simulation.submitVehicle(.{ .drive = .{
+            .vehicle_id = vehicle_id,
+            .driver_id = character_id,
+            .input = .{ .throttle = 1 },
+        } });
+        try simulation.tick();
+        _ = simulation.pollVehicleOutcome();
+    }
+    const driven = try simulation.vehicle(vehicle_id);
+    const crate_after = (try simulation.crate(crate_id)).state.pose.position;
+    try std.testing.expect(driven.state.chassis.pose.position[2] < -4);
+    try std.testing.expect(crate_after[2] < crate_before[2] - 0.2);
+
+    try simulation.submitVehicle(.{ .exit = .{
+        .vehicle_id = vehicle_id,
+        .driver_id = character_id,
+    } });
+    try simulation.tick();
+    try std.testing.expectEqual(
+        character_id,
+        simulation.pollVehicleOutcome().?.exited.driver_id,
+    );
+    try std.testing.expect((try simulation.vehicle(vehicle_id)).driver_id == null);
+    try std.testing.expectEqual(@as(usize, 1), (try simulation.characterPresentation(1)).len);
+
+    try simulation.submit(.{ .despawn = .{ .id = crate_id } });
+    try simulation.submitCharacter(.{ .despawn = .{ .id = character_id } });
+    try simulation.submitVehicle(.{ .despawn = .{ .id = vehicle_id } });
+    try simulation.tick();
+    try std.testing.expectEqual(crate_id, simulation.pollOutcome().?.despawned);
+    try std.testing.expectEqual(character_id, simulation.pollCharacterOutcome().?.despawned);
+    try std.testing.expectEqual(vehicle_id, simulation.pollVehicleOutcome().?.despawned);
+    try std.testing.expectEqual(@as(usize, 0), simulation.entityCount());
+    try std.testing.expectEqual(@as(u32, 1), simulation.bodyCount());
+}
+
+test "same-tick character commands and vehicle authority follow declared registration order" {
+    var simulation = try Simulation.init(std.testing.allocator, .{ .namespace = 911 });
+    defer simulation.deinit();
+    try simulation.submitCharacter(.{ .spawn = .{
+        .request_id = 1,
+        .position = .{ 0, 0, 0 },
+    } });
+    try simulation.submitVehicle(.{ .spawn = .{
+        .request_id = 2,
+        .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
+    } });
+    try simulation.tick();
+    const character_id = simulation.pollCharacterOutcome().?.spawned.id;
+    const vehicle_id = simulation.pollVehicleOutcome().?.spawned.id;
+    while (simulation.pollCharacterEvent() != null) {}
+    while (simulation.pollVehicleEvent() != null) {}
+
+    // Character commands are registered before vehicle commands. The action
+    // applies while on foot, then enter clears locomotion and takes authority.
+    try simulation.submitCharacter(.{ .actions = .{
+        .id = character_id,
+        .move = .{ 0, 1 },
+        .facing_yaw = 0,
+    } });
+    try simulation.submitVehicle(.{ .enter = .{
+        .vehicle_id = vehicle_id,
+        .driver_id = character_id,
+    } });
+    try simulation.tick();
+    try std.testing.expect(simulation.pollCharacterOutcome() == null);
+    try std.testing.expectEqual(
+        character_id,
+        simulation.pollVehicleOutcome().?.entered.driver_id,
+    );
+
+    // On exit the same ordering rejects action/despawn while still driving;
+    // only afterward does the vehicle return authority to the character.
+    try simulation.submitCharacter(.{ .actions = .{
+        .id = character_id,
+        .move = .{ 1, 0 },
+        .facing_yaw = 0,
+    } });
+    try simulation.submitCharacter(.{ .despawn = .{ .id = character_id } });
+    try simulation.submitVehicle(.{ .exit = .{
+        .vehicle_id = vehicle_id,
+        .driver_id = character_id,
+    } });
+    try simulation.tick();
+    const actions_rejected = simulation.pollCharacterOutcome().?.rejected;
+    try std.testing.expectEqual(characters.CommandKind.actions, actions_rejected.command);
+    try std.testing.expectEqual(characters.RejectionReason.driving, actions_rejected.reason);
+    const despawn_rejected = simulation.pollCharacterOutcome().?.rejected;
+    try std.testing.expectEqual(characters.CommandKind.despawn, despawn_rejected.command);
+    try std.testing.expectEqual(characters.RejectionReason.driving, despawn_rejected.reason);
+    try std.testing.expectEqual(
+        character_id,
+        simulation.pollVehicleOutcome().?.exited.driver_id,
+    );
+    switch ((try simulation.character(character_id)).driver_mode) {
+        .on_foot => {},
+        .driving => return error.CharacterAuthorityNotReturned,
+    }
+}
+
+test "Snapshot V3 restores occupied and unoccupied real vehicles logically" {
+    const allocator = std.testing.allocator;
+    var original = try Simulation.init(allocator, .{ .namespace = 92 });
+    var original_live = true;
+    defer if (original_live) original.deinit();
+    try original.submitCharacter(.{ .spawn = .{
+        .request_id = 1,
+        .position = .{ 0, 0, 2 },
+    } });
+    try original.submitVehicle(.{ .spawn = .{
+        .request_id = 2,
+        .chassis = .{ .pose = .{
+            .position = .{ 0, 2, 0 },
+            .rotation = .{ 0, @sin(0.15), 0, @cos(0.15) },
+        } },
+    } });
+    try original.tick();
+    const character_id = original.pollCharacterOutcome().?.spawned.id;
+    const vehicle_id = original.pollVehicleOutcome().?.spawned.id;
+    while (original.pollCharacterEvent() != null) {}
+    for (0..240) |_| try original.tick();
+    try original.submitVehicle(.{ .enter = .{
+        .vehicle_id = vehicle_id,
+        .driver_id = character_id,
+    } });
+    try original.tick();
+    _ = original.pollVehicleOutcome();
+    _ = original.pollVehicleEvent();
+    const occupied_bytes = try original.save(allocator);
+    defer allocator.free(occupied_bytes);
+    original.deinit();
+    original_live = false;
+
+    var occupied = try Simulation.fromSnapshot(allocator, occupied_bytes, .{});
+    var occupied_live = true;
+    defer if (occupied_live) occupied.deinit();
+    try std.testing.expectEqual(@as(usize, 1), occupied.characterCount());
+    try std.testing.expectEqual(@as(usize, 1), occupied.vehicleCount());
+    try std.testing.expectEqual(character_id, (try occupied.vehicle(vehicle_id)).driver_id.?);
+    try std.testing.expectEqual(@as(usize, 0), (try occupied.characterPresentation(0)).len);
+    const occupied_resaved = try occupied.save(allocator);
+    defer allocator.free(occupied_resaved);
+    try std.testing.expectEqualSlices(u8, occupied_bytes, occupied_resaved);
+
+    try occupied.submitVehicle(.{ .exit = .{
+        .vehicle_id = vehicle_id,
+        .driver_id = character_id,
+    } });
+    try occupied.tick();
+    _ = occupied.pollVehicleOutcome();
+    _ = occupied.pollVehicleEvent();
+    try std.testing.expect((try occupied.vehicle(vehicle_id)).driver_id == null);
+    try std.testing.expectEqual(@as(usize, 1), (try occupied.characterPresentation(1)).len);
+    const unoccupied_bytes = try occupied.save(allocator);
+    defer allocator.free(unoccupied_bytes);
+    occupied.deinit();
+    occupied_live = false;
+
+    var unoccupied = try Simulation.fromSnapshot(allocator, unoccupied_bytes, .{});
+    defer unoccupied.deinit();
+    try std.testing.expect((try unoccupied.vehicle(vehicle_id)).driver_id == null);
+    const unoccupied_resaved = try unoccupied.save(allocator);
+    defer allocator.free(unoccupied_resaved);
+    try std.testing.expectEqualSlices(u8, unoccupied_bytes, unoccupied_resaved);
 }
 
 test "grounded snapshot restore preserves an immediate jump" {
@@ -515,15 +841,17 @@ test "snapshot owns character tuning and preserves canonical yaw bytes" {
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = tiny_yaw,
     }};
-    const initial = try std.json.Stringify.valueAlloc(allocator, SnapshotV2{
-        .schema_version = 2,
+    const initial = try std.json.Stringify.valueAlloc(allocator, SnapshotV3{
+        .schema_version = 3,
         .completed_ticks = 3,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 75,
         .next_local_id = 2,
         .character_config = CharacterConfigV1.fromConfig(tuning),
+        .vehicle_config = VehicleConfigV1.fromConfig(.{}),
         .crates = &.{},
         .characters = &records,
+        .vehicles = &.{},
     }, .{});
     defer allocator.free(initial);
 
@@ -570,15 +898,17 @@ test "snapshot tuning and host character capacity fail before world construction
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
     }};
-    var snapshot = SnapshotV2{
-        .schema_version = 2,
+    var snapshot = SnapshotV3{
+        .schema_version = 3,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 76,
         .next_local_id = 2,
         .character_config = CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = VehicleConfigV1.fromConfig(.{}),
         .crates = &.{},
         .characters = &records,
+        .vehicles = &.{},
     };
     snapshot.character_config.gravity = 0;
     const invalid = try std.json.Stringify.valueAlloc(allocator, snapshot, .{});
@@ -682,6 +1012,31 @@ test "character outcomes distinguish cross-feature and stale identities" {
     );
 }
 
+test "vehicle enter treats an existing non-character identity as not a driver" {
+    var simulation = try Simulation.init(std.testing.allocator, .{ .namespace = 781 });
+    defer simulation.deinit();
+    try simulation.submit(.{ .spawn = .{
+        .request_id = 1,
+        .pose = .{ .position = .{ 3, 1, 0 } },
+    } });
+    try simulation.submitVehicle(.{ .spawn = .{
+        .request_id = 2,
+        .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
+    } });
+    try simulation.tick();
+    const crate_id = simulation.pollOutcome().?.spawned.id;
+    const vehicle_id = simulation.pollVehicleOutcome().?.spawned.id;
+    try simulation.submitVehicle(.{ .enter = .{
+        .vehicle_id = vehicle_id,
+        .driver_id = crate_id,
+    } });
+    try simulation.tick();
+    const rejected = simulation.pollVehicleOutcome().?.rejected;
+    try std.testing.expectEqual(vehicles.CommandKind.enter, rejected.command);
+    try std.testing.expectEqual(vehicles.RejectionReason.driver_not_found, rejected.reason);
+    try simulation.tick();
+}
+
 test "character teardown owns unread outcomes events and pending commands" {
     var simulation = try Simulation.init(std.testing.allocator, .{ .namespace = 79 });
     try simulation.submitCharacter(.{ .spawn = .{
@@ -763,7 +1118,7 @@ test "character climbs a physical step within configured height" {
     try std.testing.expect(state.position[2] < -2.5);
 }
 
-test "V2 validation owns schema cursor and cross-feature identity policy" {
+test "V3 validation owns schema cursor and cross-feature identity policy" {
     const crate_records = [_]CrateV1{.{
         .id = .{ .namespace = 73, .local = 1 },
         .half_extents = .{ 0.5, 0.5, 0.5 },
@@ -777,31 +1132,103 @@ test "V2 validation owns schema cursor and cross-feature identity policy" {
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
     }};
-    const snapshot = SnapshotV2{
-        .schema_version = 2,
+    const snapshot = SnapshotV3{
+        .schema_version = 3,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 73,
         .next_local_id = 2,
         .character_config = CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = VehicleConfigV1.fromConfig(.{}),
         .crates = &crate_records,
         .characters = &character_records,
+        .vehicles = &.{},
     };
     try std.testing.expectError(
         error.DuplicatePersistentId,
-        validateSnapshot(snapshot, 8, 1),
+        validateSnapshot(snapshot, 8, 1, 1),
     );
     var wrong_schema = snapshot;
     wrong_schema.schema_version = 1;
     try std.testing.expectError(
         error.UnsupportedSchemaVersion,
-        validateSnapshot(wrong_schema, 8, 1),
+        validateSnapshot(wrong_schema, 8, 1, 1),
     );
     var colliding_cursor = snapshot;
     colliding_cursor.characters = &.{};
     colliding_cursor.next_local_id = 1;
     try std.testing.expectError(
         error.IdentityCursorWouldCollide,
-        validateSnapshot(colliding_cursor, 8, 1),
+        validateSnapshot(colliding_cursor, 8, 1, 1),
     );
+}
+
+test "V3 validation rejects missing and multiply assigned vehicle drivers" {
+    const character_records = [_]CharacterV1{
+        .{
+            .id = .{ .namespace = 731, .local = 1 },
+            .position = .{ 0, 0, 0 },
+            .velocity = .{ 0, 0, 0 },
+            .facing_yaw = 0,
+        },
+        .{
+            .id = .{ .namespace = 731, .local = 2 },
+            .position = .{ 1, 0, 0 },
+            .velocity = .{ 0, 0, 0 },
+            .facing_yaw = 0,
+        },
+    };
+    var vehicle_records = [_]VehicleV1{
+        .{
+            .id = .{ .namespace = 731, .local = 3 },
+            .chassis_pose = .{
+                .position = .{ 0, 0, 0 },
+                .rotation = .{ 0, 0, 0, 1 },
+            },
+            .linear_velocity = .{ 0, 0, 0 },
+            .angular_velocity = .{ 0, 0, 0 },
+            .wheels = @splat(.{ .rotation_angle = 0, .angular_velocity = 0 }),
+            .input = .{ .throttle = 0, .steering = 0, .brake = 0, .hand_brake = 0 },
+            .driver_id = .{ .namespace = 731, .local = 1 },
+        },
+        .{
+            .id = .{ .namespace = 731, .local = 4 },
+            .chassis_pose = .{
+                .position = .{ 4, 0, 0 },
+                .rotation = .{ 0, 0, 0, 1 },
+            },
+            .linear_velocity = .{ 0, 0, 0 },
+            .angular_velocity = .{ 0, 0, 0 },
+            .wheels = @splat(.{ .rotation_angle = 0, .angular_velocity = 0 }),
+            .input = .{ .throttle = 0, .steering = 0, .brake = 0, .hand_brake = 0 },
+            .driver_id = .{ .namespace = 731, .local = 1 },
+        },
+    };
+    const snapshot = SnapshotV3{
+        .schema_version = 3,
+        .completed_ticks = 0,
+        .fixed_delta_seconds = 1.0 / 120.0,
+        .namespace = 731,
+        .next_local_id = 100,
+        .character_config = CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = VehicleConfigV1.fromConfig(.{}),
+        .crates = &.{},
+        .characters = &character_records,
+        .vehicles = &vehicle_records,
+    };
+
+    try std.testing.expectError(
+        error.DuplicateVehicleDriver,
+        validateSnapshot(snapshot, 0, 2, 2),
+    );
+
+    vehicle_records[1].driver_id = .{ .namespace = 731, .local = 2 };
+    vehicle_records[0].driver_id = .{ .namespace = 731, .local = 99 };
+    try std.testing.expectError(
+        error.VehicleDriverNotFound,
+        validateSnapshot(snapshot, 0, 2, 2),
+    );
+
+    vehicle_records[0].driver_id = .{ .namespace = 731, .local = 1 };
+    try validateSnapshot(snapshot, 0, 2, 2);
 }

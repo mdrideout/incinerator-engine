@@ -100,9 +100,9 @@ this machine and are not CI thresholds.
   before network-originated commands.
 - Jolt cross-platform deterministic mode remains disabled. Repeatability is
   target-local scheduling evidence, not peer-lockstep or bitwise portability.
-- Native Vulkan and D3D12 client validation is deferred by the macOS-first
-  platform policy. S0 retains compile, offline-shader, and headless portability
-  gates for those platforms plus authoritative native Metal visual evidence.
+- Linux/SteamOS and Windows are fully deferred by the macOS-only platform
+  policy. Their recorded S0 cross-build results are historical evidence, not
+  current gates or compatibility promises.
 - The headless source graph and linked artifact are isolated, but a cold root
   build still resolves visual package dependencies before selecting a step.
   Split dependency resolution before a server-only distribution workflow.

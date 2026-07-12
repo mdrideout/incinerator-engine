@@ -39,8 +39,8 @@ and restores from the composition-owned V2 snapshot.
 
 The complete Debug, ReleaseFast, and editor-enabled Debug matrices each pass
 139/139 tests. The filtered source-package extraction passes 16/16 tests.
-Linux and Windows GNU cross-builds pass for the selected Vulkan paths, and the
-Linux/Windows headless artifacts compile without shader tools.
+Linux/Windows cross-build results recorded during S1 are historical evidence,
+not current gates or support claims.
 
 ## Native Metal Evidence
 
@@ -92,7 +92,6 @@ grounded restore contact reconstruction, feature/composition persistence
 ownership, authoritative character tuning, canonical yaw, host-owned physics
 stepping, secondary-window release filtering, and measurement/cleanup evidence.
 
-Native Vulkan/D3D12 client validation is deliberately deferred under the
-macOS-first platform policy. Linux/Windows retain compile, offline-shader, and
-headless portability gates; this policy does not change S1 acceptance. The
-deliberate limits listed in the S1 design record also remain follow-on scope.
+Linux/SteamOS and Windows are fully deferred under the macOS-only platform
+policy. They impose no current compile, shader, headless, runtime, packaging,
+CI, or compatibility gates. This does not change the historical S1 acceptance.

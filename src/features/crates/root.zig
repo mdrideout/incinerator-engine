@@ -667,12 +667,10 @@ const FakeBodiesForTest = struct {
     create_calls: u32 = 0,
     destroy_calls: u32 = 0,
     impulse_calls: u32 = 0,
-    step_calls: u32 = 0,
     fail_create_call: ?u32 = null,
     fail_body_state: bool = false,
     fail_destroy: bool = false,
     fail_impulse: bool = false,
-    fail_step: bool = false,
 
     pub fn createDynamicBox(
         self: *FakeBodiesForTest,
@@ -717,22 +715,27 @@ const FakeBodiesForTest = struct {
         if (self.fail_impulse) return error.InjectedImpulseFailure;
         for (0..3) |axis| self.states[handle].velocity.linear[axis] += impulse[axis];
     }
+};
 
-    pub fn step(self: *FakeBodiesForTest, _: f32) !void {
+const TestFeature = Feature(FakeBodiesForTest);
+
+const FakeWorldStepper = struct {
+    step_calls: u32 = 0,
+    fail_step: bool = false,
+
+    pub fn step(self: *FakeWorldStepper, _: f32) !void {
         self.step_calls += 1;
         if (self.fail_step) return error.InjectedPhysicsStepFailure;
     }
 };
 
-const TestFeature = Feature(FakeBodiesForTest);
-
-fn stepFakeBodies(
+fn stepFakeWorld(
     raw: *anyopaque,
     _: *engine.Runtime,
     tick: engine.TickContext,
 ) !void {
-    const bodies: *FakeBodiesForTest = @ptrCast(@alignCast(raw));
-    try bodies.step(tick.delta_seconds);
+    const stepper: *FakeWorldStepper = @ptrCast(@alignCast(raw));
+    try stepper.step(tick.delta_seconds);
 }
 
 fn snapshotThroughFakeFeature(
@@ -833,9 +836,10 @@ test "body creation failure rolls back the provisional runtime entity" {
         4,
     );
     defer feature.deinit();
+    var stepper = FakeWorldStepper{};
     var registry = runtime.registry();
     try feature.register(&registry);
-    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+    try registry.addSystem(.physics, "fake.step", &stepper, stepFakeWorld);
     try feature.enqueue(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
 
     try std.testing.expectError(error.InjectedBodyCreateFailure, runtime.tick());
@@ -924,10 +928,11 @@ test "a command emitted during the command phase waits for the next tick" {
     );
     defer feature.deinit();
     var emitter = DeferredEmitter{ .feature = &feature };
+    var stepper = FakeWorldStepper{};
     var registry = runtime.registry();
     try registry.addSystem(.commands, "test.emit_command", &emitter, DeferredEmitter.run);
     try feature.register(&registry);
-    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+    try registry.addSystem(.physics, "fake.step", &stepper, stepFakeWorld);
 
     try runtime.tick();
     try std.testing.expectEqual(@as(usize, 0), feature.count());
@@ -957,9 +962,10 @@ test "capacity rejection preserves identity and outcome ordering" {
         1,
     );
     defer feature.deinit();
+    var stepper = FakeWorldStepper{};
     var registry = runtime.registry();
     try feature.register(&registry);
-    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+    try registry.addSystem(.physics, "fake.step", &stepper, stepFakeWorld);
 
     try feature.enqueue(.{ .spawn = .{ .request_id = 11, .pose = .{} } });
     try feature.enqueue(.{ .spawn = .{ .request_id = 12, .pose = .{} } });
@@ -1021,9 +1027,10 @@ test "physics step failure preserves live state and feature teardown removes it"
     defer {
         if (feature_live) feature.deinit();
     }
+    var stepper = FakeWorldStepper{};
     var registry = runtime.registry();
     try feature.register(&registry);
-    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+    try registry.addSystem(.physics, "fake.step", &stepper, stepFakeWorld);
     try feature.enqueue(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
     try runtime.tick();
     const id = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
@@ -1031,11 +1038,11 @@ test "physics step failure preserves live state and feature teardown removes it"
         else => return error.UnexpectedOutcome,
     };
 
-    bodies.fail_step = true;
+    stepper.fail_step = true;
     try std.testing.expectError(error.InjectedPhysicsStepFailure, runtime.tick());
     try std.testing.expect(runtime.isFaulted());
     try std.testing.expectEqual(@as(u64, 1), runtime.tickIndex());
-    try std.testing.expectEqual(@as(u32, 2), bodies.step_calls);
+    try std.testing.expectEqual(@as(u32, 2), stepper.step_calls);
     try std.testing.expectEqual(@as(usize, 1), feature.count());
     try std.testing.expectEqual(@as(usize, 1), runtime.entityCount());
     try std.testing.expectEqual(@as(usize, 1), runtime.persistentCount());
@@ -1077,9 +1084,10 @@ test "body destroy failure leaves ownership intact until feature teardown" {
     defer {
         if (feature_live) feature.deinit();
     }
+    var stepper = FakeWorldStepper{};
     var registry = runtime.registry();
     try feature.register(&registry);
-    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+    try registry.addSystem(.physics, "fake.step", &stepper, stepFakeWorld);
     try feature.enqueue(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
     try runtime.tick();
     const id = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
@@ -1128,9 +1136,10 @@ test "impulse failure does not mutate the body and teardown removes it" {
     defer {
         if (feature_live) feature.deinit();
     }
+    var stepper = FakeWorldStepper{};
     var registry = runtime.registry();
     try feature.register(&registry);
-    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+    try registry.addSystem(.physics, "fake.step", &stepper, stepFakeWorld);
     try feature.enqueue(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
     try runtime.tick();
     const id = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
@@ -1180,9 +1189,10 @@ test "a post-physics read failure faults commands and persistence but still tear
     defer {
         if (feature_live) feature.deinit();
     }
+    var stepper = FakeWorldStepper{};
     var registry = runtime.registry();
     try feature.register(&registry);
-    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+    try registry.addSystem(.physics, "fake.step", &stepper, stepFakeWorld);
     try feature.enqueue(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
 
     try std.testing.expectError(error.InjectedBodyReadFailure, runtime.tick());
@@ -1226,9 +1236,10 @@ test "partially drained outcome FIFO compacts while preserving order" {
         1,
     );
     defer feature.deinit();
+    var stepper = FakeWorldStepper{};
     var registry = runtime.registry();
     try feature.register(&registry);
-    try registry.addSystem(.physics, "fake.step", &bodies, stepFakeBodies);
+    try registry.addSystem(.physics, "fake.step", &stepper, stepFakeWorld);
 
     try feature.enqueue(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
     try runtime.tick();
