@@ -1,6 +1,6 @@
 # ADR-001: Shader Language and Target-Specific Compilation
 
-**Status:** Accepted, amended 2026-07-09
+**Status:** Accepted, amended 2026-07-12
 
 **Date:** 2024-12-05
 
@@ -24,12 +24,16 @@ The Zig target and, on Windows, the explicit backend option determine both the s
 
 | Zig target | Build output | SDL GPU driver | Runtime entry point | Support level |
 |---|---|---|---|---|
-| `aarch64-macos` | MSL generated through SPIR-V | `metal` | `main0` | Primary path |
-| `x86_64-linux` | SPIR-V | `vulkan` | `main` | Supported target |
-| `x86_64-windows-gnu` (default) | DXIL generated through SPIR-V | `direct3d12` | `main` | Intended release path; native evidence pending |
-| `x86_64-windows-gnu -Dwindows-gpu=vulkan` | SPIR-V | `vulkan` | `main` | Explicit bootstrap fallback |
+| `aarch64-macos` | MSL generated through SPIR-V | `metal` | `main0` | Tier 1 runtime-quality path |
+| `x86_64-linux` | SPIR-V | `vulkan` | `main` | Tier 2 compile/shader portability path |
+| `x86_64-windows-gnu` (default) | DXIL generated through SPIR-V | `direct3d12` | `main` | Tier 2 compile/shader portability path |
+| `x86_64-windows-gnu -Dwindows-gpu=vulkan` | SPIR-V | `vulkan` | `main` | Tier 2 explicit bootstrap fallback |
 
-The build owns an offline DXIL path and defaults Windows to D3D12. The Vulkan path remains an explicit fallback when an SDL_shadercross/DXC host tool is unavailable. Offline generation and cross-link evidence are necessary but not sufficient: Windows remains unreleased until a hosted Windows build succeeds and a native D3D12 pipeline/runtime smoke passes.
+The build owns an offline DXIL path and defaults Windows to D3D12. The Vulkan
+path remains an explicit fallback when an SDL_shadercross/DXC host tool is
+unavailable. Offline generation and cross-link evidence preserve portability;
+they are not a Windows runtime-support claim. Native D3D12/Vulkan pipeline
+validation resumes when a secondary client platform is selected under ADR-007.
 
 Executables are target-specific. This ADR makes no claim that one binary or one set of embedded shader bytes runs on multiple operating systems.
 
@@ -109,7 +113,9 @@ The Windows [`tools/shader-toolchain/dxil/vcpkg.json`](../../tools/shader-toolch
 - Shader tools remain host prerequisites.
 - Errors may arise in GLSL compilation, target translation, or reflection validation.
 - Each new backend needs a real compiler/output path and backend-specific native validation.
-- Windows remains unreleased until hosted Windows build evidence and a native D3D12 pipeline/runtime smoke pass, despite the implemented offline DXIL path.
+- Tier 2 shader paths can still accumulate driver/runtime issues that compile
+  and reflection checks cannot expose; ADR-007 defines the milestones that
+  reactivate native validation before those paths become supported clients.
 
 ## References
 

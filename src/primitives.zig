@@ -121,6 +121,138 @@ pub fn createCube(device: *c.SDL_GPUDevice) !Mesh {
 }
 
 // ============================================================================
+// Character Capsule
+// ============================================================================
+
+pub const capsule_segments: usize = 16;
+pub const capsule_hemisphere_bands: usize = 5;
+pub const capsule_radial_rings: usize = capsule_hemisphere_bands * 2;
+pub const capsule_triangle_count: usize = capsule_segments * 2 +
+    (capsule_radial_rings - 1) * capsule_segments * 2;
+pub const capsule_vertex_count: usize = capsule_triangle_count * 3;
+
+/// Generate the gameplay capsule at its authored physical dimensions with its
+/// foot at Y=0. A blue forward stripe makes yaw visible.
+pub fn characterCapsuleVertices(
+    radius: f32,
+    half_height: f32,
+) [capsule_vertex_count]Vertex {
+    std.debug.assert(std.math.isFinite(radius) and radius > 0);
+    std.debug.assert(std.math.isFinite(half_height) and half_height > 0);
+    const cylinder_top = radius + half_height * 2.0;
+    const top = cylinder_top + radius;
+    var rings: [capsule_radial_rings][capsule_segments][3]f32 = undefined;
+
+    // Bottom hemisphere rings, including its equator.
+    for (0..capsule_hemisphere_bands) |band_index| {
+        const band: f32 = @floatFromInt(band_index + 1);
+        const bands: f32 = @floatFromInt(capsule_hemisphere_bands);
+        const angle = -std.math.pi / 2.0 + (std.math.pi / 2.0) * band / bands;
+        fillCapsuleRing(&rings[band_index], radius * @cos(angle), radius + radius * @sin(angle));
+    }
+    // Top equator followed by its intermediate rings. The top pole is emitted
+    // as a fan and is not duplicated around a zero-radius ring.
+    for (0..capsule_hemisphere_bands) |band_index| {
+        const band: f32 = @floatFromInt(band_index);
+        const bands: f32 = @floatFromInt(capsule_hemisphere_bands);
+        const angle = (std.math.pi / 2.0) * band / bands;
+        fillCapsuleRing(
+            &rings[capsule_hemisphere_bands + band_index],
+            radius * @cos(angle),
+            cylinder_top + radius * @sin(angle),
+        );
+    }
+
+    var vertices: [capsule_vertex_count]Vertex = undefined;
+    var cursor: usize = 0;
+    const bottom_pole = [3]f32{ 0, 0, 0 };
+    const top_pole = [3]f32{ 0, top, 0 };
+
+    for (0..capsule_segments) |segment| {
+        const next = (segment + 1) % capsule_segments;
+        const color = capsuleColor(segment);
+        // Reversed from mathematical CCW because the pos_color pipeline uses
+        // clockwise exterior winding.
+        appendTriangle(&vertices, &cursor, bottom_pole, rings[0][next], rings[0][segment], color);
+    }
+    for (0..capsule_radial_rings - 1) |ring_index| {
+        for (0..capsule_segments) |segment| {
+            const next = (segment + 1) % capsule_segments;
+            const color = capsuleColor(segment);
+            appendTriangle(
+                &vertices,
+                &cursor,
+                rings[ring_index][segment],
+                rings[ring_index + 1][next],
+                rings[ring_index + 1][segment],
+                color,
+            );
+            appendTriangle(
+                &vertices,
+                &cursor,
+                rings[ring_index][segment],
+                rings[ring_index][next],
+                rings[ring_index + 1][next],
+                color,
+            );
+        }
+    }
+    const last_ring = capsule_radial_rings - 1;
+    for (0..capsule_segments) |segment| {
+        const next = (segment + 1) % capsule_segments;
+        const color = capsuleColor(segment);
+        appendTriangle(&vertices, &cursor, top_pole, rings[last_ring][segment], rings[last_ring][next], color);
+    }
+    std.debug.assert(cursor == vertices.len);
+    return vertices;
+}
+
+pub fn createCharacterCapsule(
+    device: *c.SDL_GPUDevice,
+    radius: f32,
+    half_height: f32,
+) !Mesh {
+    if (!std.math.isFinite(radius) or radius <= 0 or
+        !std.math.isFinite(half_height) or half_height <= 0)
+    {
+        return error.InvalidCapsuleDimensions;
+    }
+    const vertices = characterCapsuleVertices(radius, half_height);
+    return Mesh.init(device, &vertices);
+}
+
+fn fillCapsuleRing(ring: *[capsule_segments][3]f32, radius: f32, y: f32) void {
+    for (0..capsule_segments) |segment| {
+        const angle = std.math.tau *
+            @as(f32, @floatFromInt(segment)) /
+            @as(f32, @floatFromInt(capsule_segments));
+        ring[segment] = .{ radius * @cos(angle), y, radius * @sin(angle) };
+    }
+}
+
+fn appendTriangle(
+    vertices: *[capsule_vertex_count]Vertex,
+    cursor: *usize,
+    a: [3]f32,
+    b: [3]f32,
+    d: [3]f32,
+    color: [3]f32,
+) void {
+    vertices[cursor.*] = .{ .position = a, .color = color };
+    vertices[cursor.* + 1] = .{ .position = b, .color = color };
+    vertices[cursor.* + 2] = .{ .position = d, .color = color };
+    cursor.* += 3;
+}
+
+fn capsuleColor(segment: usize) [3]f32 {
+    // Forward is -Z, centered around segment 12 for this parameterization.
+    return if (segment >= 11 and segment <= 13)
+        .{ 0.12, 0.32, 0.95 }
+    else
+        .{ 0.95, 0.42, 0.12 };
+}
+
+// ============================================================================
 // Ground Plane (Checkerboard)
 // ============================================================================
 
@@ -244,3 +376,52 @@ pub fn createTexturedCube(device: *c.SDL_GPUDevice) !Mesh {
 
 // pub fn createSphere(device: *c.SDL_GPUDevice, segments: u32) !Mesh { ... }
 // pub fn createCapsule(device: *c.SDL_GPUDevice, segments: u32) !Mesh { ... }
+
+test "character capsule geometry is finite and bottom anchored" {
+    const radius: f32 = 0.4;
+    const half_height: f32 = 0.5;
+    const vertices = characterCapsuleVertices(radius, half_height);
+    try std.testing.expectEqual(capsule_vertex_count, vertices.len);
+    var minimum_y = std.math.inf(f32);
+    var maximum_y = -std.math.inf(f32);
+    var saw_forward_color = false;
+    for (vertices) |vertex| {
+        for (vertex.position) |value| try std.testing.expect(std.math.isFinite(value));
+        minimum_y = @min(minimum_y, vertex.position[1]);
+        maximum_y = @max(maximum_y, vertex.position[1]);
+        saw_forward_color = saw_forward_color or vertex.color[2] > 0.9;
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 0), minimum_y, 0.00001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1.8), maximum_y, 0.00001);
+    try std.testing.expect(saw_forward_color);
+
+    const top_center_y = radius + half_height * 2.0;
+    var triangle_index: usize = 0;
+    while (triangle_index < vertices.len) : (triangle_index += 3) {
+        const a = vertices[triangle_index].position;
+        const b = vertices[triangle_index + 1].position;
+        const d = vertices[triangle_index + 2].position;
+        const ab = [3]f32{ b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+        const ad = [3]f32{ d[0] - a[0], d[1] - a[1], d[2] - a[2] };
+        const normal = [3]f32{
+            ab[1] * ad[2] - ab[2] * ad[1],
+            ab[2] * ad[0] - ab[0] * ad[2],
+            ab[0] * ad[1] - ab[1] * ad[0],
+        };
+        const center = [3]f32{
+            (a[0] + b[0] + d[0]) / 3.0,
+            (a[1] + b[1] + d[1]) / 3.0,
+            (a[2] + b[2] + d[2]) / 3.0,
+        };
+        const outward = if (center[1] < radius)
+            [3]f32{ center[0], center[1] - radius, center[2] }
+        else if (center[1] > top_center_y)
+            [3]f32{ center[0], center[1] - top_center_y, center[2] }
+        else
+            [3]f32{ center[0], 0, center[2] };
+        const orientation = normal[0] * outward[0] +
+            normal[1] * outward[1] +
+            normal[2] * outward[2];
+        try std.testing.expect(orientation < 0);
+    }
+}

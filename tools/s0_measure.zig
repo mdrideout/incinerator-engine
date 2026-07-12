@@ -1,12 +1,12 @@
 //! Reproducible, SDL-free measurements for the S0 crate lifecycle slice.
 //!
-//! The build graph supplies the concrete `crate_simulation` module. This tool
+//! The build graph supplies the concrete `sandbox_simulation` module. This tool
 //! intentionally writes only one versioned JSON document to stdout so callers
 //! can archive or compare results without scraping human-readable logs.
 
 const std = @import("std");
 const builtin = @import("builtin");
-const simulation = @import("crate_simulation");
+const simulation = @import("sandbox_simulation");
 
 const schema_version: u32 = 1;
 const fixed_delta_seconds: f32 = 1.0 / 120.0;

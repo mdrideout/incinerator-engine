@@ -1,7 +1,7 @@
-//! SDL-free executable and integration-test root for the S0 crate slice.
+//! SDL-free executable and integration-test root for sandbox slices.
 
 const std = @import("std");
-const simulation = @import("crate_simulation");
+const simulation = @import("sandbox_simulation");
 
 pub fn main(init: std.process.Init) !void {
     _ = init;
@@ -14,25 +14,61 @@ pub fn main(init: std.process.Init) !void {
         .request_id = 1,
         .pose = .{ .position = .{ 0, 8, 0 } },
     } });
-    for (0..240) |_| try world.tick();
+    try world.submitCharacter(.{ .spawn = .{
+        .request_id = 2,
+        .position = .{ 0, 0, 2 },
+    } });
+    try world.tick();
 
     const outcome = world.pollOutcome() orelse return error.SpawnOutcomeMissing;
-    const id = switch (outcome) {
+    const crate_id = switch (outcome) {
         .spawned => |spawned| spawned.id,
         else => return error.UnexpectedOutcome,
     };
-    const crate = try world.crate(id);
+    const character_outcome = world.pollCharacterOutcome() orelse
+        return error.CharacterSpawnOutcomeMissing;
+    const character_id = switch (character_outcome) {
+        .spawned => |spawned| spawned.id,
+        else => return error.UnexpectedCharacterOutcome,
+    };
+    for (0..239) |_| {
+        try world.submitCharacter(.{ .actions = .{
+            .id = character_id,
+            .move = .{ 1, 0 },
+            .facing_yaw = 0,
+        } });
+        try world.tick();
+    }
+
+    const crate = try world.crate(crate_id);
+    const character = try world.character(character_id);
     std.debug.print(
-        "headless crate {d}:{d} at ({d:.3}, {d:.3}, {d:.3}) after {d} ticks\n",
+        "headless crate {d}:{d} at ({d:.3}, {d:.3}, {d:.3}); " ++
+            "character {d}:{d} at ({d:.3}, {d:.3}, {d:.3}) after {d} ticks\n",
         .{
-            id.namespace,
-            id.local,
+            crate_id.namespace,
+            crate_id.local,
             crate.state.pose.position[0],
             crate.state.pose.position[1],
             crate.state.pose.position[2],
+            character_id.namespace,
+            character_id.local,
+            character.position[0],
+            character.position[1],
+            character.position[2],
             world.tickIndex(),
         },
     );
+
+    try world.submit(.{ .despawn = .{ .id = crate_id } });
+    try world.submitCharacter(.{ .despawn = .{ .id = character_id } });
+    try world.tick();
+    _ = world.pollOutcome() orelse return error.DespawnOutcomeMissing;
+    _ = world.pollCharacterOutcome() orelse return error.CharacterDespawnOutcomeMissing;
+    if (world.entityCount() != 0 or world.bodyCount() != 1) {
+        return error.HeadlessCleanupMismatch;
+    }
+    std.debug.print("headless sandbox cleanup=clean\n", .{});
 }
 
 test "real Jolt lifecycle saves destroys restores and destroys" {
@@ -117,6 +153,70 @@ test "real Jolt lifecycle saves destroys restores and destroys" {
         try std.testing.expectEqual(@as(usize, 0), restored.crateCount());
         try std.testing.expectEqual(@as(u32, 1), restored.bodyCount());
     }
+}
+
+test "V2 snapshot composes crate and character records under one runtime envelope" {
+    const allocator = std.testing.allocator;
+    var saved: []u8 = undefined;
+    var crate_id: simulation.PersistentId = undefined;
+    var character_id: simulation.PersistentId = undefined;
+    var character_position: [3]f32 = undefined;
+    {
+        var world = try simulation.Simulation.init(allocator, .{ .namespace = 706 });
+        defer world.deinit();
+        try world.submit(.{ .spawn = .{
+            .request_id = 1,
+            .pose = .{ .position = .{ 2, 6, 0 } },
+        } });
+        try world.submitCharacter(.{ .spawn = .{
+            .request_id = 2,
+            .position = .{ 0, 0, 2 },
+            .facing_yaw = 0.25,
+        } });
+        try world.tick();
+        crate_id = world.pollOutcome().?.spawned.id;
+        character_id = world.pollCharacterOutcome().?.spawned.id;
+        while (world.pollCharacterOutcome() != null) {}
+        while (world.pollCharacterEvent() != null) {}
+        for (0..30) |_| {
+            try world.submitCharacter(.{ .actions = .{
+                .id = character_id,
+                .move = .{ 1, 0 },
+                .facing_yaw = 0.25,
+            } });
+            try world.tick();
+        }
+        character_position = (try world.character(character_id)).position;
+        saved = try world.save(allocator);
+        try std.testing.expectEqual(@as(usize, 2), world.entityCount());
+        try std.testing.expectEqual(@as(u32, 2), world.bodyCount());
+    }
+    defer allocator.free(saved);
+
+    var restored = try simulation.Simulation.fromSnapshot(allocator, saved, .{});
+    defer restored.deinit();
+    try std.testing.expectEqual(@as(usize, 1), restored.crateCount());
+    try std.testing.expectEqual(@as(usize, 1), restored.characterCount());
+    try std.testing.expectEqual(@as(usize, 2), restored.entityCount());
+    try std.testing.expectEqual(@as(u32, 2), restored.bodyCount());
+    const restored_character = try restored.character(character_id);
+    for (character_position, restored_character.position) |expected, actual| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), restored_character.facing_yaw, 0.0001);
+    const character_start = (try restored.characterPresentation(0))[0].pose;
+    const character_end = (try restored.characterPresentation(1))[0].pose;
+    try std.testing.expectEqual(character_start.position, character_end.position);
+
+    const saved_again = try restored.save(allocator);
+    defer allocator.free(saved_again);
+    try std.testing.expectEqualSlices(u8, saved, saved_again);
+
+    try restored.submit(.{ .despawn = .{ .id = crate_id } });
+    try restored.submitCharacter(.{ .despawn = .{ .id = character_id } });
+    try restored.tick();
+    try std.testing.expectEqual(@as(usize, 0), restored.entityCount());
+    try std.testing.expectEqual(@as(u32, 1), restored.bodyCount());
 }
 
 test "repeated crate lifecycle leaves only the host-owned ground" {
@@ -216,12 +316,18 @@ fn captureTimelineSample(
 
 fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
     const initial_v1 =
-        \\{"schema_version":1,"completed_ticks":10,
+        \\{"schema_version":2,"completed_ticks":10,
         \\"fixed_delta_seconds":0.008333333,"namespace":99,
-        \\"next_local_id":2,"crates":[
+        \\"next_local_id":2,
+        \\"character_config":{"radius":0.4,"half_height":0.5,"move_speed":6,
+        \\"jump_speed":6,"gravity":-20,"terminal_fall_speed":55,
+        \\"max_slope_radians":0.87266463,"mass":70,"max_strength":100,
+        \\"stick_to_floor_distance":0.5,"step_up_height":0.4},
+        \\"crates":[
         \\{"id":{"namespace":99,"local":1},"half_extents":[0.5,0.75,0.25],
         \\"pose":{"position":[1,6,-2],"rotation":[0,0.25881904,0,0.9659258]},
-        \\"linear_velocity":[0.5,0.25,-0.25],"angular_velocity":[0.1,0.2,0.3]}]}
+        \\"linear_velocity":[0.5,0.25,-0.25],"angular_velocity":[0.1,0.2,0.3]}],
+        \\"characters":[]}
     ;
     var world = try simulation.Simulation.fromSnapshot(allocator, initial_v1, .{});
     defer world.deinit();
@@ -245,7 +351,7 @@ fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
     return samples;
 }
 
-test "the same V1 command timeline repeats at multiple samples on one target" {
+test "the same V2 command timeline repeats at multiple samples on one target" {
     const first = try runTimeline(std.testing.allocator);
     const second = try runTimeline(std.testing.allocator);
     try std.testing.expectEqual([4]u64{ 10, 15, 16, 36 }, .{
@@ -265,6 +371,91 @@ test "the same V1 command timeline repeats at multiple samples on one target" {
         for (expected.linear_velocity, actual.linear_velocity) |a, b| {
             try std.testing.expectApproxEqAbs(a, b, timeline_tolerance);
         }
+    }
+}
+
+const CharacterTimelineSample = struct {
+    tick: u64,
+    position: [3]f32,
+    velocity: [3]f32,
+    facing_yaw: f32,
+    ground_state: simulation.GroundState,
+};
+
+fn runCharacterTimeline() ![4]CharacterTimelineSample {
+    var world = try simulation.Simulation.init(std.testing.allocator, .{
+        .namespace = 100,
+        .block = .{
+            .position = .{ 0, 1, -5 },
+            .half_extents = .{ 2, 1, 0.5 },
+        },
+    });
+    defer world.deinit();
+    try world.submitCharacter(.{ .spawn = .{
+        .request_id = 1,
+        .position = .{ 0, 0, 4 },
+    } });
+    try world.tick();
+    const id = world.pollCharacterOutcome().?.spawned.id;
+    while (world.pollCharacterOutcome() != null) {}
+    while (world.pollCharacterEvent() != null) {}
+
+    var samples: [4]CharacterTimelineSample = undefined;
+    samples[0] = characterTimelineSample(&world, id);
+    for (0..239) |index| {
+        try world.submitCharacter(.{ .actions = .{
+            .id = id,
+            .move = if (index < 160) .{ 0, 1 } else .{ 1, 0 },
+            .facing_yaw = if (index < 160) 0 else std.math.pi / 2.0,
+            .jump_pressed = index == 59,
+        } });
+        try world.tick();
+        while (world.pollCharacterOutcome() != null) {}
+        while (world.pollCharacterEvent() != null) {}
+        if (index == 58) samples[1] = characterTimelineSample(&world, id);
+        if (index == 118) samples[2] = characterTimelineSample(&world, id);
+    }
+    samples[3] = characterTimelineSample(&world, id);
+    return samples;
+}
+
+fn characterTimelineSample(
+    world: *simulation.Simulation,
+    id: simulation.PersistentId,
+) CharacterTimelineSample {
+    const view = world.character(id) catch unreachable;
+    return .{
+        .tick = world.tickIndex(),
+        .position = view.position,
+        .velocity = view.velocity,
+        .facing_yaw = view.facing_yaw,
+        .ground_state = view.ground_state,
+    };
+}
+
+test "the same character action stream repeats on one target" {
+    const first = try runCharacterTimeline();
+    const second = try runCharacterTimeline();
+    try std.testing.expectEqual([4]u64{ 1, 60, 120, 240 }, .{
+        first[0].tick,
+        first[1].tick,
+        first[2].tick,
+        first[3].tick,
+    });
+    for (first, second) |expected, actual| {
+        try std.testing.expectEqual(expected.tick, actual.tick);
+        for (expected.position, actual.position) |a, b| {
+            try std.testing.expectApproxEqAbs(a, b, timeline_tolerance);
+        }
+        for (expected.velocity, actual.velocity) |a, b| {
+            try std.testing.expectApproxEqAbs(a, b, timeline_tolerance);
+        }
+        try std.testing.expectApproxEqAbs(
+            expected.facing_yaw,
+            actual.facing_yaw,
+            timeline_tolerance,
+        );
+        try std.testing.expectEqual(expected.ground_state, actual.ground_state);
     }
 }
 
@@ -333,18 +524,24 @@ test "live-world restore fails cleanly and leaves the caller usable" {
     try std.testing.expectEqual(@as(u64, 1), world.tickIndex());
 }
 
-test "multi-record V1 save is sorted and byte-stable across fresh restore" {
+test "multi-record V2 save is sorted and byte-stable across fresh restore" {
     const allocator = std.testing.allocator;
     const unsorted =
-        \\{"schema_version":1,"completed_ticks":17,
+        \\{"schema_version":2,"completed_ticks":17,
         \\"fixed_delta_seconds":0.008333333,"namespace":700,
-        \\"next_local_id":42,"crates":[
+        \\"next_local_id":42,
+        \\"character_config":{"radius":0.4,"half_height":0.5,"move_speed":6,
+        \\"jump_speed":6,"gravity":-20,"terminal_fall_speed":55,
+        \\"max_slope_radians":0.87266463,"mass":70,"max_strength":100,
+        \\"stick_to_floor_distance":0.5,"step_up_height":0.4},
+        \\"crates":[
         \\{"id":{"namespace":700,"local":7},"half_extents":[0.25,0.5,0.75],
         \\"pose":{"position":[3,8,-2],"rotation":[0,0.38268343,0,0.9238795]},
         \\"linear_velocity":[1.25,-2.5,0.5],"angular_velocity":[0.1,0.2,0.3]},
         \\{"id":{"namespace":700,"local":2},"half_extents":[1,0.75,0.5],
         \\"pose":{"position":[-4,6,1],"rotation":[0.25881904,0,0,0.9659258]},
-        \\"linear_velocity":[-0.75,1.5,2.25],"angular_velocity":[-0.3,0.4,-0.2]}]}
+        \\"linear_velocity":[-0.75,1.5,2.25],"angular_velocity":[-0.3,0.4,-0.2]}],
+        \\"characters":[]}
     ;
 
     var first_save: []u8 = undefined;
@@ -365,19 +562,21 @@ test "multi-record V1 save is sorted and byte-stable across fresh restore" {
             namespace: u64,
             next_local_id: u64,
             crates: []const struct { id: simulation.PersistentId },
+            characters: []const struct { id: simulation.PersistentId },
         },
         allocator,
         first_save,
         .{ .ignore_unknown_fields = true },
     );
     defer parsed.deinit();
-    try std.testing.expectEqual(@as(u16, 1), parsed.value.schema_version);
+    try std.testing.expectEqual(@as(u16, 2), parsed.value.schema_version);
     try std.testing.expectEqual(@as(u64, 17), parsed.value.completed_ticks);
     try std.testing.expectEqual(@as(u64, 700), parsed.value.namespace);
     try std.testing.expectEqual(@as(u64, 42), parsed.value.next_local_id);
     try std.testing.expectEqual(@as(usize, 2), parsed.value.crates.len);
     try std.testing.expectEqual(@as(u64, 2), parsed.value.crates[0].id.local);
     try std.testing.expectEqual(@as(u64, 7), parsed.value.crates[1].id.local);
+    try std.testing.expectEqual(@as(usize, 0), parsed.value.characters.len);
 
     {
         var restored = try simulation.Simulation.fromSnapshot(allocator, first_save, .{});
@@ -430,9 +629,14 @@ test "failed fresh loads do not mutate a live simulation" {
         simulation.Simulation.fromSnapshot(allocator, oversized, .{}),
     );
     const valid_empty =
-        \\{"schema_version":1,"completed_ticks":0,
+        \\{"schema_version":2,"completed_ticks":0,
         \\"fixed_delta_seconds":0.008333333,"namespace":702,
-        \\"next_local_id":1,"crates":[]}
+        \\"next_local_id":1,
+        \\"character_config":{"radius":0.4,"half_height":0.5,"move_speed":6,
+        \\"jump_speed":6,"gravity":-20,"terminal_fall_speed":55,
+        \\"max_slope_radians":0.87266463,"mass":70,"max_strength":100,
+        \\"stick_to_floor_distance":0.5,"step_up_height":0.4},
+        \\"crates":[],"characters":[]}
     ;
     try std.testing.expectError(
         error.EngineWorldAlreadyLive,
@@ -449,19 +653,28 @@ test "failed fresh loads do not mutate a live simulation" {
 
 fn restoreAllocationCase(allocator: std.mem.Allocator) !void {
     const snapshot =
-        \\{"schema_version":1,"completed_ticks":3,
+        \\{"schema_version":2,"completed_ticks":3,
         \\"fixed_delta_seconds":0.008333333,"namespace":703,
-        \\"next_local_id":3,"crates":[
+        \\"next_local_id":4,
+        \\"character_config":{"radius":0.4,"half_height":0.5,"move_speed":6,
+        \\"jump_speed":6,"gravity":-20,"terminal_fall_speed":55,
+        \\"max_slope_radians":0.87266463,"mass":70,"max_strength":100,
+        \\"stick_to_floor_distance":0.5,"step_up_height":0.4},
+        \\"crates":[
         \\{"id":{"namespace":703,"local":1},"half_extents":[0.5,0.5,0.5],
         \\"pose":{"position":[0,4,0],"rotation":[0,0,0,1]},
         \\"linear_velocity":[0,0,0],"angular_velocity":[0,0,0]},
         \\{"id":{"namespace":703,"local":2},"half_extents":[0.75,0.5,0.25],
         \\"pose":{"position":[2,6,0],"rotation":[0,0,0,1]},
-        \\"linear_velocity":[0.5,0,-0.25],"angular_velocity":[0.1,0.2,0.3]}]}
+        \\"linear_velocity":[0.5,0,-0.25],"angular_velocity":[0.1,0.2,0.3]}],
+        \\"characters":[
+        \\{"id":{"namespace":703,"local":3},"position":[-2,0,1],
+        \\"velocity":[0,0,0],"facing_yaw":0.25}]}
     ;
     var world = try simulation.Simulation.fromSnapshot(allocator, snapshot, .{});
     defer world.deinit();
-    try std.testing.expectEqual(@as(usize, 2), world.entityCount());
+    try std.testing.expectEqual(@as(usize, 3), world.entityCount());
+    try std.testing.expectEqual(@as(usize, 1), world.characterCount());
     try std.testing.expectEqual(@as(u32, 3), world.bodyCount());
 }
 
@@ -500,6 +713,6 @@ test "owned simulation teardown accepts live crates pending commands and outcome
     try std.testing.expectEqual(@as(u32, 1), replacement.bodyCount());
 }
 
-test "all imported S0 module tests are discovered" {
+test "all imported sandbox module tests are discovered" {
     std.testing.refAllDecls(simulation);
 }

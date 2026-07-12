@@ -256,26 +256,36 @@ Do not create every directory up front. Slice 0 should establish only the minimu
 
 ## 6. Current Baseline
 
-The repository now contains a small feature-authoring kernel and one owned S0
-composition shared by visual and headless hosts:
+The repository now contains a small feature-authoring kernel and one owned S1
+sandbox composition shared by visual and headless hosts:
 
 - `src/root.zig` exposes backend-neutral contracts plus the type-erased
   `Runtime`/startup registry used by game features.
-- `src/main.zig` owns the same crate/Jolt `Simulation` as headless plus only
+- `src/main.zig` owns the same crate/character/Jolt `Simulation` as headless plus only
   visual input, camera, GPU resources, renderer, and debug UI.
-- `src/hosts/headless.zig` and `src/hosts/simulation.zig` prove the same crate
+- `src/hosts/headless.zig` and `src/hosts/simulation.zig` prove the same sandbox
   behavior with no SDL/editor/renderer edge.
 - The prototype `GameWorld`, borrowed Flecs/Jolt path, direct ECS render query,
   Scene/Gizmo mutation tools, and their compatibility seams are removed.
-- `CrateFeature` has coordinated entity/body lifecycle, V1 logical
-  save/restore, typed outcomes, and previous/current presentation extraction.
+- `CrateFeature` and `CharacterFeature` independently own their typed commands,
+  outcomes, persistence records, lifecycle, systems, and presentation extraction.
+- The composition owns V2 world metadata and cross-feature identity policy;
+  character and crate records save and restore together without private coupling,
+  and feature-owned character tuning is authoritative on restore.
+- The Jolt adapter now exposes a narrow CharacterVirtual capability with
+  bottom-anchored capsules, world-qualified handles, slope/ground state, and
+  explicit update/destruction semantics.
 - The public pure fixed-step accumulator proves 240/80 Hz presentation cadence
   and the 250 ms anti-spiral policy independently of SDL's wall clock.
-- ReleaseFast S0 characterization is recorded at 0, 1, 128, and 1,024 active
-  crates; native Metal smoke exits normally above and below 120 Hz.
-- Input events are frame-scoped while simulation consumption is tick-scoped.
+- ReleaseFast S0 and S1 characterizations are recorded; separate native Metal
+  crate and character smokes exit normally above and below 120 Hz.
+- A sandbox-owned action latch bridges frame-scoped SDL state to tick-scoped
+  character commands without losing or replaying edges/deltas.
 - The upgraded application builds in Debug and ReleaseFast, with and without the editor, and cross-links for the selected Linux and Windows GNU targets.
-- MSL, SPIR-V, and DXIL shader artifacts are generated from cache-backed outputs. Native Vulkan and D3D12 runtime validation remains open.
+- MSL, SPIR-V, and DXIL shader artifacts are generated from cache-backed
+  outputs. Apple Silicon macOS/Metal is the sole current runtime-quality target;
+  Linux/Windows retain cross-build, offline shader, and headless portability
+  gates without a native client-runtime promise.
 - The bootstrap host now uses procedural content only; the tracked game-owned GLBs are not runtime or package dependencies.
 
 ### 6.1 Verified build matrix
@@ -286,10 +296,10 @@ composition shared by visual and headless hosts:
 | Zig 0.16.0 Debug, editor excluded | Pass; zgui/ImGui are not compiled or linked | Preserve with a clean-cache CI check |
 | Zig 0.16.0 Debug and ReleaseFast tests | Pass; aggregate kernel, contracts, feature, simulation, headless, Jolt, visual-host, input/resource, and shader suites | Preserve in CI |
 | Zig 0.16.0 ReleaseFast, editor excluded | Pass | Preserve in CI |
-| `x86_64-linux-gnu` cross-link from macOS | Pass with editor enabled and excluded | Hosted Linux CI and native Vulkan runtime evidence |
-| `x86_64-windows-gnu` cross-link from macOS | Pass for default D3D12/DXIL and explicit Vulkan/SPIR-V fallback, with editor enabled and excluded | Hosted Windows CI and native D3D12 runtime evidence |
+| `x86_64-linux-gnu` cross-link from macOS | Pass with editor enabled and excluded | Preserve as a Tier 2 portability gate; reconsider native client validation before S3 content/streaming contracts are finalized |
+| `x86_64-windows-gnu` cross-link from macOS | Pass for default D3D12/DXIL and explicit Vulkan/SPIR-V fallback, with editor enabled and excluded | Preserve as a Tier 2 portability gate; native client validation resumes only after selecting Windows for playtesting/release |
 | macOS Metal runtime smoke | Pass | Installed visual smoke outside the repository |
-| Relocatable non-GPU install probe | Pass from an unrelated working directory | Native packaged runtime evidence per platform |
+| Relocatable non-GPU install probe | Pass from an unrelated working directory | Installed macOS visual-runtime evidence; secondary platform packaging is deferred |
 
 ### 6.2 Dependency baseline
 
@@ -329,13 +339,13 @@ composition shared by visual and headless hosts:
 | D-001 | Product scope: single-player sandbox now; future authoritative online/MMO aspiration | Accepted in ADR-007 | Network/state architecture |
 | D-002 | Initial hosts: sandbox and headless; optional in-process editor; server later | Accepted in ADR-007 | Slice 0 |
 | D-003 | Exact Zig 0.16.0 toolchain and coordinated wrapper cohort | Implemented | Every build/CI change |
-| D-004 | Engine-owned JoltC 5.5 build package plus narrow engine adapter; expand capabilities per slice | Implemented for rigid bodies; feature spikes pending | Character/vehicle physics |
+| D-004 | Engine-owned JoltC 5.5 build package plus narrow engine adapter; expand capabilities per slice | Implemented for rigid bodies and CharacterVirtual; vehicle spike pending | Vehicle physics |
 | D-005 | Main thread owns ECS mutation/GPU submission; callbacks publish bounded data | Accepted in ADR-008 | Async assets/contact events |
 | D-006 | Allocator and memory-budget strategy | Not started | Asset registry/streaming |
 | D-007 | Physics owns dynamic-body simulation transforms; presentation reads interpolated snapshots | Implemented for S0 in amended ADR-005 | Slice 0 scheduling/interpolation |
-| D-008 | Stable entity ID and serialization model | Implemented for S0; multi-world atomic replacement remains open | Slice 0 save/restore |
-| D-009 | Apple Silicon/Metal and Linux/SteamOS x86_64/Vulkan; Windows x86_64/D3D12 target with explicit Vulkan bootstrap exception | D3D12/DXIL implemented offline; hosted/native runtime evidence pending | Shader/build matrix |
-| D-010 | Measured entity, body, draw, memory, and streaming budgets | Not started | Slice acceptance budgets |
+| D-008 | Stable entity ID and serialization model | Implemented through composition-owned V2 crate/character snapshots, canonical yaw, and authoritative character tuning; multi-world atomic replacement remains open | Save/restore |
+| D-009 | Tier 1 Apple Silicon macOS/Metal runtime support; Tier 2 Linux/Windows portability preservation through cross-build, shader-contract, and headless gates | Accepted in amended ADR-007; native secondary client work is trigger-based rather than a current M1 gate | Before S3 content contract, secondary client selection, or server work |
+| D-010 | Measured entity, body, draw, memory, and streaming budgets | S0 crate and S1 character tick/extraction baselines recorded; memory/streaming budgets open | Streaming acceptance budgets |
 | D-011 | Thin-kernel + feature-module architecture | Accepted by this plan | Slice 0 |
 | D-012 | Commands/events/queries as cross-boundary interaction model | Accepted by this plan | Slice 0 |
 | D-013 | Source assets, cooked assets, and runtime content packaging policy | Not started | Streaming slice |
@@ -355,9 +365,35 @@ If genuine MMO remains the target, authoritative simulation, replication, intere
 
 The prototype `zphysics` dependency has been removed. `src/adapters/physics/jolt_c.zig` is the only raw C import, and `src/physics.zig` exposes engine-owned rigid-body types. The engine-owned build package exact-pins Jolt 5.5 and JoltC, compiles upstream ABI assertions, and is tested without SDL/editor linkage.
 
-JoltC exposes character, vehicle, and ragdoll APIs, but the engine adapter deliberately does not expose them yet. Character/vehicle slices must prove the narrow capability surface they need. Logical game state will be serialized and reconstructed; opaque Jolt state is not a persistence contract.
+S1 proved a narrow CharacterVirtual capability without exposing raw Jolt
+shapes, filters, pointers, or enums. The adapter deliberately still does not
+expose vehicle or ragdoll APIs; their slices must prove the capability surface
+they need. Logical game state is serialized and reconstructed rather than
+treating opaque Jolt state as a persistence contract.
 
 Cross-platform deterministic Jolt compilation is explicitly disabled. The future online direction is an authoritative server, not peer lockstep; enabling the option later requires measured behavior and performance evidence.
+
+#### D-009: Platform priority
+
+Apple Silicon macOS with Metal is the only current runtime-quality target. It
+receives native gameplay, editor, performance, failure, packaging, and installed
+runtime evidence. Linux/SteamOS and Windows remain Tier 2
+portability-preservation targets: their cross-builds, offline shader contracts,
+and headless dependency/linkage gates stay mandatory, but native client polish
+and packaging are not current delivery work.
+
+Native secondary-platform work is reactivated by a product milestone, not by
+the mere existence of backend code:
+
+- reconsider Linux client behavior before S3 finalizes cooked content,
+  filesystem, streaming, memory, and GPU-upload contracts;
+- select and validate a secondary native client before public cross-platform
+  playtesting or release;
+- require native Linux headless/server validation before S4 or any production
+  authoritative server host.
+
+This policy preserves future options without allowing three native runtime
+targets to compete with the current macOS-first gameplay roadmap.
 
 ---
 
@@ -366,10 +402,10 @@ Cross-platform deterministic Jolt compilation is explicitly disabled. The future
 | Stage | End-to-end outcome | Status |
 |---|---|---|
 | M0 | Reproducible baseline and blocking decisions | Complete |
-| M1 | Trustworthy build, shader, dependency, CI, and packaging gate | In progress |
+| M1 | Trustworthy macOS build, shader, dependency, CI, and packaging gate plus secondary-platform portability guards | In progress; native Vulkan/D3D12 client validation is deliberately deferred |
 | M2 | Immediate ownership and correctness hazards removed | Implemented; deeper failure injection/leak instrumentation and one manual minimize smoke remain evidence gates |
 | S0 | Crate lifecycle slice proves the kernel and feature contract | Complete; one-world-per-process and pre-network queue backpressure are accepted follow-on constraints |
-| S1 | Character walks around one block | Not started |
+| S1 | Character walks around one block | Complete; independent architecture, correctness, and build/evidence reviews pass with no remaining P0/P1/P2 finding |
 | S2 | Player enters and drives one vehicle | Not started |
 | S3 | One district/chunk loads and unloads asynchronously | Not started |
 | S4 | Two clients use one authoritative server, if selected | Deferred until multiplayer is selected and scoped |
@@ -431,11 +467,18 @@ M0–M2 are limited cross-cutting gates. S0 onward are vertical slices. Shared e
 - [x] Advertise only the embedded shader format and explicitly select the compatible implemented driver.
 - [x] Validate current SPIR-V entry points, resource counts, sets/bindings, block sizes, stages, and vertex interfaces through reflection.
 - [x] Query the claimed window’s swapchain format, select a supported depth format, and supply both to every scene/editor pipeline.
-- [ ] Add native Vulkan and D3D12 shader/runtime smoke tests. Offline MSL/SPIR-V/DXIL contracts and native Metal pass.
+- [x] Preserve offline MSL/SPIR-V/DXIL contracts, macOS Metal runtime smokes,
+  and Linux/Windows compile/headless gates.
+- **Deferred by platform policy:** native Vulkan/D3D12 client smokes resume only
+  when a secondary client platform is selected. Reconsider Linux client
+  behavior before S3's content/streaming contract is finalized, and require
+  native Linux headless evidence before server implementation.
 
 ### 11.4 CI and packaging
 
-- [x] Define formatting, Debug, ReleaseFast, clean-test, and native target workflow jobs; first hosted runs remain required evidence.
+- [x] Define formatting, Debug, ReleaseFast, clean-test, primary macOS, and
+  compile-only secondary-target workflow gates; the first hosted macOS run
+  remains required evidence.
 - [x] Add compile-only Linux and Windows cross-target jobs.
 - [x] Add reflected shader-contract validation.
 - [x] Add a non-GPU package/install probe that runs outside the repository root.
@@ -461,8 +504,12 @@ M0–M2 are limited cross-cutting gates. S0 onward are vertical slices. Shared e
 - [x] Debug and ReleaseFast pass on the primary platform.
 - [x] Clean tests pass without hidden generated artifacts.
 - [x] Supported GNU cross-target builds do not consume host-native libraries.
-- [ ] Every target backend passes offline and native validation: offline MSL/SPIR-V/DXIL and native Metal pass; native Vulkan and D3D12 remain open.
-- [ ] Installed visual runtimes launch outside the repository on every target. The non-GPU relocation probe passes locally.
+- [x] Tier 1 macOS passes offline MSL and native Metal validation; Tier 2
+  Linux/Windows pass their current offline shader, cross-build, and headless
+  portability contracts.
+- [ ] The installed macOS visual runtime launches outside the repository. The
+  non-GPU relocation probe already passes; secondary-platform installed-runtime
+  validation is deferred until that platform is selected.
 - [x] Zig support is an exact tested contract.
 
 ---
@@ -594,22 +641,37 @@ A player-controlled capsule walks, turns, jumps, and collides around one block. 
 
 ### Work pulled by the slice
 
-- [ ] Resolve character-controller coverage in the selected Jolt binding.
-- [ ] Add high-level action mapping from SDL input.
-- [ ] Add narrow shape-cast/query capabilities.
-- [ ] Add body-to-entity mapping through validated IDs or an external map.
-- [ ] Implement grounded movement, slope handling, jumping, and collision response.
-- [ ] Define the game-layer camera relationship without globals.
-- [ ] Introduce only the animation/render data required by the initial capsule/avatar.
-- [ ] Exercise cross-feature interaction with crates through events/relationships, not private imports.
+- [x] Resolve character-controller coverage with an engine-owned Jolt
+  CharacterVirtual adapter and real lifecycle spike.
+- [x] Add high-level action mapping and a frame-to-tick latch outside the feature.
+- [x] Add the narrow controller query/update capability required by the slice;
+  do not expose a speculative general shape-cast API.
+- [x] Keep grounded events backend-neutral; defer body-owner mapping until a
+  gameplay consumer needs contacted entity identity.
+- [x] Implement grounded movement, walkable/steep slope policy, jumping, stair
+  and floor settings, and static/dynamic collision response.
+- [x] Define interpolated host-owned follow-camera composition without globals.
+- [x] Add only the procedural capsule and typed resource slots required by S1.
+- [x] Exercise crate/character coexistence and dynamic collision through the
+  shared physics capability without private feature imports.
+- [x] Bound long-fall velocity explicitly and reconstruct grounded contacts
+  before first-tick actions after spawn/restore.
+- [x] Persist simulation-relevant character tuning and canonical yaw while
+  leaving host capacity and presentation assets outside authoritative state.
 
 ### Acceptance criteria
 
-- [ ] The same action-command stream produces expected headless results.
-- [ ] Character code imports no SDL event, ImGui, or renderer backend APIs.
-- [ ] Character and crate features coexist without private feature coupling.
-- [ ] Presentation remains smooth across differing render/simulation rates.
-- [ ] Character spawn/despawn cleans up all associated state.
+- [x] The same action-command stream produces expected headless results.
+- [x] Character code imports no SDL event, ImGui, or renderer backend APIs.
+- [x] Character and crate features coexist without private feature coupling.
+- [x] Presentation remains smooth across differing render/simulation rates.
+- [x] Character spawn/despawn cleans up all associated state.
+- [x] Grounded save/restore preserves an immediate jump and accepted snapshots
+  remain byte-stable under canonical character state/tuning.
+
+Evidence: [`docs/design/s1-character-slice.md`](docs/design/s1-character-slice.md),
+[`docs/validation/s1-acceptance.md`](docs/validation/s1-acceptance.md), and
+[`docs/performance/s1-baseline.md`](docs/performance/s1-baseline.md).
 
 ---
 
@@ -820,17 +882,17 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-003 | Zig 0.16 and pinned cohort are incompatible | P0 | M1 | Resolved |
 | F-004 | SPIR-V shaders use MSL entry point `main0` | P0 | M1 | Resolved |
 | F-005 | Primitive vertex UBO uses invalid SPIR-V descriptor set | P0 | M1 | Resolved |
-| F-006 | Windows D3D12/DXIL was not implemented | P0 | M1 | Resolved for implementation/offline build; hosted Windows and native D3D12 runtime evidence remain M1 gates |
+| F-006 | Windows D3D12/DXIL was not implemented | P0 | M1 | Resolved for implementation/offline build; native Windows runtime evidence is deferred until Windows is selected as a Tier 1 client target |
 | F-007 | GPU resource ownership permits double/triple release | P0 | M2 | Resolved with explicit `OwnedTexture` owners and copy-safe borrowed views |
 | F-008 | Jolt shape references leak on successful body creation | P0 | M2 | Resolved |
 | F-009 | No coordinated entity/body despawn lifecycle | P0 | S0 | Resolved for CrateFeature with body-first destruction and invariant-gated entity cleanup |
-| F-010 | Input edges/deltas are frame-scoped, not tick-scoped | P0 | S1 | Open; S0 has no player-input consumer |
+| F-010 | Input edges/deltas are frame-scoped, not tick-scoped | P0 | S1 | Resolved with the sandbox action latch and zero/multi-tick tests |
 | F-011 | Presentation interpolation is not implemented | P1 | S0 | Resolved for CrateFeature with previous/current pose history and shortest-arc normalized extraction |
 | F-012 | Debug triangle-batch pool overwrites live batches | P1 | M2 | Superseded by removal/deferment |
 | F-013 | Debug renderer is destroyed before retained batches | P1 | M2 | Superseded by removal/deferment |
 | F-014 | Depth resize failure leaves a released texture handle | P1 | M2 | Resolved by create-then-commit replacement and state-transition test |
 | F-015 | Process-global Jolt initialization is coupled to each world lifetime | P1 | M2/S0 | Resolved with adapter-private runtime leases and owner-thread contract |
-| F-016 | JoltC exposes character/vehicle/ragdoll APIs, but the narrow engine adapter has not proven those capabilities or opaque state persistence | P0 | D-004/S1/S2 | Open |
+| F-016 | JoltC exposes character/vehicle/ragdoll APIs, but the narrow engine adapter has not proven those capabilities or opaque state persistence | P0 | D-004/S1/S2 | CharacterVirtual capability and logical reconstruction resolved in S1; vehicle/ragdoll remain slice-scoped |
 | F-017 | ImGui event recognition is mistaken for input capture | P1 | M2 | Resolved with physical/gameplay state separation and `WantCapture*` routing |
 | F-018 | No safe schedule or mutation boundary | P0 | S0 | Resolved with frozen named phases, tick-targeted typed commands, and terminal infrastructure fault policy |
 | F-019 | Transform authority contradicts ADR-005 | P0 | D-007/S0 | Resolved for dynamic crates with explicit physics authority and post-step publication |
@@ -847,7 +909,7 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-030 | Main loop can busy-spin minimized/backpressured | P2 | M2 | Resolved in implementation with blocking swapchain acquisition and bounded unavailable-frame event wait; manual minimize evidence pending |
 | F-031 | Editor can leave bodies kinematic while hidden | P1 | M2/S5 | Superseded by removing direct Scene/Gizmo world mutation; S5 authoring must use typed commands |
 | F-032 | Scale recreation destroys body before replacement | P1 | M2/S5 | Superseded by removing direct Scene/Gizmo world mutation; future scale authoring is transactional feature work |
-| F-033 | CI and behavior coverage are shallow | P0 | M1 | CI implemented; hosted evidence open |
+| F-033 | CI and behavior coverage are shallow | P0 | M1 | CI implemented; hosted macOS evidence remains open, while Linux/Windows native-client evidence is deferred by D-009 |
 | F-034 | Engine license is not selected | P0 | Owner/release | Deferred by owner; distribution blocked |
 | F-035 | Accepted ADRs conflict with implementation | P1 | M0 | Resolved by amendments through 2026-07-09 |
 | F-036 | Tracked game-owned GLBs lack recorded provenance and do not belong in the eventual engine distribution | P0 | D-013 | Open |
@@ -874,6 +936,14 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-057 | Visual S0 still depended on the prototype `GameWorld` and borrowed Flecs/Jolt ownership | P0 | S0 | Resolved by one owned `Simulation` composition and deletion of the compatibility/editor mutation path |
 | F-058 | Outcome FIFO used quadratic front removal at the measured 1,024-crate cap | P1 | S0 | Resolved with a compacting cursor FIFO; measured bulk drain fell from roughly 0.36–0.38 ms to 0.001–0.004 ms and streaming retention is bounded |
 | F-059 | A cold headless-only build still resolves visual package dependencies even though its source graph and binary are isolated | P2 | M1/pre-server | Open; split build-graph dependency resolution before a server-only distribution workflow |
+| F-060 | Pinned JoltC CharacterVirtual settings initialization leaks its fallback empty-shape settings path | P0 | S1 | Resolved by explicitly constructing the exact Jolt 5.5 settings and releasing every caller-owned capsule/decorator reference |
+| F-061 | CrateFeature owned the world snapshot schema, clock, namespace, and identity cursor, preventing clean second-feature persistence | P0 | S1 | Resolved with feature-owned V1 records and a composition-owned V2 envelope with cross-feature identity validation |
+| F-062 | Unbounded character gravity eventually exceeded the engine/Jolt velocity contract and faulted a healthy runtime | P1 | S1 | Resolved with validated terminal-fall policy, final representability saturation, and a 3,600-tick diagonal free-fall regression |
+| F-063 | A grounded restored CharacterVirtual began `in_air`, losing an immediate jump and emitting a synthetic landing event | P1 | S1 | Resolved by refreshing contacts during controller creation and comparing original/restored first-tick jump continuation |
+| F-064 | Restore-time character config could silently change collider and locomotion behavior for the same snapshot | P2 | S1 | Resolved with required authoritative `CharacterConfigV1`; only host capacity and presentation assets remain restore inputs |
+| F-065 | Accepted non-canonical yaw was normalized during restore, breaking snapshot byte stability | P2 | S1 | Resolved with canonical `[-pi, pi)` record validation, negative-zero rejection, and exact-bit restore tests |
+| F-066 | Release events from an ImGui platform window could clear a main-window gameplay hold | P2 | S1 | Resolved by main-window filtering key/button releases and secondary-window regressions |
+| F-067 | The S1 measurement percentile test was compile-only and CI did not verify distribution fields or post-despawn state | P2 | S1 | Resolved by executing the tool test, reporting cleanup counts, and strengthening the CI schema smoke |
 
 ---
 
@@ -938,12 +1008,25 @@ Record evidence rather than relying only on target numbers:
 2. [x] Write the D-011/D-012 ADR describing feature registration, dependency rules, and commands/events/queries.
 3. [x] Choose the exact Zig baseline/migration policy under D-003.
 4. [x] Complete the focused Jolt binding spike and select the engine-owned JoltC 5.5 path under D-004.
-5. [ ] Complete M1’s remaining hosted CI and native Vulkan/D3D12 runtime evidence. The dependency cohort, all three offline shader formats, clean tests, cross-links, source-package check, and relocation probe are implemented.
+5. [ ] Complete the macOS-first M1 closeout: record hosted macOS evidence and
+   launch the installed visual runtime outside the repository. Keep existing
+   Linux/Windows cross-build, offline shader, and headless guards green; native
+   Vulkan/D3D12 client validation is not a current gate.
 6. [ ] Close M2’s remaining production-path failure-injection and native minimize evidence; the proven implementation hazards are fixed without adding speculative framework.
 7. [x] Write a short S0 design brief naming `CrateFeature` data, commands, systems, required capabilities, and tests.
 8. [x] Implement the S0 kernel/contracts, crate feature, Jolt composition, V1 persistence, typed visual-resource owner, and isolated headless host.
 9. [ ] Decide whether to replace/fork zflecs for multiple simultaneous worlds or accept one simulation world per server process before server architecture begins; this is explicitly not an S0 blocker.
 10. [x] Record below/above-simulation-rate native visual smoke, graceful teardown, and initial tick/extraction/queue measurements at the exact S0 cap.
+11. [x] Complete and independently review the S1 CharacterVirtual slice,
+    including action latching, shared-world collision, interpolation,
+    authoritative tuning persistence, headless/visual evidence, and a fresh
+    ReleaseFast characterization.
+12. [ ] Create the reviewed S1 milestone commit before beginning the next slice.
+13. [ ] Close the small macOS-focused M1/M2 evidence set: installed visual
+    launch, native minimize/restore behavior, and the highest-value production
+    initialization/failure seams.
+14. [ ] Begin S2 with a bounded vehicle capability/design spike, followed by
+    the smallest spawn → enter → drive → exit → destroy → restore slice.
 
 ---
 
@@ -968,3 +1051,5 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-10 | Cut the visual sandbox fully onto the owned S0 composition and removed the prototype bridge/editor mutation path | `GameWorld`, borrowed runtime/physics, direct render query, Scene/Gizmo tools, ImGuizmo, cylinder demo, and compatibility lease surface deleted |
 | 2026-07-10 | Closed S0 persistence, failure, cadence, performance, and graceful visual evidence | 103/103 Debug and ReleaseFast tests; velocity representability; allocation/fault sweeps; versioned 0/1/128/1,024 measurements; native Metal 240/80 Hz auto-quit smoke |
 | 2026-07-10 | Completed independent S0 architecture, correctness, and build/platform review | Initial edge findings corrected; targeted re-audits passed with no remaining actionable P0/P1/P2 S0 issue; accepted follow-on risks recorded in the acceptance document |
+| 2026-07-12 | Completed and independently reviewed the S1 character vertical slice | 139/139 Debug, ReleaseFast, and editor-enabled tests; authoritative V2 character tuning/canonical yaw; terminal-fall and grounded-restore regressions; source package and Linux/Windows cross-builds; four native Metal cadence smokes; architecture/correctness/build reviews pass with no remaining P0/P1/P2 finding |
+| 2026-07-12 | Prioritized Apple Silicon macOS/Metal as the sole current runtime-quality platform | ADR-007/D-009 amended: Linux/Windows retain cross-build, offline shader, and headless portability guards; native client investment becomes trigger-based before S3 content lock-in, secondary-client playtesting/release, or server work |

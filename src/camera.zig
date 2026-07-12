@@ -167,6 +167,19 @@ pub const Camera = struct {
         }
     }
 
+    /// Position this camera on an orbit behind its current yaw/pitch while
+    /// continuing to look at the supplied world-space target.
+    pub fn followTarget(self: *Camera, target: [3]f32, distance: f32) void {
+        std.debug.assert(std.math.isFinite(distance) and distance > 0);
+        const forward = self.getForward();
+        self.position = zm.f32x4(
+            target[0] - forward[0] * distance,
+            target[1] - forward[1] * distance,
+            target[2] - forward[2] * distance,
+            1.0,
+        );
+    }
+
     // ========================================================================
     // Convenience
     // ========================================================================
@@ -219,4 +232,16 @@ test "pitch clamp" {
     cam.rotate(0.0, 10000.0); // Try to look way down
     try std.testing.expect(cam.pitch > -std.math.pi / 2.0);
     try std.testing.expect(cam.pitch < std.math.pi / 2.0);
+}
+
+test "follow camera orbits behind and above its target" {
+    var cam = Camera{ .yaw = 0, .pitch = -0.25 };
+    cam.followTarget(.{ 2, 1, -3 }, 6);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), cam.position[0], 0.0001);
+    try std.testing.expect(cam.position[1] > 1);
+    try std.testing.expect(cam.position[2] > -3);
+    const target = cam.position + cam.getForward() * zm.splat(zm.Vec, 6);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), target[0], 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), target[1], 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, -3), target[2], 0.0001);
 }

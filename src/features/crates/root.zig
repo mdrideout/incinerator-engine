@@ -72,48 +72,14 @@ pub const CrateV1 = struct {
     angular_velocity: [3]f32,
 };
 
-pub const SnapshotV1 = struct {
-    schema_version: u16,
-    completed_ticks: u64,
-    fixed_delta_seconds: f32,
-    namespace: u64,
-    next_local_id: u64,
-    crates: []const CrateV1,
-};
+/// Validate only the crate-owned portion of a composed snapshot. World schema,
+/// clock, namespace, identity-cursor, and cross-feature identity validation
+/// belong to the composition that owns the complete persistence envelope.
+pub fn validateRecords(records: []const CrateV1, max_crates: usize) !void {
+    if (records.len > max_crates) return error.TooManyCrates;
 
-pub const max_snapshot_bytes: usize = 8 * 1024 * 1024;
-
-pub fn parseSnapshot(
-    allocator: std.mem.Allocator,
-    bytes: []const u8,
-    max_crates: usize,
-) !std.json.Parsed(SnapshotV1) {
-    if (bytes.len > max_snapshot_bytes) return error.SnapshotTooLarge;
-    var parsed = try std.json.parseFromSlice(SnapshotV1, allocator, bytes, .{});
-    errdefer parsed.deinit();
-    try validateSnapshot(parsed.value, max_crates);
-    return parsed;
-}
-
-pub fn validateSnapshot(snapshot: SnapshotV1, max_crates: usize) !void {
-    if (snapshot.schema_version != 1) return error.UnsupportedSchemaVersion;
-    if (snapshot.namespace == 0) return error.InvalidIdentityNamespace;
-    if (snapshot.next_local_id == 0) return error.InvalidIdentityCursor;
-    if (!std.math.isFinite(snapshot.fixed_delta_seconds) or
-        snapshot.fixed_delta_seconds <= 0)
-    {
-        return error.InvalidFixedDelta;
-    }
-    if (snapshot.crates.len > max_crates) return error.TooManyCrates;
-
-    for (snapshot.crates, 0..) |record, index| {
+    for (records, 0..) |record, index| {
         try record.id.validate();
-        if (record.id.namespace != snapshot.namespace) {
-            return error.ForeignIdentityNamespace;
-        }
-        if (record.id.local >= snapshot.next_local_id) {
-            return error.IdentityCursorWouldCollide;
-        }
         try (engine.physics.DynamicBoxDesc{
             .pose = record.pose,
             .velocity = .{
@@ -122,7 +88,7 @@ pub fn validateSnapshot(snapshot: SnapshotV1, max_crates: usize) !void {
             },
             .half_extents = record.half_extents,
         }).validate();
-        for (snapshot.crates[0..index]) |earlier| {
+        for (records[0..index]) |earlier| {
             if (std.meta.eql(earlier.id, record.id)) return error.DuplicatePersistentId;
         }
     }
@@ -300,12 +266,18 @@ pub fn Feature(comptime Bodies: type) type {
             return self.presentations.items;
         }
 
-        pub fn save(self: *Self, allocator: std.mem.Allocator) ![]u8 {
+        /// Return the crate-owned records for a composition snapshot. The
+        /// caller owns the returned slice and is responsible for serializing
+        /// it together with runtime metadata and other feature records.
+        pub fn snapshotRecords(
+            self: *Self,
+            allocator: std.mem.Allocator,
+        ) ![]CrateV1 {
             try self.runtime.ensureSnapshotBoundary();
             if (self.hasPendingCommands()) return error.CommandsPending;
 
             const records = try allocator.alloc(CrateV1, self.active.items.len);
-            defer allocator.free(records);
+            errdefer allocator.free(records);
             for (self.active.items, 0..) |runtime_id, index| {
                 try self.requirePhysicsAuthority(runtime_id);
                 const history = self.runtime.get(runtime_id, TransformHistory) orelse
@@ -327,33 +299,19 @@ pub fn Feature(comptime Bodies: type) type {
                 };
             }
             std.mem.sort(CrateV1, records, {}, lessThanRecord);
-
-            return std.json.Stringify.valueAlloc(allocator, SnapshotV1{
-                .schema_version = 1,
-                .completed_ticks = self.runtime.tickIndex(),
-                .fixed_delta_seconds = self.runtime.fixedDelta(),
-                .namespace = self.runtime.namespace(),
-                .next_local_id = try self.runtime.nextLocalId(),
-                .crates = records,
-            }, .{});
+            return records;
         }
 
         /// Restore into a newly initialized, still-registering feature. The
         /// operation rolls back every recreated crate if any record fails.
-        pub fn restoreSnapshot(self: *Self, snapshot: SnapshotV1) !void {
-            try validateSnapshot(snapshot, self.max_crates);
+        pub fn restoreRecords(self: *Self, records: []const CrateV1) !void {
+            try validateRecords(records, self.max_crates);
             if (self.active.items.len != 0 or self.hasPendingCommands()) {
                 return error.RestoreRequiresEmptyFeature;
             }
-            if (snapshot.namespace != self.runtime.namespace()) {
-                return error.ForeignIdentityNamespace;
-            }
-            if (snapshot.fixed_delta_seconds != self.runtime.fixedDelta()) {
-                return error.FixedDeltaMismatch;
-            }
 
             errdefer self.rollbackAll();
-            for (snapshot.crates) |record| {
+            for (records) |record| {
                 _ = try self.spawnNow(.{
                     .request_id = 0,
                     .pose = record.pose,
@@ -364,7 +322,6 @@ pub fn Feature(comptime Bodies: type) type {
                     .half_extents = record.half_extents,
                 }, record.id, false);
             }
-            try self.runtime.restoreClock(snapshot.completed_ticks, snapshot.next_local_id);
         }
 
         fn applyCommandsSystem(
@@ -620,124 +577,84 @@ fn testCrateRecord(namespace: u64, local: u64) CrateV1 {
     };
 }
 
-fn testSnapshot(
-    namespace: u64,
-    next_local_id: u64,
-    records: []const CrateV1,
-) SnapshotV1 {
-    return .{
-        .schema_version = 1,
-        .completed_ticks = 0,
-        .fixed_delta_seconds = 1.0 / 120.0,
-        .namespace = namespace,
-        .next_local_id = next_local_id,
-        .crates = records,
-    };
-}
-
-test "V1 validation rejects duplicate identities and colliding cursor" {
+test "crate record validation rejects duplicate identities and limits" {
     const records = [_]CrateV1{
         testCrateRecord(9, 1),
         testCrateRecord(9, 1),
     };
     try std.testing.expectError(
         error.DuplicatePersistentId,
-        validateSnapshot(testSnapshot(9, 2, &records), 8),
+        validateRecords(&records, 8),
     );
-
     try std.testing.expectError(
-        error.IdentityCursorWouldCollide,
-        validateSnapshot(testSnapshot(9, 1, records[0..1]), 8),
+        error.TooManyCrates,
+        validateRecords(records[0..1], 0),
     );
 }
 
-test "V1 parser requires an explicit supported schema version" {
-    const missing_version =
-        \\{"completed_ticks":0,"fixed_delta_seconds":0.008333333,
-        \\"namespace":9,"next_local_id":1,"crates":[]}
-    ;
-    try std.testing.expectError(
-        error.MissingField,
-        parseSnapshot(std.testing.allocator, missing_version, 8),
-    );
-
-    const unknown_version =
-        \\{"schema_version":2,"completed_ticks":0,
-        \\"fixed_delta_seconds":0.008333333,"namespace":9,
-        \\"next_local_id":1,"crates":[]}
-    ;
-    try std.testing.expectError(
-        error.UnsupportedSchemaVersion,
-        parseSnapshot(std.testing.allocator, unknown_version, 8),
-    );
+test "crate record validation leaves world namespace policy to composition" {
+    const records = [_]CrateV1{
+        testCrateRecord(10, 1),
+        testCrateRecord(11, 1),
+    };
+    try validateRecords(&records, records.len);
 }
 
-test "V1 parser rejects malformed and oversized documents" {
-    try std.testing.expectError(
-        error.SyntaxError,
-        parseSnapshot(std.testing.allocator, "{]", 8),
-    );
-
-    const oversized = try std.testing.allocator.alloc(u8, max_snapshot_bytes + 1);
-    defer std.testing.allocator.free(oversized);
-    @memset(oversized, ' ');
-    try std.testing.expectError(
-        error.SnapshotTooLarge,
-        parseSnapshot(std.testing.allocator, oversized, 8),
-    );
-}
-
-test "V1 validation rejects limits, invalid identities, and invalid physics" {
+test "crate record validation rejects invalid identities and physics" {
     var record = testCrateRecord(10, 1);
-    var snapshot = testSnapshot(10, 2, (&record)[0..1]);
 
-    try std.testing.expectError(error.TooManyCrates, validateSnapshot(snapshot, 0));
-
-    snapshot.fixed_delta_seconds = std.math.nan(f32);
-    try std.testing.expectError(error.InvalidFixedDelta, validateSnapshot(snapshot, 1));
-    snapshot.fixed_delta_seconds = 1.0 / 120.0;
-
-    snapshot.namespace = 0;
-    try std.testing.expectError(error.InvalidIdentityNamespace, validateSnapshot(snapshot, 1));
-    snapshot.namespace = 10;
-    snapshot.next_local_id = 0;
-    try std.testing.expectError(error.InvalidIdentityCursor, validateSnapshot(snapshot, 1));
-    snapshot.next_local_id = 2;
-
-    record.id.namespace = 11;
-    try std.testing.expectError(error.ForeignIdentityNamespace, validateSnapshot(snapshot, 1));
-    record.id.namespace = 10;
     record.id.local = 0;
-    try std.testing.expectError(error.InvalidIdentityLocal, validateSnapshot(snapshot, 1));
+    try std.testing.expectError(
+        error.InvalidIdentityLocal,
+        validateRecords((&record)[0..1], 1),
+    );
     record.id.local = 1;
 
     record.pose.position[0] = std.math.inf(f32);
-    try std.testing.expectError(error.NonFiniteTransform, validateSnapshot(snapshot, 1));
+    try std.testing.expectError(
+        error.NonFiniteTransform,
+        validateRecords((&record)[0..1], 1),
+    );
     record.pose.position[0] = 0;
     record.pose.rotation = .{ 0, 0, 0, 0 };
-    try std.testing.expectError(error.DegenerateQuaternion, validateSnapshot(snapshot, 1));
+    try std.testing.expectError(
+        error.DegenerateQuaternion,
+        validateRecords((&record)[0..1], 1),
+    );
     record.pose.rotation = .{ 0, 0, 0, 1 };
 
     record.linear_velocity[0] = std.math.nan(f32);
-    try std.testing.expectError(error.NonFinitePhysicsValue, validateSnapshot(snapshot, 1));
+    try std.testing.expectError(
+        error.NonFinitePhysicsValue,
+        validateRecords((&record)[0..1], 1),
+    );
     record.linear_velocity[0] = 0;
     record.linear_velocity[0] = std.math.nextAfter(
         f32,
         engine.physics.max_linear_velocity,
         std.math.inf(f32),
     );
-    try std.testing.expectError(error.LinearVelocityOutOfRange, validateSnapshot(snapshot, 1));
+    try std.testing.expectError(
+        error.LinearVelocityOutOfRange,
+        validateRecords((&record)[0..1], 1),
+    );
     record.linear_velocity[0] = 0;
     record.angular_velocity[0] = std.math.nextAfter(
         f32,
         engine.physics.max_angular_velocity,
         std.math.inf(f32),
     );
-    try std.testing.expectError(error.AngularVelocityOutOfRange, validateSnapshot(snapshot, 1));
+    try std.testing.expectError(
+        error.AngularVelocityOutOfRange,
+        validateRecords((&record)[0..1], 1),
+    );
     record.angular_velocity[0] = 0;
 
     record.half_extents[1] = 0;
-    try std.testing.expectError(error.InvalidHalfExtents, validateSnapshot(snapshot, 1));
+    try std.testing.expectError(
+        error.InvalidHalfExtents,
+        validateRecords((&record)[0..1], 1),
+    );
 }
 
 const FakeBodiesForTest = struct {
@@ -818,12 +735,17 @@ fn stepFakeBodies(
     try bodies.step(tick.delta_seconds);
 }
 
-fn saveSnapshotThroughFakeFeature(snapshot: SnapshotV1) ![]u8 {
+fn snapshotThroughFakeFeature(
+    records: []const CrateV1,
+    namespace: u64,
+    next_local_id: u64,
+    completed_ticks: u64,
+) ![]CrateV1 {
     var runtime = try engine.Runtime.init(std.testing.allocator, .{
-        .namespace = snapshot.namespace,
-        .fixed_delta_seconds = snapshot.fixed_delta_seconds,
-        .next_local_id = snapshot.next_local_id,
-        .completed_ticks = snapshot.completed_ticks,
+        .namespace = namespace,
+        .fixed_delta_seconds = 1.0 / 120.0,
+        .next_local_id = next_local_id,
+        .completed_ticks = completed_ticks,
     });
     defer runtime.deinit();
     var bodies = FakeBodiesForTest{};
@@ -837,11 +759,11 @@ fn saveSnapshotThroughFakeFeature(snapshot: SnapshotV1) ![]u8 {
     defer feature.deinit();
     var registry = runtime.registry();
     try feature.register(&registry);
-    try feature.restoreSnapshot(snapshot);
-    return feature.save(std.testing.allocator);
+    try feature.restoreRecords(records);
+    return feature.snapshotRecords(std.testing.allocator);
 }
 
-test "multi-record V1 restore-save is sorted and byte stable" {
+test "multi-record restore and snapshot is sorted and stable" {
     const records = [_]CrateV1{
         .{
             .id = .{ .namespace = 500, .local = 3 },
@@ -868,35 +790,32 @@ test "multi-record V1 restore-save is sorted and byte stable" {
             .angular_velocity = .{ -4, -5, -6 },
         },
     };
-    var source = testSnapshot(500, 4, &records);
-    source.completed_ticks = 37;
-
-    const first = try saveSnapshotThroughFakeFeature(source);
+    const first = try snapshotThroughFakeFeature(&records, 500, 4, 37);
     defer std.testing.allocator.free(first);
-    var parsed = try parseSnapshot(std.testing.allocator, first, 16);
-    defer parsed.deinit();
 
-    try std.testing.expectEqual(@as(u64, 37), parsed.value.completed_ticks);
-    try std.testing.expectEqual(@as(usize, 3), parsed.value.crates.len);
-    try std.testing.expectEqual(@as(u64, 1), parsed.value.crates[0].id.local);
-    try std.testing.expectEqual(@as(u64, 2), parsed.value.crates[1].id.local);
-    try std.testing.expectEqual(@as(u64, 3), parsed.value.crates[2].id.local);
+    try std.testing.expectEqual(@as(usize, 3), first.len);
+    try std.testing.expectEqual(@as(u64, 1), first[0].id.local);
+    try std.testing.expectEqual(@as(u64, 2), first[1].id.local);
+    try std.testing.expectEqual(@as(u64, 3), first[2].id.local);
     try std.testing.expectEqualDeep(
         [3]f32{ 10, 11, 12 },
-        parsed.value.crates[0].pose.position,
+        first[0].pose.position,
     );
     try std.testing.expectEqualDeep(
         [4]f32{ 0, 0, 0, 1 },
-        parsed.value.crates[1].pose.rotation,
+        first[1].pose.rotation,
     );
     try std.testing.expectEqualDeep(
         [3]f32{ 300, 400, 0 },
-        parsed.value.crates[2].linear_velocity,
+        first[2].linear_velocity,
     );
 
-    const second = try saveSnapshotThroughFakeFeature(parsed.value);
+    const second = try snapshotThroughFakeFeature(first, 500, 4, 37);
     defer std.testing.allocator.free(second);
-    try std.testing.expectEqualSlices(u8, first, second);
+    try std.testing.expectEqual(first.len, second.len);
+    for (first, second) |expected, actual| {
+        try std.testing.expectEqualDeep(expected, actual);
+    }
 }
 
 test "body creation failure rolls back the provisional runtime entity" {
@@ -963,14 +882,10 @@ test "restore failure rolls back every recreated crate" {
             .angular_velocity = .{ 0, 0, 0 },
         },
     };
-    try std.testing.expectError(error.InjectedBodyCreateFailure, feature.restoreSnapshot(.{
-        .schema_version = 1,
-        .completed_ticks = 0,
-        .fixed_delta_seconds = 1.0 / 120.0,
-        .namespace = 502,
-        .next_local_id = 3,
-        .crates = &records,
-    }));
+    try std.testing.expectError(
+        error.InjectedBodyCreateFailure,
+        feature.restoreRecords(&records),
+    );
     try std.testing.expectEqual(@as(usize, 0), feature.count());
     try std.testing.expectEqual(@as(usize, 0), runtime.entityCount());
     try std.testing.expectEqual(@as(usize, 0), runtime.persistentCount());
@@ -1130,7 +1045,10 @@ test "physics step failure preserves live state and feature teardown removes it"
         error.RuntimeFaulted,
         feature.enqueue(.{ .spawn = .{ .request_id = 2, .pose = .{} } }),
     );
-    try std.testing.expectError(error.RuntimeFaulted, feature.save(std.testing.allocator));
+    try std.testing.expectError(
+        error.RuntimeFaulted,
+        feature.snapshotRecords(std.testing.allocator),
+    );
 
     feature.deinit();
     feature_live = false;
@@ -1280,7 +1198,10 @@ test "a post-physics read failure faults commands and persistence but still tear
         error.RuntimeFaulted,
         feature.enqueue(.{ .spawn = .{ .request_id = 2, .pose = .{} } }),
     );
-    try std.testing.expectError(error.RuntimeFaulted, feature.save(std.testing.allocator));
+    try std.testing.expectError(
+        error.RuntimeFaulted,
+        feature.snapshotRecords(std.testing.allocator),
+    );
 
     feature.deinit();
     feature_live = false;

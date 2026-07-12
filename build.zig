@@ -319,9 +319,8 @@ pub fn build(b: *std.Build) void {
     const zflecs_module = zflecs.module("root");
     mod.addImport("zflecs", zflecs_module);
 
-    // S0 is composed from one feature and one concrete adapter. The feature
-    // sees only the public kernel/contracts module; the simulation host is the
-    // sole place where that feature is paired with Jolt.
+    // Gameplay features see only the public kernel/contracts module; the
+    // sandbox simulation host is the sole place where they are paired with Jolt.
     const crate_feature_module = b.createModule(.{
         .root_source_file = b.path("src/features/crates/root.zig"),
         .target = target,
@@ -330,17 +329,31 @@ pub fn build(b: *std.Build) void {
             .{ .name = "incinerator_engine", .module = mod },
         },
     });
-    const crate_simulation_module = b.createModule(.{
+    const character_feature_module = b.createModule(.{
+        .root_source_file = b.path("src/features/character/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+        },
+    });
+    const sandbox_controls_module = b.createModule(.{
+        .root_source_file = b.path("src/sandbox_controls.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const sandbox_simulation_module = b.createModule(.{
         .root_source_file = b.path("src/hosts/simulation.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "incinerator_engine", .module = mod },
             .{ .name = "crate_feature", .module = crate_feature_module },
+            .{ .name = "character_feature", .module = character_feature_module },
             .{ .name = "jolt_physics", .module = jolt_physics_module },
         },
     });
-    exe.root_module.addImport("crate_simulation", crate_simulation_module);
+    exe.root_module.addImport("sandbox_simulation", sandbox_simulation_module);
     // zflecs's exported module already owns flecs.c. Linking its library too
     // compiles the amalgamation twice and relies on archive laziness to hide
     // duplicate symbols. Keep one C owner and add the library's Windows system
@@ -403,7 +416,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "crate_simulation", .module = crate_simulation_module },
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
         },
     });
     const headless_exe = b.addExecutable(.{
@@ -412,14 +425,14 @@ pub fn build(b: *std.Build) void {
     });
     const check_headless_step = b.step(
         "check-headless",
-        "Compile the SDL-free crate simulation host",
+        "Compile the SDL-free sandbox simulation host",
     );
     check_headless_step.dependOn(&headless_exe.step);
 
     const install_headless_artifact = b.addInstallArtifact(headless_exe, .{});
     const install_headless_step = b.step(
         "install-headless",
-        "Install only the SDL-free crate simulation host",
+        "Install only the SDL-free sandbox simulation host",
     );
     install_headless_step.dependOn(&install_headless_artifact.step);
 
@@ -480,7 +493,7 @@ pub fn build(b: *std.Build) void {
 
     const run_headless_cmd = b.addRunArtifact(headless_exe);
     if (b.args) |args| run_headless_cmd.addArgs(args);
-    const run_headless_step = b.step("run-headless", "Run the SDL-free crate simulation host");
+    const run_headless_step = b.step("run-headless", "Run the SDL-free sandbox simulation host");
     run_headless_step.dependOn(&run_headless_cmd.step);
 
     // Native, record-only S0 characterization. Timings are intentionally not
@@ -491,7 +504,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "crate_simulation", .module = crate_simulation_module },
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
         },
     });
     const s0_measure_exe = b.addExecutable(.{
@@ -506,11 +519,33 @@ pub fn build(b: *std.Build) void {
     );
     s0_measure_step.dependOn(&run_s0_measure.step);
 
+    const s1_measure_root_module = b.createModule(.{
+        .root_source_file = b.path("tools/s1_measure.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+        },
+    });
+    const s1_measure_exe = b.addExecutable(.{
+        .name = "incinerator_s1_measure",
+        .root_module = s1_measure_root_module,
+    });
+    const run_s1_measure = b.addRunArtifact(s1_measure_exe);
+    if (b.args) |args| run_s1_measure.addArgs(args);
+    const s1_measure_step = b.step(
+        "measure-s1",
+        "Record SDL-free S1 character slice timings as versioned JSON",
+    );
+    s1_measure_step.dependOn(&run_s1_measure.step);
+    const s1_measure_tests = b.addTest(.{ .root_module = s1_measure_root_module });
+    const run_s1_measure_tests = b.addRunArtifact(s1_measure_tests);
+
     const headless_tests = b.addTest(.{ .root_module = headless_root_module });
     const run_headless_tests = b.addRunArtifact(headless_tests);
     const headless_test_step = b.step(
         "test-headless",
-        "Run the isolated Flecs and Jolt crate lifecycle tests",
+        "Run the isolated Flecs/Jolt crate and character lifecycle tests",
     );
     headless_test_step.dependOn(&run_headless_tests.step);
     headless_test_step.dependOn(&verify_headless_boundary.step);
@@ -578,13 +613,29 @@ pub fn build(b: *std.Build) void {
     );
     crate_feature_test_step.dependOn(&run_crate_feature_tests.step);
 
-    const crate_simulation_tests = b.addTest(.{ .root_module = crate_simulation_module });
-    const run_crate_simulation_tests = b.addRunArtifact(crate_simulation_tests);
-    const crate_simulation_test_step = b.step(
-        "test-simulation",
-        "Run the concrete crate/Jolt composition tests",
+    const character_feature_tests = b.addTest(.{ .root_module = character_feature_module });
+    const run_character_feature_tests = b.addRunArtifact(character_feature_tests);
+    const character_feature_test_step = b.step(
+        "test-character-feature",
+        "Run the backend-neutral character feature tests",
     );
-    crate_simulation_test_step.dependOn(&run_crate_simulation_tests.step);
+    character_feature_test_step.dependOn(&run_character_feature_tests.step);
+
+    const sandbox_controls_tests = b.addTest(.{ .root_module = sandbox_controls_module });
+    const run_sandbox_controls_tests = b.addRunArtifact(sandbox_controls_tests);
+    const sandbox_controls_test_step = b.step(
+        "test-sandbox-controls",
+        "Run frame-to-tick action latch tests",
+    );
+    sandbox_controls_test_step.dependOn(&run_sandbox_controls_tests.step);
+
+    const sandbox_simulation_tests = b.addTest(.{ .root_module = sandbox_simulation_module });
+    const run_sandbox_simulation_tests = b.addRunArtifact(sandbox_simulation_tests);
+    const sandbox_simulation_test_step = b.step(
+        "test-simulation",
+        "Run the concrete sandbox/Jolt composition tests",
+    );
+    sandbox_simulation_test_step.dependOn(&run_sandbox_simulation_tests.step);
 
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
@@ -610,7 +661,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_contracts_tests.step);
     test_step.dependOn(&run_crate_feature_tests.step);
-    test_step.dependOn(&run_crate_simulation_tests.step);
+    test_step.dependOn(&run_character_feature_tests.step);
+    test_step.dependOn(&run_sandbox_controls_tests.step);
+    test_step.dependOn(&run_sandbox_simulation_tests.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_physics_tests.step);
     test_step.dependOn(&run_headless_tests.step);
@@ -620,6 +673,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_headless_boundary_tests.step);
     test_step.dependOn(&run_headless_linkage_tests.step);
     test_step.dependOn(&s0_measure_exe.step);
+    test_step.dependOn(&s1_measure_exe.step);
+    test_step.dependOn(&run_s1_measure_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

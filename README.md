@@ -18,15 +18,19 @@ These versions are one tested compatibility cohort and should be upgraded togeth
 
 The complete dependency identities live in `build.zig.zon` and [`third_party/joltc-zig/README.md`](third_party/joltc-zig/README.md). Dependency features that affect linkage, ABI, or compiled capabilities are selected in `build.zig`; they are not inherited silently from wrapper defaults. Jolt's cross-platform deterministic build mode is deliberately disabled. The future network model is an authoritative server, not client lockstep; enabling that mode would need a measured requirement and performance evaluation.
 
-## Supported Targets
+## Platform Priority
 
-| Platform | Architecture | Current graphics path | Status |
-|---|---|---|---|
-| macOS | Apple Silicon (`aarch64`) | Metal / MSL | Primary native development gate |
-| Linux / SteamOS | `x86_64` | Vulkan / SPIR-V | CI workflow configured; hosted and native Vulkan runtime evidence remain release gates |
-| Windows | `x86_64-windows-gnu` | D3D12 / DXIL by default | Offline generation and cross-link pass; hosted Windows and native D3D12 runtime evidence remain release gates |
+| Tier | Platform | Architecture | Current graphics path | Status |
+|---|---|---|---|---|
+| 1 | macOS | Apple Silicon (`aarch64`) | Metal / MSL | Sole current runtime-quality, performance, editor, and packaging target |
+| 2 | Linux / SteamOS | `x86_64` | Vulkan / SPIR-V | Cross-build, shader-contract, and headless portability guard; native client validation deferred |
+| 2 | Windows | `x86_64-windows-gnu` | D3D12 / DXIL by default | Cross-build, shader-contract, and headless portability guard; native client validation deferred |
 
-`-Dwindows-gpu=vulkan` selects the provisional Windows Vulkan/SPIR-V fallback. Linux `x86_64` is also the intended future headless/server target. Mobile, web, consoles, and Intel macOS are outside the current support contract.
+`-Dwindows-gpu=vulkan` selects the provisional Windows Vulkan/SPIR-V fallback.
+Linux `x86_64` is also the intended future headless/server target. Native
+Vulkan/D3D12 client investment resumes only when a secondary client platform is
+selected; native Linux headless validation becomes required before server work.
+Mobile, web, consoles, and Intel macOS are outside the current support contract.
 
 ## Developer Environment Setup (macOS)
 
@@ -66,7 +70,7 @@ zig build run
 # Run the full kernel, feature, host, adapter, and shader contract
 zig build test
 
-# Run the SDL-free real Flecs/Jolt crate lifecycle suite
+# Run the SDL-free real Flecs/Jolt sandbox lifecycle suite
 zig build test-headless -Deditor=false
 
 # Compile the headless artifact without invoking any shader tool
@@ -75,7 +79,7 @@ zig build check-headless -Deditor=false \
   -Dspirv-cross=/definitely/missing/spirv-cross \
   -Dshadercross=/definitely/missing/shadercross
 
-# Run the SDL-free crate sandbox
+# Run the SDL-free crate + character sandbox
 zig build run-headless -Deditor=false
 
 # Run the renderer-free Jolt integration test
@@ -96,11 +100,20 @@ zig build run -- --verify-install
 # Record the ReleaseFast S0 characterization as versioned JSON
 zig build measure-s0 -Doptimize=ReleaseFast -Deditor=false
 
+# Record the ReleaseFast S1 character-slice characterization
+zig build measure-s1 -Doptimize=ReleaseFast -Deditor=false
+
 # Self-terminating native visual cadence/shutdown checks
 zig build run -Deditor=false -- \
   --visual-smoke --frames=480 --virtual-render-hz=240
 zig build run -Deditor=false -- \
   --visual-smoke --frames=160 --virtual-render-hz=80
+
+# Run the S1 character/jump/block/camera smoke above and below tick rate
+zig build run -Deditor=false -- \
+  --s1-visual-smoke --frames=480 --virtual-render-hz=240
+zig build run -Deditor=false -- \
+  --s1-visual-smoke --frames=160 --virtual-render-hz=80
 ```
 
 ## Content Boundary
@@ -112,9 +125,9 @@ The engine package intentionally excludes `assets`. Any GLB files under the work
 | Key | Action |
 |---|---|
 | ESC | Quit |
-| Right mouse + WASD | Move camera |
-| Right mouse + drag | Look around |
-| Q / E | Move camera down / up |
+| W / A / S / D | Move the character |
+| Space | Jump |
+| Right mouse + drag | Turn character / orbit camera |
 | F1 | Toggle editor UI |
 | F2 | Toggle ImGui demo |
 
@@ -130,6 +143,9 @@ The overhaul is converging on a thin kernel, feature-owned vertical slices, narr
 - [`S0 Crate Lifecycle Design`](docs/design/s0-crate-lifecycle.md)
 - [`S0 Acceptance Record`](docs/validation/s0-acceptance.md)
 - [`S0 Performance Baseline`](docs/performance/s0-baseline.md)
+- [`S1 Character Slice Design`](docs/design/s1-character-slice.md)
+- [`S1 Acceptance Record`](docs/validation/s1-acceptance.md)
+- [`S1 Performance Baseline`](docs/performance/s1-baseline.md)
 - the complete [`docs/adr`](docs/adr) directory
 
 The engine loop separates input, fixed-rate simulation, and presentation:
@@ -138,7 +154,7 @@ The engine loop separates input, fixed-rate simulation, and presentation:
 input pump (per frame) -> simulation ticks (fixed 120 Hz) -> presentation
 ```
 
-The current M2/S0 boundary is intentionally concrete rather than a future
+The current M2/S1 boundary is intentionally concrete rather than a future
 asset/framework abstraction:
 
 - GPU textures have explicit `OwnedTexture` owners and copy-safe borrowed views;
@@ -148,18 +164,28 @@ asset/framework abstraction:
   generation cannot revive stale handles;
 - physical input is maintained independently from ImGui capture and main-window
   focus loss, preventing captured releases from becoming stuck gameplay state;
+- a sandbox-owned action latch preserves edges across zero-tick frames and
+  consumes them once across multi-tick frames before emitting device-independent
+  character commands;
 - renderer failures propagate separately from benign unavailable frames, and
   scene/ImGui pipelines use the actual SDL swapchain and supported depth formats.
 - `CrateFeature` owns typed commands/outcomes, Flecs components, coordinated
-  body/entity lifecycle, V1 logical persistence, and immutable interpolated
+  body/entity lifecycle, V1 records, and immutable interpolated
   presentation records;
+- `CharacterFeature` independently owns locomotion commands, grounded-state
+  events, Jolt CharacterVirtual lifecycle, canonical V1 records and persisted
+  simulation tuning, and interpolated
+  capsule/camera presentation without importing crates, SDL, or renderer code;
+- the sandbox composition owns the V2 save envelope, runtime clock and identity
+  cursor, cross-feature identity validation, and authoritative restoration of
+  feature-owned character tuning;
 - the public engine module exposes feature-authoring contracts and a type-erased
-  startup-only runtime/registry, while the concrete crate/Jolt `Simulation`
+  startup-only runtime/registry, while the concrete sandbox/Jolt `Simulation`
   remains an internal conformance composition rather than engine API;
 - the headless artifact and its extracted-package tests contain no SDL, ImGui,
   renderer, asset-loader, or shader-tool edge.
 
-The visual sandbox and headless host now construct the same owned S0
+The visual sandbox and headless host now construct the same owned S1
 `Simulation`; the former `GameWorld`, borrowed Flecs/Jolt composition, direct
 ECS render query, and editor mutation path have been removed. The editor keeps
 stats, camera, and render panels. Scene inspection/manipulation returns in a

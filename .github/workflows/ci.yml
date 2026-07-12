@@ -142,6 +142,41 @@ jobs:
           ' "$report"
           cat "$report"
 
+      - name: S1 measurement schema smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/s1-measure.json"
+          zig build measure-s1 -Doptimize=ReleaseFast -Deditor=false -- \
+            --warmup=16 --samples=32 --trials=1 > "$report"
+          jq -e '
+            .schema_version == 1 and
+            .benchmark == "s1_character_slice" and
+            .optimize == "ReleaseFast" and
+            .warmup == 16 and .samples == 32 and .trials == 1 and
+            (.results | length) == 1 and
+            all(.results[];
+              (.action_submit.samples == 32 and
+                (.action_submit | has("mean_ns") and has("p50_ns") and
+                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
+              (.steady_tick.samples == 32 and
+                (.steady_tick | has("mean_ns") and has("p50_ns") and
+                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
+              (.presentation.samples == 32 and
+                (.presentation | has("mean_ns") and has("p50_ns") and
+                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
+              .active_crates == 1 and
+              .active_characters == 1 and
+              .active_entities == 2 and
+              .physics_bodies == 3 and
+              .post_despawn_crates == 0 and
+              .post_despawn_characters == 0 and
+              .post_despawn_entities == 0 and
+              .post_despawn_bodies == 2 and
+              .post_despawn_active_bodies == 0)
+          ' "$report"
+          cat "$report"
+
       - name: Compile-only cross targets
         shell: bash
         run: |

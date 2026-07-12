@@ -2,7 +2,7 @@
 
 **Status:** Accepted
 **Date:** 2026-07-09
-**Amended:** 2026-07-10
+**Amended:** 2026-07-12
 **Decision Maker:** Matt
 
 ## Context
@@ -46,7 +46,10 @@ public host interface.
 
 ### Feature ownership
 
-A feature owns its data and behavior end to end: components, commands, events, systems, persistence, render extraction, optional editor extension, and tests. The first proof is `CrateFeature`.
+A feature owns its data and behavior end to end: components, commands, events,
+systems, persistence, render extraction, optional editor extension, and tests.
+`CrateFeature` and `CharacterFeature` now independently prove that boundary
+while sharing one runtime and physics world.
 
 Feature registration is deterministic and explicit. Runtime feature unloading, hot reload, a binary plugin ABI, and auto-discovery are deferred until a real use case requires them.
 
@@ -75,21 +78,25 @@ The main thread owns ECS structural mutation and SDL GPU submission. Physics or 
 The public `incinerator_engine` module is the feature-authoring surface. It
 exports backend-neutral contracts, identity values, a type-erased `Runtime`,
 and the startup-only `FeatureRegistry`. Its public layout does not expose a
-Flecs world or mutable kernel bookkeeping. The concrete crate/Jolt
+Flecs world or mutable kernel bookkeeping. The concrete sandbox/Jolt
 `Simulation` is deliberately a private conformance composition shared by the
 visual sandbox and headless tests; it is not game-specific API promised by the
 engine package.
 
 The registry declares components and systems only. Commands, outcomes,
-persistence, and render extraction remain owned by each feature. The S0 kernel
+persistence records, and render extraction remain owned by each feature. The kernel
 executes four fixed-tick phases—`commands`, `pre_physics`, `physics`, and
 `post_physics`—and
 runs immutable presentation extraction outside that schedule at render
-frequency. S0 has no `pre_physics` system yet, so that phase is currently an
-empty, deterministic boundary. Expected domain rejection is reported as a typed outcome;
+frequency. CharacterFeature uses `pre_physics` for controller movement before
+the single shared Jolt step. Expected domain rejection is reported as a typed outcome;
 infrastructure, adapter, and invariant errors put the runtime into a terminal
 fault state that permits diagnostics and teardown but rejects further normal
-ticks, command submission, and persistence.
+ticks, command submission, and persistence. The composition owns the V2 world
+schema, runtime clock/identity metadata, and cross-feature identity policy;
+features own their logical V1 records and feature-specific persisted tuning.
+Character simulation tuning is required in the V2 envelope and authoritative
+on restore; host capacity and presentation assets remain restore-time policy.
 
 The current zflecs wrapper permits one live engine-owned world per process. A
 shared lease rejects a second owner before entering zflecs and preserves the

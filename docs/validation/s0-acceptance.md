@@ -100,9 +100,9 @@ this machine and are not CI thresholds.
   before network-originated commands.
 - Jolt cross-platform deterministic mode remains disabled. Repeatability is
   target-local scheduling evidence, not peer-lockstep or bitwise portability.
-- Native Vulkan and D3D12 runtime validation remain M1/release evidence. S0 has
-  compile/headless gates for those platforms and authoritative native Metal
-  visual evidence.
+- Native Vulkan and D3D12 client validation is deferred by the macOS-first
+  platform policy. S0 retains compile, offline-shader, and headless portability
+  gates for those platforms plus authoritative native Metal visual evidence.
 - The headless source graph and linked artifact are isolated, but a cold root
   build still resolves visual package dependencies before selecting a step.
   Split dependency resolution before a server-only distribution workflow.
@@ -125,8 +125,8 @@ tree:
 - **Build/platform/evidence:** pass with no blocking findings. CI schema checks,
   checked measurement workload arithmetic, raw JSON/summary consistency,
   README commands, YAML/Bash syntax, source packaging, and local/cross build
-  gates were verified. Remaining hosted/native non-Metal runtime work is
-  explicitly retained under M1/M2 rather than hidden in S0.
+  gates were verified. Native non-Metal client work is trigger-based under
+  ADR-007 rather than hidden in S0.
 
-S0 is therefore closed. This does not close M1/M2 release evidence or authorize
-S1; the next slice begins only through a separate plan decision.
+S0 is therefore closed. This does not close the macOS-first M1/M2 evidence or
+authorize S1; the next slice begins only through a separate plan decision.

@@ -8,7 +8,8 @@ const prohibited_import_basenames = [_][]const u8{
     "mesh",
     "texture",
     "editor",
-    "crate_visual_resources",
+    "sandbox_visual_resources",
+    "sandbox_controls",
     "zgui",
     "zmath",
     "zmesh",
@@ -30,6 +31,7 @@ const root_files = [_][]const u8{
 const root_directories = [_][]const u8{
     "src/engine",
     "src/features/crates",
+    "src/features/character",
 };
 
 pub fn main(init: std.process.Init) !void {

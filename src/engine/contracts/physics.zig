@@ -2,7 +2,8 @@
 //!
 //! The engine does not expose a runtime physics vtable or an upstream body-ID
 //! representation. A feature is generic over a concrete `Bodies` adapter and
-//! can validate that adapter with `assertImplementation`.
+//! can validate that adapter with `assertImplementation`. Composition roots
+//! separately validate their world-step capability.
 
 const std = @import("std");
 const transform = @import("../transform.zig");
@@ -75,6 +76,94 @@ pub const DynamicBoxDesc = struct {
     }
 };
 
+/// Gameplay-facing state reported by a character controller. These values are
+/// intentionally independent of Jolt's enum and pointer types.
+pub const GroundState = enum {
+    on_ground,
+    on_steep_ground,
+    not_supported,
+    in_air,
+};
+
+/// A bottom-anchored upright capsule. `position` is the point at the center of
+/// the capsule's bottom, which is also the feature's logical world position.
+pub const CharacterDesc = struct {
+    position: [3]f32,
+    velocity: [3]f32 = .{ 0, 0, 0 },
+    radius: f32 = 0.4,
+    half_height: f32 = 0.5,
+    max_slope_radians: f32 = std.math.degreesToRadians(50.0),
+    mass: f32 = 70.0,
+    max_strength: f32 = 100.0,
+
+    pub fn validate(self: CharacterDesc) !void {
+        try validateFinite(self.position);
+        try validateFinite(self.velocity);
+        if (!std.math.isFinite(self.radius) or self.radius <= 0) {
+            return error.InvalidCharacterRadius;
+        }
+        if (!std.math.isFinite(self.half_height) or self.half_height <= 0) {
+            return error.InvalidCharacterHalfHeight;
+        }
+        if (!std.math.isFinite(self.max_slope_radians) or
+            self.max_slope_radians <= 0 or
+            self.max_slope_radians >= std.math.pi / 2.0)
+        {
+            return error.InvalidCharacterSlope;
+        }
+        if (!std.math.isFinite(self.mass) or self.mass <= 0) {
+            return error.InvalidCharacterMass;
+        }
+        if (!std.math.isFinite(self.max_strength) or self.max_strength < 0) {
+            return error.InvalidCharacterStrength;
+        }
+        try (Velocity{ .linear = self.velocity }).validate();
+    }
+};
+
+/// One controller update. Movement policy lives in the feature; the adapter
+/// performs collision, stair walking, and floor adhesion for this velocity.
+pub const CharacterUpdate = struct {
+    velocity: [3]f32,
+    stick_to_floor_distance: f32 = 0.5,
+    step_up_height: f32 = 0.4,
+
+    pub fn validate(self: CharacterUpdate) !void {
+        try validateFinite(self.velocity);
+        try (Velocity{ .linear = self.velocity }).validate();
+        if (!std.math.isFinite(self.stick_to_floor_distance) or
+            self.stick_to_floor_distance < 0)
+        {
+            return error.InvalidStickToFloorDistance;
+        }
+        if (!std.math.isFinite(self.step_up_height) or self.step_up_height < 0) {
+            return error.InvalidStepUpHeight;
+        }
+    }
+};
+
+pub const CharacterState = struct {
+    position: [3]f32,
+    velocity: [3]f32,
+    ground_state: GroundState,
+    ground_velocity: [3]f32,
+    ground_normal: [3]f32,
+
+    pub fn validate(self: CharacterState) !void {
+        try validateFinite(self.position);
+        try validateFinite(self.velocity);
+        try validateFinite(self.ground_velocity);
+        try validateFinite(self.ground_normal);
+        try (Velocity{ .linear = self.velocity }).validate();
+        try (Velocity{ .linear = self.ground_velocity }).validate();
+    }
+
+    pub fn isSupported(self: CharacterState) bool {
+        return self.ground_state == .on_ground or
+            self.ground_state == .on_steep_ground;
+    }
+};
+
 /// Check the structural contract used by physics-backed features.
 ///
 /// `Bodies.Handle` remains wholly adapter-owned. In particular, this contract
@@ -112,11 +201,62 @@ pub fn assertImplementation(comptime Bodies: type) void {
             .{ *Bodies, Bodies.Handle, [3]f32 },
             void,
         );
+    }
+}
+
+/// Check the world-step capability consumed by a simulation composition.
+/// Features do not own or schedule the shared physics step.
+pub fn assertWorldStepImplementation(comptime Stepper: type) void {
+    comptime {
         assertFallibleMethod(
-            Bodies,
+            Stepper,
             "step",
-            .{ *Bodies, f32 },
+            .{ *Stepper, f32 },
             void,
+        );
+    }
+}
+
+/// Check the structural contract consumed by the character vertical slice.
+/// The controller handle remains wholly owned by the concrete adapter.
+pub fn assertCharacterImplementation(comptime Controllers: type) void {
+    comptime {
+        if (!@hasDecl(Controllers, "Handle")) {
+            @compileError("character implementation must declare Handle");
+        }
+        if (@TypeOf(Controllers.Handle) != type) {
+            @compileError("character implementation Handle must be a type");
+        }
+
+        assertFallibleMethod(
+            Controllers,
+            "createCharacter",
+            .{ *Controllers, CharacterDesc },
+            Controllers.Handle,
+        );
+        assertFallibleMethod(
+            Controllers,
+            "destroyCharacter",
+            .{ *Controllers, Controllers.Handle },
+            void,
+        );
+        assertFallibleMethod(
+            Controllers,
+            "characterState",
+            .{ *Controllers, Controllers.Handle },
+            CharacterState,
+        );
+        assertFallibleMethod(
+            Controllers,
+            "prepareCharacter",
+            .{ *Controllers, Controllers.Handle },
+            CharacterState,
+        );
+        assertFallibleMethod(
+            Controllers,
+            "updateCharacter",
+            .{ *Controllers, Controllers.Handle, CharacterUpdate, f32 },
+            CharacterState,
         );
     }
 }
@@ -264,7 +404,7 @@ test "velocity limits accept exact boundaries and reject silent-clamp inputs" {
     );
 }
 
-test "compile-time physics structural contract accepts an adapter-owned handle" {
+test "compile-time physics contracts separate feature bodies from host stepping" {
     const FakeBodies = struct {
         pub const Handle = enum(u32) { crate = 1 };
 
@@ -276,8 +416,57 @@ test "compile-time physics structural contract accepts an adapter-owned handle" 
             return .{};
         }
         pub fn applyImpulse(_: *@This(), _: Handle, _: [3]f32) !void {}
+    };
+    const FakeWorldStepper = struct {
         pub fn step(_: *@This(), _: f32) !void {}
     };
 
     comptime assertImplementation(FakeBodies);
+    comptime assertWorldStepImplementation(FakeWorldStepper);
+}
+
+test "character contract validates a bottom-anchored capsule and adapter" {
+    const FakeControllers = struct {
+        pub const Handle = enum(u32) { player = 1 };
+
+        pub fn createCharacter(_: *@This(), _: CharacterDesc) !Handle {
+            return .player;
+        }
+        pub fn destroyCharacter(_: *@This(), _: Handle) !void {}
+        pub fn characterState(_: *@This(), _: Handle) !CharacterState {
+            return .{
+                .position = .{ 0, 0, 0 },
+                .velocity = .{ 0, 0, 0 },
+                .ground_state = .in_air,
+                .ground_velocity = .{ 0, 0, 0 },
+                .ground_normal = .{ 0, 1, 0 },
+            };
+        }
+        pub fn prepareCharacter(self: *@This(), handle: Handle) !CharacterState {
+            return self.characterState(handle);
+        }
+        pub fn updateCharacter(
+            self: *@This(),
+            handle: Handle,
+            _: CharacterUpdate,
+            _: f32,
+        ) !CharacterState {
+            return self.characterState(handle);
+        }
+    };
+
+    comptime assertCharacterImplementation(FakeControllers);
+    try (CharacterDesc{ .position = .{ 0, 1, 0 } }).validate();
+    try std.testing.expectError(
+        error.InvalidCharacterRadius,
+        (CharacterDesc{ .position = .{ 0, 1, 0 }, .radius = 0 }).validate(),
+    );
+    try std.testing.expectError(
+        error.InvalidCharacterHalfHeight,
+        (CharacterDesc{ .position = .{ 0, 1, 0 }, .half_height = 0 }).validate(),
+    );
+    try std.testing.expectError(
+        error.InvalidStepUpHeight,
+        (CharacterUpdate{ .velocity = .{ 0, 0, 0 }, .step_up_height = -1 }).validate(),
+    );
 }

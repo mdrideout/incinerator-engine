@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted, amended 2026-07-09
+Accepted, amended 2026-07-12
 
 ## Context
 
@@ -39,6 +39,17 @@ It must not be serialized, used as a persistent entity identity, or exposed as
 a future network identity. The Jolt C import and ABI details remain private to
 the physics adapter.
 
+S1 adds a separate compile-time `CharacterControllers` capability backed by
+Jolt `CharacterVirtual`. Its `CharacterId` is also world-qualified and indexed
+through a live adapter-owned serial-to-pointer map. CharacterFeature sees only
+bottom-anchored capsule descriptions, velocities, ground state/normal/velocity,
+and a fallible update operation; it never sees Jolt shapes, filters, layers,
+enums, or pointers.
+
+The rigid-body capability consumed by CrateFeature does not include stepping.
+The composition separately validates a world-step capability and schedules the
+one shared step, keeping feature mutation distinct from host orchestration.
+
 ### Runtime and thread lifetime
 
 JoltC initialization is process-global and not reference-counted. The adapter
@@ -68,10 +79,23 @@ For dynamic bodies the implemented fixed tick order is:
 commands -> pre-physics inputs -> step Jolt -> publish post-physics state
 ```
 
-The S0 sandbox exposes only typed crate commands and immutable queries; it does
+The sandbox exposes only typed feature commands and immutable queries; it does
 not expose immediate adapter setters. Kinematic/static intent remains deferred
 until a feature defines its command and synchronization policy. Low-level
 adapter mutators are internal implementation/test seams, not a cross-feature API.
+
+CharacterVirtual is updated during `pre_physics`, before the one shared Jolt
+world step. CharacterFeature owns movement, jump, and character-gravity policy;
+the adapter owns collision casts, stair walking, floor adhesion, slope response,
+and backend validation. S1 creates no inner rigid body. The virtual controller
+therefore detects rigid bodies during its update, while general rigid-body
+queries do not yet detect the character.
+
+Character gravity uses an explicit terminal speed relative to supporting
+ground motion and saturates at the engine/Jolt velocity representation limit.
+Creation/restoration refreshes CharacterVirtual contacts before the controller
+is exposed, preserving grounded behavior—including an immediate jump—across a
+logical save/restore boundary.
 
 Current adapter getters and mutators are checked error unions. Invalid/foreign
 handles and non-finite transforms, velocities, forces, rotations, or time steps
@@ -95,13 +119,13 @@ accepted integration path.
 
 ### Presentation history
 
-The S0 crate feature publishes previous/current logical poses and immutable
+The crate and character features publish previous/current logical poses and immutable
 presentation extraction interpolates between them using the host's clamped
 `alpha`. Position is interpolated linearly and rotation uses normalized
 shortest-path interpolation. Spawn and restore initialize both samples to the
 same pose, and extraction never writes authoritative state.
 
-The visual sandbox owns the same crate/Jolt `Simulation` composition as the
+The visual sandbox owns the same crate/character/Jolt `Simulation` composition as the
 headless host. Rendering consumes only feature extraction plus a host-owned
 static ground fixture; there is no second ECS synchronization/render path.
 
@@ -129,6 +153,8 @@ Ragdolls, vehicles, and compound objects follow the same rule: a feature slice o
 - Process-local physics handles cannot accidentally become saved or replicated identities.
 - Foreign and stale-world body handles cannot alias a live body in another world.
 - Headless physics tests can link Jolt without SDL, renderer, shader, or editor dependencies.
+- CharacterVirtual lifecycle, slope policy, and collisions are available
+  without leaking the Jolt API into gameplay.
 
 ### Negative
 
@@ -137,6 +163,8 @@ Ragdolls, vehicles, and compound objects follow the same rule: a feature slice o
 - Future kinematic/static and editor-authoring features still need typed transform commands and coherent history updates.
 - The one-live-owned-world restriction prevents atomic old/new simulation replacement and must be resolved or accepted before multi-world server deployment.
 - Collider origin and center-of-mass conventions need tests as shape complexity grows.
+- CharacterVirtual has no inner body in S1, so ordinary queries/sensors do not
+  observe the player until a slice demonstrates that requirement.
 
 ## References
 
