@@ -81,28 +81,10 @@ test "SDL GPU shader interfaces and resources match the renderer contract" {
 }
 
 test "selected backend artifacts have the expected container and entry point" {
-    switch (shader_assets.format) {
-        .msl => {
-            try std.testing.expectEqualStrings("main0", shader_assets.entrypoint);
-            try std.testing.expect(std.mem.indexOf(u8, shader_assets.triangle_vertex, "vertex main0") != null);
-            try std.testing.expect(std.mem.indexOf(u8, shader_assets.triangle_fragment, "fragment main0") != null);
-        },
-        .spirv => {
-            try std.testing.expectEqualStrings("main", shader_assets.entrypoint);
-            try expectMagic(shader_assets.triangle_vertex, &.{ 0x03, 0x02, 0x23, 0x07 });
-            try expectMagic(shader_assets.triangle_fragment, &.{ 0x03, 0x02, 0x23, 0x07 });
-        },
-        .dxil => {
-            try std.testing.expectEqualStrings("main", shader_assets.entrypoint);
-            try expectMagic(shader_assets.triangle_vertex, "DXBC");
-            try expectMagic(shader_assets.triangle_fragment, "DXBC");
-        },
-    }
-}
-
-fn expectMagic(bytes: []const u8, magic: []const u8) !void {
-    try std.testing.expect(bytes.len >= magic.len);
-    try std.testing.expectEqualSlices(u8, magic, bytes[0..magic.len]);
+    try std.testing.expectEqual(.msl, shader_assets.format);
+    try std.testing.expectEqualStrings("main0", shader_assets.entrypoint);
+    try std.testing.expect(std.mem.indexOf(u8, shader_assets.triangle_vertex, "vertex main0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, shader_assets.triangle_fragment, "fragment main0") != null);
 }
 
 fn validateContract(contract: Contract) !void {

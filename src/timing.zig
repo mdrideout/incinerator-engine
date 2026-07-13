@@ -11,6 +11,7 @@
 const std = @import("std");
 const sdl = @import("sdl.zig");
 const fixed_step = @import("incinerator_engine").fixed_step;
+const developer_controls = @import("developer_controls");
 
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
@@ -23,6 +24,8 @@ pub const TICK_RATE = fixed_step.tick_rate;
 /// Duration of one simulation tick in seconds
 pub const TICK_DURATION = fixed_step.tick_duration_seconds;
 pub const FixedStepAccumulator = fixed_step.FixedStepAccumulator;
+pub const ClockPolicy = developer_controls.ClockPolicy;
+pub const TimeScale = developer_controls.TimeScale;
 
 /// FrameTimer handles all timing for the game loop.
 ///
@@ -35,6 +38,7 @@ pub const FixedStepAccumulator = fixed_step.FixedStepAccumulator;
 ///     // Fixed timestep simulation
 ///     while (timer.shouldTick()) {
 ///         simulate(TICK_DURATION);
+///         timer.recordCompletedTick();
 ///     }
 ///
 ///     // Render with interpolation
@@ -51,8 +55,12 @@ pub const FrameTimer = struct {
     /// Counter value at the start of the previous frame
     previous_frame_start: u64,
 
-    /// Delta time for this frame in seconds after the anti-spiral clamp.
+    /// Raw presentation delta for this frame after the anti-spiral clamp.
     delta_time: f64,
+
+    /// Wall-time contribution granted to the fixed-step accumulator after the
+    /// host pause/time-scale policy and anti-spiral clamp are applied.
+    simulation_delta_time: f64,
 
     /// Pure fixed-step policy fed by the SDL clock adapter.
     fixed_step: FixedStepAccumulator,
@@ -79,6 +87,7 @@ pub const FrameTimer = struct {
             .frame_start = now,
             .previous_frame_start = now,
             .delta_time = 0.0,
+            .simulation_delta_time = 0.0,
             .fixed_step = FixedStepAccumulator.init(),
             .ticks_this_frame = 0,
             .total_ticks = 0,
@@ -89,14 +98,23 @@ pub const FrameTimer = struct {
 
     /// Call at the start of each frame. Updates delta time and accumulator.
     pub fn beginFrame(self: *FrameTimer) void {
+        self.beginControlledFrame(.{ .running = .normal });
+    }
+
+    /// Sample the platform clock while applying ephemeral host execution
+    /// policy. Paused frames continue to update presentation timing but add no
+    /// simulation time. A scale changes only accumulator contribution; it
+    /// never changes the fixed delta passed to a simulation tick.
+    pub fn beginControlledFrame(self: *FrameTimer, policy: ClockPolicy) void {
         self.previous_frame_start = self.frame_start;
         self.frame_start = c.SDL_GetPerformanceCounter();
 
-        // Calculate raw elapsed time, then apply the shared fixed-step clamp.
+        // Calculate raw elapsed time, then apply the shared presentation and
+        // simulation clamps independently.
         const elapsed_ticks = self.frame_start - self.previous_frame_start;
         const raw_dt = @as(f64, @floatFromInt(elapsed_ticks)) /
             @as(f64, @floatFromInt(self.frequency));
-        self.beginFrameWithElapsedSeconds(raw_dt) catch unreachable;
+        self.beginControlledFrameWithElapsedSeconds(raw_dt, policy) catch unreachable;
     }
 
     /// Reset the host-clock baseline without advancing simulation time.
@@ -107,6 +125,7 @@ pub const FrameTimer = struct {
         self.frame_start = now;
         self.previous_frame_start = now;
         self.delta_time = 0;
+        self.simulation_delta_time = 0;
         self.ticks_this_frame = 0;
     }
 
@@ -117,32 +136,72 @@ pub const FrameTimer = struct {
         self: *FrameTimer,
         elapsed_seconds: f64,
     ) error{InvalidElapsedTime}!void {
-        const dt = try self.fixed_step.addElapsedSeconds(elapsed_seconds);
+        try self.beginControlledFrameWithElapsedSeconds(
+            elapsed_seconds,
+            .{ .running = .normal },
+        );
+    }
 
-        self.delta_time = dt;
+    /// Feed explicit raw presentation time through the same controlled policy
+    /// as `beginControlledFrame`. This is the deterministic seam used by host
+    /// cadence tests and visual smokes.
+    pub fn beginControlledFrameWithElapsedSeconds(
+        self: *FrameTimer,
+        elapsed_seconds: f64,
+        policy: ClockPolicy,
+    ) error{InvalidElapsedTime}!void {
+        if (!std.math.isFinite(elapsed_seconds) or elapsed_seconds < 0) {
+            return error.InvalidElapsedTime;
+        }
+
+        const raw_dt = @min(elapsed_seconds, fixed_step.max_frame_seconds);
+        const requested_simulation_dt = switch (policy) {
+            .paused => 0,
+            .running => |scale| raw_dt * scale.multiplier(),
+        };
+        // Scaling cannot bypass the existing anti-spiral budget. At double
+        // speed the host grants more fixed ticks only while the same per-frame
+        // maximum remains respected.
+        const simulation_dt = @min(
+            requested_simulation_dt,
+            fixed_step.max_frame_seconds,
+        );
+        _ = try self.fixed_step.addElapsedSeconds(simulation_dt);
+
+        self.delta_time = raw_dt;
+        self.simulation_delta_time = simulation_dt;
         self.ticks_this_frame = 0;
         self.total_frames += 1;
 
         // Update FPS with exponential moving average (smoothing factor 0.1)
-        const instant_fps = if (dt > 0) 1.0 / dt else 0.0;
+        const instant_fps = if (raw_dt > 0) 1.0 / raw_dt else 0.0;
         self.fps = self.fps * 0.9 + instant_fps * 0.1;
     }
 
-    /// Returns true if there's enough accumulated time for another simulation tick.
-    /// Call this in a while loop to process all pending ticks.
+    /// Consume one accumulated tick opportunity. This deliberately does not
+    /// increment completed-tick diagnostics; the host calls
+    /// `recordCompletedTick` only after the authoritative tick succeeds.
     pub fn shouldTick(self: *FrameTimer) bool {
-        if (self.fixed_step.consumeTick()) {
-            self.ticks_this_frame += 1;
-            self.total_ticks += 1;
-            return true;
-        }
-        return false;
+        return self.fixed_step.consumeTick();
+    }
+
+    /// Account for one successfully completed authoritative tick.
+    pub fn recordCompletedTick(self: *FrameTimer) void {
+        self.ticks_this_frame += 1;
+        self.total_ticks += 1;
+    }
+
+    /// Account for one host-granted single step after the caller successfully
+    /// executes that fixed tick. This does not add or consume elapsed time, so
+    /// interpolation phase and resume cadence are unchanged.
+    pub fn recordSingleStep(self: *FrameTimer) void {
+        self.recordCompletedTick();
     }
 
     /// Returns the interpolation factor (0.0 to 1.0) for smooth rendering.
     /// Use this to blend between the previous and current simulation states.
     ///
-    /// Example: render_pos = lerp(prev_pos, curr_pos, timer.alpha())
+    /// Presentation uses this value to interpolate previous/current state.
     pub fn alpha(self: *const FrameTimer) f32 {
         return self.fixed_step.alpha();
     }
@@ -157,44 +216,12 @@ pub const FrameTimer = struct {
         return self.delta_time;
     }
 
-    /// Get delta time as f32 (common for game math)
-    pub fn getDeltaTimeF32(self: *const FrameTimer) f32 {
-        return @floatCast(self.delta_time);
-    }
-
-    /// Debug: Print timing stats to stderr
-    pub fn debugPrint(self: *const FrameTimer) void {
-        std.debug.print(
-            "Frame {d}: FPS={d:.1}, dt={d:.3}ms, ticks={d}, accumulator={d:.3}ms\n",
-            .{
-                self.total_frames,
-                self.fps,
-                self.delta_time * 1000.0,
-                self.ticks_this_frame,
-                self.fixed_step.accumulatedSeconds() * 1000.0,
-            },
-        );
+    /// Get the post-policy wall-time contribution added to the fixed-step
+    /// accumulator for this frame. This is zero while paused.
+    pub fn getSimulationDeltaTime(self: *const FrameTimer) f64 {
+        return self.simulation_delta_time;
     }
 };
-
-// ============================================================================
-// Utility functions for time conversion
-// ============================================================================
-
-/// Convert seconds to milliseconds
-pub fn secondsToMs(seconds: f64) f64 {
-    return seconds * 1000.0;
-}
-
-/// Convert milliseconds to seconds
-pub fn msToSeconds(ms: f64) f64 {
-    return ms / 1000.0;
-}
-
-/// Linear interpolation helper
-pub fn lerp(a: f32, b: f32, t: f32) f32 {
-    return a + (b - a) * t;
-}
 
 // ============================================================================
 // Tests
@@ -207,6 +234,7 @@ test "FrameTimer initialization" {
     try std.testing.expect(timer.total_frames == 0);
     timer.resyncClock();
     try std.testing.expectEqual(@as(f64, 0), timer.delta_time);
+    try std.testing.expectEqual(@as(f64, 0), timer.simulation_delta_time);
     try std.testing.expectEqual(@as(u32, 0), timer.ticks_this_frame);
 }
 
@@ -215,8 +243,115 @@ test "TICK_DURATION calculation" {
     try std.testing.expectApproxEqAbs(TICK_DURATION, 0.008333, 0.001);
 }
 
-test "lerp function" {
-    try std.testing.expectApproxEqAbs(lerp(0.0, 10.0, 0.5), 5.0, 0.001);
-    try std.testing.expectApproxEqAbs(lerp(0.0, 10.0, 0.0), 0.0, 0.001);
-    try std.testing.expectApproxEqAbs(lerp(0.0, 10.0, 1.0), 10.0, 0.001);
+test "long pause adds no simulation time and resume has no catch-up burst" {
+    var timer = FrameTimer.init();
+    for (0..600) |_| {
+        try timer.beginControlledFrameWithElapsedSeconds(1.0 / 30.0, .paused);
+        try std.testing.expect(!timer.shouldTick());
+        try std.testing.expectEqual(@as(f64, 0), timer.getSimulationDeltaTime());
+    }
+    try std.testing.expectEqual(@as(u64, 0), timer.total_ticks);
+    try std.testing.expectEqual(@as(f64, 0), timer.fixed_step.accumulatedSeconds());
+
+    // Resuming at 240 Hz grants only the new half-tick frame. Paused wall time
+    // is not replayed into the accumulator.
+    try timer.beginControlledFrameWithElapsedSeconds(
+        1.0 / 240.0,
+        .{ .running = .normal },
+    );
+    try std.testing.expect(!timer.shouldTick());
+    try timer.beginControlledFrameWithElapsedSeconds(
+        1.0 / 240.0,
+        .{ .running = .normal },
+    );
+    try std.testing.expect(timer.shouldTick());
+    timer.recordCompletedTick();
+    try std.testing.expect(!timer.shouldTick());
+    try std.testing.expectEqual(@as(u64, 1), timer.total_ticks);
+}
+
+test "half and double scales change cadence only" {
+    const expected_fixed_delta = TICK_DURATION;
+    var half_timer = FrameTimer.init();
+    for (0..120) |_| {
+        try half_timer.beginControlledFrameWithElapsedSeconds(
+            1.0 / 120.0,
+            .{ .running = .half },
+        );
+        while (half_timer.shouldTick()) half_timer.recordCompletedTick();
+    }
+    try std.testing.expectEqual(@as(u64, 60), half_timer.total_ticks);
+
+    var double_timer = FrameTimer.init();
+    for (0..120) |_| {
+        try double_timer.beginControlledFrameWithElapsedSeconds(
+            1.0 / 120.0,
+            .{ .running = .double },
+        );
+        while (double_timer.shouldTick()) double_timer.recordCompletedTick();
+    }
+    try std.testing.expectEqual(@as(u64, 240), double_timer.total_ticks);
+    // Host cadence policy has no API capable of mutating the authoritative
+    // fixed tick duration.
+    try std.testing.expectEqual(expected_fixed_delta, TICK_DURATION);
+}
+
+test "single step is counted once without manufacturing elapsed time" {
+    var controller = developer_controls.Controller{};
+    _ = try controller.apply(.{ .set_paused = true });
+    _ = try controller.apply(.single_step);
+
+    var timer = FrameTimer.init();
+    try timer.beginControlledFrameWithElapsedSeconds(
+        1.0 / 60.0,
+        controller.clockPolicy(),
+    );
+    const phase_before = timer.fixed_step.accumulatedSeconds();
+    var granted_ticks: u8 = 0;
+    if (controller.takeSingleStep()) {
+        // The host calls the real fixed-delta simulation tick here, then
+        // accounts for it only after success.
+        timer.recordSingleStep();
+        granted_ticks += 1;
+    }
+    if (controller.takeSingleStep()) granted_ticks += 1;
+
+    try std.testing.expectEqual(@as(u8, 1), granted_ticks);
+    try std.testing.expectEqual(@as(u64, 1), timer.total_ticks);
+    try std.testing.expectEqual(@as(u32, 1), timer.ticks_this_frame);
+    try std.testing.expectEqual(phase_before, timer.fixed_step.accumulatedSeconds());
+    try std.testing.expect(!timer.shouldTick());
+}
+
+test "a consumed tick opportunity is counted only after authoritative success" {
+    var timer = FrameTimer.init();
+    try timer.beginControlledFrameWithElapsedSeconds(
+        TICK_DURATION,
+        .{ .running = .normal },
+    );
+    try std.testing.expect(timer.shouldTick());
+
+    // Model a failed simulation call by intentionally omitting the completion
+    // record. Diagnostics must not describe the attempted tick as completed.
+    try std.testing.expectEqual(@as(u64, 0), timer.total_ticks);
+    try std.testing.expectEqual(@as(u32, 0), timer.ticks_this_frame);
+    try std.testing.expect(!timer.shouldTick());
+
+    timer.recordCompletedTick();
+    try std.testing.expectEqual(@as(u64, 1), timer.total_ticks);
+    try std.testing.expectEqual(@as(u32, 1), timer.ticks_this_frame);
+}
+
+test "controlled frames reject invalid raw elapsed time even while paused" {
+    var timer = FrameTimer.init();
+    try std.testing.expectError(
+        error.InvalidElapsedTime,
+        timer.beginControlledFrameWithElapsedSeconds(-1, .paused),
+    );
+    try std.testing.expectError(
+        error.InvalidElapsedTime,
+        timer.beginControlledFrameWithElapsedSeconds(std.math.nan(f64), .paused),
+    );
+    try std.testing.expectEqual(@as(u64, 0), timer.total_frames);
+    try std.testing.expectEqual(@as(f64, 0), timer.fixed_step.accumulatedSeconds());
 }

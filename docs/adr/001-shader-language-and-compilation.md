@@ -1,6 +1,6 @@
 # ADR-001: Shader Language and Target-Specific Compilation
 
-**Status:** Accepted, amended 2026-07-12 (macOS-only validation)
+**Status:** Accepted, implemented, and amended 2026-07-13 (macOS-only build)
 
 **Date:** 2024-12-05
 
@@ -26,13 +26,12 @@ executable and the SDL GPU driver requested by the renderer:
 | Zig target | Build output | SDL GPU driver | Runtime entry point | Support level |
 |---|---|---|---|---|
 | `aarch64-macos` | MSL generated through SPIR-V | `metal` | `main0` | Current supported path |
-| Linux/SteamOS | Dormant SPIR-V branch | likely `vulkan` | `main` | Future/deferred; untested |
-| Windows | Dormant DXIL/SPIR-V branches | likely `direct3d12` | `main` | Future/deferred; untested |
 
-Historical DXIL and Vulkan paths remain in the build but are not maintained
-contracts. They do not receive CI, cross-build, offline-generation, or runtime
-validation and may break without blocking macOS work. A future platform
-decision under ADR-007 will re-evaluate rather than inherit these choices.
+The active build retains no Linux/Vulkan or Windows/DXIL selection. Those
+platforms remain future product possibilities under ADR-007, not dormant code
+paths or compatibility contracts. A future platform decision will design and
+validate a new target-specific shader cohort rather than inherit removed
+prototype branches.
 
 Executables are target-specific. This ADR makes no claim that one binary or one set of embedded shader bytes runs on multiple operating systems.
 
@@ -49,10 +48,7 @@ For each selected target, the build graph is:
 ```text
 GLSL source
     -> glslc -> SPIR-V intermediate
-        -> target artifact
-            -> SPIR-V directly for Vulkan
-            -> spirv-cross --msl for Metal
-            -> SDL_shadercross SPIR-V -> DXIL for D3D12
+        -> spirv-cross --msl -> Metal artifact
         -> spirv-cross --reflect -> JSON reflection
             -> cache-generated shader_assets and shader_reflections modules
                 -> executable and shader contract tests
@@ -76,7 +72,10 @@ MVP and inverse-transpose model matrix. This keeps object-space normals in the
 fragment shader's declared world-space lighting frame under rotation and
 non-uniform scale.
 
-The reflection checks validate the canonical SPIR-V interface. A second artifact test checks the selected target container and entry-point contract: MSL source declares `main0`, SPIR-V starts with its binary magic, and DXIL uses a `DXBC` container with declared entry point `main`. That artifact check does not reflect DXIL resource bindings or prove native pipeline creation. New shaders are incomplete until both their compilation graph and renderer contract expectations are registered.
+The reflection checks validate the canonical SPIR-V interface. A second
+artifact test checks that the selected MSL source declares `main0`. New shaders
+are incomplete until both their compilation graph and renderer contract
+expectations are registered.
 
 ### Toolchain policy
 
@@ -88,10 +87,8 @@ CI and release validation use the base [`tools/shader-toolchain/vcpkg.json`](../
 - shaderc `2026.2`;
 - SPIRV-Cross `1.4.350.0`.
 
-The historical Windows
-[`tools/shader-toolchain/dxil/vcpkg.json`](../../tools/shader-toolchain/dxil/vcpkg.json)
-manifest is retained only as prior exploration. It is not installed by CI or
-part of the current release contract.
+No secondary-platform shader manifest is retained. Historical Windows/DXIL
+experiments remain available in repository history only.
 
 ## Rationale
 

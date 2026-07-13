@@ -3,6 +3,24 @@
 const std = @import("std");
 const engine = @import("incinerator_engine");
 const driver_contract = @import("driver_contract");
+const interaction_contract = @import("interaction_contract");
+
+const logical_state_domain = "incinerator.character.logical";
+const logical_state_schema: u16 = 2;
+
+/// Per-world authority budgets. Commands reserve their possible outcome;
+/// ground-state events are observational and use bounded best-effort delivery.
+pub const max_pending_commands: usize = 128;
+pub const max_outcomes: usize = 128;
+pub const max_events: usize = 256;
+
+pub const Budget = struct {
+    commands: u32 = max_pending_commands,
+    outcomes: u32 = max_outcomes,
+    events: u32 = max_events,
+};
+
+pub const declared_budget = Budget{};
 
 pub const Assets = struct {
     mesh: engine.rendering.MeshHandle = .invalid,
@@ -158,6 +176,7 @@ pub const RejectionReason = enum {
     character_not_found,
     not_owned,
     driving,
+    carrying,
 };
 pub const CommandRejected = struct {
     command: CommandKind,
@@ -197,6 +216,14 @@ pub const CharacterDraw = struct {
     material: engine.rendering.MaterialHandle,
 };
 
+pub const Diagnostics = struct {
+    active_count: u32,
+    commands: engine.contracts.diagnostics.QueueStats,
+    outcomes: engine.contracts.diagnostics.QueueStats,
+    events: engine.contracts.diagnostics.QueueStats,
+    events_dropped: u64,
+};
+
 /// Feature-owned persistence payload. The composition root owns the enclosing
 /// world schema, clock, identity cursor, and records from other features.
 pub const CharacterV1 = struct {
@@ -220,6 +247,12 @@ pub fn validateRecord(record: CharacterV1) !void {
     try (engine.physics.Velocity{ .linear = record.velocity }).validate();
 }
 
+fn diagnosticsCount(value: usize) u32 {
+    return std.math.cast(u32, value) orelse std.math.maxInt(u32);
+}
+
+const FixedQueue = engine.BoundedQueue;
+
 pub fn Feature(comptime Controllers: type) type {
     engine.physics.assertCharacterImplementation(Controllers);
 
@@ -238,6 +271,9 @@ pub fn Feature(comptime Controllers: type) type {
         const DriveState = struct {
             mode: driver_contract.DriverMode = .on_foot,
             rollback: ?DriveRollback = null,
+        };
+        const CarryRuntimeState = struct {
+            mode: interaction_contract.CarryMode = .empty,
         };
         const Locomotion = struct {
             move: [2]f32 = .{ 0, 0 },
@@ -264,11 +300,14 @@ pub fn Feature(comptime Controllers: type) type {
         applying: std.ArrayListUnmanaged(QueuedCommand) = .empty,
         applying_index: usize = 0,
         active: std.ArrayListUnmanaged(engine.RuntimeId) = .empty,
-        outcomes: std.ArrayListUnmanaged(Outcome) = .empty,
-        outcomes_head: usize = 0,
-        events: std.ArrayListUnmanaged(Event) = .empty,
-        events_head: usize = 0,
+        outcomes: FixedQueue(Outcome, max_outcomes) = .{},
+        events: FixedQueue(Event, max_events) = .{},
         presentations: std.ArrayListUnmanaged(CharacterDraw) = .empty,
+        commands_high_water: u32 = 0,
+        outcomes_high_water: u32 = 0,
+        events_high_water: u32 = 0,
+        commands_rejected: u64 = 0,
+        events_dropped: u64 = 0,
 
         /// Gameplay port consumed by VehicleFeature. It exposes no character
         /// ECS component, controller handle, or implementation type.
@@ -312,6 +351,44 @@ pub fn Feature(comptime Controllers: type) type {
             }
         };
 
+        /// Gameplay port consumed by InteractionFeature. It exposes only the
+        /// validated carrier pose/modes and atomic relationship transitions;
+        /// private ECS/controller state remains owned by CharacterFeature.
+        pub const CarrierAccess = struct {
+            feature: *Self,
+
+            pub fn carryState(
+                self: *CarrierAccess,
+                id: engine.PersistentId,
+            ) !?interaction_contract.CarryState {
+                return self.feature.carryStateNow(id);
+            }
+
+            pub fn beginCarry(
+                self: *CarrierAccess,
+                character_id: engine.PersistentId,
+                item_id: engine.PersistentId,
+            ) !void {
+                try self.feature.beginCarryNow(character_id, item_id);
+            }
+
+            pub fn endCarry(
+                self: *CarrierAccess,
+                character_id: engine.PersistentId,
+                item_id: engine.PersistentId,
+            ) !void {
+                try self.feature.endCarryNow(character_id, item_id);
+            }
+
+            pub fn cancelBeginCarry(
+                self: *CarrierAccess,
+                character_id: engine.PersistentId,
+                item_id: engine.PersistentId,
+            ) void {
+                self.feature.cancelBeginCarryNow(character_id, item_id);
+            }
+        };
+
         pub fn init(
             allocator: std.mem.Allocator,
             runtime: *engine.Runtime,
@@ -319,18 +396,31 @@ pub fn Feature(comptime Controllers: type) type {
             config: Config,
         ) !Self {
             try config.validate();
-            return .{
+            var self = Self{
                 .allocator = allocator,
                 .runtime = runtime,
                 .controllers = controllers,
                 .config = config,
             };
+            errdefer self.pending.deinit(allocator);
+            errdefer self.applying.deinit(allocator);
+            errdefer self.active.deinit(allocator);
+            errdefer self.presentations.deinit(allocator);
+            try self.pending.ensureTotalCapacityPrecise(allocator, max_pending_commands);
+            try self.applying.ensureTotalCapacityPrecise(allocator, max_pending_commands);
+            try self.active.ensureTotalCapacityPrecise(allocator, config.max_characters);
+            try self.presentations.ensureTotalCapacityPrecise(
+                allocator,
+                config.max_characters,
+            );
+            return self;
         }
 
         pub fn register(self: *Self, registry: *engine.FeatureRegistry) !void {
             try registry.registerComponent(Character);
             try registry.registerComponent(RuntimeController);
             try registry.registerComponent(DriveState);
+            try registry.registerComponent(CarryRuntimeState);
             try registry.registerComponent(Locomotion);
             try registry.registerComponent(TransformHistory);
             try registry.addSystem(
@@ -357,6 +447,10 @@ pub fn Feature(comptime Controllers: type) type {
             return .{ .feature = self };
         }
 
+        pub fn carrierAccess(self: *Self) CarrierAccess {
+            return .{ .feature = self };
+        }
+
         pub fn deinit(self: *Self) void {
             while (self.active.items.len > 0) {
                 const runtime_id = self.active.items[self.active.items.len - 1];
@@ -369,8 +463,6 @@ pub fn Feature(comptime Controllers: type) type {
             self.pending.deinit(self.allocator);
             self.applying.deinit(self.allocator);
             self.active.deinit(self.allocator);
-            self.outcomes.deinit(self.allocator);
-            self.events.deinit(self.allocator);
             self.presentations.deinit(self.allocator);
             self.* = undefined;
         }
@@ -378,66 +470,139 @@ pub fn Feature(comptime Controllers: type) type {
         pub fn enqueue(self: *Self, command: Command) !void {
             try self.runtime.ensureHealthy();
             try validateCommand(command);
-            try self.pending.append(self.allocator, .{
+            const eligible_tick = try self.runtime.commandTargetTick();
+            const command_count = self.commandOccupancyCount();
+            if (command_count >= max_pending_commands or
+                command_count + self.outcomes.len >= max_outcomes)
+            {
+                self.commands_rejected +|= 1;
+                return error.CharacterCommandQueueFull;
+            }
+            self.pending.appendAssumeCapacity(.{
                 .command = command,
-                .eligible_tick = try self.runtime.commandTargetTick(),
+                .eligible_tick = eligible_tick,
             });
+            self.observeQueueHighWater();
         }
 
         pub fn pollOutcome(self: *Self) ?Outcome {
-            if (self.outcomes_head >= self.outcomes.items.len) {
-                self.outcomes.clearRetainingCapacity();
-                self.outcomes_head = 0;
-                return null;
-            }
-            const outcome = self.outcomes.items[self.outcomes_head];
-            self.outcomes_head += 1;
-            if (self.outcomes_head == self.outcomes.items.len) {
-                self.outcomes.clearRetainingCapacity();
-                self.outcomes_head = 0;
-            } else if (self.outcomes_head >= 64 and
-                self.outcomes_head >= self.outcomes.items.len - self.outcomes_head)
-            {
-                const remaining = self.outcomes.items.len - self.outcomes_head;
-                std.mem.copyForwards(
-                    Outcome,
-                    self.outcomes.items[0..remaining],
-                    self.outcomes.items[self.outcomes_head..],
-                );
-                self.outcomes.items.len = remaining;
-                self.outcomes_head = 0;
-            }
+            const outcome = self.outcomes.pop();
+            self.observeQueueHighWater();
             return outcome;
         }
 
         pub fn pollEvent(self: *Self) ?Event {
-            if (self.events_head >= self.events.items.len) {
-                self.events.clearRetainingCapacity();
-                self.events_head = 0;
-                return null;
-            }
-            const event = self.events.items[self.events_head];
-            self.events_head += 1;
-            if (self.events_head == self.events.items.len) {
-                self.events.clearRetainingCapacity();
-                self.events_head = 0;
-            } else if (self.events_head >= 64 and
-                self.events_head >= self.events.items.len - self.events_head)
-            {
-                const remaining = self.events.items.len - self.events_head;
-                std.mem.copyForwards(
-                    Event,
-                    self.events.items[0..remaining],
-                    self.events.items[self.events_head..],
-                );
-                self.events.items.len = remaining;
-                self.events_head = 0;
-            }
+            const event = self.events.pop();
+            self.observeQueueHighWater();
             return event;
         }
 
         pub fn count(self: *const Self) usize {
             return self.active.items.len;
+        }
+
+        pub fn diagnostics(self: *const Self) Diagnostics {
+            self.runtime.assertOwnerThread();
+            return .{
+                .active_count = diagnosticsCount(self.active.items.len),
+                .commands = .{
+                    .occupancy = self.commandOccupancy(),
+                    .high_water = self.commands_high_water,
+                    .capacity = max_pending_commands,
+                    .rejected = self.commands_rejected,
+                },
+                .outcomes = .{
+                    .occupancy = self.outcomeOccupancy(),
+                    .high_water = self.outcomes_high_water,
+                    .capacity = max_outcomes,
+                    .rejected = 0,
+                },
+                .events = .{
+                    .occupancy = self.eventOccupancy(),
+                    .high_water = self.events_high_water,
+                    .capacity = max_events,
+                    .rejected = self.events_dropped,
+                },
+                .events_dropped = self.events_dropped,
+            };
+        }
+
+        /// Append simulation-relevant character state in stable identity
+        /// order. Scratch is caller-owned so the per-tick path never allocates.
+        pub fn writeLogicalState(
+            self: *Self,
+            writer: *engine.contracts.replay.Writer,
+            scratch: []engine.PersistentId,
+        ) !void {
+            try self.runtime.ensureOwnerThread();
+            if (scratch.len < self.active.items.len) {
+                return error.InsufficientLogicalStateScratch;
+            }
+
+            writer.writeU8(@intCast(logical_state_domain.len));
+            writer.writeBytes(logical_state_domain);
+            writer.writeU16(logical_state_schema);
+            writer.writeU64(self.runtime.tickIndex());
+            writer.writeU32(std.math.cast(u32, self.active.items.len) orelse
+                return error.LogicalStateCountOverflow);
+
+            const ids = scratch[0..self.active.items.len];
+            for (self.active.items, 0..) |runtime_id, index| {
+                ids[index] = try self.runtime.identity(runtime_id);
+            }
+            std.mem.sort(engine.PersistentId, ids, {}, lessThanPersistentId);
+
+            for (ids) |id| {
+                const runtime_id = self.runtime.resolve(id) orelse
+                    return error.CharacterIdentityInvariantBroken;
+                const character = self.runtime.get(runtime_id, Character) orelse
+                    return error.NotACharacter;
+                const controller = self.runtime.get(runtime_id, RuntimeController) orelse
+                    return error.CharacterControllerInvariantBroken;
+                const locomotion = self.runtime.get(runtime_id, Locomotion) orelse
+                    return error.CharacterLocomotionInvariantBroken;
+                const drive = self.runtime.get(runtime_id, DriveState) orelse
+                    return error.CharacterDriveStateInvariantBroken;
+                const carry = self.runtime.get(runtime_id, CarryRuntimeState) orelse
+                    return error.CharacterCarryStateInvariantBroken;
+                const state = try self.controllers.characterState(controller.handle);
+                try state.validate();
+
+                writePersistentId(writer, id);
+                try writer.writeF32(character.radius);
+                try writer.writeF32(character.half_height);
+                try writeCharacterState(writer, state);
+
+                // Locomotion retains intent and cached values that influence
+                // the next controller update independently of the port state.
+                try writeVector2(writer, locomotion.move);
+                try writer.writeF32(locomotion.facing_yaw);
+                writer.writeBool(locomotion.jump_requested);
+                try writeVector3(writer, locomotion.velocity);
+                writeGroundState(writer, locomotion.ground_state);
+
+                writeDriverMode(writer, drive.mode);
+                writer.writeBool(drive.rollback != null);
+                if (drive.rollback) |rollback| {
+                    try writeVector2(writer, rollback.move);
+                    writer.writeBool(rollback.jump_requested);
+                }
+                writeCarryMode(writer, carry.mode);
+            }
+
+            const applying = if (self.applying_index < self.applying.items.len)
+                self.applying.items[self.applying_index..]
+            else
+                self.applying.items[0..0];
+            writer.writeU32(std.math.cast(u32, applying.len) orelse
+                return error.LogicalStateCountOverflow);
+            for (applying) |queued| try writeQueuedCommand(writer, queued);
+            writer.writeU32(std.math.cast(u32, self.pending.items.len) orelse
+                return error.LogicalStateCountOverflow);
+            for (self.pending.items) |queued| try writeQueuedCommand(writer, queued);
+
+            writer.writeU32(self.outcomeOccupancy());
+            writer.writeU32(self.eventOccupancy());
         }
 
         pub fn hasPendingCommands(self: *const Self) bool {
@@ -472,7 +637,6 @@ pub fn Feature(comptime Controllers: type) type {
         pub fn extract(self: *Self, alpha: f32) ![]const CharacterDraw {
             if (!std.math.isFinite(alpha)) return error.InvalidInterpolationAlpha;
             self.presentations.clearRetainingCapacity();
-            try self.presentations.ensureTotalCapacity(self.allocator, self.active.items.len);
             for (self.active.items) |runtime_id| {
                 const drive = self.runtime.get(runtime_id, DriveState) orelse
                     return error.CharacterDriveStateInvariantBroken;
@@ -524,6 +688,8 @@ pub fn Feature(comptime Controllers: type) type {
             for (self.active.items, 0..) |runtime_id, index| {
                 _ = self.runtime.get(runtime_id, DriveState) orelse
                     return error.CharacterDriveStateInvariantBroken;
+                _ = self.runtime.get(runtime_id, CarryRuntimeState) orelse
+                    return error.CharacterCarryStateInvariantBroken;
                 const locomotion = self.runtime.get(runtime_id, Locomotion) orelse
                     return error.CharacterLocomotionInvariantBroken;
                 const controller = self.runtime.get(runtime_id, RuntimeController) orelse
@@ -577,6 +743,7 @@ pub fn Feature(comptime Controllers: type) type {
             tick: engine.TickContext,
         ) !void {
             const self: *Self = @ptrCast(@alignCast(raw));
+            defer self.observeQueueHighWater();
             if (self.applying_index >= self.applying.items.len) {
                 self.applying.clearRetainingCapacity();
                 self.applying_index = 0;
@@ -586,10 +753,6 @@ pub fn Feature(comptime Controllers: type) type {
                     &self.applying,
                 );
             }
-            try self.pending.ensureUnusedCapacity(
-                self.allocator,
-                self.applying.items.len - self.applying_index,
-            );
             while (self.applying_index < self.applying.items.len) {
                 const queued = self.applying.items[self.applying_index];
                 self.applying_index += 1;
@@ -648,6 +811,11 @@ pub fn Feature(comptime Controllers: type) type {
                                 .reason = .driving,
                                 .id = despawn.id,
                             }),
+                            error.CharacterCarrying => try self.reject(.{
+                                .command = .despawn,
+                                .reason = .carrying,
+                                .id = despawn.id,
+                            }),
                             else => return err,
                         };
                     },
@@ -663,7 +831,7 @@ pub fn Feature(comptime Controllers: type) type {
             tick: engine.TickContext,
         ) !void {
             const self: *Self = @ptrCast(@alignCast(raw));
-            try self.events.ensureUnusedCapacity(self.allocator, self.active.items.len);
+            defer self.observeQueueHighWater();
             for (self.active.items) |runtime_id| {
                 const drive = self.runtime.get(runtime_id, DriveState) orelse
                     return error.CharacterDriveStateInvariantBroken;
@@ -693,7 +861,7 @@ pub fn Feature(comptime Controllers: type) type {
                 locomotion.move = .{ 0, 0 };
                 locomotion.jump_requested = false;
                 if (locomotion.ground_state != after.ground_state) {
-                    self.events.appendAssumeCapacity(.{ .ground_state_changed = .{
+                    self.emitEvent(.{ .ground_state_changed = .{
                         .id = id,
                         .previous = locomotion.ground_state,
                         .current = after.ground_state,
@@ -739,8 +907,7 @@ pub fn Feature(comptime Controllers: type) type {
             if (self.active.items.len >= self.config.max_characters) {
                 return error.TooManyCharacters;
             }
-            try self.active.ensureUnusedCapacity(self.allocator, 1);
-            if (emit_outcome) try self.outcomes.ensureUnusedCapacity(self.allocator, 1);
+            if (emit_outcome) std.debug.assert(self.outcomes.len < max_outcomes);
 
             const runtime_id = if (restored_id) |id|
                 try self.runtime.createWithPersistentId(id)
@@ -770,6 +937,7 @@ pub fn Feature(comptime Controllers: type) type {
             });
             try self.runtime.set(runtime_id, RuntimeController, .{ .handle = controller });
             try self.runtime.set(runtime_id, DriveState, .{});
+            try self.runtime.set(runtime_id, CarryRuntimeState, .{});
             try self.runtime.set(runtime_id, Locomotion, .{
                 .facing_yaw = yaw,
                 .velocity = state.velocity,
@@ -782,7 +950,7 @@ pub fn Feature(comptime Controllers: type) type {
             });
             self.active.appendAssumeCapacity(runtime_id);
             if (emit_outcome) {
-                self.outcomes.appendAssumeCapacity(.{ .spawned = .{
+                self.outcomes.pushAssumeCapacity(.{ .spawned = .{
                     .request_id = spawn.request_id,
                     .id = id,
                 } });
@@ -799,6 +967,8 @@ pub fn Feature(comptime Controllers: type) type {
             _ = self.runtime.get(runtime_id, Character) orelse return null;
             const drive = self.runtime.get(runtime_id, DriveState) orelse
                 return error.CharacterDriveStateInvariantBroken;
+            const carry = self.runtime.get(runtime_id, CarryRuntimeState) orelse
+                return error.CharacterCarryStateInvariantBroken;
             const locomotion = self.runtime.get(runtime_id, Locomotion) orelse
                 return error.CharacterLocomotionInvariantBroken;
             const controller = self.runtime.get(runtime_id, RuntimeController) orelse
@@ -807,6 +977,10 @@ pub fn Feature(comptime Controllers: type) type {
             const result = driver_contract.DriverState{
                 .pose = poseFor(state.position, locomotion.facing_yaw),
                 .mode = drive.mode,
+                .carried_item = switch (carry.mode) {
+                    .empty => null,
+                    .holding => |item_id| item_id,
+                },
             };
             try result.validate();
             return result;
@@ -827,6 +1001,9 @@ pub fn Feature(comptime Controllers: type) type {
                 return error.CharacterControllerInvariantBroken;
             _ = self.runtime.get(runtime_id, TransformHistory) orelse
                 return error.CharacterTransformInvariantBroken;
+            const carry = self.runtime.get(runtime_id, CarryRuntimeState) orelse
+                return error.CharacterCarryStateInvariantBroken;
+            if (carry.mode != .empty) return error.CharacterCarrying;
             const locomotion = self.runtime.getMut(runtime_id, Locomotion) orelse
                 return error.CharacterLocomotionInvariantBroken;
             const drive = self.runtime.getMut(runtime_id, DriveState) orelse
@@ -922,6 +1099,109 @@ pub fn Feature(comptime Controllers: type) type {
             drive.mode = .on_foot;
         }
 
+        fn carryStateNow(
+            self: *Self,
+            id: engine.PersistentId,
+        ) !?interaction_contract.CarryState {
+            try id.validate();
+            const runtime_id = self.runtime.resolve(id) orelse return null;
+            _ = self.runtime.get(runtime_id, Character) orelse return null;
+            const controller = self.runtime.get(runtime_id, RuntimeController) orelse
+                return error.CharacterControllerInvariantBroken;
+            const locomotion = self.runtime.get(runtime_id, Locomotion) orelse
+                return error.CharacterLocomotionInvariantBroken;
+            const drive = self.runtime.get(runtime_id, DriveState) orelse
+                return error.CharacterDriveStateInvariantBroken;
+            const carry = self.runtime.get(runtime_id, CarryRuntimeState) orelse
+                return error.CharacterCarryStateInvariantBroken;
+            const state = try self.controllers.characterState(controller.handle);
+            const result = interaction_contract.CarryState{
+                .pose = poseFor(state.position, locomotion.facing_yaw),
+                .mobility = switch (drive.mode) {
+                    .on_foot => .on_foot,
+                    .driving => .driving,
+                },
+                .carry_mode = carry.mode,
+            };
+            try result.validate();
+            return result;
+        }
+
+        fn beginCarryNow(
+            self: *Self,
+            character_id: engine.PersistentId,
+            item_id: engine.PersistentId,
+        ) !void {
+            try character_id.validate();
+            try item_id.validate();
+            const runtime_id = self.runtime.resolve(character_id) orelse
+                return error.CharacterNotFound;
+            _ = self.runtime.get(runtime_id, Character) orelse
+                return error.NotACharacter;
+            const drive = self.runtime.get(runtime_id, DriveState) orelse
+                return error.CharacterDriveStateInvariantBroken;
+            switch (drive.mode) {
+                .on_foot => {},
+                .driving => return error.CharacterDriving,
+            }
+            const carry = self.runtime.getMut(runtime_id, CarryRuntimeState) orelse
+                return error.CharacterCarryStateInvariantBroken;
+            switch (carry.mode) {
+                .empty => carry.mode = .{ .holding = item_id },
+                .holding => return error.CharacterAlreadyCarrying,
+            }
+        }
+
+        fn endCarryNow(
+            self: *Self,
+            character_id: engine.PersistentId,
+            item_id: engine.PersistentId,
+        ) !void {
+            try character_id.validate();
+            try item_id.validate();
+            const runtime_id = self.runtime.resolve(character_id) orelse
+                return error.CharacterNotFound;
+            _ = self.runtime.get(runtime_id, Character) orelse
+                return error.NotACharacter;
+            const drive = self.runtime.get(runtime_id, DriveState) orelse
+                return error.CharacterDriveStateInvariantBroken;
+            switch (drive.mode) {
+                .on_foot => {},
+                .driving => return error.CharacterDriving,
+            }
+            const carry = self.runtime.getMut(runtime_id, CarryRuntimeState) orelse
+                return error.CharacterCarryStateInvariantBroken;
+            switch (carry.mode) {
+                .empty => return error.CharacterNotCarrying,
+                .holding => |held_item| {
+                    if (!std.meta.eql(held_item, item_id)) {
+                        return error.CharacterCarryingDifferentItem;
+                    }
+                    carry.mode = .empty;
+                },
+            }
+        }
+
+        fn cancelBeginCarryNow(
+            self: *Self,
+            character_id: engine.PersistentId,
+            item_id: engine.PersistentId,
+        ) void {
+            const runtime_id = self.runtime.resolve(character_id) orelse
+                @panic("collect rollback carrier no longer exists");
+            _ = self.runtime.get(runtime_id, Character) orelse
+                @panic("collect rollback identity is not a character");
+            const carry = self.runtime.getMut(runtime_id, CarryRuntimeState) orelse
+                @panic("collect rollback character has no carry state");
+            switch (carry.mode) {
+                .empty => @panic("collect rollback character is not carrying"),
+                .holding => |held_item| if (!std.meta.eql(held_item, item_id)) {
+                    @panic("collect rollback character carries a different item");
+                },
+            }
+            carry.mode = .empty;
+        }
+
         fn applyActionsNow(self: *Self, actions: ApplyActions) !void {
             const runtime_id = self.runtime.resolve(actions.id) orelse
                 return error.CharacterNotFound;
@@ -951,15 +1231,18 @@ pub fn Feature(comptime Controllers: type) type {
                 .on_foot => {},
                 .driving => return error.CharacterDriving,
             }
+            const carry = self.runtime.get(runtime_id, CarryRuntimeState) orelse
+                return error.CharacterCarryStateInvariantBroken;
+            if (carry.mode != .empty) return error.CharacterCarrying;
             const controller = self.runtime.get(runtime_id, RuntimeController) orelse
                 return error.CharacterControllerInvariantBroken;
             const index = self.activeIndex(runtime_id) orelse
                 return error.CharacterActiveIndexInvariantBroken;
-            if (emit_outcome) try self.outcomes.ensureUnusedCapacity(self.allocator, 1);
+            if (emit_outcome) std.debug.assert(self.outcomes.len < max_outcomes);
             try self.controllers.destroyCharacter(controller.handle);
             self.destroyRuntimeOrPanic(runtime_id);
             _ = self.active.orderedRemove(index);
-            if (emit_outcome) self.outcomes.appendAssumeCapacity(.{ .despawned = id });
+            if (emit_outcome) self.outcomes.pushAssumeCapacity(.{ .despawned = id });
         }
 
         fn activeIndex(self: *const Self, runtime_id: engine.RuntimeId) ?usize {
@@ -970,7 +1253,84 @@ pub fn Feature(comptime Controllers: type) type {
         }
 
         fn reject(self: *Self, rejection: CommandRejected) !void {
-            try self.outcomes.append(self.allocator, .{ .rejected = rejection });
+            std.debug.assert(self.outcomes.len < max_outcomes);
+            self.outcomes.pushAssumeCapacity(.{ .rejected = rejection });
+        }
+
+        fn emitEvent(self: *Self, event: Event) void {
+            if (self.events.len == max_events) {
+                self.events_dropped +|= 1;
+                return;
+            }
+            self.events.pushAssumeCapacity(event);
+            self.observeQueueHighWater();
+        }
+
+        fn commandOccupancyCount(self: *const Self) usize {
+            const applying_remaining = if (self.applying_index < self.applying.items.len)
+                self.applying.items.len - self.applying_index
+            else
+                0;
+            const total = std.math.add(
+                usize,
+                self.pending.items.len,
+                applying_remaining,
+            ) catch std.math.maxInt(usize);
+            return total;
+        }
+
+        fn commandOccupancy(self: *const Self) u32 {
+            return diagnosticsCount(self.commandOccupancyCount());
+        }
+
+        fn outcomeOccupancy(self: *const Self) u32 {
+            return diagnosticsCount(self.outcomes.len);
+        }
+
+        fn eventOccupancy(self: *const Self) u32 {
+            return diagnosticsCount(self.events.len);
+        }
+
+        fn observeQueueHighWater(self: *Self) void {
+            self.commands_high_water = @max(
+                self.commands_high_water,
+                self.commandOccupancy(),
+            );
+            self.outcomes_high_water = @max(
+                self.outcomes_high_water,
+                self.outcomeOccupancy(),
+            );
+            self.events_high_water = @max(
+                self.events_high_water,
+                self.eventOccupancy(),
+            );
+        }
+
+        fn writeQueuedCommand(
+            writer: *engine.contracts.replay.Writer,
+            queued: QueuedCommand,
+        ) !void {
+            writer.writeU64(queued.eligible_tick);
+            switch (queued.command) {
+                .spawn => |spawn| {
+                    writer.writeU8(1);
+                    writer.writeU64(spawn.request_id);
+                    try writeVector3(writer, spawn.position);
+                    try writeVector3(writer, spawn.velocity);
+                    try writer.writeF32(spawn.facing_yaw);
+                },
+                .actions => |actions| {
+                    writer.writeU8(2);
+                    writePersistentId(writer, actions.id);
+                    try writeVector2(writer, actions.move);
+                    try writer.writeF32(actions.facing_yaw);
+                    writer.writeBool(actions.jump_pressed);
+                },
+                .despawn => |despawn| {
+                    writer.writeU8(3);
+                    writePersistentId(writer, despawn.id);
+                },
+            }
         }
 
         fn rollbackAll(self: *Self) void {
@@ -1138,6 +1498,87 @@ fn poseFor(position: [3]f32, yaw: f32) engine.physics.Pose {
     };
 }
 
+fn writePersistentId(
+    writer: *engine.contracts.replay.Writer,
+    id: engine.PersistentId,
+) void {
+    writer.writeU64(id.namespace);
+    writer.writeU64(id.local);
+}
+
+fn writeVector2(
+    writer: *engine.contracts.replay.Writer,
+    value: [2]f32,
+) !void {
+    for (value) |component| try writer.writeF32(component);
+}
+
+fn writeVector3(
+    writer: *engine.contracts.replay.Writer,
+    value: [3]f32,
+) !void {
+    for (value) |component| try writer.writeF32(component);
+}
+
+fn writeGroundState(
+    writer: *engine.contracts.replay.Writer,
+    state: engine.physics.GroundState,
+) void {
+    writer.writeU8(switch (state) {
+        .on_ground => 1,
+        .on_steep_ground => 2,
+        .not_supported => 3,
+        .in_air => 4,
+    });
+}
+
+fn writeCharacterState(
+    writer: *engine.contracts.replay.Writer,
+    state: engine.physics.CharacterState,
+) !void {
+    try state.validate();
+    try writeVector3(writer, state.position);
+    try writeVector3(writer, state.velocity);
+    writeGroundState(writer, state.ground_state);
+    try writeVector3(writer, state.ground_velocity);
+    try writeVector3(writer, state.ground_normal);
+}
+
+fn writeDriverMode(
+    writer: *engine.contracts.replay.Writer,
+    mode: driver_contract.DriverMode,
+) void {
+    switch (mode) {
+        .on_foot => writer.writeU8(1),
+        .driving => |vehicle_id| {
+            writer.writeU8(2);
+            writePersistentId(writer, vehicle_id);
+        },
+    }
+}
+
+fn writeCarryMode(
+    writer: *engine.contracts.replay.Writer,
+    mode: interaction_contract.CarryMode,
+) void {
+    switch (mode) {
+        .empty => writer.writeU8(1),
+        .holding => |item_id| {
+            writer.writeU8(2);
+            writePersistentId(writer, item_id);
+        },
+    }
+}
+
+fn lessThanPersistentId(
+    _: void,
+    lhs: engine.PersistentId,
+    rhs: engine.PersistentId,
+) bool {
+    if (lhs.namespace != rhs.namespace) return lhs.namespace < rhs.namespace;
+    return lhs.local < rhs.local;
+}
+
 fn lessThanRecord(_: void, lhs: CharacterV1, rhs: CharacterV1) bool {
     if (lhs.id.namespace != rhs.id.namespace) return lhs.id.namespace < rhs.id.namespace;
     return lhs.id.local < rhs.id.local;
@@ -1241,6 +1682,259 @@ const FakeControllers = struct {
 const TestFeature = Feature(FakeControllers);
 comptime {
     driver_contract.assertImplementation(TestFeature.DriverAccess);
+    interaction_contract.assertCarrierImplementation(TestFeature.CarrierAccess);
+}
+
+test "character diagnostics retain unread output and command high-water marks" {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = 49,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+    var controllers = FakeControllers{};
+    var feature = try TestFeature.init(
+        std.testing.allocator,
+        &runtime,
+        &controllers,
+        .{},
+    );
+    defer feature.deinit();
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    runtime.finishRegistration();
+
+    try feature.enqueue(.{ .spawn = .{
+        .request_id = 1,
+        .position = .{ 0, 0, 0 },
+    } });
+    try feature.enqueue(.{ .actions = .{
+        .id = .{ .namespace = 49, .local = 99 },
+        .facing_yaw = 0,
+    } });
+    var snapshot = feature.diagnostics();
+    try std.testing.expectEqual(@as(u32, 2), snapshot.commands.occupancy);
+    try std.testing.expectEqual(@as(u32, 2), snapshot.commands.high_water);
+    try std.testing.expectEqual(@as(?u32, max_pending_commands), snapshot.commands.capacity);
+
+    try runtime.tick();
+    snapshot = feature.diagnostics();
+    try std.testing.expectEqual(@as(u32, 1), snapshot.active_count);
+    try std.testing.expectEqual(@as(u32, 0), snapshot.commands.occupancy);
+    try std.testing.expectEqual(@as(u32, 2), snapshot.outcomes.occupancy);
+    try std.testing.expectEqual(@as(u32, 2), snapshot.outcomes.high_water);
+    try std.testing.expectEqual(@as(u32, 1), snapshot.events.occupancy);
+    try std.testing.expectEqual(@as(u32, 1), snapshot.events.high_water);
+
+    _ = feature.pollOutcome() orelse return error.MissingOutcome;
+    _ = feature.pollEvent() orelse return error.MissingEvent;
+    snapshot = feature.diagnostics();
+    try std.testing.expectEqual(@as(u32, 1), snapshot.outcomes.occupancy);
+    try std.testing.expectEqual(@as(u32, 0), snapshot.events.occupancy);
+    try std.testing.expectEqual(@as(u32, 1), snapshot.events.high_water);
+}
+
+test "character bounded command reservations drain and recover without allocation" {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = 86,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var controllers = FakeControllers{};
+    var feature = try TestFeature.init(
+        failing.allocator(),
+        &runtime,
+        &controllers,
+        .{},
+    );
+    defer feature.deinit();
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    runtime.finishRegistration();
+
+    const missing = engine.PersistentId{ .namespace = 86, .local = 999 };
+    const allocation_count = failing.alloc_index;
+    failing.fail_index = allocation_count;
+    for (0..max_pending_commands) |_| {
+        try feature.enqueue(.{ .actions = .{ .id = missing, .facing_yaw = 0 } });
+    }
+    try std.testing.expectError(
+        error.CharacterCommandQueueFull,
+        feature.enqueue(.{ .spawn = .{ .request_id = 900, .position = .{ 0, 0, 0 } } }),
+    );
+    var diagnostics_value = feature.diagnostics();
+    try std.testing.expectEqual(@as(u32, max_pending_commands), diagnostics_value.commands.occupancy);
+    try std.testing.expectEqual(@as(u32, max_pending_commands), diagnostics_value.commands.high_water);
+    try std.testing.expectEqual(@as(?u32, max_pending_commands), diagnostics_value.commands.capacity);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics_value.commands.rejected);
+    try std.testing.expectEqual(@as(usize, 0), feature.count());
+
+    try runtime.tick();
+    diagnostics_value = feature.diagnostics();
+    try std.testing.expectEqual(@as(u32, 0), diagnostics_value.commands.occupancy);
+    try std.testing.expectEqual(@as(u32, max_outcomes), diagnostics_value.outcomes.occupancy);
+    try std.testing.expectEqual(@as(u32, max_outcomes), diagnostics_value.outcomes.high_water);
+    try std.testing.expectEqual(@as(?u32, max_outcomes), diagnostics_value.outcomes.capacity);
+    try std.testing.expectError(
+        error.CharacterCommandQueueFull,
+        feature.enqueue(.{ .spawn = .{ .request_id = 901, .position = .{ 0, 0, 0 } } }),
+    );
+    try std.testing.expectEqual(@as(u64, 2), feature.diagnostics().commands.rejected);
+
+    for (0..max_outcomes) |_| {
+        const outcome = feature.pollOutcome() orelse return error.MissingOutcome;
+        switch (outcome) {
+            .rejected => |rejected| {
+                try std.testing.expectEqual(CommandKind.actions, rejected.command);
+                try std.testing.expectEqual(RejectionReason.character_not_found, rejected.reason);
+                try std.testing.expectEqual(missing, rejected.id.?);
+            },
+            else => return error.UnexpectedOutcome,
+        }
+    }
+    try std.testing.expect(feature.pollOutcome() == null);
+
+    try feature.enqueue(.{ .spawn = .{
+        .request_id = 902,
+        .position = .{ 0, 0, 0 },
+    } });
+    try runtime.tick();
+    const spawned = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
+        .spawned => |value| value,
+        else => return error.UnexpectedOutcome,
+    };
+    try std.testing.expectEqual(@as(u64, 902), spawned.request_id);
+    _ = feature.pollEvent() orelse return error.MissingEvent;
+    try feature.enqueue(.{ .actions = .{ .id = spawned.id, .facing_yaw = 0.25 } });
+    try runtime.tick();
+    try std.testing.expect(feature.pollOutcome() == null);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.25), (try feature.view(spawned.id)).facing_yaw, 0.0001);
+    try std.testing.expectEqual(allocation_count, failing.alloc_index);
+}
+
+test "character event saturation drops exactly and accepts production events after drain" {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = 87,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+    var failing = std.testing.FailingAllocator.init(std.testing.allocator, .{});
+    var controllers = FakeControllers{};
+    var feature = try TestFeature.init(
+        failing.allocator(),
+        &runtime,
+        &controllers,
+        .{},
+    );
+    defer feature.deinit();
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    runtime.finishRegistration();
+
+    const allocation_count = failing.alloc_index;
+    failing.fail_index = allocation_count;
+    try feature.enqueue(.{ .spawn = .{
+        .request_id = 1,
+        .position = .{ 0, 0, 0 },
+    } });
+    try runtime.tick();
+    const id = feature.pollOutcome().?.spawned.id;
+
+    for (0..max_events) |index| {
+        const airborne = index % 2 == 0;
+        controllers.state.position[1] = if (airborne) 1 else 0;
+        controllers.state.velocity = .{ 0, 0, 0 };
+        controllers.state.ground_state = .in_air;
+        try runtime.tick();
+    }
+
+    var diagnostics_value = feature.diagnostics();
+    try std.testing.expectEqual(@as(u32, max_events), diagnostics_value.events.occupancy);
+    try std.testing.expectEqual(@as(u32, max_events), diagnostics_value.events.high_water);
+    try std.testing.expectEqual(@as(?u32, max_events), diagnostics_value.events.capacity);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics_value.events.rejected);
+    try std.testing.expectEqual(@as(u64, 1), diagnostics_value.events_dropped);
+
+    for (0..max_events) |index| {
+        const event = feature.pollEvent() orelse return error.MissingEvent;
+        const changed = event.ground_state_changed;
+        try std.testing.expectEqual(id, changed.id);
+        const expected_previous: engine.physics.GroundState = if (index % 2 == 0)
+            .in_air
+        else
+            .on_ground;
+        const expected_current: engine.physics.GroundState = if (index % 2 == 0)
+            .on_ground
+        else
+            .in_air;
+        try std.testing.expectEqual(expected_previous, changed.previous);
+        try std.testing.expectEqual(expected_current, changed.current);
+    }
+    try std.testing.expect(feature.pollEvent() == null);
+
+    controllers.state.position[1] = 1;
+    controllers.state.velocity = .{ 0, 0, 0 };
+    controllers.state.ground_state = .in_air;
+    try runtime.tick();
+    const recovered = (feature.pollEvent() orelse return error.MissingEvent).ground_state_changed;
+    try std.testing.expectEqual(engine.physics.GroundState.on_ground, recovered.previous);
+    try std.testing.expectEqual(engine.physics.GroundState.in_air, recovered.current);
+    diagnostics_value = feature.diagnostics();
+    try std.testing.expectEqual(@as(u64, 1), diagnostics_value.events_dropped);
+    try std.testing.expectEqual(@as(u32, 0), diagnostics_value.events.occupancy);
+    try std.testing.expectEqual(allocation_count, failing.alloc_index);
+}
+
+test "character logical state covers entities and queued semantic actions" {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = 50,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+    var controllers = FakeControllers{};
+    var feature = try TestFeature.init(
+        std.testing.allocator,
+        &runtime,
+        &controllers,
+        .{},
+    );
+    defer feature.deinit();
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    runtime.finishRegistration();
+
+    try feature.enqueue(.{ .spawn = .{
+        .request_id = 1,
+        .position = .{ 1, 2, 3 },
+        .facing_yaw = 0.25,
+    } });
+    try runtime.tick();
+
+    var none: [0]engine.PersistentId = .{};
+    var too_small = engine.contracts.replay.Writer.init();
+    try std.testing.expectError(
+        error.InsufficientLogicalStateScratch,
+        feature.writeLogicalState(&too_small, &none),
+    );
+
+    var scratch: [1]engine.PersistentId = undefined;
+    var first_writer = engine.contracts.replay.Writer.init();
+    try feature.writeLogicalState(&first_writer, &scratch);
+    const first = first_writer.final();
+    var repeated_writer = engine.contracts.replay.Writer.init();
+    try feature.writeLogicalState(&repeated_writer, &scratch);
+    try std.testing.expectEqual(first, repeated_writer.final());
+
+    try feature.enqueue(.{ .actions = .{
+        .id = scratch[0],
+        .move = .{ 0.5, -0.25 },
+        .facing_yaw = -0.5,
+        .jump_pressed = true,
+    } });
+    var queued_writer = engine.contracts.replay.Writer.init();
+    try feature.writeLogicalState(&queued_writer, &scratch);
+    const queued = queued_writer.final();
+    try std.testing.expect(!std.mem.eql(u8, &first, &queued));
 }
 
 test "driver access makes CharacterVirtual dormant and exits transactionally" {
@@ -1360,6 +2054,136 @@ test "driver access makes CharacterVirtual dormant and exits transactionally" {
     try std.testing.expectEqual(@as(usize, 1), draws.len);
     try std.testing.expectEqual(exit_pose.position, draws[0].pose.position);
     try std.testing.expectEqual(@as(usize, 3), controllers.relocate_calls);
+}
+
+test "carrier access is atomic and CharacterV1 restores with empty carry state" {
+    const character_id = engine.PersistentId{ .namespace = 51, .local = 10 };
+    const item_id = engine.PersistentId{ .namespace = 51, .local = 20 };
+    const other_item_id = engine.PersistentId{ .namespace = 51, .local = 21 };
+    var record: CharacterV1 = undefined;
+
+    {
+        var runtime = try engine.Runtime.init(std.testing.allocator, .{
+            .namespace = 51,
+            .fixed_delta_seconds = 1.0 / 120.0,
+            .next_local_id = 11,
+        });
+        defer runtime.deinit();
+        var controllers = FakeControllers{};
+        var feature = try TestFeature.init(
+            std.testing.allocator,
+            &runtime,
+            &controllers,
+            .{},
+        );
+        defer feature.deinit();
+        var registry = runtime.registry();
+        try feature.register(&registry);
+        try feature.restoreRecords(&.{.{
+            .id = character_id,
+            .position = .{ 1, 2, 3 },
+            .velocity = .{ 0, 0, 0 },
+            .facing_yaw = 0.25,
+        }});
+        runtime.finishRegistration();
+
+        var carriers = feature.carrierAccess();
+        const initial = (try carriers.carryState(character_id)) orelse
+            return error.ExpectedCarrier;
+        try initial.validate();
+        try std.testing.expectEqual(interaction_contract.CarrierMobility.on_foot, initial.mobility);
+        try std.testing.expect(initial.carry_mode == .empty);
+        try std.testing.expectEqual([3]f32{ 1, 2, 3 }, initial.pose.position);
+        try std.testing.expect((try carriers.carryState(.{
+            .namespace = 51,
+            .local = 999,
+        })) == null);
+
+        var scratch: [1]engine.PersistentId = undefined;
+        var before_writer = engine.contracts.replay.Writer.init();
+        try feature.writeLogicalState(&before_writer, &scratch);
+        const before_digest = before_writer.final();
+
+        try carriers.beginCarry(character_id, item_id);
+        const holding = (try carriers.carryState(character_id)).?;
+        try std.testing.expectEqualDeep(item_id, holding.carry_mode.holding);
+        try std.testing.expectEqualDeep(item_id, holding.heldItem().?);
+        try std.testing.expectError(
+            error.CharacterAlreadyCarrying,
+            carriers.beginCarry(character_id, other_item_id),
+        );
+        try std.testing.expectError(
+            error.CharacterCarryingDifferentItem,
+            carriers.endCarry(character_id, other_item_id),
+        );
+        try std.testing.expectEqualDeep(
+            item_id,
+            (try carriers.carryState(character_id)).?.carry_mode.holding,
+        );
+
+        var after_writer = engine.contracts.replay.Writer.init();
+        try feature.writeLogicalState(&after_writer, &scratch);
+        try std.testing.expect(!std.mem.eql(
+            u8,
+            &before_digest,
+            &after_writer.final(),
+        ));
+
+        var drivers = feature.driverAccess();
+        const vehicle_id = engine.PersistentId{ .namespace = 51, .local = 30 };
+        try std.testing.expectError(
+            error.CharacterCarrying,
+            drivers.beginDriving(character_id, vehicle_id),
+        );
+        try feature.enqueue(.{ .despawn = .{ .id = character_id } });
+        try runtime.tick();
+        try std.testing.expectEqual(
+            RejectionReason.carrying,
+            feature.pollOutcome().?.rejected.reason,
+        );
+        try std.testing.expect(controllers.active);
+
+        carriers.cancelBeginCarry(character_id, item_id);
+        try std.testing.expect((try carriers.carryState(character_id)).?.carry_mode == .empty);
+        try drivers.beginDriving(character_id, vehicle_id);
+        try std.testing.expectError(
+            error.CharacterDriving,
+            carriers.beginCarry(character_id, item_id),
+        );
+        drivers.cancelDriving(character_id, vehicle_id);
+
+        try carriers.beginCarry(character_id, item_id);
+        try carriers.endCarry(character_id, item_id);
+        try std.testing.expect((try carriers.carryState(character_id)).?.carry_mode == .empty);
+
+        const records = try feature.snapshotRecords(std.testing.allocator);
+        defer std.testing.allocator.free(records);
+        try std.testing.expectEqual(@as(usize, 1), records.len);
+        record = records[0];
+        try std.testing.expect(!@hasField(CharacterV1, "held_item"));
+        try std.testing.expect(!@hasField(CharacterV1, "carry_mode"));
+    }
+
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{
+        .namespace = 51,
+        .fixed_delta_seconds = 1.0 / 120.0,
+        .next_local_id = 11,
+    });
+    defer runtime.deinit();
+    var controllers = FakeControllers{};
+    var feature = try TestFeature.init(
+        std.testing.allocator,
+        &runtime,
+        &controllers,
+        .{},
+    );
+    defer feature.deinit();
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    try feature.restoreRecords(&.{record});
+    runtime.finishRegistration();
+    var carriers = feature.carrierAccess();
+    try std.testing.expect((try carriers.carryState(character_id)).?.carry_mode == .empty);
 }
 
 test "typed actions drive a headless character and jump once" {

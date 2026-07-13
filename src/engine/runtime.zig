@@ -3,6 +3,8 @@
 const std = @import("std");
 const flecs = @import("zflecs");
 const identity_module = @import("engine_contracts").identity;
+const diagnostic_contract = @import("engine_contracts").diagnostics;
+const diagnostic_module = @import("diagnostics.zig");
 
 pub const PersistentId = identity_module.PersistentId;
 
@@ -29,6 +31,79 @@ pub const TickContext = struct {
     delta_seconds: f32,
 };
 
+/// Optional nonfallible observation seam for host-owned profiling. The
+/// runtime owns phase ordering and authority; an observer may timestamp the
+/// immutable phase/tick values but cannot reject, defer, or mutate a phase.
+pub const PhaseOutcome = enum(u8) {
+    succeeded,
+    failed,
+};
+
+pub const PhaseObserver = struct {
+    context: *anyopaque,
+    begin_fn: *const fn (*anyopaque, Phase, TickContext) void,
+    end_fn: *const fn (*anyopaque, Phase, TickContext, PhaseOutcome) void,
+
+    fn begin(self: PhaseObserver, phase: Phase, tick: TickContext) void {
+        self.begin_fn(self.context, phase, tick);
+    }
+
+    fn end(
+        self: PhaseObserver,
+        phase: Phase,
+        tick: TickContext,
+        outcome: PhaseOutcome,
+    ) void {
+        self.end_fn(self.context, phase, tick, outcome);
+    }
+};
+
+pub const DiagnosticJournal = diagnostic_module.DefaultJournal;
+pub const DiagnosticEntry = diagnostic_contract.Entry;
+pub const DiagnosticFreezeMatch = diagnostic_module.FreezeMatch;
+pub const DiagnosticAppendResult = diagnostic_module.AppendResult;
+pub const max_fault_name_bytes: usize = 96;
+pub const RuntimeErrorCode = @TypeOf(@intFromError(error.RuntimeFaulted));
+
+comptime {
+    if (max_fault_name_bytes > std.math.maxInt(u8)) {
+        @compileError("fault text length no longer fits its fixed-size length field");
+    }
+}
+
+/// Fixed owned text retained after the failing callback returns. Truncation is
+/// explicit, so diagnostics never imply that a clipped system/error name was
+/// complete.
+pub const FaultText = struct {
+    bytes: [max_fault_name_bytes]u8 = [_]u8{0} ** max_fault_name_bytes,
+    len: u8 = 0,
+    truncated: bool = false,
+
+    pub fn copy(value: []const u8) FaultText {
+        var result = FaultText{};
+        const copy_len = @min(value.len, max_fault_name_bytes);
+        @memcpy(result.bytes[0..copy_len], value[0..copy_len]);
+        result.len = @intCast(copy_len);
+        result.truncated = value.len > copy_len;
+        return result;
+    }
+
+    pub fn slice(self: *const FaultText) []const u8 {
+        return self.bytes[0..self.len];
+    }
+};
+
+/// The first scheduled infrastructure failure is immutable for the remainder
+/// of a runtime's life. It is returned by copy, never as mutable runtime state.
+pub const RuntimeFault = struct {
+    phase: Phase,
+    tick_index: u64,
+    journal_sequence: u64,
+    error_code: RuntimeErrorCode,
+    system_name: FaultText,
+    error_name: FaultText,
+};
+
 pub const SystemCallback = *const fn (
     context: *anyopaque,
     runtime: *Runtime,
@@ -51,12 +126,30 @@ pub const Config = struct {
 
 const Lifecycle = enum { registering, ready, ticking, faulted, deinitialized };
 
+/// Opaque capability for one registration-only restore batch. A failed batch
+/// may use this checkpoint to release only the persistent-ID tombstones it
+/// issued and restore the identity-source cursor without recycling identities
+/// from an already-committed batch.
+pub const RegistrationRestoreCheckpoint = struct {
+    runtime_token: u64,
+    sequence: u64,
+};
+
+const ActiveRegistrationRestore = struct {
+    sequence: u64,
+    identity_source: identity_module.IdentitySource,
+    issued_identity_count: usize,
+};
+
 const State = struct {
     gpa: std.mem.Allocator,
     world: *flecs.world_t,
     identities: std.AutoHashMap(PersistentId, RuntimeId),
     entities: std.AutoHashMap(u64, flecs.entity_t),
     issued_identities: std.AutoHashMap(PersistentId, void),
+    registration_restore_ids: std.ArrayListUnmanaged(PersistentId) = .empty,
+    active_registration_restore: ?ActiveRegistrationRestore = null,
+    next_registration_restore_sequence: u64 = 1,
     identity_source: identity_module.IdentitySource,
     runtime_token: u64,
     owner_thread: std.Thread.Id,
@@ -65,6 +158,8 @@ const State = struct {
     fixed_delta_seconds: f32,
     completed_ticks: u64,
     tracked_entity_count: usize = 0,
+    journal: DiagnosticJournal,
+    first_fault: ?RuntimeFault = null,
     lifecycle: Lifecycle = .registering,
 };
 
@@ -99,6 +194,7 @@ pub const Runtime = struct {
             .owner_thread = std.Thread.getCurrentId(),
             .fixed_delta_seconds = config.fixed_delta_seconds,
             .completed_ticks = config.completed_ticks,
+            .journal = DiagnosticJournal.init(),
         };
         const result = Runtime{ .storage = state };
         flecs.COMPONENT(result.statePtr().world, PersistentIdentity);
@@ -124,6 +220,7 @@ pub const Runtime = struct {
         self.statePtr().identities.deinit();
         self.statePtr().entities.deinit();
         self.statePtr().issued_identities.deinit();
+        self.statePtr().registration_restore_ids.deinit(self.statePtr().gpa);
         _ = flecs.fini(self.statePtr().world);
         releaseOwnedWorldLease();
         self.statePtr().lifecycle = .deinitialized;
@@ -148,9 +245,66 @@ pub const Runtime = struct {
         return self.statePtr().lifecycle == .faulted;
     }
 
+    /// Return an immutable copy so callers cannot mutate or outlive private
+    /// runtime storage accidentally.
+    pub fn firstFault(self: *const Runtime) ?RuntimeFault {
+        self.assertOwnerThread();
+        return self.statePtr().first_fault;
+    }
+
+    /// Borrowed read-only journal access. The view APIs on the journal retain
+    /// their owner-thread and mutation-lifetime contracts.
+    pub fn diagnosticJournal(self: *const Runtime) *const DiagnosticJournal {
+        self.assertOwnerThread();
+        return &self.statePtr().journal;
+    }
+
+    /// Shared owner-thread admission point for runtime, feature, adapter, and
+    /// host diagnostics. It performs no allocation and cannot return an error;
+    /// bounded rejection is represented by the returned value and statistics.
+    pub fn recordDiagnostic(
+        self: *Runtime,
+        entry: DiagnosticEntry,
+    ) DiagnosticAppendResult {
+        self.assertOwnerThread();
+        return self.statePtr().journal.append(entry);
+    }
+
+    pub fn armDiagnosticFreeze(self: *Runtime, condition: DiagnosticFreezeMatch) void {
+        self.assertOwnerThread();
+        self.statePtr().journal.armFreeze(condition);
+    }
+
+    pub fn disarmDiagnosticFreeze(self: *Runtime) bool {
+        self.assertOwnerThread();
+        return self.statePtr().journal.disarmFreeze();
+    }
+
+    pub fn resumeDiagnosticCapture(self: *Runtime) bool {
+        self.assertOwnerThread();
+        return self.statePtr().journal.resumeCapture();
+    }
+
+    pub fn clearDiagnostics(self: *Runtime) void {
+        self.assertOwnerThread();
+        self.statePtr().journal.clear();
+    }
+
     pub fn ensureSnapshotBoundary(self: *const Runtime) !void {
         try self.ensureHealthy();
         if (self.statePtr().lifecycle == .ticking) return error.TickInProgress;
+    }
+
+    /// Owner-thread inspection/serialization boundary that remains available
+    /// after an immutable runtime fault. It never permits observation while a
+    /// tick is executing and does not make the runtime healthy again.
+    pub fn ensureStoppedInspectionBoundary(self: *const Runtime) !void {
+        try self.requireOwnerThread();
+        return switch (self.statePtr().lifecycle) {
+            .ticking => error.TickInProgress,
+            .deinitialized => error.RuntimeDeinitialized,
+            .registering, .ready, .faulted => {},
+        };
     }
 
     /// Commands submitted while a tick is executing target the following
@@ -170,6 +324,9 @@ pub const Runtime = struct {
     pub fn finishRegistration(self: *Runtime) void {
         self.assertOwnerThread();
         if (self.statePtr().lifecycle == .registering) {
+            if (self.statePtr().active_registration_restore != null) {
+                @panic("runtime registration finished with an open restore transaction");
+            }
             // Explicit restore IDs are accepted only during registration.
             // Automatic runtime IDs are monotonic, so retaining restore
             // tombstones after this boundary would make normal churn leak.
@@ -179,6 +336,10 @@ pub const Runtime = struct {
     }
 
     pub fn tick(self: *Runtime) !void {
+        return self.tickObserved(null);
+    }
+
+    pub fn tickObserved(self: *Runtime, observer: ?PhaseObserver) !void {
         try self.requireOwnerThread();
         if (self.statePtr().lifecycle == .deinitialized) return error.RuntimeDeinitialized;
         if (self.statePtr().lifecycle == .ticking) return error.ReentrantTick;
@@ -193,19 +354,19 @@ pub const Runtime = struct {
         };
 
         self.statePtr().lifecycle = .ticking;
-        self.runPhase(.commands, context) catch |err| {
+        self.runObservedPhase(.commands, context, observer) catch |err| {
             self.statePtr().lifecycle = .faulted;
             return err;
         };
-        self.runPhase(.pre_physics, context) catch |err| {
+        self.runObservedPhase(.pre_physics, context, observer) catch |err| {
             self.statePtr().lifecycle = .faulted;
             return err;
         };
-        self.runPhase(.physics, context) catch |err| {
+        self.runObservedPhase(.physics, context, observer) catch |err| {
             self.statePtr().lifecycle = .faulted;
             return err;
         };
-        self.runPhase(.post_physics, context) catch |err| {
+        self.runObservedPhase(.post_physics, context, observer) catch |err| {
             self.statePtr().lifecycle = .faulted;
             return err;
         };
@@ -213,18 +374,72 @@ pub const Runtime = struct {
         self.statePtr().lifecycle = .ready;
     }
 
+    fn runObservedPhase(
+        self: *Runtime,
+        phase: Phase,
+        context: TickContext,
+        observer: ?PhaseObserver,
+    ) !void {
+        if (observer) |sink| sink.begin(phase, context);
+        self.runPhase(phase, context) catch |err| {
+            if (observer) |sink| sink.end(phase, context, .failed);
+            return err;
+        };
+        if (observer) |sink| sink.end(phase, context, .succeeded);
+    }
+
     fn runPhase(self: *Runtime, phase: Phase, context: TickContext) !void {
         for (self.statePtr().systems.items) |system| {
             if (system.phase == phase) {
-                try system.callback(system.context, self, context);
+                system.callback(system.context, self, context) catch |err| {
+                    self.captureFirstFault(phase, system.name, context.tick_index, err);
+                    return err;
+                };
             }
         }
+    }
+
+    fn captureFirstFault(
+        self: *Runtime,
+        phase: Phase,
+        system_name: []const u8,
+        tick_index: u64,
+        err: anyerror,
+    ) void {
+        if (self.statePtr().first_fault != null) return;
+        const result = self.recordDiagnostic(.{
+            .severity = .fatal,
+            .category = .runtime,
+            .code = diagnostic_contract.codes.runtime_system_fault,
+            .tick_index = tick_index,
+            .thread_role = .simulation,
+            .thread_id = diagnostic_module.currentThreadId(),
+            .correlation_id = self.statePtr().runtime_token,
+        });
+        _ = self.statePtr().journal.forceFreeze();
+        // A prior conditional capture may already have frozen the journal.
+        // The separately retained fault remains authoritative in that case.
+        const journal_sequence = if (result.accepted) result.sequence else 0;
+        self.statePtr().first_fault = .{
+            .phase = phase,
+            .tick_index = tick_index,
+            .journal_sequence = journal_sequence,
+            .error_code = @intFromError(err),
+            .system_name = FaultText.copy(system_name),
+            .error_name = FaultText.copy(@errorName(err)),
+        };
     }
 
     pub fn create(self: *Runtime) !RuntimeId {
         try self.ensureHealthy();
         if (self.statePtr().lifecycle == .registering) {
             try self.statePtr().issued_identities.ensureUnusedCapacity(1);
+            if (self.statePtr().active_registration_restore != null) {
+                try self.statePtr().registration_restore_ids.ensureUnusedCapacity(
+                    self.statePtr().gpa,
+                    1,
+                );
+            }
             // Reserve every fallible index allocation before consuming the
             // automatic persistent ID. If a later creation stage fails, the
             // already-reserved registration tombstone retires that ID.
@@ -239,6 +454,12 @@ pub const Runtime = struct {
         try self.ensureHealthy();
         if (self.statePtr().lifecycle != .registering) return error.RestoreIdentityOutsideRegistration;
         try self.statePtr().issued_identities.ensureUnusedCapacity(1);
+        if (self.statePtr().active_registration_restore != null) {
+            try self.statePtr().registration_restore_ids.ensureUnusedCapacity(
+                self.statePtr().gpa,
+                1,
+            );
+        }
         return self.createWithPersistentIdInternal(id, true);
     }
 
@@ -265,6 +486,9 @@ pub const Runtime = struct {
         if (track_registration_identity) {
             const issued_entry = self.statePtr().issued_identities.getOrPutAssumeCapacity(id);
             if (issued_entry.found_existing) return error.PersistentIdAlreadyIssued;
+            if (self.statePtr().active_registration_restore != null) {
+                self.statePtr().registration_restore_ids.appendAssumeCapacity(id);
+            }
         }
 
         const entity = flecs.new_id(self.statePtr().world);
@@ -363,6 +587,25 @@ pub const Runtime = struct {
         self.assertOwnerThread();
         return self.statePtr().tracked_entity_count;
     }
+
+    /// Copy the live persistent identity set into caller-owned bounded scratch
+    /// and sort it by the stable namespace/local key. This is intentionally a
+    /// logical inspection boundary: Flecs entity IDs, RuntimeIds, hash-table
+    /// iteration order, and allocator capacity never cross it.
+    pub fn copyPersistentIds(
+        self: *const Runtime,
+        scratch: []PersistentId,
+    ) ![]const PersistentId {
+        try self.ensureSnapshotBoundary();
+        const count = self.statePtr().identities.count();
+        if (scratch.len < count) return error.IdentityScratchTooSmall;
+
+        var index: usize = 0;
+        var iterator = self.statePtr().identities.keyIterator();
+        while (iterator.next()) |id| : (index += 1) scratch[index] = id.*;
+        std.mem.sort(PersistentId, scratch[0..count], {}, lessThanPersistentId);
+        return scratch[0..count];
+    }
     pub fn persistentCount(self: *const Runtime) usize {
         self.assertOwnerThread();
         return self.statePtr().identities.count();
@@ -384,11 +627,100 @@ pub const Runtime = struct {
         return self.statePtr().identity_source.cursor() orelse error.IdentitySourceExhausted;
     }
 
+    /// Begin one registration-only restore batch. The checkpoint is runtime
+    /// specific and must be committed or rolled back before another batch or
+    /// the registration boundary may complete.
+    pub fn beginRegistrationRestore(self: *Runtime) !RegistrationRestoreCheckpoint {
+        try self.requireOwnerThread();
+        if (self.statePtr().lifecycle != .registering) return error.RegistrationClosed;
+        if (self.statePtr().active_registration_restore != null) {
+            return error.RegistrationRestoreAlreadyActive;
+        }
+        if (self.statePtr().registration_restore_ids.items.len != 0) {
+            return error.RegistrationRestoreLogInvariantBroken;
+        }
+        const sequence = self.statePtr().next_registration_restore_sequence;
+        if (sequence == 0) return error.RegistrationRestoreSequenceExhausted;
+        self.statePtr().next_registration_restore_sequence +%= 1;
+        self.statePtr().active_registration_restore = .{
+            .sequence = sequence,
+            .identity_source = self.statePtr().identity_source,
+            .issued_identity_count = self.statePtr().issued_identities.count(),
+        };
+        return .{
+            .runtime_token = self.statePtr().runtime_token,
+            .sequence = sequence,
+        };
+    }
+
+    /// Commit a completed restore batch. Issued-ID tombstones and the observed
+    /// cursor become part of the registration result.
+    pub fn commitRegistrationRestore(
+        self: *Runtime,
+        checkpoint: RegistrationRestoreCheckpoint,
+    ) !void {
+        _ = try self.requireRegistrationRestore(checkpoint);
+        self.statePtr().registration_restore_ids.clearRetainingCapacity();
+        self.statePtr().active_registration_restore = null;
+    }
+
+    /// Roll back a failed restore batch after its caller has destroyed every
+    /// entity created by the batch. Runtime/entity serials remain monotonic,
+    /// while explicit-ID tombstones and the identity cursor return to their
+    /// exact pre-batch state so the same validated restore may be retried.
+    pub fn rollbackRegistrationRestore(
+        self: *Runtime,
+        checkpoint: RegistrationRestoreCheckpoint,
+    ) !void {
+        const active = try self.requireRegistrationRestore(checkpoint);
+        for (self.statePtr().registration_restore_ids.items) |id| {
+            if (self.statePtr().identities.contains(id)) {
+                return error.RegistrationRestoreHasLiveEntities;
+            }
+        }
+        const expected_count = std.math.add(
+            usize,
+            active.issued_identity_count,
+            self.statePtr().registration_restore_ids.items.len,
+        ) catch return error.RegistrationRestoreLogInvariantBroken;
+        if (self.statePtr().issued_identities.count() != expected_count) {
+            return error.RegistrationRestoreLogInvariantBroken;
+        }
+        for (self.statePtr().registration_restore_ids.items) |id| {
+            if (!self.statePtr().issued_identities.remove(id)) {
+                return error.RegistrationRestoreLogInvariantBroken;
+            }
+        }
+        self.statePtr().identity_source = active.identity_source;
+        self.statePtr().registration_restore_ids.clearRetainingCapacity();
+        self.statePtr().active_registration_restore = null;
+    }
+
+    fn requireRegistrationRestore(
+        self: *Runtime,
+        checkpoint: RegistrationRestoreCheckpoint,
+    ) !ActiveRegistrationRestore {
+        try self.requireOwnerThread();
+        if (self.statePtr().lifecycle != .registering) return error.RegistrationClosed;
+        if (checkpoint.runtime_token != self.statePtr().runtime_token) {
+            return error.ForeignRegistrationRestoreCheckpoint;
+        }
+        const active = self.statePtr().active_registration_restore orelse
+            return error.RegistrationRestoreNotActive;
+        if (checkpoint.sequence != active.sequence) {
+            return error.StaleRegistrationRestoreCheckpoint;
+        }
+        return active;
+    }
+
     /// Persistence-only cursor/clock restoration. It is legal only before the
     /// startup registry is frozen.
     pub fn restoreClock(self: *Runtime, completed_ticks: u64, next_local_id: u64) !void {
         try self.requireOwnerThread();
         if (self.statePtr().lifecycle != .registering) return error.RegistrationClosed;
+        if (self.statePtr().active_registration_restore != null) {
+            return error.RegistrationRestoreAlreadyActive;
+        }
         const current_cursor = try self.nextLocalId();
         if (next_local_id < current_cursor) return error.IdentityCursorWouldCollide;
         self.statePtr().identity_source = try identity_module.IdentitySource.initAt(
@@ -421,6 +753,11 @@ pub const Runtime = struct {
         self.requireOwnerThread() catch @panic("runtime accessed from a non-owner thread");
     }
 };
+
+fn lessThanPersistentId(_: void, lhs: PersistentId, rhs: PersistentId) bool {
+    if (lhs.namespace != rhs.namespace) return lhs.namespace < rhs.namespace;
+    return lhs.local < rhs.local;
+}
 
 pub const FeatureRegistry = struct {
     runtime: *Runtime,
@@ -516,6 +853,40 @@ test "runtime separates persistent and live identity" {
     try std.testing.expectError(
         error.PersistentIdAlreadyIssued,
         runtime.createWithPersistentId(restored_id),
+    );
+}
+
+test "registration restore rollback releases only scoped tombstones and cursor" {
+    var runtime = try Runtime.init(std.testing.allocator, .{
+        .namespace = 442,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+
+    const committed_id = PersistentId{ .namespace = 442, .local = 2 };
+    const committed = try runtime.createWithPersistentId(committed_id);
+    try runtime.destroy(committed);
+
+    const retry_id = PersistentId{ .namespace = 442, .local = 20 };
+    const failed_batch = try runtime.beginRegistrationRestore();
+    const candidate = try runtime.createWithPersistentId(retry_id);
+    try runtime.destroy(candidate);
+    try std.testing.expectEqual(@as(u64, 21), try runtime.nextLocalId());
+    try runtime.rollbackRegistrationRestore(failed_batch);
+    try std.testing.expectEqual(@as(u64, 3), try runtime.nextLocalId());
+    try std.testing.expectError(
+        error.PersistentIdAlreadyIssued,
+        runtime.createWithPersistentId(committed_id),
+    );
+
+    const retry_batch = try runtime.beginRegistrationRestore();
+    const restored = try runtime.createWithPersistentId(retry_id);
+    try runtime.commitRegistrationRestore(retry_batch);
+    try std.testing.expectEqual(@as(u64, 21), try runtime.nextLocalId());
+    try runtime.destroy(restored);
+    try std.testing.expectError(
+        error.PersistentIdAlreadyIssued,
+        runtime.createWithPersistentId(retry_id),
     );
 }
 
@@ -616,6 +987,105 @@ test "schedule is ordered and freezes before first tick" {
     );
 }
 
+test "phase observer brackets successful and failed phases without owning authority" {
+    const Edge = enum { begin, end };
+    const Event = struct {
+        phase: Phase,
+        edge: Edge,
+        outcome: ?PhaseOutcome,
+        tick_index: u64,
+    };
+    const Recorder = struct {
+        events: [8]Event = undefined,
+        count: usize = 0,
+
+        fn append(self: *@This(), event: Event) void {
+            if (self.count == self.events.len) @panic("phase observer test overflow");
+            self.events[self.count] = event;
+            self.count += 1;
+        }
+
+        fn onBegin(raw: *anyopaque, phase: Phase, tick: TickContext) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.append(.{
+                .phase = phase,
+                .edge = .begin,
+                .outcome = null,
+                .tick_index = tick.tick_index,
+            });
+        }
+
+        fn onEnd(
+            raw: *anyopaque,
+            phase: Phase,
+            tick: TickContext,
+            outcome: PhaseOutcome,
+        ) void {
+            const self: *@This() = @ptrCast(@alignCast(raw));
+            self.append(.{
+                .phase = phase,
+                .edge = .end,
+                .outcome = outcome,
+                .tick_index = tick.tick_index,
+            });
+        }
+
+        fn observer(self: *@This()) PhaseObserver {
+            return .{
+                .context = self,
+                .begin_fn = onBegin,
+                .end_fn = onEnd,
+            };
+        }
+    };
+
+    var success = try Runtime.init(std.testing.allocator, .{
+        .namespace = 11,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    var success_record = Recorder{};
+    try success.tickObserved(success_record.observer());
+    try std.testing.expectEqual(@as(usize, 8), success_record.count);
+    inline for ([_]Phase{ .commands, .pre_physics, .physics, .post_physics }, 0..) |phase, index| {
+        const begin = success_record.events[index * 2];
+        const end = success_record.events[index * 2 + 1];
+        try std.testing.expectEqual(phase, begin.phase);
+        try std.testing.expectEqual(Edge.begin, begin.edge);
+        try std.testing.expect(begin.outcome == null);
+        try std.testing.expectEqual(@as(u64, 1), begin.tick_index);
+        try std.testing.expectEqual(phase, end.phase);
+        try std.testing.expectEqual(Edge.end, end.edge);
+        try std.testing.expectEqual(PhaseOutcome.succeeded, end.outcome.?);
+        try std.testing.expectEqual(@as(u64, 1), end.tick_index);
+    }
+    try std.testing.expectEqual(@as(u64, 1), success.tickIndex());
+    success.deinit();
+
+    const Failure = struct {
+        fn run(_: *anyopaque, _: *Runtime, _: TickContext) !void {
+            return error.ObservedPhaseFailure;
+        }
+    };
+    var failed = try Runtime.init(std.testing.allocator, .{
+        .namespace = 12,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer failed.deinit();
+    var ignored_context: u8 = 0;
+    var registry = failed.registry();
+    try registry.addSystem(.physics, "test.observed-failure", &ignored_context, Failure.run);
+    var failure_record = Recorder{};
+    try std.testing.expectError(
+        error.ObservedPhaseFailure,
+        failed.tickObserved(failure_record.observer()),
+    );
+    try std.testing.expectEqual(@as(usize, 6), failure_record.count);
+    try std.testing.expectEqual(Phase.physics, failure_record.events[5].phase);
+    try std.testing.expectEqual(Edge.end, failure_record.events[5].edge);
+    try std.testing.expectEqual(PhaseOutcome.failed, failure_record.events[5].outcome.?);
+    try std.testing.expectEqual(@as(u64, 0), failed.tickIndex());
+}
+
 test "registry owns system names instead of borrowing caller storage" {
     const Noop = struct {
         fn run(_: *anyopaque, _: *Runtime, _: TickContext) !void {}
@@ -657,7 +1127,7 @@ test "runtime IDs cannot alias a later runtime" {
     try std.testing.expectError(error.ForeignRuntimeId, second.identity(first_entity));
 }
 
-test "a scheduled failure terminally faults the runtime" {
+test "a scheduled failure retains exact immutable first-fault evidence" {
     const Failure = struct {
         fn run(_: *anyopaque, _: *Runtime, _: TickContext) !void {
             return error.SyntheticSystemFailure;
@@ -666,14 +1136,149 @@ test "a scheduled failure terminally faults the runtime" {
     var runtime = try Runtime.init(std.testing.allocator, .{
         .namespace = 303,
         .fixed_delta_seconds = 1.0 / 120.0,
+        .completed_ticks = 12,
+    });
+    var context: u8 = 0;
+    var registry = runtime.registry();
+    try registry.addSystem(.physics, "test.failure", &context, Failure.run);
+    runtime.armDiagnosticFreeze(.{
+        .severity = .fatal,
+        .category = .runtime,
+        .code = diagnostic_contract.codes.runtime_system_fault,
+    });
+    const unrelated = runtime.recordDiagnostic(.{
+        .severity = .info,
+        .category = .host,
+        .code = 76,
+        .thread_role = .host,
+    });
+    try std.testing.expect(unrelated.accepted);
+    try std.testing.expect(!unrelated.froze);
+    try std.testing.expect(runtime.diagnosticJournal().stats().trigger_armed);
+    try std.testing.expect(!runtime.diagnosticJournal().stats().frozen);
+    try std.testing.expectError(error.SyntheticSystemFailure, runtime.tick());
+    try std.testing.expectEqual(@as(u64, 12), runtime.tickIndex());
+
+    const first = runtime.firstFault() orelse return error.RuntimeFaultMissing;
+    try std.testing.expectEqual(Phase.physics, first.phase);
+    try std.testing.expectEqual(@as(u64, 13), first.tick_index);
+    try std.testing.expectEqual(@as(u64, 2), first.journal_sequence);
+    try std.testing.expectEqual(
+        @intFromError(error.SyntheticSystemFailure),
+        first.error_code,
+    );
+    try std.testing.expectEqualStrings("test.failure", first.system_name.slice());
+    try std.testing.expect(!first.system_name.truncated);
+    try std.testing.expectEqualStrings(
+        "SyntheticSystemFailure",
+        first.error_name.slice(),
+    );
+    try std.testing.expect(!first.error_name.truncated);
+
+    const journal = runtime.diagnosticJournal();
+    const view = journal.borrowedChronological();
+    try std.testing.expectEqual(@as(usize, 2), view.len());
+    const entry = view.at(1).?.*;
+    try std.testing.expectEqual(first.journal_sequence, entry.sequence);
+    try std.testing.expectEqual(diagnostic_contract.Severity.fatal, entry.severity);
+    try std.testing.expectEqual(diagnostic_contract.Category.runtime, entry.category);
+    try std.testing.expectEqual(
+        diagnostic_contract.codes.runtime_system_fault,
+        entry.code,
+    );
+    try std.testing.expectEqual(@as(?u64, 13), entry.tick_index);
+    try std.testing.expectEqual(diagnostic_contract.ThreadRole.simulation, entry.thread_role);
+    try std.testing.expect(entry.thread_id.? != 0);
+    try std.testing.expectEqual(runtime.statePtr().runtime_token, entry.correlation_id);
+    try std.testing.expect(journal.stats().frozen);
+    try std.testing.expect(!journal.stats().trigger_armed);
+
+    try std.testing.expectError(error.RuntimeFaulted, runtime.tick());
+    const after_runtime_faulted = runtime.firstFault().?;
+    try std.testing.expectEqualDeep(first, after_runtime_faulted);
+    try std.testing.expectEqual(@as(usize, 2), runtime.diagnosticJournal().stats().count);
+
+    // Fault state and its frozen journal remain readable during orderly
+    // teardown, and teardown releases the one-world lease for a fresh runtime.
+    runtime.deinit();
+    var replacement = try Runtime.init(std.testing.allocator, .{
+        .namespace = 304,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer replacement.deinit();
+    try std.testing.expect(replacement.firstFault() == null);
+    try std.testing.expect(!replacement.diagnosticJournal().stats().trigger_armed);
+}
+
+test "first fault survives a journal that an earlier capture froze" {
+    const Failure = struct {
+        fn run(_: *anyopaque, _: *Runtime, _: TickContext) !void {
+            return error.FailureAfterCapture;
+        }
+    };
+    var runtime = try Runtime.init(std.testing.allocator, .{
+        .namespace = 305,
+        .fixed_delta_seconds = 1.0 / 120.0,
     });
     defer runtime.deinit();
     var context: u8 = 0;
     var registry = runtime.registry();
-    try registry.addSystem(.physics, "test.failure", &context, Failure.run);
-    try std.testing.expectError(error.SyntheticSystemFailure, runtime.tick());
-    try std.testing.expectEqual(@as(u64, 0), runtime.tickIndex());
+    try registry.addSystem(.commands, "test.failure-after-capture", &context, Failure.run);
+
+    runtime.armDiagnosticFreeze(.{
+        .severity = .warning,
+        .category = .host,
+        .code = 77,
+    });
+    const capture = runtime.recordDiagnostic(.{
+        .severity = .warning,
+        .category = .host,
+        .code = 77,
+        .thread_role = .host,
+        .thread_id = diagnostic_module.currentThreadId(),
+    });
+    try std.testing.expect(capture.accepted);
+    try std.testing.expect(capture.froze);
+    try std.testing.expect(!runtime.diagnosticJournal().stats().trigger_armed);
+
+    try std.testing.expectError(error.FailureAfterCapture, runtime.tick());
+    const first = runtime.firstFault() orelse return error.RuntimeFaultMissing;
+    try std.testing.expectEqual(Phase.commands, first.phase);
+    try std.testing.expectEqual(@as(u64, 1), first.tick_index);
+    try std.testing.expectEqual(@as(u64, 0), first.journal_sequence);
+    try std.testing.expectEqual(@intFromError(error.FailureAfterCapture), first.error_code);
+    try std.testing.expectEqualStrings("test.failure-after-capture", first.system_name.slice());
+    try std.testing.expectEqualStrings("FailureAfterCapture", first.error_name.slice());
+    try std.testing.expectEqual(@as(usize, 1), runtime.diagnosticJournal().stats().count);
+    try std.testing.expectEqual(
+        @as(u64, 1),
+        runtime.diagnosticJournal().stats().rejected_while_frozen,
+    );
+
+    runtime.clearDiagnostics();
+    try std.testing.expectEqual(@as(usize, 0), runtime.diagnosticJournal().stats().count);
+    try std.testing.expect(runtime.diagnosticJournal().stats().frozen);
+    try std.testing.expect(runtime.resumeDiagnosticCapture());
+    const after_resume = runtime.recordDiagnostic(.{
+        .severity = .info,
+        .category = .host,
+        .code = 78,
+        .thread_role = .host,
+    });
+    try std.testing.expect(after_resume.accepted);
+    try std.testing.expectEqual(@as(u64, 2), after_resume.sequence);
+    try std.testing.expect(!runtime.diagnosticJournal().stats().trigger_armed);
+    try std.testing.expectEqualDeep(first, runtime.firstFault().?);
     try std.testing.expectError(error.RuntimeFaulted, runtime.tick());
+    try std.testing.expectEqualDeep(first, runtime.firstFault().?);
+}
+
+test "fault text owns a bounded copy with visible truncation" {
+    const source = "abcdefghijklmnopqrstuvwxyz" ** 5;
+    const copied = FaultText.copy(source);
+    try std.testing.expect(copied.truncated);
+    try std.testing.expectEqual(max_fault_name_bytes, copied.slice().len);
+    try std.testing.expectEqualStrings(source[0..max_fault_name_bytes], copied.slice());
 }
 
 test "a second owned world returns a defined error before zflecs asserts" {

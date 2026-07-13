@@ -11,6 +11,7 @@ pub const FrameSample = struct {
     look_delta: [2]f32 = .{ 0, 0 },
     jump_pressed: bool = false,
     interact_pressed: bool = false,
+    carry_pressed: bool = false,
     brake: bool = false,
     hand_brake: bool = false,
     reset: bool = false,
@@ -21,6 +22,7 @@ pub const TickSample = struct {
     look_delta: [2]f32,
     jump_pressed: bool,
     interact_pressed: bool,
+    carry_pressed: bool = false,
     brake: bool,
     hand_brake: bool,
 };
@@ -30,6 +32,7 @@ pub const ActionLatch = struct {
     pending_look: [2]f32 = .{ 0, 0 },
     pending_jump: bool = false,
     pending_interact: bool = false,
+    pending_carry: bool = false,
     held_brake: bool = false,
     held_hand_brake: bool = false,
 
@@ -51,6 +54,7 @@ pub const ActionLatch = struct {
         }
         self.pending_jump = self.pending_jump or sample.jump_pressed;
         self.pending_interact = self.pending_interact or sample.interact_pressed;
+        self.pending_carry = self.pending_carry or sample.carry_pressed;
         self.held_brake = sample.brake;
         self.held_hand_brake = sample.hand_brake;
     }
@@ -61,12 +65,14 @@ pub const ActionLatch = struct {
             .look_delta = self.pending_look,
             .jump_pressed = self.pending_jump,
             .interact_pressed = self.pending_interact,
+            .carry_pressed = self.pending_carry,
             .brake = self.held_brake,
             .hand_brake = self.held_hand_brake,
         };
         self.pending_look = .{ 0, 0 };
         self.pending_jump = false;
         self.pending_interact = false;
+        self.pending_carry = false;
         return result;
     }
 
@@ -88,6 +94,7 @@ test "zero-tick frames retain edges and deltas" {
         .look_delta = .{ 3, -2 },
         .jump_pressed = true,
         .interact_pressed = true,
+        .carry_pressed = true,
         .brake = true,
         .hand_brake = true,
     });
@@ -101,6 +108,7 @@ test "zero-tick frames retain edges and deltas" {
     try std.testing.expectEqual([2]f32{ 7, -1 }, tick.look_delta);
     try std.testing.expect(tick.jump_pressed);
     try std.testing.expect(tick.interact_pressed);
+    try std.testing.expect(tick.carry_pressed);
     try std.testing.expect(!tick.brake);
     try std.testing.expect(!tick.hand_brake);
 }
@@ -112,6 +120,7 @@ test "multi-tick frames consume edges once while movement remains held" {
         .look_delta = .{ 2, 5 },
         .jump_pressed = true,
         .interact_pressed = true,
+        .carry_pressed = true,
         .brake = true,
         .hand_brake = true,
     });
@@ -121,11 +130,13 @@ test "multi-tick frames consume edges once while movement remains held" {
     try std.testing.expectEqual([2]f32{ 2, 5 }, first.look_delta);
     try std.testing.expect(first.jump_pressed);
     try std.testing.expect(first.interact_pressed);
+    try std.testing.expect(first.carry_pressed);
     try std.testing.expect(first.brake);
     try std.testing.expect(first.hand_brake);
     try std.testing.expectEqual([2]f32{ 0, 0 }, second.look_delta);
     try std.testing.expect(!second.jump_pressed);
     try std.testing.expect(!second.interact_pressed);
+    try std.testing.expect(!second.carry_pressed);
     try std.testing.expect(second.brake);
     try std.testing.expect(second.hand_brake);
 }
@@ -137,6 +148,7 @@ test "capture or focus reset discards pending gameplay actions" {
         .look_delta = .{ 2, 3 },
         .jump_pressed = true,
         .interact_pressed = true,
+        .carry_pressed = true,
         .brake = true,
         .hand_brake = true,
     });
@@ -146,6 +158,7 @@ test "capture or focus reset discards pending gameplay actions" {
     try std.testing.expectEqual([2]f32{ 0, 0 }, tick.look_delta);
     try std.testing.expect(!tick.jump_pressed);
     try std.testing.expect(!tick.interact_pressed);
+    try std.testing.expect(!tick.carry_pressed);
     try std.testing.expect(!tick.brake);
     try std.testing.expect(!tick.hand_brake);
 }

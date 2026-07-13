@@ -2,10 +2,12 @@
 
 const std = @import("std");
 pub const bundle = @import("district_bundle.zig");
+pub const catalog = @import("catalog.zig");
 
 pub const max_bundle_key_bytes: usize = 96;
 pub const max_content_root_bytes: usize = 1024;
 pub const bundle_extension = ".icdb";
+pub const catalog_relative_path = "district/catalog.icat";
 
 pub const BundleKey = struct {
     storage: [max_bundle_key_bytes]u8 = undefined,
@@ -53,7 +55,10 @@ pub const ContentRootPath = struct {
     len: u16,
 
     pub fn parse(path: []const u8) !ContentRootPath {
-        if (!std.fs.path.isAbsolute(path) or path.len == 0 or path.len > max_content_root_bytes) {
+        if (!std.fs.path.isAbsolute(path) or path.len == 0 or
+            path.len > max_content_root_bytes or
+            std.mem.indexOfScalar(u8, path, 0) != null)
+        {
             return error.InvalidContentRoot;
         }
         var result = ContentRootPath{ .len = @intCast(path.len) };
@@ -77,13 +82,77 @@ pub const LoadFailure = union(enum) {
     io_failure,
     out_of_memory,
     bundle_key_mismatch,
+    identity_mismatch: BundleIdentityMismatch,
     too_large: ReadTooLarge,
     validation: bundle.ValidationFailure,
+};
+
+pub const BundleIdentityMismatch = enum {
+    format_version,
+    schema_cohort,
+    source_digest,
+    integrity_digest,
+};
+
+/// Exact identity copied from an admitted catalog. A live worker rechecks it
+/// after decoding so replacing a valid bundle beneath an already-admitted
+/// catalog cannot publish different content under the original cohort.
+pub const ExpectedBundleIdentity = struct {
+    format_version: u16,
+    schema_cohort: u16,
+    source_digest: [32]u8,
+    integrity_digest: [32]u8,
+
+    pub fn fromIdentity(identity: bundle.BundleIdentity) ExpectedBundleIdentity {
+        return .{
+            .format_version = identity.format_version,
+            .schema_cohort = identity.schema_cohort,
+            .source_digest = identity.source_digest,
+            .integrity_digest = identity.integrity_digest,
+        };
+    }
+
+    pub fn validate(self: ExpectedBundleIdentity) !void {
+        if (self.format_version == 0 or self.schema_cohort == 0 or
+            std.mem.allEqual(u8, &self.source_digest, 0) or
+            std.mem.allEqual(u8, &self.integrity_digest, 0))
+        {
+            return error.InvalidExpectedBundleIdentity;
+        }
+    }
+
+    pub fn mismatch(
+        self: ExpectedBundleIdentity,
+        actual: bundle.BundleIdentity,
+    ) ?BundleIdentityMismatch {
+        if (actual.format_version != self.format_version) return .format_version;
+        if (actual.schema_cohort != self.schema_cohort) return .schema_cohort;
+        if (!std.mem.eql(u8, &actual.source_digest, &self.source_digest)) {
+            return .source_digest;
+        }
+        if (!std.mem.eql(u8, &actual.integrity_digest, &self.integrity_digest)) {
+            return .integrity_digest;
+        }
+        return null;
+    }
 };
 
 pub const LoadResult = union(enum) {
     scene: bundle.OwnedBundle,
     failed: LoadFailure,
+};
+
+pub const CatalogLoadFailure = union(enum) {
+    not_found,
+    access_denied,
+    io_failure,
+    too_large: ReadTooLarge,
+    validation: catalog.ValidationFailure,
+};
+
+pub const CatalogLoadResult = union(enum) {
+    loaded: catalog.OwnedCatalog,
+    failed: CatalogLoadFailure,
 };
 
 /// Directory-capability root. `open` requires an absolute configured path and
@@ -157,6 +226,50 @@ pub const ContentRoot = struct {
             .failed => |failure| .{ .failed = .{ .validation = failure } },
         };
     }
+
+    /// Load the one canonical district catalog from its fixed installed path.
+    /// Runtime selection never enumerates directories or accepts an alternate
+    /// relative catalog location.
+    pub fn loadCatalog(
+        self: *const ContentRoot,
+        io: std.Io,
+        allocator: std.mem.Allocator,
+        limits: catalog.Limits,
+    ) !CatalogLoadResult {
+        try limits.validate();
+        var file = self.dir.openFile(io, catalog_relative_path, .{
+            .allow_directory = false,
+            .follow_symlinks = true,
+            .resolve_beneath = true,
+        }) catch |err| return .{ .failed = switch (mapOpenFailure(err)) {
+            .not_found => .not_found,
+            .access_denied => .access_denied,
+            else => .io_failure,
+        } };
+        defer file.close(io);
+
+        const file_len = file.length(io) catch return .{ .failed = .io_failure };
+        if (file_len > limits.max_file_bytes) return .{ .failed = .{ .too_large = .{
+            .actual = file_len,
+            .maximum = limits.max_file_bytes,
+        } } };
+        const byte_len = std.math.cast(usize, file_len) orelse
+            return .{ .failed = .{ .too_large = .{
+                .actual = file_len,
+                .maximum = limits.max_file_bytes,
+            } } };
+        var read_buffer: [4096]u8 = undefined;
+        var reader = file.reader(io, &read_buffer);
+        const bytes = reader.interface.readAlloc(allocator, byte_len) catch |err| switch (err) {
+            error.OutOfMemory => return error.OutOfMemory,
+            else => return .{ .failed = .io_failure },
+        };
+        defer allocator.free(bytes);
+        return switch (try catalog.decode(allocator, bytes, limits)) {
+            .catalog => |value| .{ .loaded = value },
+            .failed => |failure| .{ .failed = .{ .validation = failure } },
+        };
+    }
 };
 
 fn mapOpenFailure(err: anyerror) LoadFailure {
@@ -171,10 +284,12 @@ pub const SceneRequest = struct {
     generation: u64,
     content_root: ContentRootPath,
     key: BundleKey,
+    expected_identity: ?ExpectedBundleIdentity = null,
     limits: bundle.Limits = .{},
 
     pub fn validate(self: *const SceneRequest) !void {
         if (self.generation == 0) return error.InvalidSceneGeneration;
+        if (self.expected_identity) |identity| try identity.validate();
     }
 };
 
@@ -211,6 +326,40 @@ pub const PollResult = union(enum) {
     pending: PendingStage,
     completion: Completion,
 };
+
+pub const WorkerState = enum {
+    idle,
+    queued,
+    working,
+    cancelling,
+    completion_ready,
+};
+
+pub const CompletionKind = enum {
+    ready,
+    cancelled,
+    failed,
+};
+
+pub const WorkerDiagnostics = struct {
+    state: WorkerState,
+    generation: ?u64,
+    started: bool,
+    cancellation_requested: bool,
+    completion_kind: ?CompletionKind,
+};
+
+fn diagnosticWorkerState(
+    has_active: bool,
+    has_completion: bool,
+    started: bool,
+    cancel_requested: bool,
+) WorkerState {
+    if (!has_active) return .idle;
+    if (has_completion) return .completion_ready;
+    if (cancel_requested) return .cancelling;
+    return if (started) .working else .queued;
+}
 
 /// One-job, never-detached worker. The background thread receives only an
 /// explicit absolute root, validated logical key, limits, allocator, and I/O
@@ -281,6 +430,8 @@ pub const SceneWorker = struct {
             self.thread = null;
             self.active = null;
             self.completion = null;
+            self.started = false;
+            self.cancel_requested = false;
             return .{ .completion = completion };
         }
         return .{ .pending = if (self.started) .reading else .queued };
@@ -306,6 +457,32 @@ pub const SceneWorker = struct {
         self.lock();
         defer self.unlock();
         return self.started;
+    }
+
+    pub fn diagnostics(self: *SceneWorker) WorkerDiagnostics {
+        self.assertOwnerThread();
+        self.lock();
+        defer self.unlock();
+        const completion_kind: ?CompletionKind = if (self.completion) |*completion|
+            switch (completion.*) {
+                .ready => .ready,
+                .cancelled => .cancelled,
+                .failed => .failed,
+            }
+        else
+            null;
+        return .{
+            .state = diagnosticWorkerState(
+                self.active != null,
+                self.completion != null,
+                self.started,
+                self.cancel_requested,
+            ),
+            .generation = if (self.active) |*active| active.generation else null,
+            .started = self.started,
+            .cancellation_requested = self.cancel_requested,
+            .completion_kind = completion_kind,
+        };
     }
 
     fn run(self: *SceneWorker) void {
@@ -334,6 +511,15 @@ pub const SceneWorker = struct {
         } });
         switch (result) {
             .scene => |*scene| {
+                if (request_value.expected_identity) |expected| {
+                    if (expected.mismatch(scene.bundleIdentity())) |mismatch| {
+                        scene.deinit();
+                        return self.publish(.{ .failed = .{
+                            .generation = request_value.generation,
+                            .failure = .{ .identity_mismatch = mismatch },
+                        } });
+                    }
+                }
                 self.lock();
                 if (self.cancel_requested) {
                     self.unlock();
@@ -387,6 +573,38 @@ pub const SceneWorker = struct {
     }
 };
 
+test "scene worker diagnostics distinguish every one-job lifecycle state" {
+    try std.testing.expectEqual(
+        WorkerState.idle,
+        diagnosticWorkerState(false, false, false, false),
+    );
+    try std.testing.expectEqual(
+        WorkerState.queued,
+        diagnosticWorkerState(true, false, false, false),
+    );
+    try std.testing.expectEqual(
+        WorkerState.working,
+        diagnosticWorkerState(true, false, true, false),
+    );
+    try std.testing.expectEqual(
+        WorkerState.cancelling,
+        diagnosticWorkerState(true, false, true, true),
+    );
+    try std.testing.expectEqual(
+        WorkerState.completion_ready,
+        diagnosticWorkerState(true, true, true, true),
+    );
+
+    var worker = SceneWorker.init(std.testing.io, std.testing.allocator);
+    defer worker.deinit();
+    const snapshot = worker.diagnostics();
+    try std.testing.expectEqual(WorkerState.idle, snapshot.state);
+    try std.testing.expectEqual(@as(?u64, null), snapshot.generation);
+    try std.testing.expect(!snapshot.started);
+    try std.testing.expect(!snapshot.cancellation_requested);
+    try std.testing.expect(snapshot.completion_kind == null);
+}
+
 test "bundle keys and roots reject ambiguous or cwd-dependent lookup" {
     const valid = try BundleKey.parse("district/s3_fixture");
     try std.testing.expectEqualStrings("district/s3_fixture", valid.bytes());
@@ -394,6 +612,7 @@ test "bundle keys and roots reject ambiguous or cwd-dependent lookup" {
     try std.testing.expectError(error.InvalidBundleKey, BundleKey.parse("district//fixture"));
     try std.testing.expectError(error.InvalidBundleKey, BundleKey.parse("District/fixture"));
     try std.testing.expectError(error.InvalidContentRoot, ContentRootPath.parse("relative/content"));
+    try std.testing.expectError(error.InvalidContentRoot, ContentRootPath.parse("/tmp/content\x00suffix"));
 }
 
 test "explicit root returns structured missing and validation failures" {
@@ -436,6 +655,63 @@ test "explicit root returns structured missing and validation failures" {
     try std.testing.expect(wrong_identity.failed == .bundle_key_mismatch);
 }
 
+test "explicit root loads only the fixed canonical catalog path" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    const root = ContentRoot.borrowed(temporary.dir);
+    try std.testing.expect((try root.loadCatalog(
+        std.testing.io,
+        std.testing.allocator,
+        .{},
+    )).failed == .not_found);
+
+    try temporary.dir.createDir(std.testing.io, "district", .default_dir);
+    const entries = [_]catalog.EntryDeclaration{.{
+        .coord = .{ .x = 0, .z = 0 },
+        .semantic_id = "district.west",
+        .bundle_key = "district/s3_fixture",
+        .recipe_version = 1,
+        .logical_checksum = 1,
+        .bundle = .{
+            .format_version = 1,
+            .schema_cohort = 1,
+            .source_digest = [_]u8{0x22} ** 32,
+            .integrity_digest = [_]u8{0x33} ** 32,
+        },
+    }};
+    const bytes = switch (try catalog.encode(std.testing.allocator, .{
+        .name = "district.catalog",
+        .source_digest = [_]u8{0x11} ** 32,
+        .entries = &entries,
+    }, .{})) {
+        .bytes => |value| value,
+        .failed => return error.TestCatalogEncodeFailed,
+    };
+    defer std.testing.allocator.free(bytes);
+    try temporary.dir.writeFile(std.testing.io, .{
+        .sub_path = catalog_relative_path,
+        .data = bytes,
+    });
+    var loaded = switch (try root.loadCatalog(
+        std.testing.io,
+        std.testing.allocator,
+        .{},
+    )) {
+        .loaded => |value| value,
+        .failed => return error.TestCatalogLoadFailed,
+    };
+    defer loaded.deinit();
+    try std.testing.expectEqualStrings("district.catalog", loaded.view().name);
+    try std.testing.expectEqual(@as(usize, 1), loaded.view().entries.len);
+
+    try temporary.dir.writeFile(std.testing.io, .{
+        .sub_path = catalog_relative_path,
+        .data = "not a catalog",
+    });
+    const invalid = try root.loadCatalog(std.testing.io, std.testing.allocator, .{});
+    try std.testing.expect(invalid.failed == .validation);
+}
+
 test "scene worker reports missing content, joins, and rejects stale generation" {
     var temporary = std.testing.tmpDir(.{});
     defer temporary.cleanup();
@@ -452,9 +728,9 @@ test "scene worker reports missing content, joins, and rejects stale generation"
     };
     try std.testing.expectEqual(RequestDisposition.accepted, try worker.request(request_value));
     var completion: ?Completion = null;
-    for (0..10_000) |_| {
+    for (0..5_000) |_| {
         switch (worker.poll(1)) {
-            .pending => std.Thread.yield() catch {},
+            .pending => try std.testing.io.sleep(.fromMilliseconds(1), .boot),
             .completion => |value| {
                 completion = value;
                 break;
@@ -465,6 +741,84 @@ test "scene worker reports missing content, joins, and rejects stale generation"
     try std.testing.expect(completion != null);
     try std.testing.expect(completion.?.failed.failure == .not_found);
     try std.testing.expectEqual(RequestDisposition.stale, try worker.request(request_value));
+}
+
+test "scene worker rejects a valid bundle replaced after exact catalog admission" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.createDir(std.testing.io, "district", .default_dir);
+
+    const original_bytes = (try bundle.encode(
+        std.testing.allocator,
+        workerTestBundle(),
+        .{},
+    )).bytes;
+    defer std.testing.allocator.free(original_bytes);
+    var original_decoded = switch (try bundle.decode(
+        std.testing.allocator,
+        original_bytes,
+        .{},
+    )) {
+        .bundle => |value| value,
+        .failed => return error.TestBundleDecodeFailed,
+    };
+    defer original_decoded.deinit();
+    const expected = ExpectedBundleIdentity.fromIdentity(
+        original_decoded.bundleIdentity(),
+    );
+
+    var replacement = workerTestBundle();
+    replacement.source_digest = [_]u8{0x44} ** 32;
+    const replacement_bytes = (try bundle.encode(
+        std.testing.allocator,
+        replacement,
+        .{},
+    )).bytes;
+    defer std.testing.allocator.free(replacement_bytes);
+    try temporary.dir.writeFile(std.testing.io, .{
+        .sub_path = "district/test.icdb",
+        .data = replacement_bytes,
+    });
+
+    var absolute_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const absolute_len = try temporary.dir.realPath(std.testing.io, &absolute_buffer);
+    const root_path = try ContentRootPath.parse(absolute_buffer[0..absolute_len]);
+    var worker = SceneWorker.init(std.testing.io, std.testing.allocator);
+    defer worker.deinit();
+    try std.testing.expectEqual(RequestDisposition.accepted, try worker.request(.{
+        .generation = 1,
+        .content_root = root_path,
+        .key = try BundleKey.parse("district/test"),
+        .expected_identity = expected,
+    }));
+
+    var completion: ?Completion = null;
+    for (0..5_000) |_| {
+        switch (worker.poll(1)) {
+            .pending => try std.testing.io.sleep(.fromMilliseconds(1), .boot),
+            .completion => |value| {
+                completion = value;
+                break;
+            },
+            else => return error.UnexpectedWorkerState,
+        }
+    }
+    const observed = completion orelse return error.MissingWorkerCompletion;
+    try std.testing.expect(observed == .failed);
+    try std.testing.expect(observed.failed.failure == .identity_mismatch);
+    try std.testing.expectEqual(
+        BundleIdentityMismatch.source_digest,
+        observed.failed.failure.identity_mismatch,
+    );
+
+    var invalid_expected = expected;
+    invalid_expected.source_digest = [_]u8{0} ** 32;
+    try std.testing.expectEqual(RequestDisposition.invalid, try worker.request(.{
+        .generation = 2,
+        .content_root = root_path,
+        .key = try BundleKey.parse("district/test"),
+        .expected_identity = invalid_expected,
+    }));
 }
 
 const worker_test_strings = "district/testNodeMeshMaterial";
@@ -514,10 +868,97 @@ fn workerTestBundle() bundle.BundleView {
         .indices = &worker_test_indices,
         .pixels = &.{},
         .static_boxes = &worker_test_boxes,
+        .navigation_nodes = &.{},
+        .navigation_edges = &.{},
     };
 }
 
-test "scene worker cancellation releases a ready scene and the next generation transfers ownership" {
+/// Test allocator that stops the worker on the first decoded string allocation.
+/// The file read and bundle header/integrity validation have completed before
+/// `bundle.decode` requests this allocation, so the owner can cancel at a
+/// deterministic in-decode boundary without relying on scheduler timing.
+const DecodeBarrierAllocator = struct {
+    child: std.mem.Allocator,
+    decoded_string_bytes: usize,
+    decode_entered: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    released: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+    triggered: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+
+    fn init(child: std.mem.Allocator, decoded_string_bytes: usize) DecodeBarrierAllocator {
+        return .{
+            .child = child,
+            .decoded_string_bytes = decoded_string_bytes,
+        };
+    }
+
+    fn allocator(self: *DecodeBarrierAllocator) std.mem.Allocator {
+        return .{
+            .ptr = self,
+            .vtable = &.{
+                .alloc = alloc,
+                .resize = resize,
+                .remap = remap,
+                .free = free,
+            },
+        };
+    }
+
+    fn waitForDecode(self: *DecodeBarrierAllocator) void {
+        while (!self.decode_entered.load(.acquire)) std.atomic.spinLoopHint();
+    }
+
+    fn release(self: *DecodeBarrierAllocator) void {
+        self.released.store(true, .release);
+    }
+
+    fn alloc(
+        context: *anyopaque,
+        len: usize,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *DecodeBarrierAllocator = @ptrCast(@alignCast(context));
+        if (len == self.decoded_string_bytes and !self.triggered.swap(true, .acq_rel)) {
+            self.decode_entered.store(true, .release);
+            while (!self.released.load(.acquire)) std.atomic.spinLoopHint();
+        }
+        return self.child.rawAlloc(len, alignment, return_address);
+    }
+
+    fn resize(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) bool {
+        const self: *DecodeBarrierAllocator = @ptrCast(@alignCast(context));
+        return self.child.rawResize(memory, alignment, new_len, return_address);
+    }
+
+    fn remap(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        new_len: usize,
+        return_address: usize,
+    ) ?[*]u8 {
+        const self: *DecodeBarrierAllocator = @ptrCast(@alignCast(context));
+        return self.child.rawRemap(memory, alignment, new_len, return_address);
+    }
+
+    fn free(
+        context: *anyopaque,
+        memory: []u8,
+        alignment: std.mem.Alignment,
+        return_address: usize,
+    ) void {
+        const self: *DecodeBarrierAllocator = @ptrCast(@alignCast(context));
+        self.child.rawFree(memory, alignment, return_address);
+    }
+};
+
+test "scene worker cancellation after decode starts joins and permits the next generation" {
     var temporary = std.testing.tmpDir(.{});
     defer temporary.cleanup();
     try temporary.dir.createDir(std.testing.io, "district", .default_dir);
@@ -532,28 +973,66 @@ test "scene worker cancellation releases a ready scene and the next generation t
     const absolute_len = try temporary.dir.realPath(std.testing.io, &absolute_buffer);
     const root_path = try ContentRootPath.parse(absolute_buffer[0..absolute_len]);
     const key = try BundleKey.parse("district/test");
-    var worker = SceneWorker.init(std.testing.io, std.testing.allocator);
+    var decode_barrier = DecodeBarrierAllocator.init(
+        std.testing.allocator,
+        worker_test_strings.len,
+    );
+    var worker = SceneWorker.init(std.testing.io, decode_barrier.allocator());
     defer worker.deinit();
+    // Declared after worker.deinit so an early test failure releases the worker
+    // before teardown attempts to join it.
+    defer decode_barrier.release();
 
     try std.testing.expectEqual(RequestDisposition.accepted, try worker.request(.{
         .generation = 1,
         .content_root = root_path,
         .key = key,
     }));
+    decode_barrier.waitForDecode();
+    try std.testing.expect(worker.hasStarted());
+    var diagnostics = worker.diagnostics();
+    try std.testing.expectEqual(WorkerState.working, diagnostics.state);
+    try std.testing.expectEqual(@as(?u64, 1), diagnostics.generation);
+    try std.testing.expect(diagnostics.started);
+    try std.testing.expect(!diagnostics.cancellation_requested);
+    try std.testing.expect(diagnostics.completion_kind == null);
     try std.testing.expectEqual(CancelDisposition.requested, worker.cancel(1));
-    var cancelled = false;
-    for (0..10_000) |_| {
-        switch (worker.poll(1)) {
-            .pending => std.Thread.yield() catch {},
-            .completion => |completion| {
-                try std.testing.expect(completion == .cancelled);
-                cancelled = true;
-                break;
-            },
-            else => return error.UnexpectedWorkerState,
+    diagnostics = worker.diagnostics();
+    try std.testing.expectEqual(WorkerState.cancelling, diagnostics.state);
+    try std.testing.expectEqual(@as(?u64, 1), diagnostics.generation);
+    try std.testing.expect(diagnostics.started);
+    try std.testing.expect(diagnostics.cancellation_requested);
+    try std.testing.expect(diagnostics.completion_kind == null);
+    decode_barrier.release();
+    var completion_ready = false;
+    for (0..5_000) |_| {
+        diagnostics = worker.diagnostics();
+        if (diagnostics.state == .completion_ready) {
+            completion_ready = true;
+            break;
         }
+        try std.testing.io.sleep(.fromMilliseconds(1), .boot);
     }
-    try std.testing.expect(cancelled);
+    try std.testing.expect(completion_ready);
+    try std.testing.expectEqual(@as(?u64, 1), diagnostics.generation);
+    try std.testing.expect(diagnostics.started);
+    try std.testing.expect(diagnostics.cancellation_requested);
+    try std.testing.expectEqual(CompletionKind.cancelled, diagnostics.completion_kind.?);
+    const cancelled = switch (worker.poll(1)) {
+        .completion => |completion| completion,
+        else => return error.UnexpectedWorkerState,
+    };
+    try std.testing.expect(cancelled == .cancelled);
+    try std.testing.expect(worker.thread == null);
+    try std.testing.expect(worker.active == null);
+    try std.testing.expect(worker.completion == null);
+    try std.testing.expect(worker.poll(1) == .idle);
+    diagnostics = worker.diagnostics();
+    try std.testing.expectEqual(WorkerState.idle, diagnostics.state);
+    try std.testing.expectEqual(@as(?u64, null), diagnostics.generation);
+    try std.testing.expect(!diagnostics.started);
+    try std.testing.expect(!diagnostics.cancellation_requested);
+    try std.testing.expect(diagnostics.completion_kind == null);
 
     try std.testing.expectEqual(RequestDisposition.accepted, try worker.request(.{
         .generation = 2,
@@ -561,9 +1040,9 @@ test "scene worker cancellation releases a ready scene and the next generation t
         .key = key,
     }));
     var ready = false;
-    for (0..10_000) |_| {
+    for (0..5_000) |_| {
         switch (worker.poll(2)) {
-            .pending => std.Thread.yield() catch {},
+            .pending => try std.testing.io.sleep(.fromMilliseconds(1), .boot),
             .completion => |completion_value| {
                 var completion = completion_value;
                 defer completion.deinit();

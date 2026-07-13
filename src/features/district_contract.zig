@@ -9,10 +9,19 @@ const engine = @import("engine_contracts");
 
 pub const Pose = engine.Pose;
 
-pub const current_recipe_version: u32 = 1;
 pub const max_static_boxes: usize = 8;
 pub const decoded_bytes_per_static_box: u32 = 40;
-pub const max_decoded_bytes: u32 = max_static_boxes * decoded_bytes_per_static_box;
+pub const max_navigation_nodes: usize = 8;
+pub const max_navigation_edges: usize = 16;
+pub const decoded_bytes_per_navigation_node: u32 = 16;
+pub const decoded_bytes_per_navigation_edge: u32 = 12;
+pub const max_navigation_decoded_bytes: u32 =
+    max_navigation_nodes * decoded_bytes_per_navigation_node +
+    max_navigation_edges * decoded_bytes_per_navigation_edge;
+pub const max_decoded_bytes: u32 =
+    max_static_boxes * decoded_bytes_per_static_box + max_navigation_decoded_bytes;
+pub const chunk_span: f32 = 16.0;
+pub const chunk_half_span: f32 = chunk_span / 2.0;
 
 pub const ChunkCoord = struct {
     x: i32,
@@ -22,6 +31,31 @@ pub const ChunkCoord = struct {
         return a.x == b.x and a.z == b.z;
     }
 };
+
+/// Map one finite world position into canonical, half-open district cells.
+/// District `(0, 0)` owns `[-8, 8)` on X and Z; therefore the shared boundary
+/// at X=8 belongs to the east district `(1, 0)`. Y is not used for ownership,
+/// but is still required to be finite so no invalid world pose is admitted.
+pub fn chunkCoordForWorldPosition(position: [3]f32) !ChunkCoord {
+    for (position) |component| {
+        if (!std.math.isFinite(component)) return error.NonFiniteWorldPosition;
+    }
+    return .{
+        .x = try chunkAxisForWorldPosition(position[0]),
+        .z = try chunkAxisForWorldPosition(position[2]),
+    };
+}
+
+fn chunkAxisForWorldPosition(value: f32) !i32 {
+    const shifted: f64 = @as(f64, value) + @as(f64, chunk_half_span);
+    const coordinate = @floor(shifted / @as(f64, chunk_span));
+    const minimum: f64 = @floatFromInt(std.math.minInt(i32));
+    const maximum: f64 = @floatFromInt(std.math.maxInt(i32));
+    if (coordinate < minimum or coordinate > maximum) {
+        return error.WorldPositionOutsideDistrictRange;
+    }
+    return @intFromFloat(coordinate);
+}
 
 /// One generation identifies one attempt to load one coordinate. Generations
 /// are nonzero and monotonically increase within a loader instance.
@@ -48,6 +82,42 @@ pub const StaticBox = struct {
     half_extents: [3]f32 = .{ 1, 1, 1 },
 };
 
+pub const navigation_node_terminal: u8 = 1 << 0;
+pub const navigation_node_known_flags: u8 = navigation_node_terminal;
+
+/// Stable content-cohort-bound reference. Node indices have meaning only with
+/// the exact district recipe/content fingerprint that admitted them.
+pub const NavigationNodeRef = struct {
+    coord: ChunkCoord = .{ .x = 0, .z = 0 },
+    index: u8 = 0,
+
+    pub fn eql(a: NavigationNodeRef, b: NavigationNodeRef) bool {
+        return ChunkCoord.eql(a.coord, b.coord) and a.index == b.index;
+    }
+};
+
+/// One world-space waypoint plus its canonical contiguous outgoing edge
+/// range. The explicit cooked representation is exactly 16 bytes.
+pub const NavigationNode = struct {
+    position: [3]f32 = .{ 0, 0, 0 },
+    first_edge: u8 = 0,
+    edge_count: u8 = 0,
+    flags: u8 = 0,
+    reserved: u8 = 0,
+
+    pub fn terminal(self: NavigationNode) bool {
+        return self.flags & navigation_node_terminal != 0;
+    }
+};
+
+/// One directed graph edge. The explicit cooked representation is exactly 12
+/// bytes: target X/Z, target node, flags, and two zero reserved bytes.
+pub const NavigationEdge = struct {
+    target: NavigationNodeRef = .{},
+    flags: u8 = 0,
+    reserved: u16 = 0,
+};
+
 pub const BuildValidationFailure = enum {
     unsupported_recipe_version,
     no_static_boxes,
@@ -55,6 +125,20 @@ pub const BuildValidationFailure = enum {
     invalid_pose,
     non_canonical_axis_alignment,
     invalid_half_extents,
+    too_many_navigation_nodes,
+    too_many_navigation_edges,
+    navigation_count_mismatch,
+    invalid_navigation_position,
+    navigation_node_outside_district,
+    invalid_navigation_node_flags,
+    invalid_navigation_node_reserved,
+    invalid_navigation_edge_range,
+    invalid_navigation_node_degree,
+    invalid_navigation_edge_target,
+    invalid_navigation_edge_flags,
+    invalid_navigation_edge_reserved,
+    duplicate_navigation_edge,
+    non_canonical_navigation_edge_order,
     decoded_byte_count_mismatch,
     checksum_mismatch,
 };
@@ -71,6 +155,12 @@ pub const DistrictBuild = struct {
     decoded_bytes: u32,
     static_box_count: u8,
     static_boxes: [max_static_boxes]StaticBox = [_]StaticBox{.{}} ** max_static_boxes,
+    navigation_node_count: u8 = 0,
+    navigation_edge_count: u8 = 0,
+    navigation_nodes: [max_navigation_nodes]NavigationNode =
+        [_]NavigationNode{.{}} ** max_navigation_nodes,
+    navigation_edges: [max_navigation_edges]NavigationEdge =
+        [_]NavigationEdge{.{}} ** max_navigation_edges,
 
     /// Returns the initialized prefix. Call `validate` before treating the
     /// returned boxes as an accepted build.
@@ -79,8 +169,18 @@ pub const DistrictBuild = struct {
         return self.static_boxes[0..count];
     }
 
+    pub fn navigationNodes(self: *const DistrictBuild) []const NavigationNode {
+        const count = @min(@as(usize, self.navigation_node_count), max_navigation_nodes);
+        return self.navigation_nodes[0..count];
+    }
+
+    pub fn navigationEdges(self: *const DistrictBuild) []const NavigationEdge {
+        const count = @min(@as(usize, self.navigation_edge_count), max_navigation_edges);
+        return self.navigation_edges[0..count];
+    }
+
     pub fn validationFailure(self: *const DistrictBuild) ?BuildValidationFailure {
-        if (self.recipe_version != current_recipe_version) {
+        if (self.recipe_version == 0) {
             return .unsupported_recipe_version;
         }
         if (self.static_box_count == 0) return .no_static_boxes;
@@ -98,7 +198,79 @@ pub const DistrictBuild = struct {
             }
         }
 
-        const expected_decoded_bytes = decodedByteCount(self.static_box_count);
+        if (self.navigation_node_count > max_navigation_nodes) {
+            return .too_many_navigation_nodes;
+        }
+        if (self.navigation_edge_count > max_navigation_edges) {
+            return .too_many_navigation_edges;
+        }
+        if ((self.navigation_node_count == 0) != (self.navigation_edge_count == 0)) {
+            return .navigation_count_mismatch;
+        }
+
+        var expected_first_edge: usize = 0;
+        for (self.navigationNodes(), 0..) |node, node_index| {
+            for (node.position) |component| {
+                if (!isCanonicalFiniteF32(component)) return .invalid_navigation_position;
+            }
+            const owner = chunkCoordForWorldPosition(node.position) catch
+                return .navigation_node_outside_district;
+            if (!ChunkCoord.eql(owner, self.coord)) return .navigation_node_outside_district;
+            if (node.flags & ~navigation_node_known_flags != 0) {
+                return .invalid_navigation_node_flags;
+            }
+            if (node.reserved != 0) return .invalid_navigation_node_reserved;
+            if (node.edge_count == 0 or node.edge_count > 2) {
+                return .invalid_navigation_node_degree;
+            }
+            if (node.first_edge != expected_first_edge) {
+                return .invalid_navigation_edge_range;
+            }
+            const edge_end = std.math.add(
+                usize,
+                expected_first_edge,
+                node.edge_count,
+            ) catch return .invalid_navigation_edge_range;
+            if (edge_end > self.navigation_edge_count) {
+                return .invalid_navigation_edge_range;
+            }
+
+            var previous_target: ?NavigationNodeRef = null;
+            for (self.navigationEdges()[expected_first_edge..edge_end]) |edge| {
+                if (edge.flags != 0) return .invalid_navigation_edge_flags;
+                if (edge.reserved != 0) return .invalid_navigation_edge_reserved;
+                if (edge.target.index >= max_navigation_nodes) {
+                    return .invalid_navigation_edge_target;
+                }
+                if (ChunkCoord.eql(edge.target.coord, self.coord)) {
+                    if (edge.target.index >= self.navigation_node_count or
+                        edge.target.index == node_index)
+                    {
+                        return .invalid_navigation_edge_target;
+                    }
+                } else if (!coordinatesAreAdjacent(self.coord, edge.target.coord)) {
+                    return .invalid_navigation_edge_target;
+                }
+                if (previous_target) |previous| {
+                    switch (orderNodeRef(previous, edge.target)) {
+                        .lt => {},
+                        .eq => return .duplicate_navigation_edge,
+                        .gt => return .non_canonical_navigation_edge_order,
+                    }
+                }
+                previous_target = edge.target;
+            }
+            expected_first_edge = edge_end;
+        }
+        if (expected_first_edge != self.navigation_edge_count) {
+            return .invalid_navigation_edge_range;
+        }
+
+        const expected_decoded_bytes = decodedByteCount(
+            self.static_box_count,
+            self.navigation_node_count,
+            self.navigation_edge_count,
+        );
         if (self.decoded_bytes != expected_decoded_bytes) {
             return .decoded_byte_count_mismatch;
         }
@@ -115,15 +287,32 @@ pub const DistrictBuild = struct {
             .invalid_pose => error.InvalidDistrictPose,
             .non_canonical_axis_alignment => error.DistrictBoxMustBeAxisAligned,
             .invalid_half_extents => error.InvalidDistrictHalfExtents,
+            .too_many_navigation_nodes => error.DistrictNavigationNodeCapacityExceeded,
+            .too_many_navigation_edges => error.DistrictNavigationEdgeCapacityExceeded,
+            .navigation_count_mismatch => error.DistrictNavigationCountMismatch,
+            .invalid_navigation_position => error.InvalidDistrictNavigationPosition,
+            .navigation_node_outside_district => error.DistrictNavigationNodeOutsideDistrict,
+            .invalid_navigation_node_flags => error.InvalidDistrictNavigationNodeFlags,
+            .invalid_navigation_node_reserved => error.InvalidDistrictNavigationNodeReserved,
+            .invalid_navigation_edge_range => error.InvalidDistrictNavigationEdgeRange,
+            .invalid_navigation_node_degree => error.InvalidDistrictNavigationNodeDegree,
+            .invalid_navigation_edge_target => error.InvalidDistrictNavigationEdgeTarget,
+            .invalid_navigation_edge_flags => error.InvalidDistrictNavigationEdgeFlags,
+            .invalid_navigation_edge_reserved => error.InvalidDistrictNavigationEdgeReserved,
+            .duplicate_navigation_edge => error.DuplicateDistrictNavigationEdge,
+            .non_canonical_navigation_edge_order => error.NonCanonicalDistrictNavigationEdgeOrder,
             .decoded_byte_count_mismatch => error.DistrictDecodedByteCountMismatch,
             .checksum_mismatch => error.DistrictChecksumMismatch,
         };
     }
 
     pub fn calculateChecksum(self: *const DistrictBuild) !u64 {
-        if (self.static_box_count > max_static_boxes) {
+        if (self.static_box_count > max_static_boxes)
             return error.DistrictStaticBoxCapacityExceeded;
-        }
+        if (self.navigation_node_count > max_navigation_nodes)
+            return error.DistrictNavigationNodeCapacityExceeded;
+        if (self.navigation_edge_count > max_navigation_edges)
+            return error.DistrictNavigationEdgeCapacityExceeded;
         return checksumUnchecked(self);
     }
 };
@@ -133,42 +322,12 @@ pub const ProceduralResult = union(enum) {
     failed: Failure,
 };
 
-/// Produce the deterministic first-slice district recipe. It is intentionally
-/// CPU-only and fixed-capacity so the same value can be built on a worker or in
-/// a deterministic restore path.
-pub fn proceduralBuild(coord: ChunkCoord, recipe_version: u32) ProceduralResult {
-    if (recipe_version != current_recipe_version) {
-        return .{ .failed = .{ .unsupported_recipe_version = recipe_version } };
-    }
-
-    const origin_x = @as(f32, @floatFromInt(coord.x)) * 16.0;
-    const origin_z = @as(f32, @floatFromInt(coord.z)) * 16.0;
-    var result = DistrictBuild{
-        .coord = coord,
-        .recipe_version = recipe_version,
-        .checksum = 0,
-        .decoded_bytes = decodedByteCount(3),
-        .static_box_count = 3,
-    };
-    result.static_boxes[0] = .{
-        .pose = .{ .position = .{ origin_x, -0.5, origin_z } },
-        .half_extents = .{ 7.5, 0.5, 7.5 },
-    };
-    result.static_boxes[1] = .{
-        .pose = .{ .position = .{ origin_x - 5.5, 1.0, origin_z - 2.0 } },
-        .half_extents = .{ 1.0, 1.0, 3.0 },
-    };
-    result.static_boxes[2] = .{
-        .pose = .{ .position = .{ origin_x + 3.0, 0.75, origin_z + 4.5 } },
-        .half_extents = .{ 2.5, 0.75, 0.75 },
-    };
-    result.checksum = checksumUnchecked(&result);
-    return .{ .ready = result };
-}
-
+/// Request a versioned district recipe from the composition's canonical
+/// content provider. The resulting build remains CPU-only and fixed-capacity
+/// so it can be produced on a worker or reconstructed during restore.
 pub const LoadRequest = struct {
     ticket: LoadTicket,
-    recipe_version: u32 = current_recipe_version,
+    recipe_version: u32,
 };
 
 pub const RequestDisposition = enum {
@@ -248,8 +407,14 @@ pub fn assertLoaderImplementation(comptime Loader: type) void {
     }
 }
 
-fn decodedByteCount(static_box_count: u8) u32 {
-    return @as(u32, static_box_count) * decoded_bytes_per_static_box;
+pub fn decodedByteCount(
+    static_box_count: u8,
+    navigation_node_count: u8,
+    navigation_edge_count: u8,
+) u32 {
+    return @as(u32, static_box_count) * decoded_bytes_per_static_box +
+        @as(u32, navigation_node_count) * decoded_bytes_per_navigation_node +
+        @as(u32, navigation_edge_count) * decoded_bytes_per_navigation_edge;
 }
 
 fn hasCanonicalIdentityRotation(rotation: [4]f32) bool {
@@ -258,6 +423,26 @@ fn hasCanonicalIdentityRotation(rotation: [4]f32) bool {
         if (@as(u32, @bitCast(actual)) != @as(u32, @bitCast(canonical))) return false;
     }
     return true;
+}
+
+fn isCanonicalFiniteF32(value: f32) bool {
+    if (!std.math.isFinite(value)) return false;
+    if (value == 0 and @as(u32, @bitCast(value)) != 0) return false;
+    return true;
+}
+
+fn coordinatesAreAdjacent(a: ChunkCoord, b: ChunkCoord) bool {
+    const dx = @abs(@as(i64, a.x) - @as(i64, b.x));
+    const dz = @abs(@as(i64, a.z) - @as(i64, b.z));
+    return dx + dz == 1;
+}
+
+fn orderNodeRef(a: NavigationNodeRef, b: NavigationNodeRef) std.math.Order {
+    const x_order = std.math.order(a.coord.x, b.coord.x);
+    if (x_order != .eq) return x_order;
+    const z_order = std.math.order(a.coord.z, b.coord.z);
+    if (z_order != .eq) return z_order;
+    return std.math.order(a.index, b.index);
 }
 
 const fnv_offset_basis: u64 = 14_695_981_039_346_656_037;
@@ -274,7 +459,30 @@ fn checksumUnchecked(build: *const DistrictBuild) u64 {
         for (box.pose.rotation) |value| hashU32(&hash, @bitCast(value));
         for (box.half_extents) |value| hashU32(&hash, @bitCast(value));
     }
+    hashByte(&hash, build.navigation_node_count);
+    hashByte(&hash, build.navigation_edge_count);
+    for (build.navigationNodes()) |node| {
+        for (node.position) |value| hashU32(&hash, @bitCast(value));
+        hashByte(&hash, node.first_edge);
+        hashByte(&hash, node.edge_count);
+        hashByte(&hash, node.flags);
+        hashByte(&hash, node.reserved);
+    }
+    for (build.navigationEdges()) |edge| {
+        hashU32(&hash, @bitCast(edge.target.coord.x));
+        hashU32(&hash, @bitCast(edge.target.coord.z));
+        hashByte(&hash, edge.target.index);
+        hashByte(&hash, edge.flags);
+        hashU16(&hash, edge.reserved);
+    }
     return hash;
+}
+
+fn hashU16(hash: *u64, value: u16) void {
+    inline for (0..2) |byte_index| {
+        const shift: u4 = @intCast(byte_index * 8);
+        hashByte(hash, @truncate(value >> shift));
+    }
 }
 
 fn hashU32(hash: *u64, value: u32) void {
@@ -369,55 +577,46 @@ test "district loader example satisfies the structural port" {
     comptime assertLoaderImplementation(ContractExample);
 }
 
-test "procedural district build is deterministic, bounded, and coordinate-specific" {
-    const coord = ChunkCoord{ .x = 0, .z = -4 };
-    const first = proceduralBuild(coord, current_recipe_version).ready;
-    const second = proceduralBuild(coord, current_recipe_version).ready;
-    try first.validate();
-    try second.validate();
-    try std.testing.expectEqualDeep(first, second);
-    try std.testing.expect(first.static_box_count <= max_static_boxes);
-    try std.testing.expect(first.decoded_bytes <= max_decoded_bytes);
-
-    const neighbor = proceduralBuild(.{ .x = 1, .z = -4 }, current_recipe_version).ready;
-    try neighbor.validate();
-    try std.testing.expect(first.checksum != neighbor.checksum);
-    try std.testing.expect(first.static_boxes[0].pose.position[0] !=
-        neighbor.static_boxes[0].pose.position[0]);
-}
-
-test "district validation rejects non-finite bounds and checksum corruption" {
-    var invalid_bounds = proceduralBuild(.{ .x = 0, .z = -4 }, current_recipe_version).ready;
-    invalid_bounds.static_boxes[1].half_extents[0] = std.math.nan(f32);
-    try std.testing.expectEqual(
-        BuildValidationFailure.invalid_half_extents,
-        invalid_bounds.validationFailure().?,
-    );
-
-    var corrupted = proceduralBuild(.{ .x = 0, .z = -4 }, current_recipe_version).ready;
-    corrupted.static_boxes[2].pose.position[2] += 1;
-    try std.testing.expectEqual(
-        BuildValidationFailure.checksum_mismatch,
-        corrupted.validationFailure().?,
-    );
-
-    var rotated = proceduralBuild(.{ .x = 0, .z = -4 }, current_recipe_version).ready;
-    rotated.static_boxes[0].pose.rotation = .{ 0, 0, 0, 2 };
-    try std.testing.expectEqual(
-        BuildValidationFailure.non_canonical_axis_alignment,
-        rotated.validationFailure().?,
-    );
-}
-
-test "district recipe failure and load ticket generation are explicit" {
-    const unsupported = proceduralBuild(.{ .x = 0, .z = -4 }, current_recipe_version + 1);
-    try std.testing.expectEqual(
-        current_recipe_version + 1,
-        unsupported.failed.unsupported_recipe_version,
-    );
+test "load ticket generation is explicit" {
     try (LoadTicket{ .coord = .{ .x = 0, .z = -4 }, .generation = 1 }).validate();
     try std.testing.expectError(
         error.InvalidLoadGeneration,
         (LoadTicket{ .coord = .{ .x = 0, .z = -4 }, .generation = 0 }).validate(),
+    );
+}
+
+test "world position ownership uses finite half-open district cells" {
+    try std.testing.expectEqualDeep(
+        ChunkCoord{ .x = 0, .z = 0 },
+        try chunkCoordForWorldPosition(.{ -8.0, 0, 7.999_999 }),
+    );
+    try std.testing.expectEqualDeep(
+        ChunkCoord{ .x = 1, .z = 0 },
+        try chunkCoordForWorldPosition(.{ 8.0, 100, -8.0 }),
+    );
+    try std.testing.expectEqualDeep(
+        ChunkCoord{ .x = -1, .z = -1 },
+        try chunkCoordForWorldPosition(.{ -8.000_001, -100, -8.000_001 }),
+    );
+    try std.testing.expectEqualDeep(
+        ChunkCoord{ .x = -1, .z = 2 },
+        try chunkCoordForWorldPosition(.{ -24.0, 0, 24.0 }),
+    );
+
+    try std.testing.expectError(
+        error.NonFiniteWorldPosition,
+        chunkCoordForWorldPosition(.{ 0, std.math.nan(f32), 0 }),
+    );
+    try std.testing.expectError(
+        error.NonFiniteWorldPosition,
+        chunkCoordForWorldPosition(.{ std.math.inf(f32), 0, 0 }),
+    );
+    try std.testing.expectError(
+        error.WorldPositionOutsideDistrictRange,
+        chunkCoordForWorldPosition(.{ std.math.floatMax(f32), 0, 0 }),
+    );
+    try std.testing.expectError(
+        error.WorldPositionOutsideDistrictRange,
+        chunkCoordForWorldPosition(.{ -std.math.floatMax(f32), 0, 0 }),
     );
 }

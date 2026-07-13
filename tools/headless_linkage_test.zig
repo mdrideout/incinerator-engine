@@ -1,4 +1,4 @@
-//! Portable final-binary check for prohibited visual dependencies.
+//! Portable final-binary check for prohibited product dependencies/test seams.
 
 const std = @import("std");
 
@@ -25,6 +25,14 @@ const prohibited_markers = [_][]const u8{
     "opengl32.dll",
     "user32.dll",
     "gdi32.dll",
+    "InjectedDeveloperDiagnosticFault",
+    "diagnostics.injected_fault_probe",
+    "initWithDiagnosticFaultProbe",
+    "InjectedInitFailure",
+    "InjectedVehicleCreateFailure",
+    "injected_partial_write",
+    "injected_before_replace",
+    "injected_after_replace",
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -70,5 +78,9 @@ test "marker detection accepts headless data and rejects graphics dependencies" 
     try std.testing.expectEqualStrings(
         "sdl_",
         findProhibitedMarker("prefix SDL_CreateWindow suffix").?,
+    );
+    try std.testing.expectEqualStrings(
+        "diagnostics.injected_fault_probe",
+        findProhibitedMarker("prefix diagnostics.injected_fault_probe suffix").?,
     );
 }

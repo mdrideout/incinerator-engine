@@ -4,30 +4,56 @@ const std = @import("std");
 const zmesh = @import("zmesh");
 const zstbi = @import("zstbi");
 const content = @import("content");
+const district_contract = @import("district_contract");
+const sandbox_recipe = @import("sandbox_district_recipe");
 const bundle = content.bundle;
 const cgltf = zmesh.io.zcgltf;
 
 const max_source_bytes = 256 * 1024;
+const max_dependency_id_bytes = 64;
+const max_dependencies = 8;
+const dependency_digest_domain = "incinerator.district.cook.dependencies.v1";
+
+const DependencyArgument = struct {
+    semantic_id: []const u8,
+    bundle_path: []const u8,
+};
+
+const Invocation = struct {
+    input_path: []const u8,
+    provenance_path: []const u8,
+    output_path: []const u8,
+    key: content.BundleKey,
+    coord: district_contract.ChunkCoord,
+    dependencies: [max_dependencies]DependencyArgument = undefined,
+    dependency_count: u8 = 0,
+
+    fn dependencySlice(self: *const Invocation) []const DependencyArgument {
+        return self.dependencies[0..self.dependency_count];
+    }
+};
+
+const HashedDependency = struct {
+    semantic_id: []const u8,
+    bundle_key: content.BundleKey,
+    canonical_identity: [32]u8,
+};
 
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len != 5) return error.ExpectedInputProvenanceOutputAndBundleKey;
-    const input_path: []const u8 = args[1];
-    const provenance_path: []const u8 = args[2];
-    const output_path: []const u8 = args[3];
-    const key = try content.BundleKey.parse(args[4]);
+    const invocation = try parseInvocation(args);
 
     const source = try std.Io.Dir.cwd().readFileAlloc(
         init.io,
-        input_path,
+        invocation.input_path,
         allocator,
         .limited(max_source_bytes),
     );
     defer allocator.free(source);
     const provenance = try std.Io.Dir.cwd().readFileAlloc(
         init.io,
-        provenance_path,
+        invocation.provenance_path,
         allocator,
         .limited(16 * 1024),
     );
@@ -38,14 +64,16 @@ pub fn main(init: std.process.Init) !void {
         return error.InvalidFixtureProvenance;
     }
 
-    var source_digest: [32]u8 = undefined;
-    var digest = std.crypto.hash.sha2.Sha256.init(.{});
-    digest.update(source);
-    digest.update(&.{0});
-    digest.update(provenance);
-    digest.final(&source_digest);
+    const source_digest = try sourceDigest(
+        init.io,
+        allocator,
+        source,
+        provenance,
+        &invocation.key,
+        invocation.dependencySlice(),
+    );
 
-    const source_z = try allocator.dupeZ(u8, input_path);
+    const source_z = try allocator.dupeZ(u8, invocation.input_path);
     defer allocator.free(source_z);
     zmesh.init(allocator);
     defer zmesh.deinit();
@@ -62,14 +90,185 @@ pub fn main(init: std.process.Init) !void {
     defer cgltf.free(data);
     try requireEmbeddedBoundedBuffers(data);
     try cgltf.loadBuffers(cgltf_options, data, source_z);
-    var cooked = try cook(allocator, data, key.bytes(), source_digest);
+    var cooked = try cook(
+        allocator,
+        data,
+        invocation.key.bytes(),
+        invocation.coord,
+        source_digest,
+    );
     defer cooked.deinit();
     const encoded = switch (try bundle.encode(allocator, cooked.view(), .{})) {
         .bytes => |bytes| bytes,
         .failed => return error.CookedBundleValidationFailed,
     };
     defer allocator.free(encoded);
-    try writeAtomic(init.io, output_path, encoded);
+    try writeAtomic(init.io, invocation.output_path, encoded);
+}
+
+fn parseInvocation(args: anytype) !Invocation {
+    if (args.len < 7 or (args.len - 7) % 2 != 0) {
+        return error.ExpectedInputProvenanceOutputKeyCoordinateAndDependencies;
+    }
+    const dependency_count = (args.len - 7) / 2;
+    if (dependency_count > max_dependencies) return error.TooManyCookDependencies;
+
+    const input_path: []const u8 = args[1];
+    const provenance_path: []const u8 = args[2];
+    const output_path: []const u8 = args[3];
+    const key = try content.BundleKey.parse(args[4]);
+    const coord_x = std.fmt.parseInt(i32, args[5], 10) catch
+        return error.InvalidDistrictCoordinate;
+    const coord_z = std.fmt.parseInt(i32, args[6], 10) catch
+        return error.InvalidDistrictCoordinate;
+
+    var result = Invocation{
+        .input_path = input_path,
+        .provenance_path = provenance_path,
+        .output_path = output_path,
+        .key = key,
+        .coord = .{ .x = coord_x, .z = coord_z },
+    };
+    var previous_id: ?[]const u8 = null;
+    for (0..dependency_count) |index| {
+        const semantic_id: []const u8 = args[7 + index * 2];
+        const bundle_path: []const u8 = args[8 + index * 2];
+        if (!isValidDependencyId(semantic_id)) return error.InvalidDependencySemanticId;
+        if (bundle_path.len == 0) return error.InvalidDependencyBundlePath;
+        if (previous_id) |previous| {
+            switch (std.mem.order(u8, previous, semantic_id)) {
+                .lt => {},
+                .eq => return error.DuplicateDependencySemanticId,
+                .gt => return error.UnsortedDependencySemanticIds,
+            }
+        }
+        result.dependencies[index] = .{
+            .semantic_id = semantic_id,
+            .bundle_path = bundle_path,
+        };
+        previous_id = semantic_id;
+    }
+    result.dependency_count = @intCast(dependency_count);
+    return result;
+}
+
+fn isValidDependencyId(value: []const u8) bool {
+    if (value.len == 0 or value.len > max_dependency_id_bytes) return false;
+    if (!isLowerAlphaNumeric(value[0]) or !isLowerAlphaNumeric(value[value.len - 1])) {
+        return false;
+    }
+    var segment_start: usize = 0;
+    for (value, 0..) |byte, index| {
+        const allowed = isLowerAlphaNumeric(byte) or
+            byte == '_' or byte == '-' or byte == '.' or byte == '/';
+        if (!allowed) return false;
+        if (byte == '/') {
+            const segment = value[segment_start..index];
+            if (segment.len == 0 or std.mem.eql(u8, segment, ".") or
+                std.mem.eql(u8, segment, "..")) return false;
+            segment_start = index + 1;
+        }
+    }
+    const final_segment = value[segment_start..];
+    return final_segment.len != 0 and
+        !std.mem.eql(u8, final_segment, ".") and
+        !std.mem.eql(u8, final_segment, "..");
+}
+
+fn isLowerAlphaNumeric(byte: u8) bool {
+    return (byte >= 'a' and byte <= 'z') or (byte >= '0' and byte <= '9');
+}
+
+fn baseSourceDigest(source: []const u8, provenance: []const u8) [32]u8 {
+    var result: [32]u8 = undefined;
+    var digest = std.crypto.hash.sha2.Sha256.init(.{});
+    digest.update(source);
+    digest.update(&.{0});
+    digest.update(provenance);
+    digest.final(&result);
+    return result;
+}
+
+fn sourceDigest(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    source: []const u8,
+    provenance: []const u8,
+    output_key: *const content.BundleKey,
+    dependency_arguments: []const DependencyArgument,
+) ![32]u8 {
+    const base = baseSourceDigest(source, provenance);
+    var dependencies: [max_dependencies]HashedDependency = undefined;
+    for (dependency_arguments, 0..) |argument, index| {
+        const dependency = try loadDependencyIdentity(io, allocator, argument);
+        if (std.mem.eql(u8, dependency.bundle_key.bytes(), output_key.bytes())) {
+            return error.DependencyReferencesOutputBundle;
+        }
+        for (dependencies[0..index]) |*existing| {
+            if (std.mem.eql(u8, existing.bundle_key.bytes(), dependency.bundle_key.bytes())) {
+                return error.DuplicateDependencyBundleKey;
+            }
+        }
+        dependencies[index] = dependency;
+    }
+    return deriveDependentSourceDigest(base, dependencies[0..dependency_arguments.len]);
+}
+
+fn loadDependencyIdentity(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    argument: DependencyArgument,
+) !HashedDependency {
+    const bytes = std.Io.Dir.cwd().readFileAlloc(
+        io,
+        argument.bundle_path,
+        allocator,
+        .limited((bundle.Limits{}).max_file_bytes),
+    ) catch |err| switch (err) {
+        error.OutOfMemory => return error.OutOfMemory,
+        else => return error.DependencyBundleReadFailed,
+    };
+    defer allocator.free(bytes);
+
+    var scene = switch (try bundle.decode(allocator, bytes, .{})) {
+        .bundle => |value| value,
+        .failed => return error.DependencyBundleInvalid,
+    };
+    defer scene.deinit();
+    const identity = scene.bundleIdentity();
+    const key = content.BundleKey.parse(identity.name) catch
+        return error.DependencyBundleKeyInvalid;
+    const canonical_identity = identity.canonicalFingerprint() catch
+        return error.DependencyBundleIdentityInvalid;
+    return .{
+        .semantic_id = argument.semantic_id,
+        .bundle_key = key,
+        .canonical_identity = canonical_identity,
+    };
+}
+
+fn deriveDependentSourceDigest(
+    base: [32]u8,
+    dependencies: []const HashedDependency,
+) [32]u8 {
+    var digest = std.crypto.hash.sha2.Sha256.init(.{});
+    digest.update(dependency_digest_domain);
+    digest.update(&base);
+    hashU16(&digest, @intCast(dependencies.len));
+    for (dependencies) |dependency| {
+        hashU16(&digest, @intCast(dependency.semantic_id.len));
+        digest.update(dependency.semantic_id);
+        digest.update(&dependency.canonical_identity);
+    }
+    var result: [32]u8 = undefined;
+    digest.final(&result);
+    return result;
+}
+
+fn hashU16(hash: *std.crypto.hash.sha2.Sha256, value: u16) void {
+    var bytes: [2]u8 = undefined;
+    std.mem.writeInt(u16, &bytes, value, .little);
+    hash.update(&bytes);
 }
 
 fn requireEmbeddedBoundedBuffers(data: *cgltf.Data) !void {
@@ -99,6 +298,8 @@ const Cooked = struct {
     indices: std.ArrayListUnmanaged(u32),
     pixels: std.ArrayListUnmanaged(u8),
     static_boxes: std.ArrayListUnmanaged(bundle.StaticBox),
+    navigation_nodes: std.ArrayListUnmanaged(bundle.NavigationNode),
+    navigation_edges: std.ArrayListUnmanaged(bundle.NavigationEdge),
 
     fn init(allocator: std.mem.Allocator, source_digest: [32]u8) Cooked {
         return .{
@@ -115,6 +316,8 @@ const Cooked = struct {
             .indices = .empty,
             .pixels = .empty,
             .static_boxes = .empty,
+            .navigation_nodes = .empty,
+            .navigation_edges = .empty,
         };
     }
 
@@ -132,6 +335,8 @@ const Cooked = struct {
             .indices = self.indices.items,
             .pixels = self.pixels.items,
             .static_boxes = self.static_boxes.items,
+            .navigation_nodes = self.navigation_nodes.items,
+            .navigation_edges = self.navigation_edges.items,
         };
     }
 
@@ -144,6 +349,8 @@ const Cooked = struct {
     }
 
     fn deinit(self: *Cooked) void {
+        self.navigation_edges.deinit(self.allocator);
+        self.navigation_nodes.deinit(self.allocator);
         self.static_boxes.deinit(self.allocator);
         self.pixels.deinit(self.allocator);
         self.indices.deinit(self.allocator);
@@ -162,6 +369,7 @@ fn cook(
     allocator: std.mem.Allocator,
     data: *cgltf.Data,
     bundle_name: []const u8,
+    coord: district_contract.ChunkCoord,
     source_digest: [32]u8,
 ) !Cooked {
     if (data.scene == null or data.scenes_count != 1) return error.ExactlyOneDefaultSceneRequired;
@@ -202,12 +410,41 @@ fn cook(
     const textures = data.textures orelse return error.SceneContainsNoTextures;
     for (textures[0..data.textures_count]) |*texture| try appendTexture(&result, texture);
 
-    // Same narrow logical district shape proven by S3-A at coordinate (0,0).
-    try result.static_boxes.appendSlice(allocator, &.{
-        .{ .position = .{ 0, -0.5, 0 }, .half_extents = .{ 7.5, 0.5, 7.5 } },
-        .{ .position = .{ -5.5, 1, -2 }, .half_extents = .{ 1, 1, 3 } },
-        .{ .position = .{ 3, 0.75, 4.5 }, .half_extents = .{ 2.5, 0.75, 0.75 } },
-    });
+    const logical = switch (sandbox_recipe.build(
+        coord,
+        sandbox_recipe.current_recipe_version,
+    )) {
+        .ready => |build| build,
+        .failed => return error.DistrictRecipeFailed,
+    };
+    try logical.validate();
+    for (logical.boxes()) |box| {
+        try result.static_boxes.append(allocator, .{
+            .position = box.pose.position,
+            .rotation = box.pose.rotation,
+            .half_extents = box.half_extents,
+        });
+    }
+    // Navigation is authoritative logical recipe data. It is intentionally
+    // not inferred from artist-authored glTF so headless simulation and cooked
+    // presentation consume the same deterministic graph fragment.
+    for (logical.navigationNodes()) |node| {
+        try result.navigation_nodes.append(allocator, .{
+            .position = node.position,
+            .first_edge = node.first_edge,
+            .edge_count = node.edge_count,
+            .flags = node.flags,
+            .reserved = node.reserved,
+        });
+    }
+    for (logical.navigationEdges()) |edge| {
+        try result.navigation_edges.append(allocator, .{
+            .target_coord = .{ edge.target.coord.x, edge.target.coord.z },
+            .target_node = edge.target.index,
+            .flags = edge.flags,
+            .reserved = edge.reserved,
+        });
+    }
     return result;
 }
 
@@ -491,4 +728,157 @@ test "cooker rejects external buffer dependencies before loading bytes" {
     const data = try cgltf.parse(options, source);
     defer cgltf.free(data);
     try std.testing.expectError(error.ExternalBufferUnsupported, requireEmbeddedBoundedBuffers(data));
+}
+
+test "cooker invocation parses coordinates and strictly sorted dependency pairs" {
+    const args = [_][]const u8{
+        "incinerator_content_cooker",
+        "district.gltf",
+        "PROVENANCE.md",
+        "district.icdb",
+        "district/s6_east",
+        "1",
+        "-2",
+        "sandbox.foundation",
+        "foundation.icdb",
+        "sandbox.west",
+        "west.icdb",
+    };
+    const invocation = try parseInvocation(args);
+    try std.testing.expectEqual(@as(i32, 1), invocation.coord.x);
+    try std.testing.expectEqual(@as(i32, -2), invocation.coord.z);
+    try std.testing.expectEqualStrings("district/s6_east", invocation.key.bytes());
+    try std.testing.expectEqual(@as(usize, 2), invocation.dependencySlice().len);
+    try std.testing.expectEqualStrings(
+        "sandbox.foundation",
+        invocation.dependencySlice()[0].semantic_id,
+    );
+    try std.testing.expectEqualStrings(
+        "foundation.icdb",
+        invocation.dependencySlice()[0].bundle_path,
+    );
+
+    const no_dependencies = [_][]const u8{
+        "incinerator_content_cooker",
+        "district.gltf",
+        "PROVENANCE.md",
+        "district.icdb",
+        "district/s3_fixture",
+        "0",
+        "0",
+    };
+    const dependency_free = try parseInvocation(no_dependencies);
+    try std.testing.expectEqual(@as(usize, 0), dependency_free.dependencySlice().len);
+}
+
+test "cooker invocation rejects malformed unsorted duplicate and invalid dependencies" {
+    const missing_path = [_][]const u8{
+        "cooker",
+        "district.gltf",
+        "PROVENANCE.md",
+        "district.icdb",
+        "district/s6_east",
+        "1",
+        "0",
+        "sandbox.west",
+    };
+    try std.testing.expectError(
+        error.ExpectedInputProvenanceOutputKeyCoordinateAndDependencies,
+        parseInvocation(missing_path),
+    );
+
+    const unsorted = [_][]const u8{
+        "cooker",
+        "district.gltf",
+        "PROVENANCE.md",
+        "district.icdb",
+        "district/s6_east",
+        "1",
+        "0",
+        "sandbox.west",
+        "west.icdb",
+        "sandbox.foundation",
+        "foundation.icdb",
+    };
+    try std.testing.expectError(
+        error.UnsortedDependencySemanticIds,
+        parseInvocation(unsorted),
+    );
+
+    const duplicate = [_][]const u8{
+        "cooker",
+        "district.gltf",
+        "PROVENANCE.md",
+        "district.icdb",
+        "district/s6_east",
+        "1",
+        "0",
+        "sandbox.west",
+        "west.icdb",
+        "sandbox.west",
+        "west-again.icdb",
+    };
+    try std.testing.expectError(
+        error.DuplicateDependencySemanticId,
+        parseInvocation(duplicate),
+    );
+
+    const invalid = [_][]const u8{
+        "cooker",
+        "district.gltf",
+        "PROVENANCE.md",
+        "district.icdb",
+        "district/s6_east",
+        "east",
+        "0",
+        "Sandbox.West",
+        "west.icdb",
+    };
+    try std.testing.expectError(error.InvalidDistrictCoordinate, parseInvocation(invalid));
+
+    const invalid_id = [_][]const u8{
+        "cooker",
+        "district.gltf",
+        "PROVENANCE.md",
+        "district.icdb",
+        "district/s6_east",
+        "1",
+        "0",
+        "Sandbox.West",
+        "west.icdb",
+    };
+    try std.testing.expectError(error.InvalidDependencySemanticId, parseInvocation(invalid_id));
+}
+
+test "source digest frames dependency count and identities deterministically" {
+    const base = baseSourceDigest("source bytes", "provenance bytes");
+    const no_dependencies = deriveDependentSourceDigest(base, &.{});
+    try std.testing.expect(!std.mem.eql(u8, &base, &no_dependencies));
+
+    const dependencies = [_]HashedDependency{
+        .{
+            .semantic_id = "sandbox.foundation",
+            .bundle_key = try content.BundleKey.parse("district/foundation"),
+            .canonical_identity = @splat(0x11),
+        },
+        .{
+            .semantic_id = "sandbox.west",
+            .bundle_key = try content.BundleKey.parse("district/s3_fixture"),
+            .canonical_identity = @splat(0x22),
+        },
+    };
+    const first = deriveDependentSourceDigest(base, &dependencies);
+    const repeated = deriveDependentSourceDigest(base, &dependencies);
+    try std.testing.expectEqualSlices(u8, &first, &repeated);
+    try std.testing.expect(!std.mem.eql(u8, &base, &first));
+
+    var renamed = dependencies;
+    renamed[1].semantic_id = "sandbox.west-renamed";
+    const renamed_digest = deriveDependentSourceDigest(base, &renamed);
+    try std.testing.expect(!std.mem.eql(u8, &first, &renamed_digest));
+
+    var changed_identity = dependencies;
+    changed_identity[1].canonical_identity[0] ^= 1;
+    const changed_digest = deriveDependentSourceDigest(base, &changed_identity);
+    try std.testing.expect(!std.mem.eql(u8, &first, &changed_digest));
 }

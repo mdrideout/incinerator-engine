@@ -378,6 +378,8 @@ fn fixtureBundle() bundle.BundleView {
         .indices = &fixture_indices,
         .pixels = &fixture_pixels,
         .static_boxes = &fixture_boxes,
+        .navigation_nodes = &.{},
+        .navigation_edges = &.{},
     };
 }
 

@@ -1,11 +1,19 @@
 # ADR-003: Editor Architecture and Tool System
 
-**Status:** Accepted
+**Status:** Accepted, implemented, and amended for owned editor state
 **Date:** 2025-12-05
-**Amended:** 2026-07-10
+**Amended:** 2026-07-13
 **Decision Makers:** Matt, Claude
 
-> The tool-oriented editor remains accepted. The 2026 overhaul amendment replaces the old backend-default and “editor consumes events first” assumptions: the engine compiles the exact-pinned zgui SDL3 GPU sources against its selected SDL 3.4.12 headers, passes the actual swapchain format to ImGui, maintains physical input independently, and gates gameplay with ImGui `WantCapture*`. The prototype Scene/Gizmo tools and their direct world mutation were removed at S0 closure. Authoring returns only through persistent IDs and typed feature commands.
+> The tool-oriented editor remains accepted. The 2026 overhaul amendments
+> replace the old backend-default and “editor consumes events first”
+> assumptions, and replace process-global editor/tool state with one `Editor`
+> value owned by the visual host. The engine compiles the exact-pinned zgui SDL3
+> GPU sources against its selected SDL 3.4.12 headers, passes the actual
+> swapchain format to ImGui, maintains physical input independently, and gates
+> gameplay with ImGui `WantCapture*`. The prototype Scene/Gizmo tools and their
+> direct world mutation were removed at S0 closure. Authoring returns only
+> through persistent IDs and typed feature commands.
 
 ## Context
 
@@ -28,8 +36,8 @@ We need to decide:
 We use **Dear ImGui** through the **zgui** Zig wrapper with the **SDL3 GPU backend**.
 
 The root build requests zgui without an upstream backend, then the engine-owned
-`tools/build/zgui_sdl3_gpu.zig` adapter compiles the pinned ImGui, ImPlot,
-SDL3, and SDL GPU backend sources against the same SDL 3.4.12 headers
+`tools/build/zgui_sdl3_gpu.zig` adapter compiles the pinned ImGui, SDL3, and
+SDL GPU backend sources against the same SDL 3.4.12 headers
 and target options as the renderer. This avoids a wrapper-owned SDL header split.
 
 ### Architecture: Tool-First Pattern
@@ -48,29 +56,38 @@ src/
 │       └── render_tool.zig  # Presentation settings
 ```
 
-### Tool Interface
+### Owned Editor and Tool Interface
 
-Tools implement a minimal interface - just a draw function and metadata:
+The visual host owns one `Editor` value. It owns visibility/capture policy,
+tool toggles, statistics history, and authoring drafts for exactly its
+lifetime. Teardown resets the value after releasing ImGui while the renderer
+device/window still exist; sequential application lifecycles cannot inherit
+tool state or retained renderer pointers.
+
+Tools declare immutable metadata and a stable identity. The owned editor stores
+their runtime visibility and state, then dispatches typed draw functions:
 
 ```zig
-pub const Tool = struct {
-    name: [:0]const u8,           // Window title (null-terminated for ImGui)
-    enabled: bool = true,          // Visibility toggle
-    draw_fn: *const fn (*EditorContext) void,
+pub const Descriptor = struct {
+    id: ToolId,
+    name: [:0]const u8,
+    enabled_by_default: bool = true,
 };
 ```
 
 ### Shared Context
 
-Tools receive an `EditorContext` with read-only engine state and mutable editor state:
+Tools receive one-frame borrows through `EditorContext`. Engine/authority data
+is immutable; mutations leave through bounded typed request buffers. Renderer
+settings are borrowed for the current draw only and are never retained:
 
 ```zig
 pub const EditorContext = struct {
-    // Read-only engine references
     camera: *const Camera,
     frame_timer: *const FrameTimer,
-
-    // Input capture flags
+    developer_snapshot: *const DeveloperSnapshot,
+    control_requests: *ControlRequestBuffer,
+    render_settings: *RenderSettings,
     wants_mouse: bool = false,
     wants_keyboard: bool = false,
 };
@@ -78,13 +95,14 @@ pub const EditorContext = struct {
 
 ### Manual Tool Registration
 
-Tools are **explicitly registered** in `editor.zig`:
+Tools are **explicitly and statically registered** in `editor.zig`; the array
+contains owned runtime values rather than pointers to module globals:
 
 ```zig
-var tools = [_]*Tool{
-    &stats_tool.tool,
-    &camera_tool.tool,
-    &render_tool.tool,
+const default_tools = [_]Tool{
+    Tool.init(stats_tool.descriptor),
+    Tool.init(camera_tool.descriptor),
+    Tool.init(render_tool.descriptor),
 };
 ```
 
@@ -159,6 +177,11 @@ This adds minimal overhead since both passes use the same command buffer.
 The ImGui pipeline uses `SDL_GetGPUSwapchainTextureFormat` from the claimed
 window; it does not assume BGRA8. Scene and editor pipelines therefore agree on
 the active backend's real color target format.
+
+Each frame also reads `SDL_GetWindowPixelDensity` and forwards a finite positive
+framebuffer scale to ImGui, falling back to `1.0` only when SDL reports an
+invalid value. Retina scaling is host presentation policy and never changes
+simulation or input authority.
 
 ### Event Processing
 
@@ -258,10 +281,10 @@ Editor code (ImGui and future authoring extensions) adds significant binary size
 const zgui = @import("zgui");
 const tool_module = @import("../tool.zig");
 
-pub var tool = tool_module.Tool{
+pub const descriptor = tool_module.Descriptor{
+    .id = .my_tool,
     .name = "My Tool",
-    .enabled = false,  // Start hidden
-    .draw_fn = draw,
+    .enabled_by_default = false,
 };
 
 fn draw(ctx: *tool_module.EditorContext) void {
@@ -272,13 +295,14 @@ fn draw(ctx: *tool_module.EditorContext) void {
 }
 ```
 
-2. Register in `src/editor/editor.zig`:
+2. Add the identity to `ToolId`, dispatch its draw function, and register its
+   owned runtime value in `src/editor/editor.zig`:
 ```zig
 const my_tool = @import("tools/my_tool.zig");
 
-var tools = [_]*Tool{
-    &stats_tool.tool,
-    &my_tool.tool,  // Add here
+const default_tools = [_]Tool{
+    Tool.init(stats_tool.descriptor),
+    Tool.init(my_tool.descriptor),
 };
 ```
 

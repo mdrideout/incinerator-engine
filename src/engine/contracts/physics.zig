@@ -199,11 +199,6 @@ pub const CharacterState = struct {
         try (Velocity{ .linear = self.velocity }).validate();
         try (Velocity{ .linear = self.ground_velocity }).validate();
     }
-
-    pub fn isSupported(self: CharacterState) bool {
-        return self.ground_state == .on_ground or
-            self.ground_state == .on_steep_ground;
-    }
 };
 
 /// Fixed wheel ordering used by the first wheeled-vehicle capability.
@@ -431,7 +426,11 @@ pub const VehicleState = struct {
 /// Check the structural contract used by physics-backed features.
 ///
 /// `Bodies.Handle` remains wholly adapter-owned. In particular, this contract
-/// never mirrors Jolt's body identifier or world token.
+/// never mirrors Jolt's body identifier or world token. `relocateBody` is one
+/// atomic feature-shaped operation: an implementation must validate the whole
+/// state before mutation, leave the body unchanged on error, and preserve the
+/// handle, shape, motion mode, collision layer, and other body properties on
+/// success. A successful relocation explicitly wakes the body.
 pub fn assertImplementation(comptime Bodies: type) void {
     comptime {
         if (!@hasDecl(Bodies, "Handle")) {
@@ -458,6 +457,12 @@ pub fn assertImplementation(comptime Bodies: type) void {
             "bodyState",
             .{ *Bodies, Bodies.Handle },
             BodyState,
+        );
+        assertFallibleMethod(
+            Bodies,
+            "relocateBody",
+            .{ *Bodies, Bodies.Handle, BodyState },
+            void,
         );
         assertFallibleMethod(
             Bodies,
@@ -757,6 +762,7 @@ test "compile-time physics contracts separate feature bodies from host stepping"
         pub fn bodyState(_: *@This(), _: Handle) !BodyState {
             return .{};
         }
+        pub fn relocateBody(_: *@This(), _: Handle, _: BodyState) !void {}
         pub fn applyImpulse(_: *@This(), _: Handle, _: [3]f32) !void {}
     };
     const FakeWorldStepper = struct {

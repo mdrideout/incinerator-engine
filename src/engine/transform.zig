@@ -101,8 +101,6 @@ pub fn interpolate(previous: Pose, current: Pose, alpha: f32) !Pose {
     };
 }
 
-pub const interpolatePose = interpolate;
-
 fn quaternionLengthSquared(rotation: Quaternion) f32 {
     return quaternionDot(rotation, rotation);
 }
@@ -161,4 +159,20 @@ test "quaternion normalization cannot overflow on large finite components" {
     for (normalized) |component| {
         try std.testing.expectApproxEqAbs(@as(f32, 0.5), component, 0.00001);
     }
+}
+
+test "captured physics quaternion normalization is exact and idempotent" {
+    // Captured from a live carryable at the M3 persistence boundary. The
+    // scale-safe engine normalizer leaves it stable; the former adapter-local
+    // length-squared implementation changed components on cold restore.
+    const rotation = Quaternion{
+        -0.00000015895778915364644,
+        0.01797596924006939,
+        0.0000005184497240406927,
+        0.9998383522033691,
+    };
+    const once = try normalizeQuaternion(rotation);
+    const twice = try normalizeQuaternion(once);
+    try std.testing.expectEqual(rotation, once);
+    try std.testing.expectEqual(once, twice);
 }

@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "world": {
+    "namespace": 9001,
+    "max_crates": 128,
+    "max_characters": 1,
+    "max_vehicles": 1,
+    "max_npcs": 64
+  },
+  "expected_content_cohort": "83d3376f8bd4f0d23525921e4b2445e4fd09ee22282573d745eaf7428ba19ef0",
+  "save_root": "/tmp/incinerator-headless-saves",
+  "save_slot": "world",
+  "start_policy": "fresh_or_restore",
+  "clock": {
+    "mode": "virtual",
+    "virtual_ticks": 16384,
+    "max_catch_up_ticks": 8,
+    "soft_lag_ticks": 8,
+    "hard_lag_ticks": 120
+  },
+  "shutdown": {
+    "drain_tick_budget": 256
+  },
+  "producers": {
+    "max_registered": 2,
+    "per_producer_quota": 8,
+    "ingress_capacity": 16,
+    "transaction_capacity": 16,
+    "result_capacity_per_producer": 8
+  }
+}

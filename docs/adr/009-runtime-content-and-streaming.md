@@ -1,6 +1,6 @@
 # ADR-009: Runtime Content and Streaming Boundary
 
-**Status:** Accepted
+**Status:** Accepted, implemented, and validated through S6
 **Date:** 2026-07-12
 **Decision Maker:** Matt
 
@@ -53,11 +53,25 @@ host resolves fallback resources. A separate generational registry publishes
 resident resources only after upload completion and invalidates them only after
 feature presentation no longer refers to that generation.
 
-S3-A uses a deterministic procedural producer of the same logical district
+S3-A used a deterministic procedural producer of the same logical district
 definition to prove worker, physics, persistence, and cancellation ownership.
 It is conformance content, not an alternative production packaging path. S3-B
-must add a tiny self-authored, provenance-recorded cook fixture before the
-engine claims cooked-content installation or complete glTF preservation.
+subsequently added a tiny self-authored, provenance-recorded cook fixture, and
+S6 extended the runtime boundary to one canonical two-district catalog with
+exact bundle identities and deterministic dependency-aware cooking.
+
+The current runtime admits the canonical catalog before logical or GPU
+activation. Live streaming, durable saves, replay, and cold authority use the
+same admitted logical content fingerprint. Earlier single-bundle identities
+are historical cohorts, not compatibility formats.
+
+The reusable district contract owns bounded payload shapes, coordinates,
+structural validation, checksum rules, tickets, and loader/navigation ports. A
+sandbox-owned canonical recipe provider owns the concrete west/east installed
+coordinates, collision fixtures, recipe cohort, and exact route topology.
+Cooking, catalog admission, workers, restore, replay, and hostile preflight
+consume that provider rather than reconstructing game policy inside the
+feature contract.
 
 ## Ownership and Cancellation
 

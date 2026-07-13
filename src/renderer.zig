@@ -17,14 +17,14 @@
 //! - Own mesh data (meshes are passed in for drawing)
 //! - Contain game logic or scene management
 //!
-//! The target build embeds one shader format and requests its matching backend:
-//! Metal on macOS, Vulkan on Linux, and D3D12 by default on Windows (with an
-//! explicit Vulkan fallback). Render-target formats are queried at runtime.
+//! The Apple Silicon macOS product embeds MSL and requests SDL's Metal GPU
+//! driver. Render-target formats are queried at runtime.
 //!
 //! The render loop follows the modern GPU pattern:
 //! 1. beginFrame() - acquire command buffer, start render pass
 //! 2. drawMesh() - record draw commands (call multiple times)
-//! 3. endFrame() - end render pass, submit commands
+//! 3. endRenderPass() - make the swapchain available to optional overlays
+//! 4. submitFrame() - submit all recorded GPU work
 //!
 //! Currently implemented:
 //! - Multiple pipelines (pos_color for primitives, pos_normal_uv for models)
@@ -112,6 +112,19 @@ const DepthTarget = struct {
     height: u32,
 };
 
+/// Diagnostic-only graphics capability. Both pipelines are created and
+/// released transactionally; a renderer remains healthy when the pair is
+/// unavailable.
+const PhysicsDebugPipelines = struct {
+    triangles: *c.SDL_GPUGraphicsPipeline,
+    lines: *c.SDL_GPUGraphicsPipeline,
+
+    fn deinit(self: PhysicsDebugPipelines, device: *c.SDL_GPUDevice) void {
+        c.SDL_ReleaseGPUGraphicsPipeline(device, self.triangles);
+        c.SDL_ReleaseGPUGraphicsPipeline(device, self.lines);
+    }
+};
+
 const ReleaseTextureFn = *const fn (*anyopaque, *c.SDL_GPUTexture) void;
 
 fn releaseGpuTexture(context: *anyopaque, gpu_texture: *c.SDL_GPUTexture) void {
@@ -175,11 +188,8 @@ const ShaderCode = struct {
 };
 
 fn embeddedShaderFormat() c.SDL_GPUShaderFormat {
-    return switch (shader_assets.format) {
-        .msl => c.SDL_GPU_SHADERFORMAT_MSL,
-        .spirv => c.SDL_GPU_SHADERFORMAT_SPIRV,
-        .dxil => c.SDL_GPU_SHADERFORMAT_DXIL,
-    };
+    std.debug.assert(shader_assets.format == .msl);
+    return c.SDL_GPU_SHADERFORMAT_MSL;
 }
 
 fn normalMatrix(model: zm.Mat) zm.Mat {
@@ -221,7 +231,7 @@ pub const Renderer = struct {
     pipeline_pos_color: *c.SDL_GPUGraphicsPipeline, // For primitives (Vertex)
     pipeline_pos_normal_uv: *c.SDL_GPUGraphicsPipeline, // For loaded models (VertexPNU)
     pipeline_pos_normal_uv_wireframe: *c.SDL_GPUGraphicsPipeline, // For models in wireframe mode
-    pipeline_lines: *c.SDL_GPUGraphicsPipeline, // For debug lines (Vertex format, LINELIST primitive)
+    physics_debug_pipelines: ?PhysicsDebugPipelines,
 
     // Runtime render settings (wireframe, textures, etc.)
     render_settings: RenderSettings = .{},
@@ -233,7 +243,7 @@ pub const Renderer = struct {
     default_sampler: *c.SDL_GPUSampler,
     placeholder_texture: OwnedTexture, // 1x1 white texture for untextured meshes
 
-    // Frame state (valid between beginFrame and endFrame/submitFrame)
+    // Frame state (valid between beginFrame and submitFrame)
     current_cmd: ?*c.SDL_GPUCommandBuffer = null,
     current_render_pass: ?*c.SDL_GPURenderPass = null,
     current_swapchain: ?*c.SDL_GPUTexture = null, // Swapchain texture for this frame
@@ -241,14 +251,30 @@ pub const Renderer = struct {
     /// Initialize the GPU renderer for a window.
     /// This creates the GPU device and graphics pipeline.
     pub fn init(window: *c.SDL_Window) !Renderer {
-        return initWithFailurePoint(window, null);
+        return initWithOptions(window, null, false);
     }
 
     /// Initialize with a deliberate failure at a real ownership boundary.
     /// Intended for bounded native lifecycle smokes; normal callers use init.
     pub fn initWithFailurePoint(
         window: *c.SDL_Window,
-        failure_point: ?InitFailurePoint,
+        comptime failure_point: InitFailurePoint,
+    ) !Renderer {
+        return initWithOptions(window, failure_point, false);
+    }
+
+    /// Native failure-isolation seam: construct a healthy renderer while the
+    /// paired physics-debug pipelines are deliberately unavailable.
+    pub fn initWithoutPhysicsDebugPipelinesForTest(
+        window: *c.SDL_Window,
+    ) !Renderer {
+        return initWithOptions(window, null, true);
+    }
+
+    fn initWithOptions(
+        window: *c.SDL_Window,
+        comptime failure_point: ?InitFailurePoint,
+        comptime omit_physics_debug_pipelines: bool,
     ) !Renderer {
         // Advertise only the format embedded in this target binary. SDL uses
         // that contract to select a compatible backend; claiming a format for
@@ -287,7 +313,9 @@ pub const Renderer = struct {
             return error.GPUWindowClaimFailed;
         }
         errdefer c.SDL_ReleaseWindowFromGPUDevice(device, window);
-        try injectInitFailure(failure_point, .after_window_claim);
+        if (failure_point != null) {
+            try injectInitFailure(failure_point, .after_window_claim);
+        }
 
         const swapchain_format = c.SDL_GetGPUSwapchainTextureFormat(device, window);
         if (swapchain_format == c.SDL_GPU_TEXTUREFORMAT_INVALID) {
@@ -302,7 +330,12 @@ pub const Renderer = struct {
 
         // Create graphics pipelines for different vertex formats
         // Pipeline 1: pos_color for primitives (triangle, cube, etc.)
-        const pipeline_pos_color = try createPipelinePosColor(device, swapchain_format, depth_format);
+        const pipeline_pos_color = try createPipelinePosColor(
+            device,
+            swapchain_format,
+            depth_format,
+            false,
+        );
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_color);
 
         // Pipeline 2: pos_normal_uv for loaded 3D models (GLB files)
@@ -313,10 +346,23 @@ pub const Renderer = struct {
         const pipeline_pos_normal_uv_wireframe = try createPipelinePosNormalUv(device, swapchain_format, depth_format, true);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_normal_uv_wireframe);
 
-        // Pipeline 4: lines for debug visualization (physics colliders, etc.)
-        const pipeline_lines = try createPipelineLines(device, swapchain_format, depth_format);
-        errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_lines);
-        try injectInitFailure(failure_point, .after_pipelines);
+        // Physics-debug presentation is an optional paired capability. A
+        // shader/pipeline failure removes evidence only; it cannot prevent the
+        // renderer or simulation authority from constructing.
+        const physics_debug_pipelines: ?PhysicsDebugPipelines = if (omit_physics_debug_pipelines)
+            null
+        else
+            createPhysicsDebugPipelines(device, swapchain_format, depth_format) catch |err| blk: {
+                std.debug.print(
+                    "Physics debug renderer pipelines unavailable: {s}\n",
+                    .{@errorName(err)},
+                );
+                break :blk null;
+            };
+        errdefer if (physics_debug_pipelines) |pipelines| pipelines.deinit(device);
+        if (failure_point != null) {
+            try injectInitFailure(failure_point, .after_pipelines);
+        }
 
         // Get initial window size for depth buffer
         var w: c_int = 0;
@@ -362,7 +408,9 @@ pub const Renderer = struct {
         // Create placeholder texture (1x1 white) for untextured meshes
         var placeholder_texture = try texture_module.createPlaceholderTexture(device);
         errdefer placeholder_texture.deinit();
-        try injectInitFailure(failure_point, .after_placeholder_resources);
+        if (failure_point != null) {
+            try injectInitFailure(failure_point, .after_placeholder_resources);
+        }
 
         std.debug.print(
             "Renderer initialized (swapchain format {d}, depth format {d})\n",
@@ -377,7 +425,7 @@ pub const Renderer = struct {
             .pipeline_pos_color = pipeline_pos_color,
             .pipeline_pos_normal_uv = pipeline_pos_normal_uv,
             .pipeline_pos_normal_uv_wireframe = pipeline_pos_normal_uv_wireframe,
-            .pipeline_lines = pipeline_lines,
+            .physics_debug_pipelines = physics_debug_pipelines,
             .depth_target = .{
                 .texture = depth_texture,
                 .width = width,
@@ -390,9 +438,26 @@ pub const Renderer = struct {
 
     /// Clean up GPU resources
     pub fn deinit(self: *Renderer) void {
-        // A ready frame owns a non-cancellable swapchain acquisition. Retire it
-        // before releasing any pipeline/target resources, including during
-        // error unwinding from future fallible draw work.
+        self.drainForExternalTeardown();
+
+        self.placeholder_texture.deinit();
+        c.SDL_ReleaseGPUSampler(self.device, self.default_sampler);
+        c.SDL_ReleaseGPUTexture(self.device, self.depth_target.texture);
+        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_color);
+        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv);
+        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv_wireframe);
+        if (self.physics_debug_pipelines) |pipelines| pipelines.deinit(self.device);
+        c.SDL_ReleaseWindowFromGPUDevice(self.device, self.window);
+        c.SDL_DestroyGPUDevice(self.device);
+    }
+
+    /// Retire any partially recorded swapchain frame and wait for the device
+    /// before an application releases GPU resources owned outside Renderer.
+    /// This blocking operation is teardown-only; the live frame path remains
+    /// nonblocking.
+    pub fn drainForExternalTeardown(self: *Renderer) void {
+        // A ready frame owns a non-cancellable swapchain acquisition. Submit it
+        // before any external buffer/texture owner can be released.
         self.endRenderPass();
         if (self.current_cmd) |cmd| {
             if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
@@ -401,16 +466,12 @@ pub const Renderer = struct {
             self.current_cmd = null;
             self.current_swapchain = null;
         }
-
-        self.placeholder_texture.deinit();
-        c.SDL_ReleaseGPUSampler(self.device, self.default_sampler);
-        c.SDL_ReleaseGPUTexture(self.device, self.depth_target.texture);
-        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_color);
-        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv);
-        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv_wireframe);
-        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_lines);
-        c.SDL_ReleaseWindowFromGPUDevice(self.device, self.window);
-        c.SDL_DestroyGPUDevice(self.device);
+        if (!c.SDL_WaitForGPUIdle(self.device)) {
+            std.debug.print(
+                "SDL_WaitForGPUIdle failed during renderer teardown: {s}\n",
+                .{c.SDL_GetError()},
+            );
+        }
     }
 
     /// Get the GPU device (needed for creating meshes).
@@ -421,6 +482,10 @@ pub const Renderer = struct {
     /// Actual format selected for this claimed window's swapchain.
     pub fn getSwapchainFormat(self: *const Renderer) c.SDL_GPUTextureFormat {
         return self.swapchain_format;
+    }
+
+    pub fn physicsDebugPipelinesAvailable(self: *const Renderer) bool {
+        return self.physics_debug_pipelines != null;
     }
 
     // ========================================================================
@@ -548,7 +613,7 @@ pub const Renderer = struct {
     }
 
     /// Draw a mesh with its model and view-projection matrices.
-    /// Must be called between beginFrame() and endFrame().
+    /// Must be called between beginFrame() and endRenderPass().
     ///
     /// Automatically selects the correct pipeline based on mesh vertex format
     /// and handles both indexed and non-indexed rendering.
@@ -557,27 +622,6 @@ pub const Renderer = struct {
         self.drawMeshWithMaterial(
             m,
             m.diffuse_texture,
-            .{ 1, 1, 1, 1 },
-            model,
-            view_projection,
-        );
-    }
-
-    /// Draw a mesh with an explicitly resolved material texture.
-    ///
-    /// Streamed scene registries keep mesh and material ownership separate;
-    /// this seam lets them supply a borrowed texture without mutating `Mesh`.
-    /// Legacy callers continue through `drawMesh` and its mesh-local view.
-    pub fn drawMeshWithTexture(
-        self: *Renderer,
-        m: *const Mesh,
-        diffuse_texture: ?Texture,
-        model: zm.Mat,
-        view_projection: zm.Mat,
-    ) void {
-        self.drawMeshWithMaterial(
-            m,
-            diffuse_texture,
             .{ 1, 1, 1, 1 },
             model,
             view_projection,
@@ -594,7 +638,7 @@ pub const Renderer = struct {
         view_projection: zm.Mat,
     ) void {
         const render_pass = self.current_render_pass orelse {
-            std.debug.print("drawMesh called outside of beginFrame/endFrame\n", .{});
+            std.debug.print("drawMesh called outside of an active render pass\n", .{});
             return;
         };
 
@@ -697,14 +741,15 @@ pub const Renderer = struct {
     /// mvp: Model-View-Projection matrix for transforming vertices
     pub fn drawLines(self: *Renderer, vertex_buffer: *c.SDL_GPUBuffer, vertex_count: u32, mvp: zm.Mat) void {
         const render_pass = self.current_render_pass orelse {
-            std.debug.print("drawLines called outside of beginFrame/endFrame\n", .{});
+            std.debug.print("drawLines called outside of an active render pass\n", .{});
             return;
         };
 
         const cmd = self.current_cmd orelse return;
 
+        const pipelines = self.physics_debug_pipelines orelse return;
         // Bind the line pipeline (uses LINELIST primitive type)
-        c.SDL_BindGPUGraphicsPipeline(render_pass, self.pipeline_lines);
+        c.SDL_BindGPUGraphicsPipeline(render_pass, pipelines.lines);
 
         // Push MVP matrix to vertex shader
         const uniforms = Uniforms{ .mvp = zm.matToArr(mvp) };
@@ -729,14 +774,15 @@ pub const Renderer = struct {
     /// mvp: Model-View-Projection matrix for transforming vertices
     pub fn drawDebugTriangles(self: *Renderer, vertex_buffer: *c.SDL_GPUBuffer, vertex_count: u32, mvp: zm.Mat) void {
         const render_pass = self.current_render_pass orelse {
-            std.debug.print("drawDebugTriangles called outside of beginFrame/endFrame\n", .{});
+            std.debug.print("drawDebugTriangles called outside of an active render pass\n", .{});
             return;
         };
 
         const cmd = self.current_cmd orelse return;
 
-        // Bind the pos_color pipeline (uses TRIANGLELIST primitive type)
-        c.SDL_BindGPUGraphicsPipeline(render_pass, self.pipeline_pos_color);
+        const pipelines = self.physics_debug_pipelines orelse return;
+        // Bind the dedicated two-sided, non-depth-writing debug pipeline.
+        c.SDL_BindGPUGraphicsPipeline(render_pass, pipelines.triangles);
 
         // Push MVP matrix to vertex shader
         const uniforms = Uniforms{ .mvp = zm.matToArr(mvp) };
@@ -780,11 +826,28 @@ pub const Renderer = struct {
         }
     }
 
-    /// End the current frame and present to screen.
-    /// Convenience method that calls endRenderPass() and submitFrame().
-    pub fn endFrame(self: *Renderer) !void {
-        self.endRenderPass();
-        try self.submitFrame();
+    /// Enqueue an empty command after a successfully submitted frame and
+    /// return its fence. Same-queue ordering makes this a completion fence for
+    /// every resource read by the preceding frame while keeping frame-submit
+    /// failure distinguishable from optional fence acquisition failure.
+    pub fn acquirePostSubmissionFence(self: *Renderer) !*c.SDL_GPUFence {
+        if (self.current_cmd != null or self.current_render_pass != null) {
+            return error.FrameStillInProgress;
+        }
+        const cmd = c.SDL_AcquireGPUCommandBuffer(self.device) orelse {
+            std.debug.print(
+                "SDL_AcquireGPUCommandBuffer failed for post-submit fence: {s}\n",
+                .{c.SDL_GetError()},
+            );
+            return error.PostSubmissionFenceCommandAcquireFailed;
+        };
+        return c.SDL_SubmitGPUCommandBufferAndAcquireFence(cmd) orelse {
+            std.debug.print(
+                "SDL_SubmitGPUCommandBufferAndAcquireFence failed for post-submit fence: {s}\n",
+                .{c.SDL_GetError()},
+            );
+            return error.PostSubmissionFenceAcquireFailed;
+        };
     }
 
     /// Get the swapchain texture for additional render passes (e.g., ImGui overlay).
@@ -825,11 +888,30 @@ fn selectDepthFormat(device: *c.SDL_GPUDevice) ?c.SDL_GPUTextureFormat {
     return null;
 }
 
+fn createPhysicsDebugPipelines(
+    device: *c.SDL_GPUDevice,
+    swapchain_format: c.SDL_GPUTextureFormat,
+    depth_format: c.SDL_GPUTextureFormat,
+) !PhysicsDebugPipelines {
+    // Fills intentionally use the RGB-only primitive shader. They are
+    // two-sided and depth-tested, but never write depth.
+    const triangles = try createPipelinePosColor(
+        device,
+        swapchain_format,
+        depth_format,
+        true,
+    );
+    errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, triangles);
+    const lines = try createPipelineLines(device, swapchain_format, depth_format);
+    return .{ .triangles = triangles, .lines = lines };
+}
+
 /// Create pipeline for pos_color vertex format (primitives like cube, triangle)
 fn createPipelinePosColor(
     device: *c.SDL_GPUDevice,
     swapchain_format: c.SDL_GPUTextureFormat,
     depth_format: c.SDL_GPUTextureFormat,
+    debug_overlay: bool,
 ) !*c.SDL_GPUGraphicsPipeline {
     const shaders = getTriangleShaderCode();
 
@@ -927,7 +1009,10 @@ fn createPipelinePosColor(
         .primitive_type = c.SDL_GPU_PRIMITIVETYPE_TRIANGLELIST,
         .rasterizer_state = .{
             .fill_mode = c.SDL_GPU_FILLMODE_FILL,
-            .cull_mode = c.SDL_GPU_CULLMODE_BACK, // Cull back faces (interior)
+            .cull_mode = if (debug_overlay)
+                c.SDL_GPU_CULLMODE_NONE
+            else
+                c.SDL_GPU_CULLMODE_BACK, // Debug evidence is two-sided.
             .front_face = c.SDL_GPU_FRONTFACE_CLOCKWISE, // Our vertices are CW when viewed from outside
             .depth_bias_constant_factor = 0,
             .depth_bias_clamp = 0,
@@ -946,13 +1031,16 @@ fn createPipelinePosColor(
             .padding3 = 0,
         },
         .depth_stencil_state = .{
-            .compare_op = c.SDL_GPU_COMPAREOP_LESS, // Closer pixels win
+            .compare_op = if (debug_overlay)
+                c.SDL_GPU_COMPAREOP_LESS_OR_EQUAL
+            else
+                c.SDL_GPU_COMPAREOP_LESS, // Closer pixels win
             .back_stencil_state = std.mem.zeroes(c.SDL_GPUStencilOpState),
             .front_stencil_state = std.mem.zeroes(c.SDL_GPUStencilOpState),
             .compare_mask = 0,
             .write_mask = 0,
             .enable_depth_test = true, // ENABLED: test depth before writing
-            .enable_depth_write = true, // ENABLED: write depth when test passes
+            .enable_depth_write = !debug_overlay,
             .enable_stencil_test = false,
             .padding1 = 0,
             .padding2 = 0,

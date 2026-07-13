@@ -6,20 +6,39 @@
 //! Key concepts:
 //! - Input is polled every frame (uncapped) to ensure responsiveness
 //! - Physical state is independent from capture-filtered gameplay state
-//! - Edges and deltas remain frame-scoped until the S0/S1 tick-buffer redesign
+//! - Edges and deltas are accumulated until the fixed-tick consumer accepts them
 
 const std = @import("std");
 const sdl = @import("sdl.zig");
-const build_options = @import("build_options");
-
-// Conditionally import the editor event/capture contract.
-const editor = if (build_options.editor_enabled)
-    @import("editor/editor.zig")
-else
-    @import("editor/disabled.zig");
 
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
+
+pub const EventRoute = struct {
+    keyboard_reserved: bool = false,
+    mouse_reserved: bool = false,
+};
+
+pub const Capture = struct {
+    keyboard: bool = false,
+    mouse: bool = false,
+};
+
+/// Narrow callback surface from the platform input pump to an owned optional
+/// editor. The context is borrowed for one pump call and is never retained.
+pub const EventSink = struct {
+    context: *anyopaque,
+    process_event: *const fn (*anyopaque, *const c.SDL_Event) EventRoute,
+    capture: *const fn (*anyopaque) Capture,
+
+    fn processEvent(self: EventSink, event: *const c.SDL_Event) EventRoute {
+        return self.process_event(self.context, event);
+    }
+
+    fn currentCapture(self: EventSink) Capture {
+        return self.capture(self.context);
+    }
+};
 
 /// Maximum number of keys we track (SDL scancodes go up to ~512)
 const MAX_KEYS = 512;
@@ -37,9 +56,6 @@ pub const InputBuffer = struct {
     /// Keys that were just pressed this frame (for "on press" events)
     keys_pressed: [MAX_KEYS]bool,
 
-    /// Keys that were just released this frame (for "on release" events)
-    keys_released: [MAX_KEYS]bool,
-
     /// Physical state is maintained independently from gameplay routing.
     physical_keys_down: [MAX_KEYS]bool,
 
@@ -50,21 +66,9 @@ pub const InputBuffer = struct {
     // Mouse State
     // ========================================================================
 
-    /// Gameplay-visible mouse position in window coordinates.
-    mouse_x: f32,
-    mouse_y: f32,
-
-    /// Physical mouse position, updated even while gameplay is captured.
-    physical_mouse_x: f32,
-    physical_mouse_y: f32,
-
     /// Capture-filtered mouse movement accumulated during the current frame.
     mouse_delta_x: f32,
     mouse_delta_y: f32,
-
-    /// Physical motion accumulated this frame regardless of capture.
-    physical_mouse_delta_x: f32,
-    physical_mouse_delta_y: f32,
 
     /// Mouse button state (SDL supports up to 5 buttons)
     mouse_buttons: [5]bool,
@@ -74,20 +78,6 @@ pub const InputBuffer = struct {
 
     /// Captured/reserved buttons remain suppressed until physical release.
     mouse_buttons_suppressed: [5]bool,
-
-    /// Mouse buttons just pressed this frame
-    mouse_buttons_pressed: [5]bool,
-
-    /// Mouse buttons just released this frame
-    mouse_buttons_released: [5]bool,
-
-    /// Mouse wheel delta (accumulated)
-    mouse_wheel_x: f32,
-    mouse_wheel_y: f32,
-
-    /// Physical wheel delta accumulated regardless of capture.
-    physical_mouse_wheel_x: f32,
-    physical_mouse_wheel_y: f32,
 
     /// Capture state applied to gameplay input.
     keyboard_captured: bool,
@@ -108,13 +98,6 @@ pub const InputBuffer = struct {
     /// windows may emit their own close requests without quitting the engine.
     main_window_id: c.SDL_WindowID,
 
-    /// True if the window was resized this frame
-    window_resized: bool,
-
-    /// New window dimensions (valid if window_resized is true)
-    window_width: i32,
-    window_height: i32,
-
     /// Stable visibility state for the main window.
     window_minimized: bool,
 
@@ -127,61 +110,35 @@ pub const InputBuffer = struct {
         return InputBuffer{
             .keys_down = [_]bool{false} ** MAX_KEYS,
             .keys_pressed = [_]bool{false} ** MAX_KEYS,
-            .keys_released = [_]bool{false} ** MAX_KEYS,
             .physical_keys_down = [_]bool{false} ** MAX_KEYS,
             .keys_suppressed = [_]bool{false} ** MAX_KEYS,
-            .mouse_x = 0,
-            .mouse_y = 0,
-            .physical_mouse_x = 0,
-            .physical_mouse_y = 0,
             .mouse_delta_x = 0,
             .mouse_delta_y = 0,
-            .physical_mouse_delta_x = 0,
-            .physical_mouse_delta_y = 0,
             .mouse_buttons = [_]bool{false} ** 5,
             .physical_mouse_buttons = [_]bool{false} ** 5,
             .mouse_buttons_suppressed = [_]bool{false} ** 5,
-            .mouse_buttons_pressed = [_]bool{false} ** 5,
-            .mouse_buttons_released = [_]bool{false} ** 5,
-            .mouse_wheel_x = 0,
-            .mouse_wheel_y = 0,
-            .physical_mouse_wheel_x = 0,
-            .physical_mouse_wheel_y = 0,
             .keyboard_captured = false,
             .mouse_captured = false,
             .gameplay_reset_requested = false,
             .quit_requested = false,
             .main_window_id = main_window_id,
-            .window_resized = false,
-            .window_width = 0,
-            .window_height = 0,
             .window_minimized = false,
             .window_minimized_this_frame = false,
             .window_restored_this_frame = false,
         };
     }
 
-    /// Clear per-frame events (pressed/released flags, deltas)
+    /// Clear per-frame pressed edges, motion deltas, and lifecycle flags.
     /// Call this at the start of each frame before pumping events.
     pub fn beginFrame(self: *InputBuffer) void {
-        // Clear "just pressed" and "just released" flags
+        // Clear "just pressed" flags.
         @memset(&self.keys_pressed, false);
-        @memset(&self.keys_released, false);
-        @memset(&self.mouse_buttons_pressed, false);
-        @memset(&self.mouse_buttons_released, false);
 
         // Clear accumulated deltas
         self.mouse_delta_x = 0;
         self.mouse_delta_y = 0;
-        self.mouse_wheel_x = 0;
-        self.mouse_wheel_y = 0;
-        self.physical_mouse_delta_x = 0;
-        self.physical_mouse_delta_y = 0;
-        self.physical_mouse_wheel_x = 0;
-        self.physical_mouse_wheel_y = 0;
 
         // Clear per-frame flags
-        self.window_resized = false;
         self.window_minimized_this_frame = false;
         self.window_restored_this_frame = false;
         self.gameplay_reset_requested = false;
@@ -189,18 +146,21 @@ pub const InputBuffer = struct {
 
     /// Process all pending SDL events. Call once per frame.
     /// Returns false if the application should quit.
-    pub fn pumpEvents(self: *InputBuffer) bool {
+    /// The caller supplies a one-call event sink borrowed from its owned editor.
+    pub fn pumpEvents(self: *InputBuffer, editor_sink: EventSink) bool {
         var event: c.SDL_Event = undefined;
 
         // Capture can change when the previous ImGui frame is finalized even
         // when there are no new SDL events.
-        self.applyCapture(editor.wantsKeyboard(), editor.wantsMouse());
+        const initial_capture = editor_sink.currentCapture();
+        self.applyCapture(initial_capture.keyboard, initial_capture.mouse);
 
         while (c.SDL_PollEvent(&event)) {
             // ImGui always observes the event. The returned route represents
             // only explicit editor shortcuts, never backend recognition.
-            const route = editor.processEvent(&event);
-            self.applyCapture(editor.wantsKeyboard(), editor.wantsMouse());
+            const route = editor_sink.processEvent(&event);
+            const current_capture = editor_sink.currentCapture();
+            self.applyCapture(current_capture.keyboard, current_capture.mouse);
 
             const keyboard_blocked = self.keyboard_captured or route.keyboard_reserved;
             const mouse_blocked = self.mouse_captured or route.mouse_reserved;
@@ -238,8 +198,6 @@ pub const InputBuffer = struct {
                 c.SDL_EVENT_MOUSE_MOTION => {
                     if (!self.isMainWindow(event.motion.windowID)) continue;
                     self.handleMouseMotion(
-                        event.motion.x,
-                        event.motion.y,
                         event.motion.xrel,
                         event.motion.yrel,
                         mouse_blocked,
@@ -258,20 +216,6 @@ pub const InputBuffer = struct {
                     const raw_button: usize = @intCast(event.button.button);
                     if (raw_button >= 1 and raw_button <= self.mouse_buttons.len) {
                         self.handleMouseButtonUp(event.button.windowID, raw_button - 1);
-                    }
-                },
-
-                c.SDL_EVENT_MOUSE_WHEEL => {
-                    if (self.isMainWindow(event.wheel.windowID)) {
-                        self.handleMouseWheel(event.wheel.x, event.wheel.y, mouse_blocked);
-                    }
-                },
-
-                c.SDL_EVENT_WINDOW_RESIZED => {
-                    if (self.isMainWindow(event.window.windowID)) {
-                        self.window_resized = true;
-                        self.window_width = event.window.data1;
-                        self.window_height = event.window.data2;
                     }
                 },
 
@@ -309,7 +253,6 @@ pub const InputBuffer = struct {
                 if (self.keys_down[i]) {
                     self.keys_down[i] = false;
                     self.keys_pressed[i] = false;
-                    self.keys_released[i] = true;
                 }
             }
         }
@@ -323,8 +266,6 @@ pub const InputBuffer = struct {
                 }
                 if (self.mouse_buttons[i]) {
                     self.mouse_buttons[i] = false;
-                    self.mouse_buttons_pressed[i] = false;
-                    self.mouse_buttons_released[i] = true;
                 }
             }
 
@@ -332,8 +273,6 @@ pub const InputBuffer = struct {
             // gameplay later in this frame.
             self.mouse_delta_x = 0;
             self.mouse_delta_y = 0;
-            self.mouse_wheel_x = 0;
-            self.mouse_wheel_y = 0;
         }
         self.mouse_captured = mouse;
     }
@@ -350,7 +289,6 @@ pub const InputBuffer = struct {
             if (self.keys_down[scancode]) {
                 self.keys_down[scancode] = false;
                 self.keys_pressed[scancode] = false;
-                self.keys_released[scancode] = true;
             }
             return;
         }
@@ -370,28 +308,16 @@ pub const InputBuffer = struct {
         if (!self.isMainWindow(window_id)) return;
         self.physical_keys_down[scancode] = false;
         self.keys_suppressed[scancode] = false;
-        if (self.keys_down[scancode]) {
-            self.keys_released[scancode] = true;
-        }
         self.keys_down[scancode] = false;
     }
 
     fn handleMouseMotion(
         self: *InputBuffer,
-        x: f32,
-        y: f32,
         delta_x: f32,
         delta_y: f32,
         blocked: bool,
     ) void {
-        self.physical_mouse_x = x;
-        self.physical_mouse_y = y;
-        self.physical_mouse_delta_x += delta_x;
-        self.physical_mouse_delta_y += delta_y;
-
         if (blocked) return;
-        self.mouse_x = x;
-        self.mouse_y = y;
         self.mouse_delta_x += delta_x;
         self.mouse_delta_y += delta_y;
     }
@@ -407,16 +333,11 @@ pub const InputBuffer = struct {
             self.mouse_buttons_suppressed[button] = true;
             if (self.mouse_buttons[button]) {
                 self.mouse_buttons[button] = false;
-                self.mouse_buttons_pressed[button] = false;
-                self.mouse_buttons_released[button] = true;
             }
             return;
         }
 
         if (self.mouse_buttons_suppressed[button]) return;
-        if (!self.mouse_buttons[button]) {
-            self.mouse_buttons_pressed[button] = true;
-        }
         self.mouse_buttons[button] = true;
     }
 
@@ -428,52 +349,24 @@ pub const InputBuffer = struct {
         if (!self.isMainWindow(window_id)) return;
         self.physical_mouse_buttons[button] = false;
         self.mouse_buttons_suppressed[button] = false;
-        if (self.mouse_buttons[button]) {
-            self.mouse_buttons_released[button] = true;
-        }
         self.mouse_buttons[button] = false;
     }
 
-    fn handleMouseWheel(self: *InputBuffer, x: f32, y: f32, blocked: bool) void {
-        self.physical_mouse_wheel_x += x;
-        self.physical_mouse_wheel_y += y;
-        if (blocked) return;
-        self.mouse_wheel_x += x;
-        self.mouse_wheel_y += y;
-    }
-
-    /// Focus loss is an authoritative physical release boundary. Gameplay gets
-    /// release edges for every active key/button and no stale input survives.
+    /// Focus loss is an authoritative physical release boundary. No stale
+    /// gameplay or physical input survives.
     fn handleFocusLost(self: *InputBuffer) void {
         self.gameplay_reset_requested = true;
         @memset(&self.keys_pressed, false);
-        for (0..MAX_KEYS) |i| {
-            if (self.keys_down[i]) {
-                self.keys_released[i] = true;
-            }
-        }
         @memset(&self.keys_down, false);
         @memset(&self.physical_keys_down, false);
         @memset(&self.keys_suppressed, false);
 
-        @memset(&self.mouse_buttons_pressed, false);
-        for (0..self.mouse_buttons.len) |i| {
-            if (self.mouse_buttons[i]) {
-                self.mouse_buttons_released[i] = true;
-            }
-        }
         @memset(&self.mouse_buttons, false);
         @memset(&self.physical_mouse_buttons, false);
         @memset(&self.mouse_buttons_suppressed, false);
 
         self.mouse_delta_x = 0;
         self.mouse_delta_y = 0;
-        self.mouse_wheel_x = 0;
-        self.mouse_wheel_y = 0;
-        self.physical_mouse_delta_x = 0;
-        self.physical_mouse_delta_y = 0;
-        self.physical_mouse_wheel_x = 0;
-        self.physical_mouse_wheel_y = 0;
     }
 
     fn handleWindowCloseRequested(self: *InputBuffer, window_id: c.SDL_WindowID) void {
@@ -519,54 +412,14 @@ pub const InputBuffer = struct {
         return self.keys_pressed[idx];
     }
 
-    /// Check if a key was just released this frame
-    pub fn isKeyReleased(self: *const InputBuffer, scancode: c.SDL_Scancode) bool {
-        const idx: usize = @intCast(scancode);
-        if (idx >= MAX_KEYS) return false;
-        return self.keys_released[idx];
-    }
-
     /// Check if a mouse button is currently held (0=left, 1=middle, 2=right)
     pub fn isMouseButtonDown(self: *const InputBuffer, button: u8) bool {
         if (button >= 5) return false;
         return self.mouse_buttons[button];
     }
 
-    /// Check if a mouse button was just pressed
-    pub fn isMouseButtonPressed(self: *const InputBuffer, button: u8) bool {
-        if (button >= 5) return false;
-        return self.mouse_buttons_pressed[button];
-    }
-
     pub fn gameplayActionsMustReset(self: *const InputBuffer) bool {
         return self.gameplay_reset_requested;
-    }
-
-    /// Debug: Print current input state
-    pub fn debugPrint(self: *const InputBuffer) void {
-        // Only print if there's interesting input
-        if (self.mouse_delta_x != 0 or self.mouse_delta_y != 0) {
-            std.debug.print("Mouse: ({d:.1}, {d:.1}) delta: ({d:.1}, {d:.1})\n", .{
-                self.mouse_x,
-                self.mouse_y,
-                self.mouse_delta_x,
-                self.mouse_delta_y,
-            });
-        }
-
-        // Print any pressed keys
-        for (self.keys_pressed, 0..) |pressed, i| {
-            if (pressed) {
-                std.debug.print("Key pressed: scancode {d}\n", .{i});
-            }
-        }
-
-        // Print mouse button presses
-        for (self.mouse_buttons_pressed, 0..) |pressed, i| {
-            if (pressed) {
-                std.debug.print("Mouse button pressed: {d}\n", .{i});
-            }
-        }
     }
 };
 
@@ -579,21 +432,13 @@ pub const Key = struct {
     pub const A = c.SDL_SCANCODE_A;
     pub const S = c.SDL_SCANCODE_S;
     pub const D = c.SDL_SCANCODE_D;
-    pub const Q = c.SDL_SCANCODE_Q;
     pub const E = c.SDL_SCANCODE_E;
+    pub const F = c.SDL_SCANCODE_F;
     pub const SPACE = c.SDL_SCANCODE_SPACE;
     pub const LSHIFT = c.SDL_SCANCODE_LSHIFT;
-    pub const LCTRL = c.SDL_SCANCODE_LCTRL;
-    pub const ESCAPE = c.SDL_SCANCODE_ESCAPE;
-    pub const TAB = c.SDL_SCANCODE_TAB;
-    pub const F1 = c.SDL_SCANCODE_F1;
-    pub const F2 = c.SDL_SCANCODE_F2;
-    pub const F3 = c.SDL_SCANCODE_F3;
 };
 
 pub const MouseButton = struct {
-    pub const LEFT: u8 = 0;
-    pub const MIDDLE: u8 = 1;
     pub const RIGHT: u8 = 2;
 };
 
@@ -604,7 +449,6 @@ pub const MouseButton = struct {
 test "InputBuffer initialization" {
     const input = InputBuffer.init(1);
     try std.testing.expect(!input.quit_requested);
-    try std.testing.expect(input.mouse_x == 0);
     try std.testing.expect(!input.keyboard_captured);
     try std.testing.expect(!input.mouse_captured);
     try std.testing.expect(!input.window_minimized);
@@ -622,7 +466,6 @@ test "physical key release is observed during keyboard capture" {
 
     try std.testing.expect(input.physical_keys_down[key]);
     try std.testing.expect(!input.isKeyDown(Key.W));
-    try std.testing.expect(input.isKeyReleased(Key.W));
     try std.testing.expect(input.keys_suppressed[key]);
 
     input.handleKeyUp(1, key);
@@ -639,21 +482,15 @@ test "focus loss releases and clears keyboard and mouse state" {
     input.handleKeyDown(key, false);
     input.handleMouseButtonDown(button, false);
     input.beginFrame();
-    input.handleMouseMotion(10, 20, 3, -2, false);
-    input.handleMouseWheel(1, -1, false);
+    input.handleMouseMotion(3, -2, false);
     input.handleFocusLost();
 
     try std.testing.expect(input.gameplayActionsMustReset());
-    try std.testing.expect(input.isKeyReleased(Key.W));
-    try std.testing.expect(input.mouse_buttons_released[button]);
     try std.testing.expect(!input.physical_keys_down[key]);
     try std.testing.expect(!input.isKeyDown(Key.W));
     try std.testing.expect(!input.physical_mouse_buttons[button]);
     try std.testing.expect(!input.isMouseButtonDown(MouseButton.RIGHT));
     try std.testing.expectEqual(@as(f32, 0), input.mouse_delta_x);
-    try std.testing.expectEqual(@as(f32, 0), input.physical_mouse_delta_x);
-    try std.testing.expectEqual(@as(f32, 0), input.mouse_wheel_x);
-    try std.testing.expectEqual(@as(f32, 0), input.physical_mouse_wheel_x);
 }
 
 test "held input stays suppressed after capture ends until physical release" {
@@ -691,7 +528,6 @@ test "held mouse button stays suppressed across mouse capture" {
 
     try std.testing.expect(input.physical_mouse_buttons[button]);
     try std.testing.expect(!input.isMouseButtonDown(MouseButton.RIGHT));
-    try std.testing.expect(input.mouse_buttons_released[button]);
 
     input.beginFrame();
     input.applyCapture(false, false);
@@ -701,17 +537,50 @@ test "held mouse button stays suppressed across mouse capture" {
     input.handleMouseButtonUp(1, button);
     input.handleMouseButtonDown(button, false);
     try std.testing.expect(input.isMouseButtonDown(MouseButton.RIGHT));
-    try std.testing.expect(input.isMouseButtonPressed(MouseButton.RIGHT));
 }
 
 test "disabled editor reserves and captures no input" {
     const disabled_editor = @import("editor/disabled.zig");
-    const route = disabled_editor.processEvent(null);
+    var owned_editor = disabled_editor.Editor.init(null, null, null);
+    defer owned_editor.deinit();
+    const route = owned_editor.processEvent(null);
 
     try std.testing.expect(!route.keyboard_reserved);
     try std.testing.expect(!route.mouse_reserved);
-    try std.testing.expect(!disabled_editor.wantsKeyboard());
-    try std.testing.expect(!disabled_editor.wantsMouse());
+    try std.testing.expect(!owned_editor.wantsKeyboard());
+    try std.testing.expect(!owned_editor.wantsMouse());
+}
+
+test "event sink is a borrowed callback surface without retained ownership" {
+    const FakeEditor = struct {
+        calls: u32 = 0,
+        current_capture: Capture = .{ .keyboard = true },
+
+        fn process(
+            context: *anyopaque,
+            _: *const c.SDL_Event,
+        ) EventRoute {
+            const self: *@This() = @ptrCast(@alignCast(context));
+            self.calls += 1;
+            return .{ .keyboard_reserved = true };
+        }
+
+        fn readCapture(context: *anyopaque) Capture {
+            const self: *const @This() = @ptrCast(@alignCast(context));
+            return self.current_capture;
+        }
+    };
+
+    var fake = FakeEditor{};
+    const sink = EventSink{
+        .context = &fake,
+        .process_event = FakeEditor.process,
+        .capture = FakeEditor.readCapture,
+    };
+    const event = std.mem.zeroes(c.SDL_Event);
+    try std.testing.expect(sink.processEvent(&event).keyboard_reserved);
+    try std.testing.expect(sink.currentCapture().keyboard);
+    try std.testing.expectEqual(@as(u32, 1), fake.calls);
 }
 
 test "only the main window close request quits the application" {
@@ -755,8 +624,6 @@ test "main window minimize releases held gameplay input without focus event" {
     input.handleWindowMinimized(42);
 
     try std.testing.expect(input.gameplayActionsMustReset());
-    try std.testing.expect(input.isKeyReleased(Key.W));
-    try std.testing.expect(input.mouse_buttons_released[button]);
     try std.testing.expect(!input.physical_keys_down[key]);
     try std.testing.expect(!input.isKeyDown(Key.W));
     try std.testing.expect(!input.physical_mouse_buttons[button]);
@@ -809,12 +676,10 @@ test "secondary window key release preserves main window hold" {
 
     try std.testing.expect(input.physical_keys_down[key]);
     try std.testing.expect(input.isKeyDown(Key.W));
-    try std.testing.expect(!input.isKeyReleased(Key.W));
 
     input.handleKeyUp(42, key);
     try std.testing.expect(!input.physical_keys_down[key]);
     try std.testing.expect(!input.isKeyDown(Key.W));
-    try std.testing.expect(input.isKeyReleased(Key.W));
 }
 
 test "secondary window mouse release preserves main window hold" {
@@ -827,10 +692,8 @@ test "secondary window mouse release preserves main window hold" {
 
     try std.testing.expect(input.physical_mouse_buttons[button]);
     try std.testing.expect(input.isMouseButtonDown(MouseButton.RIGHT));
-    try std.testing.expect(!input.mouse_buttons_released[button]);
 
     input.handleMouseButtonUp(42, button);
     try std.testing.expect(!input.physical_mouse_buttons[button]);
     try std.testing.expect(!input.isMouseButtonDown(MouseButton.RIGHT));
-    try std.testing.expect(input.mouse_buttons_released[button]);
 }

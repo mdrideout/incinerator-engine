@@ -266,22 +266,6 @@ pub fn createDebugCheckerboard(device: *c.SDL_GPUDevice) !OwnedTexture {
     );
 }
 
-/// Create a colored debug checkerboard for distinguishing objects.
-pub fn createColoredCheckerboard(
-    device: *c.SDL_GPUDevice,
-    hue: enum { red, green, blue, yellow, cyan, magenta },
-) !OwnedTexture {
-    const colors: [2][3]u8 = switch (hue) {
-        .red => .{ .{ 255, 180, 180 }, .{ 200, 100, 100 } },
-        .green => .{ .{ 180, 255, 180 }, .{ 100, 200, 100 } },
-        .blue => .{ .{ 180, 180, 255 }, .{ 100, 100, 200 } },
-        .yellow => .{ .{ 255, 255, 180 }, .{ 200, 200, 100 } },
-        .cyan => .{ .{ 180, 255, 255 }, .{ 100, 200, 200 } },
-        .magenta => .{ .{ 255, 180, 255 }, .{ 200, 100, 200 } },
-    };
-    return createCheckerboardTexture(device, 64, 2, colors[0], colors[1]);
-}
-
 // ============================================================================
 // Tests
 // ============================================================================

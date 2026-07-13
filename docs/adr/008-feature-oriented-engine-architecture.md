@@ -1,8 +1,8 @@
 # ADR-008: Feature-Oriented Engine Architecture
 
-**Status:** Accepted
+**Status:** Accepted, implemented, and validated through M3
 **Date:** 2026-07-09
-**Amended:** 2026-07-12
+**Amended:** 2026-07-13
 **Decision Maker:** Matt
 
 ## Context
@@ -48,11 +48,12 @@ public host interface.
 
 A feature owns its data and behavior end to end: components, commands, events,
 systems, persistence, render extraction, optional editor extension, and tests.
-`CrateFeature`, `CharacterFeature`, and `VehicleFeature` now independently
-prove that boundary while sharing one runtime and physics world. Character and
-vehicle interact through the named `DriverAccess` gameplay port rather than
-private components or direct feature imports. This is the narrow common
-authority contract proven by two consumers, not a general possession framework.
+`CrateFeature`, `CharacterFeature`, `VehicleFeature`, `DistrictFeature`,
+`InteractionFeature`, and `NpcFeature` independently prove that boundary while
+sharing one runtime and physics world. Cross-feature behavior uses narrow
+named gameplay ports—such as driver, carrier, district, and navigation
+access—rather than private components or direct feature imports. These are
+concrete authority contracts, not a general possession or messaging framework.
 
 Feature registration is deterministic and explicit. Runtime feature unloading, hot reload, a binary plugin ABI, and auto-discovery are deferred until a real use case requires them.
 
@@ -97,25 +98,34 @@ Jolt step. No feature adapter privately advances the shared world. Expected
 domain rejection is reported as a typed outcome;
 infrastructure, adapter, and invariant errors put the runtime into a terminal
 fault state that permits diagnostics and teardown but rejects further normal
-ticks, command submission, and persistence. The composition owns the V4 world
-schema, runtime clock/identity metadata, global identity policy, validated
-character/vehicle driver relationships, and logical district reconstruction;
+ticks, command submission, and persistence. The composition owns the current
+`SnapshotV7` world schema, runtime clock/identity metadata, global identity
+policy, validated cross-feature relationships, and logical district
+reconstruction;
 features own their logical V1 records and feature-specific persisted tuning.
-Character and vehicle simulation tuning is required in the V4 envelope and
+Feature simulation tuning is required in the current save envelope and
 authoritative on restore; host capacity and presentation assets remain
 restore-time policy. Occupied restore creates characters and vehicles before
-linking authority, while district restore rebuilds its validated procedural
-recipe and static-body ownership without persisting worker or backend handles.
+linking authority, while district, interaction, and NPC restore rebuild
+validated logical ownership without persisting worker or backend handles.
 Any partial link or activation failure rolls back before the candidate world is
 discarded.
 
 The current zflecs wrapper permits one live engine-owned world per process. A
 shared lease rejects a second owner before entering zflecs and preserves the
-existing caller, but successful atomic old/new snapshot swapping is not yet
-available. The visual sandbox now owns that same composition; the prototype
-`GameWorld` and borrowed-world bridge have been removed. Pending command and outcome
-storage is also intentionally unbounded for the single-player sandbox; bounded
-backpressure is required before network-originated work is accepted.
+existing caller. The accepted M3 product model is one authoritative world per
+process, with replacement through validated process restart rather than
+in-process hot swap. The visual sandbox and cold authority own deliberately
+different host compositions over the same logical contracts. The graphical
+host is also compiled as two separately named products: the normal client and
+an explicitly installed validation composition. Scripted scenarios and fault
+seams are compile-time absent from the normal client. The prototype `GameWorld`
+and borrowed-world bridge have been removed. Pending command and outcome
+storage is fixed-capacity and accepted commands reserve
+authority-outcome delivery before mutation. M3 also bounds external producer
+ingress and result delivery. A future network transport must add its own
+authentication, retry, idempotency, and rate policy; it may not rely on
+unbounded growth.
 
 ## Consequences
 

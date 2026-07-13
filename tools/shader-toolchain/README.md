@@ -23,34 +23,6 @@ zig build \
 
 `.shader-tools` is an example local install root and must not be committed.
 
-## Deferred platform notes
-
-Linux/SteamOS and Windows are future platforms with no current build, shader,
-runtime, packaging, or CI contract. The remainder of this section records prior
-Windows toolchain exploration only; these commands are not maintained and may
-fail until a future Windows port is explicitly started.
-
-The sibling `dxil/vcpkg.json` manifest adds
-exact-pinned SDL_shadercross and DirectX Shader Compiler packages. The manifest
-also disables SDL's default host window-system features because this SDL copy
-belongs only to the offline shader-cross CLI:
-
-```powershell
-vcpkg install `
-  --x-manifest-root=tools/shader-toolchain/dxil `
-  --x-install-root=.shader-tools `
-  --triplet=x64-windows
-
-$env:PATH = "$PWD/.shader-tools/x64-windows/bin;$env:PATH"
-
-zig build -Dtarget=x86_64-windows-gnu `
-  -Dglslc="$PWD/.shader-tools/x64-windows/tools/shaderc/glslc.exe" `
-  -Dspirv-cross="$PWD/.shader-tools/x64-windows/tools/spirv-cross/spirv-cross.exe" `
-  -Dshadercross="$PWD/.shader-tools/x64-windows/tools/sdl3-shadercross/shadercross.exe"
-```
-
-The `bin` directory must remain on `PATH` while running `shadercross.exe` so its
-exact `dxcompiler.dll` and `dxil.dll` are used rather than a machine-global copy.
-
-The dormant build currently contains `-Dwindows-gpu=vulkan` and D3D12 branches.
-They are implementation leftovers, not supported options or release promises.
+This is an Apple-Silicon macOS toolchain. The active shader contract is GLSL to
+SPIR-V intermediate to MSL. Future platform work starts with a new, independently
+tested toolchain contract; no dormant Windows or Linux shader path is retained.

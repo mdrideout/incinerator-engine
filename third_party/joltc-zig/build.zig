@@ -12,12 +12,24 @@ pub fn build(b: *std.Build) !void {
         "cross_platform_deterministic",
         "Compile Jolt for cross-platform deterministic simulation",
     ) orelse false;
+    const no_exceptions = b.option(
+        bool,
+        "no_exceptions",
+        "Compile JoltC and Jolt without C++ exceptions",
+    ) orelse true;
+    const object_layer_bits = b.option(
+        u8,
+        "object_layer_bits",
+        "Jolt object-layer ABI width (JoltC requires 32)",
+    ) orelse 32;
+    if (object_layer_bits != 32) return error.UnsupportedJoltCObjectLayerWidth;
 
     const lib_joltc = try buildLibJoltc(b, .{
         .target = target,
         .optimize = optimize,
         .shared = false,
-        .no_exceptions = true,
+        .no_exceptions = no_exceptions,
+        .object_layer_bits = object_layer_bits,
         .cross_platform_deterministic = cross_platform_deterministic,
     });
 
@@ -31,6 +43,7 @@ fn buildLibJoltc(
         optimize: std.builtin.OptimizeMode,
         shared: bool,
         no_exceptions: bool,
+        object_layer_bits: u8,
         cross_platform_deterministic: bool,
     },
 ) !*std.Build.Step.Compile {
@@ -55,7 +68,10 @@ fn buildLibJoltc(
     // JoltC's public ABI fixes JPH_ObjectLayer at uint32_t. Jolt defaults to
     // 16 bits, so every C++ translation unit must receive this definition.
     // joltc_assert.cpp below makes an ABI mismatch a compile-time failure.
-    lib_joltc.root_module.addCMacro("JPH_OBJECT_LAYER_BITS", "32");
+    lib_joltc.root_module.addCMacro(
+        "JPH_OBJECT_LAYER_BITS",
+        b.fmt("{d}", .{options.object_layer_bits}),
+    );
     if (options.cross_platform_deterministic) {
         lib_joltc.root_module.addCMacro("JPH_CROSS_PLATFORM_DETERMINISTIC", "1");
     }

@@ -94,13 +94,35 @@ pub const PumpResult = struct {
 };
 
 pub const Stats = struct {
-    staged_cpu_bytes: u64,
-    in_flight_upload_bytes: u64,
-    resident_gpu_bytes: u64,
-    staged_scenes: u8,
-    submitted_scenes: u8,
-    resident_scenes: u8,
-    active_batches: u8,
+    staged_cpu_bytes: u64 = 0,
+    staged_upload_bytes: u64 = 0,
+    in_flight_upload_bytes: u64 = 0,
+    resident_gpu_bytes: u64 = 0,
+    live_scenes: u8 = 0,
+    reserved_scenes: u8 = 0,
+    staged_scenes: u8 = 0,
+    submitted_scenes: u8 = 0,
+    retiring_scenes: u8 = 0,
+    resident_scenes: u8 = 0,
+    active_batches: u8 = 0,
+};
+
+pub const Limits = struct {
+    scene_capacity: u8,
+    batch_capacity: u8,
+    scenes_per_batch: u8,
+    max_staged_cpu_bytes: u64,
+    max_in_flight_upload_bytes: u64,
+    max_resident_gpu_bytes: u64,
+    max_submit_bytes_per_pump: u64,
+};
+
+/// Rich read-only diagnostic view. `Stats` remains the instantaneous drain
+/// contract; limits and source-owned peaks cannot be mistaken for live work.
+pub const Diagnostics = struct {
+    current: Stats,
+    high_water: Stats,
+    limits: Limits,
 };
 
 const StagedMesh = struct {
@@ -301,7 +323,8 @@ pub fn Registry(comptime Backend: type) type {
         pub const Resolution = Backend.ResourceView;
 
         const Slot = struct {
-            generation: u32 = 1,
+            /// Zero permanently retires this slot after generation exhaustion.
+            generation: u64 = 1,
             state: Residency = .free,
             staged: ?StagedScene = null,
             resident: ?Backend.Candidate = null,
@@ -309,7 +332,7 @@ pub fn Registry(comptime Backend: type) type {
 
         const BatchEntry = struct {
             slot_index: u8 = 0,
-            generation: u32 = 0,
+            generation: u64 = 0,
             upload_bytes: u64 = 0,
             discard: bool = false,
         };
@@ -334,6 +357,7 @@ pub fn Registry(comptime Backend: type) type {
         staged_upload_bytes: u64 = 0,
         in_flight_upload_bytes: u64 = 0,
         resident_gpu_bytes: u64 = 0,
+        high_water: Stats = .{},
 
         pub fn init(
             allocator: std.mem.Allocator,
@@ -380,10 +404,19 @@ pub fn Registry(comptime Backend: type) type {
 
         pub fn reserve(self: *Self) !engine.rendering.SceneHandle {
             try self.ensureOwnerThread();
+            var exhausted_slots: usize = 0;
             for (&self.slots, 0..) |*slot, index| {
                 if (slot.state != .free) continue;
+                if (slot.generation == 0) {
+                    exhausted_slots += 1;
+                    continue;
+                }
                 slot.state = .reserved;
+                self.captureHighWater();
                 return .{ .index = @intCast(index), .generation = slot.generation };
+            }
+            if (exhausted_slots == max_scenes) {
+                return error.DistrictSceneGenerationExhausted;
             }
             return error.DistrictSceneRegistryFull;
         }
@@ -429,10 +462,15 @@ pub fn Registry(comptime Backend: type) type {
             slot.state = .staged;
             self.staged_cpu_bytes += sizes.cpu_bytes;
             self.staged_upload_bytes += sizes.upload_bytes;
+            self.captureHighWater();
         }
 
         pub fn cancel(self: *Self, handle: engine.rendering.SceneHandle) !void {
             try self.ensureOwnerThread();
+            // Cancellation can create the observable `.retiring` state for a
+            // submitted scene. Capture on every exit so diagnostics retain
+            // that peak even though no later successful pump is guaranteed.
+            defer self.captureHighWater();
             const slot = try self.currentSlot(handle);
             switch (slot.state) {
                 .reserved => self.recycleSlot(slot),
@@ -491,10 +529,45 @@ pub fn Registry(comptime Backend: type) type {
             return (try self.currentSlot(handle)).state;
         }
 
+        /// Report whether one previously issued generation has finished every
+        /// registry-owned release step and its slot is safe to reuse.
+        ///
+        /// Unlike aggregate `Stats`, this remains meaningful while unrelated
+        /// scenes and batches stay live. A current submitted generation remains
+        /// incomplete after `release` changes it to `retiring`; fence polling
+        /// eventually recycles the slot and advances its monotonic generation.
+        /// Fabricated future generations are rejected instead of being mistaken
+        /// for completed work.
+        pub fn recycleComplete(
+            self: *Self,
+            handle: engine.rendering.SceneHandle,
+        ) !bool {
+            try self.ensureOwnerThread();
+            if (!handle.isValid() or handle.index >= max_scenes) {
+                return error.StaleSceneHandle;
+            }
+
+            const slot = &self.slots[handle.index];
+            if (slot.generation == 0) {
+                // Generation exhaustion permanently retires this slot. Every
+                // nonzero generation it could have issued is therefore done.
+                return true;
+            }
+            if (slot.generation > handle.generation) return true;
+            if (slot.generation < handle.generation or slot.state == .free) {
+                return error.StaleSceneHandle;
+            }
+            return false;
+        }
+
         /// Poll every active fence without waiting, then submit at most one
         /// bounded batch using one transfer buffer and one command buffer.
         pub fn pump(self: *Self) !PumpResult {
             try self.ensureOwnerThread();
+            // Polling and submission may make progress before a later backend
+            // or invariant error. Preserve the final observable accounting on
+            // both success and failure paths.
+            defer self.captureHighWater();
             var result = PumpResult{};
             try self.pollCompleted(&result);
             try self.submitOneBatch(&result);
@@ -503,25 +576,65 @@ pub fn Registry(comptime Backend: type) type {
 
         pub fn stats(self: *Self) !Stats {
             try self.ensureOwnerThread();
+            return self.currentStats();
+        }
+
+        pub fn diagnostics(self: *Self) !Diagnostics {
+            try self.ensureOwnerThread();
+            return .{
+                .current = self.currentStats(),
+                .high_water = self.high_water,
+                .limits = .{
+                    .scene_capacity = max_scenes,
+                    .batch_capacity = max_in_flight_batches,
+                    .scenes_per_batch = max_scenes_per_batch,
+                    .max_staged_cpu_bytes = self.config.max_staged_cpu_bytes,
+                    .max_in_flight_upload_bytes = self.config.max_in_flight_upload_bytes,
+                    .max_resident_gpu_bytes = self.config.max_resident_gpu_bytes,
+                    .max_submit_bytes_per_pump = self.config.max_submit_bytes_per_pump,
+                },
+            };
+        }
+
+        fn currentStats(self: *const Self) Stats {
             var result = Stats{
                 .staged_cpu_bytes = self.staged_cpu_bytes,
+                .staged_upload_bytes = self.staged_upload_bytes,
                 .in_flight_upload_bytes = self.in_flight_upload_bytes,
                 .resident_gpu_bytes = self.resident_gpu_bytes,
+                .live_scenes = 0,
+                .reserved_scenes = 0,
                 .staged_scenes = 0,
                 .submitted_scenes = 0,
+                .retiring_scenes = 0,
                 .resident_scenes = 0,
                 .active_batches = 0,
             };
-            for (self.slots) |slot| switch (slot.state) {
-                .staged => result.staged_scenes += 1,
-                .submitted, .retiring => result.submitted_scenes += 1,
-                .resident => result.resident_scenes += 1,
-                else => {},
-            };
+            for (self.slots) |slot| {
+                if (slot.state != .free) result.live_scenes += 1;
+                switch (slot.state) {
+                    .free => {},
+                    .reserved => result.reserved_scenes += 1,
+                    .staged => result.staged_scenes += 1,
+                    .submitted => result.submitted_scenes += 1,
+                    .retiring => result.retiring_scenes += 1,
+                    .resident => result.resident_scenes += 1,
+                }
+            }
             for (self.batches) |batch| if (batch.active) {
                 result.active_batches += 1;
             };
             return result;
+        }
+
+        fn captureHighWater(self: *Self) void {
+            const current = self.currentStats();
+            inline for (std.meta.fields(Stats)) |field| {
+                @field(self.high_water, field.name) = @max(
+                    @field(self.high_water, field.name),
+                    @field(current, field.name),
+                );
+            }
         }
 
         fn pollCompleted(self: *Self, result: *PumpResult) !void {
@@ -595,15 +708,7 @@ pub fn Registry(comptime Backend: type) type {
                     if (candidate.*) |*owned| self.backend.releaseCandidate(owned);
                     candidate.* = null;
                 }
-                for (selected[0..count]) |slot_index| {
-                    const slot = &self.slots[slot_index];
-                    const staged = &(slot.staged orelse continue);
-                    self.staged_cpu_bytes -= staged.cpu_bytes;
-                    self.staged_upload_bytes -= staged.upload_bytes;
-                    staged.deinit(self.allocator);
-                    slot.staged = null;
-                    self.recycleSlot(slot);
-                }
+                try self.restoreSelectedStagingAfterSubmitFailure(selected[0..count]);
                 return err;
             };
 
@@ -615,15 +720,7 @@ pub fn Registry(comptime Backend: type) type {
                     }
                     var owned_submission = submission;
                     self.backend.releaseSubmission(&owned_submission);
-                    for (selected[0..count]) |slot_index| {
-                        const slot = &self.slots[slot_index];
-                        const staged = &(slot.staged orelse continue);
-                        self.staged_cpu_bytes -= staged.cpu_bytes;
-                        self.staged_upload_bytes -= staged.upload_bytes;
-                        staged.deinit(self.allocator);
-                        slot.staged = null;
-                        self.recycleSlot(slot);
-                    }
+                    try self.restoreSelectedStagingAfterSubmitFailure(selected[0..count]);
                     return error.SceneBackendCandidateMissing;
                 }
             }
@@ -657,6 +754,31 @@ pub fn Registry(comptime Backend: type) type {
             result.submitted_bytes = bytes;
         }
 
+        /// A failed backend submit consumes the copied staging data, but it
+        /// must not invalidate the generation still owned by the presentation
+        /// coordinator. Returning to `reserved` leaves exactly one valid
+        /// release path for shutdown while preserving the original error.
+        fn restoreSelectedStagingAfterSubmitFailure(
+            self: *Self,
+            selected: []const u8,
+        ) !void {
+            for (selected) |slot_index| {
+                const slot = &self.slots[slot_index];
+                if (slot.state != .staged or slot.staged == null) {
+                    return error.SceneRegistryInvariantBroken;
+                }
+            }
+            for (selected) |slot_index| {
+                const slot = &self.slots[slot_index];
+                const staged = &(slot.staged.?);
+                self.staged_cpu_bytes -= staged.cpu_bytes;
+                self.staged_upload_bytes -= staged.upload_bytes;
+                staged.deinit(self.allocator);
+                slot.staged = null;
+                slot.state = .reserved;
+            }
+        }
+
         fn currentSlot(self: *Self, handle: engine.rendering.SceneHandle) !*Slot {
             if (!handle.isValid() or handle.index >= max_scenes) return error.StaleSceneHandle;
             const slot = &self.slots[handle.index];
@@ -682,8 +804,11 @@ pub fn Registry(comptime Backend: type) type {
             slot.state = .free;
             slot.staged = null;
             slot.resident = null;
-            slot.generation +%= 1;
-            if (slot.generation == 0) slot.generation = 1;
+            if (slot.generation == std.math.maxInt(u64)) {
+                slot.generation = 0;
+            } else {
+                slot.generation += 1;
+            }
         }
 
         fn ensureOwnerThread(self: *const Self) !void {
@@ -708,8 +833,6 @@ pub const ResidentMaterial = struct {
     base_color_texture: ?u16,
 };
 
-pub const ResidentInstance = InstanceUpload;
-
 pub const SdlMeshView = struct {
     mesh: *const Mesh,
     material_index: u16,
@@ -719,7 +842,7 @@ pub const SdlSceneView = struct {
     mesh_storage: [max_meshes_per_scene]SdlMeshView = undefined,
     texture_storage: [max_textures_per_scene]texture_module.Texture = undefined,
     material_storage: [max_materials_per_scene]ResidentMaterial = undefined,
-    instance_storage: [max_instances_per_scene]ResidentInstance = undefined,
+    instance_storage: [max_instances_per_scene]InstanceUpload = undefined,
     mesh_count: u8 = 0,
     texture_count: u8 = 0,
     material_count: u8 = 0,
@@ -757,7 +880,7 @@ pub const SdlSceneView = struct {
         return self.material_storage[0..self.material_count];
     }
 
-    pub fn instances(self: *const SdlSceneView) []const ResidentInstance {
+    pub fn instances(self: *const SdlSceneView) []const InstanceUpload {
         return self.instance_storage[0..self.instance_count];
     }
 
@@ -782,7 +905,7 @@ const SdlCandidate = struct {
     texture_count: u8 = 0,
     materials: [max_materials_per_scene]ResidentMaterial = undefined,
     material_count: u8 = 0,
-    instances: [max_instances_per_scene]ResidentInstance = undefined,
+    instances: [max_instances_per_scene]InstanceUpload = undefined,
     instance_count: u8 = 0,
     upload_bytes: u64 = 0,
 };
@@ -1169,6 +1292,123 @@ fn testRegistry(recorder: *FakeRecorder) !FakeRegistry {
     );
 }
 
+fn expectRegistryDrained(stats: Stats) !void {
+    try std.testing.expectEqual(@as(u64, 0), stats.staged_cpu_bytes);
+    try std.testing.expectEqual(@as(u64, 0), stats.staged_upload_bytes);
+    try std.testing.expectEqual(@as(u64, 0), stats.in_flight_upload_bytes);
+    try std.testing.expectEqual(@as(u64, 0), stats.resident_gpu_bytes);
+    try std.testing.expectEqual(@as(u8, 0), stats.live_scenes);
+    try std.testing.expectEqual(@as(u8, 0), stats.reserved_scenes);
+    try std.testing.expectEqual(@as(u8, 0), stats.staged_scenes);
+    try std.testing.expectEqual(@as(u8, 0), stats.submitted_scenes);
+    try std.testing.expectEqual(@as(u8, 0), stats.retiring_scenes);
+    try std.testing.expectEqual(@as(u8, 0), stats.resident_scenes);
+    try std.testing.expectEqual(@as(u8, 0), stats.active_batches);
+}
+
+test "stats distinguish every live scene state and prove full drain" {
+    const sizes = try validateAndSize(test_scene);
+    var recorder = FakeRecorder{};
+    var registry = try testRegistry(&recorder);
+    defer registry.deinit();
+    try expectRegistryDrained(try registry.stats());
+
+    const handle = try registry.reserve();
+    var stats = try registry.stats();
+    try std.testing.expectEqual(@as(u8, 1), stats.live_scenes);
+    try std.testing.expectEqual(@as(u8, 1), stats.reserved_scenes);
+
+    try registry.stage(handle, test_scene);
+    stats = try registry.stats();
+    try std.testing.expectEqual(sizes.cpu_bytes, stats.staged_cpu_bytes);
+    try std.testing.expectEqual(sizes.upload_bytes, stats.staged_upload_bytes);
+    try std.testing.expectEqual(@as(u8, 1), stats.live_scenes);
+    try std.testing.expectEqual(@as(u8, 1), stats.staged_scenes);
+    try std.testing.expectEqual(@as(u8, 0), stats.reserved_scenes);
+
+    _ = try registry.pump();
+    stats = try registry.stats();
+    try std.testing.expectEqual(@as(u64, 0), stats.staged_cpu_bytes);
+    try std.testing.expectEqual(@as(u64, 0), stats.staged_upload_bytes);
+    try std.testing.expectEqual(sizes.upload_bytes, stats.in_flight_upload_bytes);
+    try std.testing.expectEqual(@as(u8, 1), stats.live_scenes);
+    try std.testing.expectEqual(@as(u8, 1), stats.submitted_scenes);
+    try std.testing.expectEqual(@as(u8, 1), stats.active_batches);
+
+    try registry.cancel(handle);
+    stats = try registry.stats();
+    try std.testing.expectEqual(@as(u8, 1), stats.live_scenes);
+    try std.testing.expectEqual(@as(u8, 0), stats.submitted_scenes);
+    try std.testing.expectEqual(@as(u8, 1), stats.retiring_scenes);
+    try std.testing.expectEqual(sizes.upload_bytes, stats.in_flight_upload_bytes);
+    try std.testing.expectEqual(@as(u8, 1), stats.active_batches);
+
+    recorder.signaled[0] = true;
+    const completed = try registry.pump();
+    try std.testing.expectEqual(@as(u8, 1), completed.discarded_scenes);
+    try expectRegistryDrained(try registry.stats());
+}
+
+test "diagnostics retain source-owned peaks and expose configured limits" {
+    const sizes = try validateAndSize(test_scene);
+    const config = Config{};
+    var recorder = FakeRecorder{};
+    var registry = try testRegistry(&recorder);
+    defer registry.deinit();
+
+    var diagnostic = try registry.diagnostics();
+    try expectRegistryDrained(diagnostic.current);
+    try expectRegistryDrained(diagnostic.high_water);
+    try std.testing.expectEqual(@as(u8, max_scenes), diagnostic.limits.scene_capacity);
+    try std.testing.expectEqual(
+        @as(u8, max_in_flight_batches),
+        diagnostic.limits.batch_capacity,
+    );
+    try std.testing.expectEqual(
+        @as(u8, max_scenes_per_batch),
+        diagnostic.limits.scenes_per_batch,
+    );
+    try std.testing.expectEqual(
+        config.max_staged_cpu_bytes,
+        diagnostic.limits.max_staged_cpu_bytes,
+    );
+    try std.testing.expectEqual(
+        config.max_in_flight_upload_bytes,
+        diagnostic.limits.max_in_flight_upload_bytes,
+    );
+    try std.testing.expectEqual(
+        config.max_resident_gpu_bytes,
+        diagnostic.limits.max_resident_gpu_bytes,
+    );
+    try std.testing.expectEqual(
+        config.max_submit_bytes_per_pump,
+        diagnostic.limits.max_submit_bytes_per_pump,
+    );
+
+    const handle = try registry.reserve();
+    try registry.stage(handle, test_scene);
+    _ = try registry.pump();
+    recorder.signaled[0] = true;
+    _ = try registry.pump();
+    try registry.release(handle);
+
+    diagnostic = try registry.diagnostics();
+    try expectRegistryDrained(diagnostic.current);
+    try std.testing.expectEqual(@as(u8, 1), diagnostic.high_water.live_scenes);
+    try std.testing.expectEqual(@as(u8, 1), diagnostic.high_water.reserved_scenes);
+    try std.testing.expectEqual(@as(u8, 1), diagnostic.high_water.staged_scenes);
+    try std.testing.expectEqual(@as(u8, 1), diagnostic.high_water.submitted_scenes);
+    try std.testing.expectEqual(@as(u8, 1), diagnostic.high_water.resident_scenes);
+    try std.testing.expectEqual(@as(u8, 1), diagnostic.high_water.active_batches);
+    try std.testing.expectEqual(sizes.cpu_bytes, diagnostic.high_water.staged_cpu_bytes);
+    try std.testing.expectEqual(sizes.upload_bytes, diagnostic.high_water.staged_upload_bytes);
+    try std.testing.expectEqual(
+        sizes.upload_bytes,
+        diagnostic.high_water.in_flight_upload_bytes,
+    );
+    try std.testing.expectEqual(sizes.upload_bytes, diagnostic.high_water.resident_gpu_bytes);
+}
+
 test "staged and submitted scenes resolve fallback until a signaled fence publishes" {
     var recorder = FakeRecorder{};
     var registry = try testRegistry(&recorder);
@@ -1211,6 +1451,9 @@ test "post-submit cancellation discards after fence and never publishes" {
     try registry.stage(handle, test_scene);
     _ = try registry.pump();
     try registry.cancel(handle);
+    const after_cancel = try registry.diagnostics();
+    try std.testing.expectEqual(@as(u8, 1), after_cancel.current.retiring_scenes);
+    try std.testing.expectEqual(@as(u8, 1), after_cancel.high_water.retiring_scenes);
     try std.testing.expectError(error.StaleSceneHandle, registry.resolve(handle));
     recorder.signaled[0] = true;
     const completed = try registry.pump();
@@ -1231,7 +1474,7 @@ test "resident release captures accounting before destroying the backend owner" 
     _ = try registry.pump();
     try registry.release(old);
     const stats = try registry.stats();
-    try std.testing.expectEqual(@as(u64, 0), stats.resident_gpu_bytes);
+    try expectRegistryDrained(stats);
     try std.testing.expectEqual(@as(u8, 1), recorder.released_candidates);
     try std.testing.expectError(error.StaleSceneHandle, registry.resolve(old));
     const replacement = try registry.reserve();
@@ -1257,6 +1500,112 @@ test "one batch can publish one scene and discard another" {
     try std.testing.expectEqual(@as(u8, 1), completed.discarded_scenes);
     try std.testing.expectEqual(Residency.resident, try registry.residency(first));
     try std.testing.expectError(error.StaleSceneHandle, registry.residency(second));
+}
+
+test "per-handle recycle permits one resident scene to unload and reload beside its neighbor" {
+    const sizes = try validateAndSize(test_scene);
+    var recorder = FakeRecorder{};
+    var registry = try testRegistry(&recorder);
+    defer registry.deinit();
+
+    const west = try registry.reserve();
+    const east = try registry.reserve();
+    try std.testing.expect(!try registry.recycleComplete(west));
+    try std.testing.expect(!try registry.recycleComplete(east));
+
+    try registry.stage(west, test_scene);
+    try registry.stage(east, test_scene);
+    var stats = try registry.stats();
+    try std.testing.expectEqual(sizes.cpu_bytes * 2, stats.staged_cpu_bytes);
+    try std.testing.expectEqual(sizes.upload_bytes * 2, stats.staged_upload_bytes);
+    try std.testing.expectEqual(@as(u8, 2), stats.staged_scenes);
+
+    const submitted = try registry.pump();
+    try std.testing.expectEqual(@as(u8, 2), submitted.submitted_scenes);
+    try std.testing.expectEqual(sizes.upload_bytes * 2, submitted.submitted_bytes);
+    stats = try registry.stats();
+    try std.testing.expectEqual(sizes.upload_bytes * 2, stats.in_flight_upload_bytes);
+    try std.testing.expectEqual(@as(u8, 2), stats.submitted_scenes);
+
+    recorder.signaled[0] = true;
+    const published = try registry.pump();
+    try std.testing.expectEqual(@as(u8, 2), published.published_scenes);
+    stats = try registry.stats();
+    try std.testing.expectEqual(sizes.upload_bytes * 2, stats.resident_gpu_bytes);
+    try std.testing.expectEqual(@as(u8, 2), stats.resident_scenes);
+
+    try registry.release(west);
+    try std.testing.expect(try registry.recycleComplete(west));
+    try std.testing.expect(!try registry.recycleComplete(east));
+    try std.testing.expectEqual(Residency.resident, try registry.residency(east));
+    stats = try registry.stats();
+    try std.testing.expectEqual(sizes.upload_bytes, stats.resident_gpu_bytes);
+    try std.testing.expectEqual(@as(u8, 1), stats.resident_scenes);
+    try std.testing.expectEqual(@as(u8, 1), stats.live_scenes);
+
+    const west_reloaded = try registry.reserve();
+    try std.testing.expectEqual(west.index, west_reloaded.index);
+    try std.testing.expect(west_reloaded.generation > west.generation);
+    try std.testing.expect(!try registry.recycleComplete(west_reloaded));
+    // Completion is tied to the old generation, not aggregate slot occupancy.
+    try std.testing.expect(try registry.recycleComplete(west));
+
+    try registry.stage(west_reloaded, test_scene);
+    _ = try registry.pump();
+    stats = try registry.stats();
+    try std.testing.expectEqual(sizes.upload_bytes, stats.in_flight_upload_bytes);
+    try std.testing.expectEqual(sizes.upload_bytes, stats.resident_gpu_bytes);
+    try std.testing.expectEqual(@as(u8, 1), stats.submitted_scenes);
+    try std.testing.expectEqual(@as(u8, 1), stats.resident_scenes);
+
+    recorder.signaled[1] = true;
+    _ = try registry.pump();
+    stats = try registry.stats();
+    try std.testing.expectEqual(sizes.upload_bytes * 2, stats.resident_gpu_bytes);
+    try std.testing.expectEqual(@as(u8, 2), stats.resident_scenes);
+    try std.testing.expectEqual(Residency.resident, try registry.residency(east));
+    try std.testing.expectEqual(Residency.resident, try registry.residency(west_reloaded));
+
+    try registry.release(east);
+    try registry.release(west_reloaded);
+    try std.testing.expect(try registry.recycleComplete(east));
+    try std.testing.expect(try registry.recycleComplete(west_reloaded));
+    try expectRegistryDrained(try registry.stats());
+}
+
+test "per-handle recycle waits for a retiring fence while a neighbor publishes" {
+    var recorder = FakeRecorder{};
+    var registry = try testRegistry(&recorder);
+    defer registry.deinit();
+
+    const cancelled = try registry.reserve();
+    const neighbor = try registry.reserve();
+    try registry.stage(cancelled, test_scene);
+    try registry.stage(neighbor, test_scene);
+    _ = try registry.pump();
+
+    try registry.release(cancelled);
+    try std.testing.expect(!try registry.recycleComplete(cancelled));
+    try std.testing.expectEqual(Residency.retiring, try registry.residency(cancelled));
+    try std.testing.expectEqual(Residency.submitted, try registry.residency(neighbor));
+
+    recorder.signaled[0] = true;
+    const completed = try registry.pump();
+    try std.testing.expectEqual(@as(u8, 1), completed.discarded_scenes);
+    try std.testing.expectEqual(@as(u8, 1), completed.published_scenes);
+    try std.testing.expect(try registry.recycleComplete(cancelled));
+    try std.testing.expect(!try registry.recycleComplete(neighbor));
+    try std.testing.expectEqual(Residency.resident, try registry.residency(neighbor));
+    try std.testing.expectError(
+        error.StaleSceneHandle,
+        registry.recycleComplete(.{
+            .index = neighbor.index,
+            .generation = neighbor.generation + 1,
+        }),
+    );
+
+    try registry.release(neighbor);
+    try expectRegistryDrained(try registry.stats());
 }
 
 test "budget and fixed scene capacity produce explicit backpressure" {
@@ -1300,16 +1649,44 @@ test "fixed registry capacity rejects a fifth live generation" {
     for (handles) |handle| try registry.release(handle);
 }
 
-test "submit failure releases staged ownership and leaves stale handles" {
+test "submit failure preserves owner generation for composed shutdown cleanup" {
+    const ShutdownSceneOwner = struct {
+        registry: *FakeRegistry,
+        scene: ?engine.rendering.SceneHandle = null,
+
+        fn begin(self: *@This()) !engine.rendering.SceneHandle {
+            const scene = try self.registry.reserve();
+            self.scene = scene;
+            return scene;
+        }
+
+        fn releaseAfterSimulationTeardown(self: *@This()) !void {
+            const scene = self.scene orelse return;
+            try self.registry.release(scene);
+            self.scene = null;
+        }
+    };
     var recorder = FakeRecorder{ .fail_submit = true };
     var registry = try testRegistry(&recorder);
     defer registry.deinit();
-    const handle = try registry.reserve();
+    var owner = ShutdownSceneOwner{ .registry = &registry };
+    const handle = try owner.begin();
     try registry.stage(handle, test_scene);
     try std.testing.expectError(error.InjectedSubmitFailure, registry.pump());
+    try std.testing.expectEqual(Residency.reserved, try registry.residency(handle));
+    try std.testing.expectEqual(@as(u16, 0), try registry.resolve(handle));
+
+    const failed_stats = try registry.stats();
+    try std.testing.expectEqual(@as(u8, 1), failed_stats.live_scenes);
+    try std.testing.expectEqual(@as(u8, 1), failed_stats.reserved_scenes);
+    try std.testing.expectEqual(@as(u64, 0), failed_stats.staged_cpu_bytes);
+    try std.testing.expectEqual(@as(u64, 0), failed_stats.staged_upload_bytes);
+    try std.testing.expectEqual(@as(u8, 0), failed_stats.active_batches);
+
+    try owner.releaseAfterSimulationTeardown();
+    try std.testing.expectEqual(null, owner.scene);
+    try expectRegistryDrained(try registry.stats());
     try std.testing.expectError(error.StaleSceneHandle, registry.resolve(handle));
-    const stats = try registry.stats();
-    try std.testing.expectEqual(@as(u64, 0), stats.staged_cpu_bytes);
 }
 
 test "partial backend failure releases every candidate returned before error" {
@@ -1320,10 +1697,12 @@ test "partial backend failure releases every candidate returned before error" {
     try registry.stage(handle, test_scene);
     try std.testing.expectError(error.InjectedPartialSubmitFailure, registry.pump());
     try std.testing.expectEqual(@as(u8, 1), recorder.released_candidates);
-    try std.testing.expectError(error.StaleSceneHandle, registry.resolve(handle));
+    try std.testing.expectEqual(Residency.reserved, try registry.residency(handle));
+    try registry.release(handle);
+    try expectRegistryDrained(try registry.stats());
 }
 
-test "successful submission missing a candidate is retired without accounting drift" {
+test "successful submission missing a candidate preserves ownership without accounting drift" {
     var recorder = FakeRecorder{ .omit_last_candidate = true };
     var registry = try testRegistry(&recorder);
     defer registry.deinit();
@@ -1331,11 +1710,43 @@ test "successful submission missing a candidate is retired without accounting dr
     try registry.stage(handle, test_scene);
     try std.testing.expectError(error.SceneBackendCandidateMissing, registry.pump());
     try std.testing.expectEqual(@as(u8, 1), recorder.released_submissions);
-    try std.testing.expectError(error.StaleSceneHandle, registry.resolve(handle));
-    const stats = try registry.stats();
-    try std.testing.expectEqual(@as(u64, 0), stats.staged_cpu_bytes);
-    try std.testing.expectEqual(@as(u64, 0), stats.in_flight_upload_bytes);
-    try std.testing.expectEqual(@as(u64, 0), stats.resident_gpu_bytes);
+    try std.testing.expectEqual(Residency.reserved, try registry.residency(handle));
+    try registry.release(handle);
+    try expectRegistryDrained(try registry.stats());
+}
+
+test "scene generation exhaustion permanently retires slots without revival" {
+    var recorder = FakeRecorder{};
+    var registry = try testRegistry(&recorder);
+    defer registry.deinit();
+
+    const ancient = try registry.reserve();
+    try registry.release(ancient);
+    for (&registry.slots) |*slot| {
+        try std.testing.expectEqual(Residency.free, slot.state);
+        slot.generation = std.math.maxInt(u64);
+    }
+
+    var terminal: [max_scenes]engine.rendering.SceneHandle = undefined;
+    for (&terminal) |*handle| {
+        handle.* = try registry.reserve();
+        try std.testing.expectEqual(std.math.maxInt(u64), handle.generation);
+    }
+    for (terminal) |handle| {
+        try registry.release(handle);
+        try std.testing.expectError(error.StaleSceneHandle, registry.resolve(handle));
+    }
+    for (registry.slots) |slot| {
+        try std.testing.expectEqual(Residency.free, slot.state);
+        try std.testing.expectEqual(@as(u64, 0), slot.generation);
+    }
+
+    try std.testing.expectError(
+        error.DistrictSceneGenerationExhausted,
+        registry.reserve(),
+    );
+    try std.testing.expectError(error.StaleSceneHandle, registry.resolve(ancient));
+    try expectRegistryDrained(try registry.stats());
 }
 
 test "teardown releases resident and unsignaled submitted resources exactly once" {

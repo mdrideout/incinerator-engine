@@ -14,20 +14,17 @@
 const std = @import("std");
 const zgui = @import("zgui");
 const tool_module = @import("../tool.zig");
-
-const Tool = tool_module.Tool;
-const EditorContext = tool_module.EditorContext;
+const FrameTimer = @import("../../timing.zig").FrameTimer;
 
 // ============================================================================
 // Tool Definition
 // ============================================================================
 
-/// The Stats tool instance.
-/// This is what gets registered in editor.zig's tool array.
-pub var tool = Tool{
+/// Immutable metadata registered by editor.zig.
+pub const descriptor = tool_module.Descriptor{
+    .id = .stats,
     .name = "Stats",
-    .enabled = true, // Enabled by default - always useful!
-    .draw_fn = draw,
+    .enabled_by_default = true,
 };
 
 // ============================================================================
@@ -35,14 +32,16 @@ pub var tool = Tool{
 // ============================================================================
 
 const HISTORY_SIZE = 120; // ~1 second at 120 FPS
-var frame_time_history: [HISTORY_SIZE]f32 = [_]f32{0.0} ** HISTORY_SIZE;
-var history_index: usize = 0;
+pub const State = struct {
+    frame_time_history: [HISTORY_SIZE]f32 = [_]f32{0.0} ** HISTORY_SIZE,
+    history_index: usize = 0,
+};
 
 // ============================================================================
 // Draw Function
 // ============================================================================
 
-fn draw(ctx: *EditorContext) void {
+pub fn draw(state: *State, frame_timer: *const FrameTimer) void {
     // Set initial window size and position (first time only)
     // The struct fields include the condition for when to apply
     zgui.setNextWindowPos(.{ .x = 10, .y = 30, .cond = .first_use_ever });
@@ -54,7 +53,7 @@ fn draw(ctx: *EditorContext) void {
             .no_collapse = false, // Allow collapsing
         },
     })) {
-        const timer = ctx.frame_timer;
+        const timer = frame_timer;
 
         // Current FPS (large, prominent)
         const fps = timer.getFps();
@@ -76,8 +75,8 @@ fn draw(ctx: *EditorContext) void {
         zgui.text("Frame time: {d:.2} ms", .{frame_time_ms});
 
         // Update frame time history for graph
-        frame_time_history[history_index] = @floatCast(frame_time_ms);
-        history_index = (history_index + 1) % HISTORY_SIZE;
+        state.frame_time_history[state.history_index] = @floatCast(frame_time_ms);
+        state.history_index = (state.history_index + 1) % HISTORY_SIZE;
 
         // Simulation info
         zgui.separator();
@@ -91,7 +90,7 @@ fn draw(ctx: *EditorContext) void {
         // Plot the frame time history
         // The graph automatically scrolls as we update values
         zgui.plotLines("##frame_times", .{
-            .v = &frame_time_history,
+            .v = &state.frame_time_history,
             .v_count = @intCast(HISTORY_SIZE),
             .scale_min = 0.0,
             .scale_max = 33.3, // Cap at ~30 FPS equivalent

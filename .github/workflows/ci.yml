@@ -58,6 +58,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          test "$(uname -m)" = "arm64"
           test "$(zig version)" = "$ZIG_VERSION"
           "$GLSLC" --version
           "$SPIRV_CROSS" --revision
@@ -66,33 +67,70 @@ jobs:
         shell: bash
         run: zig fmt --check build.zig build.zig.zon src tools third_party/joltc-zig
 
-      - name: Headless dependency boundary
+      - name: Cold headless product and lifecycle
         shell: bash
         run: |
           set -euo pipefail
-          zig build verify-headless-boundary -Deditor=false
-          zig build check-headless -Deditor=false \
-            -Dglslc=/definitely/missing/glslc \
-            -Dspirv-cross=/definitely/missing/spirv-cross \
-            -Dshadercross=/definitely/missing/shadercross --summary all
-          zig build verify-headless-linkage -Deditor=false \
-            -Dglslc=/definitely/missing/glslc \
-            -Dspirv-cross=/definitely/missing/spirv-cross \
-            -Dshadercross=/definitely/missing/shadercross --summary all
+          zig build -Dproduct=headless test --summary all
           prefix="$RUNNER_TEMP/incinerator-headless"
-          zig build install-headless -Deditor=false \
-            -Dglslc=/definitely/missing/glslc \
-            -Dspirv-cross=/definitely/missing/spirv-cross \
-            -Dshadercross=/definitely/missing/shadercross --prefix "$prefix"
-          nm "$prefix/bin/incinerator_headless" > "$RUNNER_TEMP/headless-nm.txt"
-          if grep -E 'SDL_|ImGui|cgltf|stbi_|meshopt_' "$RUNNER_TEMP/headless-nm.txt"; then
+          zig build -Dproduct=headless -Doptimize=ReleaseFast \
+            --prefix "$prefix" install-headless-product \
+            verify-installed-headless-product test-m3-lifecycle --summary all
+          if nm "$prefix/bin/incinerator_headless" | \
+            grep -E '(_ecs_(http|rest|script|meta|json)|_Flecs(Http|Rest|Script|Meta|Json))'; then
+            echo "unexpected Flecs service/reflection addon in headless product" >&2
             exit 1
           fi
-          otool -L "$prefix/bin/incinerator_headless" > "$RUNNER_TEMP/headless-libraries.txt"
-          if grep -E 'SDL|Metal|QuartzCore|AppKit' "$RUNNER_TEMP/headless-libraries.txt"; then
-            exit 1
-          fi
-          "$prefix/bin/incinerator_headless"
+          zig build -Dproduct=headless verify-cold-headless-product --summary all
+
+      - name: M3 pre-server readiness measurement
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/m3-measure.json"
+          zig build -Dproduct=headless -Doptimize=ReleaseFast \
+            measure-m3 --summary none > "$report"
+          jq -e '
+            .schema_version == 2 and
+            .gate == "m3-pre-server-readiness" and
+            .mode == "routine" and
+            .required_ticks == 32768 and .completed_ticks == 32768 and
+            .cohorts.zig_version == "0.16.0" and
+            .cohorts.optimize == "ReleaseFast" and
+            .cohorts.target_arch == "aarch64" and
+            .cohorts.target_os == "macos" and
+            .performance.authority_tick.samples == 32768 and
+            .performance.authority_tick.p99_ns <= .ceilings.p99_authority_tick_ns and
+            .resources.allocator_final_live_bytes == 0 and
+            .resources.allocator_peak_bytes <= .ceilings.allocator_peak_bytes and
+            .resources.max_rss_bytes <= .ceilings.max_rss_bytes and
+            .saturation.internal_outcome_queue_full and
+            .saturation.internal_recovered and
+            .saturation.producer_quota_full and
+            .saturation.producer_ingress_full and
+            .saturation.producer_transaction_table_full and
+            .saturation.producer_result_capacity_full and
+            .saturation.producer_recovered and
+            .integrated_slices.active_districts == 2 and
+            .integrated_slices.active_vehicles == 1 and
+            .integrated_slices.active_npcs == 64 and
+            .producer.completion_isolation and
+            .producer_inventory.protocol_fault_handbacks == 0 and
+            .producer_inventory.final_registered == 0 and
+            .producer_inventory.final_unread_results == 0 and
+            .final_ownership.renderer_or_gpu_resources == 0 and
+            .final_ownership.live_worlds_after_cleanup == 0 and
+            .final_ownership.live_authorities_after_cleanup == 0 and
+            .final_ownership.native_ownership_released and
+            .shutdown.accepted_work_drained and
+            .shutdown.producers_unregistered and
+            .shutdown.lifecycle_stopped and
+            .shutdown.save_boundary_ready and
+            .persistence.canonical_before_restart and
+            .persistence.canonical_after_restore and
+            .ceilings.all_passed
+          ' "$report"
+          cat "$report"
 
       - name: Tests without editor
         shell: bash
@@ -116,172 +154,11 @@ jobs:
             -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" --summary all
           zig build -Doptimize=ReleaseFast -Deditor=false \
             -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS" --summary all
-
-      - name: S0 measurement schema smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          report="$RUNNER_TEMP/s0-measure.json"
-          zig build measure-s0 -Doptimize=ReleaseFast -Deditor=false -- \
-            --counts=0,1,128,1024 --warmup=16 --samples=32 --trials=1 \
-            > "$report"
-          jq -e '
-            .schema_version == 1 and
-            .benchmark == "s0_crate_lifecycle" and
-            .optimize == "ReleaseFast" and
-            .config.counts == [0, 1, 128, 1024] and
-            ([.results[].crate_count] == [0, 1, 128, 1024]) and
-            all(.results[];
-              .post_spawn_crates == .crate_count and
-              .post_spawn_entities == .crate_count and
-              .post_spawn_bodies == (.crate_count + 1) and
-              .post_spawn_active_bodies == .crate_count and
-              .steady_tick.samples == 32 and
-              .presentation.samples == 32 and
-              (.steady_tick | has("mean_ns") and has("p50_ns") and
-                has("p95_ns") and has("p99_ns") and has("max_ns")) and
-              (.presentation | has("mean_ns") and has("p50_ns") and
-                has("p95_ns") and has("p99_ns") and has("max_ns")) and
-              .post_despawn_crates == 0 and
-              .post_despawn_entities == 0 and
-              .post_despawn_bodies == 1 and
-              .post_despawn_active_bodies == 0)
-          ' "$report"
-          cat "$report"
-
-      - name: S1 measurement schema smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          report="$RUNNER_TEMP/s1-measure.json"
-          zig build measure-s1 -Doptimize=ReleaseFast -Deditor=false -- \
-            --warmup=16 --samples=32 --trials=1 > "$report"
-          jq -e '
-            .schema_version == 1 and
-            .benchmark == "s1_character_slice" and
-            .optimize == "ReleaseFast" and
-            .warmup == 16 and .samples == 32 and .trials == 1 and
-            (.results | length) == 1 and
-            all(.results[];
-              (.action_submit.samples == 32 and
-                (.action_submit | has("mean_ns") and has("p50_ns") and
-                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
-              (.steady_tick.samples == 32 and
-                (.steady_tick | has("mean_ns") and has("p50_ns") and
-                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
-              (.presentation.samples == 32 and
-                (.presentation | has("mean_ns") and has("p50_ns") and
-                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
-              .active_crates == 1 and
-              .active_characters == 1 and
-              .active_entities == 2 and
-              .physics_bodies == 3 and
-              .post_despawn_crates == 0 and
-              .post_despawn_characters == 0 and
-              .post_despawn_entities == 0 and
-              .post_despawn_bodies == 2 and
-              .post_despawn_active_bodies == 0)
-          ' "$report"
-          cat "$report"
-
-      - name: S2 measurement schema smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          report="$RUNNER_TEMP/s2-measure.json"
-          zig build measure-s2 -Doptimize=ReleaseFast -Deditor=false -- \
-            --warmup=16 --samples=32 --trials=1 > "$report"
-          jq -e '
-            .schema_version == 1 and
-            .benchmark == "s2_vehicle_slice" and
-            .optimize == "ReleaseFast" and
-            .warmup == 16 and .samples == 32 and .trials == 1 and
-            (.results | length) == 1 and
-            all(.results[];
-              (.drive_submit.samples == 32 and
-                (.drive_submit | has("mean_ns") and has("p50_ns") and
-                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
-              (.steady_tick.samples == 32 and
-                (.steady_tick | has("mean_ns") and has("p50_ns") and
-                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
-              (.presentation.samples == 32 and
-                (.presentation | has("mean_ns") and has("p50_ns") and
-                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
-              .active_crates == 1 and
-              .active_characters == 1 and
-              .active_vehicles == 1 and
-              .active_entities == 3 and
-              .physics_bodies == 3 and
-              .vehicle_displacement > 0.1 and
-              .post_despawn_crates == 0 and
-              .post_despawn_characters == 0 and
-              .post_despawn_vehicles == 0 and
-              .post_despawn_entities == 0 and
-              .post_despawn_bodies == 1 and
-              .post_despawn_active_bodies == 0)
-          ' "$report"
-          cat "$report"
-
-      - name: S3-A measurement schema smoke
-        shell: bash
-        run: |
-          set -euo pipefail
-          report="$RUNNER_TEMP/s3-measure.json"
-          zig build measure-s3 -Doptimize=ReleaseFast -Deditor=false -- \
-            --warmup=16 --samples=32 --trials=1 --cycles=3 > "$report"
-          jq -e '
-            .schema_version == 1 and
-            .benchmark == "s3a_district_streaming" and
-            .optimize == "ReleaseFast" and
-            .warmup == 16 and .samples == 32 and .trials == 1 and
-            .cycles == 3 and (.results | length) == 1 and
-            all(.results[];
-              (has("cancellation_request_tick_ns") and
-                has("cancellation_wall_ns") and
-                has("request_to_cancellation_ticks") and
-                has("cancellation_completion_ticks")) and
-              .cancelled_districts == 0 and
-              .cancelled_district_bodies == 0 and
-              .cancelled_entities == 0 and
-              .cancelled_physics_bodies == 1 and
-              .cancelled_active_bodies == 0 and
-              (.request_to_activation_wall.samples == 3 and
-                (.request_to_activation_wall | has("mean_ns") and
-                  has("p50_ns") and has("p95_ns") and
-                  has("p99_ns") and has("max_ns"))) and
-              (.request_to_activation_ticks.samples == 3 and
-                (.request_to_activation_ticks | has("mean_ticks") and
-                  has("p50_ticks") and has("p95_ticks") and
-                  has("p99_ticks") and has("max_ticks"))) and
-              (.activation_tick.samples == 3 and
-                (.activation_tick | has("mean_ns") and has("p50_ns") and
-                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
-              (.unload_tick.samples == 3 and
-                (.unload_tick | has("mean_ns") and has("p50_ns") and
-                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
-              (.steady_tick.samples == 32 and
-                (.steady_tick | has("mean_ns") and has("p50_ns") and
-                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
-              (.district_extraction.samples == 32 and
-                (.district_extraction | has("mean_ns") and has("p50_ns") and
-                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
-              .active_districts == 1 and
-              .active_district_bodies == 3 and
-              .active_static_boxes == 3 and
-              .active_decoded_bytes == 120 and
-              .active_entities == 1 and
-              .active_physics_bodies == 4 and
-              .active_awake_bodies == 0 and
-              .cleanup_cycles_requested == 3 and
-              .cleanup_cycles_completed == 3 and
-              .clean_cleanup_cycles == 3 and
-              .post_cleanup_districts == 0 and
-              .post_cleanup_district_bodies == 0 and
-              .post_cleanup_entities == 0 and
-              .post_cleanup_physics_bodies == 1 and
-              .post_cleanup_active_bodies == 0)
-          ' "$report"
-          cat "$report"
+          if nm zig-out/bin/incinerator_engine | \
+            grep -E '(_ecs_(http|rest|script|meta|json)|_Flecs(Http|Rest|Script|Meta|Json))'; then
+            echo "unexpected Flecs service/reflection addon in client product" >&2
+            exit 1
+          fi
 
       - name: Relocatable install smoke
         shell: bash

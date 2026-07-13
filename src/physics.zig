@@ -7,10 +7,40 @@
 const std = @import("std");
 const engine = @import("engine_contracts");
 const c = @import("jolt_c").c;
+const simulation_cohort_options = @import("simulation_cohort_options");
+const physics_debug = engine.physics_debug;
 
 const invalid_body_id: c.JPH_BodyID = std.math.maxInt(c.JPH_BodyID);
 const temp_allocator_bytes: u32 = 10 * 1024 * 1024;
-pub const max_bodies: u32 = 10_240;
+pub const max_bodies: u32 = simulation_cohort_options.jolt_max_bodies;
+/// Fixed per-world Jolt broad/narrow-phase product budgets. Exhaustion is a
+/// typed terminal step error; representative S8/M3 scale remains far below
+/// these ceilings and never relies on Jolt reallocating authority implicitly.
+pub const max_body_pairs: u32 = 65_536;
+pub const max_contact_constraints: u32 = 10_240;
+/// One Physics-owned ceiling shared by every CharacterControllers view.
+pub const max_virtual_characters: usize =
+    simulation_cohort_options.jolt_max_virtual_characters;
+
+/// Exact job-system sizing for the supported Jolt 5.5/JoltC cohort.
+///
+/// JoltC maps a null config, zero capacities, or a non-positive thread count
+/// back to Jolt defaults; the thread default is hardware-derived. Keep every
+/// field positive and explicit so world creation has a stable resource and
+/// scheduling footprint. One worker is the smallest explicit count this JoltC
+/// wrapper honors; Jolt may also execute jobs on the owner thread while it
+/// waits, giving the world a maximum concurrency of two.
+pub const job_system_worker_count: i32 = simulation_cohort_options.jolt_worker_count;
+pub const job_system_max_jobs: u32 = simulation_cohort_options.jolt_max_jobs;
+pub const job_system_max_barriers: u32 = simulation_cohort_options.jolt_max_barriers;
+
+fn jobSystemThreadPoolConfig() c.JobSystemThreadPoolConfig {
+    return .{
+        .maxJobs = job_system_max_jobs,
+        .maxBarriers = job_system_max_barriers,
+        .numThreads = job_system_worker_count,
+    };
+}
 
 /// JoltC exposes process-global initialization without reference counting.
 /// Keep that detail private to this adapter so multiple Physics worlds cannot
@@ -49,9 +79,254 @@ pub const VehicleId = struct {
     serial: u64,
 };
 
+/// Runtime policy for renderer-neutral physics evidence. When rigid-contact
+/// capture is available, its listener and scratch stay installed for the
+/// lifetime of the Physics world. Toggling these fields only controls which
+/// categories are copied into the caller-owned batch after a completed step.
+pub const DebugConfig = struct {
+    shapes: bool = true,
+    bounds: bool = true,
+    contacts: bool = true,
+    centers_of_mass: bool = true,
+    velocities: bool = true,
+
+    pub fn enabled(self: DebugConfig) bool {
+        return self.shapes or self.bounds or self.contacts or
+            self.centers_of_mass or self.velocities;
+    }
+};
+
+/// Availability of the optional rigid-body contact evidence producer.
+///
+/// CharacterVirtual and vehicle-wheel contacts are extracted directly and do
+/// not depend on this capability. Physics authority and every other debug
+/// category remain usable when this optional producer is unavailable.
+pub const RigidContactCaptureAvailability = enum {
+    available,
+    unavailable_scratch_allocation,
+    unavailable_listener_creation,
+};
+
+pub const DebugExtraction = struct {
+    batch: physics_debug.Batch,
+    rigid_contact_capture: RigidContactCaptureAvailability,
+};
+
+/// Plain namespaces used only to correlate debug primitives. These are engine
+/// serials, never Jolt body IDs or pointers.
+pub const debug_object_kinds = struct {
+    pub const body: u32 = 1;
+    pub const character: u32 = 2;
+    pub const vehicle: u32 = 3;
+};
+
+const BodyShapeDescriptor = union(enum) {
+    box: [3]f32,
+    sphere: f32,
+};
+
+const BodyHandleRecord = struct {
+    raw_id: u32,
+    shape: BodyShapeDescriptor,
+};
+
+const CharacterHandleRecord = struct {
+    character: *c.JPH_CharacterVirtual,
+    radius: f32,
+    half_height: f32,
+};
+
 const VehicleHandleRecord = struct {
     body_id: c.JPH_BodyID,
     constraint: *c.JPH_VehicleConstraint,
+    chassis_half_extents: [3]f32,
+    center_of_mass_offset: [3]f32,
+    wheel_attachment_positions: [engine.physics.vehicle_wheel_count][3]f32,
+    wheel_radius: f32,
+    wheel_width: f32,
+};
+
+const rigid_contact_capacity: usize = 4_096;
+
+const RigidContact = struct {
+    body_a: u32,
+    body_b: u32,
+    point: [3]f32,
+    normal: [3]f32,
+};
+
+const ContactSlot = struct {
+    contact: RigidContact = undefined,
+    published: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
+};
+
+/// Jolt may call one listener from its worker and from the owner thread. Each
+/// callback atomically reserves one disjoint slot and only copies plain values;
+/// the owner consumes the scratch after JPH_PhysicsSystem_Update2 returns.
+const ContactScratch = struct {
+    reserved: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    dropped: std.atomic.Value(u32) = std.atomic.Value(u32).init(0),
+    contacts: [rigid_contact_capacity]ContactSlot =
+        [_]ContactSlot{.{}} ** rigid_contact_capacity,
+
+    fn reset(self: *ContactScratch) void {
+        for (self.contacts[0..self.count()]) |*slot| {
+            slot.published.store(false, .monotonic);
+        }
+        self.reserved.store(0, .release);
+        self.dropped.store(0, .release);
+    }
+
+    fn append(self: *ContactScratch, contact: RigidContact) void {
+        const index = self.reserved.fetchAdd(1, .acq_rel);
+        if (index >= rigid_contact_capacity) {
+            _ = self.dropped.fetchAdd(1, .monotonic);
+            return;
+        }
+        self.contacts[index].contact = contact;
+        self.contacts[index].published.store(true, .release);
+    }
+
+    fn count(self: *const ContactScratch) usize {
+        return @min(
+            @as(usize, self.reserved.load(.acquire)),
+            rigid_contact_capacity,
+        );
+    }
+};
+
+const ContactDebugResources = struct {
+    listener: *c.JPH_ContactListener,
+    scratch: *ContactScratch,
+};
+
+/// Private deterministic seam for the native creation-null branch. Scratch
+/// allocation failure is tested with a genuinely bounded allocator instead.
+const ContactDebugCreationTestFailure = enum {
+    listener_creation,
+};
+
+/// A tagged union keeps the listener/scratch lifetime invariant structural:
+/// resources are either both present or both absent with a visible reason.
+const ContactDebugCapture = union(RigidContactCaptureAvailability) {
+    available: ContactDebugResources,
+    unavailable_scratch_allocation: void,
+    unavailable_listener_creation: void,
+
+    fn init(
+        allocator: std.mem.Allocator,
+        comptime test_failure: ?ContactDebugCreationTestFailure,
+    ) ContactDebugCapture {
+        const scratch = allocator.create(ContactScratch) catch {
+            return .{ .unavailable_scratch_allocation = {} };
+        };
+        scratch.* = .{};
+
+        c.JPH_ContactListener_SetProcs(&contact_listener_procs);
+        if (test_failure == .listener_creation) {
+            allocator.destroy(scratch);
+            return .{ .unavailable_listener_creation = {} };
+        }
+        const listener = c.JPH_ContactListener_Create(scratch) orelse {
+            allocator.destroy(scratch);
+            return .{ .unavailable_listener_creation = {} };
+        };
+        return .{ .available = .{
+            .listener = listener,
+            .scratch = scratch,
+        } };
+    }
+
+    fn availability(self: ContactDebugCapture) RigidContactCaptureAvailability {
+        return std.meta.activeTag(self);
+    }
+
+    fn install(self: ContactDebugCapture, system: *c.JPH_PhysicsSystem) void {
+        switch (self) {
+            .available => |resources| {
+                c.JPH_PhysicsSystem_SetContactListener(system, resources.listener);
+            },
+            else => {},
+        }
+    }
+
+    fn deinit(
+        self: ContactDebugCapture,
+        system: *c.JPH_PhysicsSystem,
+        allocator: std.mem.Allocator,
+    ) void {
+        switch (self) {
+            .available => |resources| {
+                // Update jobs have joined before Physics.update returns. The
+                // owner detaches first so no future callback can retain the
+                // scratch pointer, then releases listener and scratch in order.
+                c.JPH_PhysicsSystem_SetContactListener(system, null);
+                c.JPH_ContactListener_Destroy(resources.listener);
+                allocator.destroy(resources.scratch);
+            },
+            else => {},
+        }
+    }
+
+    fn reset(self: *ContactDebugCapture) void {
+        switch (self.*) {
+            .available => |resources| resources.scratch.reset(),
+            else => {},
+        }
+    }
+};
+
+fn captureRigidContacts(
+    raw: ?*anyopaque,
+    body_a: ?*const c.JPH_Body,
+    body_b: ?*const c.JPH_Body,
+    manifold: ?*const c.JPH_ContactManifold,
+) void {
+    const scratch: *ContactScratch = @ptrCast(@alignCast(raw.?));
+    var normal: c.JPH_Vec3 = undefined;
+    c.JPH_ContactManifold_GetWorldSpaceNormal(manifold, &normal);
+    const point_count = c.JPH_ContactManifold_GetPointCount(manifold);
+    const raw_body_a: u32 = @intCast(c.JPH_Body_GetID(body_a));
+    const raw_body_b: u32 = @intCast(c.JPH_Body_GetID(body_b));
+    for (0..point_count) |index| {
+        var point: c.JPH_RVec3 = undefined;
+        c.JPH_ContactManifold_GetWorldSpaceContactPointOn1(
+            manifold,
+            @intCast(index),
+            &point,
+        );
+        scratch.append(.{
+            .body_a = raw_body_a,
+            .body_b = raw_body_b,
+            .point = fromRVec3(point),
+            .normal = fromVec3(normal),
+        });
+    }
+}
+
+fn contactAdded(
+    raw: ?*anyopaque,
+    body_a: ?*const c.JPH_Body,
+    body_b: ?*const c.JPH_Body,
+    manifold: ?*const c.JPH_ContactManifold,
+    _: [*c]c.JPH_ContactSettings,
+) callconv(.c) void {
+    captureRigidContacts(raw, body_a, body_b, manifold);
+}
+
+fn contactPersisted(
+    raw: ?*anyopaque,
+    body_a: ?*const c.JPH_Body,
+    body_b: ?*const c.JPH_Body,
+    manifold: ?*const c.JPH_ContactManifold,
+    _: [*c]c.JPH_ContactSettings,
+) callconv(.c) void {
+    captureRigidContacts(raw, body_a, body_b, manifold);
+}
+
+const contact_listener_procs = c.JPH_ContactListener_Procs{
+    .OnContactAdded = contactAdded,
+    .OnContactPersisted = contactPersisted,
 };
 
 const VehicleCreateFailurePoint = enum {
@@ -109,6 +384,7 @@ const InitFailurePoint = enum {
     after_job_and_temp_allocators,
     after_filter_bundle,
     after_physics_system_transfer,
+    after_contact_listener,
 };
 
 fn acquireRuntimeLease() !u64 {
@@ -164,8 +440,8 @@ fn lockRuntime() void {
 }
 
 fn failInitAt(
-    requested: ?InitFailurePoint,
-    reached: InitFailurePoint,
+    comptime requested: ?InitFailurePoint,
+    comptime reached: InitFailurePoint,
 ) !void {
     if (requested == reached) return error.InjectedInitFailure;
 }
@@ -180,12 +456,16 @@ pub const Physics = struct {
     body_interface: *c.JPH_BodyInterface,
     job_system: *c.JPH_JobSystem,
     temp_allocator: *c.JPH_TempAllocator,
-    body_handles: std.AutoHashMap(u64, u32),
-    character_handles: std.AutoHashMap(u64, *c.JPH_CharacterVirtual),
+    scratch_allocator: std.mem.Allocator,
+    contact_debug_capture: ContactDebugCapture,
+    body_handles: std.AutoHashMap(u64, BodyHandleRecord),
+    character_handles: std.AutoHashMap(u64, CharacterHandleRecord),
     vehicle_handles: std.AutoHashMap(u64, VehicleHandleRecord),
     next_body_serial: u64 = 1,
     next_character_serial: u64 = 1,
     next_vehicle_serial: u64 = 1,
+    update_in_progress: bool = false,
+    has_completed_update: bool = false,
 
     pub fn init() !Physics {
         return initWithAllocator(std.heap.page_allocator);
@@ -197,20 +477,40 @@ pub const Physics = struct {
 
     fn initWithAllocatorAndFailurePoint(
         allocator: std.mem.Allocator,
-        failure_point: ?InitFailurePoint,
+        comptime failure_point: ?InitFailurePoint,
+    ) !Physics {
+        return initWithOptions(allocator, failure_point, null);
+    }
+
+    fn initWithContactDebugFailureForTest(
+        allocator: std.mem.Allocator,
+        comptime contact_debug_failure: ContactDebugCreationTestFailure,
+    ) !Physics {
+        return initWithOptions(allocator, null, contact_debug_failure);
+    }
+
+    fn initWithOptions(
+        allocator: std.mem.Allocator,
+        comptime failure_point: ?InitFailurePoint,
+        comptime contact_debug_failure: ?ContactDebugCreationTestFailure,
     ) !Physics {
         const world_token = try acquireRuntimeLease();
         errdefer releaseRuntimeLease();
-        try failInitAt(failure_point, .after_runtime_lease);
+        if (failure_point != null) {
+            try failInitAt(failure_point, .after_runtime_lease);
+        }
 
-        const job_system = c.JPH_JobSystemThreadPool_Create(null) orelse
+        const job_system_config = jobSystemThreadPoolConfig();
+        const job_system = c.JPH_JobSystemThreadPool_Create(&job_system_config) orelse
             return error.JobSystemCreationFailed;
         errdefer c.JPH_JobSystem_Destroy(job_system);
 
         const temp_allocator = c.JPH_TempAllocator_Create(temp_allocator_bytes) orelse
             return error.TempAllocatorCreationFailed;
         errdefer c.JPH_TempAllocator_Destroy(temp_allocator);
-        try failInitAt(failure_point, .after_job_and_temp_allocators);
+        if (failure_point != null) {
+            try failInitAt(failure_point, .after_job_and_temp_allocators);
+        }
 
         var object_layer_filter: ?*c.JPH_ObjectLayerPairFilter =
             c.JPH_ObjectLayerPairFilterTable_Create(object_layers.count);
@@ -264,13 +564,15 @@ pub const Physics = struct {
         errdefer if (object_vs_broad_phase_filter) |filter| {
             c.JPH_ObjectVsBroadPhaseLayerFilter_Destroy(filter);
         };
-        try failInitAt(failure_point, .after_filter_bundle);
+        if (failure_point != null) {
+            try failInitAt(failure_point, .after_filter_bundle);
+        }
 
         const settings = c.JPH_PhysicsSystemSettings{
             .maxBodies = max_bodies,
             .numBodyMutexes = 0,
-            .maxBodyPairs = 65_536,
-            .maxContactConstraints = 10_240,
+            .maxBodyPairs = max_body_pairs,
+            .maxContactConstraints = max_contact_constraints,
             ._padding = 0,
             .broadPhaseLayerInterface = broad_phase_interface.?,
             .objectLayerPairFilter = object_layer_filter.?,
@@ -287,10 +589,22 @@ pub const Physics = struct {
         object_layer_filter = null;
         object_vs_broad_phase_filter = null;
         errdefer c.JPH_PhysicsSystem_Destroy(system);
-        try failInitAt(failure_point, .after_physics_system_transfer);
+        if (failure_point != null) {
+            try failInitAt(failure_point, .after_physics_system_transfer);
+        }
 
         // A created system always exposes a body interface.
         const body_interface = c.JPH_PhysicsSystem_GetBodyInterface(system) orelse unreachable;
+
+        const contact_debug_capture = ContactDebugCapture.init(
+            allocator,
+            contact_debug_failure,
+        );
+        errdefer contact_debug_capture.deinit(system, allocator);
+        contact_debug_capture.install(system);
+        if (failure_point != null) {
+            try failInitAt(failure_point, .after_contact_listener);
+        }
 
         var gravity = c.JPH_Vec3{ .x = 0, .y = -9.81, .z = 0 };
         c.JPH_PhysicsSystem_SetGravity(system, &gravity);
@@ -302,8 +616,10 @@ pub const Physics = struct {
             .body_interface = body_interface,
             .job_system = job_system,
             .temp_allocator = temp_allocator,
-            .body_handles = std.AutoHashMap(u64, u32).init(allocator),
-            .character_handles = std.AutoHashMap(u64, *c.JPH_CharacterVirtual).init(allocator),
+            .scratch_allocator = allocator,
+            .contact_debug_capture = contact_debug_capture,
+            .body_handles = std.AutoHashMap(u64, BodyHandleRecord).init(allocator),
+            .character_handles = std.AutoHashMap(u64, CharacterHandleRecord).init(allocator),
             .vehicle_handles = std.AutoHashMap(u64, VehicleHandleRecord).init(allocator),
         };
     }
@@ -319,6 +635,7 @@ pub const Physics = struct {
         if (self.vehicle_handles.count() != 0) {
             @panic("physics world deinitialized with live vehicle handles");
         }
+        self.contact_debug_capture.deinit(self.system, self.scratch_allocator);
         c.JPH_PhysicsSystem_Destroy(self.system);
         c.JPH_TempAllocator_Destroy(self.temp_allocator);
         c.JPH_JobSystem_Destroy(self.job_system);
@@ -370,9 +687,9 @@ pub const Physics = struct {
     fn validateBody(self: *Physics, body_id: BodyId) !void {
         self.assertOwnerThread();
         if (!self.owns(body_id)) return error.ForeignBodyId;
-        const mapped_raw = self.body_handles.get(body_id.serial) orelse
+        const record = self.body_handles.get(body_id.serial) orelse
             return error.InvalidBodyId;
-        if (mapped_raw != body_id.value) return error.InvalidBodyId;
+        if (record.raw_id != body_id.value) return error.InvalidBodyId;
         if (!c.JPH_BodyInterface_IsAdded(self.body_interface, body_id.toJolt())) {
             return error.InvalidBodyId;
         }
@@ -386,8 +703,9 @@ pub const Physics = struct {
         if (self.world_token != character_id.world_token) {
             return error.ForeignCharacterId;
         }
-        return self.character_handles.get(character_id.serial) orelse
-            error.InvalidCharacterId;
+        const record = self.character_handles.get(character_id.serial) orelse
+            return error.InvalidCharacterId;
+        return record.character;
     }
 
     fn createVirtualCharacter(
@@ -398,6 +716,9 @@ pub const Physics = struct {
         try desc.validate();
         if (self.next_character_serial == 0) {
             return error.CharacterHandleSerialExhausted;
+        }
+        if (self.character_handles.count() >= max_virtual_characters) {
+            return error.TooManyCharacters;
         }
         try self.character_handles.ensureUnusedCapacity(1);
 
@@ -472,7 +793,11 @@ pub const Physics = struct {
             null,
         );
         try ensureCharacterContactCapacity(character);
-        self.character_handles.putAssumeCapacityNoClobber(serial, character);
+        self.character_handles.putAssumeCapacityNoClobber(serial, .{
+            .character = character,
+            .radius = desc.radius,
+            .half_height = desc.half_height,
+        });
         self.next_character_serial +%= 1;
         return .{ .world_token = self.world_token, .serial = serial };
     }
@@ -667,7 +992,7 @@ pub const Physics = struct {
     fn createFourWheelVehicle(
         self: *Physics,
         desc: engine.physics.VehicleDesc,
-        failure_point: ?VehicleCreateFailurePoint,
+        comptime failure_point: ?VehicleCreateFailurePoint,
     ) !VehicleId {
         self.assertOwnerThread();
         const normalized = try desc.normalized();
@@ -754,7 +1079,9 @@ pub const Physics = struct {
             &linear_velocity,
             &angular_velocity,
         );
-        try injectVehicleCreateFailure(failure_point, .after_body);
+        if (failure_point != null) {
+            try injectVehicleCreateFailure(failure_point, .after_body);
+        }
 
         var wheel_settings: [engine.physics.vehicle_wheel_count]*c.JPH_WheelSettings = undefined;
         var wheel_settings_count: usize = 0;
@@ -840,7 +1167,9 @@ pub const Physics = struct {
         vehicle_settings.wheelsCount = engine.physics.vehicle_wheel_count;
         vehicle_settings.wheels = @ptrCast(&wheel_settings);
         vehicle_settings.controller = @ptrCast(controller_settings);
-        try injectVehicleCreateFailure(failure_point, .after_settings);
+        if (failure_point != null) {
+            try injectVehicleCreateFailure(failure_point, .after_settings);
+        }
 
         const constraint = c.JPH_VehicleConstraint_Create(
             body,
@@ -868,7 +1197,9 @@ pub const Physics = struct {
             c.JPH_Wheel_SetRotationAngle(wheel, dynamics.rotation_angle);
             c.JPH_Wheel_SetAngularVelocity(wheel, dynamics.angular_velocity);
         }
-        try injectVehicleCreateFailure(failure_point, .after_constraint);
+        if (failure_point != null) {
+            try injectVehicleCreateFailure(failure_point, .after_constraint);
+        }
 
         var world_up = toVec3(.{ 0, 1, 0 });
         const tester_raw = c.JPH_VehicleCollisionTesterCastSphere_Create(
@@ -880,7 +1211,9 @@ pub const Physics = struct {
         const tester: *c.JPH_VehicleCollisionTester = @ptrCast(tester_raw);
         defer c.JPH_VehicleCollisionTester_Destroy(tester);
         c.JPH_VehicleConstraint_SetVehicleCollisionTester(constraint, tester);
-        try injectVehicleCreateFailure(failure_point, .after_collision_tester);
+        if (failure_point != null) {
+            try injectVehicleCreateFailure(failure_point, .after_collision_tester);
+        }
 
         c.JPH_PhysicsSystem_AddConstraint(self.system, @ptrCast(constraint));
         constraint_added = true;
@@ -889,12 +1222,19 @@ pub const Physics = struct {
             c.JPH_VehicleConstraint_AsPhysicsStepListener(constraint),
         );
         listener_added = true;
-        try injectVehicleCreateFailure(failure_point, .after_registration);
+        if (failure_point != null) {
+            try injectVehicleCreateFailure(failure_point, .after_registration);
+        }
 
         const serial = self.next_vehicle_serial;
         self.vehicle_handles.putAssumeCapacityNoClobber(serial, .{
             .body_id = raw_body_id,
             .constraint = constraint,
+            .chassis_half_extents = normalized.chassis_half_extents,
+            .center_of_mass_offset = normalized.center_of_mass_offset,
+            .wheel_attachment_positions = normalized.wheel_attachment_positions,
+            .wheel_radius = normalized.wheel_radius,
+            .wheel_width = normalized.wheel_width,
         });
         self.next_vehicle_serial +%= 1;
         return .{ .world_token = self.world_token, .serial = serial };
@@ -1056,7 +1396,12 @@ pub const Physics = struct {
         const shape: *c.JPH_Shape = @ptrCast(box);
         defer c.JPH_Shape_Destroy(shape);
 
-        return try self.createBody(shape, position, motion_type);
+        return try self.createBody(
+            shape,
+            position,
+            motion_type,
+            .{ .box = half_extents },
+        );
     }
 
     pub fn createDynamicSphere(
@@ -1073,7 +1418,12 @@ pub const Physics = struct {
         const shape: *c.JPH_Shape = @ptrCast(sphere);
         defer c.JPH_Shape_Destroy(shape);
 
-        return try self.createBody(shape, position, .dynamic);
+        return try self.createBody(
+            shape,
+            position,
+            .dynamic,
+            .{ .sphere = radius },
+        );
     }
 
     fn createBody(
@@ -1081,6 +1431,7 @@ pub const Physics = struct {
         shape: *const c.JPH_Shape,
         position: [3]f32,
         motion_type: MotionType,
+        debug_shape: BodyShapeDescriptor,
     ) !BodyId {
         if (!isFiniteVector(position)) return error.InvalidPosition;
 
@@ -1120,7 +1471,10 @@ pub const Physics = struct {
         if (self.next_body_serial == 0) return error.BodyHandleSerialExhausted;
         const serial = self.next_body_serial;
         self.next_body_serial +%= 1;
-        try self.body_handles.put(serial, @intCast(raw_id));
+        try self.body_handles.put(serial, .{
+            .raw_id = @intCast(raw_id),
+            .shape = debug_shape,
+        });
 
         return .{
             .world_token = self.world_token,
@@ -1155,6 +1509,8 @@ pub const Physics = struct {
             true,
             c.JPH_Activation_Activate,
         );
+        const record = self.body_handles.getPtr(body_id.serial) orelse unreachable;
+        record.shape = .{ .box = half_extents };
     }
 
     pub fn getBodyPosition(self: *Physics, body_id: BodyId) ![3]f32 {
@@ -1201,8 +1557,8 @@ pub const Physics = struct {
     pub fn isBodyAdded(self: *Physics, body_id: BodyId) bool {
         self.assertOwnerThread();
         if (!self.owns(body_id)) return false;
-        const mapped_raw = self.body_handles.get(body_id.serial) orelse return false;
-        if (mapped_raw != body_id.value) return false;
+        const record = self.body_handles.get(body_id.serial) orelse return false;
+        if (record.raw_id != body_id.value) return false;
         return c.JPH_BodyInterface_IsAdded(self.body_interface, body_id.toJolt());
     }
 
@@ -1306,8 +1662,8 @@ pub const Physics = struct {
     pub fn removeBody(self: *Physics, body_id: BodyId) bool {
         self.assertOwnerThread();
         if (!self.owns(body_id)) return false;
-        const mapped_raw = self.body_handles.get(body_id.serial) orelse return false;
-        if (mapped_raw != body_id.value) return false;
+        const record = self.body_handles.get(body_id.serial) orelse return false;
+        if (record.raw_id != body_id.value) return false;
         if (!c.JPH_BodyInterface_IsAdded(self.body_interface, body_id.toJolt())) return false;
         c.JPH_BodyInterface_RemoveAndDestroyBody(self.body_interface, body_id.toJolt());
         if (!self.body_handles.remove(body_id.serial)) {
@@ -1316,11 +1672,321 @@ pub const Physics = struct {
         return true;
     }
 
+    /// Extract one immutable renderer-neutral batch after a completed world
+    /// update. This method performs only bounded reads from stopped Jolt state
+    /// and writes to caller-owned storage; it allocates nothing and does not
+    /// change body, controller, vehicle, listener, or solver state.
+    pub fn extractDebug(
+        self: *Physics,
+        config: DebugConfig,
+        completed_tick: u64,
+        storage: *physics_debug.Storage,
+    ) physics_debug.Batch {
+        return self.extractDebugWithStatus(config, completed_tick, storage).batch;
+    }
+
+    /// Extract debug geometry together with the precise availability of the
+    /// optional rigid-body contact producer. The batch also carries a neutral
+    /// per-category `source_unavailable` marker so consumers that only retain
+    /// `Batch` still observe degraded contact evidence.
+    pub fn extractDebugWithStatus(
+        self: *Physics,
+        config: DebugConfig,
+        completed_tick: u64,
+        storage: *physics_debug.Storage,
+    ) DebugExtraction {
+        self.assertOwnerThread();
+        if (self.update_in_progress or !self.has_completed_update) {
+            @panic("physics debug extraction requires a completed stopped update");
+        }
+
+        const contact_availability = self.rigidContactCaptureAvailability();
+        storage.begin(completed_tick);
+        if (!config.enabled()) return .{
+            .batch = storage.batch().?,
+            .rigid_contact_capture = contact_availability,
+        };
+
+        var bodies = self.body_handles.iterator();
+        while (bodies.next()) |entry| {
+            const record = entry.value_ptr.*;
+            self.emitRigidBodyDebug(
+                record.raw_id,
+                record.shape,
+                .{ .kind = debug_object_kinds.body, .serial = entry.key_ptr.* },
+                config,
+                storage,
+            );
+        }
+
+        var characters = self.character_handles.iterator();
+        while (characters.next()) |entry| {
+            self.emitCharacterDebug(
+                entry.value_ptr.*,
+                .{ .kind = debug_object_kinds.character, .serial = entry.key_ptr.* },
+                config,
+                storage,
+            );
+        }
+
+        var vehicle_iterator = self.vehicle_handles.iterator();
+        while (vehicle_iterator.next()) |entry| {
+            const object = physics_debug.ObjectRef{
+                .kind = debug_object_kinds.vehicle,
+                .serial = entry.key_ptr.*,
+            };
+            const record = entry.value_ptr.*;
+            self.emitRigidBodyDebug(
+                @intCast(record.body_id),
+                .{ .box = record.chassis_half_extents },
+                object,
+                config,
+                storage,
+            );
+            self.emitVehicleWheelsDebug(record, object, config, storage);
+        }
+
+        if (config.contacts) switch (self.contact_debug_capture) {
+            .available => |resources| {
+                var unpublished: u64 = 0;
+                for (resources.scratch.contacts[0..resources.scratch.count()]) |*slot| {
+                    if (!slot.published.load(.acquire)) {
+                        unpublished += 1;
+                        continue;
+                    }
+                    const contact = slot.contact;
+                    emitContact(
+                        storage,
+                        contact.point,
+                        contact.normal,
+                        self.objectForRawBody(contact.body_a) orelse
+                            self.objectForRawBody(contact.body_b),
+                    );
+                }
+                _ = storage.recordOverflow(
+                    .contact,
+                    .line,
+                    4 * (@as(u64, resources.scratch.dropped.load(.acquire)) + unpublished),
+                );
+            },
+            else => {
+                _ = storage.markSourceUnavailable(.contact);
+            },
+        };
+
+        return .{
+            .batch = storage.batch().?,
+            .rigid_contact_capture = contact_availability,
+        };
+    }
+
+    /// Query optional rigid-contact evidence without allocating or mutating
+    /// either debug or authoritative physics state.
+    pub fn rigidContactCaptureAvailability(
+        self: *const Physics,
+    ) RigidContactCaptureAvailability {
+        self.assertOwnerThread();
+        return self.contact_debug_capture.availability();
+    }
+
+    fn objectForRawBody(
+        self: *Physics,
+        raw_id: u32,
+    ) ?physics_debug.ObjectRef {
+        var bodies = self.body_handles.iterator();
+        while (bodies.next()) |entry| {
+            if (entry.value_ptr.raw_id == raw_id) {
+                return .{
+                    .kind = debug_object_kinds.body,
+                    .serial = entry.key_ptr.*,
+                };
+            }
+        }
+        var vehicle_iterator = self.vehicle_handles.iterator();
+        while (vehicle_iterator.next()) |entry| {
+            if (entry.value_ptr.body_id == raw_id) {
+                return .{
+                    .kind = debug_object_kinds.vehicle,
+                    .serial = entry.key_ptr.*,
+                };
+            }
+        }
+        return null;
+    }
+
+    fn emitRigidBodyDebug(
+        self: *Physics,
+        raw_id: u32,
+        shape: BodyShapeDescriptor,
+        object: physics_debug.ObjectRef,
+        config: DebugConfig,
+        storage: *physics_debug.Storage,
+    ) void {
+        const body_id: c.JPH_BodyID = @intCast(raw_id);
+        var position: c.JPH_RVec3 = undefined;
+        var rotation: c.JPH_Quat = undefined;
+        c.JPH_BodyInterface_GetPosition(self.body_interface, body_id, &position);
+        c.JPH_BodyInterface_GetRotation(self.body_interface, body_id, &rotation);
+        const world_position = fromRVec3(position);
+        const world_rotation = fromJoltQuat(rotation);
+
+        if (config.shapes) {
+            switch (shape) {
+                .box => |half_extents| emitBox(
+                    storage,
+                    world_position,
+                    world_rotation,
+                    half_extents,
+                    object,
+                ),
+                .sphere => |radius| emitSphere(
+                    storage,
+                    world_position,
+                    radius,
+                    object,
+                ),
+            }
+        }
+
+        const body = c.JPH_PhysicsSystem_GetBodyPtr(self.system, body_id) orelse return;
+        var center_of_mass: c.JPH_RVec3 = undefined;
+        c.JPH_Body_GetCenterOfMassPosition(body, &center_of_mass);
+        const com = fromRVec3(center_of_mass);
+
+        if (config.bounds) {
+            var bounds: c.JPH_AABox = undefined;
+            c.JPH_Body_GetWorldSpaceBounds(body, &bounds);
+            emitBounds(storage, fromVec3(bounds.min), fromVec3(bounds.max), object);
+        }
+        if (config.centers_of_mass) emitCenterOfMass(storage, com, object);
+        if (config.velocities) {
+            var velocity: c.JPH_Vec3 = undefined;
+            c.JPH_BodyInterface_GetLinearVelocity(self.body_interface, body_id, &velocity);
+            emitVelocity(storage, com, fromVec3(velocity), object);
+        }
+    }
+
+    fn emitCharacterDebug(
+        self: *Physics,
+        record: CharacterHandleRecord,
+        object: physics_debug.ObjectRef,
+        config: DebugConfig,
+        storage: *physics_debug.Storage,
+    ) void {
+        _ = self;
+        var center_of_mass_transform: c.JPH_RMat4 = undefined;
+        c.JPH_CharacterVirtual_GetCenterOfMassTransform(
+            record.character,
+            &center_of_mass_transform,
+        );
+
+        if (config.shapes) {
+            emitCapsule(
+                storage,
+                center_of_mass_transform,
+                record.radius,
+                record.half_height,
+                object,
+            );
+        }
+        if (config.bounds) {
+            const shape = c.JPH_CharacterBase_GetShape(@ptrCast(record.character)) orelse
+                unreachable;
+            var scale = toVec3(.{ 1, 1, 1 });
+            var bounds: c.JPH_AABox = undefined;
+            c.JPH_Shape_GetWorldSpaceBounds(
+                shape,
+                &center_of_mass_transform,
+                &scale,
+                &bounds,
+            );
+            emitBounds(storage, fromVec3(bounds.min), fromVec3(bounds.max), object);
+        }
+        const center = [3]f32{
+            center_of_mass_transform.column[3].x,
+            center_of_mass_transform.column[3].y,
+            center_of_mass_transform.column[3].z,
+        };
+        if (config.centers_of_mass) emitCenterOfMass(storage, center, object);
+        if (config.velocities) {
+            var velocity: c.JPH_Vec3 = undefined;
+            c.JPH_CharacterVirtual_GetLinearVelocity(record.character, &velocity);
+            emitVelocity(storage, center, fromVec3(velocity), object);
+        }
+        if (config.contacts) {
+            const count = c.JPH_CharacterVirtual_GetNumActiveContacts(record.character);
+            for (0..count) |index| {
+                var contact: c.JPH_CharacterVirtualContact = undefined;
+                c.JPH_CharacterVirtual_GetActiveContact(
+                    record.character,
+                    @intCast(index),
+                    &contact,
+                );
+                if (contact.wasDiscarded) continue;
+                emitContact(
+                    storage,
+                    fromRVec3(contact.position),
+                    fromVec3(contact.contactNormal),
+                    object,
+                );
+            }
+        }
+    }
+
+    fn emitVehicleWheelsDebug(
+        self: *Physics,
+        record: VehicleHandleRecord,
+        object: physics_debug.ObjectRef,
+        config: DebugConfig,
+        storage: *physics_debug.Storage,
+    ) void {
+        _ = self;
+        const wheel_right = toVec3(.{ 1, 0, 0 });
+        const wheel_up = toVec3(.{ 0, 1, 0 });
+        for (0..engine.physics.vehicle_wheel_count) |index| {
+            const wheel = c.JPH_VehicleConstraint_GetWheel(
+                record.constraint,
+                @intCast(index),
+            ) orelse continue;
+            if (config.shapes) {
+                var transform: c.JPH_RMat4 = undefined;
+                c.JPH_VehicleConstraint_GetWheelWorldTransform(
+                    record.constraint,
+                    @intCast(index),
+                    &wheel_right,
+                    &wheel_up,
+                    &transform,
+                );
+                emitWheel(
+                    storage,
+                    transform,
+                    record.wheel_radius,
+                    record.wheel_width,
+                    object,
+                );
+            }
+            if (config.contacts and c.JPH_Wheel_HasContact(wheel)) {
+                var point: c.JPH_RVec3 = undefined;
+                var normal: c.JPH_Vec3 = undefined;
+                c.JPH_Wheel_GetContactPosition(wheel, &point);
+                c.JPH_Wheel_GetContactNormal(wheel, &normal);
+                emitContact(storage, fromRVec3(point), fromVec3(normal), object);
+            }
+        }
+    }
+
     pub fn update(self: *Physics, delta_time: f32) StepError!void {
         self.assertOwnerThread();
         if (!std.math.isFinite(delta_time) or delta_time <= 0) {
             return error.InvalidDeltaTime;
         }
+        if (self.update_in_progress) @panic("nested Physics update");
+        self.update_in_progress = true;
+        defer {
+            self.update_in_progress = false;
+            self.has_completed_update = true;
+        }
+        self.contact_debug_capture.reset();
         const result = c.JPH_PhysicsSystem_Update2(
             self.system,
             delta_time,
@@ -1331,6 +1997,415 @@ pub const Physics = struct {
         return checkPhysicsUpdateResult(result);
     }
 };
+
+const shape_line_color: physics_debug.Color = .{ 0.15, 0.85, 1.0, 1.0 };
+const shape_fill_color: physics_debug.Color = .{ 0.1, 0.45, 0.8, 1.0 };
+const bounds_color: physics_debug.Color = .{ 1.0, 0.75, 0.1, 1.0 };
+const contact_color: physics_debug.Color = .{ 1.0, 0.2, 0.2, 1.0 };
+const center_of_mass_color: physics_debug.Color = .{ 1.0, 0.2, 1.0, 1.0 };
+const velocity_color: physics_debug.Color = .{ 0.2, 1.0, 0.25, 1.0 };
+
+fn add3(a: [3]f32, b: [3]f32) [3]f32 {
+    return .{ a[0] + b[0], a[1] + b[1], a[2] + b[2] };
+}
+
+fn sub3(a: [3]f32, b: [3]f32) [3]f32 {
+    return .{ a[0] - b[0], a[1] - b[1], a[2] - b[2] };
+}
+
+fn scale3(value: [3]f32, scalar: f32) [3]f32 {
+    return .{ value[0] * scalar, value[1] * scalar, value[2] * scalar };
+}
+
+fn cross3(a: [3]f32, b: [3]f32) [3]f32 {
+    return .{
+        a[1] * b[2] - a[2] * b[1],
+        a[2] * b[0] - a[0] * b[2],
+        a[0] * b[1] - a[1] * b[0],
+    };
+}
+
+fn rotate3(rotation: [4]f32, value: [3]f32) [3]f32 {
+    const q = [3]f32{ rotation[0], rotation[1], rotation[2] };
+    const twice_cross = scale3(cross3(q, value), 2);
+    return add3(
+        value,
+        add3(
+            scale3(twice_cross, rotation[3]),
+            cross3(q, twice_cross),
+        ),
+    );
+}
+
+fn transformedPoint(
+    position: [3]f32,
+    rotation: [4]f32,
+    local: [3]f32,
+) [3]f32 {
+    return add3(position, rotate3(rotation, local));
+}
+
+fn addDebugLine(
+    storage: *physics_debug.Storage,
+    category: physics_debug.Category,
+    start: [3]f32,
+    end: [3]f32,
+    color: physics_debug.Color,
+    object: ?physics_debug.ObjectRef,
+) void {
+    _ = storage.addLine(.{
+        .category = category,
+        .start = start,
+        .end = end,
+        .color = color,
+        .object = object,
+    });
+}
+
+fn addDebugTriangle(
+    storage: *physics_debug.Storage,
+    category: physics_debug.Category,
+    a: [3]f32,
+    b: [3]f32,
+    triangle_c: [3]f32,
+    color: physics_debug.Color,
+    object: ?physics_debug.ObjectRef,
+) void {
+    _ = storage.addTriangle(.{
+        .category = category,
+        .a = a,
+        .b = b,
+        .c = triangle_c,
+        .color = color,
+        .object = object,
+    });
+}
+
+const box_edges = [_][2]usize{
+    .{ 0, 1 }, .{ 1, 3 }, .{ 3, 2 }, .{ 2, 0 },
+    .{ 4, 5 }, .{ 5, 7 }, .{ 7, 6 }, .{ 6, 4 },
+    .{ 0, 4 }, .{ 1, 5 }, .{ 2, 6 }, .{ 3, 7 },
+};
+
+const box_triangles = [_][3]usize{
+    .{ 0, 2, 1 }, .{ 1, 2, 3 },
+    .{ 4, 5, 6 }, .{ 5, 7, 6 },
+    .{ 0, 1, 4 }, .{ 1, 5, 4 },
+    .{ 2, 6, 3 }, .{ 3, 6, 7 },
+    .{ 0, 4, 2 }, .{ 2, 4, 6 },
+    .{ 1, 3, 5 }, .{ 3, 7, 5 },
+};
+
+fn localBoxCorners(half_extents: [3]f32) [8][3]f32 {
+    return .{
+        .{ -half_extents[0], -half_extents[1], -half_extents[2] },
+        .{ half_extents[0], -half_extents[1], -half_extents[2] },
+        .{ -half_extents[0], half_extents[1], -half_extents[2] },
+        .{ half_extents[0], half_extents[1], -half_extents[2] },
+        .{ -half_extents[0], -half_extents[1], half_extents[2] },
+        .{ half_extents[0], -half_extents[1], half_extents[2] },
+        .{ -half_extents[0], half_extents[1], half_extents[2] },
+        .{ half_extents[0], half_extents[1], half_extents[2] },
+    };
+}
+
+fn emitBox(
+    storage: *physics_debug.Storage,
+    position: [3]f32,
+    rotation: [4]f32,
+    half_extents: [3]f32,
+    object: physics_debug.ObjectRef,
+) void {
+    const local = localBoxCorners(half_extents);
+    var world: [8][3]f32 = undefined;
+    for (local, 0..) |corner, index| {
+        world[index] = transformedPoint(position, rotation, corner);
+    }
+    for (box_edges) |edge| {
+        addDebugLine(
+            storage,
+            .shape,
+            world[edge[0]],
+            world[edge[1]],
+            shape_line_color,
+            object,
+        );
+    }
+    for (box_triangles) |triangle| {
+        addDebugTriangle(
+            storage,
+            .shape,
+            world[triangle[0]],
+            world[triangle[1]],
+            world[triangle[2]],
+            shape_fill_color,
+            object,
+        );
+    }
+}
+
+fn emitSphere(
+    storage: *physics_debug.Storage,
+    center: [3]f32,
+    radius: f32,
+    object: physics_debug.ObjectRef,
+) void {
+    const segment_count: usize = 16;
+    for (0..3) |plane| {
+        for (0..segment_count) |index| {
+            const first_angle = std.math.tau * @as(f32, @floatFromInt(index)) /
+                @as(f32, @floatFromInt(segment_count));
+            const second_angle = std.math.tau * @as(f32, @floatFromInt(index + 1)) /
+                @as(f32, @floatFromInt(segment_count));
+            const first_circle = [2]f32{ @cos(first_angle) * radius, @sin(first_angle) * radius };
+            const second_circle = [2]f32{ @cos(second_angle) * radius, @sin(second_angle) * radius };
+            const first = switch (plane) {
+                0 => add3(center, .{ first_circle[0], first_circle[1], 0 }),
+                1 => add3(center, .{ first_circle[0], 0, first_circle[1] }),
+                else => add3(center, .{ 0, first_circle[0], first_circle[1] }),
+            };
+            const second = switch (plane) {
+                0 => add3(center, .{ second_circle[0], second_circle[1], 0 }),
+                1 => add3(center, .{ second_circle[0], 0, second_circle[1] }),
+                else => add3(center, .{ 0, second_circle[0], second_circle[1] }),
+            };
+            addDebugLine(storage, .shape, first, second, shape_line_color, object);
+        }
+    }
+
+    const points = [_][3]f32{
+        add3(center, .{ radius, 0, 0 }),
+        add3(center, .{ -radius, 0, 0 }),
+        add3(center, .{ 0, radius, 0 }),
+        add3(center, .{ 0, -radius, 0 }),
+        add3(center, .{ 0, 0, radius }),
+        add3(center, .{ 0, 0, -radius }),
+    };
+    const triangles = [_][3]usize{
+        .{ 0, 2, 4 }, .{ 4, 2, 1 }, .{ 1, 2, 5 }, .{ 5, 2, 0 },
+        .{ 4, 3, 0 }, .{ 1, 3, 4 }, .{ 5, 3, 1 }, .{ 0, 3, 5 },
+    };
+    for (triangles) |triangle| {
+        addDebugTriangle(
+            storage,
+            .shape,
+            points[triangle[0]],
+            points[triangle[1]],
+            points[triangle[2]],
+            shape_fill_color,
+            object,
+        );
+    }
+}
+
+fn emitCapsule(
+    storage: *physics_debug.Storage,
+    transform: c.JPH_RMat4,
+    radius: f32,
+    half_height: f32,
+    object: physics_debug.ObjectRef,
+) void {
+    const segment_count: usize = 16;
+    const bottom_y = -half_height;
+    const top_y = half_height;
+    for (0..segment_count) |index| {
+        const first_angle = std.math.tau * @as(f32, @floatFromInt(index)) /
+            @as(f32, @floatFromInt(segment_count));
+        const second_angle = std.math.tau * @as(f32, @floatFromInt(index + 1)) /
+            @as(f32, @floatFromInt(segment_count));
+        const first_direction = [3]f32{ @cos(first_angle) * radius, 0, @sin(first_angle) * radius };
+        const second_direction = [3]f32{ @cos(second_angle) * radius, 0, @sin(second_angle) * radius };
+        addDebugLine(
+            storage,
+            .shape,
+            transformMatrixPoint(transform, add3(first_direction, .{ 0, bottom_y, 0 })),
+            transformMatrixPoint(transform, add3(second_direction, .{ 0, bottom_y, 0 })),
+            shape_line_color,
+            object,
+        );
+        addDebugLine(
+            storage,
+            .shape,
+            transformMatrixPoint(transform, add3(first_direction, .{ 0, top_y, 0 })),
+            transformMatrixPoint(transform, add3(second_direction, .{ 0, top_y, 0 })),
+            shape_line_color,
+            object,
+        );
+        if (index % 4 == 0) {
+            addDebugLine(
+                storage,
+                .shape,
+                transformMatrixPoint(transform, add3(first_direction, .{ 0, bottom_y, 0 })),
+                transformMatrixPoint(transform, add3(first_direction, .{ 0, top_y, 0 })),
+                shape_line_color,
+                object,
+            );
+        }
+    }
+
+    const arc_segments: usize = 8;
+    const directions = [_][3]f32{ .{ 1, 0, 0 }, .{ -1, 0, 0 }, .{ 0, 0, 1 }, .{ 0, 0, -1 } };
+    for (directions) |direction| {
+        for (0..arc_segments) |index| {
+            const first_fraction = @as(f32, @floatFromInt(index)) /
+                @as(f32, @floatFromInt(arc_segments));
+            const second_fraction = @as(f32, @floatFromInt(index + 1)) /
+                @as(f32, @floatFromInt(arc_segments));
+            const first_angle = first_fraction * (std.math.pi / 2.0);
+            const second_angle = second_fraction * (std.math.pi / 2.0);
+            const first_radial = scale3(direction, @cos(first_angle) * radius);
+            const second_radial = scale3(direction, @cos(second_angle) * radius);
+            addDebugLine(
+                storage,
+                .shape,
+                transformMatrixPoint(transform, add3(first_radial, .{ 0, bottom_y - @sin(first_angle) * radius, 0 })),
+                transformMatrixPoint(transform, add3(second_radial, .{ 0, bottom_y - @sin(second_angle) * radius, 0 })),
+                shape_line_color,
+                object,
+            );
+            addDebugLine(
+                storage,
+                .shape,
+                transformMatrixPoint(transform, add3(first_radial, .{ 0, top_y + @sin(first_angle) * radius, 0 })),
+                transformMatrixPoint(transform, add3(second_radial, .{ 0, top_y + @sin(second_angle) * radius, 0 })),
+                shape_line_color,
+                object,
+            );
+        }
+    }
+}
+
+fn transformMatrixPoint(matrix: c.JPH_RMat4, local: [3]f32) [3]f32 {
+    return .{
+        matrix.column[3].x + matrix.column[0].x * local[0] + matrix.column[1].x * local[1] + matrix.column[2].x * local[2],
+        matrix.column[3].y + matrix.column[0].y * local[0] + matrix.column[1].y * local[1] + matrix.column[2].y * local[2],
+        matrix.column[3].z + matrix.column[0].z * local[0] + matrix.column[1].z * local[1] + matrix.column[2].z * local[2],
+    };
+}
+
+fn emitWheel(
+    storage: *physics_debug.Storage,
+    transform: c.JPH_RMat4,
+    radius: f32,
+    width: f32,
+    object: physics_debug.ObjectRef,
+) void {
+    const segment_count: usize = 16;
+    for (0..segment_count) |index| {
+        const first_angle = std.math.tau * @as(f32, @floatFromInt(index)) /
+            @as(f32, @floatFromInt(segment_count));
+        const second_angle = std.math.tau * @as(f32, @floatFromInt(index + 1)) /
+            @as(f32, @floatFromInt(segment_count));
+        for ([_]f32{ -width * 0.5, width * 0.5 }) |side| {
+            addDebugLine(
+                storage,
+                .shape,
+                transformMatrixPoint(transform, .{ side, @cos(first_angle) * radius, @sin(first_angle) * radius }),
+                transformMatrixPoint(transform, .{ side, @cos(second_angle) * radius, @sin(second_angle) * radius }),
+                shape_line_color,
+                object,
+            );
+        }
+        if (index % 4 == 0) {
+            addDebugLine(
+                storage,
+                .shape,
+                transformMatrixPoint(transform, .{ -width * 0.5, @cos(first_angle) * radius, @sin(first_angle) * radius }),
+                transformMatrixPoint(transform, .{ width * 0.5, @cos(first_angle) * radius, @sin(first_angle) * radius }),
+                shape_line_color,
+                object,
+            );
+        }
+    }
+}
+
+fn emitBounds(
+    storage: *physics_debug.Storage,
+    minimum: [3]f32,
+    maximum: [3]f32,
+    object: physics_debug.ObjectRef,
+) void {
+    const center = scale3(add3(minimum, maximum), 0.5);
+    const half_extents = scale3(sub3(maximum, minimum), 0.5);
+    const local = localBoxCorners(half_extents);
+    var world: [8][3]f32 = undefined;
+    for (local, 0..) |corner, index| world[index] = add3(center, corner);
+    for (box_edges) |edge| {
+        addDebugLine(
+            storage,
+            .bounds,
+            world[edge[0]],
+            world[edge[1]],
+            bounds_color,
+            object,
+        );
+    }
+}
+
+fn emitCenterOfMass(
+    storage: *physics_debug.Storage,
+    center: [3]f32,
+    object: physics_debug.ObjectRef,
+) void {
+    const radius: f32 = 0.12;
+    for ([_][3]f32{ .{ radius, 0, 0 }, .{ 0, radius, 0 }, .{ 0, 0, radius } }) |axis| {
+        addDebugLine(
+            storage,
+            .center_of_mass,
+            sub3(center, axis),
+            add3(center, axis),
+            center_of_mass_color,
+            object,
+        );
+    }
+}
+
+fn emitVelocity(
+    storage: *physics_debug.Storage,
+    origin: [3]f32,
+    velocity: [3]f32,
+    object: physics_debug.ObjectRef,
+) void {
+    addDebugLine(
+        storage,
+        .velocity,
+        origin,
+        add3(origin, scale3(velocity, 0.1)),
+        velocity_color,
+        object,
+    );
+}
+
+fn emitContact(
+    storage: *physics_debug.Storage,
+    point: [3]f32,
+    normal: [3]f32,
+    object: ?physics_debug.ObjectRef,
+) void {
+    const marker_radius: f32 = 0.05;
+    for ([_][3]f32{
+        .{ marker_radius, 0, 0 },
+        .{ 0, marker_radius, 0 },
+        .{ 0, 0, marker_radius },
+    }) |axis| {
+        addDebugLine(
+            storage,
+            .contact,
+            sub3(point, axis),
+            add3(point, axis),
+            contact_color,
+            object,
+        );
+    }
+    addDebugLine(
+        storage,
+        .contact,
+        point,
+        add3(point, scale3(normal, 0.35)),
+        contact_color,
+        object,
+    );
+}
 
 /// Compile-time physics capability consumed by the crate vertical slice.
 /// Keeping the handle concrete avoids allocation, type erasure, and a Jolt
@@ -1387,6 +2462,44 @@ pub const CrateBodies = struct {
                 .angular = try self.physics.getAngularVelocity(body_id),
             },
         }).normalized();
+    }
+
+    /// Atomically install the complete authoritative motion state and wake the
+    /// crate. Every fallible check and conversion happens before the first Jolt
+    /// mutation. Jolt's combined operation preserves the body identifier,
+    /// shape, motion type, collision layer, mass, and other body properties.
+    pub fn relocateBody(
+        self: *CrateBodies,
+        body_id: Handle,
+        state: engine.physics.BodyState,
+    ) !void {
+        try self.physics.validateBody(body_id);
+        const normalized = try state.normalized();
+
+        var position = toRVec3(normalized.pose.position);
+        var rotation = c.JPH_Quat{
+            .x = normalized.pose.rotation[0],
+            .y = normalized.pose.rotation[1],
+            .z = normalized.pose.rotation[2],
+            .w = normalized.pose.rotation[3],
+        };
+        var linear_velocity = toVec3(normalized.velocity.linear);
+        var angular_velocity = toVec3(normalized.velocity.angular);
+
+        c.JPH_BodyInterface_SetPositionRotationAndVelocity(
+            self.physics.body_interface,
+            body_id.toJolt(),
+            &position,
+            &rotation,
+            &linear_velocity,
+            &angular_velocity,
+        );
+        // Jolt's combined setter wakes only for non-zero velocity. Authoring
+        // relocation has explicit wake semantics even when velocity is zero.
+        c.JPH_BodyInterface_ActivateBody(
+            self.physics.body_interface,
+            body_id.toJolt(),
+        );
     }
 
     pub fn applyImpulse(
@@ -1469,6 +2582,16 @@ pub const CharacterControllers = struct {
     physics: *Physics,
 
     pub const Handle = CharacterId;
+
+    /// Host-only diagnostics. The count is Physics-global, not wrapper-local.
+    pub fn controllerCount(self: *CharacterControllers) usize {
+        self.physics.assertOwnerThread();
+        return self.physics.character_handles.count();
+    }
+
+    pub fn controllerCapacity(_: *const CharacterControllers) usize {
+        return max_virtual_characters;
+    }
 
     pub fn createCharacter(
         self: *CharacterControllers,
@@ -1556,8 +2679,8 @@ pub const Vehicles = struct {
 };
 
 fn injectVehicleCreateFailure(
-    requested: ?VehicleCreateFailurePoint,
-    reached: VehicleCreateFailurePoint,
+    comptime requested: ?VehicleCreateFailurePoint,
+    comptime reached: VehicleCreateFailurePoint,
 ) !void {
     if (requested == reached) return error.InjectedVehicleCreateFailure;
 }
@@ -1569,25 +2692,8 @@ fn isFiniteVector(value: [3]f32) bool {
 }
 
 fn normalizeQuaternion(rotation: [4]f32) ![4]f32 {
-    for (rotation) |component| {
-        if (!std.math.isFinite(component)) return error.InvalidRotation;
-    }
-
-    const length_squared = rotation[0] * rotation[0] +
-        rotation[1] * rotation[1] +
-        rotation[2] * rotation[2] +
-        rotation[3] * rotation[3];
-    if (!std.math.isFinite(length_squared) or length_squared <= 1.0e-12) {
+    return engine.transform.normalizeQuaternion(rotation) catch
         return error.InvalidRotation;
-    }
-
-    const inverse_length = 1.0 / @sqrt(length_squared);
-    return .{
-        rotation[0] * inverse_length,
-        rotation[1] * inverse_length,
-        rotation[2] * inverse_length,
-        rotation[3] * inverse_length,
-    };
 }
 
 fn validateHalfExtents(half_extents: [3]f32) !void {
@@ -1641,6 +2747,13 @@ fn getBoxHalfExtentsForTest(physics: *Physics, body_id: BodyId) ![3]f32 {
     var half_extents: c.JPH_Vec3 = undefined;
     c.JPH_BoxShape_GetHalfExtent(@ptrCast(shape), &half_extents);
     return .{ half_extents.x, half_extents.y, half_extents.z };
+}
+
+fn contactDebugResourcesForTest(physics: *Physics) ?ContactDebugResources {
+    return switch (physics.contact_debug_capture) {
+        .available => |resources| resources,
+        else => null,
+    };
 }
 
 fn toVec3(value: [3]f32) c.JPH_Vec3 {
@@ -1734,6 +2847,22 @@ fn expectEquivalentRotation(expected: [4]f32, actual: [4]f32) !void {
     try std.testing.expectApproxEqAbs(@as(f32, 1), @abs(dot), 0.0001);
 }
 
+fn expectBodyStateApprox(
+    expected: engine.physics.BodyState,
+    actual: engine.physics.BodyState,
+) !void {
+    for (expected.pose.position, actual.pose.position) |expected_value, actual_value| {
+        try std.testing.expectApproxEqAbs(expected_value, actual_value, 0.0001);
+    }
+    try expectEquivalentRotation(expected.pose.rotation, actual.pose.rotation);
+    for (expected.velocity.linear, actual.velocity.linear) |expected_value, actual_value| {
+        try std.testing.expectApproxEqAbs(expected_value, actual_value, 0.0001);
+    }
+    for (expected.velocity.angular, actual.velocity.angular) |expected_value, actual_value| {
+        try std.testing.expectApproxEqAbs(expected_value, actual_value, 0.0001);
+    }
+}
+
 fn fromJoltGroundState(value: c.JPH_GroundState) engine.physics.GroundState {
     return switch (value) {
         c.JPH_GroundState_OnGround => .on_ground,
@@ -1763,6 +2892,29 @@ fn fromJoltMotionType(motion_type: c.JPH_MotionType) MotionType {
         c.JPH_MotionType_Dynamic => .dynamic,
         else => unreachable,
     };
+}
+
+test "Jolt job-system sizing matches the supported exact cohort" {
+    try std.testing.expectEqual(@as(i32, 1), job_system_worker_count);
+    try std.testing.expectEqual(
+        @as(u32, c.JPH_MAX_PHYSICS_JOBS),
+        job_system_max_jobs,
+    );
+    try std.testing.expectEqual(
+        @as(u32, c.JPH_MAX_PHYSICS_BARRIERS),
+        job_system_max_barriers,
+    );
+}
+
+test "Jolt job-system C config never requests wrapper defaults" {
+    const config = jobSystemThreadPoolConfig();
+
+    try std.testing.expect(config.maxJobs > 0);
+    try std.testing.expect(config.maxBarriers > 0);
+    try std.testing.expect(config.numThreads > 0);
+    try std.testing.expectEqual(job_system_max_jobs, config.maxJobs);
+    try std.testing.expectEqual(job_system_max_barriers, config.maxBarriers);
+    try std.testing.expectEqual(job_system_worker_count, config.numThreads);
 }
 
 test "Jolt 5.5 falling body lifecycle" {
@@ -2018,7 +3170,7 @@ test "four-wheel vehicle creation failures roll back every native owner" {
         .after_registration,
     };
 
-    for (failure_points) |failure_point| {
+    inline for (failure_points) |failure_point| {
         try std.testing.expectError(
             error.InjectedVehicleCreateFailure,
             physics.createFourWheelVehicle(.{
@@ -2184,6 +3336,51 @@ test "virtual character lifecycle can be repeated without retained handles" {
         try controllers.destroyCharacter(character);
     }
     try std.testing.expectEqual(@as(usize, 0), physics.character_handles.count());
+}
+
+test "character controller views share one fixed global capacity" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    var first = physics.characterControllers();
+    var second = physics.characterControllers();
+    try std.testing.expectEqual(max_virtual_characters, first.controllerCapacity());
+    try std.testing.expectEqual(max_virtual_characters, second.controllerCapacity());
+
+    var handles: [max_virtual_characters]CharacterId = undefined;
+    for (&handles, 0..) |*handle, index| {
+        const x: f32 = @floatFromInt(index % 16);
+        const z: f32 = @floatFromInt(index / 16);
+        const controllers = if (index < max_virtual_characters / 2) &first else &second;
+        handle.* = try controllers.createCharacter(.{
+            .position = .{ x * 2, 1, z * 2 },
+        });
+    }
+    try std.testing.expectEqual(max_virtual_characters, first.controllerCount());
+    try std.testing.expectEqual(max_virtual_characters, second.controllerCount());
+    for (handles, 0..) |handle, index| {
+        const controllers = if (index < max_virtual_characters / 2) &first else &second;
+        _ = try controllers.prepareCharacter(handle);
+        _ = try controllers.updateCharacter(
+            handle,
+            .{ .velocity = .{ 0, -1, 0 } },
+            1.0 / 120.0,
+        );
+    }
+    try std.testing.expectError(
+        error.TooManyCharacters,
+        second.createCharacter(.{ .position = .{ 40, 1, 40 } }),
+    );
+
+    try first.destroyCharacter(handles[0]);
+    const replacement = try second.createCharacter(.{ .position = .{ 40, 1, 40 } });
+    _ = try second.updateCharacter(
+        replacement,
+        .{ .velocity = .{ 0, -1, 0 } },
+        1.0 / 120.0,
+    );
+    for (handles[1..]) |handle| try first.destroyCharacter(handle);
+    try second.destroyCharacter(replacement);
+    try std.testing.expectEqual(@as(usize, 0), first.controllerCount());
 }
 
 test "virtual character distinguishes walkable and steep support" {
@@ -2352,9 +3549,10 @@ test "physics init failure checkpoints unwind and permit healthy restart" {
         .after_job_and_temp_allocators,
         .after_filter_bundle,
         .after_physics_system_transfer,
+        .after_contact_listener,
     };
 
-    for (failure_points) |failure_point| {
+    inline for (failure_points) |failure_point| {
         try std.testing.expectError(
             error.InjectedInitFailure,
             Physics.initWithAllocatorAndFailurePoint(
@@ -2380,6 +3578,102 @@ test "physics init failure checkpoints unwind and permit healthy restart" {
 
         try std.testing.expectEqual(leases_before, runtimeLeaseCount());
     }
+}
+
+test "contact scratch allocation failure preserves authority and reports partial evidence" {
+    const leases_before = runtimeLeaseCount();
+    var allocator_bytes: [16 * 1024]u8 = undefined;
+    try std.testing.expect(allocator_bytes.len < @sizeOf(ContactScratch));
+    var fixed = std.heap.FixedBufferAllocator.init(&allocator_bytes);
+
+    var physics = try Physics.initWithAllocator(fixed.allocator());
+    defer physics.deinit();
+    try std.testing.expectEqual(leases_before + 1, runtimeLeaseCount());
+    try std.testing.expectEqual(
+        RigidContactCaptureAvailability.unavailable_scratch_allocation,
+        physics.rigidContactCaptureAvailability(),
+    );
+
+    const body = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 3, 1, 3 });
+    defer _ = physics.removeBody(body);
+    try physics.update(1.0 / 60.0);
+
+    var first_lines: [256]physics_debug.Line = undefined;
+    var first_triangles: [64]physics_debug.Triangle = undefined;
+    var first_storage = physics_debug.Storage.init(&first_lines, &first_triangles);
+    const first = physics.extractDebugWithStatus(.{}, 1, &first_storage);
+    try std.testing.expectEqual(
+        RigidContactCaptureAvailability.unavailable_scratch_allocation,
+        first.rigid_contact_capture,
+    );
+    try std.testing.expect(first.batch.statsFor(.contact).source_unavailable);
+    try std.testing.expectEqual(
+        physics_debug.PrimitiveStats{},
+        first.batch.statsFor(.contact).lines,
+    );
+    inline for (.{
+        physics_debug.Category.shape,
+        physics_debug.Category.bounds,
+        physics_debug.Category.center_of_mass,
+        physics_debug.Category.velocity,
+    }) |category| {
+        try std.testing.expect(first.batch.statsFor(category).lines.admitted > 0);
+        try std.testing.expect(!first.batch.statsFor(category).source_unavailable);
+    }
+    try std.testing.expect(first.batch.statsFor(.shape).triangles.admitted > 0);
+
+    // Re-reading the same stopped authoritative state remains deterministic
+    // even though one optional producer never existed.
+    var second_lines: [256]physics_debug.Line = undefined;
+    var second_triangles: [64]physics_debug.Triangle = undefined;
+    var second_storage = physics_debug.Storage.init(&second_lines, &second_triangles);
+    const second = physics.extractDebugWithStatus(.{}, 1, &second_storage);
+    try std.testing.expectEqual(first.batch.lines.len, second.batch.lines.len);
+    try std.testing.expectEqual(first.batch.triangles.len, second.batch.triangles.len);
+    for (first.batch.lines, second.batch.lines) |expected, actual| {
+        try std.testing.expect(std.meta.eql(expected, actual));
+    }
+    for (first.batch.triangles, second.batch.triangles) |expected, actual| {
+        try std.testing.expect(std.meta.eql(expected, actual));
+    }
+
+    var contacts_disabled = DebugConfig{};
+    contacts_disabled.contacts = false;
+    const disabled = physics.extractDebugWithStatus(
+        contacts_disabled,
+        1,
+        &second_storage,
+    );
+    try std.testing.expect(!disabled.batch.statsFor(.contact).source_unavailable);
+}
+
+test "contact listener creation failure is optional and tears scratch down safely" {
+    const leases_before = runtimeLeaseCount();
+    var physics = try Physics.initWithContactDebugFailureForTest(
+        std.testing.allocator,
+        .listener_creation,
+    );
+    defer physics.deinit();
+    try std.testing.expectEqual(leases_before + 1, runtimeLeaseCount());
+    try std.testing.expectEqual(
+        RigidContactCaptureAvailability.unavailable_listener_creation,
+        physics.rigidContactCaptureAvailability(),
+    );
+
+    const body = try physics.createDynamicBox(.{ 0, 2, 0 }, .{ 0.5, 0.5, 0.5 });
+    defer _ = physics.removeBody(body);
+    try physics.update(1.0 / 60.0);
+
+    var lines: [256]physics_debug.Line = undefined;
+    var triangles: [64]physics_debug.Triangle = undefined;
+    var storage = physics_debug.Storage.init(&lines, &triangles);
+    const extraction = physics.extractDebugWithStatus(.{}, 1, &storage);
+    try std.testing.expectEqual(
+        RigidContactCaptureAvailability.unavailable_listener_creation,
+        extraction.rigid_contact_capture,
+    );
+    try std.testing.expect(extraction.batch.statsFor(.contact).source_unavailable);
+    try std.testing.expect(extraction.batch.statsFor(.shape).lines.admitted > 0);
 }
 
 test "body IDs cannot cross live physics worlds" {
@@ -2654,6 +3948,124 @@ test "crate capability preserves accepted boundary velocities without clamping" 
     }
 }
 
+test "crate relocation atomically installs state preserves body properties and explicitly wakes" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 20, 1, 20 });
+    defer _ = physics.removeBody(ground);
+    var bodies = physics.crateBodies();
+    const body = try bodies.createDynamicBox(.{
+        .pose = .{ .position = .{ 0, 4, 0 } },
+        .half_extents = .{ 0.5, 0.75, 1.25 },
+    });
+    defer bodies.destroyBody(body) catch @panic("relocated body cleanup failed");
+
+    // Settle all the way to sleep so the zero-velocity relocation exercises
+    // the adapter's explicit wake rather than Jolt's velocity-based wake.
+    for (0..2_000) |_| {
+        try physics.update(1.0 / 120.0);
+        if (!try physics.isBodyActive(body)) break;
+    }
+    try std.testing.expect(!try physics.isBodyActive(body));
+
+    const record_before = physics.body_handles.get(body.serial) orelse
+        return error.MissingBodyHandleRecord;
+    const body_count_before = bodies.bodyCount();
+    const motion_before = try physics.getMotionType(body);
+    const layer_before = c.JPH_BodyInterface_GetObjectLayer(
+        physics.body_interface,
+        body.toJolt(),
+    );
+    const target = try (engine.physics.BodyState{
+        .pose = .{
+            .position = .{ 8.25, 6.5, -3.75 },
+            .rotation = .{ 0, 2, 0, 2 },
+        },
+        .velocity = .{},
+    }).normalized();
+
+    try bodies.relocateBody(body, target);
+    try expectBodyStateApprox(target, try bodies.bodyState(body));
+    try std.testing.expect(try physics.isBodyActive(body));
+    try std.testing.expectEqual(body_count_before, bodies.bodyCount());
+    try std.testing.expectEqual(motion_before, try physics.getMotionType(body));
+    try std.testing.expectEqual(
+        layer_before,
+        c.JPH_BodyInterface_GetObjectLayer(physics.body_interface, body.toJolt()),
+    );
+    const record_after = physics.body_handles.get(body.serial) orelse
+        return error.MissingBodyHandleRecord;
+    try std.testing.expectEqual(record_before.raw_id, record_after.raw_id);
+    try std.testing.expect(std.meta.eql(record_before.shape, record_after.shape));
+    try std.testing.expect(physics.isBodyAdded(body));
+}
+
+test "crate relocation rejects invalid stale and foreign state without mutation" {
+    var first = try Physics.init();
+    defer first.deinit();
+    var first_bodies = first.crateBodies();
+    const body = try first_bodies.createDynamicBox(.{
+        .pose = .{ .position = .{ 1, 2, 3 } },
+        .velocity = .{
+            .linear = .{ 4, 5, 6 },
+            .angular = .{ 1, 2, 3 },
+        },
+        .half_extents = .{ 0.5, 1, 1.5 },
+    });
+
+    const state_before = try first_bodies.bodyState(body);
+    const record_before = first.body_handles.get(body.serial) orelse
+        return error.MissingBodyHandleRecord;
+    const body_count_before = first_bodies.bodyCount();
+    const active_before = try first.isBodyActive(body);
+    const motion_before = try first.getMotionType(body);
+    const layer_before = c.JPH_BodyInterface_GetObjectLayer(
+        first.body_interface,
+        body.toJolt(),
+    );
+    try std.testing.expectError(
+        error.NonFiniteTransform,
+        first_bodies.relocateBody(body, .{
+            .pose = .{ .position = .{ std.math.inf(f32), 0, 0 } },
+        }),
+    );
+    try std.testing.expectError(
+        error.LinearVelocityOutOfRange,
+        first_bodies.relocateBody(body, .{
+            .velocity = .{ .linear = .{ engine.physics.max_linear_velocity, 1, 0 } },
+        }),
+    );
+    try expectBodyStateApprox(state_before, try first_bodies.bodyState(body));
+    try std.testing.expectEqual(body_count_before, first_bodies.bodyCount());
+    try std.testing.expectEqual(active_before, try first.isBodyActive(body));
+    try std.testing.expectEqual(motion_before, try first.getMotionType(body));
+    try std.testing.expectEqual(
+        layer_before,
+        c.JPH_BodyInterface_GetObjectLayer(first.body_interface, body.toJolt()),
+    );
+    const record_after_rejection = first.body_handles.get(body.serial) orelse
+        return error.MissingBodyHandleRecord;
+    try std.testing.expectEqual(record_before.raw_id, record_after_rejection.raw_id);
+    try std.testing.expect(std.meta.eql(record_before.shape, record_after_rejection.shape));
+
+    var second = try Physics.init();
+    defer second.deinit();
+    var second_bodies = second.crateBodies();
+    try std.testing.expectError(
+        error.ForeignBodyId,
+        second_bodies.relocateBody(body, .{ .pose = .{ .position = .{ 9, 9, 9 } } }),
+    );
+    try expectBodyStateApprox(state_before, try first_bodies.bodyState(body));
+    try std.testing.expectEqual(@as(u32, 0), second_bodies.bodyCount());
+
+    try first_bodies.destroyBody(body);
+    try std.testing.expectError(
+        error.InvalidBodyId,
+        first_bodies.relocateBody(body, .{ .pose = .{ .position = .{ 7, 7, 7 } } }),
+    );
+    try std.testing.expectEqual(@as(u32, 0), first_bodies.bodyCount());
+}
+
 test "district capability creates rotated static bodies and tears them down" {
     comptime engine.physics.assertStaticBodyImplementation(DistrictBodies);
 
@@ -2738,4 +4150,363 @@ test "district capability rejects invalid input and foreign handles" {
         first_bodies.destroyBody(body),
     );
     try std.testing.expectEqual(@as(u32, 0), first_bodies.bodyCount());
+}
+
+fn batchHasObjectLine(
+    batch: physics_debug.Batch,
+    category: physics_debug.Category,
+    object: physics_debug.ObjectRef,
+) bool {
+    for (batch.lines) |line| {
+        if (line.category == category and line.object != null and
+            std.meta.eql(line.object.?, object))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+fn expectShapeInsideObjectBounds(
+    batch: physics_debug.Batch,
+    object: physics_debug.ObjectRef,
+) !void {
+    var minimum = [3]f32{ std.math.inf(f32), std.math.inf(f32), std.math.inf(f32) };
+    var maximum = [3]f32{ -std.math.inf(f32), -std.math.inf(f32), -std.math.inf(f32) };
+    var bounds_found = false;
+    for (batch.lines) |line| {
+        if (line.category != .bounds or line.object == null or
+            !std.meta.eql(line.object.?, object))
+        {
+            continue;
+        }
+        bounds_found = true;
+        for (0..3) |axis| {
+            minimum[axis] = @min(minimum[axis], @min(line.start[axis], line.end[axis]));
+            maximum[axis] = @max(maximum[axis], @max(line.start[axis], line.end[axis]));
+        }
+    }
+    try std.testing.expect(bounds_found);
+
+    var shape_found = false;
+    for (batch.lines) |line| {
+        if (line.category != .shape or line.object == null or
+            !std.meta.eql(line.object.?, object))
+        {
+            continue;
+        }
+        shape_found = true;
+        for (0..3) |axis| {
+            try std.testing.expect(line.start[axis] >= minimum[axis] - 0.01);
+            try std.testing.expect(line.start[axis] <= maximum[axis] + 0.01);
+            try std.testing.expect(line.end[axis] >= minimum[axis] - 0.01);
+            try std.testing.expect(line.end[axis] <= maximum[axis] + 0.01);
+        }
+    }
+    try std.testing.expect(shape_found);
+}
+
+test "renderer-neutral extraction covers rigid character vehicle and district evidence" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+
+    const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 100, 1, 100 });
+    defer _ = physics.removeBody(ground);
+
+    var district_bodies = physics.districtBodies();
+    const district = try district_bodies.createStaticBox(.{
+        .pose = .{ .position = .{ 15, 1, 0 } },
+        .half_extents = .{ 2, 1, 3 },
+    });
+    defer district_bodies.destroyBody(district) catch unreachable;
+
+    var crate_bodies = physics.crateBodies();
+    const crate = try crate_bodies.createDynamicBox(.{
+        .pose = .{ .position = .{ -4, 2, 0 } },
+        .half_extents = .{ 0.5, 0.5, 0.5 },
+    });
+    defer crate_bodies.destroyBody(crate) catch unreachable;
+
+    const sphere = try physics.createDynamicSphere(.{ 8, 2, 0 }, 0.6);
+    defer _ = physics.removeBody(sphere);
+
+    var characters = physics.characterControllers();
+    const character = try characters.createCharacter(.{
+        .position = .{ 4, 0.02, 0 },
+    });
+    defer characters.destroyCharacter(character) catch unreachable;
+
+    var vehicle_api = physics.vehicles();
+    const vehicle = try vehicle_api.createVehicle(.{
+        .chassis = .{ .pose = .{ .position = .{ 0, 2, 5 } } },
+    });
+    defer vehicle_api.destroyVehicle(vehicle) catch unreachable;
+
+    const delta_time: f32 = 1.0 / 120.0;
+    for (0..300) |_| {
+        _ = try characters.updateCharacter(
+            character,
+            .{ .velocity = .{ 0, 0, 0 } },
+            delta_time,
+        );
+        try physics.update(delta_time);
+    }
+
+    const vehicle_state = try vehicle_api.vehicleState(vehicle);
+    for (vehicle_state.wheels) |wheel| try std.testing.expect(wheel.has_contact);
+
+    // Wake the settled crate into its support contact so the exact completed
+    // step contains rigid listener evidence as well as CharacterVirtual and
+    // wheel contacts. Sleeping rigid pairs do not issue persisted callbacks.
+    try crate_bodies.applyImpulse(crate, .{ 0, -0.25, 0 });
+    _ = try characters.updateCharacter(
+        character,
+        .{ .velocity = .{ 0, 0, 0 } },
+        delta_time,
+    );
+    try physics.update(delta_time);
+
+    var lines: [4_096]physics_debug.Line = undefined;
+    var triangles: [512]physics_debug.Triangle = undefined;
+    var storage = physics_debug.Storage.init(&lines, &triangles);
+    const batch = physics.extractDebug(.{}, 301, &storage);
+
+    try std.testing.expectEqual(@as(u64, 301), batch.completed_tick);
+    try std.testing.expectEqual(@as(u64, 1), batch.generation);
+    try std.testing.expect(batch.lines.len > 0);
+    try std.testing.expect(batch.triangles.len > 0);
+    inline for (.{
+        physics_debug.Category.shape,
+        physics_debug.Category.bounds,
+        physics_debug.Category.contact,
+        physics_debug.Category.center_of_mass,
+        physics_debug.Category.velocity,
+    }) |category| {
+        try std.testing.expect(batch.statsFor(category).lines.admitted > 0);
+    }
+    try std.testing.expect(batch.statsFor(.shape).triangles.admitted > 0);
+
+    const ground_ref = physics_debug.ObjectRef{
+        .kind = debug_object_kinds.body,
+        .serial = ground.serial,
+    };
+    const district_ref = physics_debug.ObjectRef{
+        .kind = debug_object_kinds.body,
+        .serial = district.serial,
+    };
+    const crate_ref = physics_debug.ObjectRef{
+        .kind = debug_object_kinds.body,
+        .serial = crate.serial,
+    };
+    const sphere_ref = physics_debug.ObjectRef{
+        .kind = debug_object_kinds.body,
+        .serial = sphere.serial,
+    };
+    const character_ref = physics_debug.ObjectRef{
+        .kind = debug_object_kinds.character,
+        .serial = character.serial,
+    };
+    const vehicle_ref = physics_debug.ObjectRef{
+        .kind = debug_object_kinds.vehicle,
+        .serial = vehicle.serial,
+    };
+    for ([_]physics_debug.ObjectRef{
+        ground_ref,
+        district_ref,
+        crate_ref,
+        sphere_ref,
+        character_ref,
+        vehicle_ref,
+    }) |object| {
+        try std.testing.expect(batchHasObjectLine(batch, .shape, object));
+        try std.testing.expect(batchHasObjectLine(batch, .bounds, object));
+        try std.testing.expect(batchHasObjectLine(batch, .center_of_mass, object));
+        try std.testing.expect(batchHasObjectLine(batch, .velocity, object));
+    }
+
+    try expectShapeInsideObjectBounds(batch, ground_ref);
+    try expectShapeInsideObjectBounds(batch, district_ref);
+    try expectShapeInsideObjectBounds(batch, crate_ref);
+    try expectShapeInsideObjectBounds(batch, sphere_ref);
+    try expectShapeInsideObjectBounds(batch, character_ref);
+
+    try std.testing.expect(batchHasObjectLine(batch, .contact, character_ref));
+    try std.testing.expect(batchHasObjectLine(batch, .contact, vehicle_ref));
+    var rigid_contact_found = false;
+    for (batch.lines) |line| {
+        if (line.category == .contact and line.object != null and
+            line.object.?.kind == debug_object_kinds.body)
+        {
+            rigid_contact_found = true;
+            break;
+        }
+    }
+    try std.testing.expect(rigid_contact_found);
+}
+
+test "debug toggles and bounded overflow do not mutate authoritative physics" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 10, 1, 10 });
+    defer _ = physics.removeBody(ground);
+    const body = try physics.createDynamicBox(.{ 0, 1, 0 }, .{ 0.5, 0.5, 0.5 });
+    defer _ = physics.removeBody(body);
+    for (0..120) |_| try physics.update(1.0 / 120.0);
+
+    const position_before = try physics.getBodyPosition(body);
+    const rotation_before = try physics.getBodyRotation(body);
+    const linear_before = try physics.getLinearVelocity(body);
+    const angular_before = try physics.getAngularVelocity(body);
+    const motion_before = try physics.getMotionType(body);
+    const body_count_before = physics.getBodyCount();
+    const active_count_before = physics.getActiveBodyCount();
+    const contact_resources_before = contactDebugResourcesForTest(&physics).?;
+
+    var lines: [1]physics_debug.Line = undefined;
+    var triangles: [1]physics_debug.Triangle = undefined;
+    var storage = physics_debug.Storage.init(&lines, &triangles);
+    const disabled = DebugConfig{
+        .shapes = false,
+        .bounds = false,
+        .contacts = false,
+        .centers_of_mass = false,
+        .velocities = false,
+    };
+    for (0..100) |index| {
+        const enabled = index % 2 == 0;
+        const batch = physics.extractDebug(
+            if (enabled) DebugConfig{} else disabled,
+            @intCast(index + 1),
+            &storage,
+        );
+        if (enabled) {
+            try std.testing.expect(batch.lines.len == 1);
+            try std.testing.expect(batch.triangles.len == 1);
+            var visible_overflow = false;
+            for (batch.category_stats) |stats| {
+                visible_overflow = visible_overflow or
+                    stats.lines.overflow_dropped > 0 or
+                    stats.triangles.overflow_dropped > 0;
+            }
+            try std.testing.expect(visible_overflow);
+        } else {
+            try std.testing.expectEqual(@as(usize, 0), batch.lines.len);
+            try std.testing.expectEqual(@as(usize, 0), batch.triangles.len);
+        }
+    }
+    try std.testing.expectEqual(@as(u64, 100), storage.batch().?.generation);
+    const contact_resources_after = contactDebugResourcesForTest(&physics).?;
+    try std.testing.expect(
+        contact_resources_before.listener == contact_resources_after.listener,
+    );
+    try std.testing.expect(
+        contact_resources_before.scratch == contact_resources_after.scratch,
+    );
+    try std.testing.expectEqual(position_before, try physics.getBodyPosition(body));
+    try std.testing.expectEqual(rotation_before, try physics.getBodyRotation(body));
+    try std.testing.expectEqual(linear_before, try physics.getLinearVelocity(body));
+    try std.testing.expectEqual(angular_before, try physics.getAngularVelocity(body));
+    try std.testing.expectEqual(motion_before, try physics.getMotionType(body));
+    try std.testing.expectEqual(body_count_before, physics.getBodyCount());
+    try std.testing.expectEqual(active_count_before, physics.getActiveBodyCount());
+}
+
+test "contact callback scratch reserves concurrently and reports saturation" {
+    var scratch = ContactScratch{};
+    const thread_count: usize = 4;
+    const writes_per_thread: usize = rigid_contact_capacity / 2;
+    const Context = struct {
+        target: *ContactScratch,
+        seed: u32,
+
+        fn run(context: *@This()) void {
+            for (0..writes_per_thread) |index| {
+                const value: f32 = @floatFromInt(context.seed + @as(u32, @intCast(index)));
+                context.target.append(.{
+                    .body_a = context.seed,
+                    .body_b = context.seed + 1,
+                    .point = .{ value, 0, 0 },
+                    .normal = .{ 0, 1, 0 },
+                });
+            }
+        }
+    };
+
+    var contexts: [thread_count]Context = undefined;
+    var threads: [thread_count]std.Thread = undefined;
+    for (&threads, &contexts, 0..) |*thread, *context, index| {
+        context.* = .{ .target = &scratch, .seed = @intCast(index * writes_per_thread) };
+        thread.* = try std.Thread.spawn(.{}, Context.run, .{context});
+    }
+    for (&threads) |*thread| thread.join();
+
+    try std.testing.expectEqual(rigid_contact_capacity, scratch.count());
+    try std.testing.expectEqual(
+        @as(u32, thread_count * writes_per_thread - rigid_contact_capacity),
+        scratch.dropped.load(.acquire),
+    );
+    var seen = [_]bool{false} ** (thread_count * writes_per_thread);
+    for (scratch.contacts[0..scratch.count()]) |*slot| {
+        try std.testing.expect(slot.published.load(.acquire));
+        const payload_index: usize = @intFromFloat(slot.contact.point[0]);
+        try std.testing.expect(payload_index < seen.len);
+        try std.testing.expect(!seen[payload_index]);
+        seen[payload_index] = true;
+        try std.testing.expectEqual([3]f32{ 0, 1, 0 }, slot.contact.normal);
+    }
+    scratch.reset();
+    try std.testing.expectEqual(@as(usize, 0), scratch.count());
+    try std.testing.expectEqual(@as(u32, 0), scratch.dropped.load(.acquire));
+    for (&scratch.contacts) |*slot| {
+        try std.testing.expect(!slot.published.load(.acquire));
+    }
+}
+
+test "contact listener lifecycle survives repeated same-process worlds" {
+    const leases_before = runtimeLeaseCount();
+    for (0..6) |cycle| {
+        var physics = try Physics.init();
+        try std.testing.expectEqual(leases_before + 1, runtimeLeaseCount());
+        const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 5, 1, 5 });
+        const body = try physics.createDynamicBox(.{ 0, 0.75, 0 }, .{ 0.5, 0.5, 0.5 });
+        var contact_observed = false;
+        for (0..120) |_| {
+            try physics.update(1.0 / 120.0);
+            const resources = contactDebugResourcesForTest(&physics).?;
+            if (resources.scratch.count() > 0) {
+                contact_observed = true;
+                break;
+            }
+        }
+        try std.testing.expect(contact_observed);
+
+        var lines: [512]physics_debug.Line = undefined;
+        var triangles: [64]physics_debug.Triangle = undefined;
+        var storage = physics_debug.Storage.init(&lines, &triangles);
+        const batch = physics.extractDebug(.{}, @intCast(cycle + 1), &storage);
+        try std.testing.expect(batch.statsFor(.contact).lines.admitted > 0);
+
+        try std.testing.expect(physics.removeBody(body));
+        try std.testing.expect(physics.removeBody(ground));
+        physics.deinit();
+        try std.testing.expectEqual(leases_before, runtimeLeaseCount());
+    }
+}
+
+test "debug shape descriptors follow successful replacement only" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    const body = try physics.createDynamicBox(.{ 0, 4, 0 }, .{ 0.5, 0.5, 0.5 });
+    defer _ = physics.removeBody(body);
+    try physics.update(1.0 / 60.0);
+
+    try physics.setBoxHalfExtents(body, .{ 1, 2, 3 });
+    const record_after_success = physics.body_handles.get(body.serial).?;
+    try std.testing.expectEqual([3]f32{ 1, 2, 3 }, record_after_success.shape.box);
+    try std.testing.expectError(
+        error.InvalidHalfExtents,
+        physics.setBoxHalfExtents(body, .{ 9, -1, 9 }),
+    );
+    const record_after_failure = physics.body_handles.get(body.serial).?;
+    try std.testing.expectEqual([3]f32{ 1, 2, 3 }, record_after_failure.shape.box);
 }

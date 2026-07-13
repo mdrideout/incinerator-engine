@@ -1,5 +1,11 @@
 # S3-B Cooked Content and GPU Residency Acceptance
 
+> **Historical phase record.** This document preserves the evidence and claims
+> recorded when this slice closed. Counts, cohorts, platform results, and
+> limitations below describe that dated tree, not current support. See the
+> [current macOS readiness record](macos-readiness.md) and
+> [cleanup plan](../../CLEANUP_PLAN.md).
+
 **Date:** 2026-07-12  
 **Platform:** Apple Silicon macOS / Metal  
 **Scope:** S3-B only; full S3 remains open for S3-C proximity and repeated

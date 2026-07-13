@@ -4,6 +4,7 @@ const std = @import("std");
 
 const prohibited_import_basenames = [_][]const u8{
     "sdl",
+    "physics_debug_gpu",
     "renderer",
     "mesh",
     "texture",
@@ -25,18 +26,44 @@ const root_files = [_][]const u8{
     "src/physics.zig",
     "src/adapters/physics/jolt_c.zig",
     "src/hosts/headless.zig",
+    "src/hosts/headless_authority.zig",
+    "src/hosts/headless_config.zig",
+    "src/hosts/headless_content.zig",
+    "src/hosts/headless_clock.zig",
+    "src/hosts/external_producers.zig",
     "src/hosts/simulation.zig",
+    "src/hosts/developer_controls.zig",
+    "src/hosts/developer_diagnostics.zig",
+    "src/hosts/developer_profile.zig",
+    "src/hosts/developer_visualization.zig",
+    "src/hosts/district_replay_loader.zig",
+    "src/hosts/sandbox_replay.zig",
+    "src/hosts/sandbox_authoring.zig",
+    "src/hosts/sandbox_save.zig",
+    "src/hosts/sandbox_navigation.zig",
+    "src/sandbox/district_recipe.zig",
+    "src/adapters/platform/macos_signals.zig",
+    "src/adapters/storage/save_slots.zig",
+    "tools/s4_replay.zig",
+    "tools/s5_save.zig",
     "src/features/driver_contract.zig",
     "src/features/district_contract.zig",
+    "src/features/navigation_contract.zig",
+    "src/features/interaction_contract.zig",
     "src/district_worker.zig",
+    "tools/m3_soak.zig",
 };
 
 const root_directories = [_][]const u8{
+    "src/content",
     "src/engine",
     "src/features/crates",
     "src/features/character",
     "src/features/vehicle",
     "src/features/district",
+    "src/features/interaction",
+    "src/features/npc",
+    "src/features/population",
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -104,6 +131,15 @@ fn scanStringDirective(
 test "directive scanner covers Zig imports and raw C includes" {
     try std.testing.expectEqualStrings("sdl.zig", std.fs.path.basename("../../sdl.zig"));
     try std.testing.expectEqualStrings("shader_assets", std.fs.path.basename("shader_assets"));
+    try std.testing.expectError(
+        error.ProhibitedHeadlessImport,
+        scanStringDirective(
+            "const overlay = @import(\"../physics_debug_gpu.zig\");",
+            "test",
+            "@import(\"",
+            false,
+        ),
+    );
     try std.testing.expectError(
         error.ProhibitedHeadlessImport,
         scanStringDirective(

@@ -12,12 +12,3 @@
 pub const c = @cImport({
     @cInclude("SDL3/SDL.h");
 });
-
-// Re-export commonly used types for convenience
-pub const Window = c.SDL_Window;
-pub const Event = c.SDL_Event;
-pub const GPUDevice = c.SDL_GPUDevice;
-pub const GPUTexture = c.SDL_GPUTexture;
-pub const GPUCommandBuffer = c.SDL_GPUCommandBuffer;
-pub const GPURenderPass = c.SDL_GPURenderPass;
-pub const Scancode = c.SDL_Scancode;

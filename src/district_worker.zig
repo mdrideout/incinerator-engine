@@ -7,7 +7,43 @@
 //! cross this boundary.
 
 const std = @import("std");
+const builtin = @import("builtin");
 const contract = @import("district_contract");
+const sandbox_recipe = @import("sandbox_district_recipe");
+
+pub const WorkerState = enum {
+    idle,
+    queued,
+    working,
+    cancelling,
+    completion_ready,
+};
+
+pub const CompletionKind = enum {
+    ready,
+    cancelled,
+    failed,
+};
+
+pub const Diagnostics = struct {
+    state: WorkerState,
+    generation: ?u64,
+    started: bool,
+    cancellation_requested: bool,
+    completion_kind: ?CompletionKind,
+};
+
+fn diagnosticState(
+    has_active: bool,
+    has_completion: bool,
+    started: bool,
+    cancel_requested: bool,
+) WorkerState {
+    if (!has_active) return .idle;
+    if (has_completion) return .completion_ready;
+    if (cancel_requested) return .cancelling;
+    return if (started) .working else .queued;
+}
 
 pub const Worker = struct {
     /// `std.atomic.Mutex` is sufficient here because every critical section is
@@ -21,7 +57,7 @@ pub const Worker = struct {
     last_generation: u64 = 0,
     started: bool = false,
     cancel_requested: bool = false,
-    test_gate: ?*TestGate = null,
+    test_gate: if (builtin.is_test) ?*TestGate else void = if (builtin.is_test) null else {},
 
     pub fn init() Worker {
         return .{ .owner_thread = std.Thread.getCurrentId() };
@@ -124,6 +160,32 @@ pub const Worker = struct {
         return contract.LoadTicket.eql(active.ticket, ticket) and self.started;
     }
 
+    pub fn diagnostics(self: *Worker) Diagnostics {
+        self.assertOwnerThread();
+        self.lock();
+        defer self.unlock();
+        const completion_kind: ?CompletionKind = if (self.completion) |*completion|
+            switch (completion.*) {
+                .ready => .ready,
+                .cancelled => .cancelled,
+                .failed => .failed,
+            }
+        else
+            null;
+        return .{
+            .state = diagnosticState(
+                self.active != null,
+                self.completion != null,
+                self.started,
+                self.cancel_requested,
+            ),
+            .generation = if (self.active) |*active| active.ticket.generation else null,
+            .started = self.started,
+            .cancellation_requested = self.cancel_requested,
+            .completion_kind = completion_kind,
+        };
+    }
+
     pub fn deinit(self: *Worker) void {
         self.assertOwnerThread();
         self.lock();
@@ -158,7 +220,9 @@ pub const Worker = struct {
             return;
         }
 
-        if (self.test_gate) |gate| gate.hold(self, request_value.ticket);
+        if (builtin.is_test) {
+            if (self.test_gate) |gate| gate.hold(self, request_value.ticket);
+        }
 
         // Give the owner a scheduling point after work has observably started.
         // Cancellation is also checked between each bounded preparation unit.
@@ -168,7 +232,7 @@ pub const Worker = struct {
             return;
         }
 
-        const procedural = contract.proceduralBuild(
+        const procedural = sandbox_recipe.build(
             request_value.ticket.coord,
             request_value.recipe_version,
         );
@@ -224,7 +288,9 @@ pub const Worker = struct {
         else
             candidate;
         self.unlock();
-        if (self.test_gate) |gate| gate.finished.set(gate.io);
+        if (builtin.is_test) {
+            if (self.test_gate) |gate| gate.finished.set(gate.io);
+        }
     }
 
     fn lock(self: *Worker) void {
@@ -297,6 +363,13 @@ fn testTicket(generation: u64) contract.LoadTicket {
     return .{ .coord = .{ .x = 0, .z = -4 }, .generation = generation };
 }
 
+fn testRequest(ticket: contract.LoadTicket) contract.LoadRequest {
+    return .{
+        .ticket = ticket,
+        .recipe_version = sandbox_recipe.current_recipe_version,
+    };
+}
+
 fn collectFinished(
     worker: *Worker,
     gate: *TestGate,
@@ -338,6 +411,68 @@ fn expectCancelled(completion: contract.Completion, expected: contract.LoadTicke
     }
 }
 
+test "district worker diagnostics distinguish every one-job lifecycle state" {
+    try std.testing.expectEqual(
+        WorkerState.idle,
+        diagnosticState(false, false, false, false),
+    );
+    try std.testing.expectEqual(
+        WorkerState.queued,
+        diagnosticState(true, false, false, false),
+    );
+    try std.testing.expectEqual(
+        WorkerState.working,
+        diagnosticState(true, false, true, false),
+    );
+    try std.testing.expectEqual(
+        WorkerState.cancelling,
+        diagnosticState(true, false, true, true),
+    );
+    try std.testing.expectEqual(
+        WorkerState.completion_ready,
+        diagnosticState(true, true, true, true),
+    );
+
+    var gate = TestGate.init(std.testing.io);
+    var worker = Worker.initWithTestGate(&gate);
+    defer worker.deinit();
+    var snapshot = worker.diagnostics();
+    try std.testing.expectEqual(WorkerState.idle, snapshot.state);
+    try std.testing.expect(!snapshot.started);
+    try std.testing.expect(!snapshot.cancellation_requested);
+    try std.testing.expect(snapshot.completion_kind == null);
+    const expected = testTicket(91);
+    try std.testing.expectEqual(
+        contract.RequestDisposition.accepted,
+        try worker.request(testRequest(expected)),
+    );
+    gate.waitEntered();
+    snapshot = worker.diagnostics();
+    try std.testing.expectEqual(WorkerState.working, snapshot.state);
+    try std.testing.expectEqual(@as(?u64, 91), snapshot.generation);
+    try std.testing.expect(snapshot.started);
+    try std.testing.expect(!snapshot.cancellation_requested);
+    try std.testing.expect(snapshot.completion_kind == null);
+    gate.release();
+    gate.waitFinished();
+    snapshot = worker.diagnostics();
+    try std.testing.expectEqual(WorkerState.completion_ready, snapshot.state);
+    try std.testing.expectEqual(@as(?u64, 91), snapshot.generation);
+    try std.testing.expect(snapshot.started);
+    try std.testing.expect(!snapshot.cancellation_requested);
+    try std.testing.expectEqual(CompletionKind.ready, snapshot.completion_kind.?);
+    _ = switch (worker.poll(expected)) {
+        .completion => |completion| completion,
+        else => return error.UnexpectedWorkerPoll,
+    };
+    snapshot = worker.diagnostics();
+    try std.testing.expectEqual(WorkerState.idle, snapshot.state);
+    try std.testing.expectEqual(@as(?u64, null), snapshot.generation);
+    try std.testing.expect(!snapshot.started);
+    try std.testing.expect(!snapshot.cancellation_requested);
+    try std.testing.expect(snapshot.completion_kind == null);
+}
+
 test "district worker returns a validated deterministic build and joins on poll" {
     var gate = TestGate.init(std.testing.io);
     var worker = Worker.initWithTestGate(&gate);
@@ -345,7 +480,7 @@ test "district worker returns a validated deterministic build and joins on poll"
     const expected = testTicket(1);
     try std.testing.expectEqual(
         contract.RequestDisposition.accepted,
-        try worker.request(.{ .ticket = expected }),
+        try worker.request(testRequest(expected)),
     );
     const completion = try startAndRelease(&worker, &gate, expected);
     try std.testing.expect(contract.LoadTicket.eql(expected, completion.ticket()));
@@ -362,11 +497,11 @@ test "district worker enforces one-job backpressure and stale generations" {
     const second = testTicket(2);
     try std.testing.expectEqual(
         contract.RequestDisposition.accepted,
-        try worker.request(.{ .ticket = first }),
+        try worker.request(testRequest(first)),
     );
     try std.testing.expectEqual(
         contract.RequestDisposition.busy,
-        try worker.request(.{ .ticket = second }),
+        try worker.request(testRequest(second)),
     );
     try std.testing.expectEqual(contract.CancelDisposition.stale, worker.cancel(second));
     const stale_poll = worker.poll(second);
@@ -376,12 +511,12 @@ test "district worker enforces one-job backpressure and stale generations" {
     try expectCancelled(cancelled, first);
     try std.testing.expectEqual(
         contract.RequestDisposition.stale,
-        try worker.request(.{ .ticket = first }),
+        try worker.request(testRequest(first)),
     );
     gate.reset();
     try std.testing.expectEqual(
         contract.RequestDisposition.accepted,
-        try worker.request(.{ .ticket = second }),
+        try worker.request(testRequest(second)),
     );
     _ = try startAndRelease(&worker, &gate, second);
 }
@@ -393,7 +528,7 @@ test "district worker cancellation after work starts is sleep-free and generatio
     const expected = testTicket(11);
     try std.testing.expectEqual(
         contract.RequestDisposition.accepted,
-        try worker.request(.{ .ticket = expected }),
+        try worker.request(testRequest(expected)),
     );
     const completion = try startAndCancel(&worker, &gate, expected);
     try expectCancelled(completion, expected);
@@ -408,12 +543,12 @@ test "district worker reports unsupported recipes as structured failures" {
         contract.RequestDisposition.accepted,
         try worker.request(.{
             .ticket = expected,
-            .recipe_version = contract.current_recipe_version + 1,
+            .recipe_version = sandbox_recipe.current_recipe_version + 1,
         }),
     );
     const completion = try startAndRelease(&worker, &gate, expected);
     try std.testing.expectEqual(
-        contract.current_recipe_version + 1,
+        sandbox_recipe.current_recipe_version + 1,
         completion.failed.failure.unsupported_recipe_version,
     );
 }
@@ -424,7 +559,7 @@ test "district worker deinit cancels and joins started work" {
     const expected = testTicket(31);
     try std.testing.expectEqual(
         contract.RequestDisposition.accepted,
-        try worker.request(.{ .ticket = expected }),
+        try worker.request(testRequest(expected)),
     );
     gate.waitEntered();
     try std.testing.expect(worker.hasStarted(expected));
@@ -438,12 +573,18 @@ test "district worker cancellation wins over a published unconsumed result" {
     const expected = testTicket(41);
     try std.testing.expectEqual(
         contract.RequestDisposition.accepted,
-        try worker.request(.{ .ticket = expected }),
+        try worker.request(testRequest(expected)),
     );
     gate.waitEntered();
     gate.release();
     gate.waitFinished();
     try std.testing.expectEqual(contract.CancelDisposition.requested, worker.cancel(expected));
+    const snapshot = worker.diagnostics();
+    try std.testing.expectEqual(WorkerState.completion_ready, snapshot.state);
+    try std.testing.expectEqual(@as(?u64, 41), snapshot.generation);
+    try std.testing.expect(snapshot.started);
+    try std.testing.expect(snapshot.cancellation_requested);
+    try std.testing.expectEqual(CompletionKind.cancelled, snapshot.completion_kind.?);
     const completion = switch (worker.poll(expected)) {
         .completion => |value| value,
         else => return error.UnexpectedWorkerPoll,
@@ -457,7 +598,7 @@ test "district worker rejects fallible admission from a non-owner thread" {
     var rejected = std.atomic.Value(bool).init(false);
     const Probe = struct {
         fn run(target: *Worker, result: *std.atomic.Value(bool)) void {
-            _ = target.request(.{ .ticket = testTicket(51) }) catch |err| {
+            _ = target.request(testRequest(testTicket(51))) catch |err| {
                 result.store(err == error.WrongDistrictWorkerThread, .release);
                 return;
             };
@@ -468,6 +609,6 @@ test "district worker rejects fallible admission from a non-owner thread" {
     try std.testing.expect(rejected.load(.acquire));
     try std.testing.expectEqual(
         contract.RequestDisposition.accepted,
-        try worker.request(.{ .ticket = testTicket(51) }),
+        try worker.request(testRequest(testTicket(51))),
     );
 }

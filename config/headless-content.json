@@ -1,0 +1,23 @@
+{
+  "schema_version": 1,
+  "catalog_semantic_id": "incinerator.s6.two-district",
+  "catalog_wire_schema": 1,
+  "content_cohort_fingerprint": "83d3376f8bd4f0d23525921e4b2445e4fd09ee22282573d745eaf7428ba19ef0",
+  "catalog_file_sha256": "af483aad28cb184dcfad4fc7e7f30437faaa6905f65554690e254e6694087901",
+  "districts": [
+    {
+      "semantic_id": "district.west",
+      "coord_x": 0,
+      "coord_z": 0,
+      "recipe_version": 2,
+      "bundle_file_sha256": "f811334db94a7737a4f153fd760b359c4391dea5030067fca4abd0e1cccafeb8"
+    },
+    {
+      "semantic_id": "district.east",
+      "coord_x": 1,
+      "coord_z": 0,
+      "recipe_version": 2,
+      "bundle_file_sha256": "3ecdb803f9be8125ff2971799a5cba6589a25551a0e6e40b911e3d7bf891c82d"
+    }
+  ]
+}

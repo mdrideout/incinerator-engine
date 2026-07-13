@@ -1,310 +1,250 @@
-//! editor.zig - Editor System Orchestrator
+//! Owned optional developer editor for the visual sandbox composition.
 //!
-//! DOMAIN: Editor Layer (top-level)
-//!
-//! This module is the main entry point for the editor system. It manages:
-//! - ImGui backend lifecycle
-//! - Tool registration and rendering
-//! - Editor UI (main menu bar, tool toggles)
-//! - Shared editor state (EditorContext)
-//!
-//! Architecture:
-//! The editor follows a tool-first architecture where each debug panel is a
-//! self-contained "Tool" that implements a simple interface. Tools are manually
-//! registered in this file, giving explicit control over what's included.
-//!
-//! The editor is conditionally compiled via the `editor_enabled` build option:
-//! - Debug builds: Editor enabled by default
-//! - Release builds: Editor disabled by default (can override with -Deditor=true)
-//!
-//! Integration with Game Loop:
-//! ```
-//! // In main.zig render function:
-//! renderer.beginFrame(clear_color);
-//! // ... draw scene ...
-//! editor.draw(renderer, ctx);  // Draw editor overlay
-//! renderer.endFrame();
-//! ```
+//! The editor is a value owned by App. Visibility, capture policy, tool
+//! toggles, and stateful tool data all share that lifetime. Tools receive only
+//! one-frame borrows and fixed semantic request buffers.
 
 const std = @import("std");
-const build_options = @import("build_options");
 const zgui = @import("zgui");
 
 const sdl = @import("../sdl.zig");
+const input = @import("../input.zig");
 const renderer_module = @import("../renderer.zig");
-const camera_module = @import("../camera.zig");
-const timing_module = @import("../timing.zig");
 
 const imgui_backend = @import("imgui_backend.zig");
 const tool = @import("tool.zig");
-
-// Import tools
-// Each tool is a self-contained module that defines a `tool` variable.
-// We import them here and register them in the tools array below.
 const stats_tool = @import("tools/stats_tool.zig");
 const camera_tool = @import("tools/camera_tool.zig");
 const render_tool = @import("tools/render_tool.zig");
+const diagnostics_tool = @import("tools/diagnostics_tool.zig");
+const physics_debug_tool = @import("tools/physics_debug_tool.zig");
+const crate_authoring_tool = @import("tools/crate_authoring_tool.zig");
+const interaction_tool = @import("tools/interaction_tool.zig");
 
 const c = sdl.c;
 
 pub const Tool = tool.Tool;
-pub const EditorContext = tool.EditorContext;
+pub const FrameInput = tool.FrameInput;
+pub const AuthoringCrateView = tool.AuthoringCrateView;
+pub const AuthoringFeedbackStatus = tool.AuthoringFeedbackStatus;
+pub const AuthoringFeedback = tool.AuthoringFeedback;
+pub const SaveFeedbackStatus = tool.SaveFeedbackStatus;
+pub const SaveFeedback = tool.SaveFeedback;
+pub const CrateAuthoringView = tool.CrateAuthoringView;
+pub const InteractionView = tool.InteractionView;
 
-/// Semantic editor routing for an SDL event.
-///
-/// This reports only shortcuts that the editor itself reserved. It is
-/// intentionally separate from ImGui's `WantCapture*` state: the boolean
-/// returned by the SDL backend only means that it recognized an event.
-pub const EventRoute = struct {
-    keyboard_reserved: bool = false,
-    mouse_reserved: bool = false,
+/// Semantic editor routing for an SDL event. This reports only shortcuts that
+/// the editor reserves; ImGui capture is queried independently.
+pub const EventRoute = input.EventRoute;
+
+const default_tools = [_]Tool{
+    Tool.init(stats_tool.descriptor),
+    Tool.init(camera_tool.descriptor),
+    Tool.init(render_tool.descriptor),
+    Tool.init(diagnostics_tool.descriptor),
+    Tool.init(physics_debug_tool.descriptor),
+    Tool.init(crate_authoring_tool.descriptor),
+    Tool.init(interaction_tool.descriptor),
 };
 
-// ============================================================================
-// Editor State
-// ============================================================================
+pub const Editor = struct {
+    backend: imgui_backend.Backend = .{},
+    visible: bool = true,
+    show_demo_window: bool = false,
+    input_passthrough: bool = false,
+    tools: [default_tools.len]Tool = default_tools,
+    stats: stats_tool.State = .{},
+    crate_authoring: crate_authoring_tool.State = .{},
 
-/// Whether the editor overlay is visible (can be toggled with F1)
-var editor_visible: bool = true;
+    /// Initialize the owned editor after the renderer has claimed its window.
+    pub fn init(
+        window: *c.SDL_Window,
+        device: *c.SDL_GPUDevice,
+        swapchain_format: c.SDL_GPUTextureFormat,
+    ) Editor {
+        var result = Editor{};
+        result.backend.init(window, device, swapchain_format);
+        std.debug.print("Editor initialized with {} tools\n", .{result.tools.len});
+        return result;
+    }
 
-/// Show the ImGui demo window (for learning/reference)
-var show_demo_window: bool = false;
+    /// Release ImGui while the renderer device and window are still alive.
+    pub fn deinit(self: *Editor) void {
+        self.backend.deinit();
+        self.* = .{};
+    }
 
-/// Input passthrough mode (F3 toggle).
-///
-/// Passthrough is an explicit debugging override. It defaults to false so the
-/// editor honors ImGui's capture requests during normal use. ImGui always sees
-/// every SDL event regardless of this setting.
-var input_passthrough: bool = false;
+    /// Forward every event to ImGui, then reserve only explicit editor keys.
+    pub fn processEvent(self: *Editor, event: *const c.SDL_Event) EventRoute {
+        _ = self.backend.processEvent(event);
 
-// ============================================================================
-// Tool Registry
-// ============================================================================
-// Tools are explicitly registered here. This is intentional:
-// - You see exactly what tools are included
-// - Easy to reorder (affects menu and render order)
-// - Compile error if a tool file is missing
-//
-// To add a new tool:
-// 1. Create the tool file in tools/
-// 2. Import it above
-// 3. Add &tool_name.tool to this array
+        var route = EventRoute{};
+        if (event.type == c.SDL_EVENT_KEY_DOWN) {
+            if (event.key.scancode == c.SDL_SCANCODE_F1) {
+                if (!event.key.repeat) self.visible = !self.visible;
+                route.keyboard_reserved = true;
+                return route;
+            }
+            if (event.key.scancode == c.SDL_SCANCODE_F3) {
+                if (!event.key.repeat) self.input_passthrough = !self.input_passthrough;
+                route.keyboard_reserved = true;
+                return route;
+            }
+        }
 
-var tools = [_]*Tool{
-    &stats_tool.tool,
-    &camera_tool.tool,
-    &render_tool.tool,
-    // Add more tools here as we create them:
-    // &console_tool.tool,
+        if (!self.visible) return route;
+        if (event.type == c.SDL_EVENT_KEY_DOWN and
+            event.key.scancode == c.SDL_SCANCODE_F2)
+        {
+            if (!event.key.repeat) self.show_demo_window = !self.show_demo_window;
+            route.keyboard_reserved = true;
+        }
+        return route;
+    }
+
+    /// Produce a stack-borrowed adapter for the platform event pump. The sink
+    /// never outlives the call in which the App supplies it.
+    pub fn eventSink(self: *Editor) input.EventSink {
+        return .{
+            .context = self,
+            .process_event = routeInputEvent,
+            .capture = inputCapture,
+        };
+    }
+
+    /// Draw after the scene render pass and before the renderer submits the
+    /// frame. Renderer settings are borrowed only through the local context.
+    pub fn draw(
+        self: *Editor,
+        gpu_renderer: *renderer_module.Renderer,
+        frame: FrameInput,
+    ) void {
+        const cmd = gpu_renderer.current_cmd orelse return;
+        const swapchain_texture = gpu_renderer.getSwapchainTexture() orelse return;
+        const window_size = gpu_renderer.getWindowSize();
+        const pixel_density = c.SDL_GetWindowPixelDensity(gpu_renderer.window);
+        const framebuffer_scale = if (std.math.isFinite(pixel_density) and
+            pixel_density > 0)
+            pixel_density
+        else
+            1.0;
+        self.backend.newFrame(
+            @intCast(window_size.width),
+            @intCast(window_size.height),
+            framebuffer_scale,
+        );
+
+        if (!self.visible) {
+            drawHiddenHint();
+            self.backend.render(cmd, swapchain_texture);
+            return;
+        }
+
+        self.drawMainMenuBar();
+        for (&self.tools) |*registered_tool| {
+            if (registered_tool.enabled) {
+                self.drawTool(
+                    registered_tool.id,
+                    &frame,
+                    &gpu_renderer.render_settings,
+                );
+            }
+        }
+        if (self.show_demo_window) zgui.showDemoWindow(&self.show_demo_window);
+        self.backend.render(cmd, swapchain_texture);
+    }
+
+    pub fn wantsMouse(self: *const Editor) bool {
+        if (!self.visible or self.input_passthrough) return false;
+        return self.backend.wantsMouse();
+    }
+
+    pub fn wantsKeyboard(self: *const Editor) bool {
+        if (!self.visible or self.input_passthrough) return false;
+        return self.backend.wantsKeyboard();
+    }
+
+    pub fn isVisible(self: *const Editor) bool {
+        return self.visible;
+    }
+
+    fn drawTool(
+        self: *Editor,
+        id: tool.ToolId,
+        frame: *const FrameInput,
+        render_settings: *renderer_module.RenderSettings,
+    ) void {
+        switch (id) {
+            .stats => stats_tool.draw(&self.stats, frame.frame_timer),
+            .camera => camera_tool.draw(frame.camera),
+            .render => render_tool.draw(render_settings),
+            .diagnostics => diagnostics_tool.draw(&frame.developer),
+            .physics_debug => physics_debug_tool.draw(&frame.visualization),
+            .crate_authoring => crate_authoring_tool.draw(
+                &self.crate_authoring,
+                &frame.authoring,
+            ),
+            .interaction => interaction_tool.draw(&frame.interaction),
+        }
+    }
+
+    fn drawMainMenuBar(self: *Editor) void {
+        if (!zgui.beginMainMenuBar()) return;
+        defer zgui.endMainMenuBar();
+
+        if (zgui.beginMenu("Tools", true)) {
+            for (&self.tools) |*registered_tool| {
+                if (zgui.menuItem(registered_tool.name, .{
+                    .selected = registered_tool.enabled,
+                })) {
+                    registered_tool.toggle();
+                }
+            }
+            zgui.separator();
+            if (zgui.menuItem("ImGui Demo", .{
+                .shortcut = "F2",
+                .selected = self.show_demo_window,
+            })) {
+                self.show_demo_window = !self.show_demo_window;
+            }
+            zgui.endMenu();
+        }
+
+        if (zgui.beginMenu("View", true)) {
+            if (zgui.menuItem("Input Passthrough", .{
+                .shortcut = "F3",
+                .selected = self.input_passthrough,
+            })) {
+                self.input_passthrough = !self.input_passthrough;
+            }
+            zgui.separator();
+            if (zgui.menuItem("Hide Editor", .{ .shortcut = "F1" })) {
+                self.visible = false;
+            }
+            zgui.endMenu();
+        }
+    }
+
+    fn routeInputEvent(
+        context: *anyopaque,
+        event: *const c.SDL_Event,
+    ) input.EventRoute {
+        const self: *Editor = @ptrCast(@alignCast(context));
+        return self.processEvent(event);
+    }
+
+    fn inputCapture(context: *anyopaque) input.Capture {
+        const self: *const Editor = @ptrCast(@alignCast(context));
+        return .{
+            .keyboard = self.wantsKeyboard(),
+            .mouse = self.wantsMouse(),
+        };
+    }
 };
 
-// ============================================================================
-// Public API
-// ============================================================================
-
-/// Initialize the editor system.
-///
-/// Call this after the renderer is initialized. Sets up ImGui and all tools.
-pub fn init(
-    window: *c.SDL_Window,
-    device: *c.SDL_GPUDevice,
-    swapchain_format: c.SDL_GPUTextureFormat,
-) void {
-    // Skip if editor is disabled at build time
-    if (!build_options.editor_enabled) return;
-
-    // ImGui's pipeline must match the actual claimed-window swapchain format.
-    imgui_backend.init(window, device, swapchain_format);
-
-    std.debug.print("Editor initialized with {} tools\n", .{tools.len});
-}
-
-/// Shutdown the editor system.
-pub fn deinit() void {
-    if (!build_options.editor_enabled) return;
-    imgui_backend.deinit();
-}
-
-/// Process an SDL event for editor input.
-///
-/// Every event is forwarded to the ImGui backend, including events received
-/// while the overlay is hidden. The returned route contains only explicit
-/// editor shortcuts; gameplay capture is queried separately through
-/// wantsMouse() and wantsKeyboard().
-///
-/// Key behavior:
-/// - F1: Toggle editor visibility (always works, even when hidden)
-/// - F2: Toggle ImGui demo window (only when editor visible)
-/// - F3: Toggle input passthrough mode (always works)
-///
-/// Input passthrough mode disables ImGui capture as an explicit debugging
-/// override. It does not stop ImGui from receiving events.
-pub fn processEvent(event: *const c.SDL_Event) EventRoute {
-    if (!build_options.editor_enabled) return .{};
-
-    // Backend recognition is not capture. ImGui must observe every event so
-    // key/button releases and focus transitions cannot become unbalanced.
-    _ = imgui_backend.processEvent(event);
-
-    var route = EventRoute{};
-
-    // ========================================================================
-    // Global hotkeys - these work regardless of editor visibility or passthrough
-    // ========================================================================
-    if (event.type == c.SDL_EVENT_KEY_DOWN) {
-        // F1: Toggle editor visibility
-        if (event.key.scancode == c.SDL_SCANCODE_F1) {
-            if (!event.key.repeat) {
-                editor_visible = !editor_visible;
-            }
-            route.keyboard_reserved = true;
-            return route;
-        }
-        // F3: Toggle input passthrough mode
-        if (event.key.scancode == c.SDL_SCANCODE_F3) {
-            if (!event.key.repeat) {
-                input_passthrough = !input_passthrough;
-            }
-            route.keyboard_reserved = true;
-            return route;
-        }
-    }
-
-    // A hidden editor still receives backend events, but reserves no local
-    // shortcuts other than the global toggles above.
-    if (!editor_visible) return route;
-
-    // ========================================================================
-    // Editor-only hotkeys - only work when editor is visible
-    // ========================================================================
-    if (event.type == c.SDL_EVENT_KEY_DOWN) {
-        // F2: Toggle demo window
-        if (event.key.scancode == c.SDL_SCANCODE_F2) {
-            if (!event.key.repeat) {
-                show_demo_window = !show_demo_window;
-            }
-            route.keyboard_reserved = true;
-            return route;
-        }
-    }
-
-    return route;
-}
-
-/// Draw the editor overlay.
-///
-/// IMPORTANT: Call this AFTER ending the scene render pass but BEFORE submitting.
-/// The editor needs to:
-/// 1. Build ImGui UI (happens immediately)
-/// 2. Upload draw data (needs copy pass - can't be inside render pass)
-/// 3. Render ImGui (starts its own render pass with LOAD to preserve scene)
-///
-/// Call sequence in main.zig:
-///   renderer.beginFrame()
-///   drawScene()
-///   renderer.endRenderPass()  // End scene pass first!
-///   editor.draw()             // ImGui does its thing
-///   renderer.submitFrame()    // Submit everything
-///
-/// When editor is hidden, a small hint is still drawn to remind users how to
-/// bring it back (Press F1).
-pub fn draw(
-    gpu_renderer: *renderer_module.Renderer,
-    camera: *const camera_module.Camera,
-    frame_timer: *const timing_module.FrameTimer,
-) void {
-    if (!build_options.editor_enabled) return;
-
-    // Get command buffer (render pass should already be ended)
-    const cmd = gpu_renderer.current_cmd orelse return;
-
-    // Get swapchain texture for ImGui's render pass
-    const swapchain_texture = gpu_renderer.getSwapchainTexture() orelse return;
-
-    // Get window size for ImGui frame
-    const window_size = gpu_renderer.getWindowSize();
-
-    // Begin new ImGui frame - we always need this, even when hidden (for the hint)
-    imgui_backend.newFrame(
-        @intCast(window_size.width),
-        @intCast(window_size.height),
-    );
-
-    // ========================================================================
-    // Hidden state: just draw the hint and return
-    // ========================================================================
-    if (!editor_visible) {
-        drawHiddenHint();
-        imgui_backend.render(cmd, swapchain_texture);
-        return;
-    }
-
-    // ========================================================================
-    // Visible state: draw full editor UI
-    // ========================================================================
-
-    // Create the editor context that tools will use
-    var ctx = EditorContext{
-        .camera = camera,
-        .frame_timer = frame_timer,
-        .wants_mouse = wantsMouse(),
-        .wants_keyboard = wantsKeyboard(),
-    };
-
-    // Draw main menu bar
-    drawMainMenuBar();
-
-    // Draw all enabled tools
-    for (&tools) |t| {
-        t.draw(&ctx);
-    }
-
-    // Draw demo window if enabled (great for learning ImGui!)
-    if (show_demo_window) {
-        zgui.showDemoWindow(&show_demo_window);
-    }
-
-    // Render ImGui (handles its own render pass)
-    imgui_backend.render(cmd, swapchain_texture);
-}
-
-/// Check if editor wants mouse input
-pub fn wantsMouse() bool {
-    if (!build_options.editor_enabled) return false;
-    if (!editor_visible) return false;
-    if (input_passthrough) return false;
-    return imgui_backend.wantsMouse();
-}
-
-/// Check if editor wants keyboard input
-pub fn wantsKeyboard() bool {
-    if (!build_options.editor_enabled) return false;
-    if (!editor_visible) return false;
-    if (input_passthrough) return false;
-    return imgui_backend.wantsKeyboard();
-}
-
-/// Check if editor is currently visible
-pub fn isVisible() bool {
-    if (!build_options.editor_enabled) return false;
-    return editor_visible;
-}
-
-// ============================================================================
-// Internal: Hidden Hint Overlay
-// ============================================================================
-
-/// Draw a small hint when the editor is hidden.
-/// This helps users remember how to bring the editor back.
 fn drawHiddenHint() void {
-    // Position in top-left corner
     zgui.setNextWindowPos(.{ .x = 10, .y = 10, .cond = .always });
-
-    // Semi-transparent background
     zgui.setNextWindowBgAlpha(.{ .alpha = 0.5 });
-
-    // Minimal window with no decorations
-    // Note: We use a minimal set of flags that zgui supports
     if (zgui.begin("##hidden_hint", .{
         .flags = .{
             .no_title_bar = true,
@@ -316,54 +256,49 @@ fn drawHiddenHint() void {
             .no_focus_on_appearing = true,
         },
     })) {
-        // Gray text so it's not too distracting
-        zgui.textColored(.{ 0.7, 0.7, 0.7, 1.0 }, "Press F1 to show editor", .{});
+        zgui.textColored(
+            .{ 0.7, 0.7, 0.7, 1.0 },
+            "Press F1 to show editor",
+            .{},
+        );
     }
     zgui.end();
 }
 
-// ============================================================================
-// Internal: Main Menu Bar
-// ============================================================================
-
-fn drawMainMenuBar() void {
-    if (zgui.beginMainMenuBar()) {
-        // Tools menu - toggle visibility of each tool
-        if (zgui.beginMenu("Tools", true)) {
-            for (&tools) |t| {
-                // menuItem takes a struct with optional shortcut, selected state, and enabled
-                if (zgui.menuItem(t.name, .{
-                    .selected = t.enabled, // Checkmark when enabled
-                })) {
-                    t.toggle();
-                }
-            }
-            zgui.separator();
-            if (zgui.menuItem("ImGui Demo", .{
-                .shortcut = "F2",
-                .selected = show_demo_window,
-            })) {
-                show_demo_window = !show_demo_window;
-            }
-            zgui.endMenu();
-        }
-
-        // View menu - general editor settings
-        if (zgui.beginMenu("View", true)) {
-            // Input passthrough toggle - allows camera movement while editor is open
-            if (zgui.menuItem("Input Passthrough", .{
-                .shortcut = "F3",
-                .selected = input_passthrough,
-            })) {
-                input_passthrough = !input_passthrough;
-            }
-            zgui.separator();
-            if (zgui.menuItem("Hide Editor", .{ .shortcut = "F1" })) {
-                editor_visible = false;
-            }
-            zgui.endMenu();
-        }
-
-        zgui.endMainMenuBar();
+test "tool registry contains every tool identity exactly once" {
+    var seen = [_]bool{false} ** std.meta.tags(tool.ToolId).len;
+    for (default_tools) |registered_tool| {
+        const index = @intFromEnum(registered_tool.id);
+        try std.testing.expect(!seen[index]);
+        seen[index] = true;
     }
+    for (seen) |present| try std.testing.expect(present);
+}
+
+test "editor runtime and tool state belong to each value" {
+    var first = Editor{};
+    const second = Editor{};
+
+    first.visible = false;
+    first.tools[0].toggle();
+    first.stats.history_index = 7;
+    first.crate_authoring.dirty = true;
+
+    try std.testing.expect(second.visible);
+    try std.testing.expect(second.tools[0].enabled);
+    try std.testing.expectEqual(@as(usize, 0), second.stats.history_index);
+    try std.testing.expect(!second.crate_authoring.dirty);
+}
+
+test "owned editor event routing mutates only its receiver" {
+    var first = Editor{};
+    const second = Editor{};
+    var event = std.mem.zeroes(c.SDL_Event);
+    event.type = c.SDL_EVENT_KEY_DOWN;
+    event.key.scancode = c.SDL_SCANCODE_F1;
+
+    const route = first.processEvent(&event);
+    try std.testing.expect(route.keyboard_reserved);
+    try std.testing.expect(!first.isVisible());
+    try std.testing.expect(second.isVisible());
 }

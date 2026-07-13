@@ -1,5 +1,10 @@
 # S0 Crate Lifecycle Design
 
+> **Historical slice design.** This was the delivery contract for the slice at
+> closure. Detailed file layout, cohorts, and limitations below may have been
+> consolidated later. See [ADR-008](../adr/008-feature-oriented-engine-architecture.md)
+> and the [cleanup plan](../../CLEANUP_PLAN.md) for current architecture.
+
 **Status:** Complete (2026-07-10)
 **Scope:** S0 only
 **Related decisions:** ADR-004, ADR-005, ADR-007, ADR-008

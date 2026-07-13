@@ -23,24 +23,21 @@
 const std = @import("std");
 const zgui = @import("zgui");
 const tool_module = @import("../tool.zig");
-
-const Tool = tool_module.Tool;
-const EditorContext = tool_module.EditorContext;
+const Camera = @import("../../camera.zig").Camera;
 
 // ============================================================================
 // Tool Definition
 // ============================================================================
-// Every tool needs a public `tool` variable that gets registered in editor.zig.
-// This is the "plugin" pattern - the tool defines itself, the editor just
-// collects and iterates over all registered tools.
+// Each tool publishes immutable registration metadata. editor.zig owns the
+// corresponding runtime visibility and explicitly dispatches the draw call.
 
 /// The Camera tool instance.
 /// Starts disabled (false) since it's more specialized than Stats.
 /// Users can enable it from the Tools menu when needed.
-pub var tool = Tool{
+pub const descriptor = tool_module.Descriptor{
+    .id = .camera,
     .name = "Camera", // Window title and menu item name
-    .enabled = false, // Start hidden - enable from Tools menu
-    .draw_fn = draw, // Function pointer to our draw implementation
+    .enabled_by_default = false, // Start hidden - enable from Tools menu
 };
 
 // ============================================================================
@@ -58,13 +55,13 @@ fn radiansToDegrees(radians: f32) f32 {
 // Draw Function
 // ============================================================================
 // This is called every frame when the tool is enabled.
-// It receives the EditorContext which contains a pointer to the camera.
+// It receives only a one-frame immutable camera borrow.
 //
 // ImGui is an "immediate mode" GUI - you call functions every frame to draw
 // widgets, and they return true if the user interacted with them. There's no
 // retained widget tree like in HTML/CSS or traditional GUI frameworks.
 
-fn draw(ctx: *EditorContext) void {
+pub fn draw(camera: *const Camera) void {
     // ========================================================================
     // Window Setup
     // ========================================================================
@@ -91,8 +88,6 @@ fn draw(ctx: *EditorContext) void {
     // This is a common pattern in ImGui - always match begin/end.
 
     if (zgui.begin("Camera", .{})) {
-        const camera = ctx.camera;
-
         // ====================================================================
         // Position Section
         // ====================================================================

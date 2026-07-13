@@ -1,6 +1,7 @@
 //! Gameplay-neutral port used by the vehicle slice to transfer control
 //! to and from a character without importing CharacterFeature internals.
 
+const std = @import("std");
 const engine = @import("incinerator_engine");
 
 pub const DriverMode = union(enum) {
@@ -11,13 +12,23 @@ pub const DriverMode = union(enum) {
 pub const DriverState = struct {
     pose: engine.physics.Pose,
     mode: DriverMode,
+    /// Feature-neutral eligibility projection. The driver slice owns the
+    /// relationship; VehicleFeature only needs to know whether entering a
+    /// vehicle would conflict with an already-held persistent object.
+    carried_item: ?engine.PersistentId = null,
 
     pub fn validate(self: DriverState) !void {
         try self.pose.validate();
         switch (self.mode) {
             .on_foot => {},
-            .driving => |vehicle_id| try vehicle_id.validate(),
+            .driving => |vehicle_id| {
+                try vehicle_id.validate();
+                if (self.carried_item != null) {
+                    return error.DriverCannotCarryWhileDriving;
+                }
+            },
         }
+        if (self.carried_item) |item_id| try item_id.validate();
     }
 };
 
@@ -170,6 +181,19 @@ test "driver state validates its pose and driving identity" {
     try (DriverState{ .pose = .{}, .mode = .on_foot }).validate();
     try (DriverState{
         .pose = .{},
+        .mode = .on_foot,
+        .carried_item = .{ .namespace = 1, .local = 2 },
+    }).validate();
+    try (DriverState{
+        .pose = .{},
         .mode = .{ .driving = .{ .namespace = 1, .local = 1 } },
     }).validate();
+    try std.testing.expectError(
+        error.DriverCannotCarryWhileDriving,
+        (DriverState{
+            .pose = .{},
+            .mode = .{ .driving = .{ .namespace = 1, .local = 1 } },
+            .carried_item = .{ .namespace = 1, .local = 2 },
+        }).validate(),
+    );
 }

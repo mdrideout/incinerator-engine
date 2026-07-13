@@ -112,41 +112,6 @@ pub const Camera = struct {
         return zm.mul(view, proj);
     }
 
-    // ========================================================================
-    // Movement
-    // ========================================================================
-
-    /// Move the camera forward/backward along its look direction
-    ///
-    /// Positive amount = forward, negative = backward
-    /// Movement is projected onto the XZ plane (no flying up/down)
-    pub fn moveForward(self: *Camera, amount: f32) void {
-        const forward = self.getForward();
-        // Project onto XZ plane for ground-based movement
-        const forward_xz = zm.normalize3(.{
-            forward[0],
-            0.0,
-            forward[2],
-            0.0,
-        });
-        self.position += forward_xz * zm.splat(zm.Vec, amount);
-    }
-
-    /// Move the camera left/right (strafe)
-    ///
-    /// Positive amount = right, negative = left
-    pub fn moveRight(self: *Camera, amount: f32) void {
-        const right = self.getRight();
-        self.position += right * zm.splat(zm.Vec, amount);
-    }
-
-    /// Move the camera up/down (world Y axis)
-    ///
-    /// Positive amount = up, negative = down
-    pub fn moveUp(self: *Camera, amount: f32) void {
-        self.position += zm.f32x4(0.0, amount, 0.0, 0.0);
-    }
-
     /// Rotate the camera based on mouse delta
     ///
     /// dx = horizontal mouse movement (pixels)
@@ -178,33 +143,6 @@ pub const Camera = struct {
             target[2] - forward[2] * distance,
             1.0,
         );
-    }
-
-    // ========================================================================
-    // Convenience
-    // ========================================================================
-
-    /// Create a camera positioned to look at the origin from a distance
-    pub fn lookingAtOrigin(distance: f32) Camera {
-        return Camera{
-            .position = zm.f32x4(0.0, 0.0, distance, 1.0),
-            .yaw = 0.0,
-            .pitch = 0.0,
-        };
-    }
-
-    /// Create a camera positioned above and behind the origin, looking down at the scene.
-    /// Good default for viewing physics demos with falling objects.
-    /// height: how high above the ground (Y position)
-    /// back: how far back (Z position)
-    pub fn aboveLookingDown(height: f32, back: f32) Camera {
-        // Calculate pitch to look at origin from position (0, height, back)
-        const pitch = -std.math.atan2(height, back); // negative = look down
-        return Camera{
-            .position = zm.f32x4(0.0, height, back, 1.0),
-            .yaw = 0.0,
-            .pitch = pitch,
-        };
     }
 };
 

@@ -1,4 +1,7 @@
 const std = @import("std");
+const headless_product = @import("tools/build/headless_product.zig");
+const macos = @import("tools/build/macos.zig");
+const simulation_graph = @import("tools/build/simulation_graph.zig");
 const zgui_sdl3_gpu = @import("tools/build/zgui_sdl3_gpu.zig");
 
 const CookedContent = struct {
@@ -6,30 +9,83 @@ const CookedContent = struct {
     output: std.Build.LazyPath,
 };
 
+const CookDependency = struct {
+    semantic_id: []const u8,
+    bundle: std.Build.LazyPath,
+};
+
 fn runContentCooker(
     b: *std.Build,
     cooker: *std.Build.Step.Compile,
+    source_path: []const u8,
+    provenance_path: []const u8,
     output_name: []const u8,
+    bundle_key: []const u8,
+    coord_x: i32,
+    coord_z: i32,
+    dependencies: []const CookDependency,
 ) CookedContent {
     const run = b.addRunArtifact(cooker);
-    run.addFileArg(b.path("fixtures/s3_district/district.gltf"));
-    run.addFileArg(b.path("fixtures/s3_district/PROVENANCE.md"));
+    run.addFileArg(b.path(source_path));
+    run.addFileArg(b.path(provenance_path));
     const output = run.addOutputFileArg(output_name);
-    run.addArg("district/s3_fixture");
+    run.addArg(bundle_key);
+    run.addArg(b.fmt("{d}", .{coord_x}));
+    run.addArg(b.fmt("{d}", .{coord_z}));
+    for (dependencies) |dependency| {
+        run.addArg(dependency.semantic_id);
+        run.addFileArg(dependency.bundle);
+    }
     return .{ .step = &run.step, .output = output };
 }
 
-const WindowsGpu = enum {
-    d3d12,
-    vulkan,
+fn runContentCatalogCooker(
+    b: *std.Build,
+    cooker: *std.Build.Step.Compile,
+    spec_path: []const u8,
+    output_name: []const u8,
+    bundles: []const std.Build.LazyPath,
+) CookedContent {
+    const run = b.addRunArtifact(cooker);
+    run.addFileArg(b.path(spec_path));
+    const output = run.addOutputFileArg(output_name);
+    for (bundles) |bundle| run.addFileArg(bundle);
+    return .{ .step = &run.step, .output = output };
+}
+
+const Product = enum {
+    client,
+    headless,
 };
 
-const FlecsDebugMode = enum {
-    sanitize,
-    debug,
-    depends_on_build,
-    none,
-};
+fn addClientImport(
+    product: *std.Build.Step.Compile,
+    validation: *std.Build.Step.Compile,
+    name: []const u8,
+    module: *std.Build.Module,
+) void {
+    product.root_module.addImport(name, module);
+    validation.root_module.addImport(name, module);
+}
+
+fn linkClientLibrary(
+    product: *std.Build.Step.Compile,
+    validation: *std.Build.Step.Compile,
+    library: *std.Build.Step.Compile,
+) void {
+    product.root_module.linkLibrary(library);
+    validation.root_module.linkLibrary(library);
+}
+
+fn addValidationCommand(
+    b: *std.Build,
+    install_step: *std.Build.Step,
+    argv: []const []const u8,
+) *std.Build.Step.Run {
+    const command = b.addSystemCommand(argv);
+    command.step.dependOn(install_step);
+    return command;
+}
 
 // Although this function looks imperative, it does not perform the build
 // directly and instead it mutates the build graph (`b`) that will be then
@@ -38,16 +94,26 @@ const FlecsDebugMode = enum {
 // build runner to parallelize the build automatically (and the cache system to
 // know when a step doesn't need to be re-run).
 pub fn build(b: *std.Build) void {
-    // Standard target options allow the person running `zig build` to choose
-    // what target to build for. Here we do not override the defaults, which
-    // means any target is allowed, and the default is native. Other options
-    // for restricting supported target set are available.
+    macos.requireToolchain();
+    // The active product contract is deliberately narrow. Keeping the target
+    // option is useful for selecting an SDK/version floor, but every product
+    // rejects non-Apple-Silicon macOS targets at graph construction time.
     const target = b.standardTargetOptions(.{});
+    macos.requireAppleSilicon(b, target);
     // Standard optimization options allow the person running `zig build` to select
     // between Debug, ReleaseSafe, ReleaseFast, and ReleaseSmall. Here we do not
     // set a preferred release mode, allowing the user to decide how to optimize.
     const optimize = b.standardOptimizeOption(.{});
-    const flecs_debug_mode: FlecsDebugMode = if (optimize == .Debug) .sanitize else .none;
+    const product = b.option(
+        Product,
+        "product",
+        "Build product (client is the default; headless is the cold Apple Silicon authority product)",
+    ) orelse .client;
+    if (product == .headless) {
+        headless_product.build(b, target, optimize);
+        return;
+    }
+
     const glslc_path = b.option(
         []const u8,
         "glslc",
@@ -58,17 +124,6 @@ pub fn build(b: *std.Build) void {
         "spirv-cross",
         "Path to the host spirv-cross executable",
     ) orelse "spirv-cross";
-    const shadercross_path = b.option(
-        []const u8,
-        "shadercross",
-        "Path to the host SDL_shadercross executable used for DXIL",
-    ) orelse "shadercross";
-    const windows_gpu = b.option(
-        WindowsGpu,
-        "windows-gpu",
-        "Windows SDL GPU backend (d3d12 is the support target; vulkan is a bootstrap fallback)",
-    ) orelse .d3d12;
-
     // ---------------------------------------------------------
     // Editor Build Option
     // ---------------------------------------------------------
@@ -93,43 +148,54 @@ pub fn build(b: *std.Build) void {
     // target and optimize options) will be listed when running `zig build --help`
     // in this directory.
 
-    // This creates a module, which represents a collection of source files alongside
-    // some compilation options, such as optimization mode and linked system libraries.
-    // Zig modules are the preferred way of making Zig code available to consumers.
-    // addModule defines a module that we intend to make available for importing
-    // to our consumers. We must give it a name because a Zig package can expose
-    // multiple modules and consumers will need to be able to specify which
-    // module they want to access.
-    const contracts_module = b.createModule(.{
-        .root_source_file = b.path("src/engine/contracts.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    const content_module = b.createModule(.{
-        .root_source_file = b.path("src/content/root.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    const graph = simulation_graph.create(b, target, optimize);
+    const cohort_verification = simulation_graph.addCohortVerification(b);
+    const contracts_module = graph.contracts;
+    const content_module = graph.content;
+    const mod = graph.engine;
+    const jolt_physics_module = graph.jolt_physics;
+    const crate_feature_module = graph.crates;
+    const driver_contract_module = graph.driver_contract;
+    const district_contract_module = graph.district_contract;
+    const sandbox_district_recipe_module = graph.sandbox_district_recipe;
+    const navigation_contract_module = graph.navigation_contract;
+    const sandbox_navigation_module = graph.sandbox_navigation;
+    const interaction_contract_module = graph.interaction_contract;
+    const character_feature_module = graph.character;
+    const vehicle_feature_module = graph.vehicle;
+    const district_worker_module = graph.district_worker;
+    const district_replay_loader_module = graph.district_replay_loader;
+    const district_feature_module = graph.district;
+    const npc_feature_module = graph.npc;
+    const population_feature_module = graph.population;
+    const interaction_feature_module = graph.interaction;
+    const developer_controls_module = graph.developer_controls;
+    const developer_diagnostics_module = graph.developer_diagnostics;
+    const sandbox_authoring_module = graph.sandbox_authoring;
+    const sandbox_save_module = graph.sandbox_save;
+    const save_slots_module = graph.save_slots;
+    const sandbox_replay_module = graph.sandbox_replay;
+    const sandbox_simulation_module = graph.sandbox_simulation;
+
     const content_host_module = b.createModule(.{
         .root_source_file = b.path("src/content/root.zig"),
         .target = b.graph.host,
         .optimize = optimize,
     });
-
-    const mod = b.addModule("incinerator_engine", .{
-        // The root source file is the "entry point" of this module. Users of
-        // this module will only be able to access public declarations contained
-        // in this file, which means that if you have declarations that you
-        // intend to expose to consumers that were defined in other files part
-        // of this module, you will have to make sure to re-export them from
-        // the root file.
-        .root_source_file = b.path("src/root.zig"),
-        // Later on we'll use this module as the root module of a test executable
-        // which requires us to specify a target.
-        .target = target,
-        .optimize = optimize,
+    const district_contract_host_module = b.createModule(.{
+        .root_source_file = b.path("src/features/district_contract.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+        .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
     });
-    mod.addImport("engine_contracts", contracts_module);
+    const sandbox_district_recipe_host_module = b.createModule(.{
+        .root_source_file = b.path("src/sandbox/district_recipe.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+        .imports = &.{
+            .{ .name = "district_contract", .module = district_contract_host_module },
+        },
+    });
 
     // Here we define an executable. An executable needs to have a root module
     // which needs to expose a `main` function. While we could add a main function
@@ -154,6 +220,11 @@ pub fn build(b: *std.Build) void {
     // Code can access these via: const options = @import("build_options");
     const options = b.addOptions();
     options.addOption(bool, "editor_enabled", editor_enabled);
+    options.addOption(bool, "validation_mode", false);
+
+    const validation_options = b.addOptions();
+    validation_options.addOption(bool, "editor_enabled", editor_enabled);
+    validation_options.addOption(bool, "validation_mode", true);
 
     const exe = b.addExecutable(.{
         .name = "incinerator_engine",
@@ -182,24 +253,31 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    exe.root_module.addImport("content", content_module);
+    const validation_exe = b.addExecutable(.{
+        .name = "incinerator_validation",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "incinerator_engine", .module = mod },
+                .{ .name = "build_options", .module = validation_options.createModule() },
+            },
+        }),
+    });
+    addClientImport(exe, validation_exe, "content", content_module);
+    addClientImport(exe, validation_exe, "engine_contracts", contracts_module);
 
     // ---------------------------------------------------------
     // SDL3 (castholm/SDL)
     // ---------------------------------------------------------
-    const sdl_dep = b.dependency("sdl", .{
+    const sdl_dep = b.lazyDependency("sdl", .{
         .target = target,
         .optimize = optimize,
         .preferred_linkage = .static,
-        //.strip = null,
-        //.sanitize_c = null,
-        //.pic = null,
-        //.lto = null,
-        //.emscripten_pthreads = false,
-        //.install_build_config_h = false,
-    });
+    }) orelse return;
     const sdl_lib = sdl_dep.artifact("SDL3");
-    exe.root_module.linkLibrary(sdl_lib);
+    linkClientLibrary(exe, validation_exe, sdl_lib);
 
     const district_gpu_registry_module = b.createModule(.{
         .root_source_file = b.path("src/district_gpu_registry.zig"),
@@ -225,43 +303,24 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
     });
-    exe.root_module.addImport("district_presentation", district_presentation_module);
+    addClientImport(
+        exe,
+        validation_exe,
+        "district_presentation",
+        district_presentation_module,
+    );
 
-    // ---------------------------------------------------------
-    // Jolt Physics 5.5 through the engine-owned JoltC build package.
-    // ---------------------------------------------------------
-    const joltc = b.dependency("joltc", .{
-        .target = target,
-        .optimize = optimize,
-        .cross_platform_deterministic = false,
-    });
-    const jolt_c_module = b.createModule(.{
-        .root_source_file = b.path("src/adapters/physics/jolt_c.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    jolt_c_module.linkLibrary(joltc.artifact("joltc"));
-    const jolt_physics_module = b.createModule(.{
-        .root_source_file = b.path("src/physics.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "engine_contracts", .module = contracts_module },
-            .{ .name = "jolt_c", .module = jolt_c_module },
-        },
-    });
     // ---------------------------------------------------------
     // ImGui (zgui) debug UI
     // ---------------------------------------------------------
     // zgui wraps Dear ImGui for immediate-mode debug UI.
     // We use the SDL3 GPU backend to integrate with our existing renderer.
-    // Available backends: no_backend, glfw_opengl3, glfw_wgpu, sdl3_gpu, etc.
     if (editor_enabled) {
         const zgui = b.lazyDependency("zgui", .{
             .target = target,
             .optimize = optimize,
             .shared = false,
-            .with_implot = true,
+            .with_implot = false,
             .with_gizmo = false,
             .with_node_editor = false,
             .with_te = false,
@@ -276,33 +335,33 @@ pub fn build(b: *std.Build) void {
             .backend = .no_backend,
         }) orelse return;
         const editor_gui = zgui_sdl3_gpu.build(b, zgui, sdl_dep, target, optimize);
-        exe.root_module.addImport("zgui", editor_gui.module);
-        exe.root_module.linkLibrary(editor_gui.library);
+        addClientImport(exe, validation_exe, "zgui", editor_gui.module);
+        linkClientLibrary(exe, validation_exe, editor_gui.library);
     }
 
     // ---------------------------------------------------------
     // Math (zmath)
     // ---------------------------------------------------------
-    const zmath = b.dependency("zmath", .{
+    const zmath = b.lazyDependency("zmath", .{
         .target = target,
         .optimize = optimize,
-        .enable_cross_platform_determinism = true,
-    });
-    exe.root_module.addImport("zmath", zmath.module("root"));
+        .enable_cross_platform_determinism = false,
+    }) orelse return;
+    addClientImport(exe, validation_exe, "zmath", zmath.module("root"));
 
     // Source glTF decoding exists only in this host cooker. Shipped runtime
     // content code imports the renderer-neutral codec/explicit-root reader and
     // never links zmesh, zstbi, SDL, or a source-format parser.
-    const host_zmesh = b.dependency("zmesh", .{
+    const host_zmesh = b.lazyDependency("zmesh", .{
         .target = b.graph.host,
         .optimize = .ReleaseSafe,
         .shape_use_32bit_indices = true,
         .shared = false,
-    });
-    const host_zstbi = b.dependency("zstbi", .{
+    }) orelse return;
+    const host_zstbi = b.lazyDependency("zstbi", .{
         .target = b.graph.host,
         .optimize = .ReleaseSafe,
-    });
+    }) orelse return;
     const content_cooker = b.addExecutable(.{
         .name = "incinerator_content_cooker",
         .root_module = b.createModule(.{
@@ -311,6 +370,8 @@ pub fn build(b: *std.Build) void {
             .optimize = .ReleaseSafe,
             .imports = &.{
                 .{ .name = "content", .module = content_host_module },
+                .{ .name = "district_contract", .module = district_contract_host_module },
+                .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_host_module },
                 .{ .name = "zmesh", .module = host_zmesh.module("root") },
                 .{ .name = "zstbi", .module = host_zstbi.module("root") },
             },
@@ -318,13 +379,88 @@ pub fn build(b: *std.Build) void {
     });
     content_cooker.root_module.linkLibrary(host_zmesh.artifact("zmesh"));
 
-    const cooked_fixture = runContentCooker(b, content_cooker, "s3_fixture.icdb");
-    const cooked_fixture_repeat = runContentCooker(b, content_cooker, "s3_fixture_repeat.icdb");
+    const cooked_fixture = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s3_district/district.gltf",
+        "fixtures/s3_district/PROVENANCE.md",
+        "s3_fixture.icdb",
+        "district/s3_fixture",
+        0,
+        0,
+        &.{},
+    );
+    const cooked_fixture_repeat = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s3_district/district.gltf",
+        "fixtures/s3_district/PROVENANCE.md",
+        "s3_fixture_repeat.icdb",
+        "district/s3_fixture",
+        0,
+        0,
+        &.{},
+    );
+    const cooked_east = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s6_east/district.gltf",
+        "fixtures/s6_east/PROVENANCE.md",
+        "s6_east.icdb",
+        "district/s6_east",
+        1,
+        0,
+        &.{.{
+            .semantic_id = "district.west",
+            .bundle = cooked_fixture.output,
+        }},
+    );
+    const cooked_east_repeat = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s6_east/district.gltf",
+        "fixtures/s6_east/PROVENANCE.md",
+        "s6_east_repeat.icdb",
+        "district/s6_east",
+        1,
+        0,
+        &.{.{
+            .semantic_id = "district.west",
+            .bundle = cooked_fixture_repeat.output,
+        }},
+    );
+    const content_catalog_cooker = b.addExecutable(.{
+        .name = "incinerator_content_catalog_cooker",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/content_catalog_cooker.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+            .imports = &.{
+                .{ .name = "content", .module = content_host_module },
+                .{ .name = "district_contract", .module = district_contract_host_module },
+                .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_host_module },
+            },
+        }),
+    });
+    const cooked_catalog = runContentCatalogCooker(
+        b,
+        content_catalog_cooker,
+        "fixtures/s6_catalog/catalog.txt",
+        "catalog.icat",
+        &.{ cooked_fixture.output, cooked_east.output },
+    );
+    const cooked_catalog_repeat = runContentCatalogCooker(
+        b,
+        content_catalog_cooker,
+        "fixtures/s6_catalog/catalog.txt",
+        "catalog_repeat.icat",
+        &.{ cooked_fixture_repeat.output, cooked_east_repeat.output },
+    );
     const cook_content_step = b.step(
         "cook-content",
-        "Cook the self-authored S3-B district fixture",
+        "Cook the two self-authored district fixtures and declared dependency closure",
     );
-    cook_content_step.dependOn(cooked_fixture.step);
+    cook_content_step.dependOn(cooked_catalog.step);
     const install_cooked_fixture = b.addInstallFile(
         cooked_fixture.output,
         "share/incinerator/content/district/s3_fixture.icdb",
@@ -333,8 +469,23 @@ pub fn build(b: *std.Build) void {
         b.path("fixtures/s3_district/PROVENANCE.md"),
         "share/incinerator/content/district/s3_fixture.PROVENANCE.md",
     );
+    const install_cooked_east = b.addInstallFile(
+        cooked_east.output,
+        "share/incinerator/content/district/s6_east.icdb",
+    );
+    const install_east_provenance = b.addInstallFile(
+        b.path("fixtures/s6_east/PROVENANCE.md"),
+        "share/incinerator/content/district/s6_east.PROVENANCE.md",
+    );
+    const install_cooked_catalog = b.addInstallFile(
+        cooked_catalog.output,
+        "share/incinerator/content/district/catalog.icat",
+    );
     b.getInstallStep().dependOn(&install_cooked_fixture.step);
     b.getInstallStep().dependOn(&install_fixture_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_east.step);
+    b.getInstallStep().dependOn(&install_east_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_catalog.step);
 
     const content_tests = b.addTest(.{ .root_module = content_host_module });
     const run_content_tests = b.addRunArtifact(content_tests);
@@ -356,6 +507,8 @@ pub fn build(b: *std.Build) void {
     const verify_cooked_bundle = b.addRunArtifact(content_bundle_verify);
     verify_cooked_bundle.addFileArg(cooked_fixture.output);
     verify_cooked_bundle.addFileArg(cooked_fixture_repeat.output);
+    verify_cooked_bundle.addFileArg(cooked_east.output);
+    verify_cooked_bundle.addFileArg(cooked_east_repeat.output);
     const content_cooker_test_step = b.step(
         "test-content-cooker",
         "Prove deterministic glTF cooking and preserved fixture semantics",
@@ -364,6 +517,35 @@ pub fn build(b: *std.Build) void {
     const content_cooker_tests = b.addTest(.{ .root_module = content_cooker.root_module });
     const run_content_cooker_tests = b.addRunArtifact(content_cooker_tests);
     content_cooker_test_step.dependOn(&run_content_cooker_tests.step);
+    const content_catalog_cooker_tests = b.addTest(.{
+        .root_module = content_catalog_cooker.root_module,
+    });
+    const run_content_catalog_cooker_tests = b.addRunArtifact(
+        content_catalog_cooker_tests,
+    );
+    content_cooker_test_step.dependOn(&run_content_catalog_cooker_tests.step);
+    const content_catalog_verify = b.addExecutable(.{
+        .name = "content_catalog_verify",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/content_catalog_verify.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "content", .module = content_module },
+                .{ .name = "district_contract", .module = district_contract_module },
+                .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
+                .{ .name = "sandbox_replay", .module = sandbox_replay_module },
+            },
+        }),
+    });
+    const verify_cooked_catalog = b.addRunArtifact(content_catalog_verify);
+    verify_cooked_catalog.addFileArg(cooked_catalog.output);
+    verify_cooked_catalog.addFileArg(cooked_catalog_repeat.output);
+    verify_cooked_catalog.addFileArg(cooked_fixture.output);
+    verify_cooked_catalog.addFileArg(cooked_east.output);
+    verify_cooked_catalog.addFileArg(b.path("config/headless-content.json"));
+    verify_cooked_catalog.addFileArg(b.path("config/headless.example.json"));
+    content_cooker_test_step.dependOn(&verify_cooked_catalog.step);
 
     const content_relocation_test = b.addExecutable(.{
         .name = "content_relocation_test",
@@ -393,172 +575,97 @@ pub fn build(b: *std.Build) void {
     );
     content_relocation_step.dependOn(&run_content_relocation.step);
 
-    // ---------------------------------------------------------
-    // ECS (zflecs) - Entity Component System
-    // ---------------------------------------------------------
-    // zflecs is the kernel-private storage implementation used by registered
-    // feature components. Flecs APIs/IDs are not imported by the visual host
-    // or exposed as the engine's identity/persistence contract.
-    const zflecs = b.dependency("zflecs", .{
-        .target = target,
-        .optimize = optimize,
-        .shared = false,
-        .debug_mode = flecs_debug_mode,
-        .debug_info = false,
-        .float_t = .fp32,
-        .ftime_t = .fp32,
-        .accurate_counters = false,
-        .disable_counters = false,
-        .soft_assert = false,
-        .keep_assert = false,
-        .default_to_uncached_queries = false,
-        .no_always_inline = false,
-        .custom_build = .whitelist,
-        .toggle_alerts_addon = true,
-        .toggle_app_addon = true,
-        .toggle_doc_addon = true,
-        .toggle_json_addon = true,
-        .toggle_http_addon = true,
-        .toggle_log_addon = true,
-        .toggle_meta_addon = true,
-        .toggle_metrics_addon = true,
-        .toggle_module_addon = true,
-        .toggle_os_api_impl_addon = true,
-        .toggle_pipeline_addon = true,
-        .toggle_rest_addon = true,
-        .toggle_parser_addon = true,
-        .toggle_query_dsl_addon = true,
-        .toggle_script_addon = true,
-        .toggle_system_addon = true,
-        .toggle_stats_addon = true,
-        .toggle_timer_addon = true,
-        .toggle_units_addon = true,
-        .low_footprint = false,
-        // zflecs currently always compiles C with FLECS_USE_OS_ALLOC. Passing
-        // true keeps the generated Zig layout in lockstep with that C ABI.
-        .use_os_alloc = true,
-        .hi_component_id = 256,
-        .hi_id_record_id = 1024,
-        .sparse_page_bits = 6,
-        .entity_page_bits = 10,
-        .id_desc_max = 32,
-        .event_desc_max = 8,
-        .variable_count_max = 64,
-        .term_count_max = 32,
-        .term_arg_count_max = 16,
-        .query_variable_count_max = 64,
-        .query_scope_nesting_max = 8,
-        .dag_depth_max = 128,
-    });
-    const zflecs_module = zflecs.module("root");
-    mod.addImport("zflecs", zflecs_module);
-
-    // Gameplay features see only the public kernel/contracts module; the
-    // sandbox simulation host is the sole place where they are paired with Jolt.
-    const crate_feature_module = b.createModule(.{
-        .root_source_file = b.path("src/features/crates/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "incinerator_engine", .module = mod },
-        },
-    });
-    const driver_contract_module = b.createModule(.{
-        .root_source_file = b.path("src/features/driver_contract.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "incinerator_engine", .module = mod },
-        },
-    });
-    const district_contract_module = b.createModule(.{
-        .root_source_file = b.path("src/features/district_contract.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "engine_contracts", .module = contracts_module },
-        },
-    });
-    const character_feature_module = b.createModule(.{
-        .root_source_file = b.path("src/features/character/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "incinerator_engine", .module = mod },
-            .{ .name = "driver_contract", .module = driver_contract_module },
-        },
-    });
-    const vehicle_feature_module = b.createModule(.{
-        .root_source_file = b.path("src/features/vehicle/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "incinerator_engine", .module = mod },
-            .{ .name = "driver_contract", .module = driver_contract_module },
-        },
-    });
-    const district_worker_module = b.createModule(.{
-        .root_source_file = b.path("src/district_worker.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "district_contract", .module = district_contract_module },
-        },
-    });
-    const district_feature_module = b.createModule(.{
-        .root_source_file = b.path("src/features/district/root.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "incinerator_engine", .module = mod },
-            .{ .name = "district_contract", .module = district_contract_module },
-        },
-    });
+    addClientImport(exe, validation_exe, "population_feature", population_feature_module);
     const sandbox_controls_module = b.createModule(.{
         .root_source_file = b.path("src/sandbox_controls.zig"),
         .target = target,
         .optimize = optimize,
     });
-    const sandbox_simulation_module = b.createModule(.{
-        .root_source_file = b.path("src/hosts/simulation.zig"),
+    const developer_profile_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/developer_profile.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const developer_visualization_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/developer_visualization.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
+    });
+    addClientImport(exe, validation_exe, "developer_controls", developer_controls_module);
+    addClientImport(exe, validation_exe, "developer_diagnostics", developer_diagnostics_module);
+    addClientImport(exe, validation_exe, "developer_profile", developer_profile_module);
+    addClientImport(
+        exe,
+        validation_exe,
+        "developer_visualization",
+        developer_visualization_module,
+    );
+    addClientImport(exe, validation_exe, "sandbox_authoring", sandbox_authoring_module);
+    addClientImport(exe, validation_exe, "sandbox_save", sandbox_save_module);
+    addClientImport(exe, validation_exe, "save_slots", save_slots_module);
+    addClientImport(exe, validation_exe, "sandbox_replay", sandbox_replay_module);
+    const district_content_catalog_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/district_content_catalog.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "incinerator_engine", .module = mod },
-            .{ .name = "crate_feature", .module = crate_feature_module },
-            .{ .name = "character_feature", .module = character_feature_module },
-            .{ .name = "vehicle_feature", .module = vehicle_feature_module },
+            .{ .name = "content", .module = content_module },
             .{ .name = "district_contract", .module = district_contract_module },
-            .{ .name = "district_feature", .module = district_feature_module },
-            .{ .name = "district_worker", .module = district_worker_module },
-            .{ .name = "jolt_physics", .module = jolt_physics_module },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
+            .{ .name = "sandbox_replay", .module = sandbox_replay_module },
         },
     });
-    exe.root_module.addImport("sandbox_simulation", sandbox_simulation_module);
-    // zflecs's exported module already owns flecs.c. Linking its library too
-    // compiles the amalgamation twice and relies on archive laziness to hide
-    // duplicate symbols. Keep one C owner and add the library's Windows system
-    // dependencies explicitly.
-    if (target.result.os.tag == .windows) {
-        mod.linkSystemLibrary("ws2_32", .{});
-        mod.linkSystemLibrary("dbghelp", .{});
-        exe.root_module.linkSystemLibrary("ws2_32", .{});
-        exe.root_module.linkSystemLibrary("dbghelp", .{});
-    }
-
-    // unsure if need these
-    // { // Needed for glfw/wgpu rendering backend
-    //     const zglfw = b.dependency("zglfw", .{});
-    //     exe.root_module.addImport("zglfw", zglfw.module("root"));
-    //     exe.linkLibrary(zglfw.artifact("glfw"));
-
-    //     const zpool = b.dependency("zpool", .{});
-    //     exe.root_module.addImport("zpool", zpool.module("root"));
-
-    //     const zgpu = b.dependency("zgpu", .{});
-    //     exe.root_module.addImport("zgpu", zgpu.module("root"));
-    //     exe.linkLibrary(zgpu.artifact("zdawn"));
-    // }
+    addClientImport(
+        exe,
+        validation_exe,
+        "district_content_catalog",
+        district_content_catalog_module,
+    );
+    const content_catalog_relocation_test = b.addExecutable(.{
+        .name = "content_catalog_relocation_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/content_catalog_relocation_test.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "content", .module = content_module },
+                .{ .name = "district_content_catalog", .module = district_content_catalog_module },
+            },
+        }),
+    });
+    const install_content_catalog_relocation_test = b.addInstallArtifact(
+        content_catalog_relocation_test,
+        .{ .dest_dir = .{ .override = .{ .custom = "libexec/incinerator" } } },
+    );
+    const installed_content_catalog_relocation_path = b.getInstallPath(
+        .{ .custom = "libexec/incinerator" },
+        content_catalog_relocation_test.out_filename,
+    );
+    const run_content_catalog_relocation = b.addSystemCommand(
+        &.{installed_content_catalog_relocation_path},
+    );
+    run_content_catalog_relocation.addArg(
+        b.getInstallPath(.prefix, "share/incinerator/content"),
+    );
+    run_content_catalog_relocation.setCwd(.{ .cwd_relative = "/tmp" });
+    run_content_catalog_relocation.step.dependOn(&install_cooked_fixture.step);
+    run_content_catalog_relocation.step.dependOn(&install_cooked_east.step);
+    run_content_catalog_relocation.step.dependOn(&install_cooked_catalog.step);
+    run_content_catalog_relocation.step.dependOn(
+        &install_content_catalog_relocation_test.step,
+    );
+    content_relocation_step.dependOn(&run_content_catalog_relocation.step);
+    addClientImport(exe, validation_exe, "sandbox_simulation", sandbox_simulation_module);
+    const sandbox_interaction_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_interaction.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+        },
+    });
+    addClientImport(exe, validation_exe, "sandbox_interaction", sandbox_interaction_module);
 
     // ---------------------------------------------------------
     // Shader Compilation (GLSL → target backend format)
@@ -569,11 +676,22 @@ pub fn build(b: *std.Build) void {
     const shaders = buildShaders(b, target, optimize, .{
         .glslc = glslc_path,
         .spirv_cross = spirv_cross_path,
-        .shadercross = shadercross_path,
-        .windows_gpu = windows_gpu,
     });
-    exe.root_module.addImport("shader_assets", shaders.module);
+    addClientImport(exe, validation_exe, "shader_assets", shaders.module);
     exe.step.dependOn(shaders.step);
+    validation_exe.step.dependOn(shaders.step);
+
+    const physics_debug_gpu_module = b.createModule(.{
+        .root_source_file = b.path("src/physics_debug_gpu.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts_module },
+            .{ .name = "zmath", .module = zmath.module("root") },
+            .{ .name = "shader_assets", .module = shaders.module },
+        },
+    });
+    physics_debug_gpu_module.linkLibrary(sdl_lib);
 
     const shader_contract_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -590,33 +708,116 @@ pub fn build(b: *std.Build) void {
     const shader_test_step = b.step("test-shaders", "Validate SDL GPU shader contracts");
     shader_test_step.dependOn(&run_shader_contract_tests.step);
 
+    const physics_debug_gpu_tests = b.addTest(.{
+        .root_module = physics_debug_gpu_module,
+    });
+    const run_physics_debug_gpu_tests = b.addRunArtifact(physics_debug_gpu_tests);
+    const physics_debug_gpu_test_step = b.step(
+        "test-physics-debug-gpu",
+        "Run persistent bounded SDL GPU physics-overlay tests",
+    );
+    physics_debug_gpu_test_step.dependOn(&run_physics_debug_gpu_tests.step);
+
     // The headless host is intentionally not installed by the default build.
     // Its allowlisted module graph has no SDL, editor, asset, or shader edge.
+    const external_producers_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/external_producers.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const headless_config_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/headless_config.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const headless_content_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/headless_content.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "headless_config", .module = headless_config_module },
+            .{ .name = "headless_content_manifest", .module = graph.headless_content_manifest },
+        },
+    });
+    const headless_clock_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/headless_clock.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const macos_signals_module = b.createModule(.{
+        .root_source_file = b.path("src/adapters/platform/macos_signals.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const headless_authority_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/headless_authority.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "crate_feature", .module = crate_feature_module },
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "external_producers", .module = external_producers_module },
+            .{ .name = "sandbox_save", .module = sandbox_save_module },
+        },
+    });
+    const m3_soak_module = b.createModule(.{
+        .root_source_file = b.path("tools/m3_soak.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "crate_feature", .module = crate_feature_module },
+            .{ .name = "headless_authority", .module = headless_authority_module },
+            .{ .name = "external_producers", .module = external_producers_module },
+            .{ .name = "sandbox_save", .module = sandbox_save_module },
+        },
+    });
     const headless_root_module = b.createModule(.{
         .root_source_file = b.path("src/hosts/headless.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "sandbox_replay", .module = sandbox_replay_module },
+            .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
+            .{ .name = "developer_diagnostics", .module = developer_diagnostics_module },
+            .{ .name = "sandbox_save", .module = sandbox_save_module },
+            .{ .name = "save_slots", .module = save_slots_module },
+            .{ .name = "headless_config", .module = headless_config_module },
+            .{ .name = "headless_content", .module = headless_content_module },
+            .{ .name = "headless_clock", .module = headless_clock_module },
+            .{ .name = "macos_signals", .module = macos_signals_module },
+            .{ .name = "headless_authority", .module = headless_authority_module },
         },
     });
     const headless_exe = b.addExecutable(.{
         .name = "incinerator_headless",
         .root_module = headless_root_module,
     });
-    const check_headless_step = b.step(
-        "check-headless",
-        "Compile the SDL-free sandbox simulation host",
+    const m3_soak_exe = b.addExecutable(.{
+        .name = "incinerator_m3_soak",
+        .root_module = m3_soak_module,
+    });
+    const check_m3_soak_step = b.step(
+        "check-m3-soak",
+        "Compile the SDL-free M3 virtual-time soak",
     );
-    check_headless_step.dependOn(&headless_exe.step);
-
-    const install_headless_artifact = b.addInstallArtifact(headless_exe, .{});
-    const install_headless_step = b.step(
-        "install-headless",
-        "Install only the SDL-free sandbox simulation host",
+    check_m3_soak_step.dependOn(&m3_soak_exe.step);
+    const run_m3_soak = b.addRunArtifact(m3_soak_exe);
+    run_m3_soak.addArg("routine");
+    const measure_m3_step = b.step(
+        "measure-m3",
+        "Run the ReleaseFast 32,768-tick M3 readiness soak",
     );
-    install_headless_step.dependOn(&install_headless_artifact.step);
-
+    measure_m3_step.dependOn(&run_m3_soak.step);
+    const run_m3_long = b.addRunArtifact(m3_soak_exe);
+    run_m3_long.addArg("long");
+    const measure_m3_long_step = b.step(
+        "measure-m3-long",
+        "Run the opt-in ReleaseFast 131,072-tick M3 soak",
+    );
+    measure_m3_long_step.dependOn(&run_m3_long.step);
     const headless_boundary_exe = b.addExecutable(.{
         .name = "headless_boundary_test",
         .root_module = b.createModule(.{
@@ -672,107 +873,187 @@ pub fn build(b: *std.Build) void {
     headless_tool_test_step.dependOn(&run_headless_boundary_tests.step);
     headless_tool_test_step.dependOn(&run_headless_linkage_tests.step);
 
-    const run_headless_cmd = b.addRunArtifact(headless_exe);
-    if (b.args) |args| run_headless_cmd.addArgs(args);
-    const run_headless_step = b.step("run-headless", "Run the SDL-free sandbox simulation host");
-    run_headless_step.dependOn(&run_headless_cmd.step);
+    // Same-cohort replay is a separate SDL/editor/GPU-free product. It reads
+    // and validates the complete envelope/content cohorts before constructing
+    // the process's one authoritative simulation world.
+    const replay_tool_module = b.createModule(.{
+        .root_source_file = b.path("tools/s4_replay.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "content", .module = content_module },
+            .{ .name = "district_content_catalog", .module = district_content_catalog_module },
+            .{ .name = "sandbox_replay", .module = sandbox_replay_module },
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "interaction_feature", .module = interaction_feature_module },
+        },
+    });
+    const replay_tool_exe = b.addExecutable(.{
+        .name = "incinerator_replay",
+        .root_module = replay_tool_module,
+    });
+    b.installArtifact(replay_tool_exe);
+    const check_replay_tool_step = b.step(
+        "check-replay",
+        "Compile the standalone SDL-free same-cohort replay verifier",
+    );
+    check_replay_tool_step.dependOn(&replay_tool_exe.step);
+    const verify_replay_linkage = b.addRunArtifact(headless_linkage_exe);
+    verify_replay_linkage.addFileArg(replay_tool_exe.getEmittedBin());
+    const verify_replay_linkage_step = b.step(
+        "verify-replay-boundary",
+        "Reject visual dependencies from the final replay verifier binary",
+    );
+    verify_replay_linkage_step.dependOn(&verify_replay_linkage.step);
+    check_replay_tool_step.dependOn(&verify_replay_linkage.step);
+    const run_replay_tool = b.addRunArtifact(replay_tool_exe);
+    if (b.args) |args| run_replay_tool.addArgs(args);
+    const run_replay_tool_step = b.step(
+        "run-replay",
+        "Run the standalone replay tool",
+    );
+    run_replay_tool_step.dependOn(&run_replay_tool.step);
 
-    // Native, record-only S0 characterization. Timings are intentionally not
-    // test thresholds; CI validates and logs the JSON report for comparison on
-    // stable hardware.
-    const s0_measure_root_module = b.createModule(.{
-        .root_source_file = b.path("tools/s0_measure.zig"),
+    // Durable authoring/save verification is a separate cold, SDL/editor/GPU-
+    // free product. The installed smoke invokes it twice so restore occurs in
+    // a genuinely fresh process.
+    const save_tool_module = b.createModule(.{
+        .root_source_file = b.path("tools/s5_save.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "content", .module = content_module },
+            .{ .name = "district_content_catalog", .module = district_content_catalog_module },
+            .{ .name = "sandbox_replay", .module = sandbox_replay_module },
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "interaction_feature", .module = interaction_feature_module },
+            .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
+            .{ .name = "sandbox_save", .module = sandbox_save_module },
+            .{ .name = "save_slots", .module = save_slots_module },
+        },
+    });
+    const save_tool_exe = b.addExecutable(.{
+        .name = "incinerator_save",
+        .root_module = save_tool_module,
+    });
+    b.installArtifact(save_tool_exe);
+    const check_save_tool_step = b.step(
+        "check-s5-save",
+        "Compile and linkage-check the standalone durable save/restart verifier",
+    );
+    check_save_tool_step.dependOn(&save_tool_exe.step);
+    const verify_save_linkage = b.addRunArtifact(headless_linkage_exe);
+    verify_save_linkage.addFileArg(save_tool_exe.getEmittedBin());
+    check_save_tool_step.dependOn(&verify_save_linkage.step);
+    const run_save_tool = b.addRunArtifact(save_tool_exe);
+    if (b.args) |args| run_save_tool.addArgs(args);
+    const run_save_tool_step = b.step(
+        "run-s5-save",
+        "Run the standalone durable save/restart tool",
+    );
+    run_save_tool_step.dependOn(&run_save_tool.step);
+
+    const s7_measure_root_module = b.createModule(.{
+        .root_source_file = b.path("tools/s7_measure.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
         },
     });
-    const s0_measure_exe = b.addExecutable(.{
-        .name = "incinerator_s0_measure",
-        .root_module = s0_measure_root_module,
+    const s7_measure_exe = b.addExecutable(.{
+        .name = "incinerator_s7_measure",
+        .root_module = s7_measure_root_module,
     });
-    const run_s0_measure = b.addRunArtifact(s0_measure_exe);
-    if (b.args) |args| run_s0_measure.addArgs(args);
-    const s0_measure_step = b.step(
-        "measure-s0",
-        "Record SDL-free S0 lifecycle timings as versioned JSON",
+    const run_s7_measure = b.addRunArtifact(s7_measure_exe);
+    if (b.args) |args| run_s7_measure.addArgs(args);
+    const s7_measure_step = b.step(
+        "measure-s7",
+        "Measure 128 S7 ownership cycles as versioned SDL-free JSON",
     );
-    s0_measure_step.dependOn(&run_s0_measure.step);
+    s7_measure_step.dependOn(&run_s7_measure.step);
+    const s7_measure_tests = b.addTest(.{ .root_module = s7_measure_root_module });
+    const run_s7_measure_tests = b.addRunArtifact(s7_measure_tests);
+    const s7_measure_test_step = b.step(
+        "test-s7-measure",
+        "Run S7 measurement argument and report-statistic tests",
+    );
+    s7_measure_test_step.dependOn(&run_s7_measure_tests.step);
 
-    const s1_measure_root_module = b.createModule(.{
-        .root_source_file = b.path("tools/s1_measure.zig"),
+    const s8_measure_root_module = b.createModule(.{
+        .root_source_file = b.path("tools/s8_measure.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "sandbox_replay", .module = sandbox_replay_module },
+            .{ .name = "sandbox_save", .module = sandbox_save_module },
+            .{ .name = "population_feature", .module = population_feature_module },
+            .{ .name = "district_contract", .module = district_contract_module },
+            .{ .name = "jolt_physics", .module = jolt_physics_module },
+            .{ .name = "content", .module = content_module },
+            .{ .name = "district_content_catalog", .module = district_content_catalog_module },
         },
     });
-    const s1_measure_exe = b.addExecutable(.{
-        .name = "incinerator_s1_measure",
-        .root_module = s1_measure_root_module,
+    const s8_measure_exe = b.addExecutable(.{
+        .name = "incinerator_s8_measure",
+        .root_module = s8_measure_root_module,
     });
-    const run_s1_measure = b.addRunArtifact(s1_measure_exe);
-    if (b.args) |args| run_s1_measure.addArgs(args);
-    const s1_measure_step = b.step(
-        "measure-s1",
-        "Record SDL-free S1 character slice timings as versioned JSON",
+    const s8_measure_check_step = b.step(
+        "check-s8-measure",
+        "Compile the SDL-free S8 population measurement",
     );
-    s1_measure_step.dependOn(&run_s1_measure.step);
-    const s1_measure_tests = b.addTest(.{ .root_module = s1_measure_root_module });
-    const run_s1_measure_tests = b.addRunArtifact(s1_measure_tests);
-
-    const s2_measure_root_module = b.createModule(.{
-        .root_source_file = b.path("tools/s2_measure.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
-        },
-    });
-    const s2_measure_exe = b.addExecutable(.{
-        .name = "incinerator_s2_measure",
-        .root_module = s2_measure_root_module,
-    });
-    const run_s2_measure = b.addRunArtifact(s2_measure_exe);
-    if (b.args) |args| run_s2_measure.addArgs(args);
-    const s2_measure_step = b.step(
-        "measure-s2",
-        "Record SDL-free S2 vehicle slice timings as versioned JSON",
+    s8_measure_check_step.dependOn(&s8_measure_exe.step);
+    const run_s8_measure = b.addRunArtifact(s8_measure_exe);
+    run_s8_measure.addArg(b.getInstallPath(
+        .prefix,
+        "share/incinerator/content",
+    ));
+    run_s8_measure.step.dependOn(b.getInstallStep());
+    const s8_measure_step = b.step(
+        "measure-s8",
+        "Run the ReleaseFast S8 replay proof and paired scale measurement",
     );
-    s2_measure_step.dependOn(&run_s2_measure.step);
-    const s2_measure_tests = b.addTest(.{ .root_module = s2_measure_root_module });
-    const run_s2_measure_tests = b.addRunArtifact(s2_measure_tests);
-
-    const s3_measure_root_module = b.createModule(.{
-        .root_source_file = b.path("tools/s3_measure.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
-        },
-    });
-    const s3_measure_exe = b.addExecutable(.{
-        .name = "incinerator_s3_measure",
-        .root_module = s3_measure_root_module,
-    });
-    const run_s3_measure = b.addRunArtifact(s3_measure_exe);
-    if (b.args) |args| run_s3_measure.addArgs(args);
-    const s3_measure_step = b.step(
-        "measure-s3",
-        "Record SDL-free S3-A district streaming timings as versioned JSON",
+    s8_measure_step.dependOn(&run_s8_measure.step);
+    const s8_measure_tests = b.addTest(.{ .root_module = s8_measure_root_module });
+    const run_s8_measure_tests = b.addRunArtifact(s8_measure_tests);
+    const s8_measure_test_step = b.step(
+        "test-s8-measure",
+        "Run S8 methodology and report-statistic tests",
     );
-    s3_measure_step.dependOn(&run_s3_measure.step);
-    const s3_measure_tests = b.addTest(.{ .root_module = s3_measure_root_module });
-    const run_s3_measure_tests = b.addRunArtifact(s3_measure_tests);
+    s8_measure_test_step.dependOn(&run_s8_measure_tests.step);
 
     const headless_tests = b.addTest(.{ .root_module = headless_root_module });
     const run_headless_tests = b.addRunArtifact(headless_tests);
+    const external_producers_tests = b.addTest(.{ .root_module = external_producers_module });
+    const run_external_producers_tests = b.addRunArtifact(external_producers_tests);
+    const external_producers_test_step = b.step(
+        "test-external-producers",
+        "Run bounded external producer router tests",
+    );
+    external_producers_test_step.dependOn(&run_external_producers_tests.step);
+    const headless_authority_tests = b.addTest(.{ .root_module = headless_authority_module });
+    const run_headless_authority_tests = b.addRunArtifact(headless_authority_tests);
+    const headless_authority_test_step = b.step(
+        "test-headless-authority",
+        "Run one-world headless authority tests",
+    );
+    headless_authority_test_step.dependOn(&run_headless_authority_tests.step);
+    const m3_soak_tests = b.addTest(.{ .root_module = m3_soak_module });
+    const run_m3_soak_tests = b.addRunArtifact(m3_soak_tests);
+    const m3_soak_test_step = b.step(
+        "test-m3-soak",
+        "Run M3 soak argument and cohort contract tests",
+    );
+    m3_soak_test_step.dependOn(&run_m3_soak_tests.step);
     const headless_test_step = b.step(
         "test-headless",
         "Run the isolated Flecs/Jolt sandbox lifecycle tests",
     );
     headless_test_step.dependOn(&run_headless_tests.step);
+    headless_test_step.dependOn(&run_external_producers_tests.step);
+    headless_test_step.dependOn(&run_headless_authority_tests.step);
     headless_test_step.dependOn(&verify_headless_boundary.step);
     headless_test_step.dependOn(&verify_headless_linkage.step);
     headless_test_step.dependOn(&run_headless_boundary_tests.step);
@@ -789,7 +1070,53 @@ pub fn build(b: *std.Build) void {
     // successful compile cannot be mistaken for macOS/Metal runtime evidence.
     const native_apple_silicon = target.query.isNative() and
         target.result.os.tag == .macos and target.result.cpu.arch == .aarch64;
-    const installed_exe_path = b.getInstallPath(.bin, exe.out_filename);
+    const install_validation_artifact = b.addInstallArtifact(validation_exe, .{
+        .dest_dir = .{ .override = .{ .custom = "libexec/incinerator" } },
+    });
+    const install_validation_step = b.step(
+        "install-validation",
+        "Install the visual-validation host outside the product bin directory",
+    );
+    install_validation_step.dependOn(b.getInstallStep());
+    install_validation_step.dependOn(&install_validation_artifact.step);
+    const check_validation_step = b.step(
+        "check-validation",
+        "Compile the visual-validation host without installing it",
+    );
+    check_validation_step.dependOn(&validation_exe.step);
+    const validation_boundary_tool = b.addExecutable(.{
+        .name = "validation_boundary",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/build/validation_boundary.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    const verify_validation_boundary = b.addRunArtifact(validation_boundary_tool);
+    verify_validation_boundary.addFileArg(exe.getEmittedBin());
+    verify_validation_boundary.addFileArg(validation_exe.getEmittedBin());
+    const verify_validation_boundary_step = b.step(
+        "verify-validation-boundary",
+        "Prove validation scenarios are absent from the product binary",
+    );
+    verify_validation_boundary_step.dependOn(&verify_validation_boundary.step);
+    const validation_boundary_tests = b.addTest(.{
+        .root_module = validation_boundary_tool.root_module,
+    });
+    const run_validation_boundary_tests = b.addRunArtifact(validation_boundary_tests);
+    const test_validation_boundary_step = b.step(
+        "test-validation-boundary",
+        "Run product/validation marker scanner tests",
+    );
+    test_validation_boundary_step.dependOn(&run_validation_boundary_tests.step);
+    const installed_validation_path = b.getInstallPath(
+        .{ .custom = "libexec/incinerator" },
+        validation_exe.out_filename,
+    );
+    const verify_installed_validation_step = b.step(
+        "verify-installed-validation",
+        "Verify validation-host relocation and executable-relative content discovery",
+    );
 
     const installed_s1_smoke_step = b.step(
         "smoke-installed-s1-macos",
@@ -798,6 +1125,42 @@ pub fn build(b: *std.Build) void {
     const installed_s2_smoke_step = b.step(
         "smoke-installed-s2-macos",
         "Run installed S2 Metal smokes above/below tick rate from /tmp (native Apple Silicon only)",
+    );
+    const installed_s3_smoke_step = b.step(
+        "smoke-installed-s3-macos",
+        "Run installed S3 cooked-content/Metal smokes above/below tick rate from /tmp (native Apple Silicon only)",
+    );
+    const installed_s6_smoke_step = b.step(
+        "smoke-installed-s6-macos",
+        "Run installed S6 two-district overlap/drain Metal smokes at 240/80 Hz from /tmp (native Apple Silicon only)",
+    );
+    const installed_s7_smoke_step = b.step(
+        "smoke-installed-s7-macos",
+        "Run installed S7 carry/ownership Metal smokes at 240/80 Hz from /tmp (native Apple Silicon only)",
+    );
+    const installed_s8_smoke_step = b.step(
+        "smoke-installed-s8-macos",
+        "Run installed S8 64-NPC population Metal smokes at 240/80 Hz from /tmp (native Apple Silicon only)",
+    );
+    const installed_s4_diagnostics_smoke_step = b.step(
+        "smoke-installed-s4-diagnostics-macos",
+        "Run the installed S4 diagnostics/fault-inspection Metal smoke from /tmp (native Apple Silicon only)",
+    );
+    const installed_s4_replay_smoke_step = b.step(
+        "smoke-installed-s4-replay-macos",
+        "Capture and verify a full installed same-cohort replay from /tmp (native Apple Silicon only)",
+    );
+    const installed_s4_physics_debug_smoke_step = b.step(
+        "smoke-installed-s4-physics-debug-macos",
+        "Run the installed bounded physics-debug/profiling Metal smoke from /tmp (native Apple Silicon only)",
+    );
+    const installed_s5_save_smoke_step = b.step(
+        "smoke-installed-s5-save-macos",
+        "Write and cold-restore an installed durable authoring save from /tmp (native Apple Silicon only)",
+    );
+    const installed_s5_authoring_smoke_step = b.step(
+        "smoke-installed-s5-authoring-macos",
+        "Run installed S5 editor authoring/save authority smoke from /tmp (native Apple Silicon, editor enabled)",
     );
     const window_lifecycle_smoke_step = b.step(
         "smoke-window-lifecycle-macos",
@@ -809,12 +1172,25 @@ pub fn build(b: *std.Build) void {
     );
     const macos_readiness_step = b.step(
         "test-macos-readiness",
-        "Run installed visual, window lifecycle, and init cleanup Tier-1 gates",
+        "Run installed visual, streaming, diagnostics, authoring/save, window lifecycle, and init cleanup Tier-1 gates",
     );
 
     if (native_apple_silicon) {
-        const installed_s1_smoke = b.addSystemCommand(&.{
-            installed_exe_path,
+        const verify_installed_validation = addValidationCommand(
+            b,
+            install_validation_step,
+            &.{ installed_validation_path, "--verify-install" },
+        );
+        verify_installed_validation.setCwd(.{ .cwd_relative = "/tmp" });
+        verify_installed_validation.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        verify_installed_validation_step.dependOn(
+            &verify_installed_validation.step,
+        );
+
+        const installed_s1_smoke = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
             "--s1-visual-smoke",
             "--frames=160",
             "--virtual-render-hz=80",
@@ -823,8 +1199,8 @@ pub fn build(b: *std.Build) void {
         installed_s1_smoke.step.dependOn(b.getInstallStep());
         installed_s1_smoke_step.dependOn(&installed_s1_smoke.step);
 
-        const installed_s2_smoke_below = b.addSystemCommand(&.{
-            installed_exe_path,
+        const installed_s2_smoke_below = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
             "--s2-visual-smoke",
             "--frames=480",
             "--virtual-render-hz=80",
@@ -832,7 +1208,7 @@ pub fn build(b: *std.Build) void {
         installed_s2_smoke_below.setCwd(.{ .cwd_relative = "/tmp" });
         installed_s2_smoke_below.step.dependOn(b.getInstallStep());
         const installed_s2_smoke_above = b.addSystemCommand(&.{
-            installed_exe_path,
+            installed_validation_path,
             "--s2-visual-smoke",
             "--frames=1440",
             "--virtual-render-hz=240",
@@ -841,16 +1217,277 @@ pub fn build(b: *std.Build) void {
         installed_s2_smoke_above.step.dependOn(&installed_s2_smoke_below.step);
         installed_s2_smoke_step.dependOn(&installed_s2_smoke_above.step);
 
-        const window_lifecycle_smoke = b.addSystemCommand(&.{
-            installed_exe_path,
+        const installed_s3_smoke_above = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
+            "--s3-streaming-smoke",
+            "--frames=1200",
+            "--virtual-render-hz=240",
+        });
+        installed_s3_smoke_above.setCwd(.{ .cwd_relative = "/tmp" });
+        // Relocation evidence must exercise executable-relative content
+        // discovery rather than a development-shell override.
+        installed_s3_smoke_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        // The install step also cooks and installs the S3 fixture/provenance.
+        installed_s3_smoke_above.step.dependOn(b.getInstallStep());
+        const installed_s3_smoke_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s3-streaming-smoke",
+            "--frames=1200",
+            "--virtual-render-hz=80",
+        });
+        installed_s3_smoke_below.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s3_smoke_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s3_smoke_below.step.dependOn(&installed_s3_smoke_above.step);
+        installed_s3_smoke_step.dependOn(&installed_s3_smoke_below.step);
+
+        const installed_s6_smoke_above = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
+            "--s6-streaming-smoke",
+            "--frames=240",
+            "--virtual-render-hz=240",
+        });
+        installed_s6_smoke_above.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s6_smoke_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s6_smoke_above.step.dependOn(b.getInstallStep());
+        const installed_s6_smoke_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s6-streaming-smoke",
+            "--frames=96",
+            "--virtual-render-hz=80",
+        });
+        installed_s6_smoke_below.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s6_smoke_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s6_smoke_below.step.dependOn(&installed_s6_smoke_above.step);
+        installed_s6_smoke_step.dependOn(&installed_s6_smoke_below.step);
+
+        const installed_s7_smoke_above = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
+            "--s7-interaction-smoke",
+            "--frames=1200",
+            "--virtual-render-hz=240",
+        });
+        installed_s7_smoke_above.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s7_smoke_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s7_smoke_above.step.dependOn(b.getInstallStep());
+        const installed_s7_smoke_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s7-interaction-smoke",
+            "--frames=1200",
+            "--virtual-render-hz=80",
+        });
+        installed_s7_smoke_below.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s7_smoke_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s7_smoke_below.step.dependOn(&installed_s7_smoke_above.step);
+        installed_s7_smoke_step.dependOn(&installed_s7_smoke_below.step);
+
+        const installed_s8_smoke_above = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
+            "--s8-population-smoke",
+            "--frames=1200",
+            "--virtual-render-hz=240",
+        });
+        installed_s8_smoke_above.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s8_smoke_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s8_smoke_above.step.dependOn(b.getInstallStep());
+        const installed_s8_smoke_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s8-population-smoke",
+            "--frames=400",
+            "--virtual-render-hz=80",
+        });
+        installed_s8_smoke_below.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s8_smoke_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s8_smoke_below.step.dependOn(&installed_s8_smoke_above.step);
+        installed_s8_smoke_step.dependOn(&installed_s8_smoke_below.step);
+
+        const installed_s4_diagnostics_smoke = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
+            "--s4-diagnostics-smoke",
+        });
+        installed_s4_diagnostics_smoke.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s4_diagnostics_smoke.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s4_diagnostics_smoke.step.dependOn(b.getInstallStep());
+        installed_s4_diagnostics_smoke_step.dependOn(
+            &installed_s4_diagnostics_smoke.step,
+        );
+
+        const installed_s4_physics_debug_smoke = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
+            "--s4-physics-debug-smoke",
+            "--frames=600",
+            "--virtual-render-hz=80",
+        });
+        installed_s4_physics_debug_smoke.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s4_physics_debug_smoke.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s4_physics_debug_smoke.step.dependOn(b.getInstallStep());
+        installed_s4_physics_debug_smoke_step.dependOn(
+            &installed_s4_physics_debug_smoke.step,
+        );
+
+        const installed_replay_path = b.getInstallPath(
+            .bin,
+            replay_tool_exe.out_filename,
+        );
+        const replay_capture_path = "/tmp/incinerator-s4b-smoke.icrp";
+        const installed_content_root = b.getInstallPath(
+            .prefix,
+            "share/incinerator/content",
+        );
+        const installed_s4_replay_record = b.addSystemCommand(&.{
+            installed_replay_path,
+            "record-smoke",
+            replay_capture_path,
+            installed_content_root,
+        });
+        installed_s4_replay_record.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s4_replay_record.step.dependOn(b.getInstallStep());
+        const installed_s4_replay_verify = b.addSystemCommand(&.{
+            installed_replay_path,
+            "verify-smoke",
+            replay_capture_path,
+            installed_content_root,
+        });
+        installed_s4_replay_verify.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s4_replay_verify.step.dependOn(
+            &installed_s4_replay_record.step,
+        );
+        const installed_s4_replay_cleanup = b.addSystemCommand(&.{
+            "rm",
+            "-f",
+            replay_capture_path,
+        });
+        installed_s4_replay_cleanup.step.dependOn(
+            &installed_s4_replay_verify.step,
+        );
+        installed_s4_replay_smoke_step.dependOn(
+            &installed_s4_replay_cleanup.step,
+        );
+
+        const installed_save_path = b.getInstallPath(
+            .bin,
+            save_tool_exe.out_filename,
+        );
+        const save_root = "/tmp/incinerator-s5-save-smoke";
+        const installed_s5_save_prepare = b.addSystemCommand(&.{
+            "rm",
+            "-rf",
+            save_root,
+        });
+        installed_s5_save_prepare.step.dependOn(b.getInstallStep());
+        const installed_s5_save_mkdir = b.addSystemCommand(&.{
+            "mkdir",
+            "-p",
+            save_root,
+        });
+        installed_s5_save_mkdir.step.dependOn(&installed_s5_save_prepare.step);
+        const installed_s5_save_write = b.addSystemCommand(&.{
+            installed_save_path,
+            "write-smoke",
+            save_root,
+            installed_content_root,
+        });
+        installed_s5_save_write.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s5_save_write.step.dependOn(&installed_s5_save_mkdir.step);
+        const installed_s5_save_verify = b.addSystemCommand(&.{
+            installed_save_path,
+            "verify-smoke",
+            save_root,
+            installed_content_root,
+        });
+        installed_s5_save_verify.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s5_save_verify.step.dependOn(&installed_s5_save_write.step);
+        const installed_s5_save_cleanup = b.addSystemCommand(&.{
+            "rm",
+            "-rf",
+            save_root,
+        });
+        installed_s5_save_cleanup.step.dependOn(&installed_s5_save_verify.step);
+        installed_s5_save_smoke_step.dependOn(&installed_s5_save_cleanup.step);
+
+        if (editor_enabled) {
+            const authoring_save_root = "/tmp/incinerator-s5-authoring-smoke";
+            const installed_s5_authoring_prepare = b.addSystemCommand(&.{
+                "rm",
+                "-rf",
+                authoring_save_root,
+            });
+            installed_s5_authoring_prepare.step.dependOn(b.getInstallStep());
+            const installed_s5_authoring_mkdir = b.addSystemCommand(&.{
+                "mkdir",
+                "-p",
+                authoring_save_root,
+            });
+            installed_s5_authoring_mkdir.step.dependOn(
+                &installed_s5_authoring_prepare.step,
+            );
+            const installed_s5_authoring = addValidationCommand(b, install_validation_step, &.{
+                installed_validation_path,
+                "--s5-authoring-smoke",
+                "--save-root=" ++ authoring_save_root,
+            });
+            installed_s5_authoring.setCwd(.{ .cwd_relative = "/tmp" });
+            installed_s5_authoring.removeEnvironmentVariable(
+                "INCINERATOR_CONTENT_ROOT",
+            );
+            installed_s5_authoring.step.dependOn(&installed_s5_authoring_mkdir.step);
+            const installed_s5_authoring_verify = b.addSystemCommand(&.{
+                installed_save_path,
+                "verify-authoring-smoke",
+                authoring_save_root,
+                installed_content_root,
+            });
+            installed_s5_authoring_verify.setCwd(.{ .cwd_relative = "/tmp" });
+            installed_s5_authoring_verify.step.dependOn(
+                &installed_s5_authoring.step,
+            );
+            const installed_s5_authoring_cleanup = b.addSystemCommand(&.{
+                "rm",
+                "-rf",
+                authoring_save_root,
+            });
+            installed_s5_authoring_cleanup.step.dependOn(
+                &installed_s5_authoring_verify.step,
+            );
+            installed_s5_authoring_smoke_step.dependOn(
+                &installed_s5_authoring_cleanup.step,
+            );
+        } else {
+            const editor_required = b.addFail(
+                "S5 authoring smoke requires -Deditor=true",
+            );
+            installed_s5_authoring_smoke_step.dependOn(&editor_required.step);
+        }
+
+        const window_lifecycle_smoke = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
             "--window-lifecycle-smoke",
         });
         window_lifecycle_smoke.setCwd(.{ .cwd_relative = "/tmp" });
         window_lifecycle_smoke.step.dependOn(b.getInstallStep());
         window_lifecycle_smoke_step.dependOn(&window_lifecycle_smoke.step);
 
-        const init_failure_smoke = b.addSystemCommand(&.{
-            installed_exe_path,
+        const init_failure_smoke = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
             "--init-failure-smoke",
         });
         init_failure_smoke.setCwd(.{ .cwd_relative = "/tmp" });
@@ -860,16 +1497,16 @@ pub fn build(b: *std.Build) void {
         // The aggregate gate is serialized deliberately. Concurrent GUI
         // processes would make WindowServer/Metal failures environmental and
         // weaken the signal from these native checks.
-        const readiness_s2_below = b.addSystemCommand(&.{
-            installed_exe_path,
+        const readiness_s2_below = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
             "--s2-visual-smoke",
             "--frames=480",
             "--virtual-render-hz=80",
         });
         readiness_s2_below.setCwd(.{ .cwd_relative = "/tmp" });
-        readiness_s2_below.step.dependOn(b.getInstallStep());
+        readiness_s2_below.step.dependOn(&verify_installed_validation.step);
         const readiness_s2_above = b.addSystemCommand(&.{
-            installed_exe_path,
+            installed_validation_path,
             "--s2-visual-smoke",
             "--frames=1440",
             "--virtual-render-hz=240",
@@ -877,28 +1514,273 @@ pub fn build(b: *std.Build) void {
         readiness_s2_above.setCwd(.{ .cwd_relative = "/tmp" });
         readiness_s2_above.step.dependOn(&readiness_s2_below.step);
 
+        const readiness_s3_above = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s3-streaming-smoke",
+            "--frames=1200",
+            "--virtual-render-hz=240",
+        });
+        readiness_s3_above.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s3_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s3_above.step.dependOn(&readiness_s2_above.step);
+        const readiness_s3_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s3-streaming-smoke",
+            "--frames=1200",
+            "--virtual-render-hz=80",
+        });
+        readiness_s3_below.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s3_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s3_below.step.dependOn(&readiness_s3_above.step);
+
+        const readiness_s6_above = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s6-streaming-smoke",
+            "--frames=240",
+            "--virtual-render-hz=240",
+        });
+        readiness_s6_above.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s6_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s6_above.step.dependOn(&readiness_s3_below.step);
+        const readiness_s6_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s6-streaming-smoke",
+            "--frames=96",
+            "--virtual-render-hz=80",
+        });
+        readiness_s6_below.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s6_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s6_below.step.dependOn(&readiness_s6_above.step);
+
+        const readiness_s7_above = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s7-interaction-smoke",
+            "--frames=1200",
+            "--virtual-render-hz=240",
+        });
+        readiness_s7_above.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s7_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s7_above.step.dependOn(&readiness_s6_below.step);
+        const readiness_s7_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s7-interaction-smoke",
+            "--frames=1200",
+            "--virtual-render-hz=80",
+        });
+        readiness_s7_below.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s7_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s7_below.step.dependOn(&readiness_s7_above.step);
+
+        const readiness_s8_above = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s8-population-smoke",
+            "--frames=1200",
+            "--virtual-render-hz=240",
+        });
+        readiness_s8_above.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s8_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s8_above.step.dependOn(&readiness_s7_below.step);
+        const readiness_s8_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s8-population-smoke",
+            "--frames=400",
+            "--virtual-render-hz=80",
+        });
+        readiness_s8_below.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s8_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s8_below.step.dependOn(&readiness_s8_above.step);
+
         const readiness_window = b.addSystemCommand(&.{
-            installed_exe_path,
+            installed_validation_path,
             "--window-lifecycle-smoke",
         });
         readiness_window.setCwd(.{ .cwd_relative = "/tmp" });
-        readiness_window.step.dependOn(&readiness_s2_above.step);
+        readiness_window.step.dependOn(&readiness_s8_below.step);
 
         const readiness_init = b.addSystemCommand(&.{
-            installed_exe_path,
+            installed_validation_path,
             "--init-failure-smoke",
         });
         readiness_init.setCwd(.{ .cwd_relative = "/tmp" });
         readiness_init.step.dependOn(&readiness_window.step);
-        macos_readiness_step.dependOn(&readiness_init.step);
+        const readiness_s4_diagnostics = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s4-diagnostics-smoke",
+        });
+        readiness_s4_diagnostics.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s4_diagnostics.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s4_diagnostics.step.dependOn(&readiness_init.step);
+        const readiness_s4_replay_record = b.addSystemCommand(&.{
+            installed_replay_path,
+            "record-smoke",
+            replay_capture_path,
+            installed_content_root,
+        });
+        readiness_s4_replay_record.setCwd(.{ .cwd_relative = "/tmp" });
+        const readiness_s4_physics_debug = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s4-physics-debug-smoke",
+            "--frames=600",
+            "--virtual-render-hz=80",
+        });
+        readiness_s4_physics_debug.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s4_physics_debug.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s4_physics_debug.step.dependOn(
+            &readiness_s4_diagnostics.step,
+        );
+        readiness_s4_replay_record.step.dependOn(
+            &readiness_s4_physics_debug.step,
+        );
+        const readiness_s4_replay_verify = b.addSystemCommand(&.{
+            installed_replay_path,
+            "verify-smoke",
+            replay_capture_path,
+            installed_content_root,
+        });
+        readiness_s4_replay_verify.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s4_replay_verify.step.dependOn(
+            &readiness_s4_replay_record.step,
+        );
+        const readiness_s4_replay_cleanup = b.addSystemCommand(&.{
+            "rm",
+            "-f",
+            replay_capture_path,
+        });
+        readiness_s4_replay_cleanup.step.dependOn(
+            &readiness_s4_replay_verify.step,
+        );
+        const readiness_s5_authoring_root =
+            "/tmp/incinerator-s5-readiness-authoring";
+        const readiness_s5_authoring_prepare = b.addSystemCommand(&.{
+            "rm",
+            "-rf",
+            readiness_s5_authoring_root,
+        });
+        readiness_s5_authoring_prepare.step.dependOn(
+            &readiness_s4_replay_cleanup.step,
+        );
+        const readiness_s5_authoring_mkdir = b.addSystemCommand(&.{
+            "mkdir",
+            "-p",
+            readiness_s5_authoring_root,
+        });
+        readiness_s5_authoring_mkdir.step.dependOn(
+            &readiness_s5_authoring_prepare.step,
+        );
+        const readiness_s5_authoring = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s5-authoring-smoke",
+            "--save-root=" ++ readiness_s5_authoring_root,
+        });
+        readiness_s5_authoring.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s5_authoring.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s5_authoring.step.dependOn(
+            &readiness_s5_authoring_mkdir.step,
+        );
+        const readiness_s5_authoring_verify = b.addSystemCommand(&.{
+            installed_save_path,
+            "verify-authoring-smoke",
+            readiness_s5_authoring_root,
+            installed_content_root,
+        });
+        readiness_s5_authoring_verify.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s5_authoring_verify.step.dependOn(
+            &readiness_s5_authoring.step,
+        );
+        const readiness_s5_authoring_cleanup = b.addSystemCommand(&.{
+            "rm",
+            "-rf",
+            readiness_s5_authoring_root,
+        });
+        readiness_s5_authoring_cleanup.step.dependOn(
+            &readiness_s5_authoring_verify.step,
+        );
+
+        const readiness_s5_save_root = "/tmp/incinerator-s5-readiness-save";
+        const readiness_s5_save_prepare = b.addSystemCommand(&.{
+            "rm",
+            "-rf",
+            readiness_s5_save_root,
+        });
+        readiness_s5_save_prepare.step.dependOn(
+            &readiness_s5_authoring_cleanup.step,
+        );
+        const readiness_s5_save_mkdir = b.addSystemCommand(&.{
+            "mkdir",
+            "-p",
+            readiness_s5_save_root,
+        });
+        readiness_s5_save_mkdir.step.dependOn(&readiness_s5_save_prepare.step);
+        const readiness_s5_save_write = b.addSystemCommand(&.{
+            installed_save_path,
+            "write-smoke",
+            readiness_s5_save_root,
+            installed_content_root,
+        });
+        readiness_s5_save_write.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s5_save_write.step.dependOn(&readiness_s5_save_mkdir.step);
+        const readiness_s5_save_verify = b.addSystemCommand(&.{
+            installed_save_path,
+            "verify-smoke",
+            readiness_s5_save_root,
+            installed_content_root,
+        });
+        readiness_s5_save_verify.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s5_save_verify.step.dependOn(&readiness_s5_save_write.step);
+        const readiness_s5_save_cleanup = b.addSystemCommand(&.{
+            "rm",
+            "-rf",
+            readiness_s5_save_root,
+        });
+        readiness_s5_save_cleanup.step.dependOn(&readiness_s5_save_verify.step);
+        if (editor_enabled) {
+            macos_readiness_step.dependOn(&readiness_s5_save_cleanup.step);
+        } else {
+            const editor_required = b.addFail(
+                "S5 macOS readiness requires -Deditor=true",
+            );
+            macos_readiness_step.dependOn(&editor_required.step);
+        }
     } else {
         const native_only = b.addFail(
             "macOS readiness smokes require a native aarch64-macos target",
         );
         installed_s1_smoke_step.dependOn(&native_only.step);
         installed_s2_smoke_step.dependOn(&native_only.step);
+        installed_s3_smoke_step.dependOn(&native_only.step);
+        installed_s6_smoke_step.dependOn(&native_only.step);
+        installed_s7_smoke_step.dependOn(&native_only.step);
+        installed_s8_smoke_step.dependOn(&native_only.step);
+        installed_s4_diagnostics_smoke_step.dependOn(&native_only.step);
+        installed_s4_replay_smoke_step.dependOn(&native_only.step);
+        installed_s4_physics_debug_smoke_step.dependOn(&native_only.step);
+        installed_s5_save_smoke_step.dependOn(&native_only.step);
+        installed_s5_authoring_smoke_step.dependOn(&native_only.step);
         window_lifecycle_smoke_step.dependOn(&native_only.step);
         init_failure_smoke_step.dependOn(&native_only.step);
+        verify_installed_validation_step.dependOn(&native_only.step);
         macos_readiness_step.dependOn(&native_only.step);
     }
 
@@ -976,6 +1858,20 @@ pub fn build(b: *std.Build) void {
     );
     driver_contract_test_step.dependOn(&run_driver_contract_tests.step);
 
+    const interaction_contract_tests = b.addTest(.{
+        .root_module = interaction_contract_module,
+    });
+    const run_interaction_contract_tests = b.addRunArtifact(
+        interaction_contract_tests,
+    );
+    const interaction_contract_test_step = b.step(
+        "test-interaction-contract",
+        "Run carrier/district interaction-port contract tests",
+    );
+    interaction_contract_test_step.dependOn(
+        &run_interaction_contract_tests.step,
+    );
+
     const vehicle_feature_tests = b.addTest(.{ .root_module = vehicle_feature_module });
     const run_vehicle_feature_tests = b.addRunArtifact(vehicle_feature_tests);
     const vehicle_feature_test_step = b.step(
@@ -992,6 +1888,32 @@ pub fn build(b: *std.Build) void {
     );
     district_contract_test_step.dependOn(&run_district_contract_tests.step);
 
+    const navigation_contract_tests = b.addTest(.{
+        .root_module = navigation_contract_module,
+    });
+    const run_navigation_contract_tests = b.addRunArtifact(
+        navigation_contract_tests,
+    );
+    const navigation_contract_test_step = b.step(
+        "test-navigation-contract",
+        "Run generation-aware copied-value navigation contract tests",
+    );
+    navigation_contract_test_step.dependOn(
+        &run_navigation_contract_tests.step,
+    );
+
+    const sandbox_navigation_tests = b.addTest(.{
+        .root_module = sandbox_navigation_module,
+    });
+    const run_sandbox_navigation_tests = b.addRunArtifact(
+        sandbox_navigation_tests,
+    );
+    const sandbox_navigation_test_step = b.step(
+        "test-sandbox-navigation",
+        "Run pure exact-cohort navigation preflight tests",
+    );
+    sandbox_navigation_test_step.dependOn(&run_sandbox_navigation_tests.step);
+
     const district_worker_tests = b.addTest(.{ .root_module = district_worker_module });
     const run_district_worker_tests = b.addRunArtifact(district_worker_tests);
     const district_worker_test_step = b.step(
@@ -1000,6 +1922,20 @@ pub fn build(b: *std.Build) void {
     );
     district_worker_test_step.dependOn(&run_district_worker_tests.step);
 
+    const district_replay_loader_tests = b.addTest(.{
+        .root_module = district_replay_loader_module,
+    });
+    const run_district_replay_loader_tests = b.addRunArtifact(
+        district_replay_loader_tests,
+    );
+    const district_replay_loader_test_step = b.step(
+        "test-district-replay-loader",
+        "Run logical district completion capture/injection seam tests",
+    );
+    district_replay_loader_test_step.dependOn(
+        &run_district_replay_loader_tests.step,
+    );
+
     const district_feature_tests = b.addTest(.{ .root_module = district_feature_module });
     const run_district_feature_tests = b.addRunArtifact(district_feature_tests);
     const district_feature_test_step = b.step(
@@ -1007,6 +1943,42 @@ pub fn build(b: *std.Build) void {
         "Run backend-neutral district lifecycle tests",
     );
     district_feature_test_step.dependOn(&run_district_feature_tests.step);
+
+    const interaction_feature_tests = b.addTest(.{
+        .root_module = interaction_feature_module,
+    });
+    const run_interaction_feature_tests = b.addRunArtifact(
+        interaction_feature_tests,
+    );
+    const interaction_feature_test_step = b.step(
+        "test-interaction-feature",
+        "Run bounded interaction ownership and rollback tests",
+    );
+    interaction_feature_test_step.dependOn(
+        &run_interaction_feature_tests.step,
+    );
+
+    const npc_feature_tests = b.addTest(.{
+        .root_module = npc_feature_module,
+    });
+    const run_npc_feature_tests = b.addRunArtifact(npc_feature_tests);
+    const npc_feature_test_step = b.step(
+        "test-npc-feature",
+        "Run bounded navigation-driven NPC authority tests",
+    );
+    npc_feature_test_step.dependOn(&run_npc_feature_tests.step);
+
+    const population_feature_tests = b.addTest(.{
+        .root_module = population_feature_module,
+    });
+    const run_population_feature_tests = b.addRunArtifact(
+        population_feature_tests,
+    );
+    const population_feature_test_step = b.step(
+        "test-population-feature",
+        "Run fixed stateless NPC population producer tests",
+    );
+    population_feature_test_step.dependOn(&run_population_feature_tests.step);
 
     const district_gpu_registry_tests = b.addTest(.{
         .root_module = district_gpu_registry_module,
@@ -1046,6 +2018,70 @@ pub fn build(b: *std.Build) void {
     );
     sandbox_controls_test_step.dependOn(&run_sandbox_controls_tests.step);
 
+    const developer_controls_tests = b.addTest(.{ .root_module = developer_controls_module });
+    const run_developer_controls_tests = b.addRunArtifact(developer_controls_tests);
+    const developer_controls_test_step = b.step(
+        "test-developer-controls",
+        "Run host-only pause, step, and time-scale control tests",
+    );
+    developer_controls_test_step.dependOn(&run_developer_controls_tests.step);
+
+    const developer_diagnostics_tests = b.addTest(.{
+        .root_module = developer_diagnostics_module,
+    });
+    const run_developer_diagnostics_tests = b.addRunArtifact(developer_diagnostics_tests);
+    const developer_diagnostics_test_step = b.step(
+        "test-developer-diagnostics",
+        "Run backend-neutral developer snapshot and export tests",
+    );
+    developer_diagnostics_test_step.dependOn(&run_developer_diagnostics_tests.step);
+
+    const developer_profile_tests = b.addTest(.{ .root_module = developer_profile_module });
+    const run_developer_profile_tests = b.addRunArtifact(developer_profile_tests);
+    const developer_profile_test_step = b.step(
+        "test-developer-profile",
+        "Run bounded fixed-phase profiling ring tests",
+    );
+    developer_profile_test_step.dependOn(&run_developer_profile_tests.step);
+
+    const developer_visualization_tests = b.addTest(.{
+        .root_module = developer_visualization_module,
+    });
+    const run_developer_visualization_tests = b.addRunArtifact(
+        developer_visualization_tests,
+    );
+    const developer_visualization_test_step = b.step(
+        "test-developer-visualization",
+        "Run typed physics-debug and profiling host-control tests",
+    );
+    developer_visualization_test_step.dependOn(
+        &run_developer_visualization_tests.step,
+    );
+
+    const sandbox_authoring_tests = b.addTest(.{ .root_module = sandbox_authoring_module });
+    const run_sandbox_authoring_tests = b.addRunArtifact(sandbox_authoring_tests);
+    const sandbox_authoring_test_step = b.step(
+        "test-sandbox-authoring",
+        "Run bounded persistent-selection and undo/redo session tests",
+    );
+    sandbox_authoring_test_step.dependOn(&run_sandbox_authoring_tests.step);
+
+    const sandbox_save_tests = b.addTest(.{ .root_module = sandbox_save_module });
+    const run_sandbox_save_tests = b.addRunArtifact(sandbox_save_tests);
+    const sandbox_save_test_step = b.step(
+        "test-sandbox-save",
+        "Run canonical exact-cohort save-envelope tests",
+    );
+    sandbox_save_test_step.dependOn(&run_sandbox_save_tests.step);
+
+    const save_slots_tests = b.addTest(.{ .root_module = save_slots_module });
+    const run_save_slots_tests = b.addRunArtifact(save_slots_tests);
+    const save_slots_test_step = b.step(
+        "test-save-slots",
+        "Run macOS atomic save-slot and recovery tests",
+    );
+    save_slots_test_step.dependOn(&run_save_slots_tests.step);
+
     const sandbox_simulation_tests = b.addTest(.{ .root_module = sandbox_simulation_module });
     const run_sandbox_simulation_tests = b.addRunArtifact(sandbox_simulation_tests);
     const sandbox_simulation_test_step = b.step(
@@ -1053,6 +2089,42 @@ pub fn build(b: *std.Build) void {
         "Run the concrete sandbox/Jolt composition tests",
     );
     sandbox_simulation_test_step.dependOn(&run_sandbox_simulation_tests.step);
+
+    const sandbox_interaction_tests = b.addTest(.{
+        .root_module = sandbox_interaction_module,
+    });
+    const run_sandbox_interaction_tests = b.addRunArtifact(
+        sandbox_interaction_tests,
+    );
+    const sandbox_interaction_test_step = b.step(
+        "test-sandbox-interaction",
+        "Run bounded host/editor interaction producer tests",
+    );
+    sandbox_interaction_test_step.dependOn(
+        &run_sandbox_interaction_tests.step,
+    );
+
+    const sandbox_replay_tests = b.addTest(.{ .root_module = sandbox_replay_module });
+    const run_sandbox_replay_tests = b.addRunArtifact(sandbox_replay_tests);
+    const sandbox_replay_test_step = b.step(
+        "test-replay",
+        "Run same-cohort flight-recorder envelope and cursor tests",
+    );
+    sandbox_replay_test_step.dependOn(&run_sandbox_replay_tests.step);
+
+    const district_content_catalog_tests = b.addTest(.{
+        .root_module = district_content_catalog_module,
+    });
+    const run_district_content_catalog_tests = b.addRunArtifact(
+        district_content_catalog_tests,
+    );
+    const district_content_catalog_test_step = b.step(
+        "test-district-content-catalog",
+        "Run canonical district catalog admission boundary tests",
+    );
+    district_content_catalog_test_step.dependOn(
+        &run_district_content_catalog_tests.step,
+    );
 
     // Creates an executable that will run `test` blocks from the executable's
     // root module. Note that test executables only test one module at a time,
@@ -1075,38 +2147,68 @@ pub fn build(b: *std.Build) void {
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&cohort_verification.run.step);
+    test_step.dependOn(&cohort_verification.tests.step);
     test_step.dependOn(&run_content_tests.step);
     test_step.dependOn(&verify_cooked_bundle.step);
     test_step.dependOn(&run_content_cooker_tests.step);
+    test_step.dependOn(&run_content_catalog_cooker_tests.step);
+    test_step.dependOn(&verify_cooked_catalog.step);
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_contracts_tests.step);
     test_step.dependOn(&run_crate_feature_tests.step);
     test_step.dependOn(&run_character_feature_tests.step);
     test_step.dependOn(&run_driver_contract_tests.step);
+    test_step.dependOn(&run_interaction_contract_tests.step);
     test_step.dependOn(&run_vehicle_feature_tests.step);
     test_step.dependOn(&run_district_contract_tests.step);
+    test_step.dependOn(&run_navigation_contract_tests.step);
+    test_step.dependOn(&run_sandbox_navigation_tests.step);
     test_step.dependOn(&run_district_worker_tests.step);
+    test_step.dependOn(&run_district_replay_loader_tests.step);
     test_step.dependOn(&run_district_feature_tests.step);
+    test_step.dependOn(&run_interaction_feature_tests.step);
+    test_step.dependOn(&run_npc_feature_tests.step);
+    test_step.dependOn(&run_population_feature_tests.step);
     test_step.dependOn(&run_district_gpu_registry_tests.step);
     test_step.dependOn(&run_district_scene_adapter_tests.step);
     test_step.dependOn(&run_district_presentation_tests.step);
     test_step.dependOn(&run_sandbox_controls_tests.step);
+    test_step.dependOn(&run_developer_controls_tests.step);
+    test_step.dependOn(&run_developer_diagnostics_tests.step);
+    test_step.dependOn(&run_developer_profile_tests.step);
+    test_step.dependOn(&run_developer_visualization_tests.step);
+    test_step.dependOn(&run_sandbox_authoring_tests.step);
+    test_step.dependOn(&run_sandbox_save_tests.step);
+    test_step.dependOn(&run_save_slots_tests.step);
     test_step.dependOn(&run_sandbox_simulation_tests.step);
+    test_step.dependOn(&run_sandbox_interaction_tests.step);
+    test_step.dependOn(&run_sandbox_replay_tests.step);
+    test_step.dependOn(&run_district_content_catalog_tests.step);
+    test_step.dependOn(&replay_tool_exe.step);
+    test_step.dependOn(&verify_replay_linkage.step);
+    test_step.dependOn(&save_tool_exe.step);
+    test_step.dependOn(&verify_save_linkage.step);
     test_step.dependOn(&run_exe_tests.step);
     test_step.dependOn(&run_physics_tests.step);
     test_step.dependOn(&run_headless_tests.step);
+    test_step.dependOn(&run_external_producers_tests.step);
+    test_step.dependOn(&run_headless_authority_tests.step);
     test_step.dependOn(&run_shader_contract_tests.step);
+    test_step.dependOn(&verify_validation_boundary.step);
+    test_step.dependOn(&run_validation_boundary_tests.step);
+    test_step.dependOn(verify_installed_validation_step);
+    test_step.dependOn(&run_physics_debug_gpu_tests.step);
     test_step.dependOn(&verify_headless_boundary.step);
     test_step.dependOn(&verify_headless_linkage.step);
     test_step.dependOn(&run_headless_boundary_tests.step);
     test_step.dependOn(&run_headless_linkage_tests.step);
-    test_step.dependOn(&s0_measure_exe.step);
-    test_step.dependOn(&s1_measure_exe.step);
-    test_step.dependOn(&run_s1_measure_tests.step);
-    test_step.dependOn(&s2_measure_exe.step);
-    test_step.dependOn(&run_s2_measure_tests.step);
-    test_step.dependOn(&s3_measure_exe.step);
-    test_step.dependOn(&run_s3_measure_tests.step);
+    test_step.dependOn(&s7_measure_exe.step);
+    test_step.dependOn(&run_s7_measure_tests.step);
+    test_step.dependOn(&s8_measure_exe.step);
+    test_step.dependOn(&run_s8_measure_tests.step);
+    test_step.dependOn(&m3_soak_exe.step);
+    test_step.dependOn(&run_m3_soak_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //
@@ -1124,48 +2226,22 @@ pub fn build(b: *std.Build) void {
 // =============================================================================
 // Shader Compilation
 // =============================================================================
-// Compiles GLSL shaders into the format consumed by the selected target's SDL
-// GPU backend. Windows defaults to D3D12/DXIL and exposes Vulkan/SPIR-V only as
-// an explicit fallback; the renderer advertises only the format built.
+// Compiles GLSL through a SPIR-V intermediate into Metal Shading Language, the
+// only active SDL GPU backend contract.
 
 const ShaderFormat = enum {
     msl,
-    spirv,
-    dxil,
 
-    fn fileExtension(self: ShaderFormat) []const u8 {
-        return switch (self) {
-            .msl => "metal",
-            .spirv => "spv",
-            .dxil => "dxil",
-        };
+    fn fileExtension(_: ShaderFormat) []const u8 {
+        return "metal";
     }
 
-    fn entrypoint(self: ShaderFormat) []const u8 {
-        return switch (self) {
-            .msl => "main0",
-            .spirv, .dxil => "main",
-        };
+    fn entrypoint(_: ShaderFormat) []const u8 {
+        return "main0";
     }
 
-    fn driver(self: ShaderFormat) []const u8 {
-        return switch (self) {
-            .msl => "metal",
-            .spirv => "vulkan",
-            .dxil => "direct3d12",
-        };
-    }
-};
-
-const ShaderStage = enum {
-    vertex,
-    fragment,
-
-    fn shadercrossName(self: ShaderStage) []const u8 {
-        return switch (self) {
-            .vertex => "vertex",
-            .fragment => "fragment",
-        };
+    fn driver(_: ShaderFormat) []const u8 {
+        return "metal";
     }
 };
 
@@ -1179,8 +2255,6 @@ const ShaderBuild = struct {
 const ShaderTools = struct {
     glslc: []const u8,
     spirv_cross: []const u8,
-    shadercross: []const u8,
-    windows_gpu: WindowsGpu,
 };
 
 const CompiledShader = struct {
@@ -1194,23 +2268,15 @@ fn buildShaders(
     optimize: std.builtin.OptimizeMode,
     tools: ShaderTools,
 ) ShaderBuild {
-    const format: ShaderFormat = switch (target.result.os.tag) {
-        .macos => .msl,
-        .linux => .spirv,
-        .windows => switch (tools.windows_gpu) {
-            .d3d12 => .dxil,
-            .vulkan => .spirv,
-        },
-        else => @panic("unsupported target: Incinerator shaders support macOS, Linux, and Windows only"),
-    };
+    const format: ShaderFormat = .msl;
 
-    const shader_step = b.step("shaders", "Compile shaders for the selected target backend");
+    const shader_step = b.step("shaders", "Compile GLSL shaders into Metal Shading Language");
     const generated = b.addWriteFiles();
 
-    const triangle_vertex = compileShader(b, tools, "shaders/triangle.vert", "triangle.vert", .vertex, format);
-    const triangle_fragment = compileShader(b, tools, "shaders/triangle.frag", "triangle.frag", .fragment, format);
-    const model_vertex = compileShader(b, tools, "shaders/model.vert", "model.vert", .vertex, format);
-    const model_fragment = compileShader(b, tools, "shaders/model.frag", "model.frag", .fragment, format);
+    const triangle_vertex = compileShader(b, tools, "shaders/triangle.vert", "triangle.vert");
+    const triangle_fragment = compileShader(b, tools, "shaders/triangle.frag", "triangle.frag");
+    const model_vertex = compileShader(b, tools, "shaders/model.vert", "model.vert");
+    const model_fragment = compileShader(b, tools, "shaders/model.frag", "model.frag");
 
     const extension = format.fileExtension();
     _ = generated.addCopyFile(triangle_vertex.target, b.fmt("triangle.vert.{s}", .{extension}));
@@ -1224,7 +2290,7 @@ fn buildShaders(
     _ = generated.addCopyFile(reflectShader(b, tools, model_fragment.spirv, "model.frag"), "model.frag.json");
 
     const module_source = generated.add("shader_assets.zig", b.fmt(
-        \\pub const Format = enum {{ msl, spirv, dxil }};
+        \\pub const Format = enum {{ msl }};
         \\pub const format: Format = .{s};
         \\pub const entrypoint = "{s}";
         \\pub const driver = "{s}";
@@ -1278,35 +2344,11 @@ fn compileShader(
     tools: ShaderTools,
     source_path: []const u8,
     output_name: []const u8,
-    stage: ShaderStage,
-    format: ShaderFormat,
 ) CompiledShader {
     const glslc = b.addSystemCommand(&.{tools.glslc});
     glslc.addFileArg(b.path(source_path));
     glslc.addArg("-o");
     const spirv = glslc.addOutputFileArg(b.fmt("{s}.spv", .{output_name}));
-
-    if (format == .spirv) return .{ .spirv = spirv, .target = spirv };
-
-    if (format == .dxil) {
-        const shadercross = b.addSystemCommand(&.{tools.shadercross});
-        shadercross.addFileArg(spirv);
-        shadercross.addArgs(&.{
-            "-s",
-            "SPIRV",
-            "-d",
-            "DXIL",
-            "-t",
-            stage.shadercrossName(),
-            "-e",
-            "main",
-            "-o",
-        });
-        return .{
-            .spirv = spirv,
-            .target = shadercross.addOutputFileArg(b.fmt("{s}.dxil", .{output_name})),
-        };
-    }
 
     const spirv_cross = b.addSystemCommand(&.{tools.spirv_cross});
     spirv_cross.addFileArg(spirv);

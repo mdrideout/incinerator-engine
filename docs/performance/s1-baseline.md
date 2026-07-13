@@ -1,5 +1,10 @@
 # S1 Character Slice Performance Baseline
 
+> **Historical phase baseline.** Measurements and limits below are preserved as
+> recorded for this slice; they are not measurements of the current tree. See
+> the [current macOS readiness record](../validation/macos-readiness.md) and
+> [cleanup plan](../../CLEANUP_PLAN.md).
+
 **Recorded:** 2026-07-12  
 **Status:** Characterization evidence, not a performance guarantee
 

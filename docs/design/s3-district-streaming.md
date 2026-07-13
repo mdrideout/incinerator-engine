@@ -1,7 +1,12 @@
 # S3 District Streaming
 
-**Date:** 2026-07-12
-**Status:** S3-A and S3-B complete; full S3 remains open for S3-C
+> **Historical slice design.** This was the delivery contract for the slice at
+> closure. Detailed file layout, cohorts, and limitations below may have been
+> consolidated later. See [ADR-009](../adr/009-runtime-content-and-streaming.md)
+> and the [cleanup plan](../../CLEANUP_PLAN.md) for current architecture.
+
+**Date:** 2026-07-13
+**Status:** Complete through S3-C
 
 ## Outcome
 
@@ -14,9 +19,9 @@ cleanup.
 
 This is a streaming vertical slice, not a general asset framework. S3-A proves
 logical ownership and thread affinity. S3-B adds the cooked fixture, installed
-content, scene generations, fallback, and nonblocking Metal residency. Full S3
-remains open until S3-C adds proximity policy, repeated installed lifecycle
-smokes, and complete end-to-end evidence.
+content, scene generations, fallback, and nonblocking Metal residency. S3-C
+adds host-owned fixed-tick proximity policy, repeated installed lifecycle
+smokes, and complete end-to-end drain evidence.
 
 ## Content Policy
 
@@ -38,8 +43,7 @@ The initial contract supports exactly:
 
 - one in-flight worker job;
 - one loading, cancelling, or active district;
-- one declared coordinate, `(0, -4)`, outside the bootstrap ground, in the
-  sandbox host;
+- one declared coordinate in the sandbox host;
 - recipe version 1;
 - at most eight finite axis-aligned static boxes;
 - one host-supplied typed mesh/material pair carried as inert logical draw data;
@@ -126,7 +130,21 @@ registry, SDL/Metal upload, and fallback resolution. The host reserves a typed
 scene generation before it requests a logical load. Logical activation may
 immediately become visible through collision-box fallback geometry; GPU
 residency later changes only host-side handle resolution and never simulation
-authority or collision. S3-C will add host-owned proximity policy.
+authority or collision.
+
+S3-C makes the host choose a plain X/Z focus target: the occupied vehicle while
+driving, otherwise the character. A finite AABB Schmitt trigger is sampled once
+per fixed tick. Its inclusive load boundary lies strictly inside its unload
+boundary, so render cadence and boundary jitter cannot create duplicate
+admission. The smoke host supplies a synthetic focus through the same policy;
+`DistrictFeature` still imports neither character nor vehicle code.
+
+Desired presence is distinct from asynchronous state. Departure cooperatively
+cancels a content read, records cancel-on-admission before a logical ticket
+exists, submits typed cancellation while loading, or submits typed unload while
+active. Re-entry remains latched while the previous content, logical,
+presentation, and GPU owners drain. A new generation is admitted only after
+all registry states, batches, and byte counters return to zero.
 
 After a successful `unload`, extraction is empty before the host releases
 the scene. One scene generation preserves nodes, shared mesh instances,
@@ -197,7 +215,7 @@ are gates; local timings are characterization evidence.
 4. [x] Record the ReleaseFast headless baseline, repeat independent reviews,
    and close S3-A without claiming full S3 completion.
 
-## Remaining Full-S3 Gates
+## Full-S3 Staged Delivery
 
 ### S3-B: cooked content and GPU residency — complete
 
@@ -209,13 +227,13 @@ are gates; local timings are characterization evidence.
 - Renderer queues, hardware instancing, culling, and LOD remain deliberately
   absent because the one-scene measurements do not justify them.
 
-### S3-C: boundary host and native evidence
+### S3-C: boundary host and native evidence — complete
 
-- Add proximity hysteresis without importing character/vehicle features into
+- [x] Add proximity hysteresis without importing character/vehicle features into
   `DistrictFeature`.
-- Run the installed cooked-content/Metal lifecycle smoke from `/tmp` above and
+- [x] Run the installed cooked-content/Metal lifecycle smoke from `/tmp` above and
   below the fixed tick rate, including repeated cancel/load/unload/reload.
-- Record repeated lifecycle timing/peak profiles and repeat final full-S3
+- [x] Record repeated lifecycle timing/peak profiles and repeat final full-S3
   independent reviews.
 
 ## Acceptance Evidence
@@ -230,6 +248,11 @@ are gates; local timings are characterization evidence.
   body/entity counts to baseline, and V4 restore is byte-stable.
 - ReleaseFast S3-A measurement records job latency, command/commit/unload cost,
   complete tick/extraction distributions, byte/count budgets, and final cleanup.
+- Installed ReleaseFast S3-C smokes run the cooked Metal lifecycle from `/tmp`
+  at 240 Hz and 80 Hz. Each cancels one admitted load, completes three
+  load/resident/unload cycles, rejects every stale scene handle, stays at one
+  live scene/active upload batch, and drains every logical, worker, CPU, upload,
+  and GPU owner before clean shutdown.
 
 ## Explicit Full-S3 Deferrals
 

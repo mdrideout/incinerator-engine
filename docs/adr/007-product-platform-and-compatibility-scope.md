@@ -1,6 +1,6 @@
 # ADR-007: Product, Platform, and Compatibility Scope
 
-**Status:** Accepted, amended 2026-07-12 (macOS-only scope)
+**Status:** Accepted, implemented, and amended 2026-07-13 (macOS-only scope)
 
 **Date:** 2026-07-09
 
@@ -34,7 +34,11 @@ The engine is intended to become open source. The game, its content, and its ass
 
 Implementation may continue while that choice is deferred, but public reuse or redistribution must not be described as licensed. Selecting and adding an engine license is a separate owner decision before an open-source release.
 
-Engine packages must not silently include game-owned content. The `build.zig.zon` package paths intentionally exclude `assets`. Existing GLB files under `assets/models` are optional game-owned development content; the sandbox startup and `--verify-install` path do not depend on them. Small engine test fixtures may be added later only when their provenance and redistribution terms are recorded.
+Engine packages must not silently include game-owned content. The unreferenced
+demo GLBs formerly under `assets/models` were removed from the engine
+repository. Small engine test fixtures may be added only when their provenance
+and redistribution terms are recorded; current fixtures are narrow
+self-authored conformance inputs rather than game content.
 
 ### Tested dependency cohort
 
@@ -58,22 +62,28 @@ These dependencies are upgraded and validated as a cohort, not independently und
 | Future/deferred | Windows | Undecided | Likely D3D12 with DXIL | No current gate, compatibility promise, or required abstraction |
 
 Linux/SteamOS and Windows are product possibilities, not current engineering
-targets. Existing backend and build branches are dormant historical work and
-may break without blocking macOS development. The engine will not introduce
-multi-platform abstractions, cross-build constraints, CI jobs, shader gates,
-packaging work, or runtime tests solely to preserve them.
+targets. Greenfield cleanup removes their active backend/build/shader branches
+instead of maintaining dormant compatibility paths. The engine will not
+introduce multi-platform abstractions, cross-build constraints, CI jobs,
+shader gates, packaging work, or runtime tests solely to preserve them.
+
+The vendored `third_party/joltc-zig` build package retains upstream
+Windows/Linux compiler and system-library conditionals. They are
+dependency-internal portability code, not top-level engine platform policy or
+support. Incinerator rejects a non-native-Apple-Silicon-macOS target before the
+active client or cold-authority graph resolves that dependency.
 
 A future platform is reactivated only by a new product decision that defines
-its architecture, backend, packaging, and validation contract. Porting work may
-adapt or replace dormant code. Linux headless/server support must be explicitly
-selected before authoritative-server implementation; it is not maintained in
-advance. Mobile, web, consoles, and Intel macOS are also outside the current
-support contract.
+its architecture, backend, packaging, and validation contract. Porting work
+starts from the current contracts plus repository history. Linux
+headless/server support must be explicitly selected before authoritative-server
+implementation; it is not maintained in advance. Mobile, web, consoles, and
+Intel macOS are also outside the current support contract.
 
 Shader outputs, reflection JSON, and generated Zig modules live in the Zig
 cache. macOS CI and release validation use the exact-pinned base manifest and
-explicit tool paths. Historical SPIR-V/DXIL branches and manifests are not
-current validation requirements.
+explicit tool paths. Historical SPIR-V/DXIL experiments exist in repository
+history only and are not current validation requirements.
 
 ### Compatibility policy
 
@@ -99,5 +109,6 @@ Before a future stable engine release, the project may deliberately version a pu
   platforms impose no current compile-time, shader, runtime, packaging, or CI
   requirements.
 - Prototype APIs may be removed directly instead of wrapped.
-- Game-owned GLBs cannot become implicit engine package or runtime dependencies.
+- Game-owned assets cannot become implicit engine repository, package, or
+  runtime dependencies.
 - The repository remains intentionally unlicensed until the owner selects an engine license.

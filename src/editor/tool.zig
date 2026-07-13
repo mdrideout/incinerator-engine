@@ -9,89 +9,184 @@
 //! Design Philosophy:
 //! - Tools are composable: each tool is independent and focused
 //! - Tools are toggleable: can be enabled/disabled at runtime
-//! - Tools share context: read from EditorContext for engine state
+//! - Tools receive only the concern-specific frame input they need
 //! - Tools are explicit: manually registered, not auto-discovered
 //!
-//! Example Usage:
-//!     const my_tool = Tool{
-//!         .name = "My Tool",
-//!         .draw_fn = myDrawFunction,
-//!     };
-//!
-//!     fn myDrawFunction(ctx: *EditorContext) void {
-//!         if (zgui.begin("My Tool", .{})) {
-//!             zgui.text("Hello from my tool!");
-//!         }
-//!         zgui.end();
-//!     }
+//! Every tool publishes immutable metadata plus a draw function. The editor
+//! owns runtime visibility and state, and dispatches the statically registered
+//! tool identities explicitly.
 
 const std = @import("std");
 
 // Forward declarations for engine types
 const Camera = @import("../camera.zig").Camera;
 const FrameTimer = @import("../timing.zig").FrameTimer;
+const engine = @import("incinerator_engine");
+const sandbox_host = @import("sandbox_simulation");
+const developer_controls = @import("developer_controls");
+const developer_diagnostics = @import("developer_diagnostics");
+const developer_profile = @import("developer_profile");
+const developer_visualization = @import("developer_visualization");
+const sandbox_authoring = @import("sandbox_authoring");
+const sandbox_interaction = @import("sandbox_interaction");
+
+pub const DeveloperSnapshot = developer_diagnostics.Snapshot(sandbox_host.Diagnostics);
+pub const ProfileSpanView = developer_profile.SpanRing(
+    developer_profile.default_span_capacity,
+).BorrowedView;
+pub const ProfileFrameView = developer_profile.FrameRing(
+    developer_profile.default_frame_capacity,
+).BorrowedView;
 
 // ============================================================================
-// Editor Context
+// Host-neutral authoring views
 // ============================================================================
 
-/// Shared context passed to all tools during rendering.
-/// Contains read-only references to engine systems and mutable editor state.
-///
-/// This is the "bridge" between the engine and the editor - tools can inspect
-/// engine state but modifications go through proper channels.
-pub const EditorContext = struct {
-    // -------------------------------------------------------------------------
-    // Engine References (read-only access to engine state)
-    // -------------------------------------------------------------------------
+/// Immutable crate record borrowed for one editor draw. The editor sees only
+/// engine-owned values; it never receives a Simulation, ECS entity, or physics
+/// body handle.
+pub const AuthoringCrateView = struct {
+    id: engine.PersistentId,
+    state: engine.physics.BodyState,
+    authoring_revision: u64,
+};
 
-    /// The player/debug camera - tools can read position, rotation, etc.
+pub const AuthoringFeedbackStatus = enum {
+    none,
+    applied,
+    rejected,
+    submission_failed,
+};
+
+/// Latest correlated authoring result retained by the composition. `sequence`
+/// advances for every update so an optional editor can distinguish a new
+/// result from an unchanged snapshot without owning outcome history.
+pub const AuthoringFeedback = struct {
+    sequence: u64 = 0,
+    status: AuthoringFeedbackStatus = .none,
+    operation: ?sandbox_authoring.OperationKind = null,
+    transaction_id: ?u64 = null,
+    id: ?engine.PersistentId = null,
+    rejection_reason: ?sandbox_host.RejectionReason = null,
+    detail: []const u8 = "",
+};
+
+pub const SaveFeedbackStatus = enum {
+    unavailable,
+    idle,
+    queued,
+    committing,
+    committed,
+    committed_sync_warning,
+    not_committed,
+};
+
+/// Latest save-slot result. Strings are immutable frame borrows owned by the
+/// composition; the editor neither stores them nor reaches the filesystem.
+pub const SaveFeedback = struct {
+    sequence: u64 = 0,
+    status: SaveFeedbackStatus = .unavailable,
+    slot_label: []const u8 = "",
+    detail: []const u8 = "",
+};
+
+/// Complete immutable authoring input for one editor frame. S5 deliberately
+/// exposes one sandbox candidate; adding a bounded catalogue later does not
+/// change the request or authority boundary.
+pub const CrateAuthoringView = struct {
+    session: sandbox_authoring.Snapshot,
+    available_crate: ?AuthoringCrateView = null,
+    selected_crate: ?AuthoringCrateView = null,
+    feedback: AuthoringFeedback = .{},
+    save: SaveFeedback = .{},
+    request_rejections: u64 = 0,
+};
+
+/// Immutable S7 carrier/carryable authority presented to the optional editor.
+/// Outcomes are retained by value so polling remains centralized in the host;
+/// the tool cannot drain or reorder another producer's result.
+pub const InteractionView = struct {
+    carrier: ?sandbox_host.CharacterView = null,
+    carryable: ?sandbox_host.CarryableView = null,
+    next_transaction_id: ?u64 = null,
+    last_outcome: ?sandbox_host.InteractionOutcome = null,
+    submission_failures: u64 = 0,
+    request_rejections: u64 = 0,
+};
+
+pub const DeveloperInput = struct {
+    snapshot: *const DeveloperSnapshot,
+    journal: engine.runtime.DiagnosticJournal.BorrowedView,
+    control_requests: *developer_controls.RequestBuffer,
+    diagnostic_requests: *developer_diagnostics.RequestBuffer,
+};
+
+pub const VisualizationInput = struct {
+    snapshot: *const developer_visualization.Snapshot,
+    profile_spans: ProfileSpanView,
+    profile_frames: ProfileFrameView,
+    profile_stats: developer_profile.RecorderStats,
+    visualization_requests: *developer_visualization.RequestBuffer,
+};
+
+pub const AuthoringInput = struct {
+    view: *const CrateAuthoringView,
+    requests: *sandbox_authoring.RequestBuffer,
+};
+
+pub const InteractionInput = struct {
+    view: *const InteractionView,
+    requests: *sandbox_interaction.RequestBuffer,
+};
+
+/// One-frame observations and fixed request sinks, grouped by concern. This is
+/// the composition/editor boundary; tools never receive App or Simulation.
+pub const FrameInput = struct {
     camera: *const Camera,
-
-    /// Frame timing information - for FPS display, profiling, etc.
     frame_timer: *const FrameTimer,
-
-    /// Whether the editor wants to capture mouse input.
-    /// When true, game should not process mouse input
-    wants_mouse: bool = false,
-
-    /// Whether the editor wants to capture keyboard input (e.g., text input active)
-    /// When true, game should not process keyboard input
-    wants_keyboard: bool = false,
+    developer: DeveloperInput,
+    visualization: VisualizationInput,
+    authoring: AuthoringInput,
+    interaction: InteractionInput,
 };
 
 // ============================================================================
 // Tool Interface
 // ============================================================================
 
-/// A Tool is a self-contained editor panel/window.
-///
-/// Tools are defined as data + function pointer rather than a vtable interface
-/// because:
-/// 1. Simpler - no need for allocations or dynamic dispatch overhead
-/// 2. Composable - tools are just data, easy to store in arrays
-/// 3. Zig-idiomatic - follows pattern used in std.Build, etc.
-pub const Tool = struct {
-    /// Display name shown in window title and tool menu
-    /// Must be null-terminated for ImGui compatibility
-    name: [:0]const u8,
+/// Explicit identity for the statically composed sandbox editor tools. Draw
+/// dispatch remains in editor.zig so state is owned by an Editor value instead
+/// of hidden behind module globals or self-referential pointers.
+pub const ToolId = enum {
+    stats,
+    camera,
+    render,
+    diagnostics,
+    physics_debug,
+    crate_authoring,
+    interaction,
+};
 
-    /// Whether this tool is currently visible
-    /// Tools can be toggled on/off at runtime via the editor menu
+pub const Descriptor = struct {
+    id: ToolId,
+    name: [:0]const u8,
+    enabled_by_default: bool = true,
+};
+
+/// Runtime visibility state for one statically registered tool.
+pub const Tool = struct {
+    id: ToolId,
+    name: [:0]const u8,
     enabled: bool = true,
 
-    /// The draw function - called every frame when enabled.
-    /// Should use zgui to render the tool's UI.
-    draw_fn: *const fn (ctx: *EditorContext) void,
-
-    /// Draw this tool if enabled
-    pub fn draw(self: *const Tool, ctx: *EditorContext) void {
-        if (self.enabled) {
-            self.draw_fn(ctx);
-        }
+    pub fn init(descriptor: Descriptor) Tool {
+        return .{
+            .id = descriptor.id,
+            .name = descriptor.name,
+            .enabled = descriptor.enabled_by_default,
+        };
     }
 
-    /// Toggle this tool's visibility
     pub fn toggle(self: *Tool) void {
         self.enabled = !self.enabled;
     }
@@ -102,17 +197,26 @@ pub const Tool = struct {
 // ============================================================================
 
 test "Tool toggle works" {
-    var tool = Tool{
+    var registered_tool = Tool{
+        .id = .stats,
         .name = "Test Tool",
         .enabled = true,
-        .draw_fn = struct {
-            fn draw(_: *EditorContext) void {}
-        }.draw,
     };
 
-    try std.testing.expect(tool.enabled == true);
-    tool.toggle();
-    try std.testing.expect(tool.enabled == false);
-    tool.toggle();
-    try std.testing.expect(tool.enabled == true);
+    try std.testing.expect(registered_tool.enabled == true);
+    registered_tool.toggle();
+    try std.testing.expect(registered_tool.enabled == false);
+    registered_tool.toggle();
+    try std.testing.expect(registered_tool.enabled == true);
+}
+
+test "Tool initializes from immutable descriptor" {
+    const registered_tool = Tool.init(.{
+        .id = .camera,
+        .name = "Camera",
+        .enabled_by_default = false,
+    });
+    try std.testing.expectEqual(ToolId.camera, registered_tool.id);
+    try std.testing.expectEqualStrings("Camera", registered_tool.name);
+    try std.testing.expect(!registered_tool.enabled);
 }

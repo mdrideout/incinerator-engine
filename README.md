@@ -2,7 +2,7 @@
 
 Incinerator is a game-specific 3D engine being rebuilt for a single-player sandbox, with a deliberate path toward a future authoritative online game. It uses Zig, SDL3, Jolt Physics, Flecs, and ImGui.
 
-The engine is intended to become open source and the game will be licensed separately. No engine license has been selected yet, so this repository currently grants no license. The overhaul is greenfield: prototype APIs and file formats may change without compatibility shims. See [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md) for current status and delivery gates.
+The engine is intended to become open source and the game will be licensed separately. No engine license has been selected yet, so this repository currently grants no license. The overhaul is greenfield: prototype APIs and file formats may change without compatibility shims. See [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md) for the completed feature roadmap and [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md) for the completed post-M3 consolidation record.
 
 ## Toolchain Cohort
 
@@ -10,13 +10,13 @@ These versions are one tested compatibility cohort and should be upgraded togeth
 
 | Component | Pinned version | Integration |
 |---|---|---|
-| Zig | `0.16.0` exact | Recorded in `.zigversion` and `build.zig.zon` |
+| Zig | `0.16.0` exact | Recorded in `.zigversion`; enforced by the build guard (the package manifest records the same minimum floor) |
 | SDL | `3.4.12` | `castholm/SDL` wrapper `0.5.2` at an exact commit |
 | Jolt Physics | `5.5.0` | Engine-owned JoltC build package with exact Jolt, JoltC, and Zig wrapper commits |
 | Flecs | Exact development commit | `zflecs` wrapper pinned with an explicit ABI/feature cohort and one C-source owner |
 | ImGui | Exact development commit | Optional `zgui` editor; its SDL3 backend is compiled by the engine against the selected SDL 3.4.12 headers |
 
-The complete dependency identities live in `build.zig.zon` and [`third_party/joltc-zig/README.md`](third_party/joltc-zig/README.md). Dependency features that affect linkage, ABI, or compiled capabilities are selected in `build.zig`; they are not inherited silently from wrapper defaults. Jolt's cross-platform deterministic build mode is deliberately disabled. The future network model is an authoritative server, not client lockstep; enabling that mode would need a measured requirement and performance evaluation.
+The complete dependency identities live in `build.zig.zon` and [`third_party/joltc-zig/README.md`](third_party/joltc-zig/README.md). Dependency features that affect linkage, ABI, or compiled capabilities are selected explicitly; they are not inherited silently from wrapper defaults. The shared simulation build graph generates the replay cohort from those pins and physics limits, and an automatic verifier rejects manifest drift. Flecs is compiled as private ECS storage with only the OS API implementation addon, excluding its HTTP, REST, script, metrics, module, and pipeline surfaces. Jolt's cross-platform deterministic build mode is deliberately disabled. The future network model is an authoritative server, not client lockstep; enabling that mode would need a measured requirement and performance evaluation.
 
 ## Platform Priority
 
@@ -26,11 +26,17 @@ The complete dependency identities live in `build.zig.zon` and [`third_party/jol
 | Future/deferred | Linux / SteamOS | Undecided | Likely Vulkan / SPIR-V | No current support claim, build gate, CI job, or compatibility requirement |
 | Future/deferred | Windows | Undecided | Likely D3D12 / DXIL | No current support claim, build gate, CI job, or compatibility requirement |
 
-Existing Linux, Windows, Vulkan, and D3D12 code is dormant prior work, not a
-maintained contract. It may break as the macOS architecture evolves. Porting
+The active build retains no Linux, Windows, Vulkan, or D3D12 path. Porting
 resumes only after a separate product decision selects a second platform; that
-work may adapt or replace dormant paths instead of constraining current design.
+work will establish a new tested target cohort instead of constraining current
+design around removed prototype branches.
 Mobile, web, consoles, and Intel macOS are also outside the current contract.
+
+The vendored `third_party/joltc-zig` package still contains upstream
+OS/compiler conditionals for JoltC itself. Those are dependency-internal
+portability code, not an Incinerator target, build option, test gate, or support
+claim. The top-level client and cold-headless graphs reject every non-native
+Apple Silicon macOS target before resolving that package.
 
 ## Developer Environment Setup (macOS)
 
@@ -47,21 +53,20 @@ zig version  # Must print 0.16.0
 #### 2. Shader Compilation Tools
 
 The maintained build compiles GLSL 4.50 to MSL for macOS and generates
-canonical SPIR-V reflection data to validate the shader/renderer contract.
-Dormant SPIR-V/DXIL branches may remain in the build, but they are not currently
-run, tested, or treated as compatibility requirements.
+canonical SPIR-V reflection data to validate the shader/renderer contract. No
+secondary-platform shader branch is part of the active graph.
 
 For local convenience on macOS, tools may come from `PATH`:
 
 ```bash
 brew install shaderc spirv-cross
 glslc --version
-spirv-cross --version
+spirv-cross --revision
 ```
 
-CI and release validation use the exact-pinned macOS base manifest. A historical
-Windows DXIL manifest remains for future porting, but it is not a current gate.
-See [`tools/shader-toolchain/README.md`](tools/shader-toolchain/README.md).
+CI and release validation use the exact-pinned macOS manifest. Future platform
+work must introduce its own reviewed toolchain cohort. See
+[`tools/shader-toolchain/README.md`](tools/shader-toolchain/README.md).
 Generated shaders, reflection JSON, and embedding modules remain in the Zig
 cache; builds do not write generated artifacts into the source tree.
 
@@ -74,20 +79,74 @@ zig build
 # Build and run
 zig build run
 
+# Compile or explicitly install the separate visual-validation host. Normal
+# `zig build` does not install validation; validation lives in libexec.
+zig build check-validation -Deditor=false
+zig build install-validation -Deditor=false
+zig build verify-validation-boundary -Deditor=false
+
 # Run the full kernel, feature, host, adapter, and shader contract
 zig build test
 
 # Run the SDL-free real Flecs/Jolt sandbox lifecycle suite
 zig build test-headless -Deditor=false
 
-# Compile the headless artifact without invoking any shader tool
-zig build check-headless -Deditor=false \
-  -Dglslc=/definitely/missing/glslc \
-  -Dspirv-cross=/definitely/missing/spirv-cross \
-  -Dshadercross=/definitely/missing/shadercross
+# Build and test the genuinely cold operational headless product. This branch
+# does not resolve SDL, GPU/editor packages, shaders, or visual content.
+zig build -Dproduct=headless test --summary all
 
-# Run the SDL-free sandbox composition
-zig build run-headless -Deditor=false
+# Run the deterministic M3 authority soak (32,768 ticks) or its opt-in long
+# cohort (131,072 ticks). Both require a ReleaseFast Apple Silicon macOS build.
+zig build -Dproduct=headless -Doptimize=ReleaseFast measure-m3 --summary none
+zig build -Dproduct=headless -Doptimize=ReleaseFast measure-m3-long --summary none
+
+# Install only the operational binary plus its exact config/content manifests,
+# then verify that allowlist and Mach-O boundary.
+prefix=$(mktemp -d /tmp/incinerator-headless.XXXXXX)
+zig build -Dproduct=headless -Doptimize=ReleaseFast \
+  --prefix "$prefix" install-headless-product verify-installed-headless-product
+
+# Run the installed product. Inputs must be absolute paths. The optional
+# producers exercise bounded external work and exact completion delivery.
+"$prefix/bin/incinerator_headless" \
+  --config "$prefix/etc/incinerator/headless/config.example.json" \
+  --content-manifest "$prefix/share/incinerator/headless/content.json" \
+  --synthetic-producers
+
+# Exercise the S4-B same-cohort replay contracts and compile the standalone
+# SDL/editor/GPU-free replay verifier.
+zig build test-replay -Deditor=false
+zig build check-replay -Deditor=false
+
+# Record and verify the installed cooked-content scenario from /tmp. This
+# proves normal replay plus an exact district-ingress divergence.
+zig build smoke-installed-s4-replay-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+
+# Exercise bounded physics extraction, persistent Metal uploads/draws, and the
+# fixed host profiler in the complete sandbox scenario.
+zig build smoke-installed-s4-physics-debug-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+
+# Exercise real editor relocation/undo/redo/save, then cold-restore that exact
+# slot in a fresh installed SDL/editor/GPU-free process.
+zig build smoke-installed-s5-authoring-macos \
+  -Doptimize=ReleaseFast -Deditor=true
+
+# Exercise the standalone two-process durable save/restart path.
+zig build smoke-installed-s5-save-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+
+# Exercise the complete carry lifecycle in the installed Metal host at both
+# cadence extremes, then run the SDL-free 128-cycle ownership measurement.
+zig build smoke-installed-s7-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build measure-s7 \
+  -Doptimize=ReleaseFast -Deditor=false --summary none
+
+# Run the current SDL-free 64-NPC/65-controller scale characterization.
+zig build measure-s8 \
+  -Doptimize=ReleaseFast -Deditor=false --summary none
 
 # Run the renderer-free Jolt integration test
 zig build test-physics
@@ -101,54 +160,42 @@ zig build -Doptimize=ReleaseFast
 # Build without development editor dependencies
 zig build -Deditor=false
 
-# Verify an installed executable without initializing a window or GPU
+# Verify the build-installed cooked content without initializing a window or
+# GPU. This command runs Zig's cache artifact; use the installed smokes below
+# when executable relocation is part of the proof.
 zig build run -- --verify-install
 
-# Exercise only the cooked bundle/schema and installed /tmp relocation gates
+# Exercise only the cooked bundle/catalog/admission and installed /tmp gates
 zig build test-content -Deditor=false
 zig build test-content-cooker -Deditor=false
+zig build test-district-content-catalog -Deditor=false
 zig build smoke-installed-content -Deditor=false
 
-# Record the ReleaseFast S0 characterization as versioned JSON
-zig build measure-s0 -Doptimize=ReleaseFast -Deditor=false
-
-# Record the ReleaseFast S1 character-slice characterization
-zig build measure-s1 -Doptimize=ReleaseFast -Deditor=false
-
-# Record the ReleaseFast S2 occupied-vehicle characterization
-zig build measure-s2 -Doptimize=ReleaseFast -Deditor=false
-
-# Record the ReleaseFast S3-A procedural district characterization
-zig build measure-s3 -Doptimize=ReleaseFast -Deditor=false
-
-# Self-terminating native visual cadence/shutdown checks
-zig build run -Deditor=false -- \
-  --visual-smoke --frames=480 --virtual-render-hz=240
-zig build run -Deditor=false -- \
-  --visual-smoke --frames=160 --virtual-render-hz=80
-
-# Run the S1 character/jump/block/camera smoke above and below tick rate
-zig build run -Deditor=false -- \
-  --s1-visual-smoke --frames=480 --virtual-render-hz=240
-zig build run -Deditor=false -- \
-  --s1-visual-smoke --frames=160 --virtual-render-hz=80
-
-# Run the S2 vehicle/steering/collision/authority smoke above and below tick rate
-zig build run -Deditor=false -- \
-  --s2-visual-smoke --frames=1440 --virtual-render-hz=240
-zig build run -Deditor=false -- \
-  --s2-visual-smoke --frames=480 --virtual-render-hz=80
-
 # Run the serialized Tier-1 installed-runtime readiness gate. This launches
-# the installed ReleaseFast Mach-O from /tmp, not Zig's cache artifact.
+# the separately named installed validation Mach-O from /tmp, not the normal
+# product or Zig's cache artifact.
 zig build test-macos-readiness \
-  -Doptimize=ReleaseFast -Deditor=false
+  -Doptimize=ReleaseFast -Deditor=true
 
-# The current three native gates can also be run independently. The historical
-# S1 visual gate remains available as a regression check.
+# The native gates can also be run independently. The historical S1 visual
+# gate remains available as a regression check.
 zig build smoke-installed-s1-macos \
   -Doptimize=ReleaseFast -Deditor=false
 zig build smoke-installed-s2-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s3-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s6-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s4-diagnostics-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s4-replay-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s4-physics-debug-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s5-authoring-macos \
+  -Doptimize=ReleaseFast -Deditor=true
+zig build smoke-installed-s5-save-macos \
   -Doptimize=ReleaseFast -Deditor=false
 zig build smoke-window-lifecycle-macos \
   -Doptimize=ReleaseFast -Deditor=false
@@ -156,28 +203,59 @@ zig build smoke-init-failures-macos \
   -Doptimize=ReleaseFast -Deditor=false
 ```
 
+`incinerator_engine` is the normal interactive client. Scripted slice
+scenarios, lifecycle probes, initialization failpoints, and deliberate faults
+are compiled only into `incinerator_validation`, which is installed under
+`libexec/incinerator` only when a validation step requests it. The installed
+smoke/readiness steps select that artifact automatically; validation-only
+command-line flags are rejected by the normal client.
+
 ## Content Boundary
 
-The engine package intentionally excludes `assets`. Any GLB files under the
-working tree's `assets/models` directory are game-owned development content,
-not engine package or startup dependencies.
+The engine package and repository intentionally exclude game-owned `assets`.
+The retired unreferenced demo GLBs were removed; only the small self-authored,
+provenance-recorded engine conformance fixtures under `fixtures/` participate
+in cooking, packaging, or startup.
 
-The S3-B runtime now consumes a versioned renderer-neutral cooked bundle from
+The runtime consumes versioned renderer-neutral cooked bundles from
 an explicit absolute content root. Source glTF and image decoding exist only in
 the host cooker; the runtime executable does not import the former prototype
-glTF loader, zmesh, or zstbi. The build cooks the self-authored fixture into the
-Zig cache and installs it beneath
-`share/incinerator/content/district/s3_fixture.icdb` with its provenance record.
+glTF loader, zmesh, or zstbi. The build cooks two self-authored adjacent
+fixtures and a canonical exact-identity catalog into the Zig cache, then
+installs them beneath `share/incinerator/content/district/` with both
+provenance records. The checked-in dependency closure is west -> east ->
+catalog; identical inputs produce byte-identical outputs.
 `zig build run` configures the installed content root explicitly, while a
 relocated installed executable derives the same root from its application
 prefix. `--content-root=/absolute/path` overrides either behavior.
 
-Normal sandbox startup reads and validates the cooked bundle on a joined worker,
-activates logical collision independently, resolves a fallback until the Metal
-fence signals, and then draws the authored scene instances. `--verify-install`
-validates the installed cooked content without initializing SDL or a GPU.
-Host-owned proximity hysteresis and repeated installed load/cancel/unload/reload
-evidence remain S3-C work.
+Before logical or GPU activation, the shared admission boundary loads only
+`district/catalog.icat`, validates both bundles and coordinate-specific logical
+checksums, and creates the content fingerprint used by replay and durable
+saves. Runtime scene requests recheck the exact admitted bundle identity, so a
+bundle replaced after startup cannot publish ready content under the original
+cohort.
+
+The reusable district contract owns bounded payload shapes, structural
+validation, checksums, tickets, and loader/navigation capabilities. The
+sandbox-owned [`src/sandbox/district_recipe.zig`](src/sandbox/district_recipe.zig)
+owns the installed west/east coordinates, collision fixtures, recipe cohort,
+and exact route topology consumed by cooking, admission, streaming, restore,
+replay, and preflight. Concrete game-world policy is therefore not part of the
+engine feature contract.
+
+The normal sandbox samples the character or occupied vehicle position at fixed
+ticks through host-owned proximity hysteresis. Exactly two catalog-backed
+stream slots share one joined content worker and one bounded GPU registry.
+Entering a district reads and validates its exact cooked bundle, activates
+logical collision independently, resolves a fallback until the Metal fence
+signals, and then draws the authored scene instances. Adjacent hysteresis
+permits both west and east districts to overlap while per-generation recycling
+lets either drain without releasing its neighbor. `--verify-install` validates
+installed cooked content without initializing SDL or a GPU. The installed S3
+smoke preserves the single-district cancellation regression; the S6 smoke
+proves three complete forward/reverse overlap cycles, truthful production
+diagnostics, both render cadences, and complete two-slot drain from `/tmp`.
 
 ## Controls
 
@@ -186,19 +264,52 @@ evidence remain S3-C work.
 | ESC | Quit |
 | W / A / S / D | Move the character, or throttle/reverse and steer while driving |
 | E | Enter or exit the sandbox vehicle |
+| F | Collect the nearby carryable, or drop the held carryable into the current district |
 | Space | Jump on foot; service brake while driving |
 | Left Shift | Handbrake while driving |
 | Right mouse + drag | Turn/look and orbit the current control target |
 | F1 | Toggle editor UI |
 | F2 | Toggle ImGui demo |
+| F3 | Toggle editor input passthrough |
 
-Physics debug rendering and its former editor panel/hotkey were removed during the JoltC migration. A replacement is deferred until it can be implemented against the new adapter with explicit ownership and teardown rules.
+Open the editor with F1, then use **Tools → Physics Debug & Profiler**. Its
+master switch and category checkboxes control bounded shapes, bounds, contacts,
+centers of mass, and velocity evidence. The same panel shows persistent Metal
+upload/draw state, visible capacity loss, fixed phase spans, and per-frame
+draw/upload/stream/resource counts. These are host-only typed controls; they do
+not mutate simulation state. Use Instruments and Metal capture for deeper
+platform profiling.
+
+To author and persist the sandbox crate, supply an existing absolute save root
+and enable the editor explicitly:
+
+```bash
+mkdir -p /tmp/incinerator-saves
+zig build run -Deditor=true -- --save-root=/tmp/incinerator-saves
+```
+
+Open **Tools → Crate Authoring**, select the available crate, edit its draft
+position, and use **Apply position**, **Undo**, **Redo**, and **Save**. The tool
+only sees immutable records and emits typed requests that the host applies
+after UI drawing. The committed slot is
+`/tmp/incinerator-saves/sandbox.isav`. S5 intentionally exposes one relocation
+producer and one fixed slot; CLI/automation routing, autosave, migration, and
+multiple writers are future work.
+
+Open **Tools → Interaction** to inspect the immutable carryable/holder state
+and emit the same typed collect/drop requests used by F. A carryable is either
+owned by one district, held by one character, or dormant because its owner is
+unloaded; it never has both a world body and a holder. Pressing E while carrying
+is a healthy typed rejection recorded in developer diagnostics, not an
+application failure.
 
 ## Architecture
 
-The overhaul is converging on a thin kernel, feature-owned vertical slices, narrow capability contracts, backend adapters, and explicit host composition roots. See:
+The engine uses a thin kernel, feature-owned vertical slices, narrow capability
+contracts, backend adapters, and explicit host composition roots. See:
 
 - [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md)
+- [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 - [`ADR-007: Product, Platform, and Compatibility Scope`](docs/adr/007-product-platform-and-compatibility-scope.md)
 - [`ADR-008: Feature-Oriented Engine Architecture`](docs/adr/008-feature-oriented-engine-architecture.md)
 - [`S0 Crate Lifecycle Design`](docs/design/s0-crate-lifecycle.md)
@@ -215,7 +326,34 @@ The overhaul is converging on a thin kernel, feature-owned vertical slices, narr
 - [`S3-A Performance Baseline`](docs/performance/s3a-baseline.md)
 - [`S3-B Acceptance Record`](docs/validation/s3b-acceptance.md)
 - [`S3-B Resource Baseline`](docs/performance/s3b-baseline.md)
+- [`S3-C Acceptance Record`](docs/validation/s3c-acceptance.md)
+- [`S3-C Installed Lifecycle Baseline`](docs/performance/s3c-baseline.md)
 - [`ADR-009: Runtime Content and Streaming Boundary`](docs/adr/009-runtime-content-and-streaming.md)
+- [`ADR-010: Developer Diagnostics, Replay, and Debug Visualization`](docs/adr/010-developer-diagnostics-replay-and-debug-visualization.md)
+- [`S4 Developer Diagnostics and Reproducibility`](docs/design/s4-developer-diagnostics.md)
+- [`S4-A Validation Record`](docs/validation/s4a-acceptance.md)
+- [`S4-B Validation Record`](docs/validation/s4b-acceptance.md)
+- [`S4-C Validation Record`](docs/validation/s4c-acceptance.md)
+- [`S4-C Physics Debug / Profiler Baseline`](docs/performance/s4c-baseline.md)
+- [`ADR-011: Persistent Authoring and Durable Save Slots`](docs/adr/011-persistent-authoring-and-durable-save-slots.md)
+- [`S5 Persistent Authoring and Durable Save Design`](docs/design/s5-persistent-authoring.md)
+- [`S5 Validation Record`](docs/validation/s5-acceptance.md)
+- [`ADR-012: Canonical District Catalog and Fixed Two-Slot Streaming`](docs/adr/012-canonical-district-catalog-and-fixed-two-slot-streaming.md)
+- [`S6 Multi-District Content Design`](docs/design/s6-multi-district-content.md)
+- [`S6 Validation Record`](docs/validation/s6-acceptance.md)
+- [`S6 Two-District Streaming Baseline`](docs/performance/s6-baseline.md)
+- [`ADR-013: Feature-Owned Carry Interaction and District Ownership`](docs/adr/013-feature-owned-carry-interaction-and-district-ownership.md)
+- [`S7 Interaction and Cross-District Ownership Design`](docs/design/s7-interaction-ownership.md)
+- [`S7 Validation Record`](docs/validation/s7-acceptance.md)
+- [`S7 Interaction and Ownership Baseline`](docs/performance/s7-baseline.md)
+- [`ADR-014: Bounded Navigation and Feature-Owned NPC Population`](docs/adr/014-bounded-district-navigation-and-feature-owned-npc-population.md)
+- [`S8 Navigation and Population Design`](docs/design/s8-navigation-population.md)
+- [`S8 Validation Record`](docs/validation/s8-acceptance.md)
+- [`S8 Population and Scale Baseline`](docs/performance/s8-baseline.md)
+- [`ADR-015: Apple Silicon macOS Pre-Server Readiness`](docs/adr/015-macos-pre-server-readiness.md)
+- [`M3 Pre-Server Readiness Design`](docs/design/m3-pre-server-readiness.md)
+- [`M3 Acceptance Record`](docs/validation/m3-acceptance.md)
+- [`M3 Performance Baseline`](docs/performance/m3-baseline.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 
@@ -226,8 +364,9 @@ input pump (per frame) -> simulation ticks (fixed 120 Hz) -> presentation
 ```
 
 The current overhaul boundary is intentionally concrete rather than a future
-asset/framework abstraction. S3-A owns logical simulation; S3-B owns cooked
-visual content and streamed GPU residency:
+asset/framework abstraction. S3-A owns logical simulation, S3-B owns cooked
+visual content and streamed GPU residency, and S3-C keeps focus selection and
+proximity policy in the host while exercising the complete lifecycle:
 
 - GPU textures have explicit `OwnedTexture` owners and copy-safe borrowed views;
 - glTF/resource initialization unwinds transactionally with checked upload sizes;
@@ -251,15 +390,21 @@ visual content and streamed GPU residency:
 - `VehicleFeature` owns typed spawn/enter/drive/exit/despawn commands, explicit
   driver authority, logical vehicle records, and chassis/four-wheel extraction
   through backend-neutral vehicle and driver ports;
-- `DistrictFeature` owns a bounded asynchronous logical lifecycle, one
-  persistent district entity, transactional static-body ownership, typed
+- `DistrictFeature` owns two bounded asynchronous logical lifecycle slots over
+  one worker, up to two persistent district entities, transactional static-body ownership, typed
   outcomes/events, and renderer-neutral extraction through loader/static-body
   ports; the real worker publishes only fixed plain data and never touches
   Runtime, Flecs, Jolt, SDL, or renderer state;
-- the sandbox composition owns the V4 save envelope, runtime clock and identity
-  cursor, cross-feature identity validation, and authoritative restoration of
-  feature-owned character/vehicle tuning, occupied relationships, and logical
-  district state;
+- `InteractionFeature` owns the one carryable's district/held/dormant logical
+  state and transactional collect/drop lifecycle through narrow carrier and
+  district ports;
+- `NpcFeature` owns bounded autonomous-character authority, semantic goals,
+  district-aware navigation state, persistence, diagnostics, and presentation;
+  a separate fixed population planner is only a producer;
+- the sandbox composition owns the current `SnapshotV7` save envelope, runtime
+  clock and identity cursor, cross-feature identity validation, and
+  authoritative restoration of feature-owned tuning, relationships, district,
+  interaction, and NPC state;
 - exactly one composition-owned physics step advances crates, characters, and
   vehicles; no feature adapter privately advances the shared Jolt world;
 - the public engine module exposes feature-authoring contracts and a type-erased
@@ -270,15 +415,16 @@ visual content and streamed GPU residency:
 
 The visual sandbox and headless host construct the same owned logical
 `Simulation`; the visual host additionally composes S3-B content and residency.
-The former `GameWorld`, borrowed Flecs/Jolt composition, direct
-ECS render query, and editor mutation path have been removed. The editor keeps
-stats, camera, and render panels. Scene inspection/manipulation returns in a
-later tooling slice through persistent IDs and typed feature commands rather
-than raw Flecs/Jolt access.
+The former `GameWorld`, borrowed Flecs/Jolt composition, direct ECS render
+query, and editor mutation path have been removed. The editor keeps stats,
+camera, render, diagnostics, profiling, physics-debug, and crate-authoring
+panels. Persistent crate relocation now uses typed feature commands and exact
+undo/redo change sets; the editor never receives raw Flecs/Jolt access.
 Fixed-rate simulation is not a claim of bitwise or cross-platform deterministic
-lockstep. The current zflecs wrapper permits one owned world per process, so
-successful atomic old/new world replacement remains an explicit open decision
-before multi-world server architecture.
+lockstep. The current zflecs wrapper permits one owned world per process. M3
+accepts that as the operational model: replacement is a validated process
+restart, while any future multi-world process requires a new architecture
+decision.
 
 ## License
 

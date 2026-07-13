@@ -6,10 +6,10 @@
 const std = @import("std");
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'D', 'B', 'N', 'D', 'L' };
-pub const format_version: u16 = 1;
-pub const schema_cohort: u16 = 1;
-pub const header_size: u32 = 288;
-pub const section_count: usize = 10;
+pub const format_version: u16 = 2;
+pub const schema_cohort: u16 = 2;
+pub const header_size: u32 = 320;
+pub const section_count: usize = 12;
 pub const none_index: u32 = std.math.maxInt(u32);
 
 pub const Limits = struct {
@@ -24,6 +24,8 @@ pub const Limits = struct {
     max_indices: u32 = 384,
     max_pixel_bytes: u32 = 4 * 1024,
     max_static_boxes: u32 = 8,
+    max_navigation_nodes: u32 = 8,
+    max_navigation_edges: u32 = 16,
 };
 
 pub const Section = enum(u8) {
@@ -37,10 +39,12 @@ pub const Section = enum(u8) {
     indices,
     pixels,
     static_boxes,
+    navigation_nodes,
+    navigation_edges,
 };
 
 const section_strides = [section_count]u32{
-    1, 80, 16, 20, 32, 28, 32, 4, 1, 40,
+    1, 80, 16, 20, 32, 28, 32, 4, 1, 40, 16, 12,
 };
 
 pub const NameRef = struct {
@@ -110,6 +114,24 @@ pub const StaticBox = struct {
     half_extents: [3]f32,
 };
 
+pub const navigation_node_terminal: u8 = 1 << 0;
+pub const navigation_node_known_flags: u8 = navigation_node_terminal;
+
+pub const NavigationNode = struct {
+    position: [3]f32,
+    first_edge: u8,
+    edge_count: u8,
+    flags: u8 = 0,
+    reserved: u8 = 0,
+};
+
+pub const NavigationEdge = struct {
+    target_coord: [2]i32,
+    target_node: u8,
+    flags: u8 = 0,
+    reserved: u16 = 0,
+};
+
 /// Borrowed immutable scene data. The owner of every slice must outlive it.
 pub const BundleView = struct {
     bundle_name: NameRef,
@@ -124,9 +146,51 @@ pub const BundleView = struct {
     indices: []const u32,
     pixels: []const u8,
     static_boxes: []const StaticBox,
+    navigation_nodes: []const NavigationNode,
+    navigation_edges: []const NavigationEdge,
 
     pub fn name(self: BundleView, reference: NameRef) ?[]const u8 {
         return reference.bytes(self.strings);
+    }
+};
+
+pub const bundle_identity_fingerprint_version: u16 = 1;
+
+/// Canonical renderer-neutral identity of one successfully decoded bundle.
+///
+/// `name` borrows the decoded bundle's owned string allocation and therefore
+/// remains valid only until that `OwnedBundle` is deinitialized. The digests
+/// and version fields are owned values copied from the validated header.
+pub const BundleIdentity = struct {
+    name: []const u8,
+    format_version: u16,
+    schema_cohort: u16,
+    source_digest: [32]u8,
+    integrity_digest: [32]u8,
+
+    /// Hash an explicit canonical representation suitable for a content-cohort
+    /// fingerprint. No Zig aggregate layout, pointer value, or host endianness
+    /// participates.
+    pub fn canonicalFingerprint(self: BundleIdentity) ![32]u8 {
+        if (self.name.len == 0 or
+            self.name.len > std.math.maxInt(u32) or
+            !std.unicode.utf8ValidateSlice(self.name))
+        {
+            return error.InvalidBundleIdentityName;
+        }
+
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        hash.update("incinerator.bundle.identity");
+        hashU16(&hash, bundle_identity_fingerprint_version);
+        hashU16(&hash, self.format_version);
+        hashU16(&hash, self.schema_cohort);
+        hashU32(&hash, @intCast(self.name.len));
+        hash.update(self.name);
+        hash.update(&self.source_digest);
+        hash.update(&self.integrity_digest);
+        var result: [32]u8 = undefined;
+        hash.final(&result);
+        return result;
     }
 };
 
@@ -134,6 +198,7 @@ pub const BundleView = struct {
 /// decode; a renderer registry may take ownership of this complete value.
 pub const OwnedBundle = struct {
     allocator: std.mem.Allocator,
+    identity: BundleIdentity,
     bundle_name: NameRef,
     source_digest: [32]u8,
     strings: []u8,
@@ -146,6 +211,8 @@ pub const OwnedBundle = struct {
     indices: []u32,
     pixels: []u8,
     static_boxes: []StaticBox,
+    navigation_nodes: []NavigationNode,
+    navigation_edges: []NavigationEdge,
 
     pub fn view(self: *const OwnedBundle) BundleView {
         return .{
@@ -161,10 +228,19 @@ pub const OwnedBundle = struct {
             .indices = self.indices,
             .pixels = self.pixels,
             .static_boxes = self.static_boxes,
+            .navigation_nodes = self.navigation_nodes,
+            .navigation_edges = self.navigation_edges,
         };
     }
 
+    /// Return a copy whose name remains borrowed from this bundle.
+    pub fn bundleIdentity(self: *const OwnedBundle) BundleIdentity {
+        return self.identity;
+    }
+
     pub fn deinit(self: *OwnedBundle) void {
+        self.allocator.free(self.navigation_edges);
+        self.allocator.free(self.navigation_nodes);
         self.allocator.free(self.static_boxes);
         self.allocator.free(self.pixels);
         self.allocator.free(self.indices);
@@ -191,6 +267,8 @@ pub const CapacityKind = enum {
     indices,
     pixels,
     static_boxes,
+    navigation_nodes,
+    navigation_edges,
 };
 
 pub const CapacityFailure = struct {
@@ -204,6 +282,7 @@ pub const ValidationFailure = union(enum) {
     unsupported_format_version: u16,
     incompatible_schema: u16,
     invalid_header,
+    missing_source_digest,
     size_mismatch,
     invalid_section: Section,
     capacity_exceeded: CapacityFailure,
@@ -216,6 +295,9 @@ pub const ValidationFailure = union(enum) {
     invalid_material,
     invalid_texture,
     invalid_static_box,
+    invalid_navigation_node,
+    invalid_navigation_edge,
+    non_canonical_navigation,
 };
 
 pub const EncodeResult = union(enum) {
@@ -304,6 +386,14 @@ pub fn encode(
     encodeIndices(sectionBytes(bytes, sections[@intFromEnum(Section.indices)]), bundle.indices);
     @memcpy(sectionBytes(bytes, sections[@intFromEnum(Section.pixels)]), bundle.pixels);
     encodeStaticBoxes(sectionBytes(bytes, sections[@intFromEnum(Section.static_boxes)]), bundle.static_boxes);
+    encodeNavigationNodes(
+        sectionBytes(bytes, sections[@intFromEnum(Section.navigation_nodes)]),
+        bundle.navigation_nodes,
+    );
+    encodeNavigationEdges(
+        sectionBytes(bytes, sections[@intFromEnum(Section.navigation_edges)]),
+        bundle.navigation_edges,
+    );
 
     var integrity_digest: [32]u8 = undefined;
     calculateIntegrity(bytes, &integrity_digest);
@@ -337,7 +427,9 @@ pub fn decode(
         getU64(bytes, 24) != header_size or
         getU64(bytes, 32) != bytes.len - header_size or
         getU16(bytes, 104) != section_count or
-        getU16(bytes, 106) != 0)
+        getU16(bytes, 106) != 0 or
+        !std.mem.allEqual(u8, bytes[116..120], 0) or
+        !std.mem.allEqual(u8, bytes[312..320], 0))
     {
         return .{ .failed = .invalid_header };
     }
@@ -357,7 +449,15 @@ pub fn decode(
         }
         const expected_size = std.math.mul(u32, section.count, section.stride) catch
             return .{ .failed = .{ .invalid_section = @enumFromInt(index) } };
-        expected_offset = std.mem.alignForward(u64, expected_offset, 4);
+        const aligned_offset = std.mem.alignForward(u64, expected_offset, 4);
+        if (aligned_offset > bytes.len or !std.mem.allEqual(
+            u8,
+            bytes[@intCast(expected_offset)..@intCast(aligned_offset)],
+            0,
+        )) {
+            return .{ .failed = .{ .invalid_section = @enumFromInt(index) } };
+        }
+        expected_offset = aligned_offset;
         const end = std.math.add(u64, section.offset, section.byte_size) catch
             return .{ .failed = .{ .invalid_section = @enumFromInt(index) } };
         if (section.byte_size != expected_size or section.offset != expected_offset or end > bytes.len) {
@@ -392,6 +492,10 @@ pub fn decode(
     errdefer allocator.free(pixels);
     const static_boxes = try allocator.alloc(StaticBox, counts.static_boxes);
     errdefer allocator.free(static_boxes);
+    const navigation_nodes = try allocator.alloc(NavigationNode, counts.navigation_nodes);
+    errdefer allocator.free(navigation_nodes);
+    const navigation_edges = try allocator.alloc(NavigationEdge, counts.navigation_edges);
+    errdefer allocator.free(navigation_edges);
 
     decodeNodes(nodes, constSectionBytes(bytes, sections[@intFromEnum(Section.nodes)]));
     decodeMeshes(meshes, constSectionBytes(bytes, sections[@intFromEnum(Section.meshes)]));
@@ -401,11 +505,27 @@ pub fn decode(
     decodeVertices(vertices, constSectionBytes(bytes, sections[@intFromEnum(Section.vertices)]));
     decodeIndices(indices, constSectionBytes(bytes, sections[@intFromEnum(Section.indices)]));
     decodeStaticBoxes(static_boxes, constSectionBytes(bytes, sections[@intFromEnum(Section.static_boxes)]));
+    decodeNavigationNodes(
+        navigation_nodes,
+        constSectionBytes(bytes, sections[@intFromEnum(Section.navigation_nodes)]),
+    );
+    decodeNavigationEdges(
+        navigation_edges,
+        constSectionBytes(bytes, sections[@intFromEnum(Section.navigation_edges)]),
+    );
 
     var source_digest: [32]u8 = undefined;
     @memcpy(&source_digest, bytes[40..72]);
     var owned = OwnedBundle{
         .allocator = allocator,
+        .identity = .{
+            // Filled with the validated bundle-name slice below.
+            .name = strings[0..0],
+            .format_version = found_format,
+            .schema_cohort = found_schema,
+            .source_digest = source_digest,
+            .integrity_digest = expected_digest,
+        },
         .bundle_name = .{ .offset = getU32(bytes, 108), .len = getU32(bytes, 112) },
         .source_digest = source_digest,
         .strings = strings,
@@ -418,17 +538,21 @@ pub fn decode(
         .indices = indices,
         .pixels = pixels,
         .static_boxes = static_boxes,
+        .navigation_nodes = navigation_nodes,
+        .navigation_edges = navigation_edges,
     };
     if (validationFailure(owned.view(), limits)) |failure| {
         owned.deinit();
         return .{ .failed = failure };
     }
+    owned.identity.name = owned.bundle_name.bytes(owned.strings) orelse unreachable;
     return .{ .bundle = owned };
 }
 
 fn validationFailure(bundle: BundleView, limits: Limits) ?ValidationFailure {
     const counts = Counts.fromView(bundle);
     if (counts.capacityFailure(limits)) |failure| return .{ .capacity_exceeded = failure };
+    if (std.mem.allEqual(u8, &bundle.source_digest, 0)) return .missing_source_digest;
     if (bundle.bundle_name.bytes(bundle.strings) == null) return .invalid_name;
     if (!std.unicode.utf8ValidateSlice(bundle.strings)) return .invalid_name;
     if (bundle.nodes.len == 0 or bundle.meshes.len == 0 or bundle.primitives.len == 0 or
@@ -505,11 +629,62 @@ fn validationFailure(bundle: BundleView, limits: Limits) ?ValidationFailure {
             }
         }
     }
+    if ((bundle.navigation_nodes.len == 0) != (bundle.navigation_edges.len == 0)) {
+        return .invalid_navigation_node;
+    }
+    var expected_first_edge: usize = 0;
+    for (bundle.navigation_nodes) |node| {
+        for (node.position) |component| {
+            if (!isCanonicalFiniteF32(component)) return .invalid_navigation_node;
+        }
+        if (node.flags & ~navigation_node_known_flags != 0 or node.reserved != 0 or
+            node.edge_count == 0 or node.edge_count > 2 or
+            node.first_edge != expected_first_edge)
+        {
+            return .invalid_navigation_node;
+        }
+        const edge_end = std.math.add(usize, expected_first_edge, node.edge_count) catch
+            return .invalid_navigation_node;
+        if (edge_end > bundle.navigation_edges.len) return .invalid_navigation_node;
+        var previous: ?NavigationEdge = null;
+        for (bundle.navigation_edges[expected_first_edge..edge_end]) |edge| {
+            if (edge.target_node >= limits.max_navigation_nodes or
+                edge.flags != 0 or edge.reserved != 0)
+            {
+                return .invalid_navigation_edge;
+            }
+            if (previous) |prior| {
+                switch (orderNavigationEdge(prior, edge)) {
+                    .lt => {},
+                    .eq => return .invalid_navigation_edge,
+                    .gt => return .non_canonical_navigation,
+                }
+            }
+            previous = edge;
+        }
+        expected_first_edge = edge_end;
+    }
+    if (expected_first_edge != bundle.navigation_edges.len) {
+        return .invalid_navigation_node;
+    }
     if (hasDuplicateNames(bundle.nodes, bundle.strings) or
         hasDuplicateNames(bundle.meshes, bundle.strings) or
         hasDuplicateNames(bundle.materials, bundle.strings) or
         hasDuplicateNames(bundle.textures, bundle.strings)) return .duplicate_name;
     return null;
+}
+
+fn isCanonicalFiniteF32(value: f32) bool {
+    if (!std.math.isFinite(value)) return false;
+    return value != 0 or @as(u32, @bitCast(value)) == 0;
+}
+
+fn orderNavigationEdge(a: NavigationEdge, b: NavigationEdge) std.math.Order {
+    const x_order = std.math.order(a.target_coord[0], b.target_coord[0]);
+    if (x_order != .eq) return x_order;
+    const z_order = std.math.order(a.target_coord[1], b.target_coord[1]);
+    if (z_order != .eq) return z_order;
+    return std.math.order(a.target_node, b.target_node);
 }
 
 fn hasDuplicateNames(items: anytype, strings: []const u8) bool {
@@ -539,6 +714,8 @@ const Counts = struct {
     indices: u32,
     pixels: u32,
     static_boxes: u32,
+    navigation_nodes: u32,
+    navigation_edges: u32,
 
     fn fromView(bundle: BundleView) Counts {
         return .{
@@ -552,6 +729,8 @@ const Counts = struct {
             .indices = count32(bundle.indices.len),
             .pixels = count32(bundle.pixels.len),
             .static_boxes = count32(bundle.static_boxes.len),
+            .navigation_nodes = count32(bundle.navigation_nodes.len),
+            .navigation_edges = count32(bundle.navigation_edges.len),
         };
     }
 
@@ -567,6 +746,8 @@ const Counts = struct {
             .indices = sections[7].count,
             .pixels = sections[8].count,
             .static_boxes = sections[9].count,
+            .navigation_nodes = sections[10].count,
+            .navigation_edges = sections[11].count,
         };
     }
 
@@ -582,6 +763,8 @@ const Counts = struct {
             .{ CapacityKind.indices, self.indices, limits.max_indices },
             .{ CapacityKind.pixels, self.pixels, limits.max_pixel_bytes },
             .{ CapacityKind.static_boxes, self.static_boxes, limits.max_static_boxes },
+            .{ CapacityKind.navigation_nodes, self.navigation_nodes, limits.max_navigation_nodes },
+            .{ CapacityKind.navigation_edges, self.navigation_edges, limits.max_navigation_edges },
         };
         inline for (checks) |check| {
             if (check[1] > check[2]) return .{ .kind = check[0], .actual = check[1], .maximum = check[2] };
@@ -606,9 +789,34 @@ fn calculateIntegrity(bytes: []const u8, out: *[32]u8) void {
     hash.final(out);
 }
 
+fn hashU16(hash: *std.crypto.hash.sha2.Sha256, value: u16) void {
+    var bytes: [2]u8 = undefined;
+    std.mem.writeInt(u16, &bytes, value, .little);
+    hash.update(&bytes);
+}
+
+fn hashU32(hash: *std.crypto.hash.sha2.Sha256, value: u32) void {
+    var bytes: [4]u8 = undefined;
+    std.mem.writeInt(u32, &bytes, value, .little);
+    hash.update(&bytes);
+}
+
 fn sectionCounts(bundle: BundleView) [section_count]u32 {
     const counts = Counts.fromView(bundle);
-    return .{ counts.strings, counts.nodes, counts.meshes, counts.primitives, counts.materials, counts.textures, counts.vertices, counts.indices, counts.pixels, counts.static_boxes };
+    return .{
+        counts.strings,
+        counts.nodes,
+        counts.meshes,
+        counts.primitives,
+        counts.materials,
+        counts.textures,
+        counts.vertices,
+        counts.indices,
+        counts.pixels,
+        counts.static_boxes,
+        counts.navigation_nodes,
+        counts.navigation_edges,
+    };
 }
 
 fn sectionBytes(bytes: []u8, section: SectionDesc) []u8 {
@@ -778,6 +986,53 @@ fn decodeStaticBoxes(values: []StaticBox, bytes: []const u8) void {
     }
 }
 
+fn encodeNavigationNodes(bytes: []u8, values: []const NavigationNode) void {
+    for (values, 0..) |value, index| {
+        const base = index * 16;
+        for (value.position, 0..) |component, component_index| {
+            putF32(bytes, base + component_index * 4, component);
+        }
+        bytes[base + 12] = value.first_edge;
+        bytes[base + 13] = value.edge_count;
+        bytes[base + 14] = value.flags;
+        bytes[base + 15] = value.reserved;
+    }
+}
+
+fn decodeNavigationNodes(values: []NavigationNode, bytes: []const u8) void {
+    for (values, 0..) |*value, index| {
+        const base = index * 16;
+        for (&value.position, 0..) |*component, component_index| {
+            component.* = getF32(bytes, base + component_index * 4);
+        }
+        value.first_edge = bytes[base + 12];
+        value.edge_count = bytes[base + 13];
+        value.flags = bytes[base + 14];
+        value.reserved = bytes[base + 15];
+    }
+}
+
+fn encodeNavigationEdges(bytes: []u8, values: []const NavigationEdge) void {
+    for (values, 0..) |value, index| {
+        const base = index * 12;
+        putI32(bytes, base, value.target_coord[0]);
+        putI32(bytes, base + 4, value.target_coord[1]);
+        bytes[base + 8] = value.target_node;
+        bytes[base + 9] = value.flags;
+        putU16(bytes, base + 10, value.reserved);
+    }
+}
+
+fn decodeNavigationEdges(values: []NavigationEdge, bytes: []const u8) void {
+    for (values, 0..) |*value, index| {
+        const base = index * 12;
+        value.target_coord = .{ getI32(bytes, base), getI32(bytes, base + 4) };
+        value.target_node = bytes[base + 8];
+        value.flags = bytes[base + 9];
+        value.reserved = getU16(bytes, base + 10);
+    }
+}
+
 fn putName(bytes: []u8, offset: usize, value: NameRef) void {
     putU32(bytes, offset, value.offset);
     putU32(bytes, offset + 4, value.len);
@@ -795,6 +1050,10 @@ fn putU32(bytes: []u8, offset: usize, value: anytype) void {
     std.mem.writeInt(u32, bytes[offset..][0..4], @intCast(value), .little);
 }
 
+fn putI32(bytes: []u8, offset: usize, value: i32) void {
+    putU32(bytes, offset, @as(u32, @bitCast(value)));
+}
+
 fn putU64(bytes: []u8, offset: usize, value: anytype) void {
     std.mem.writeInt(u64, bytes[offset..][0..8], @intCast(value), .little);
 }
@@ -809,6 +1068,10 @@ fn getU16(bytes: []const u8, offset: usize) u16 {
 
 fn getU32(bytes: []const u8, offset: usize) u32 {
     return std.mem.readInt(u32, bytes[offset..][0..4], .little);
+}
+
+fn getI32(bytes: []const u8, offset: usize) i32 {
+    return @bitCast(getU32(bytes, offset));
 }
 
 fn getU64(bytes: []const u8, offset: usize) u64 {
@@ -843,6 +1106,18 @@ const test_vertices = [_]VertexPNU{
 const test_indices = [_]u32{ 0, 1, 2 };
 const test_pixels = [_]u8{ 255, 64, 32, 255 };
 const test_boxes = [_]StaticBox{.{ .position = .{ 0, -0.5, 0 }, .half_extents = .{ 7.5, 0.5, 7.5 } }};
+const test_navigation_nodes = [_]NavigationNode{
+    .{ .position = .{ -4, 0, 3 }, .first_edge = 0, .edge_count = 1, .flags = navigation_node_terminal },
+    .{ .position = .{ 2, 0, 3 }, .first_edge = 1, .edge_count = 2 },
+    .{ .position = .{ 7, 0, 3 }, .first_edge = 3, .edge_count = 2 },
+};
+const test_navigation_edges = [_]NavigationEdge{
+    .{ .target_coord = .{ 0, 0 }, .target_node = 1 },
+    .{ .target_coord = .{ 0, 0 }, .target_node = 0 },
+    .{ .target_coord = .{ 0, 0 }, .target_node = 2 },
+    .{ .target_coord = .{ 0, 0 }, .target_node = 1 },
+    .{ .target_coord = .{ 1, 0 }, .target_node = 0 },
+};
 
 fn testBundle() BundleView {
     return .{
@@ -858,6 +1133,8 @@ fn testBundle() BundleView {
         .indices = &test_indices,
         .pixels = &test_pixels,
         .static_boxes = &test_boxes,
+        .navigation_nodes = &test_navigation_nodes,
+        .navigation_edges = &test_navigation_edges,
     };
 }
 
@@ -868,12 +1145,18 @@ test "bundle encoding is deterministic little-endian and round trips scene relat
     defer std.testing.allocator.free(second);
     try std.testing.expectEqualSlices(u8, first, second);
     try std.testing.expectEqualSlices(u8, &magic, first[0..8]);
-    try std.testing.expectEqual(@as(u16, 1), getU16(first, 8));
+    try std.testing.expectEqual(format_version, getU16(first, 8));
 
     var decoded = (try decode(std.testing.allocator, first, .{})).bundle;
     defer decoded.deinit();
     const view = decoded.view();
+    const decoded_identity = decoded.bundleIdentity();
     try std.testing.expectEqualStrings("district/s3_fixture", view.name(view.bundle_name).?);
+    try std.testing.expectEqualStrings("district/s3_fixture", decoded_identity.name);
+    try std.testing.expectEqual(format_version, decoded_identity.format_version);
+    try std.testing.expectEqual(schema_cohort, decoded_identity.schema_cohort);
+    try std.testing.expectEqualSlices(u8, &testBundle().source_digest, &decoded_identity.source_digest);
+    try std.testing.expectEqualSlices(u8, first[72..104], &decoded_identity.integrity_digest);
     try std.testing.expectEqual(@as(usize, 2), view.nodes.len);
     try std.testing.expectEqual(@as(u32, 0), view.nodes[0].mesh);
     try std.testing.expectEqual(@as(u32, 0), view.nodes[1].mesh);
@@ -881,6 +1164,52 @@ test "bundle encoding is deterministic little-endian and round trips scene relat
     try std.testing.expectEqual(@as(u32, 0), view.primitives[0].material);
     try std.testing.expectEqual(@as(u32, 0), view.materials[0].base_color_texture);
     try std.testing.expectEqualSlices(u8, &test_pixels, view.pixels);
+    try std.testing.expectEqual(@as(usize, 3), view.navigation_nodes.len);
+    try std.testing.expectEqual(@as(usize, 5), view.navigation_edges.len);
+    try std.testing.expectEqual(@as(f32, 7), view.navigation_nodes[2].position[0]);
+    try std.testing.expectEqual(@as(i32, 1), view.navigation_edges[4].target_coord[0]);
+}
+
+test "decoded identity owns header digests, borrows owned name, and fingerprints integrity" {
+    const canonical = (try encode(std.testing.allocator, testBundle(), .{})).bytes;
+    var decoded = (try decode(std.testing.allocator, canonical, .{})).bundle;
+    // Identity must not borrow from the encoded input buffer.
+    std.testing.allocator.free(canonical);
+    defer decoded.deinit();
+
+    const identity_value = decoded.bundleIdentity();
+    try std.testing.expectEqualStrings("district/s3_fixture", identity_value.name);
+    const canonical_fingerprint = try identity_value.canonicalFingerprint();
+    try std.testing.expect(!std.mem.allEqual(u8, &canonical_fingerprint, 0));
+
+    const altered_bytes = (try encode(std.testing.allocator, testBundle(), .{})).bytes;
+    defer std.testing.allocator.free(altered_bytes);
+    const pixel_section = readSectionDesc(altered_bytes, @intFromEnum(Section.pixels));
+    altered_bytes[pixel_section.offset] ^= 1;
+    @memset(altered_bytes[72..104], 0);
+    var altered_integrity: [32]u8 = undefined;
+    calculateIntegrity(altered_bytes, &altered_integrity);
+    @memcpy(altered_bytes[72..104], &altered_integrity);
+
+    var altered = (try decode(std.testing.allocator, altered_bytes, .{})).bundle;
+    defer altered.deinit();
+    const altered_identity = altered.bundleIdentity();
+    try std.testing.expectEqualStrings(identity_value.name, altered_identity.name);
+    try std.testing.expectEqualSlices(
+        u8,
+        &identity_value.source_digest,
+        &altered_identity.source_digest,
+    );
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        &identity_value.integrity_digest,
+        &altered_identity.integrity_digest,
+    ));
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        &canonical_fingerprint,
+        &(try altered_identity.canonicalFingerprint()),
+    ));
 }
 
 test "bundle rejects integrity corruption before constructing typed slices" {
@@ -947,6 +1276,56 @@ test "bundle rejects version, schema, section, reference, and capacity failures"
     try std.testing.expectEqual(CapacityKind.nodes, over_capacity.failed.capacity_exceeded.kind);
 }
 
+test "bundle rejects authenticated non-canonical reserved and alignment bytes" {
+    var padded_bundle = testBundle();
+    padded_bundle.strings = fixture_strings ++ "x";
+    const canonical = (try encode(std.testing.allocator, padded_bundle, .{})).bytes;
+    defer std.testing.allocator.free(canonical);
+
+    for ([_]usize{ 116, 312 }) |reserved_offset| {
+        const altered = try std.testing.allocator.dupe(u8, canonical);
+        defer std.testing.allocator.free(altered);
+        altered[reserved_offset] = 1;
+        @memset(altered[72..104], 0);
+        var digest: [32]u8 = undefined;
+        calculateIntegrity(altered, &digest);
+        @memcpy(altered[72..104], &digest);
+        const result = try decode(std.testing.allocator, altered, .{});
+        try std.testing.expect(result.failed == .invalid_header);
+    }
+
+    var previous_end: u64 = header_size;
+    var padding_offset: ?usize = null;
+    var padded_section: ?Section = null;
+    for (0..section_count) |index| {
+        const section = readSectionDesc(canonical, index);
+        const aligned = std.mem.alignForward(u64, previous_end, 4);
+        if (aligned > previous_end) {
+            padding_offset = @intCast(previous_end);
+            padded_section = @enumFromInt(index);
+            break;
+        }
+        previous_end = section.offset + section.byte_size;
+    }
+    const altered = try std.testing.allocator.dupe(u8, canonical);
+    defer std.testing.allocator.free(altered);
+    altered[padding_offset orelse return error.TestFixtureHasNoAlignmentPadding] = 1;
+    @memset(altered[72..104], 0);
+    var digest: [32]u8 = undefined;
+    calculateIntegrity(altered, &digest);
+    @memcpy(altered[72..104], &digest);
+    const result = try decode(std.testing.allocator, altered, .{});
+    try std.testing.expectEqual(padded_section.?, result.failed.invalid_section);
+
+    const zero_source = try std.testing.allocator.dupe(u8, canonical);
+    defer std.testing.allocator.free(zero_source);
+    @memset(zero_source[40..104], 0);
+    calculateIntegrity(zero_source, &digest);
+    @memcpy(zero_source[72..104], &digest);
+    const zero_source_result = try decode(std.testing.allocator, zero_source, .{});
+    try std.testing.expect(zero_source_result.failed == .missing_source_digest);
+}
+
 test "bundle validation rejects non-finite transforms and invalid texture ranges" {
     var invalid = testBundle();
     var nodes = test_nodes;
@@ -965,4 +1344,107 @@ test "bundle validation rejects non-finite transforms and invalid texture ranges
     boxes[0].rotation = .{ 0, 0.5, 0, 0.5 };
     invalid.static_boxes = &boxes;
     try std.testing.expect((try encode(std.testing.allocator, invalid, .{})).failed == .invalid_static_box);
+
+    invalid = testBundle();
+    invalid.source_digest = [_]u8{0} ** 32;
+    try std.testing.expect((try encode(std.testing.allocator, invalid, .{})).failed ==
+        .missing_source_digest);
+}
+
+test "navigation sections use exact little-endian strides and reject hostile fragments" {
+    const canonical = (try encode(std.testing.allocator, testBundle(), .{})).bytes;
+    defer std.testing.allocator.free(canonical);
+    const node_section = readSectionDesc(canonical, @intFromEnum(Section.navigation_nodes));
+    const edge_section = readSectionDesc(canonical, @intFromEnum(Section.navigation_edges));
+    try std.testing.expectEqual(@as(u32, 3), node_section.count);
+    try std.testing.expectEqual(@as(u32, 16), node_section.stride);
+    try std.testing.expectEqual(@as(u32, 48), node_section.byte_size);
+    try std.testing.expectEqual(@as(u32, 5), edge_section.count);
+    try std.testing.expectEqual(@as(u32, 12), edge_section.stride);
+    try std.testing.expectEqual(@as(u32, 60), edge_section.byte_size);
+    try std.testing.expectEqual(@as(i32, 1), getI32(canonical, edge_section.offset + 4 * 12));
+    try std.testing.expectEqual(@as(u8, 0), canonical[edge_section.offset + 4 * 12 + 8]);
+
+    var invalid = testBundle();
+    var nodes = test_navigation_nodes;
+    nodes[0].position[0] = @bitCast(@as(u32, 0x8000_0000));
+    invalid.navigation_nodes = &nodes;
+    try std.testing.expect((try encode(std.testing.allocator, invalid, .{})).failed ==
+        .invalid_navigation_node);
+
+    invalid = testBundle();
+    nodes = test_navigation_nodes;
+    nodes[1].first_edge = 2;
+    invalid.navigation_nodes = &nodes;
+    try std.testing.expect((try encode(std.testing.allocator, invalid, .{})).failed ==
+        .invalid_navigation_node);
+
+    invalid = testBundle();
+    var edges = test_navigation_edges;
+    edges[0].target_node = 8;
+    invalid.navigation_edges = &edges;
+    try std.testing.expect((try encode(std.testing.allocator, invalid, .{})).failed ==
+        .invalid_navigation_edge);
+
+    invalid = testBundle();
+    edges = test_navigation_edges;
+    edges[0].flags = 1;
+    invalid.navigation_edges = &edges;
+    try std.testing.expect((try encode(std.testing.allocator, invalid, .{})).failed ==
+        .invalid_navigation_edge);
+
+    invalid = testBundle();
+    edges = test_navigation_edges;
+    edges[2] = edges[1];
+    invalid.navigation_edges = &edges;
+    try std.testing.expect((try encode(std.testing.allocator, invalid, .{})).failed ==
+        .invalid_navigation_edge);
+
+    invalid = testBundle();
+    edges = test_navigation_edges;
+    std.mem.swap(NavigationEdge, &edges[1], &edges[2]);
+    invalid.navigation_edges = &edges;
+    try std.testing.expect((try encode(std.testing.allocator, invalid, .{})).failed ==
+        .non_canonical_navigation);
+
+    invalid = testBundle();
+    invalid.navigation_nodes = &.{};
+    try std.testing.expect((try encode(std.testing.allocator, invalid, .{})).failed ==
+        .invalid_navigation_node);
+
+    var limits = Limits{};
+    limits.max_navigation_nodes = 2;
+    const over_capacity = try encode(std.testing.allocator, testBundle(), limits);
+    try std.testing.expectEqual(
+        CapacityKind.navigation_nodes,
+        over_capacity.failed.capacity_exceeded.kind,
+    );
+
+    var cross_district = testBundle();
+    edges = test_navigation_edges;
+    edges[4].target_node = 3;
+    cross_district.navigation_edges = &edges;
+    const broad_bytes = (try encode(
+        std.testing.allocator,
+        cross_district,
+        .{},
+    )).bytes;
+    defer std.testing.allocator.free(broad_bytes);
+    limits = .{};
+    limits.max_navigation_nodes = 3;
+    const narrow_decode = try decode(std.testing.allocator, broad_bytes, limits);
+    try std.testing.expect(narrow_decode.failed == .invalid_navigation_edge);
+}
+
+test "decoder applies navigation validation after integrity verification" {
+    const bytes = (try encode(std.testing.allocator, testBundle(), .{})).bytes;
+    defer std.testing.allocator.free(bytes);
+    const nodes = readSectionDesc(bytes, @intFromEnum(Section.navigation_nodes));
+    bytes[nodes.offset + 14] = 0x80;
+    @memset(bytes[72..104], 0);
+    var digest: [32]u8 = undefined;
+    calculateIntegrity(bytes, &digest);
+    @memcpy(bytes[72..104], &digest);
+    const result = try decode(std.testing.allocator, bytes, .{});
+    try std.testing.expect(result.failed == .invalid_navigation_node);
 }

@@ -1,5 +1,10 @@
 # S2 Vehicle Slice Design
 
+> **Historical slice design.** This was the delivery contract for the slice at
+> closure. Detailed file layout, cohorts, and limitations below may have been
+> consolidated later. See [ADR-008](../adr/008-feature-oriented-engine-architecture.md)
+> and the [cleanup plan](../../CLEANUP_PLAN.md) for current architecture.
+
 **Date:** 2026-07-12  
 **Status:** Complete
 

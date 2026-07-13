@@ -39,7 +39,7 @@ pub const MaterialHandle = struct {
 /// not flatten authored scene structure or observe GPU residency.
 pub const SceneHandle = struct {
     index: u32,
-    generation: u32,
+    generation: u64,
 
     pub const invalid = SceneHandle{
         .index = std.math.maxInt(u32),

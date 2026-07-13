@@ -1,12 +1,15 @@
 # Incinerator Engine Overhaul Plan
 
-**Status:** Active
+**Status:** Pre-multiplayer program and post-M3 greenfield cleanup complete; S9
+and secondary platforms deferred
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-07-12
+**Last reviewed:** 2026-07-13
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
+
+**Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
 
@@ -256,8 +259,12 @@ Do not create every directory up front. Slice 0 should establish only the minimu
 
 ## 6. Current Baseline
 
-The repository now contains a small feature-authoring kernel and one owned S3-A
-sandbox composition shared by visual and headless hosts:
+The repository now contains a small feature-authoring kernel, a complete S8
+single-player sandbox composition shared by visual and headless hosts, and the
+cold M3 operational authority product. The visual host composes cooked
+two-district GPU residency, interaction, navigation/population, diagnostics,
+replay, profiling, and durable authoring; the cold product composes only
+logical authority and operational lifecycle:
 
 - `src/root.zig` exposes backend-neutral contracts plus the type-erased
   `Runtime`/startup registry used by game features.
@@ -267,20 +274,22 @@ sandbox composition shared by visual and headless hosts:
   behavior with no SDL/editor/renderer edge.
 - The prototype `GameWorld`, borrowed Flecs/Jolt path, direct ECS render query,
   Scene/Gizmo mutation tools, and their compatibility seams are removed.
-- `CrateFeature`, `CharacterFeature`, `VehicleFeature`, and `DistrictFeature` independently own
-  their typed commands, outcomes, persistence records, lifecycle, systems, and
-  presentation extraction.
-- The composition owns V4 world metadata, cross-feature identity/driver policy,
-  and one shared physics step; crate, character, vehicle, and district records restore
-  together without private coupling, and feature-owned tuning is authoritative.
+- `CrateFeature`, `CharacterFeature`, `VehicleFeature`, `DistrictFeature`,
+  `InteractionFeature`, and `NpcFeature` independently own their typed
+  commands, outcomes, persistence records, lifecycle, systems, and
+  presentation extraction; the population planner owns no authority.
+- The composition owns `SnapshotV7` world metadata, cross-feature identity and
+  relationship policy, and one shared physics step; crate, character, vehicle,
+  district, interaction, and NPC records restore together without private
+  coupling, and feature-owned tuning is authoritative.
 - The Jolt adapter now exposes a narrow CharacterVirtual capability with
   bottom-anchored capsules, world-qualified handles, slope/ground state, and
   explicit update/destruction semantics.
 - The public pure fixed-step accumulator proves 240/80 Hz presentation cadence
   and the 250 ms anti-spiral policy independently of SDL's wall clock.
-- ReleaseFast S0 through S3-A characterizations are recorded; separate native
-  Metal crate, character, and vehicle smokes exit normally above and below
-  120 Hz.
+- Historical ReleaseFast S0 through S3-A characterizations and the S3-B
+  cooked/staged/GPU resource baseline are preserved as dated records; their
+  phase-only measurement executables are not current workflows.
 - A sandbox-owned action latch bridges frame-scoped SDL state to tick-scoped
   character commands without losing or replaying edges/deltas.
 - The upgraded application builds in Debug and ReleaseFast, with and without
@@ -288,7 +297,22 @@ sandbox composition shared by visual and headless hosts:
 - MSL shader artifacts and reflection data are generated from cache-backed
   outputs. Apple Silicon macOS/Metal is the sole current platform target;
   Linux/Windows and their shader paths are fully deferred with no gates.
-- The bootstrap host now uses procedural content only; the tracked game-owned GLBs are not runtime or package dependencies.
+- The sandbox installs and loads the small provenance-recorded S3 cooked fixture
+  through an explicit content root; the unreferenced game-owned demo GLBs were
+  removed from the engine repository.
+- Reusable district contracts own bounded values and structural validation;
+  `src/sandbox/district_recipe.zig` owns concrete installed coordinates,
+  collision fixtures, and the exact two-district navigation policy.
+- S4 provides bounded structured diagnostics, immutable first-fault retention,
+  same-cohort replay with category-first divergence, renderer-neutral physics
+  evidence, and fixed profiling/Metal overlay ownership.
+- S5 through S8 provide typed durable authoring, exact two-district catalogs,
+  cross-district carry ownership, cooked-route NPC authority, Snapshot V7,
+  current replay cohort 5, and a measured 64-NPC/65-controller scale contract.
+- M3 provides a genuinely cold three-file headless product, exact bounded
+  startup admission, one-world process ownership, two generational synthetic
+  producers, signal/lag/storage/fault lifecycle gates, and routine/long
+  ReleaseFast soak budgets. It introduces no transport or secondary platform.
 
 ### 6.1 Verified build matrix
 
@@ -311,7 +335,7 @@ sandbox composition shared by visual and headless hosts:
 | JoltC | `amerkoleci/joltc@52d8c98...` | 32-bit object-layer ABI assertions enabled; single precision; cross-platform determinism explicitly off |
 | zgui | `bfbebed3...` | Lazy and absent when `-Deditor=false`; engine adapter compiles its backend against SDL 3.4.12 headers |
 | zmath / zmesh / zstbi / zflecs | Exact tested commits in `build.zig.zon` | Linkage/features are explicit; Flecs C/Zig ABI options match and `flecs.c` has one owner |
-| shaderc / SPIRV-Cross / SDL_shadercross / DXC | vcpkg baseline `cd61e1e...`; shaderc 2026.2; SPIRV-Cross 1.4.350.0; SDL_shadercross 3.0.0-preview2; DXC 2026-05-27 | Separate base and DXIL manifests; official offline DXIL generation passes |
+| shaderc / SPIRV-Cross | vcpkg baseline `cd61e1e...`; shaderc 2026.2; SPIRV-Cross 1.4.350.0 | Exact Apple Silicon macOS GLSL → SPIR-V → MSL and reflection toolchain; secondary-platform manifests are removed |
 
 ---
 
@@ -341,14 +365,18 @@ sandbox composition shared by visual and headless hosts:
 | D-003 | Exact Zig 0.16.0 toolchain and coordinated wrapper cohort | Implemented | Every build/CI change |
 | D-004 | Engine-owned JoltC 5.5 build package plus narrow engine adapter; expand capabilities per slice | Implemented for rigid bodies, CharacterVirtual, and the integrated S2 real-Jolt four-wheel capability | Future physics slices |
 | D-005 | Main thread owns ECS mutation/GPU submission; callbacks publish bounded data | Accepted in ADR-008 | Async assets/contact events |
-| D-006 | Allocator and memory-budget strategy | Implemented for S3: bounded logical/content workers, 64 KiB cooked files, fixed scene/resource counts, and explicit staged/in-flight/resident/per-pump byte caps; future slices must add their own measured budgets | Future asset slices |
+| D-006 | Allocator and memory-budget strategy | Implemented through M3: bounded logical/content workers and visual ownership, fixed feature/router queues, tracked allocator peaks/final-live bytes, absolute process RSS, snapshot/envelope ceilings, and per-slice measured budgets; future slices must add their own cohorts | Future slices |
 | D-007 | Physics owns dynamic-body simulation transforms; presentation reads interpolated snapshots | Implemented for S0 in amended ADR-005 | Slice 0 scheduling/interpolation |
-| D-008 | Stable entity ID and serialization model | Implemented through composition-owned V4 crate/character/vehicle/district snapshots, canonical state, authoritative tuning, validated driver relationships, and logical district reconstruction; multi-world atomic replacement remains open | Save/restore |
-| D-009 | Apple Silicon macOS/Metal is the only current platform; Linux/SteamOS and Windows are future/deferred with no current gates | Accepted in amended ADR-007; dormant platform code may break and creates no abstraction requirement | Explicit secondary-platform product decision |
-| D-010 | Measured entity, body, draw, memory, and streaming budgets | S0–S3-B baselines recorded, including cooked/staged/GPU volumes and enforced registry caps; repeated end-to-end timing remains S3-C | Streaming acceptance budgets |
+| D-008 | Stable entity ID and serialization model | Implemented through composition-owned `SnapshotV7`, canonical crate/character/vehicle/district/interaction/NPC state, authoritative tuning, validated relationships, and two-district logical reconstruction; live multi-world atomic replacement is outside the accepted one-world-per-process M3 model | Save/restore |
+| D-009 | Apple Silicon macOS/Metal is the only current platform; Linux/SteamOS and Windows are future/deferred with no current gates | Implemented in amended ADR-007; active secondary-platform paths are removed and create no abstraction requirement | Explicit secondary-platform product decision |
+| D-010 | Measured entity, body, controller, contact-evidence, draw, queue, memory, streaming, persistence, and fixed-tick budgets | Implemented through M3 with S8 representative population scale plus routine/long one-world authority soaks and automatic ceilings | Future slices extend their own measured budgets |
 | D-011 | Thin-kernel + feature-module architecture | Accepted by this plan | Slice 0 |
 | D-012 | Commands/events/queries as cross-boundary interaction model | Accepted by this plan | Slice 0 |
 | D-013 | Source assets, cooked assets, and runtime content packaging policy | Accepted in ADR-009; runtime consumes explicit-root versioned cooked bundles, while source import is offline/editor-only and S3-A procedural data is conformance content | Streaming slice |
+| D-014 | Bounded diagnostics, immutable inspection, and same-build replay contract | Accepted for S4; no remote telemetry platform or mutable editor service locator | S4 |
+| D-015 | Durable save-slot storage and greenfield schema compatibility policy | Accepted for S5; unsupported cohorts may be rejected until a stability promise exists | S5 |
+| D-016 | One simulation world per process and macOS-local server-shaped readiness; deployment platforms remain a future decision | Accepted for M3; replacing/forking zflecs remains an explicit alternative if a later product requires multi-world processes | M3/S9 |
+| D-017 | Post-M3 greenfield consolidation: current cohorts only, separate product/validation compositions, sandbox-owned content policy, owned editor, minimal macOS dependency graph | Completed under `CLEANUP_PLAN.md`; no compatibility, secondary-platform, or multiplayer scope | Next gameplay phase |
 
 ### Decision notes
 
@@ -385,9 +413,14 @@ runtime, and CI investment.
 
 Linux/SteamOS and Windows are future product possibilities only. They have no
 current cross-build, shader, headless, runtime, packaging, CI, or compatibility
-gates, and they must not motivate multi-platform abstractions. Existing code is
-dormant and may break. A future platform or Linux server begins with a separate
-decision and an explicit porting milestone that may adapt or replace that code.
+gates, and they must not motivate multi-platform abstractions. Active
+secondary-platform paths are removed. A future platform or Linux server begins
+with a separate decision and an explicit porting milestone.
+
+Vendored `third_party/joltc-zig` retains upstream OS/compiler conditionals as
+dependency-internal portability code. Those branches are not engine platform
+options or support claims; the top-level graphs reject unsupported targets
+before dependency resolution.
 
 ---
 
@@ -397,15 +430,24 @@ decision and an explicit porting milestone that may adapt or replace that code.
 |---|---|---|
 | M0 | Reproducible baseline and blocking decisions | Complete |
 | M1 | Trustworthy Apple Silicon macOS build, shader, dependency, CI, and packaging gate | Complete for the macOS-only scope; all secondary-platform work is deferred |
-| M2 | Immediate ownership and correctness hazards removed | Complete for the pre-S2 scope; content-upload failure/cancellation policy remains slice-owned by S3 |
+| M2 | Immediate ownership and correctness hazards removed | Complete for its foundational scope; S3 owns the later streamed-content lifecycle and evidence |
 | S0 | Crate lifecycle slice proves the kernel and feature contract | Complete; one-world-per-process and pre-network queue backpressure are accepted follow-on constraints |
 | S1 | Character walks around one block | Complete; independent architecture, correctness, and build/evidence reviews pass with no remaining P0/P1/P2 finding |
 | S2 | Player enters and drives one vehicle | Complete; real Jolt vehicle, driver authority, Snapshot V3, procedural presentation, native Metal lifecycle smokes, ReleaseFast baseline, and independent reviews pass |
-| S3 | One district/chunk loads and unloads asynchronously | S3-A procedural/headless foundation and S3-B cooked/Metal residency complete. S3-C proximity/repeated native lifecycle evidence remains open |
-| S4 | Two clients use one authoritative server, if selected | Deferred until multiplayer is selected and scoped |
-| S5 | Transform editing supports command, undo, save, and restore | Not started |
+| S3 | One district/chunk loads and unloads asynchronously | Complete; procedural/headless ownership, cooked/Metal residency, host proximity, cancellation/drain, repeated installed lifecycle evidence, and independent reviews pass |
+| S4 | A developer can inspect, capture, and reproduce a sandbox fault | Complete; all three stages and the final integrated diagnostics/replay/visualization review pass with no remaining actionable P0/P1/P2 finding |
+| S5 | Transform authoring supports command, undo, durable save, restart, and restore | Complete; full macOS/editor/cold-restart evidence and independent review pass |
+| S6 | Two authored districts cook, install, select, and stream deterministically | Complete; exact catalog admission, two-slot logical/visual authority, durable/replay cohorts, native overlap/drain evidence, and independent reviews pass |
+| S7 | Persistent interaction and cross-district world ownership are proven | Complete; transactional authority, save/replay, native Metal, 128-cycle measurement, and independent review pass |
+| S8 | A bounded navigation-driven population crosses streamed districts safely at representative scale | Complete and independently reviewed |
+| M3 | A server-shaped headless product is operationally ready for external producers | Complete and independently reviewed; pre-network capability gate only |
+| S9 | Two clients use one authoritative server, if selected | Deferred until the completed pre-multiplayer program is reviewed |
 
-M0–M2 are limited cross-cutting gates. S0 onward are vertical slices. Shared engine, renderer, asset, persistence, and tooling capabilities are pulled into existence by those slices rather than completed as independent horizontal milestones.
+M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
+slices. M3 is a narrow pre-network readiness gate, not a speculative server
+framework. S9 is the conditional authoritative multiplayer slice. Shared
+diagnostics, storage, content, rendering, and server-shaped capabilities are
+extracted only as concrete slices prove their consumers.
 
 ---
 
@@ -463,8 +505,8 @@ M0–M2 are limited cross-cutting gates. S0 onward are vertical slices. Shared e
 - [x] Query the claimed window’s swapchain format, select a supported depth format, and supply both to every scene/editor pipeline.
 - [x] Preserve the offline MSL contract and macOS Metal runtime smokes.
 - **Fully deferred by platform policy:** Linux/SteamOS and Windows compilation,
-  shaders, headless behavior, runtime, packaging, and CI. Dormant paths are not
-  current contracts and may break.
+  shaders, headless behavior, runtime, packaging, and CI. Removed experimental
+  paths remain available in repository history only.
 
 ### 11.4 CI and packaging
 
@@ -479,8 +521,11 @@ M0–M2 are limited cross-cutting gates. S0 onward are vertical slices. Shared e
 - [x] Include required source, shader, local dependency, tool, CI, and documentation paths in `build.zig.zon`.
 - [x] Gate Zig-filtered source-package membership and execute the headless test graph from the extracted package so `.paths` and file-mode drift cannot escape checkout-only tests.
 - **Deferred by owner:** select and add the engine `LICENSE`. No redistribution/release claim is permitted until then.
-- [ ] Record third-party notices and move or remove unprovenanced game-owned assets before distribution.
-- [ ] Decide whether large source assets use Git LFS, an artifact store, or small fixtures.
+- [x] Remove the unreferenced/unprovenanced game-owned demo GLBs from the engine
+  repository; retain only self-authored conformance fixtures with provenance.
+- [ ] Record third-party notices before distribution.
+- **Deferred to the separately licensed game:** choose Git LFS or an artifact
+  store when real large game source assets exist.
 
 ### 11.5 Coordinated dependency migration
 
@@ -606,13 +651,14 @@ This is the first proof of the engine architecture and replaces a speculative �
 - [x] Initial tick, extraction, command/outcome, body-count, and teardown measurements are recorded at 0, 1, 128, and 1,024 crates.
 - [x] Supported adapter-failure and malformed/non-finite/over-limit persistence cases are covered, including allocation-failure unwind and velocity representability.
 
-### Known S0 limitations
+### Historical S0 limitations at slice closure
 
 - The current zflecs wrapper permits one owned world per process. A second
   candidate fails cleanly and leaves the live simulation usable, but successful
   atomic old/new world swapping is not yet possible.
-- Command/outcome buffers are allocator-backed and unbounded; add measured
-  backpressure before accepting network-originated commands.
+- Command/outcome buffers were allocator-backed and unbounded at S0 closure.
+  M3 subsequently replaced feature authority queues with fixed capacities and
+  bounded external-producer admission. Network transport policy remains S9.
 
 Evidence: [`docs/validation/s0-acceptance.md`](docs/validation/s0-acceptance.md)
 and [`docs/performance/s0-baseline.md`](docs/performance/s0-baseline.md).
@@ -724,7 +770,7 @@ installed native evidence. Only completion of all three closes S3.
 
 ### S3-A — Procedural/headless ownership foundation
 
-**Status:** Complete. Full S3 remains open.
+**Status:** Complete. Full S3 subsequently closed through S3-C.
 
 #### Feature-owned scope
 
@@ -798,112 +844,429 @@ and [`docs/adr/009-runtime-content-and-streaming.md`](docs/adr/009-runtime-conte
 
 ### S3-C — Boundary policy and native evidence
 
-- [ ] Add host-owned proximity hysteresis without importing character or
+- [x] Add host-owned proximity hysteresis without importing character or
   vehicle features into `DistrictFeature`.
-- [ ] Run installed cooked-content/Metal load, cancel, unload, and reload smokes
+- [x] Run installed cooked-content/Metal load, cancel, unload, and reload smokes
   from `/tmp` above and below the fixed tick rate.
-- [ ] Record repeated lifecycle timing/peak profiles and repeat final full-S3
+- [x] Record repeated lifecycle timing/peak profiles and repeat final full-S3
   independent reviews.
 
 ### Full-S3 acceptance criteria
 
-- [ ] Repeated cooked load/unload cycles leave no stale CPU/GPU handles or
+- [x] Repeated cooked load/unload cycles leave no stale CPU/GPU handles or
   leaked resources.
-- [ ] Cancellation during decode and before/after GPU submission is safe.
-- [ ] Simulation remains responsive while cooked content streams and GPU fences
+- [x] Cancellation during decode and before/after GPU submission is safe.
+- [x] Simulation remains responsive while cooked content streams and GPU fences
   are polled nonblockingly.
-- [ ] CPU, staging, upload, and resident GPU volumes stay within recorded budgets.
-- [ ] A multi-node, instanced, textured glTF fixture renders with authored transforms.
-- [ ] Installed/cooked content works outside the repository root.
+- [x] CPU, staging, upload, and resident GPU volumes stay within recorded budgets.
+- [x] A multi-node, instanced, textured glTF fixture renders with authored transforms.
+- [x] Installed/cooked content works outside the repository root.
 
 ---
 
-## 17. S4 — Authoritative Multiplayer Slice (Conditional)
-
-**Status:** Deferred until multiplayer is selected and scoped.
+## 17. S4 — Developer Diagnostics and Reproducibility Slice
 
 ### Outcome
 
-Two clients connect to one headless authoritative server and observe consistent character, crate, and vehicle state under simulated latency and loss.
+A developer can inspect a complete load → cancel → reload district
+lifecycle, capture its authoritative ingress, reproduce its logical behavior
+headlessly on the same supported cohort, and inspect physics/presentation
+alignment without reaching into private Flecs, Jolt, SDL, or feature state.
 
-### Feature-owned scope
+S4 is staged so diagnostics, replay, and visualization each close one bounded
+developer workflow instead of becoming an open-ended tooling subsystem.
 
-- network identity, authority, ownership, and replication components;
-- versioned input and state messages;
-- connection/join/leave/ownership events;
-- server input application and snapshot systems;
-- client prediction/reconciliation/interpolation as selected;
-- interest management aligned with streamed chunks;
-- network diagnostics and fault tests.
+### S4-A — Structured diagnostics and live inspection
 
-### Work pulled by the slice
+- [x] Add a fixed-capacity backend-neutral diagnostic journal with severity,
+  category, code, tick/frame/thread context, persistent identity where
+  applicable, correlation IDs, and visible overflow accounting.
+- [x] Retain the immutable first runtime fault with phase, system, tick, and
+  structured error context instead of retaining only a faulted bit.
+- [x] Compose typed read-only feature/adapter diagnostic snapshots explicitly;
+  do not expose raw Flecs/Jolt/SDL state or a mutable universal context.
+- [x] Feed stderr/JSON, headless tests, and an ImGui console/timeline from the
+  same diagnostic contracts.
+- [x] Add host-owned pause, single tick, controlled time scale, and conditional
+  capture without changing authoritative fixed delta or persistent state.
+- [x] Expose queue occupancy/high-water marks, entity/body counts, and district
+  worker/logical/GPU lifecycle plus upload/resident byte accounting.
 
-- [ ] Define authoritative state and trust boundaries.
-- [ ] Version command and snapshot serialization.
-- [ ] Add server tick, input sequencing, acknowledgements, and reconciliation.
-- [ ] Keep network snapshot interpolation distinct from local presentation interpolation.
-- [ ] Add interest management using S3 chunk ownership.
-- [ ] Deterministically queue/order contact results before replication.
-- [ ] Test join-in-progress, reconnect, loss, reordering, and version mismatch.
-- [ ] Treat Jolt cross-platform determinism as test input, not a complete lockstep guarantee.
+#### S4-A acceptance
 
-### Acceptance criteria
+- [x] The S3-C load → cancel → reload lifecycle is inspectable through the
+  same typed snapshots and journal in headless and ImGui hosts.
+- [x] Saturation follows explicit bounded drop/reject policy, increments visible
+  counters, and cannot corrupt simulation.
+- [x] ImGui inspection is read-only. Any authoritative mutation uses a typed
+  feature command; host-only pause/step/time-scale controls remain outside save
+  state and never change fixed delta.
+- [x] Editor-disabled/headless builds retain structured diagnostics without
+  linking ImGui or SDL GPU.
+- [x] The installed production fault loop retains the first runtime error,
+  freezes authoritative/content/GPU progress with a resident district scene,
+  renders inspect-only, consumes SDL quit, and returns the original error.
 
-- [ ] Two clients use one authoritative headless server.
-- [ ] Join-in-progress reconstructs valid GPU-independent world state.
-- [ ] Character and vehicle ownership transitions remain consistent under latency/loss.
-- [ ] Server binaries link no renderer or editor dependencies.
+### S4-B — Same-build flight recorder and replay
+
+- [x] Define separate simulation, world-configuration, and content cohort
+  fingerprints for the current toolchain/build, explicit Jolt worker count,
+  constructed world parameters, and S3 cooked bundle identity.
+- [x] Admit capture only at a typed cold replayable boundary before the first
+  authoritative command/tick. Do not treat the then-current Snapshot V5 as a mid-run Jolt
+  continuation checkpoint; reject unsupported capture points structurally.
+- [x] Record a bounded versioned flight-recorder envelope containing bootstrap
+  commands, tick-addressed semantic commands at the `Simulation.submit*`
+  boundary, nondeterministic logical ingress at its consumption tick, and
+  canonical per-tick category digests.
+- [x] Replay captures headlessly and report the first divergent tick/category.
+- [x] Capture every authoritative mutation while excluding host-only pause and
+  presentation timing that cannot change tick-addressed logical state.
+
+#### S4-B acceptance
+
+- [x] A captured current-feature scenario replays to the same logical digest at
+  every tick on the exact supported cohort; altered ingress identifies the
+  exact first divergent tick.
+- [x] Corrupt, oversized, incompatible, and truncated captures fail
+  structurally before constructing or partially applying authoritative state.
+- [x] Replay introduces no cross-platform or bit-identical Jolt guarantee.
+
+### S4-C — Physics visualization and focused profiling
+
+- [x] Implement bounded renderer-neutral debug primitives and a Jolt-adapter
+  extraction of shapes, bounds, contacts, centers of mass, and velocities under
+  ADR-006's ownership/teardown rules.
+- [x] Expose fixed named CPU phase spans, draw counts, streaming/upload spans,
+  and the existing memory/count budgets. Use Instruments and Metal capture for
+  deep Apple-platform profiling instead of creating a generic tracing service.
+- [x] Prove one current crate/character/vehicle/district contact-alignment
+  scenario through adapter/headless assertions and the installed Metal
+  render-command path; pixel and physical-display output remain explicit
+  nonclaims.
+- [x] Keep remote telemetry services and generic profiler infrastructure outside
+  this slice.
+
+#### S4-C acceptance
+
+- [x] Physics debug extraction exports no raw Jolt types, survives repeated
+  enable/disable/teardown, and adds no renderer/editor dependency to headless
+  artifacts.
+- [x] Diagnostics and visualization change no authoritative state, save bytes,
+  body mode, lifecycle behavior, or release ownership.
+- [x] Debug, ReleaseFast, installed Metal, and source-package gates pass for all
+  three S4 stages.
+
+Complete governing decision and staged design:
+[ADR-010](docs/adr/010-developer-diagnostics-replay-and-debug-visualization.md)
+and [S4 developer diagnostics](docs/design/s4-developer-diagnostics.md).
 
 ---
 
-## 18. S5 — Persistent Editor Slice
+## 18. S5 — Persistent Authoring and Durable Save Slice
 
 ### Outcome
 
-An entity transform can be edited through a typed command, undone, redone, saved, restored, and observed in both simulation and presentation without violating authority.
+A crate selected by persistent identity can be relocated through a typed
+transaction, undone, redone, atomically saved to disk, restarted, restored, and
+observed in simulation and presentation without violating physics authority.
 
 ### Feature-owned scope
 
 - editor selection and transaction state;
 - authoring commands and change sets;
 - undo/redo and persistence events;
-- editor extensions registered by relevant features;
+- one optional crate-authoring editor extension;
 - diagnostics and editor integration tests.
 
 ### Work pulled by the slice
 
-- [ ] Replace direct `@constCast` mutation with commands.
-- [ ] Add transactional change sets and undo/redo.
-- [ ] Use the same versioned serializers proven by earlier slices.
-- [ ] Make selection robust to deletion and handle invalidation.
-- [ ] Preserve physics body mode/properties during manipulation.
-- [ ] Separate debug inspection from persistent authoring.
-- [ ] Let character, vehicle, and streaming features register optional editor extensions.
-- [ ] Use the same command schema for any future LLM tooling.
+- [x] Add the first typed authoring relocation command; do not reintroduce any
+  direct editor-to-Flecs/Jolt mutation path.
+- [x] Add transactional change sets and undo/redo.
+- [x] Define relocation velocity, wake, and interpolation-history semantics so
+  logical, physics, and presentation state commit together.
+- [x] Add a narrow filesystem save-slot adapter with temporary-write/commit
+  semantics, recovery, and structured I/O/incompatibility failures.
+- [x] Record schema, build, and content cohort identifiers. Under the greenfield
+  policy unsupported versions may be rejected; migration shims begin only
+  after a compatibility promise exists.
+- [x] Make selection robust to deletion and handle invalidation.
+- [x] Preserve physics body mode/properties during manipulation.
+- [x] Separate debug inspection from persistent authoring.
+- [x] Register only the crate extension pulled by this slice; later features
+  register optional extensions only when a concrete authoring consumer needs them.
+- [x] Keep future LLM/CLI tooling on the same feature command schema while
+  requiring M3 transaction-to-owner routing before another producer is admitted.
 
 ### Acceptance criteria
 
-- [ ] Transform edit → undo → redo → save → restore passes.
-- [ ] Hiding/closing the editor never changes authority or body state unexpectedly.
-- [ ] Editor builds can be excluded completely from runtime/server hosts.
-- [ ] Editor code accesses features only through registered extensions, commands, events, and queries.
+- [x] Transform edit → undo → redo → atomic save → process restart → restore
+  passes and canonical re-save is byte-stable.
+- [x] Injected write/rename failure leaves the previous committed save loadable;
+  malformed and incompatible saves fail structurally.
+- [x] Physics body, logical pose, velocity policy, and interpolation history
+  remain coherent after every transaction and rollback.
+- [x] Hiding/closing the editor never changes authority or body state unexpectedly.
+- [x] Editor builds can be excluded completely from runtime/server hosts.
+- [x] Editor code accesses features only through registered extensions, commands, events, and queries.
+
+Governing decision and staged design:
+[ADR-011](docs/adr/011-persistent-authoring-and-durable-save-slots.md) and
+[S5 persistent authoring](docs/design/s5-persistent-authoring.md). Complete
+evidence is recorded in the
+[S5 validation record](docs/validation/s5-acceptance.md).
 
 ---
 
-## 19. Continuous Capability Extraction
+## 19. S6 — Multi-District Content Workflow Slice
+
+### Outcome
+
+Two small self-authored adjacent districts are declared in one narrow catalog,
+cooked deterministically, installed independently of the repository, selected
+by coordinate, and repeatedly streamed through stable logical keys.
+
+### Work pulled by the slice
+
+- [x] Define a versioned fixed-capacity content catalog mapping coordinates and
+  semantic IDs to cooked bundle keys and declared dependencies.
+- [x] Add a second self-authored, provenance-recorded district source package.
+- [x] Make catalog/cooking deterministic and dependency-aware; one changed
+  source invalidates only its declared dependency closure.
+- [x] Extend district ownership only as required for adjacent overlap and
+  hysteresis; do not create a general VFS, CDN, asset database, or platform
+  format abstraction.
+- [x] Extend the minimal S4 exact-cohort fingerprint, which S5 records in
+  durable saves, over the canonical multi-district catalog without invalidating
+  the single-bundle replay/save contract.
+- [x] Report duplicate keys/coordinates, missing dependencies, cycles,
+  incompatible cohorts, corrupt bundles, and cook failures structurally.
+- [x] Preserve source/cooked/resident separation and engine/game packaging
+  separation. Development hot reload remains evidence-driven and optional.
+
+### Acceptance criteria
+
+- [x] Identical inputs produce byte-identical bundles and catalog; a one-source
+  change recooks the exact declared closure.
+- [x] Invalid catalogs and incompatible/corrupt bundles fail before activation.
+- [x] Both districts load/unload repeatedly within explicit worker, logical,
+  CPU, GPU, and registry budgets, including adjacent-boundary overlap.
+- [x] Installed content works from `/tmp` with no repository-relative lookup.
+- [x] Engine packaging contains only permitted/provenanced fixtures, not
+  separately licensed game-owned development content.
+
+Staged implementation and current evidence:
+[S6 design](docs/design/s6-multi-district-content.md) and
+[S6 validation record](docs/validation/s6-acceptance.md). S6-A canonical
+catalog/admission, S6-B fixed two-slot logical authority, and S6-C visual
+overlap/native closeout are complete. Both independent reviews report no
+remaining actionable P0/P1/P2 findings.
+
+---
+
+## 20. S7 — Interaction and World-Ownership Slice
+
+**Status:** Complete. The bounded ownership decision, staged checklist, and
+final evidence
+are recorded in [ADR-013](docs/adr/013-feature-owned-carry-interaction-and-district-ownership.md),
+[the S7 design](docs/design/s7-interaction-ownership.md), and
+[the S7 validation record](docs/validation/s7-acceptance.md). The versioned
+resource characterization is [the S7 baseline](docs/performance/s7-baseline.md).
+
+### Outcome
+
+The character collects one persistent world object, carries it logically
+across a streamed boundary, and drops it transactionally under the destination
+district's ownership. Save, replay, restore, and district lifecycle transitions
+preserve the object without duplication or loss.
+
+### Work pulled by the slice
+
+- [x] Add typed collect/drop commands and outcomes with authoritative proximity,
+  holder, destination, ownership, stale-ID, and duplicate checks.
+- [x] Define inventory-held versus district-owned persistence and transfer
+  entity/physics/district ownership transactionally.
+- [x] Make input, editor, replay, and future networking producers of the same
+  semantic commands rather than privileged mutation paths.
+- [x] Exercise save/restart/restore, S4 capture/replay, district unload/reload,
+  presentation, and cancellation while the object crosses ownership bounds.
+- [x] Measure a declared bounded interaction workload including commands,
+  entities, bodies, persistence bytes, and lifecycle cleanup.
+
+### Acceptance criteria
+
+- [x] Invalid range, unauthorized/stale/duplicate collect, invalid drop, and
+  unloaded destination are typed rejections with no partial mutation.
+- [x] Source-district unload cannot destroy or duplicate a held object; drop
+  commits all ownership/body state together or rolls back fully.
+- [x] Capture/replay and save/restart/restore preserve holder and district
+  ownership exactly.
+- [x] Repeated collect → cross-boundary → drop → unload cycles return
+  every entity, body, queue, and presentation resource to its expected owner or
+  exact baseline.
+- [x] Headless and installed native Metal behavior pass.
+
+---
+
+## 21. S8 — Population, Navigation, and Scale Slice
+
+**Status:** Complete and independently reviewed. The accepted boundary, staged checklist, capacities,
+and nonclaims are recorded in
+[ADR-014](docs/adr/014-bounded-district-navigation-and-feature-owned-npc-population.md),
+the [S8 design](docs/design/s8-navigation-population.md), and the
+[S8 acceptance record](docs/validation/s8-acceptance.md).
+
+### Outcome
+
+One navigation-driven NPC patrols across the two authored districts while a
+bounded population runs the same proven logical behavior at representative
+scale. District unload/reload, save/replay/restore, and lifecycle cleanup
+preserve navigation and ownership without introducing a general AI framework.
+
+### Work pulled by the slice
+
+- [x] Extend cooked district content with only the bounded navigation data
+  required by one patrol route, with structural validation and explicit bytes.
+- [x] Add a feature-owned NPC lifecycle and typed goal/locomotion commands using
+  narrow navigation and character/physics capabilities rather than private
+  feature imports.
+- [x] Transfer NPC district ownership transactionally when the patrol crosses a
+  streamed boundary; define unload, cancellation, and restore policy for an NPC
+  at or between boundaries.
+- [x] Add a fixed-capacity population controller that instantiates the same
+  proven patrol behavior for a declared scale workload.
+- [x] Keep behavior trees, crowd simulation, generic navmesh APIs, traffic,
+  combat AI, and procedural population systems outside the slice.
+- [x] Exercise S4 diagnostics/replay, S5 durable restore, S6 content cohorts,
+  and S7 ownership rules under the population workload.
+
+### Acceptance criteria
+
+- [x] The single patrol crosses both districts, survives unload/reload and
+  restart/restore, and never loses or duplicates entity/body ownership.
+- [x] Same-cohort replay preserves tick-addressed navigation commands and
+  logical state transitions; no bitwise or cross-platform Jolt guarantee is
+  implied.
+- [x] Invalid navigation data, unreachable goals, stale NPC IDs, and capacity
+  exhaustion produce bounded typed failures with no partial lifecycle commit.
+- [x] The declared population/soak workload remains within measured queue,
+  entity, body, navigation, persistence, tick, and memory budgets and returns
+  every resource to its exact baseline.
+- [x] Headless and installed native Metal behavior pass.
+
+---
+
+## 22. M3 — Pre-Server Readiness Gate
+
+### Outcome
+
+Without implementing networking, an installed server-shaped headless artifact
+can accept bounded synthetic external producers, run and restore one
+authoritative world per process, survive long virtual-time workloads, and shut
+down cleanly. Apple Silicon macOS remains the only active platform.
+
+### Work
+
+- [x] Record and enforce one simulation world per process for the current
+  zflecs cohort; keep replacement/forking as a future explicit alternative.
+- [x] Bound every externally reachable command/outcome/event queue and define
+  typed reject/backpressure/load-shed semantics.
+- [x] Before admitting CLI, automation, or any second authoring producer, add
+  bounded transaction-to-owner registration and explicit outcome delivery;
+  preserve S5's fail-closed rule that unrelated outcomes are never discarded.
+- [x] Split cold headless/server-shaped build dependency resolution from visual
+  packages, shaders, editor, GPU, and visual content.
+- [x] Add server-shaped configuration, required content fingerprints,
+  signal-driven graceful shutdown, durable restore, and fixed-tick catch-up
+  policy without creating transport or account services.
+- [x] Inventory authoritative state and trust boundaries for future S9.
+- [x] Run a versioned long-duration virtual-tick soak with synthetic producers
+  and explicit allocation, queue, entity, body, and tick budgets.
+
+### Acceptance criteria
+
+- [x] The installed headless artifact launches outside the repository without
+  SDL GPU, renderer, editor, shader, or visual-content dependencies.
+- [x] Saturation remains bounded and typed with no unbounded allocation growth.
+- [x] The one-world process model is tested through restart/failure recovery;
+  canonical durable shutdown/restart restores exact state.
+- [x] The soak finishes within declared budgets and leaves clean ownership.
+- [x] No network transport, replication, prediction, account system,
+  distributed persistence, Linux server port, or MMO operations are introduced.
+
+---
+
+## 23. S9 — Authoritative Multiplayer Slice (Conditional)
+
+**Status:** Deferred until the completed S3-C through M3 pre-multiplayer program
+is reviewed and multiplayer implementation is explicitly started. Entry
+requires M3 plus S4 diagnostics/replay, S5 durable storage, S6 fingerprints,
+S7 proven authority/ownership semantics, and S8 population/scale evidence.
+
+### Outcome
+
+Two clients connect to one headless authoritative server and observe consistent
+character, crate, vehicle, district, interaction, and population state under
+simulated latency, loss, reordering, reconnect, and cohort mismatch.
+
+### Feature-owned scope
+
+- network identity, authority, ownership, and replication components;
+- versioned input and state messages plus exact build/content/protocol cohorts;
+- connection, join, leave, reconnect, and ownership events;
+- server input application and snapshot systems;
+- client prediction, reconciliation, and interpolation as selected;
+- interest management aligned with streamed district ownership;
+- network diagnostics, authoritative-ingress capture, and fault tests.
+
+### Work pulled by the slice
+
+- [ ] Define authoritative state and trust boundaries from the M3 inventory.
+- [ ] Version command and snapshot serialization and reject build, content, or
+  protocol cohort mismatches before world admission.
+- [ ] Add server tick, input sequencing, acknowledgements, and reconciliation.
+- [ ] Keep network snapshot interpolation distinct from local presentation
+  interpolation; client prediction remains assistance rather than authority.
+- [ ] Add interest management using S6/S8 district and population ownership.
+- [ ] Deterministically queue/order contact results before replication without
+  claiming cross-platform lockstep physics.
+- [ ] Capture accepted authoritative server ingress through S4 and reproduce
+  logical server failures headlessly where the same-cohort contract permits.
+- [ ] Test join-in-progress, reconnect, loss, duplication, reordering, stale
+  ownership, queue saturation, and version mismatch.
+- [ ] Keep accounts, distributed persistence, anti-cheat, Linux deployment,
+  and MMO operations in separately approved future programs.
+
+### Acceptance criteria
+
+- [ ] Two clients use one authoritative headless server under injected latency,
+  loss, duplication, and reordering.
+- [ ] Join-in-progress and reconnect reconstruct valid GPU-independent world
+  state within the admitted content/protocol cohort.
+- [ ] Character, vehicle, interaction, district, and NPC ownership transitions
+  remain consistent under latency/loss and stale inputs are rejected.
+- [ ] Mismatched build/content/protocol cohorts fail before partial admission.
+- [ ] An accepted-ingress capture identifies the first divergent authoritative
+  tick in the same-build headless replay contract.
+- [ ] Server binaries link no renderer or editor dependencies.
+
+---
+
+## 24. Continuous Capability Extraction
 
 These are not independent “finish the subsystem” milestones. Slices pull the minimum required work from them.
 
-### 19.1 Kernel evolution
+### 24.1 Kernel evolution
 
 - feature registration and composition;
 - schedule phases, deferred mutations, and access declarations;
 - runtime/persistent identity;
 - diagnostics and configuration;
 - deterministic command/event queues;
-- world lifecycle and multiple-world behavior.
+- world lifecycle and the explicitly selected process/world model.
 
-### 19.2 Rendering evolution
+### 24.2 Rendering evolution
 
 - render extraction and presentation snapshots;
 - geometry/material/instance separation;
@@ -913,7 +1276,7 @@ These are not independent “finish the subsystem” milestones. Slices pull the
 - GPU upload queues and deferred destruction;
 - draw, visibility, upload, and GPU timing metrics.
 
-### 19.3 Asset evolution
+### 24.3 Asset evolution
 
 - typed generational handles;
 - explicit loading states and registries;
@@ -922,9 +1285,10 @@ These are not independent “finish the subsystem” milestones. Slices pull the
 - worker decode and renderer-owned upload;
 - fallback assets, cancellation, and diagnostics.
 
-### 19.4 Persistence/network evolution
+### 24.4 Persistence/network evolution
 
-- versioned schemas and migrations;
+- versioned schemas and explicit compatibility policy; migrations only after a
+  stability promise requires them;
 - stable IDs and cross-entity references;
 - chunk ownership and partial loading;
 - snapshots, command logs, and replay where slices require them.
@@ -941,7 +1305,7 @@ Before moving code from a feature into shared engine infrastructure, record:
 
 ---
 
-## 20. Findings Register
+## 25. Findings Register
 
 | ID | Finding | Priority | Target | Status |
 |---|---|---:|---|---|
@@ -950,7 +1314,7 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-003 | Zig 0.16 and pinned cohort are incompatible | P0 | M1 | Resolved |
 | F-004 | SPIR-V shaders use MSL entry point `main0` | P0 | M1 | Resolved |
 | F-005 | Primitive vertex UBO uses invalid SPIR-V descriptor set | P0 | M1 | Resolved |
-| F-006 | Windows D3D12/DXIL was not implemented | P0 | M1 | Resolved for implementation/offline build; native Windows runtime evidence is deferred until Windows is selected as a Tier 1 client target |
+| F-006 | Windows D3D12/DXIL was not implemented | P0 | M1/C2 | Historical M1 experiment removed from the active macOS-only graph; any future Windows implementation starts with a new platform decision and evidence contract |
 | F-007 | GPU resource ownership permits double/triple release | P0 | M2 | Resolved with explicit `OwnedTexture` owners and copy-safe borrowed views |
 | F-008 | Jolt shape references leak on successful body creation | P0 | M2 | Resolved |
 | F-009 | No coordinated entity/body despawn lifecycle | P0 | S0 | Resolved for CrateFeature with body-first destruction and invariant-gated entity cleanup |
@@ -964,7 +1328,7 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-017 | ImGui event recognition is mistaken for input capture | P1 | M2 | Resolved with physical/gameplay state separation and `WantCapture*` routing |
 | F-018 | No safe schedule or mutation boundary | P0 | S0 | Resolved with frozen named phases, tick-targeted typed commands, and terminal infrastructure fault policy |
 | F-019 | Transform authority contradicts ADR-005 | P0 | D-007/S0 | Resolved for dynamic crates with explicit physics authority and post-step publication |
-| F-020 | Physics capacities and worker/temp budgets are hard-coded and unmeasured | P1 | D-010/S3 | Open |
+| F-020 | Global physics capacities and representative active/contact budgets remain hard-coded or incompletely measured | P1 | D-010/S8/M3 | Resolved: named 10,240-body, 65,536-pair, 10,240-contact-constraint, 128-CharacterVirtual, and 4,096 contact-evidence budgets; world preflight, typed Jolt exhaustion mapping, contact-scratch saturation, S8 64-NPC native evidence, and M3 mixed-world soak are measured |
 | F-021 | glTF loader drops scene graph, transforms, skins, animation | P1 | S3 | Resolved for S3-B by removing the runtime loader: the cooker preserves the required nodes/transforms/instances/materials/textures and rejects unsupported skins/animation/extensions |
 | F-022 | glTF error unwinding leaks GPU resources | P1 | M2 | Resolved with mesh-first transactional prefix cleanup and explicit texture ownership |
 | F-023 | Asset uploads synchronously wait per resource | P1 | S3 | Resolved for streamed districts with bounded batched submission and query-only fence polling; unrelated procedural startup helpers remain synchronous and outside the streamed-content claim |
@@ -975,7 +1339,7 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-028 | Physics sync mixes center-of-mass and body origin | P1 | M2/S2 | Resolved |
 | F-029 | Model normals are not transformed into lighting space | P2 | M2 | Resolved with an inverse-transpose world-space normal matrix and reflected 128-byte model UBO |
 | F-030 | Main loop can busy-spin minimized/backpressured | P2 | M2 | Resolved with explicit main-window suspension, bounded SDL waits, clock resynchronization, the independent unavailable-swapchain path, and installed native minimize/restore evidence |
-| F-031 | Editor can leave bodies kinematic while hidden | P1 | M2/S5 | Superseded by removing direct Scene/Gizmo world mutation; S5 authoring must use typed commands |
+| F-031 | Editor can leave bodies kinematic while hidden | P1 | M2/S5 | Resolved in S5: the optional editor emits typed relocation requests only; hide/close/exclusion authority invariants and native Metal evidence pass |
 | F-032 | Scale recreation destroys body before replacement | P1 | M2/S5 | Superseded by removing direct Scene/Gizmo world mutation; future scale authoring is transactional feature work |
 | F-033 | CI and behavior coverage are shallow | P0 | M1 | Resolved for Apple Silicon macOS; secondary platforms are outside the current contract under D-009 |
 | F-034 | Engine license is not selected | P0 | Owner/release | Deferred by owner; distribution blocked |
@@ -990,12 +1354,12 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-043 | Raw body IDs can alias bodies in another/recreated world or after Jolt's 8-bit slot generation wraps | P0 | M2/S0 | Resolved with world qualification, an engine-owned 64-bit body serial map, and >256-reuse stale-handle tests |
 | F-044 | Mesh and decoded-image byte-size arithmetic can overflow before GPU upload | P0 | M2 | Resolved with checked nonzero `usize` arithmetic and SDL `u32` bounds |
 | F-045 | Renderer teardown can release resources with an acquired frame still live | P1 | M2 | Resolved by ending and submitting any live frame before resource teardown |
-| F-046 | zflecs permits one owned world, preventing successful atomic old/new snapshot replacement | P0 | pre-server/S4 | Accepted for the single-player S0 host; a shared lease returns a defined error and a wrapper decision is required before multi-world server work |
+| F-046 | zflecs permits one owned world, preventing successful atomic old/new snapshot replacement | P0 | M3/S9 | Accepted as one authoritative world per process for M3; replacing/forking the wrapper requires a later explicit product need |
 | F-047 | Flecs/Jolt finite native generations can revive long-lived stale handles | P0 | S0 | Resolved with engine-owned monotonic runtime/body serials and membership validation |
 | F-048 | The headless boundary gate depended on executable shell-script mode and failed from Zig packages/Windows | P0 | M1/S0 | Resolved with a host-built Zig verifier and extracted-package headless test |
 | F-049 | Command deferral/rejection depended on system order and expected stale commands faulted the world | P0 | S0 | Resolved with tick-targeted queue entries and typed rejected outcomes |
 | F-050 | S0 design promised a public game-specific Simulation while the engine package exposes feature-authoring primitives | P1 | S0 | Resolved in the design brief: concrete crate composition is an internal conformance host |
-| F-051 | S0 command/outcome buffers have no backpressure | P1 | pre-network/S4 | Open; measure and bound before external/network producers |
+| F-051 | S0 command/outcome buffers have no backpressure | P1 | M3/S9 | Resolved in M3: every feature and external producer edge has fixed reservations, typed rejection, diagnostics, full/reject/drain/reuse tests, and integrated ownership evidence |
 | F-052 | Motion-type changes left Jolt bodies in the old collision/object layer | P0 | M2/S0 | Resolved with one motion-to-layer mapping and a static-to-dynamic landing regression |
 | F-053 | Teardown/rollback swallowed body-destruction failures and could discard the only live handle | P0 | S0 | Resolved by preserving body-first ordering and treating cleanup failures as terminal invariant violations before entity removal |
 | F-054 | Public `RuntimeId` exposed the raw Flecs entity value despite the backend-neutral API claim | P0 | S0 | Resolved with a public runtime-token/serial handle and a kernel-private serial-to-Flecs index |
@@ -1003,7 +1367,7 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-056 | A valid V1 velocity could be silently clamped by Jolt during restore | P0 | S0 | Resolved with engine-level linear/angular magnitude limits matching the configured Jolt representation and boundary tests |
 | F-057 | Visual S0 still depended on the prototype `GameWorld` and borrowed Flecs/Jolt ownership | P0 | S0 | Resolved by one owned `Simulation` composition and deletion of the compatibility/editor mutation path |
 | F-058 | Outcome FIFO used quadratic front removal at the measured 1,024-crate cap | P1 | S0 | Resolved with a compacting cursor FIFO; measured bulk drain fell from roughly 0.36–0.38 ms to 0.001–0.004 ms and streaming retention is bounded |
-| F-059 | A cold headless-only build still resolves visual package dependencies even though its source graph and binary are isolated | P2 | M1/pre-server | Open; split build-graph dependency resolution before a server-only distribution workflow |
+| F-059 | A cold headless-only build still resolves visual package dependencies even though its source graph and binary are isolated | P2 | M3/S9 | Resolved in M3: `-Dproduct=headless` branches before visual resolution and passes isolated-package/cache extracted Debug and ReleaseFast builds plus source/import/marker/linkage/install allowlists |
 | F-060 | Pinned JoltC CharacterVirtual settings initialization leaks its fallback empty-shape settings path | P0 | S1 | Resolved by explicitly constructing the exact Jolt 5.5 settings and releasing every caller-owned capsule/decorator reference |
 | F-061 | CrateFeature owned the world snapshot schema, clock, namespace, and identity cursor, preventing clean second-feature persistence | P0 | S1 | Resolved with feature-owned V1 records and a composition-owned V2 envelope with cross-feature identity validation |
 | F-062 | Unbounded character gravity eventually exceeded the engine/Jolt velocity contract and faulted a healthy runtime | P1 | S1 | Resolved with validated terminal-fall policy, final representability saturation, and a 3,600-tick diagonal free-fall regression |
@@ -1013,21 +1377,23 @@ Before moving code from a feature into shared engine infrastructure, record:
 | F-066 | Release events from an ImGui platform window could clear a main-window gameplay hold | P2 | S1 | Resolved by main-window filtering key/button releases and secondary-window regressions |
 | F-067 | The S1 measurement percentile test was compile-only and CI did not verify distribution fields or post-despawn state | P2 | S1 | Resolved by executing the tool test, reporting cleanup counts, and strengthening the CI schema smoke |
 | F-068 | Historical Windows execution fails on the first Flecs identity component write | P1 | Future Windows port | Recorded only; Windows has no current gates or support claim, so investigate only if a future product decision selects Windows |
+| F-069 | The normal visual host treated the valid vehicle `driver_carrying` rejection as fatal even though feature authority stayed healthy | P1 | S7 | Resolved by narrowly classifying expected interactive domain rejections, recording them in the bounded diagnostic journal, and retaining fatal handling for authority failures |
 
 ---
 
-## 21. Verification Strategy
+## 26. Verification Strategy
 
-### 21.1 Required build checks
+### 26.1 Required build checks
 
 - clean Debug and ReleaseFast builds;
 - clean tests and formatting;
 - macOS MSL/reflection shader contract checks;
 - installed-runtime smoke test outside the repository;
 - headless host build and world smoke test;
-- editor/server dependency exclusion checks.
+- editor/headless dependency exclusion checks plus the implemented M3 cold
+  server-shaped product exclusion gate.
 
-### 21.2 Vertical slice contract
+### 26.2 Vertical slice contract
 
 Every slice must include, as applicable:
 
@@ -1039,7 +1405,7 @@ Every slice must include, as applicable:
 - performance measurements at the intended scale;
 - dependency-graph/architecture fitness checks.
 
-### 21.3 Architecture fitness checks
+### 26.3 Architecture fitness checks
 
 - Kernel imports no SDL, Jolt, ImGui, host, or game-feature implementation.
 - Server/headless builds link no renderer/editor libraries.
@@ -1049,13 +1415,18 @@ Every slice must include, as applicable:
 - Rendering cannot mutate authoritative simulation data.
 - Worker callbacks cannot directly mutate ECS/gameplay/editor state.
 
-### 21.4 Performance measurements
+### 26.4 Performance measurements
 
-Reproducible records now cover S0 through the S3-A procedural foundation; the
-latest is [`docs/performance/s3a-baseline.md`](docs/performance/s3a-baseline.md).
-Each `measure-s*` target emits versioned JSON, and CI gates schema, declared
-workload behavior, bounded counts/bytes, and cleanup—not noisy wall-time
-thresholds.
+Timed ReleaseFast characterizations cover S0 through S3-A. S3-B records the
+cooked/staged/GPU resource boundary in
+[`docs/performance/s3b-baseline.md`](docs/performance/s3b-baseline.md), and S3-C
+adds installed streaming lifecycle/cadence evidence in
+[`docs/performance/s3c-baseline.md`](docs/performance/s3c-baseline.md). S4-C's
+[`docs/performance/s4c-baseline.md`](docs/performance/s4c-baseline.md) is a
+bounded physics-debug and fixed-profile resource record, not a new timed
+performance budget. Each existing `measure-s*` target emits versioned JSON,
+and CI gates schema, declared workload behavior, bounded counts/bytes, and
+cleanup—not noisy wall-time thresholds.
 
 Record evidence rather than relying only on target numbers:
 
@@ -1071,7 +1442,7 @@ Record evidence rather than relying only on target numbers:
 
 ---
 
-## 22. Immediate Next Actions
+## 27. Immediate Next Actions
 
 1. [x] Resolve D-001: single-player sandbox first; future authoritative online/MMO remains an aspiration.
 2. [x] Write the D-011/D-012 ADR describing feature registration, dependency rules, and commands/events/queries.
@@ -1084,7 +1455,8 @@ Record evidence rather than relying only on target numbers:
    minimize/restore evidence without adding speculative backend frameworks.
 7. [x] Write a short S0 design brief naming `CrateFeature` data, commands, systems, required capabilities, and tests.
 8. [x] Implement the S0 kernel/contracts, crate feature, Jolt composition, V1 persistence, typed visual-resource owner, and isolated headless host.
-9. [ ] Decide whether to replace/fork zflecs for multiple simultaneous worlds or accept one simulation world per server process before server architecture begins; this is explicitly not an S0 blocker.
+9. [x] Accept one simulation world per process for the M3 server-shaped gate;
+   replacing/forking zflecs remains a future explicit alternative.
 10. [x] Record below/above-simulation-rate native visual smoke, graceful teardown, and initial tick/extraction/queue measurements at the exact S0 cap.
 11. [x] Complete and independently review the S1 CharacterVirtual slice,
     including action latching, shared-world collision, interpolation,
@@ -1111,13 +1483,27 @@ Record evidence rather than relying only on target numbers:
 19. [x] Implement S3-B: self-authored cook input, versioned
     installed cooked bundle, explicit content root, generational resource
     registry, fallback rendering, and nonblocking Metal upload/cancellation.
-20. [ ] Complete S3-C only after S3-B: host-owned proximity hysteresis,
+20. [x] Complete S3-C only after S3-B: host-owned proximity hysteresis,
     installed `/tmp` native lifecycle smokes, end-to-end budgets, and final S3
     review.
+21. [x] Implement and independently review S4-A structured diagnostics/live
+    inspection, S4-B same-build capture/replay, and S4-C bounded physics
+    visualization/focused profiling.
+22. [x] Implement and independently review S5 typed authoring, bounded
+    undo/redo, and atomic durable save/restart/restore.
+23. [x] Implement and independently review S6 deterministic two-district
+    catalog/cooking/install/streaming and cohort fingerprints.
+24. [x] Implement and independently review S7 interaction ownership plus
+    cross-district collect/drop, replay, and durable restore.
+25. [x] Implement and independently review S8 bounded NPC lifecycle,
+    navigation, cross-district ownership, and representative scale/soak.
+26. [x] Close and independently review M3 bounded external-producer queues,
+    cold headless dependency isolation, durable lifecycle, and soak. Keep S9
+    multiplayer and all secondary platforms deferred.
 
 ---
 
-## 23. Progress Log
+## 28. Progress Log
 
 | Date | Change | Evidence |
 |---|---|---|
@@ -1149,3 +1535,19 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-12 | Split S3 into an honest procedural/headless foundation, cooked/Metal residency, and final boundary/native stages | ADR-009 and the S3 design contract keep source import offline, make logical activation independent of GPU residency, and retain cooked installation plus nonblocking Metal upload as explicit S3-B/C gates |
 | 2026-07-12 | Completed and independently reviewed the S3-A procedural/headless district foundation | 212/212 editor-excluded Debug, ReleaseFast, and editor-enabled tests; 19/19 extracted source-package tests; bounded joined worker with TSan/stress evidence; explicit output backpressure; crate and CharacterVirtual support-removal regressions; Snapshot V4 byte-stable restore; three-trial ReleaseFast characterization with 24/24 clean cycles; no remaining actionable P0/P1/P2 finding; full S3 remains open for S3-B/C |
 | 2026-07-12 | Completed and independently reviewed the S3-B cooked-content and Metal-residency boundary | Self-authored two-node instanced/textured glTF and provenance; deterministic explicit-LE 868-byte installed bundle; absolute content root and joined worker; scene-level generations; fallback plus one-batch nonblocking Metal upload; 344 staged CPU and 116 resident GPU bytes; 280/280 Debug, ReleaseFast, and editor-enabled tests; 28/28 extracted-package tests; installed `/tmp` verification and native Metal startup; no remaining actionable P0/P1/P2 finding; S3-C proximity/repeated lifecycle evidence remains open |
+| 2026-07-13 | Expanded and approved the complete macOS-only pre-multiplayer program while explicitly deferring S9 | Roadmap sequences S3-C, staged S4 diagnostics/replay/visualization, S5 durable authoring, S6 multi-district content, S7 interaction ownership, S8 navigation/population/scale, and M3 server-shaped readiness |
+| 2026-07-13 | Completed and independently reviewed S5 persistent crate authoring and durable save/restart | Typed post-physics relocation with exact undo/redo and replay; immutable optional editor extension; fail-closed one-producer ownership; exact-cohort envelope/world preflight; candidate and directory `F_FULLFSYNC`; installed Metal save cold-restored by a fresh editor-free process; 114/114 and 117/117 full Debug/ReleaseFast graphs with 464/464 tests, 62/62 aggregate macOS readiness, and no remaining actionable P0/P1/P2 finding |
+| 2026-07-13 | Completed and independently reviewed S3-C and closed the full S3 streamed-district slice | Host-owned finite AABB hysteresis; deterministic in-decode cancellation; typed logical cancellation/unload; nonblocking Metal fallback/residency/drain; fail-closed scene generations; poisoned-environment installed `/tmp` smokes at 240/80 Hz; exact 344-byte staged CPU and 116-byte upload/resident peaks; 72/72 focused and 295/295 Debug, ReleaseFast, and editor-enabled tests; 28/28 extracted-package tests; no remaining actionable P0/P1/P2 finding |
+| 2026-07-13 | Completed and independently reviewed S4-A structured diagnostics/live inspection | Fixed 256-entry runtime journal and one-shot freeze policy; immutable first fault; typed feature/worker/stream/GPU snapshots; optional host capabilities; compact text/JSON/headless/ImGui consumers; pause/step/scale controls; resident-district production fault-loop proof with frozen content/GPU progress and original-error return; 332/332 Debug, ReleaseFast, and editor-enabled tests; 31/31 extracted-package tests; 41/41 aggregate native macOS steps; no remaining actionable P0/P1/P2 finding |
+| 2026-07-13 | Completed and independently reviewed S4-B same-cohort flight recording/replay | Cold typed admission; exact simulation/world/content/CPU/Jolt cohort; bounded canonical little-endian envelope; feature-owned per-tick digests; consumed asynchronous district ingress; hostile-input preflight before world acquisition; standalone SDL/editor/GPU-free verifier; exact command and valid district-ingress divergence; 369/369 Debug, ReleaseFast, and editor-enabled tests; 47/47 extracted-package tests; 46/46 aggregate native macOS steps; no remaining actionable P0/P1/P2 finding |
+| 2026-07-13 | Completed and independently reviewed S4-C and closed the full S4 developer-diagnostics slice | Bounded renderer-neutral physics evidence and optional rigid-contact capture; fixed three-slot Metal overlay with six GPU/six transfer buffers and distinct copy/post-submit fence ownership; fixed phase/frame profiling; optional CPU/GPU diagnostics degradation; 420/420 Debug and ReleaseFast tests, 420/420 editor-enabled tests, 48/48 extracted-package tests, 37/37 installed native steps, and 47/47 aggregate ReleaseFast macOS readiness steps; 600 native draws/post-submit fences with zero primitive/backpressure drops; no remaining actionable P0/P1/P2 finding |
+| 2026-07-13 | Completed S6-A canonical catalog, deterministic dependency-aware cooking, and exact admission | Fixed-capacity explicit-LE catalog with typed graph failures and closure queries; distinct provenanced east fixture; real west -> east -> catalog build edges; byte-identical repeat cooks; installed `/tmp` admission of both exact bundles; domain-separated catalog cohort with legacy bundle fingerprint pinned; 20/20 cooker steps and 18/18 content tests |
+| 2026-07-13 | Completed S6-B fixed two-slot logical authority and cold persistence/replay integration | One loader over two canonical slots; two real-Jolt districts/six bodies; independent neighbor-preserving cancel/failure/unload/reload; transactional 0/1/2 restore; Snapshot V5 and replay cohort 3; catalog-backed two-district replay and fresh durable restore; extracted source package 59/59 steps and 95/95 tests; S6-C visual/native review remains |
+| 2026-07-13 | Completed and independently reviewed S6-C and closed the full S6 multi-district slice | Exact west/east startup catalog contract; two fixed visual slots over one worker/registry; per-generation content/logical/GPU routing and recycling; truthful two-slot production diagnostics; three forward/reverse installed Metal overlap cycles at 240/80 Hz with exact two-scene/232-byte peak and complete drain; 493/493 tests across Debug/ReleaseFast/editor-off/on, 95/95 extracted-package tests; corrected rollback, diagnostics, cadence, and fail-fast findings; no remaining actionable P0/P1/P2 finding |
+| 2026-07-13 | Completed and independently reviewed S7 interaction ownership and closed the slice | Feature-owned district/held/dormant carryable authority; transactional collect/drop and rollback; Snapshot V6/replay cohort 4; held+dormant cold restart; shared input/editor semantic mailbox; installed Metal lifecycle at 240/80 Hz; 128 real-Jolt ownership cycles with held-owner cancellation and 11,033 commands; 519/519 tests in all Debug/ReleaseFast/editor modes; 65/65-step extracted package and 72/72-step native readiness; no remaining actionable P0/P1/P2 finding |
+| 2026-07-13 | Began S8 with an accepted bounded route/population contract | ADR-014 fixes cooked district route authority, feature-owned NPC lifecycle, 64-instance scale, CharacterVirtual capacity, persistence/replay cohorts, stage gates, and explicit AI/networking nonclaims before implementation |
+| 2026-07-13 | Completed and independently reviewed S8-A cooked-route and standalone NPC authority | Recipe/bundle V2 exact route admission; generation-aware live access plus pure pre-authority traversal validation; bounded 64-NPC lifecycle and stateless producer; global 128 CharacterVirtual ceiling; retained-handle half-open transfer; compact hostile-record preflight; 541/541 full Debug and ReleaseFast tests; 158/158 extracted-package tests; no remaining actionable P0/P1/P2 finding |
+| 2026-07-13 | Completed and independently reviewed S8-B composition, persistence, and replay | Snapshot V7 and replay cohort 5; exact 64-NPC/128-controller preflight; real-Jolt wait/cancel/cross/dormancy/resume/cold-restore lifecycle; full FIFO NPC output/event digest; installed exact-category replay divergence; active/waiting/dormant canonical durable restart; 547/547 editor-free Debug tests and focused Debug/ReleaseFast gates; review findings corrected with no remaining actionable P0/P1/P2 finding |
+| 2026-07-13 | Completed and independently reviewed S8-C and closed the full S8 population/scale slice | Exact 64-identity installed Metal lifecycle at 240/80 Hz; direct Physics-global controller evidence; three-pair 16,384-tick ReleaseFast scale measurement with 0.491250 ms worst p99, 124,296-byte allocation delta, and 2,457,600-byte RSS delta; 4,096-tick replay; saturated FIFO recovery; 558/558 tests in all editor/optimization modes; 169/169 extracted-source tests; review findings corrected with no remaining actionable P0/P1/P2 finding |
+| 2026-07-13 | Completed and independently reviewed M3 and closed the entire pre-multiplayer program | Cold Apple Silicon macOS product with exact three-file install and only `libSystem` dynamic linkage; one-world owner loop; exact config/content/save admission; two bounded generational producers; healthy saturation and retained fault evidence; real signal, lag, storage, corruption, restart, and committed-observability lifecycle matrix; three 32,768-tick ReleaseFast trials plus a 131,072-tick long run; 152/152 full Debug/ReleaseFast steps with 589/589 tests, 96/96 extracted-source steps with 193/193 tests, 26/26 cold-product steps with 51/51 tests, and 74/74 native macOS readiness steps; no remaining actionable P0/P1/P2 finding; S9 and secondary platforms remain deferred |
+| 2026-07-13 | Completed and independently reviewed the post-M3 greenfield cleanup | Removed obsolete cohorts, aliases, demo art, deferred-platform paths, dead APIs, and unused dependency capabilities; separated normal client and validation compositions at compile time; made editor state instance-owned; moved installed content policy into the sandbox; shared bounded queue/cohort mechanics without a generic bus; exact Zig/native-target and binary/package boundaries enforced; final 169/169, 589/589 editor-free aggregates, 172/172 editor-enabled aggregate, 80/80 native readiness, 98/98 and 196/196 extracted source gate, and 32/32 and 52/52 extracted cold gate pass; no remaining actionable P0/P1/P2 finding |

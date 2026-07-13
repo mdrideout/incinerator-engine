@@ -1,5 +1,10 @@
 # S3-B Cooked and Resident Resource Baseline
 
+> **Historical phase baseline.** Measurements and limits below are preserved as
+> recorded for this slice; they are not measurements of the current tree. See
+> the [current macOS readiness record](../validation/macos-readiness.md) and
+> [cleanup plan](../../CLEANUP_PLAN.md).
+
 **Date:** 2026-07-12  
 **Platform:** Apple Silicon macOS / Metal  
 **Mode:** Debug native startup characterization; capacities are enforced in all

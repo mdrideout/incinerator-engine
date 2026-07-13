@@ -57,11 +57,10 @@ pub fn build(
         .optimize = optimize,
     });
     native.link_libc = true;
-    if (target.result.abi != .msvc) native.link_libcpp = true;
+    native.link_libcpp = true;
 
     native.addIncludePath(zgui.path("libs"));
     native.addIncludePath(zgui.path("libs/imgui"));
-    native.addIncludePath(zgui.path("libs/implot"));
     native.addIncludePath(sdl.path("include"));
 
     native.addCMacro("IMGUI_DISABLE_OBSOLETE_FUNCTIONS", "");
@@ -81,10 +80,6 @@ pub fn build(
             "libs/imgui/imgui_tables.cpp",
             "libs/imgui/imgui_draw.cpp",
             "libs/imgui/imgui_demo.cpp",
-            "src/zplot.cpp",
-            "libs/implot/implot_demo.cpp",
-            "libs/implot/implot.cpp",
-            "libs/implot/implot_items.cpp",
             "libs/imgui/backends/imgui_impl_sdl3.cpp",
             "libs/imgui/backends/imgui_impl_sdlgpu3.cpp",
         },

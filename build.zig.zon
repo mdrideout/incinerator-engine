@@ -35,6 +35,7 @@
         .sdl = .{
             .url = "git+https://github.com/castholm/SDL.git#1b67d371a531ecb0499d4b80a865631c299f472a",
             .hash = "sdl-0.5.2+3.4.12-SDL--qPKpwHc40bqAlYs7W9pXJVyLwsGDNa4shNXbOZr",
+            .lazy = true,
         },
         .joltc = .{
             .path = "third_party/joltc-zig",
@@ -47,14 +48,17 @@
         .zmath = .{
             .url = "git+https://github.com/zig-gamedev/zmath.git#9e42b04a24c970a297b365f3d3022f92dbf3219d",
             .hash = "zmath-0.11.0-dev-wjwivTwtAwDOjG2_KGP-HLtHrONfsFfHttalmxFAGVAK",
+            .lazy = true,
         },
         .zmesh = .{
             .url = "git+https://github.com/zig-gamedev/zmesh#a0efcc452eab17550ad5525df2293009e9cbaf66",
             .hash = "zmesh-0.11.0-dev-oO3A5kqTCgAF9nWzOGHywV6-07-wJRUIMm1RH7BlCTHb",
+            .lazy = true,
         },
         .zstbi = .{
             .url = "git+https://github.com/zig-gamedev/zstbi#3813f5f113b26f644cfa01a30155cc76b3526e91",
             .hash = "zstbi-0.11.0-dev-L0Ea_3GWBwAh7m54XX055vwLKPTPij5hyqyeq92MXPE2",
+            .lazy = true,
         },
         .zflecs = .{
             .url = "git+https://github.com/zig-gamedev/zflecs.git#9c2771cf0cae508db622821bb7deac6e9370a9de",
@@ -64,11 +68,13 @@
     .paths = .{
         ".zigversion",
         ".github",
+        "CLEANUP_PLAN.md",
         "README.md",
         "OVERHAUL_PLAN.md",
         "PLAN_001.md",
         "build.zig",
         "build.zig.zon",
+        "config",
         "docs",
         "fixtures",
         "shaders",

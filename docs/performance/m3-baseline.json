@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "benchmark": "m3-pre-server-readiness",
+  "recorded_at": "2026-07-13",
+  "machine": {
+    "cpu": "Apple M2 Max",
+    "memory_bytes": 68719476736,
+    "macos_version": "15.7.7",
+    "macos_build": "24G720"
+  },
+  "methodology": "three fresh ReleaseFast workload processes; absolute getrusage max RSS",
+  "cohort": {
+    "zig_version": "0.16.0",
+    "optimize": "ReleaseFast",
+    "target_arch": "aarch64",
+    "target_os": "macos",
+    "config": "m3-config-v1:namespace=93001,crates=8,characters=1,vehicles=1,npcs=64,ground=true,producers=2,quota=8,ingress=16,transactions=16,results=8",
+    "scenario": "m3-scenario-v3:district-cancel-activate-unload-reload,s2-live-vehicle,s7-collect-drop,s8-64-npcs,two-producer-relocation-saturation,draining-stop,canonical-cold-restore",
+    "required_ticks": 32768
+  },
+  "ceilings": {
+    "p99_authority_tick_ns": 8333333,
+    "snapshot_payload_bytes": 131072,
+    "save_envelope_bytes": 131072,
+    "allocator_peak_bytes": 67108864,
+    "max_rss_bytes": 134217728
+  },
+  "trials": [
+    {
+      "trial": 1,
+      "completed_ticks": 32768,
+      "authority_tick_ns": {
+        "samples": 32768,
+        "total_ns": 12091515552,
+        "mean_ns": 369003.7705078125,
+        "p50_ns": 365667,
+        "p95_ns": 418542,
+        "p99_ns": 474208,
+        "max_ns": 2169292
+      },
+      "authority_ticks_per_second": 2709.999409013703,
+      "whole_run_elapsed_ns": 12321126084,
+      "whole_run_ticks_per_second": 2659.4971739273046,
+      "allocator_peak_bytes": 733394,
+      "allocator_final_live_bytes": 0,
+      "max_rss_bytes": 19955712,
+      "snapshot_payload_bytes": 34441,
+      "save_envelope_bytes": 34633,
+      "canonical_before_restart": true,
+      "canonical_after_restore": true,
+      "all_ceilings_passed": true
+    },
+    {
+      "trial": 2,
+      "completed_ticks": 32768,
+      "authority_tick_ns": {
+        "samples": 32768,
+        "total_ns": 12186809860,
+        "mean_ns": 371911.9219970703,
+        "p50_ns": 363792,
+        "p95_ns": 414333,
+        "p99_ns": 560500,
+        "max_ns": 10242958
+      },
+      "authority_ticks_per_second": 2688.808669080195,
+      "whole_run_elapsed_ns": 12414714250,
+      "whole_run_ticks_per_second": 2639.4485881944483,
+      "allocator_peak_bytes": 733394,
+      "allocator_final_live_bytes": 0,
+      "max_rss_bytes": 21708800,
+      "snapshot_payload_bytes": 34441,
+      "save_envelope_bytes": 34633,
+      "canonical_before_restart": true,
+      "canonical_after_restore": true,
+      "all_ceilings_passed": true
+    },
+    {
+      "trial": 3,
+      "completed_ticks": 32768,
+      "authority_tick_ns": {
+        "samples": 32768,
+        "total_ns": 12020033527,
+        "mean_ns": 366822.3122253418,
+        "p50_ns": 364166,
+        "p95_ns": 413083,
+        "p99_ns": 472458,
+        "max_ns": 8785917
+      },
+      "authority_ticks_per_second": 2726.1155242533127,
+      "whole_run_elapsed_ns": 12242311958,
+      "whole_run_ticks_per_second": 2676.6186086760395,
+      "allocator_peak_bytes": 733394,
+      "allocator_final_live_bytes": 0,
+      "max_rss_bytes": 21594112,
+      "snapshot_payload_bytes": 34441,
+      "save_envelope_bytes": 34633,
+      "canonical_before_restart": true,
+      "canonical_after_restore": true,
+      "all_ceilings_passed": true
+    }
+  ],
+  "observed_maxima": {
+    "p99_authority_tick_ns": 560500,
+    "max_authority_tick_ns": 10242958,
+    "allocator_peak_bytes": 733394,
+    "max_rss_bytes": 21708800,
+    "snapshot_payload_bytes": 34441,
+    "save_envelope_bytes": 34633
+  },
+  "long_cohort": {
+    "required_ticks": 131072,
+    "completed_ticks": 131072,
+    "p99_authority_tick_ns": 477875,
+    "max_authority_tick_ns": 8077958,
+    "authority_ticks_per_second": 2717.203099605379,
+    "whole_run_ticks_per_second": 2670.6463904357975,
+    "allocator_peak_bytes": 1519514,
+    "allocator_final_live_bytes": 0,
+    "max_rss_bytes": 22626304,
+    "snapshot_payload_bytes": 34337,
+    "save_envelope_bytes": 34529,
+    "canonical_before_restart": true,
+    "canonical_after_restore": true,
+    "shutdown_drained": true,
+    "all_ceilings_passed": true
+  },
+  "deterministic_gates": {
+    "all_completed_exactly": true,
+    "all_allocator_final_live_zero": true,
+    "all_canonical_before_and_after_restore": true,
+    "all_saturation_recovery_passed": true,
+    "all_completion_isolated": true,
+    "all_shutdown_drained": true,
+    "all_ceilings_passed": true
+  }
+}

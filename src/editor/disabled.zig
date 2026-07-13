@@ -1,28 +1,80 @@
-//! Compile-time editor stub used by runtime and headless-style builds.
+//! Compile-time editor implementation for product builds without ImGui.
+//!
+//! The API mirrors editor.Editor so the application and input pump retain the
+//! same explicit ownership and routing shape in both build configurations.
 
-pub const EventRoute = struct {
-    keyboard_reserved: bool = false,
-    mouse_reserved: bool = false,
+const renderer_module = @import("../renderer.zig");
+const input = @import("../input.zig");
+const sdl = @import("../sdl.zig");
+const tool = @import("tool.zig");
+
+pub const AuthoringCrateView = tool.AuthoringCrateView;
+pub const AuthoringFeedbackStatus = tool.AuthoringFeedbackStatus;
+pub const AuthoringFeedback = tool.AuthoringFeedback;
+pub const SaveFeedbackStatus = tool.SaveFeedbackStatus;
+pub const SaveFeedback = tool.SaveFeedback;
+pub const CrateAuthoringView = tool.CrateAuthoringView;
+pub const InteractionView = tool.InteractionView;
+pub const FrameInput = tool.FrameInput;
+
+pub const EventRoute = input.EventRoute;
+
+pub const Editor = struct {
+    pub fn init(_: anytype, _: anytype, _: anytype) Editor {
+        return .{};
+    }
+
+    pub fn deinit(_: *Editor) void {}
+
+    pub fn processEvent(_: *Editor, _: anytype) EventRoute {
+        return .{};
+    }
+
+    pub fn eventSink(self: *Editor) input.EventSink {
+        return .{
+            .context = self,
+            .process_event = routeInputEvent,
+            .capture = inputCapture,
+        };
+    }
+
+    pub fn draw(
+        _: *Editor,
+        _: *renderer_module.Renderer,
+        _: FrameInput,
+    ) void {}
+
+    pub fn wantsMouse(_: *const Editor) bool {
+        return false;
+    }
+
+    pub fn wantsKeyboard(_: *const Editor) bool {
+        return false;
+    }
+
+    pub fn isVisible(_: *const Editor) bool {
+        return false;
+    }
+
+    fn routeInputEvent(
+        context: *anyopaque,
+        event: *const sdl.c.SDL_Event,
+    ) input.EventRoute {
+        const self: *Editor = @ptrCast(@alignCast(context));
+        return self.processEvent(event);
+    }
+
+    fn inputCapture(_: *anyopaque) input.Capture {
+        return .{};
+    }
 };
 
-pub fn init(_: anytype, _: anytype, _: anytype) void {}
-
-pub fn deinit() void {}
-
-pub fn processEvent(_: anytype) EventRoute {
-    return .{};
-}
-
-pub fn draw(_: anytype, _: anytype, _: anytype) void {}
-
-pub fn wantsMouse() bool {
-    return false;
-}
-
-pub fn wantsKeyboard() bool {
-    return false;
-}
-
-pub fn isVisible() bool {
-    return false;
+test "disabled editor reserves and captures no input" {
+    var disabled = Editor.init(null, null, null);
+    const route = disabled.processEvent(null);
+    try @import("std").testing.expect(!route.keyboard_reserved);
+    try @import("std").testing.expect(!route.mouse_reserved);
+    try @import("std").testing.expect(!disabled.wantsKeyboard());
+    try @import("std").testing.expect(!disabled.wantsMouse());
+    try @import("std").testing.expect(!disabled.isVisible());
 }
