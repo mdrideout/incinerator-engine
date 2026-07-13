@@ -110,6 +110,9 @@ zig build measure-s0 -Doptimize=ReleaseFast -Deditor=false
 # Record the ReleaseFast S1 character-slice characterization
 zig build measure-s1 -Doptimize=ReleaseFast -Deditor=false
 
+# Record the ReleaseFast S2 occupied-vehicle characterization
+zig build measure-s2 -Doptimize=ReleaseFast -Deditor=false
+
 # Self-terminating native visual cadence/shutdown checks
 zig build run -Deditor=false -- \
   --visual-smoke --frames=480 --virtual-render-hz=240
@@ -122,13 +125,22 @@ zig build run -Deditor=false -- \
 zig build run -Deditor=false -- \
   --s1-visual-smoke --frames=160 --virtual-render-hz=80
 
+# Run the S2 vehicle/steering/collision/authority smoke above and below tick rate
+zig build run -Deditor=false -- \
+  --s2-visual-smoke --frames=1440 --virtual-render-hz=240
+zig build run -Deditor=false -- \
+  --s2-visual-smoke --frames=480 --virtual-render-hz=80
+
 # Run the serialized Tier-1 installed-runtime readiness gate. This launches
 # the installed ReleaseFast Mach-O from /tmp, not Zig's cache artifact.
 zig build test-macos-readiness \
   -Doptimize=ReleaseFast -Deditor=false
 
-# The three native gates can also be run independently.
+# The current three native gates can also be run independently. The historical
+# S1 visual gate remains available as a regression check.
 zig build smoke-installed-s1-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s2-macos \
   -Doptimize=ReleaseFast -Deditor=false
 zig build smoke-window-lifecycle-macos \
   -Doptimize=ReleaseFast -Deditor=false
@@ -145,9 +157,11 @@ The engine package intentionally excludes `assets`. Any GLB files under the work
 | Key | Action |
 |---|---|
 | ESC | Quit |
-| W / A / S / D | Move the character |
-| Space | Jump |
-| Right mouse + drag | Turn character / orbit camera |
+| W / A / S / D | Move the character, or throttle/reverse and steer while driving |
+| E | Enter or exit the sandbox vehicle |
+| Space | Jump on foot; service brake while driving |
+| Left Shift | Handbrake while driving |
+| Right mouse + drag | Turn/look and orbit the current control target |
 | F1 | Toggle editor UI |
 | F2 | Toggle ImGui demo |
 
@@ -167,7 +181,8 @@ The overhaul is converging on a thin kernel, feature-owned vertical slices, narr
 - [`S1 Acceptance Record`](docs/validation/s1-acceptance.md)
 - [`S1 Performance Baseline`](docs/performance/s1-baseline.md)
 - [`S2 Vehicle Slice Design`](docs/design/s2-vehicle-slice.md)
-- [`S2 Headless Acceptance Record`](docs/validation/s2-headless-acceptance.md)
+- [`S2 Acceptance Record`](docs/validation/s2-headless-acceptance.md)
+- [`S2 Performance Baseline`](docs/performance/s2-baseline.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 

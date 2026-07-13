@@ -77,11 +77,20 @@ const ProgramMode = union(enum) {
     verify_install,
     visual_smoke: VisualSmokeConfig,
     s1_visual_smoke: VisualSmokeConfig,
+    s2_visual_smoke: VisualSmokeConfig,
     window_lifecycle_smoke,
     init_failure_smoke,
 };
 
-const BootstrapProfile = enum { sandbox, s0_smoke };
+const BootstrapProfile = enum { sandbox, s0_smoke, s1_smoke, s2_smoke };
+
+const ScriptedScenario = enum { none, s1_character, s2_vehicle };
+
+const s2_enter_tick: u64 = 240;
+const s2_brake_tick: u64 = 581;
+const s2_steer_tick: u64 = 601;
+const s2_exit_tick: u64 = 661;
+const s2_required_ticks: u64 = 720;
 
 const sandbox_block = sandbox_host.StaticBox{
     .position = .{ 0, 1, -5 },
@@ -96,6 +105,8 @@ const FramePresentation = struct {
     character_count: usize,
     character_id: ?sandbox_host.PersistentId,
     character_position: ?[3]f32,
+    vehicle_count: usize,
+    vehicle_id: ?sandbox_host.PersistentId,
 };
 
 const RenderResult = union(enum) {
@@ -113,8 +124,24 @@ const RunSummary = struct {
     character_presented_frames: u64 = 0,
     character_position_changed: bool = false,
     character_jump_observed: bool = false,
+    vehicle_presented_frames: u64 = 0,
+    character_hidden_while_driving: bool = false,
+    character_visible_after_exit: bool = false,
     min_alpha: f32 = 1.0,
     max_alpha: f32 = 0.0,
+};
+
+const S2SmokeProgress = struct {
+    entered: bool = false,
+    drive_applied: bool = false,
+    steering_applied: bool = false,
+    brake_applied: bool = false,
+    steering_observed: bool = false,
+    vehicle_moved: bool = false,
+    crate_displaced: bool = false,
+    exited: bool = false,
+    vehicle_position_before_drive: ?[3]f32 = null,
+    crate_position_before_drive: ?[3]f32 = null,
 };
 
 const WindowLifecycleSummary = struct {
@@ -190,10 +217,20 @@ fn vectorChanged(comptime count: usize, first: [count]f32, current: [count]f32) 
     return false;
 }
 
+fn distanceSquared(first: [3]f32, current: [3]f32) f32 {
+    var result: f32 = 0;
+    for (first, current) |a, b| {
+        const delta = b - a;
+        result += delta * delta;
+    }
+    return result;
+}
+
 fn parseProgramMode(args: anytype) !ProgramMode {
     var verify_install = false;
     var visual_smoke = false;
     var s1_visual_smoke = false;
+    var s2_visual_smoke = false;
     var window_lifecycle_smoke = false;
     var init_failure_smoke = false;
     var frames: ?u64 = null;
@@ -210,6 +247,9 @@ fn parseProgramMode(args: anytype) !ProgramMode {
         } else if (std.mem.eql(u8, arg, "--s1-visual-smoke")) {
             if (s1_visual_smoke) return error.DuplicateArgument;
             s1_visual_smoke = true;
+        } else if (std.mem.eql(u8, arg, "--s2-visual-smoke")) {
+            if (s2_visual_smoke) return error.DuplicateArgument;
+            s2_visual_smoke = true;
         } else if (std.mem.eql(u8, arg, "--window-lifecycle-smoke")) {
             if (window_lifecycle_smoke) return error.DuplicateArgument;
             window_lifecycle_smoke = true;
@@ -236,7 +276,7 @@ fn parseProgramMode(args: anytype) !ProgramMode {
     }
 
     if (verify_install) {
-        if (visual_smoke or s1_visual_smoke or window_lifecycle_smoke or
+        if (visual_smoke or s1_visual_smoke or s2_visual_smoke or window_lifecycle_smoke or
             init_failure_smoke or frames != null or virtual_render_hz != null)
         {
             return error.ConflictingProgramModes;
@@ -245,26 +285,29 @@ fn parseProgramMode(args: anytype) !ProgramMode {
     }
     const explicit_mode_count = @as(u8, @intFromBool(visual_smoke)) +
         @as(u8, @intFromBool(s1_visual_smoke)) +
+        @as(u8, @intFromBool(s2_visual_smoke)) +
         @as(u8, @intFromBool(window_lifecycle_smoke)) +
         @as(u8, @intFromBool(init_failure_smoke));
     if (explicit_mode_count > 1) return error.ConflictingProgramModes;
-    if (!visual_smoke and !s1_visual_smoke and
+    if (!visual_smoke and !s1_visual_smoke and !s2_visual_smoke and
         (frames != null or virtual_render_hz != null))
     {
         return error.VisualSmokeOptionWithoutMode;
     }
     if (window_lifecycle_smoke) return .window_lifecycle_smoke;
     if (init_failure_smoke) return .init_failure_smoke;
-    if (!visual_smoke and !s1_visual_smoke) return .normal;
+    if (!visual_smoke and !s1_visual_smoke and !s2_visual_smoke) return .normal;
 
     const config = VisualSmokeConfig{
-        .frames = frames orelse 480,
+        .frames = frames orelse if (s2_visual_smoke) 1_440 else 480,
         .virtual_render_hz = virtual_render_hz orelse 240,
     };
     const scaled = std.math.mul(u64, config.frames, 4) catch
         return error.InvalidFrameCount;
     _ = std.math.add(u64, scaled, 120) catch return error.InvalidFrameCount;
-    return if (s1_visual_smoke)
+    return if (s2_visual_smoke)
+        .{ .s2_visual_smoke = config }
+    else if (s1_visual_smoke)
         .{ .s1_visual_smoke = config }
     else
         .{ .visual_smoke = config };
@@ -283,9 +326,12 @@ const App = struct {
     simulation: sandbox_host.Simulation,
     initial_crate_id: ?sandbox_host.PersistentId,
     initial_character_id: ?sandbox_host.PersistentId,
+    initial_vehicle_id: ?sandbox_host.PersistentId,
+    controlled_vehicle_id: ?sandbox_host.PersistentId,
     action_latch: sandbox_controls.ActionLatch,
     game_camera: camera.Camera,
     profile: BootstrapProfile,
+    s2_smoke: S2SmokeProgress,
 
     // Presentation resources remain owned by the visual host.
     ground_mesh: mesh.Mesh,
@@ -349,6 +395,14 @@ const App = struct {
                 .material = sandbox_visual_resources.character_material_handle,
             },
         };
+        const vehicle_config = sandbox_host.VehicleConfig{
+            .assets = .{
+                .chassis_mesh = sandbox_visual_resources.vehicle_chassis_mesh_handle,
+                .chassis_material = sandbox_visual_resources.vehicle_chassis_material_handle,
+                .wheel_mesh = sandbox_visual_resources.vehicle_wheel_mesh_handle,
+                .wheel_material = sandbox_visual_resources.vehicle_wheel_material_handle,
+            },
+        };
         var visuals = try sandbox_visual_resources.SandboxVisualResources.init(
             gpu_renderer.getDevice(),
             character_config.radius,
@@ -367,19 +421,40 @@ const App = struct {
             },
             .create_ground = true,
             .character = character_config,
-            .block = if (profile == .sandbox) sandbox_block else null,
+            .vehicle = vehicle_config,
+            .block = switch (profile) {
+                .sandbox, .s1_smoke => sandbox_block,
+                .s0_smoke, .s2_smoke => null,
+            },
         });
         errdefer simulation.deinit();
         try injectAppInitFailure(failure_point, .after_simulation);
         try simulation.submit(.{ .spawn = .{
             .request_id = 1,
-            .pose = .{ .position = .{ 0, 12, 0 } },
+            .pose = .{ .position = switch (profile) {
+                .s2_smoke => .{ 0, 0.5, -9 },
+                .sandbox, .s0_smoke, .s1_smoke => .{ 0, 12, 0 },
+            } },
             .velocity = .{ .angular = .{ 0.2, 0.35, 0.1 } },
         } });
-        if (profile == .sandbox) {
+        if (profile != .s0_smoke) {
             try simulation.submitCharacter(.{ .spawn = .{
                 .request_id = 1,
-                .position = .{ 0, 0, 4 },
+                .position = switch (profile) {
+                    .s2_smoke => .{ 0, 0, 2 },
+                    .sandbox, .s1_smoke => .{ 0, 0, 4 },
+                    .s0_smoke => unreachable,
+                },
+            } });
+        }
+        if (profile == .sandbox or profile == .s2_smoke) {
+            try simulation.submitVehicle(.{ .spawn = .{
+                .request_id = 1,
+                .chassis = .{ .pose = .{ .position = switch (profile) {
+                    .sandbox => .{ 0, 2, 2 },
+                    .s2_smoke => .{ 0, 2, 0 },
+                    .s0_smoke, .s1_smoke => unreachable,
+                } } },
             } });
         }
 
@@ -398,8 +473,10 @@ const App = struct {
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Controls:\n", .{});
         std.debug.print("   ESC - Quit\n", .{});
-        std.debug.print("   WASD - Move character\n", .{});
-        std.debug.print("   SPACE - Jump\n", .{});
+        std.debug.print("   WASD - Move character / drive vehicle\n", .{});
+        std.debug.print("   E - Enter / exit vehicle\n", .{});
+        std.debug.print("   SPACE - Jump / vehicle brake\n", .{});
+        std.debug.print("   LEFT SHIFT - Vehicle hand brake\n", .{});
         std.debug.print("   Right-click + drag - Turn/look\n", .{});
         std.debug.print("   F1 - Toggle editor UI\n", .{});
         std.debug.print("   F2 - Toggle ImGui demo\n", .{});
@@ -413,6 +490,8 @@ const App = struct {
             .simulation = simulation,
             .initial_crate_id = null,
             .initial_character_id = null,
+            .initial_vehicle_id = null,
+            .controlled_vehicle_id = null,
             .action_latch = .{},
             .ground_mesh = ground_mesh,
             .block_mesh = block_mesh,
@@ -423,6 +502,7 @@ const App = struct {
                 .pitch = -0.25,
             },
             .profile = profile,
+            .s2_smoke = .{},
             .debug_frame_counter = 0,
         };
     }
@@ -451,7 +531,7 @@ const App = struct {
     pub fn run(
         self: *App,
         smoke: ?VisualSmokeConfig,
-        scripted_character: bool,
+        scenario: ScriptedScenario,
     ) !RunSummary {
         var running = true;
         var summary = RunSummary{};
@@ -492,7 +572,7 @@ const App = struct {
             // Run simulation at fixed timestep. Multiple ticks may run per frame
             // if we're behind, or zero ticks if we're ahead.
             while (self.frame_timer.shouldTick()) {
-                try self.simulateTick(scripted_character);
+                try self.simulateTick(scenario);
             }
 
             // ================================================================
@@ -540,30 +620,67 @@ const App = struct {
                     } else if (self.initial_crate_id != null) {
                         return error.VisualSmokeCratePresentationMissing;
                     }
-                    if (scripted_character and self.initial_character_id != null) {
-                        if (presentation.character_count != 1) {
-                            return error.S1VisualSmokeCharacterPresentationMissing;
-                        }
-                        const presented_id = presentation.character_id orelse
-                            return error.S1VisualSmokeCharacterPresentationMissing;
-                        const spawned_id = self.initial_character_id orelse
-                            return error.S1VisualSmokeCharacterSpawnMissing;
-                        if (!std.meta.eql(presented_id, spawned_id)) {
-                            return error.S1VisualSmokePresentedWrongCharacter;
-                        }
-                        const position = presentation.character_position orelse
-                            return error.S1VisualSmokeCharacterPresentationMissing;
-                        summary.character_presented_frames += 1;
-                        if (first_character_position) |first| {
-                            summary.character_position_changed =
-                                summary.character_position_changed or
-                                vectorChanged(3, first, position);
-                            summary.character_jump_observed =
-                                summary.character_jump_observed or
-                                position[1] > first[1] + 0.1;
-                        } else {
-                            first_character_position = position;
-                        }
+                    switch (scenario) {
+                        .none => {},
+                        .s1_character => if (self.initial_character_id != null) {
+                            if (presentation.character_count != 1) {
+                                return error.S1VisualSmokeCharacterPresentationMissing;
+                            }
+                            const presented_id = presentation.character_id orelse
+                                return error.S1VisualSmokeCharacterPresentationMissing;
+                            const spawned_id = self.initial_character_id orelse
+                                return error.S1VisualSmokeCharacterSpawnMissing;
+                            if (!std.meta.eql(presented_id, spawned_id)) {
+                                return error.S1VisualSmokePresentedWrongCharacter;
+                            }
+                            const position = presentation.character_position orelse
+                                return error.S1VisualSmokeCharacterPresentationMissing;
+                            summary.character_presented_frames += 1;
+                            if (first_character_position) |first| {
+                                summary.character_position_changed =
+                                    summary.character_position_changed or
+                                    vectorChanged(3, first, position);
+                                summary.character_jump_observed =
+                                    summary.character_jump_observed or
+                                    position[1] > first[1] + 0.1;
+                            } else {
+                                first_character_position = position;
+                            }
+                        },
+                        .s2_vehicle => {
+                            if (self.initial_vehicle_id) |spawned_id| {
+                                if (presentation.vehicle_count != 1) {
+                                    return error.S2VisualSmokeVehiclePresentationMissing;
+                                }
+                                const presented_id = presentation.vehicle_id orelse
+                                    return error.S2VisualSmokeVehiclePresentationMissing;
+                                if (!std.meta.eql(presented_id, spawned_id)) {
+                                    return error.S2VisualSmokePresentedWrongVehicle;
+                                }
+                                summary.vehicle_presented_frames += 1;
+                            }
+                            if (self.initial_character_id) |spawned_id| {
+                                if (self.s2_smoke.entered and !self.s2_smoke.exited) {
+                                    if (presentation.character_count != 0) {
+                                        return error.S2VisualSmokeDrivingCharacterVisible;
+                                    }
+                                    summary.character_hidden_while_driving = true;
+                                } else {
+                                    if (presentation.character_count != 1) {
+                                        return error.S2VisualSmokeCharacterPresentationMissing;
+                                    }
+                                    const presented_id = presentation.character_id orelse
+                                        return error.S2VisualSmokeCharacterPresentationMissing;
+                                    if (!std.meta.eql(presented_id, spawned_id)) {
+                                        return error.S2VisualSmokePresentedWrongCharacter;
+                                    }
+                                    summary.character_presented_frames += 1;
+                                    if (self.s2_smoke.exited) {
+                                        summary.character_visible_after_exit = true;
+                                    }
+                                }
+                            }
+                        },
                     }
                 },
                 .unavailable => summary.unavailable_frames += 1,
@@ -609,33 +726,73 @@ const App = struct {
             }
             if (!summary.position_changed) return error.VisualSmokePositionDidNotChange;
             if (!summary.rotation_changed) return error.VisualSmokeRotationDidNotChange;
-            if (scripted_character) {
-                if (self.initial_character_id == null) {
-                    return error.S1VisualSmokeCharacterSpawnMissing;
-                }
-                if (summary.character_presented_frames == 0 or
-                    !summary.character_position_changed or
-                    !summary.character_jump_observed)
+            switch (scenario) {
+                .none => if (self.simulation.crateCount() != 1 or
+                    self.simulation.characterCount() != 0 or
+                    self.simulation.vehicleCount() != 0 or
+                    self.simulation.entityCount() != 1 or
+                    self.simulation.bodyCount() != 2)
                 {
-                    return error.S1VisualSmokeCharacterDidNotMove;
-                }
-                if (self.simulation.crateCount() != 1 or
-                    self.simulation.characterCount() != 1 or
-                    self.simulation.entityCount() != 2 or
-                    self.simulation.bodyCount() != 3)
-                {
-                    return error.S1VisualSmokeLifecycleInvariant;
-                }
-                const character = try self.simulation.character(self.initial_character_id.?);
-                if (character.position[2] < -4.2 or character.position[2] > -3.5) {
-                    return error.S1VisualSmokeBlockCollisionFailed;
-                }
-            } else if (self.simulation.crateCount() != 1 or
-                self.simulation.characterCount() != 0 or
-                self.simulation.entityCount() != 1 or
-                self.simulation.bodyCount() != 2)
-            {
-                return error.VisualSmokeLifecycleInvariant;
+                    return error.VisualSmokeLifecycleInvariant;
+                },
+                .s1_character => {
+                    if (self.initial_character_id == null) {
+                        return error.S1VisualSmokeCharacterSpawnMissing;
+                    }
+                    if (summary.character_presented_frames == 0 or
+                        !summary.character_position_changed or
+                        !summary.character_jump_observed)
+                    {
+                        return error.S1VisualSmokeCharacterDidNotMove;
+                    }
+                    if (self.simulation.crateCount() != 1 or
+                        self.simulation.characterCount() != 1 or
+                        self.simulation.vehicleCount() != 0 or
+                        self.simulation.entityCount() != 2 or
+                        self.simulation.bodyCount() != 3)
+                    {
+                        return error.S1VisualSmokeLifecycleInvariant;
+                    }
+                    const character = try self.simulation.character(self.initial_character_id.?);
+                    if (character.position[2] < -4.2 or character.position[2] > -3.5) {
+                        return error.S1VisualSmokeBlockCollisionFailed;
+                    }
+                },
+                .s2_vehicle => {
+                    if (self.simulation.tickIndex() < s2_required_ticks) {
+                        return error.S2VisualSmokeInsufficientTicks;
+                    }
+                    if (self.initial_character_id == null or self.initial_vehicle_id == null) {
+                        return error.S2VisualSmokeSpawnMissing;
+                    }
+                    if (summary.vehicle_presented_frames == 0 or
+                        !summary.character_hidden_while_driving or
+                        !summary.character_visible_after_exit or
+                        !self.s2_smoke.entered or
+                        !self.s2_smoke.drive_applied or
+                        !self.s2_smoke.steering_applied or
+                        !self.s2_smoke.brake_applied or
+                        !self.s2_smoke.steering_observed or
+                        !self.s2_smoke.vehicle_moved or
+                        !self.s2_smoke.crate_displaced or
+                        !self.s2_smoke.exited)
+                    {
+                        return error.S2VisualSmokeLifecycleEvidenceMissing;
+                    }
+                    if (self.controlled_vehicle_id != null or
+                        self.simulation.crateCount() != 1 or
+                        self.simulation.characterCount() != 1 or
+                        self.simulation.vehicleCount() != 1 or
+                        self.simulation.entityCount() != 3 or
+                        self.simulation.bodyCount() != 3)
+                    {
+                        return error.S2VisualSmokeLifecycleInvariant;
+                    }
+                    const vehicle = try self.simulation.vehicle(self.initial_vehicle_id.?);
+                    if (vehicle.driver_id != null) {
+                        return error.S2VisualSmokeDriverStillActive;
+                    }
+                },
             }
             const expected = try smokeExpectation(config);
             if (self.simulation.tickIndex() != expected.ticks) {
@@ -729,7 +886,7 @@ const App = struct {
 
             self.frame_timer.beginFrame();
             while (self.frame_timer.shouldTick()) {
-                try self.simulateTick(true);
+                try self.simulateTick(.s1_character);
             }
 
             switch (try self.render(self.frame_timer.alpha())) {
@@ -808,28 +965,42 @@ const App = struct {
             else
                 .{ 0, 0 },
             .jump_pressed = self.input_buffer.isKeyPressed(input.Key.SPACE),
+            .interact_pressed = self.input_buffer.isKeyPressed(input.Key.E),
+            .brake = self.input_buffer.isKeyDown(input.Key.SPACE),
+            .hand_brake = self.input_buffer.isKeyDown(input.Key.LSHIFT),
             .reset = self.input_buffer.gameplayActionsMustReset(),
         });
     }
 
     /// Submit one device-independent action sample before each fixed tick.
-    fn simulateTick(self: *App, scripted_character: bool) !void {
-        if (self.initial_character_id) |id| {
-            const actions = if (scripted_character)
-                sandbox_controls.TickSample{
-                    .move = .{ 0, 1 },
-                    .look_delta = .{ 0, 0 },
-                    .jump_pressed = self.simulation.tickIndex() == 60,
-                }
-            else
-                self.action_latch.takeTick();
-            self.game_camera.rotate(actions.look_delta[0], actions.look_delta[1]);
-            try self.simulation.submitCharacter(.{ .actions = .{
-                .id = id,
-                .move = actions.move,
-                .facing_yaw = self.game_camera.yaw,
-                .jump_pressed = actions.jump_pressed,
-            } });
+    fn simulateTick(self: *App, scenario: ScriptedScenario) !void {
+        const actions = switch (scenario) {
+            .none => self.action_latch.takeTick(),
+            .s1_character => sandbox_controls.TickSample{
+                .move = .{ 0, 1 },
+                .look_delta = .{ 0, 0 },
+                .jump_pressed = self.simulation.tickIndex() == 60,
+                .interact_pressed = false,
+                .brake = false,
+                .hand_brake = false,
+            },
+            .s2_vehicle => sandbox_controls.TickSample{
+                .move = .{ 0, 0 },
+                .look_delta = .{ 0, 0 },
+                .jump_pressed = false,
+                .interact_pressed = false,
+                .brake = false,
+                .hand_brake = false,
+            },
+        };
+        self.game_camera.rotate(actions.look_delta[0], actions.look_delta[1]);
+
+        switch (scenario) {
+            .none => try self.submitInteractiveActions(actions),
+            .s1_character => if (self.initial_character_id) |id| {
+                try self.submitCharacterActions(id, actions);
+            },
+            .s2_vehicle => try self.submitInteractiveActions(self.s2ScriptedActions()),
         }
         try self.simulation.tick();
         while (self.simulation.pollOutcome()) |outcome| {
@@ -855,6 +1026,177 @@ const App = struct {
             }
         }
         while (self.simulation.pollCharacterEvent()) |_| {}
+        try self.processVehicleOutcomes(scenario);
+        while (self.simulation.pollVehicleEvent()) |_| {}
+        if (scenario == .s2_vehicle) try self.observeS2State();
+    }
+
+    fn submitInteractiveActions(
+        self: *App,
+        actions: sandbox_controls.TickSample,
+    ) !void {
+        if (actions.interact_pressed) {
+            const character_id = self.initial_character_id orelse return;
+            const vehicle_id = self.initial_vehicle_id orelse return;
+            if (self.controlled_vehicle_id) |controlled_id| {
+                try self.simulation.submitVehicle(.{ .exit = .{
+                    .vehicle_id = controlled_id,
+                    .driver_id = character_id,
+                } });
+            } else {
+                try self.simulation.submitVehicle(.{ .enter = .{
+                    .vehicle_id = vehicle_id,
+                    .driver_id = character_id,
+                } });
+            }
+            // Authority transitions consume the tick without applying the same
+            // frame sample to either locomotion target.
+            return;
+        }
+
+        if (self.controlled_vehicle_id) |vehicle_id| {
+            const character_id = self.initial_character_id orelse
+                return error.ControlledVehicleMissingCharacter;
+            try self.simulation.submitVehicle(.{ .drive = .{
+                .vehicle_id = vehicle_id,
+                .driver_id = character_id,
+                .input = .{
+                    .throttle = actions.move[1],
+                    .steering = actions.move[0],
+                    .brake = if (actions.brake) 1 else 0,
+                    .hand_brake = if (actions.hand_brake) 1 else 0,
+                },
+            } });
+        } else if (self.initial_character_id) |character_id| {
+            try self.submitCharacterActions(character_id, actions);
+        }
+    }
+
+    fn submitCharacterActions(
+        self: *App,
+        character_id: sandbox_host.PersistentId,
+        actions: sandbox_controls.TickSample,
+    ) !void {
+        try self.simulation.submitCharacter(.{ .actions = .{
+            .id = character_id,
+            .move = actions.move,
+            .facing_yaw = self.game_camera.yaw,
+            .jump_pressed = actions.jump_pressed,
+        } });
+    }
+
+    fn s2ScriptedActions(self: *const App) sandbox_controls.TickSample {
+        const tick = self.simulation.tickIndex();
+        var actions = sandbox_controls.TickSample{
+            .move = .{ 0, 0 },
+            .look_delta = .{ 0, 0 },
+            .jump_pressed = false,
+            .interact_pressed = tick == s2_enter_tick or tick == s2_exit_tick,
+            .brake = false,
+            .hand_brake = false,
+        };
+        if (tick > s2_enter_tick and tick < s2_exit_tick) {
+            actions.move = .{
+                if (tick >= s2_steer_tick) 0.65 else 0,
+                1,
+            };
+            actions.brake = tick >= s2_brake_tick and tick < s2_steer_tick;
+        }
+        return actions;
+    }
+
+    fn processVehicleOutcomes(self: *App, scenario: ScriptedScenario) !void {
+        while (self.simulation.pollVehicleOutcome()) |outcome| {
+            switch (outcome) {
+                .spawned => |spawned| {
+                    if (spawned.request_id != 1 or self.initial_vehicle_id != null) {
+                        return error.UnexpectedVehicleBootstrapOutcome;
+                    }
+                    self.initial_vehicle_id = spawned.id;
+                },
+                .entered => |entered| {
+                    if (self.controlled_vehicle_id != null or
+                        !std.meta.eql(entered.vehicle_id, self.initial_vehicle_id orelse
+                            return error.UnexpectedVehicleAuthorityOutcome) or
+                        !std.meta.eql(entered.driver_id, self.initial_character_id orelse
+                            return error.UnexpectedVehicleAuthorityOutcome))
+                    {
+                        return error.UnexpectedVehicleAuthorityOutcome;
+                    }
+                    self.controlled_vehicle_id = entered.vehicle_id;
+                    if (scenario == .s2_vehicle) {
+                        self.s2_smoke.entered = true;
+                        self.s2_smoke.vehicle_position_before_drive =
+                            (try self.simulation.vehicle(entered.vehicle_id)).state.chassis.pose.position;
+                        const crate_id = self.initial_crate_id orelse
+                            return error.S2VisualSmokeCrateSpawnMissing;
+                        self.s2_smoke.crate_position_before_drive =
+                            (try self.simulation.crate(crate_id)).state.pose.position;
+                    }
+                },
+                .drive_applied => |applied| {
+                    if (!std.meta.eql(applied.vehicle_id, self.controlled_vehicle_id orelse
+                        return error.UnexpectedVehicleDriveOutcome) or
+                        !std.meta.eql(applied.driver_id, self.initial_character_id orelse
+                            return error.UnexpectedVehicleDriveOutcome))
+                    {
+                        return error.UnexpectedVehicleDriveOutcome;
+                    }
+                    if (scenario == .s2_vehicle) {
+                        self.s2_smoke.drive_applied = true;
+                        self.s2_smoke.steering_applied = self.s2_smoke.steering_applied or
+                            @abs(applied.input.steering) > 0.1;
+                        self.s2_smoke.brake_applied = self.s2_smoke.brake_applied or
+                            applied.input.brake > 0.5;
+                    }
+                },
+                .exited => |exited| {
+                    if (!std.meta.eql(exited.vehicle_id, self.controlled_vehicle_id orelse
+                        return error.UnexpectedVehicleAuthorityOutcome) or
+                        !std.meta.eql(exited.driver_id, self.initial_character_id orelse
+                            return error.UnexpectedVehicleAuthorityOutcome))
+                    {
+                        return error.UnexpectedVehicleAuthorityOutcome;
+                    }
+                    self.controlled_vehicle_id = null;
+                    if (scenario == .s2_vehicle) self.s2_smoke.exited = true;
+                },
+                .rejected => |rejected| switch (scenario) {
+                    .s1_character, .s2_vehicle => return error.ScriptedVehicleCommandRejected,
+                    .none => switch (rejected.command) {
+                        .enter => if (rejected.reason != .too_far) {
+                            return error.UnexpectedVehicleEnterRejection;
+                        },
+                        .exit => if (rejected.reason != .exit_blocked) {
+                            return error.UnexpectedVehicleExitRejection;
+                        },
+                        .spawn, .drive, .despawn => return error.UnexpectedVehicleCommandRejection,
+                    },
+                },
+                .despawned => return error.UnexpectedVehicleBootstrapOutcome,
+            }
+        }
+    }
+
+    fn observeS2State(self: *App) !void {
+        if (!self.s2_smoke.entered or self.s2_smoke.exited) return;
+        const vehicle_id = self.initial_vehicle_id orelse
+            return error.S2VisualSmokeVehicleSpawnMissing;
+        const vehicle = try self.simulation.vehicle(vehicle_id);
+        if (self.s2_smoke.vehicle_position_before_drive) |before| {
+            self.s2_smoke.vehicle_moved = self.s2_smoke.vehicle_moved or
+                distanceSquared(before, vehicle.state.chassis.pose.position) > 1;
+        }
+        self.s2_smoke.steering_observed = self.s2_smoke.steering_observed or
+            @abs(vehicle.state.wheels[0].steer_angle) > 0.05 or
+            @abs(vehicle.state.wheels[1].steer_angle) > 0.05;
+        if (self.s2_smoke.crate_position_before_drive) |before| {
+            const crate_id = self.initial_crate_id orelse
+                return error.S2VisualSmokeCrateSpawnMissing;
+            const position = (try self.simulation.crate(crate_id)).state.pose.position;
+            self.s2_smoke.crate_displaced = self.s2_smoke.crate_displaced or
+                distanceSquared(before, position) > 0.04;
+        }
     }
 
     /// Render the current frame using SDL3 GPU API
@@ -878,7 +1220,22 @@ const App = struct {
             @as(f32, @floatFromInt(window_size.height));
 
         const character_draws = try self.simulation.characterPresentation(alpha);
-        if (self.initial_character_id) |player_id| {
+        const vehicle_draws = try self.simulation.vehiclePresentation(alpha);
+        if (self.controlled_vehicle_id) |controlled_id| {
+            var vehicle_found = false;
+            for (vehicle_draws) |draw| {
+                if (std.meta.eql(draw.persistent_id, controlled_id)) {
+                    self.game_camera.followTarget(.{
+                        draw.chassis_pose.position[0],
+                        draw.chassis_pose.position[1] + 1,
+                        draw.chassis_pose.position[2],
+                    }, 8.0);
+                    vehicle_found = true;
+                    break;
+                }
+            }
+            if (!vehicle_found) return error.ControlledVehiclePresentationMissing;
+        } else if (self.initial_character_id) |player_id| {
             var player_found = false;
             for (character_draws) |draw| {
                 if (std.meta.eql(draw.persistent_id, player_id)) {
@@ -896,7 +1253,7 @@ const App = struct {
         // The ground is a visual-host fixture matching the simulation-owned
         // static body. Feature-owned entities arrive through extraction below.
         self.gpu_renderer.drawMesh(&self.ground_mesh, zm.identity(), view_proj);
-        if (self.profile == .sandbox) {
+        if (self.profile == .sandbox or self.profile == .s1_smoke) {
             const block_scale = zm.scaling(
                 sandbox_block.half_extents[0] * 2,
                 sandbox_block.half_extents[1] * 2,
@@ -937,6 +1294,59 @@ const App = struct {
             );
             const model_matrix = zm.mul(zm.mul(scale, rotation), translation);
             self.gpu_renderer.drawMesh(crate_mesh, model_matrix, view_proj);
+        }
+
+        for (vehicle_draws) |draw| {
+            const chassis_mesh = try self.visuals.resolve(
+                draw.chassis_mesh,
+                draw.chassis_material,
+            );
+            const chassis_scale = zm.scaling(
+                draw.chassis_half_extents[0] * 2,
+                draw.chassis_half_extents[1] * 2,
+                draw.chassis_half_extents[2] * 2,
+            );
+            const chassis_rotation = zm.quatToMat(zm.f32x4(
+                draw.chassis_pose.rotation[0],
+                draw.chassis_pose.rotation[1],
+                draw.chassis_pose.rotation[2],
+                draw.chassis_pose.rotation[3],
+            ));
+            const chassis_translation = zm.translation(
+                draw.chassis_pose.position[0],
+                draw.chassis_pose.position[1],
+                draw.chassis_pose.position[2],
+            );
+            self.gpu_renderer.drawMesh(
+                chassis_mesh,
+                zm.mul(zm.mul(chassis_scale, chassis_rotation), chassis_translation),
+                view_proj,
+            );
+
+            for (draw.wheels) |wheel| {
+                const wheel_mesh = try self.visuals.resolve(wheel.mesh, wheel.material);
+                const wheel_scale = zm.scaling(
+                    wheel.width,
+                    wheel.radius * 2,
+                    wheel.radius * 2,
+                );
+                const wheel_rotation = zm.quatToMat(zm.f32x4(
+                    wheel.pose.rotation[0],
+                    wheel.pose.rotation[1],
+                    wheel.pose.rotation[2],
+                    wheel.pose.rotation[3],
+                ));
+                const wheel_translation = zm.translation(
+                    wheel.pose.position[0],
+                    wheel.pose.position[1],
+                    wheel.pose.position[2],
+                );
+                self.gpu_renderer.drawMesh(
+                    wheel_mesh,
+                    zm.mul(zm.mul(wheel_scale, wheel_rotation), wheel_translation),
+                    view_proj,
+                );
+            }
         }
 
         for (character_draws) |draw| {
@@ -993,6 +1403,11 @@ const App = struct {
                 character_draws[0].pose.position
             else
                 null,
+            .vehicle_count = vehicle_draws.len,
+            .vehicle_id = if (vehicle_draws.len > 0)
+                vehicle_draws[0].persistent_id
+            else
+                null,
         } };
     }
 
@@ -1022,7 +1437,7 @@ fn runInitFailureSmoke() !RunSummary {
     };
 
     for (failure_points) |failure_point| {
-        var unexpected = App.initWithFailurePoint(.sandbox, failure_point) catch |err| {
+        var unexpected = App.initWithFailurePoint(.s1_smoke, failure_point) catch |err| {
             const expected: anyerror = if (rendererFailurePoint(failure_point) != null)
                 error.InjectedRendererInitFailure
             else
@@ -1037,9 +1452,9 @@ fn runInitFailureSmoke() !RunSummary {
     // A successful lifecycle in the same process proves that each injected
     // unwind released the SDL video runtime, window, Metal device, Jolt world,
     // and all intermediate resources needed by a later initialization.
-    var healthy = try App.init(.sandbox);
+    var healthy = try App.init(.s1_smoke);
     defer healthy.deinit();
-    return healthy.run(.{ .frames = 160, .virtual_render_hz = 80 }, true);
+    return healthy.run(.{ .frames = 160, .virtual_render_hz = 80 }, .s1_character);
 }
 
 pub fn main(init: std.process.Init) !void {
@@ -1056,7 +1471,8 @@ pub fn main(init: std.process.Init) !void {
     const profile: BootstrapProfile = switch (mode) {
         .normal => .sandbox,
         .visual_smoke => .s0_smoke,
-        .s1_visual_smoke, .window_lifecycle_smoke => .sandbox,
+        .s1_visual_smoke, .window_lifecycle_smoke => .s1_smoke,
+        .s2_visual_smoke => .s2_smoke,
         .init_failure_smoke => {
             const summary = try runInitFailureSmoke();
             const expected = try smokeExpectation(.{
@@ -1080,6 +1496,7 @@ pub fn main(init: std.process.Init) !void {
     var app = try App.init(profile);
     var visual_smoke_succeeded = false;
     var s1_visual_smoke_succeeded = false;
+    var s2_visual_smoke_succeeded = false;
     var window_lifecycle_smoke_succeeded = false;
     defer {
         app.deinit();
@@ -1088,6 +1505,9 @@ pub fn main(init: std.process.Init) !void {
         }
         if (s1_visual_smoke_succeeded) {
             std.debug.print("S1_VISUAL_SMOKE_SHUTDOWN status=clean\n", .{});
+        }
+        if (s2_visual_smoke_succeeded) {
+            std.debug.print("S2_VISUAL_SMOKE_SHUTDOWN status=clean\n", .{});
         }
         if (window_lifecycle_smoke_succeeded) {
             std.debug.print("WINDOW_LIFECYCLE_SMOKE_SHUTDOWN status=clean\n", .{});
@@ -1098,10 +1518,10 @@ pub fn main(init: std.process.Init) !void {
     render_tool.setRenderSettings(&app.gpu_renderer.render_settings);
 
     switch (mode) {
-        .normal => _ = try app.run(null, false),
+        .normal => _ = try app.run(null, .none),
         .verify_install => unreachable,
         .visual_smoke => |config| {
-            const summary = try app.run(config, false);
+            const summary = try app.run(config, .none);
             std.debug.print(
                 "S0_VISUAL_SMOKE_RESULT ready_frames={d} unavailable_frames={d} " ++
                     "attempted_frames={d} crate_frames={d} position_changed={} " ++
@@ -1124,7 +1544,7 @@ pub fn main(init: std.process.Init) !void {
             visual_smoke_succeeded = true;
         },
         .s1_visual_smoke => |config| {
-            const summary = try app.run(config, true);
+            const summary = try app.run(config, .s1_character);
             std.debug.print(
                 "S1_VISUAL_SMOKE_RESULT ready_frames={d} unavailable_frames={d} " ++
                     "attempted_frames={d} character_frames={d} character_moved={} " ++
@@ -1146,6 +1566,35 @@ pub fn main(init: std.process.Init) !void {
                 },
             );
             s1_visual_smoke_succeeded = true;
+        },
+        .s2_visual_smoke => |config| {
+            const summary = try app.run(config, .s2_vehicle);
+            std.debug.print(
+                "S2_VISUAL_SMOKE_RESULT ready_frames={d} unavailable_frames={d} " ++
+                    "attempted_frames={d} vehicle_frames={d} vehicle_moved={} " ++
+                    "steering_observed={} brake_applied={} crate_displaced={} character_hidden={} " ++
+                    "character_restored={} exited={} ticks={d} alpha_min={d:.6} " ++
+                    "alpha_max={d:.6} virtual_render_hz={d} gpu_driver={s}\n",
+                .{
+                    summary.ready_frames,
+                    summary.unavailable_frames,
+                    summary.attempted_frames,
+                    summary.vehicle_presented_frames,
+                    app.s2_smoke.vehicle_moved,
+                    app.s2_smoke.steering_observed,
+                    app.s2_smoke.brake_applied,
+                    app.s2_smoke.crate_displaced,
+                    summary.character_hidden_while_driving,
+                    summary.character_visible_after_exit,
+                    app.s2_smoke.exited,
+                    app.simulation.tickIndex(),
+                    summary.min_alpha,
+                    summary.max_alpha,
+                    config.virtual_render_hz,
+                    shader_assets.driver,
+                },
+            );
+            s2_visual_smoke_succeeded = true;
         },
         .window_lifecycle_smoke => {
             const summary = try app.runWindowLifecycleSmoke();
@@ -1186,6 +1635,9 @@ test "window suspension discards pending and held gameplay actions" {
         .move = .{ 1, -1 },
         .look_delta = .{ 3, -2 },
         .jump_pressed = true,
+        .interact_pressed = true,
+        .brake = true,
+        .hand_brake = true,
     });
 
     try std.testing.expect(suspendGameplayForWindowState(
@@ -1196,6 +1648,9 @@ test "window suspension discards pending and held gameplay actions" {
     try std.testing.expectEqual([2]f32{ 0, 0 }, after_restore.move);
     try std.testing.expectEqual([2]f32{ 0, 0 }, after_restore.look_delta);
     try std.testing.expect(!after_restore.jump_pressed);
+    try std.testing.expect(!after_restore.interact_pressed);
+    try std.testing.expect(!after_restore.brake);
+    try std.testing.expect(!after_restore.hand_brake);
 }
 
 test "program mode parsing keeps visual smoke explicit and bounded" {
@@ -1218,6 +1673,14 @@ test "program mode parsing keeps visual smoke explicit and bounded" {
         "--virtual-render-hz=120",
     });
     try std.testing.expectEqual(@as(u64, 240), s1_smoke.s1_visual_smoke.frames);
+    const s2_smoke = try parseProgramMode(&[_][]const u8{
+        "incinerator",
+        "--s2-visual-smoke",
+    });
+    try std.testing.expectEqual(@as(u64, 1_440), s2_smoke.s2_visual_smoke.frames);
+    try std.testing.expectEqual(@as(u32, 240), s2_smoke.s2_visual_smoke.virtual_render_hz);
+    const s2_expected = try smokeExpectation(s2_smoke.s2_visual_smoke);
+    try std.testing.expectEqual(s2_required_ticks, s2_expected.ticks);
     const window_smoke = try parseProgramMode(&[_][]const u8{
         "incinerator",
         "--window-lifecycle-smoke",
@@ -1250,6 +1713,14 @@ test "program mode parsing keeps visual smoke explicit and bounded" {
             "incinerator",
             "--visual-smoke",
             "--s1-visual-smoke",
+        }),
+    );
+    try std.testing.expectError(
+        error.ConflictingProgramModes,
+        parseProgramMode(&[_][]const u8{
+            "incinerator",
+            "--s1-visual-smoke",
+            "--s2-visual-smoke",
         }),
     );
     try std.testing.expectError(

@@ -5,7 +5,7 @@
 
 ## Scope
 
-This record closes the pre-S2 macOS runtime evidence gap. Apple Silicon macOS
+This record covers the current S2 macOS runtime gate. Apple Silicon macOS
 with Metal is the sole current platform target. Linux/SteamOS and Windows are
 future/deferred and impose no build, shader, headless, runtime, packaging, CI,
 or compatibility gates.
@@ -25,17 +25,20 @@ zig build test-macos-readiness \
 The aggregate runs the following checks serially so concurrent graphical
 processes cannot turn WindowServer or Metal contention into a false result.
 
-### Installed S1 visual runtime
+### Installed S2 visual runtime
 
 ```sh
-zig build smoke-installed-s1-macos \
+zig build smoke-installed-s2-macos \
   -Doptimize=ReleaseFast -Deditor=false
 ```
 
-Observed result: Metal selected; 160 ready and zero unavailable frames; 240
-fixed ticks; character movement and jumping observed; block collision and
-composition lifecycle invariants passed; normal teardown emitted
-`S1_VISUAL_SMOKE_SHUTDOWN status=clean`.
+Observed result: Metal selected; 480 ready and zero unavailable frames at 80
+Hz; 720 fixed ticks; chassis/wheels rendered; vehicle movement, steering,
+dynamic-crate displacement, character suppression/restoration, and successful
+exit observed; normal teardown emitted `S2_VISUAL_SMOKE_SHUTDOWN status=clean`.
+The corresponding 1,440-frame 240 Hz run passed the same evidence with the same
+720 fixed ticks. The historical installed S1 smoke also remains independently
+available and green after the bootstrap-profile split.
 
 This proves that the installed binary is self-contained for the current
 procedural sandbox. Shaders are embedded, SDL and Jolt are statically linked,
@@ -85,13 +88,13 @@ will exist.
 
 ## Automated Baseline
 
-- Debug and ReleaseFast, editor excluded: 146/146 tests pass in each mode.
-- Debug with the editor enabled: 146/146 tests pass.
-- Jolt adapter Debug and ReleaseFast: 20/20 tests pass in each mode.
+- Debug and ReleaseFast, editor excluded: 179/179 tests pass in each mode.
+- Debug with the editor enabled: 179/179 tests pass.
 - Native installed ReleaseFast runtime: all three gates above pass.
 - `zig fmt --check` and `git diff --check`: pass.
 
-Hosted run `29211872146` passed every macOS job step. Graphical smokes stay local
+Hosted run `29213905954` passed every macOS job step through S2 headless
+composition. Graphical smokes stay local
 because hosted WindowServer/Metal availability is not a reliable contract;
 hosted CI runs deterministic macOS build, test, shader, headless, source-package,
 and non-GPU relocation checks.

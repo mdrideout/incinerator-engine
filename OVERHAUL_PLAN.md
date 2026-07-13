@@ -4,7 +4,7 @@
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-07-10
+**Last reviewed:** 2026-07-12
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -278,8 +278,9 @@ sandbox composition shared by visual and headless hosts:
   explicit update/destruction semantics.
 - The public pure fixed-step accumulator proves 240/80 Hz presentation cadence
   and the 250 ms anti-spiral policy independently of SDL's wall clock.
-- ReleaseFast S0 and S1 characterizations are recorded; separate native Metal
-  crate and character smokes exit normally above and below 120 Hz.
+- ReleaseFast S0, S1, and S2 characterizations are recorded; separate native
+  Metal crate, character, and vehicle smokes exit normally above and below
+  120 Hz.
 - A sandbox-owned action latch bridges frame-scoped SDL state to tick-scoped
   character commands without losing or replaying edges/deltas.
 - The upgraded application builds in Debug and ReleaseFast, with and without
@@ -399,7 +400,7 @@ decision and an explicit porting milestone that may adapt or replace that code.
 | M2 | Immediate ownership and correctness hazards removed | Complete for the pre-S2 scope; content-upload failure/cancellation policy remains slice-owned by S3 |
 | S0 | Crate lifecycle slice proves the kernel and feature contract | Complete; one-world-per-process and pre-network queue backpressure are accepted follow-on constraints |
 | S1 | Character walks around one block | Complete; independent architecture, correctness, and build/evidence reviews pass with no remaining P0/P1/P2 finding |
-| S2 | Player enters and drives one vehicle | Stages 1–3 complete: real-Jolt capability, backend-neutral feature, driver authority, Snapshot V3, and headless composition; native macOS presentation/performance next |
+| S2 | Player enters and drives one vehicle | Complete; real Jolt vehicle, driver authority, Snapshot V3, procedural presentation, native Metal lifecycle smokes, ReleaseFast baseline, and independent reviews pass |
 | S3 | One district/chunk loads and unloads asynchronously | Not started |
 | S4 | Two clients use one authoritative server, if selected | Deferred until multiplayer is selected and scoped |
 | S5 | Transform editing supports command, undo, save, and restore | Not started |
@@ -678,7 +679,7 @@ One vehicle can be spawned, entered, driven, exited, destroyed, and restored. Ch
 ### Feature-owned scope
 
 - chassis/wheel/occupancy/control components;
-- spawn, enter, exit, drive, reset, and destroy commands;
+- spawn, enter, exit, drive, and destroy commands;
 - ownership/occupancy and lifecycle events;
 - vehicle physics systems and presentation extraction;
 - tunable vehicle configuration and persistence;
@@ -697,16 +698,15 @@ One vehicle can be spawned, entered, driven, exited, destroyed, and restored. Ch
 
 ### Acceptance criteria
 
-- [ ] Vehicle lifecycle leaks no bodies, constraints, shapes, entities, or assets.
+- [x] Vehicle lifecycle leaks no bodies, constraints, shapes, entities, or assets.
 - [x] Character enters/exits through public contracts without private module access.
 - [x] Save/restore preserves required gameplay state, including occupied and unoccupied byte-stable logical state.
 - [x] Vehicle behavior is stable under the selected tick and one-step collision policy in the covered real-Jolt scenarios.
 - [x] Server/headless composition can simulate the vehicle without presentation code.
 
-Headless evidence: [`docs/design/s2-vehicle-slice.md`](docs/design/s2-vehicle-slice.md)
-and [`docs/validation/s2-headless-acceptance.md`](docs/validation/s2-headless-acceptance.md).
-The remaining unchecked lifecycle criterion includes the native visual asset
-owner and therefore closes with S2 Stage 4, not this headless milestone.
+Complete evidence: [`docs/design/s2-vehicle-slice.md`](docs/design/s2-vehicle-slice.md),
+[`docs/validation/s2-headless-acceptance.md`](docs/validation/s2-headless-acceptance.md),
+and [`docs/performance/s2-baseline.md`](docs/performance/s2-baseline.md).
 
 ---
 
@@ -1032,9 +1032,9 @@ Record evidence rather than relying only on target numbers:
 15. [x] Implement `VehicleFeature` against fake vehicle and driver ports, then
     compose the smallest spawn → enter → drive → exit → destroy → restore
     slice over a neutral shared physics step.
-16. [ ] Complete the macOS-first S2 native presentation/input/camera smoke with
+16. [x] Complete the macOS-first S2 native presentation/input/camera smoke with
     procedural chassis and wheel assets.
-17. [ ] Record the ReleaseFast one-vehicle characterization and complete the
+17. [x] Record the ReleaseFast one-vehicle characterization and complete the
     final independent S2 review before beginning S3.
 
 ---
@@ -1067,3 +1067,4 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-12 | Recorded the first complete hosted macOS contract | Hosted run `29211872146`: every macOS step green, including tests/builds, source package, install relocation, and the macOS-hosted headless boundary |
 | 2026-07-12 | Narrowed platform scope from macOS-first with portability guards to macOS-only | Removed Linux/Windows CI jobs and cross-target checks; dormant secondary-platform code and historical evidence impose no current compatibility or abstraction requirement |
 | 2026-07-12 | Completed the S2 backend-neutral feature and real headless composition | 177/177 Debug, ReleaseFast, and editor-enabled macOS tests; one composition-owned physics step; explicit character/vehicle driver port and transactional exit relocation; strict Snapshot V3 occupied/unoccupied byte-stable logical restore; exact driver rollback, adapter error isolation, same-tick authority ordering, allocation/adapter rollback, and relationship validation; 16/16 extracted source-package tests |
+| 2026-07-12 | Completed and independently reviewed the S2 vehicle vertical slice | 179/179 Debug, ReleaseFast, and editor-enabled macOS tests; procedural chassis and canonical four-wheel rendering; exclusive outcome-driven character/vehicle controls and camera target; 720-tick native Metal collision/steering/exit smoke at 240 and 80 render Hz; installed ReleaseFast Mach-O from `/tmp`; three-trial ReleaseFast characterization; no remaining actionable P0/P1/P2 finding |

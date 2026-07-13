@@ -560,6 +560,28 @@ pub fn build(b: *std.Build) void {
     const s1_measure_tests = b.addTest(.{ .root_module = s1_measure_root_module });
     const run_s1_measure_tests = b.addRunArtifact(s1_measure_tests);
 
+    const s2_measure_root_module = b.createModule(.{
+        .root_source_file = b.path("tools/s2_measure.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+        },
+    });
+    const s2_measure_exe = b.addExecutable(.{
+        .name = "incinerator_s2_measure",
+        .root_module = s2_measure_root_module,
+    });
+    const run_s2_measure = b.addRunArtifact(s2_measure_exe);
+    if (b.args) |args| run_s2_measure.addArgs(args);
+    const s2_measure_step = b.step(
+        "measure-s2",
+        "Record SDL-free S2 vehicle slice timings as versioned JSON",
+    );
+    s2_measure_step.dependOn(&run_s2_measure.step);
+    const s2_measure_tests = b.addTest(.{ .root_module = s2_measure_root_module });
+    const run_s2_measure_tests = b.addRunArtifact(s2_measure_tests);
+
     const headless_tests = b.addTest(.{ .root_module = headless_root_module });
     const run_headless_tests = b.addRunArtifact(headless_tests);
     const headless_test_step = b.step(
@@ -589,6 +611,10 @@ pub fn build(b: *std.Build) void {
         "smoke-installed-s1-macos",
         "Run the installed S1 Metal smoke from /tmp (native Apple Silicon only)",
     );
+    const installed_s2_smoke_step = b.step(
+        "smoke-installed-s2-macos",
+        "Run installed S2 Metal smokes above/below tick rate from /tmp (native Apple Silicon only)",
+    );
     const window_lifecycle_smoke_step = b.step(
         "smoke-window-lifecycle-macos",
         "Exercise installed macOS minimize/restore suspension (native Apple Silicon only)",
@@ -613,6 +639,24 @@ pub fn build(b: *std.Build) void {
         installed_s1_smoke.step.dependOn(b.getInstallStep());
         installed_s1_smoke_step.dependOn(&installed_s1_smoke.step);
 
+        const installed_s2_smoke_below = b.addSystemCommand(&.{
+            installed_exe_path,
+            "--s2-visual-smoke",
+            "--frames=480",
+            "--virtual-render-hz=80",
+        });
+        installed_s2_smoke_below.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s2_smoke_below.step.dependOn(b.getInstallStep());
+        const installed_s2_smoke_above = b.addSystemCommand(&.{
+            installed_exe_path,
+            "--s2-visual-smoke",
+            "--frames=1440",
+            "--virtual-render-hz=240",
+        });
+        installed_s2_smoke_above.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s2_smoke_above.step.dependOn(&installed_s2_smoke_below.step);
+        installed_s2_smoke_step.dependOn(&installed_s2_smoke_above.step);
+
         const window_lifecycle_smoke = b.addSystemCommand(&.{
             installed_exe_path,
             "--window-lifecycle-smoke",
@@ -632,21 +676,29 @@ pub fn build(b: *std.Build) void {
         // The aggregate gate is serialized deliberately. Concurrent GUI
         // processes would make WindowServer/Metal failures environmental and
         // weaken the signal from these native checks.
-        const readiness_s1 = b.addSystemCommand(&.{
+        const readiness_s2_below = b.addSystemCommand(&.{
             installed_exe_path,
-            "--s1-visual-smoke",
-            "--frames=160",
+            "--s2-visual-smoke",
+            "--frames=480",
             "--virtual-render-hz=80",
         });
-        readiness_s1.setCwd(.{ .cwd_relative = "/tmp" });
-        readiness_s1.step.dependOn(b.getInstallStep());
+        readiness_s2_below.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s2_below.step.dependOn(b.getInstallStep());
+        const readiness_s2_above = b.addSystemCommand(&.{
+            installed_exe_path,
+            "--s2-visual-smoke",
+            "--frames=1440",
+            "--virtual-render-hz=240",
+        });
+        readiness_s2_above.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s2_above.step.dependOn(&readiness_s2_below.step);
 
         const readiness_window = b.addSystemCommand(&.{
             installed_exe_path,
             "--window-lifecycle-smoke",
         });
         readiness_window.setCwd(.{ .cwd_relative = "/tmp" });
-        readiness_window.step.dependOn(&readiness_s1.step);
+        readiness_window.step.dependOn(&readiness_s2_above.step);
 
         const readiness_init = b.addSystemCommand(&.{
             installed_exe_path,
@@ -660,6 +712,7 @@ pub fn build(b: *std.Build) void {
             "macOS readiness smokes require a native aarch64-macos target",
         );
         installed_s1_smoke_step.dependOn(&native_only.step);
+        installed_s2_smoke_step.dependOn(&native_only.step);
         window_lifecycle_smoke_step.dependOn(&native_only.step);
         init_failure_smoke_step.dependOn(&native_only.step);
         macos_readiness_step.dependOn(&native_only.step);
@@ -799,6 +852,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&s0_measure_exe.step);
     test_step.dependOn(&s1_measure_exe.step);
     test_step.dependOn(&run_s1_measure_tests.step);
+    test_step.dependOn(&s2_measure_exe.step);
+    test_step.dependOn(&run_s2_measure_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

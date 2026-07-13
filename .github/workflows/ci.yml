@@ -180,6 +180,44 @@ jobs:
           ' "$report"
           cat "$report"
 
+      - name: S2 measurement schema smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/s2-measure.json"
+          zig build measure-s2 -Doptimize=ReleaseFast -Deditor=false -- \
+            --warmup=16 --samples=32 --trials=1 > "$report"
+          jq -e '
+            .schema_version == 1 and
+            .benchmark == "s2_vehicle_slice" and
+            .optimize == "ReleaseFast" and
+            .warmup == 16 and .samples == 32 and .trials == 1 and
+            (.results | length) == 1 and
+            all(.results[];
+              (.drive_submit.samples == 32 and
+                (.drive_submit | has("mean_ns") and has("p50_ns") and
+                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
+              (.steady_tick.samples == 32 and
+                (.steady_tick | has("mean_ns") and has("p50_ns") and
+                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
+              (.presentation.samples == 32 and
+                (.presentation | has("mean_ns") and has("p50_ns") and
+                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
+              .active_crates == 1 and
+              .active_characters == 1 and
+              .active_vehicles == 1 and
+              .active_entities == 3 and
+              .physics_bodies == 3 and
+              .vehicle_displacement > 0.1 and
+              .post_despawn_crates == 0 and
+              .post_despawn_characters == 0 and
+              .post_despawn_vehicles == 0 and
+              .post_despawn_entities == 0 and
+              .post_despawn_bodies == 1 and
+              .post_despawn_active_bodies == 0)
+          ' "$report"
+          cat "$report"
+
       - name: Relocatable install smoke
         shell: bash
         run: |

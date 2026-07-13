@@ -1,0 +1,169 @@
+{
+  "schema_version": 1,
+  "benchmark": "s2_vehicle_slice",
+  "zig_version": "0.16.0",
+  "optimize": "ReleaseFast",
+  "target_arch": "aarch64",
+  "target_os": "macos",
+  "target_abi": "none",
+  "cpu_count": 12,
+  "clock": "awake",
+  "clock_resolution_ns": 42,
+  "fixed_delta_seconds": 0.008333333767950535,
+  "warmup": 120,
+  "samples": 512,
+  "trials": 3,
+  "workload": "one_occupied_four_wheel_vehicle_one_virtual_character_one_dynamic_crate_and_ground",
+  "results": [
+    {
+      "trial": 1,
+      "init_ns": 1267167,
+      "spawn_tick_ns": 191417,
+      "enter_tick_ns": 92375,
+      "drive_submit": {
+        "samples": 512,
+        "mean_ns": 35.953125,
+        "p50_ns": 42,
+        "p95_ns": 42,
+        "p99_ns": 125,
+        "max_ns": 208
+      },
+      "steady_tick": {
+        "samples": 512,
+        "mean_ns": 89299.97265625,
+        "p50_ns": 87292,
+        "p95_ns": 123208,
+        "p99_ns": 138459,
+        "max_ns": 159042
+      },
+      "presentation": {
+        "samples": 512,
+        "mean_ns": 349.61328125,
+        "p50_ns": 333,
+        "p95_ns": 417,
+        "p99_ns": 750,
+        "max_ns": 5375
+      },
+      "final_vehicle_position": [
+        0.31302136182785034,
+        0.8641289472579956,
+        -24.26244354248047
+      ],
+      "vehicle_displacement": 24.264461517333984,
+      "active_crates": 1,
+      "active_characters": 1,
+      "active_vehicles": 1,
+      "active_entities": 3,
+      "physics_bodies": 3,
+      "exit_tick_ns": 81458,
+      "despawn_tick_ns": 8625,
+      "post_despawn_crates": 0,
+      "post_despawn_characters": 0,
+      "post_despawn_vehicles": 0,
+      "post_despawn_entities": 0,
+      "post_despawn_bodies": 1,
+      "post_despawn_active_bodies": 0,
+      "teardown_ns": 828041
+    },
+    {
+      "trial": 2,
+      "init_ns": 1133334,
+      "spawn_tick_ns": 160167,
+      "enter_tick_ns": 73625,
+      "drive_submit": {
+        "samples": 512,
+        "mean_ns": 32.595703125,
+        "p50_ns": 42,
+        "p95_ns": 42,
+        "p99_ns": 84,
+        "max_ns": 125
+      },
+      "steady_tick": {
+        "samples": 512,
+        "mean_ns": 81628.193359375,
+        "p50_ns": 83833,
+        "p95_ns": 97959,
+        "p99_ns": 104042,
+        "max_ns": 108750
+      },
+      "presentation": {
+        "samples": 512,
+        "mean_ns": 343.162109375,
+        "p50_ns": 333,
+        "p95_ns": 417,
+        "p99_ns": 500,
+        "max_ns": 4750
+      },
+      "final_vehicle_position": [
+        0.31302136182785034,
+        0.8641289472579956,
+        -24.26244354248047
+      ],
+      "vehicle_displacement": 24.264461517333984,
+      "active_crates": 1,
+      "active_characters": 1,
+      "active_vehicles": 1,
+      "active_entities": 3,
+      "physics_bodies": 3,
+      "exit_tick_ns": 50208,
+      "despawn_tick_ns": 7458,
+      "post_despawn_crates": 0,
+      "post_despawn_characters": 0,
+      "post_despawn_vehicles": 0,
+      "post_despawn_entities": 0,
+      "post_despawn_bodies": 1,
+      "post_despawn_active_bodies": 0,
+      "teardown_ns": 576166
+    },
+    {
+      "trial": 3,
+      "init_ns": 1058834,
+      "spawn_tick_ns": 117375,
+      "enter_tick_ns": 80708,
+      "drive_submit": {
+        "samples": 512,
+        "mean_ns": 62.134765625,
+        "p50_ns": 42,
+        "p95_ns": 84,
+        "p99_ns": 167,
+        "max_ns": 10834
+      },
+      "steady_tick": {
+        "samples": 512,
+        "mean_ns": 68376.4765625,
+        "p50_ns": 70875,
+        "p95_ns": 106792,
+        "p99_ns": 125625,
+        "max_ns": 224917
+      },
+      "presentation": {
+        "samples": 512,
+        "mean_ns": 438.091796875,
+        "p50_ns": 333,
+        "p95_ns": 958,
+        "p99_ns": 1500,
+        "max_ns": 12375
+      },
+      "final_vehicle_position": [
+        0.31302136182785034,
+        0.8641289472579956,
+        -24.26244354248047
+      ],
+      "vehicle_displacement": 24.264461517333984,
+      "active_crates": 1,
+      "active_characters": 1,
+      "active_vehicles": 1,
+      "active_entities": 3,
+      "physics_bodies": 3,
+      "exit_tick_ns": 39500,
+      "despawn_tick_ns": 8125,
+      "post_despawn_crates": 0,
+      "post_despawn_characters": 0,
+      "post_despawn_vehicles": 0,
+      "post_despawn_entities": 0,
+      "post_despawn_bodies": 1,
+      "post_despawn_active_bodies": 0,
+      "teardown_ns": 594667
+    }
+  ]
+}

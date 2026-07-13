@@ -121,6 +121,76 @@ pub fn createCube(device: *c.SDL_GPUDevice) !Mesh {
 }
 
 // ============================================================================
+// Wheel Cylinder
+// ============================================================================
+
+pub const wheel_segments: usize = 16;
+pub const wheel_triangle_count: usize = wheel_segments * 4;
+pub const wheel_vertex_count: usize = wheel_triangle_count * 3;
+
+/// Generate a centered unit wheel cylinder. Its axle is +X, matching the
+/// engine physics contract; callers scale X by wheel width and Y/Z by wheel
+/// diameter. One orange segment makes rotation visible in the debug sandbox.
+pub fn wheelCylinderVertices() [wheel_vertex_count]Vertex {
+    const half_extent: f32 = 0.5;
+    const left_center = [3]f32{ -half_extent, 0, 0 };
+    const right_center = [3]f32{ half_extent, 0, 0 };
+    var vertices: [wheel_vertex_count]Vertex = undefined;
+    var cursor: usize = 0;
+
+    for (0..wheel_segments) |segment| {
+        const angle = std.math.tau *
+            @as(f32, @floatFromInt(segment)) /
+            @as(f32, @floatFromInt(wheel_segments));
+        const next_angle = std.math.tau *
+            @as(f32, @floatFromInt(segment + 1)) /
+            @as(f32, @floatFromInt(wheel_segments));
+        const a = [2]f32{ half_extent * @cos(angle), half_extent * @sin(angle) };
+        const b = [2]f32{ half_extent * @cos(next_angle), half_extent * @sin(next_angle) };
+        const left_a = [3]f32{ -half_extent, a[0], a[1] };
+        const right_a = [3]f32{ half_extent, a[0], a[1] };
+        const left_b = [3]f32{ -half_extent, b[0], b[1] };
+        const right_b = [3]f32{ half_extent, b[0], b[1] };
+        const tread_color = if (segment == 0)
+            [3]f32{ 0.95, 0.45, 0.08 }
+        else
+            [3]f32{ 0.08, 0.09, 0.11 };
+        const sidewall_color = if (segment == 0)
+            [3]f32{ 0.95, 0.45, 0.08 }
+        else
+            [3]f32{ 0.16, 0.17, 0.20 };
+
+        // The pos_color pipeline uses clockwise exterior winding. These
+        // conventional cross products therefore point into the cylinder.
+        appendWheelTriangle(&vertices, &cursor, left_a, right_a, right_b, tread_color);
+        appendWheelTriangle(&vertices, &cursor, left_a, right_b, left_b, tread_color);
+        appendWheelTriangle(&vertices, &cursor, left_center, left_a, left_b, sidewall_color);
+        appendWheelTriangle(&vertices, &cursor, right_center, right_b, right_a, sidewall_color);
+    }
+    std.debug.assert(cursor == vertices.len);
+    return vertices;
+}
+
+pub fn createWheelCylinder(device: *c.SDL_GPUDevice) !Mesh {
+    const vertices = wheelCylinderVertices();
+    return Mesh.init(device, &vertices);
+}
+
+fn appendWheelTriangle(
+    vertices: *[wheel_vertex_count]Vertex,
+    cursor: *usize,
+    a: [3]f32,
+    b: [3]f32,
+    d: [3]f32,
+    color: [3]f32,
+) void {
+    vertices[cursor.*] = .{ .position = a, .color = color };
+    vertices[cursor.* + 1] = .{ .position = b, .color = color };
+    vertices[cursor.* + 2] = .{ .position = d, .color = color };
+    cursor.* += 3;
+}
+
+// ============================================================================
 // Character Capsule
 // ============================================================================
 
@@ -419,6 +489,64 @@ test "character capsule geometry is finite and bottom anchored" {
             [3]f32{ center[0], center[1] - top_center_y, center[2] }
         else
             [3]f32{ center[0], 0, center[2] };
+        const orientation = normal[0] * outward[0] +
+            normal[1] * outward[1] +
+            normal[2] * outward[2];
+        try std.testing.expect(orientation < 0);
+    }
+}
+
+test "wheel cylinder geometry follows the canonical axle and winding" {
+    const vertices = wheelCylinderVertices();
+    try std.testing.expectEqual(wheel_vertex_count, vertices.len);
+
+    var minimum = [3]f32{ std.math.inf(f32), std.math.inf(f32), std.math.inf(f32) };
+    var maximum = [3]f32{ -std.math.inf(f32), -std.math.inf(f32), -std.math.inf(f32) };
+    var saw_rotation_marker = false;
+    for (vertices) |vertex| {
+        for (vertex.position, 0..) |value, axis| {
+            try std.testing.expect(std.math.isFinite(value));
+            minimum[axis] = @min(minimum[axis], value);
+            maximum[axis] = @max(maximum[axis], value);
+        }
+        for (vertex.color) |value| try std.testing.expect(std.math.isFinite(value));
+        saw_rotation_marker = saw_rotation_marker or vertex.color[0] > 0.9;
+    }
+    for (minimum) |value| {
+        try std.testing.expectApproxEqAbs(@as(f32, -0.5), value, 0.00001);
+    }
+    for (maximum) |value| {
+        try std.testing.expectApproxEqAbs(@as(f32, 0.5), value, 0.00001);
+    }
+    try std.testing.expect(saw_rotation_marker);
+
+    var triangle_index: usize = 0;
+    while (triangle_index < vertices.len) : (triangle_index += 3) {
+        const a = vertices[triangle_index].position;
+        const b = vertices[triangle_index + 1].position;
+        const d = vertices[triangle_index + 2].position;
+        const ab = [3]f32{ b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+        const ad = [3]f32{ d[0] - a[0], d[1] - a[1], d[2] - a[2] };
+        const normal = [3]f32{
+            ab[1] * ad[2] - ab[2] * ad[1],
+            ab[2] * ad[0] - ab[0] * ad[2],
+            ab[0] * ad[1] - ab[1] * ad[0],
+        };
+        const normal_length_squared = normal[0] * normal[0] +
+            normal[1] * normal[1] +
+            normal[2] * normal[2];
+        try std.testing.expect(normal_length_squared > 0.000001);
+
+        const center = [3]f32{
+            (a[0] + b[0] + d[0]) / 3.0,
+            (a[1] + b[1] + d[1]) / 3.0,
+            (a[2] + b[2] + d[2]) / 3.0,
+        };
+        const is_cap = a[0] == b[0] and b[0] == d[0];
+        const outward = if (is_cap)
+            [3]f32{ if (center[0] < 0) -1 else 1, 0, 0 }
+        else
+            [3]f32{ 0, center[1], center[2] };
         const orientation = normal[0] * outward[0] +
             normal[1] * outward[1] +
             normal[2] * outward[2];

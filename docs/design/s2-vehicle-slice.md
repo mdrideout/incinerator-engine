@@ -1,7 +1,7 @@
 # S2 Vehicle Slice Design
 
 **Date:** 2026-07-12  
-**Status:** Accepted direction; headless feature/composition complete; native visual stage next
+**Status:** Complete
 
 ## Outcome
 
@@ -47,15 +47,15 @@ The pinned wrapper has two known hazards that the adapter must avoid:
    access, including enter/exit transactions and persistence policy.
 3. [x] Compose character, crate, and vehicle over one runtime and one physics step;
    add Snapshot V3 and headless lifecycle/restore evidence.
-4. [ ] Add procedural chassis/wheel presentation, input routing, camera switching,
+4. [x] Add procedural chassis/wheel presentation, input routing, camera switching,
    and a self-terminating native Metal lifecycle smoke.
-5. [ ] Record a ReleaseFast one-vehicle baseline and complete independent
+5. [x] Record a ReleaseFast one-vehicle baseline and complete independent
    architecture, correctness, and build/evidence reviews.
 
 Stages 1–3 prove the native ownership model, backend-neutral feature, explicit
-driver-authority boundary, and real headless composition. Stage 4 is the next
-implementation boundary; it may add presentation and input wiring but must not
-move SDL, renderer, or camera policy into `VehicleFeature`.
+driver-authority boundary, and real headless composition. Stages 4–5 retain
+SDL, renderer, camera, resource ownership, native smoke orchestration, and
+performance recording in the visual/build hosts rather than `VehicleFeature`.
 
 ## Dependency and Ownership Boundaries
 

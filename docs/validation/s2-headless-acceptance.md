@@ -1,7 +1,7 @@
-# S2 Vehicle Headless Acceptance Record
+# S2 Vehicle Acceptance Record
 
 **Date:** 2026-07-12
-**Status:** Stages 1–3 complete; native macOS presentation and performance remain
+**Status:** Complete
 
 ## Outcome
 
@@ -48,9 +48,28 @@ real adapters and owns cross-feature identity and restore policy.
 - Headless fixtures now use V3 and continue to cover deterministic crate
   timelines, sorted multi-record saves, live-world restore rejection, and
   exhaustive Zig allocation-failure unwind.
+- The visual host owns distinct typed chassis/wheel handles, one procedural
+  chassis mesh, and one canonical +X-axis wheel mesh reused four times. It
+  resolves immutable feature extraction without exposing SDL/GPU resources to
+  `VehicleFeature`.
+- Input is latched per render frame and consumed per fixed tick. `E` is a
+  one-tick authority edge; transition ticks send locomotion to neither feature.
+  WASD, service brake, and handbrake route exclusively to the outcome-confirmed
+  control target. Camera selection follows the same authority state.
+- The native S2 smoke settles the real vehicle, then sends synthetic fixed-tick
+  samples through the same interaction/action mapper as manual play: enter,
+  drive into and displace the dynamic crate, service brake, steer, and exit. It
+  proves character suppression/restoration and self-terminates with clean
+  teardown. It passes with 720
+  fixed ticks both above the simulation rate (1,440 frames at 240 Hz) and below
+  it (480 frames at 80 Hz). The ReleaseFast installed Mach-O passes from `/tmp`.
+- `measure-s2` requires one matching `drive_applied` result for every measured
+  input plus material chassis displacement, and records three ReleaseFast trials for the complete occupied vehicle
+  tick and chassis/four-wheel extraction. CI validates the report schema and
+  lifecycle cleanup, never noisy elapsed-time thresholds.
 
 The complete Apple Silicon macOS Debug, ReleaseFast, and editor-enabled Debug
-matrices each pass 177/177 tests. The filtered source-package extraction passes
+matrices each pass 179/179 tests. The filtered source-package extraction passes
 16/16 tests and executes the isolated macOS headless graph. Linux/SteamOS and
 Windows are fully deferred: they have no current S2 build, shader, headless,
 runtime, packaging, or compatibility gates.
@@ -71,16 +90,15 @@ the declared logical snapshot immediately after reconstruction; it does not
 promise bit-identical future physics, cross-platform determinism, or backward
 compatibility with V1/V2 snapshots.
 
-## Remaining S2 Gates
+## Closeout
 
-- Add visual-host-only input routing, camera target switching, and procedural
-  chassis/four-wheel resource ownership.
-- Run the self-terminating native Metal lifecycle smoke above and below the
-  120 Hz simulation rate, including an installed ReleaseFast executable from
-  outside the repository.
-- Record the one-vehicle ReleaseFast characterization.
-- Repeat the final architecture, correctness, and build/evidence reviews over
-  the complete visual slice.
+The committed [`S2 performance baseline`](../performance/s2-baseline.md)
+characterizes one occupied four-wheel vehicle, one dormant character, one
+dynamic crate, and ground on the primary Apple Silicon development machine.
+The median p99 complete tick is 0.125625 ms, 1.51% of the 8.333 ms budget; this
+is a one-player characterization, not an NPC, server, or MMO capacity claim.
 
-These are Stage 4/5 gates. They do not change the accepted headless contracts,
-and they must not move SDL, renderer, camera, or GPU ownership into the feature.
+Independent architecture, correctness, and macOS build/evidence reviews were
+repeated over the complete visual and measurement slice. Their findings were
+corrected before closeout; no actionable P0/P1/P2 S2 issue remains. S2 is
+complete and does not broaden the accepted macOS-only platform contract.
