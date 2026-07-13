@@ -337,6 +337,14 @@ pub fn build(b: *std.Build) void {
             .{ .name = "incinerator_engine", .module = mod },
         },
     });
+    const district_contract_module = b.createModule(.{
+        .root_source_file = b.path("src/features/district_contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts_module },
+        },
+    });
     const character_feature_module = b.createModule(.{
         .root_source_file = b.path("src/features/character/root.zig"),
         .target = target,
@@ -355,6 +363,23 @@ pub fn build(b: *std.Build) void {
             .{ .name = "driver_contract", .module = driver_contract_module },
         },
     });
+    const district_worker_module = b.createModule(.{
+        .root_source_file = b.path("src/district_worker.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "district_contract", .module = district_contract_module },
+        },
+    });
+    const district_feature_module = b.createModule(.{
+        .root_source_file = b.path("src/features/district/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "district_contract", .module = district_contract_module },
+        },
+    });
     const sandbox_controls_module = b.createModule(.{
         .root_source_file = b.path("src/sandbox_controls.zig"),
         .target = target,
@@ -369,6 +394,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "crate_feature", .module = crate_feature_module },
             .{ .name = "character_feature", .module = character_feature_module },
             .{ .name = "vehicle_feature", .module = vehicle_feature_module },
+            .{ .name = "district_contract", .module = district_contract_module },
+            .{ .name = "district_feature", .module = district_feature_module },
+            .{ .name = "district_worker", .module = district_worker_module },
             .{ .name = "jolt_physics", .module = jolt_physics_module },
         },
     });
@@ -582,11 +610,33 @@ pub fn build(b: *std.Build) void {
     const s2_measure_tests = b.addTest(.{ .root_module = s2_measure_root_module });
     const run_s2_measure_tests = b.addRunArtifact(s2_measure_tests);
 
+    const s3_measure_root_module = b.createModule(.{
+        .root_source_file = b.path("tools/s3_measure.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+        },
+    });
+    const s3_measure_exe = b.addExecutable(.{
+        .name = "incinerator_s3_measure",
+        .root_module = s3_measure_root_module,
+    });
+    const run_s3_measure = b.addRunArtifact(s3_measure_exe);
+    if (b.args) |args| run_s3_measure.addArgs(args);
+    const s3_measure_step = b.step(
+        "measure-s3",
+        "Record SDL-free S3-A district streaming timings as versioned JSON",
+    );
+    s3_measure_step.dependOn(&run_s3_measure.step);
+    const s3_measure_tests = b.addTest(.{ .root_module = s3_measure_root_module });
+    const run_s3_measure_tests = b.addRunArtifact(s3_measure_tests);
+
     const headless_tests = b.addTest(.{ .root_module = headless_root_module });
     const run_headless_tests = b.addRunArtifact(headless_tests);
     const headless_test_step = b.step(
         "test-headless",
-        "Run the isolated Flecs/Jolt crate and character lifecycle tests",
+        "Run the isolated Flecs/Jolt sandbox lifecycle tests",
     );
     headless_test_step.dependOn(&run_headless_tests.step);
     headless_test_step.dependOn(&verify_headless_boundary.step);
@@ -796,6 +846,30 @@ pub fn build(b: *std.Build) void {
     );
     vehicle_feature_test_step.dependOn(&run_vehicle_feature_tests.step);
 
+    const district_contract_tests = b.addTest(.{ .root_module = district_contract_module });
+    const run_district_contract_tests = b.addRunArtifact(district_contract_tests);
+    const district_contract_test_step = b.step(
+        "test-district-contract",
+        "Run renderer-neutral district build/loader contract tests",
+    );
+    district_contract_test_step.dependOn(&run_district_contract_tests.step);
+
+    const district_worker_tests = b.addTest(.{ .root_module = district_worker_module });
+    const run_district_worker_tests = b.addRunArtifact(district_worker_tests);
+    const district_worker_test_step = b.step(
+        "test-district-worker",
+        "Run bounded procedural district worker tests",
+    );
+    district_worker_test_step.dependOn(&run_district_worker_tests.step);
+
+    const district_feature_tests = b.addTest(.{ .root_module = district_feature_module });
+    const run_district_feature_tests = b.addRunArtifact(district_feature_tests);
+    const district_feature_test_step = b.step(
+        "test-district-feature",
+        "Run backend-neutral district lifecycle tests",
+    );
+    district_feature_test_step.dependOn(&run_district_feature_tests.step);
+
     const sandbox_controls_tests = b.addTest(.{ .root_module = sandbox_controls_module });
     const run_sandbox_controls_tests = b.addRunArtifact(sandbox_controls_tests);
     const sandbox_controls_test_step = b.step(
@@ -839,6 +913,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_character_feature_tests.step);
     test_step.dependOn(&run_driver_contract_tests.step);
     test_step.dependOn(&run_vehicle_feature_tests.step);
+    test_step.dependOn(&run_district_contract_tests.step);
+    test_step.dependOn(&run_district_worker_tests.step);
+    test_step.dependOn(&run_district_feature_tests.step);
     test_step.dependOn(&run_sandbox_controls_tests.step);
     test_step.dependOn(&run_sandbox_simulation_tests.step);
     test_step.dependOn(&run_exe_tests.step);
@@ -854,6 +931,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_s1_measure_tests.step);
     test_step.dependOn(&s2_measure_exe.step);
     test_step.dependOn(&run_s2_measure_tests.step);
+    test_step.dependOn(&s3_measure_exe.step);
+    test_step.dependOn(&run_s3_measure_tests.step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

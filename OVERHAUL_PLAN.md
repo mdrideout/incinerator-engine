@@ -256,29 +256,29 @@ Do not create every directory up front. Slice 0 should establish only the minimu
 
 ## 6. Current Baseline
 
-The repository now contains a small feature-authoring kernel and one owned S2
+The repository now contains a small feature-authoring kernel and one owned S3-A
 sandbox composition shared by visual and headless hosts:
 
 - `src/root.zig` exposes backend-neutral contracts plus the type-erased
   `Runtime`/startup registry used by game features.
-- `src/main.zig` owns the same crate/character/vehicle/Jolt `Simulation` as headless plus only
+- `src/main.zig` owns the same crate/character/vehicle/district/Jolt `Simulation` as headless plus only
   visual input, camera, GPU resources, renderer, and debug UI.
 - `src/hosts/headless.zig` and `src/hosts/simulation.zig` prove the same sandbox
   behavior with no SDL/editor/renderer edge.
 - The prototype `GameWorld`, borrowed Flecs/Jolt path, direct ECS render query,
   Scene/Gizmo mutation tools, and their compatibility seams are removed.
-- `CrateFeature`, `CharacterFeature`, and `VehicleFeature` independently own
+- `CrateFeature`, `CharacterFeature`, `VehicleFeature`, and `DistrictFeature` independently own
   their typed commands, outcomes, persistence records, lifecycle, systems, and
   presentation extraction.
-- The composition owns V3 world metadata, cross-feature identity/driver policy,
-  and one shared physics step; crate, character, and vehicle records restore
+- The composition owns V4 world metadata, cross-feature identity/driver policy,
+  and one shared physics step; crate, character, vehicle, and district records restore
   together without private coupling, and feature-owned tuning is authoritative.
 - The Jolt adapter now exposes a narrow CharacterVirtual capability with
   bottom-anchored capsules, world-qualified handles, slope/ground state, and
   explicit update/destruction semantics.
 - The public pure fixed-step accumulator proves 240/80 Hz presentation cadence
   and the 250 ms anti-spiral policy independently of SDL's wall clock.
-- ReleaseFast S0, S1, and S2 characterizations are recorded; separate native
+- ReleaseFast S0 through S3-A characterizations are recorded; separate native
   Metal crate, character, and vehicle smokes exit normally above and below
   120 Hz.
 - A sandbox-owned action latch bridges frame-scoped SDL state to tick-scoped
@@ -341,14 +341,14 @@ sandbox composition shared by visual and headless hosts:
 | D-003 | Exact Zig 0.16.0 toolchain and coordinated wrapper cohort | Implemented | Every build/CI change |
 | D-004 | Engine-owned JoltC 5.5 build package plus narrow engine adapter; expand capabilities per slice | Implemented for rigid bodies, CharacterVirtual, and the integrated S2 real-Jolt four-wheel capability | Future physics slices |
 | D-005 | Main thread owns ECS mutation/GPU submission; callbacks publish bounded data | Accepted in ADR-008 | Async assets/contact events |
-| D-006 | Allocator and memory-budget strategy | Not started | Asset registry/streaming |
+| D-006 | Allocator and memory-budget strategy | S3-A fixes one worker, one inline completion, eight boxes, and 320 decoded bytes maximum; cooked/staging/resident budgets remain S3-B work | Asset registry/streaming |
 | D-007 | Physics owns dynamic-body simulation transforms; presentation reads interpolated snapshots | Implemented for S0 in amended ADR-005 | Slice 0 scheduling/interpolation |
-| D-008 | Stable entity ID and serialization model | Implemented through composition-owned V3 crate/character/vehicle snapshots, canonical state, authoritative tuning, and validated driver relationships; multi-world atomic replacement remains open | Save/restore |
+| D-008 | Stable entity ID and serialization model | Implemented through composition-owned V4 crate/character/vehicle/district snapshots, canonical state, authoritative tuning, validated driver relationships, and logical district reconstruction; multi-world atomic replacement remains open | Save/restore |
 | D-009 | Apple Silicon macOS/Metal is the only current platform; Linux/SteamOS and Windows are future/deferred with no current gates | Accepted in amended ADR-007; dormant platform code may break and creates no abstraction requirement | Explicit secondary-platform product decision |
-| D-010 | Measured entity, body, draw, memory, and streaming budgets | S0 crate and S1 character tick/extraction baselines recorded; memory/streaming budgets open | Streaming acceptance budgets |
+| D-010 | Measured entity, body, draw, memory, and streaming budgets | S0–S3-A baselines recorded; GPU/cooked/resident budgets remain S3-B/C work | Streaming acceptance budgets |
 | D-011 | Thin-kernel + feature-module architecture | Accepted by this plan | Slice 0 |
 | D-012 | Commands/events/queries as cross-boundary interaction model | Accepted by this plan | Slice 0 |
-| D-013 | Source assets, cooked assets, and runtime content packaging policy | Not started | Streaming slice |
+| D-013 | Source assets, cooked assets, and runtime content packaging policy | Accepted in ADR-009; runtime consumes explicit-root versioned cooked bundles, while source import is offline/editor-only and S3-A procedural data is conformance content | Streaming slice |
 
 ### Decision notes
 
@@ -401,7 +401,7 @@ decision and an explicit porting milestone that may adapt or replace that code.
 | S0 | Crate lifecycle slice proves the kernel and feature contract | Complete; one-world-per-process and pre-network queue backpressure are accepted follow-on constraints |
 | S1 | Character walks around one block | Complete; independent architecture, correctness, and build/evidence reviews pass with no remaining P0/P1/P2 finding |
 | S2 | Player enters and drives one vehicle | Complete; real Jolt vehicle, driver authority, Snapshot V3, procedural presentation, native Metal lifecycle smokes, ReleaseFast baseline, and independent reviews pass |
-| S3 | One district/chunk loads and unloads asynchronously | Not started |
+| S3 | One district/chunk loads and unloads asynchronously | S3-A procedural/headless foundation complete. S3-B cooked/Metal residency and S3-C boundary/native evidence remain open |
 | S4 | Two clients use one authoritative server, if selected | Deferred until multiplayer is selected and scoped |
 | S5 | Transform editing supports command, undo, save, and restore | Not started |
 
@@ -716,35 +716,100 @@ and [`docs/performance/s2-baseline.md`](docs/performance/s2-baseline.md).
 
 Approaching one boundary loads a district/chunk asynchronously; leaving it unloads its entities, bodies, and assets safely. Cancellation and memory backpressure are exercised.
 
-### Feature-owned scope
+S3 is deliberately staged. S3-A proves asynchronous CPU preparation, owner-thread
+commit, collision ownership, unload, and persistence without pretending that
+procedural geometry is the production content path. S3-B adds cooked content
+and renderer-owned GPU residency. S3-C adds proximity policy and complete
+installed native evidence. Only completion of all three closes S3.
 
-- chunk identity, state, ownership, and dependency components;
-- request/cancel/activate/deactivate commands;
-- load/fail/activate/unload events;
-- streaming state machine and activation systems;
-- persistence for stable entities and cross-chunk references;
-- diagnostics and tests.
+### S3-A — Procedural/headless ownership foundation
 
-### Work pulled by the slice
+**Status:** Complete. Full S3 remains open.
 
-- [ ] Decide source versus cooked content policy under D-013.
-- [ ] Introduce typed handles for every asset type actually used by the district.
-- [ ] Make registries the sole owners of GPU-backed resources.
-- [ ] Preserve required glTF nodes, transforms, instancing, materials, and shared resources.
-- [ ] Decode assets on workers under D-005.
-- [ ] Queue batched GPU uploads through renderer-owned staging resources.
-- [ ] Define loading states, cancellation, fallback assets, and structured failures.
-- [ ] Add render queues, culling, instancing, and LOD only where measurements require them.
-- [ ] Define chunk coordinates, stable identities, ownership, and unload semantics.
-- [ ] Resolve cross-chunk references and missing-reference behavior.
-- [ ] Add memory/upload budgets and backpressure.
+#### Feature-owned scope
 
-### Acceptance criteria
+- one chunk identity and `absent/loading/cancelling/active` state;
+- request, cancel, and unload commands with typed outcomes/events;
+- generation-safe completion commit at the fixed-tick boundary;
+- one persistent district entity, up to eight owned static bodies, and one
+  immutable logical draw;
+- logical V1 district persistence inside the strict composition-owned Snapshot
+  V4 envelope;
+- real worker, fake-backed feature tests, real-Jolt collision, diagnostics, and
+  bounded lifecycle tests.
 
-- [ ] Repeated load/unload cycles leave no stale handles or leaked resources.
-- [ ] Cancellation during decode/upload is safe.
-- [ ] Simulation remains responsive while content streams.
-- [ ] Memory and upload volume stay within recorded budgets.
+#### Work pulled by S3-A
+
+- [x] Decide the source/cooked/resident policy under D-013 in ADR-009.
+- [x] Enforce Runtime and loader lifecycle owner-thread affinity.
+- [x] Define a renderer/ECS/Jolt-neutral fixed-capacity district build and
+  worker port.
+- [x] Run one real, joined background worker with generation-safe cancellation,
+  single-job backpressure, and no worker access to Runtime, Flecs, Jolt, SDL,
+  renderer, or editor state.
+- [x] Implement `DistrictFeature` over narrow loader and static-body ports with
+  command-before-completion ordering and transactional activation/unload.
+- [x] Compose the real worker and Jolt static bodies; wake moving bodies whose
+  streamed support disappears.
+- [x] Introduce the mesh/material typed handles actually carried by the logical
+  district draw without making them activation prerequisites.
+- [x] Add strict Snapshot V4 logical district save/restore without persisting
+  tickets, worker state, physics handles, or presentation resources.
+- [x] Exercise real cancellation, stale generations, collision, unload,
+  repeated cycles, body/entity cleanup, and byte-stable restore headlessly.
+- [x] Record the S3-A ReleaseFast measurement and finish independent reviews.
+
+#### S3-A acceptance criteria
+
+- [x] Repeated procedural load/unload cycles return entities and bodies to the
+  exact baseline without stale generations or detached work.
+- [x] Cancellation after a real worker starts and cancellation after publication
+  are both safe and deterministic.
+- [x] Only the simulation owner thread commits entities/bodies; activation is
+  independent of presentation-handle residency.
+- [x] A dynamic body collides with the district and resumes falling when its
+  streamed support unloads.
+- [x] Snapshot V4 restore reconstructs logical ownership and is immediately
+  byte-stable.
+- [x] ReleaseFast evidence records request-to-active ticks, cancellation,
+  activation/unload, steady tick/extraction distributions, bounded bytes/counts,
+  and cleanup without noisy timing thresholds.
+
+Complete design contract: [`docs/design/s3-district-streaming.md`](docs/design/s3-district-streaming.md)
+and [`docs/adr/009-runtime-content-and-streaming.md`](docs/adr/009-runtime-content-and-streaming.md).
+
+### S3-B — Cooked content and GPU residency
+
+- [ ] Define a versioned cooked manifest, schema cohort, integrity metadata,
+  explicit content root, and structured I/O/validation failures.
+- [ ] Add a tiny self-authored, provenance-recorded glTF cook input preserving
+  the nodes, transforms, instances, mesh/material relationships, and textures
+  required by the slice.
+- [ ] Install cooked output beneath `share/incinerator/content` and prove runtime
+  lookup outside the repository root.
+- [ ] Make renderer-owned generational registries the sole GPU resource owners.
+- [ ] Add fallback resolution, bounded staging, batched submission,
+  nonblocking fence polling, upload budgets, and safe pre/post-submit
+  cancellation.
+- [ ] Add render queues, culling, instancing, and LOD only where measurements
+  justify them.
+
+### S3-C — Boundary policy and native evidence
+
+- [ ] Add host-owned proximity hysteresis without importing character or
+  vehicle features into `DistrictFeature`.
+- [ ] Run installed cooked-content/Metal load, cancel, unload, and reload smokes
+  from `/tmp` above and below the fixed tick rate.
+- [ ] Record end-to-end CPU/GPU/resident budgets and repeat independent reviews.
+
+### Full-S3 acceptance criteria
+
+- [ ] Repeated cooked load/unload cycles leave no stale CPU/GPU handles or
+  leaked resources.
+- [ ] Cancellation during decode and before/after GPU submission is safe.
+- [ ] Simulation remains responsive while cooked content streams and GPU fences
+  are polled nonblockingly.
+- [ ] CPU, staging, upload, and resident GPU volumes stay within recorded budgets.
 - [ ] A multi-node, instanced, textured glTF fixture renders with authored transforms.
 - [ ] Installed/cooked content works outside the repository root.
 
@@ -983,10 +1048,11 @@ Every slice must include, as applicable:
 
 ### 21.4 Performance measurements
 
-S0's first reproducible record is
-[`docs/performance/s0-baseline.md`](docs/performance/s0-baseline.md). The
-`measure-s0` target emits versioned JSON and CI gates only schema/completion,
-not noisy wall-time thresholds.
+Reproducible records now cover S0 through the S3-A procedural foundation; the
+latest is [`docs/performance/s3a-baseline.md`](docs/performance/s3a-baseline.md).
+Each `measure-s*` target emits versioned JSON, and CI gates schema, declared
+workload behavior, bounded counts/bytes, and cleanup—not noisy wall-time
+thresholds.
 
 Record evidence rather than relying only on target numbers:
 
@@ -1036,6 +1102,15 @@ Record evidence rather than relying only on target numbers:
     procedural chassis and wheel assets.
 17. [x] Record the ReleaseFast one-vehicle characterization and complete the
     final independent S2 review before beginning S3.
+18. [x] Close the S3-A procedural/headless foundation with its ReleaseFast
+    measurement, source-package proof, full macOS test matrix, and independent
+    architecture/correctness/build review.
+19. [ ] Implement S3-B as the next slice: self-authored cook input, versioned
+    installed cooked bundle, explicit content root, generational resource
+    registry, fallback rendering, and nonblocking Metal upload/cancellation.
+20. [ ] Complete S3-C only after S3-B: host-owned proximity hysteresis,
+    installed `/tmp` native lifecycle smokes, end-to-end budgets, and final S3
+    review.
 
 ---
 
@@ -1068,3 +1143,5 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-12 | Narrowed platform scope from macOS-first with portability guards to macOS-only | Removed Linux/Windows CI jobs and cross-target checks; dormant secondary-platform code and historical evidence impose no current compatibility or abstraction requirement |
 | 2026-07-12 | Completed the S2 backend-neutral feature and real headless composition | 177/177 Debug, ReleaseFast, and editor-enabled macOS tests; one composition-owned physics step; explicit character/vehicle driver port and transactional exit relocation; strict Snapshot V3 occupied/unoccupied byte-stable logical restore; exact driver rollback, adapter error isolation, same-tick authority ordering, allocation/adapter rollback, and relationship validation; 16/16 extracted source-package tests |
 | 2026-07-12 | Completed and independently reviewed the S2 vehicle vertical slice | 179/179 Debug, ReleaseFast, and editor-enabled macOS tests; procedural chassis and canonical four-wheel rendering; exclusive outcome-driven character/vehicle controls and camera target; 720-tick native Metal collision/steering/exit smoke at 240 and 80 render Hz; installed ReleaseFast Mach-O from `/tmp`; three-trial ReleaseFast characterization; no remaining actionable P0/P1/P2 finding |
+| 2026-07-12 | Split S3 into an honest procedural/headless foundation, cooked/Metal residency, and final boundary/native stages | ADR-009 and the S3 design contract keep source import offline, make logical activation independent of GPU residency, and retain cooked installation plus nonblocking Metal upload as explicit S3-B/C gates |
+| 2026-07-12 | Completed and independently reviewed the S3-A procedural/headless district foundation | 212/212 editor-excluded Debug, ReleaseFast, and editor-enabled tests; 19/19 extracted source-package tests; bounded joined worker with TSan/stress evidence; explicit output backpressure; crate and CharacterVirtual support-removal regressions; Snapshot V4 byte-stable restore; three-trial ReleaseFast characterization with 24/24 clean cycles; no remaining actionable P0/P1/P2 finding; full S3 remains open for S3-B/C |

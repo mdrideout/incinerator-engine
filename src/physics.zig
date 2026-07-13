@@ -10,6 +10,7 @@ const c = @import("jolt_c").c;
 
 const invalid_body_id: c.JPH_BodyID = std.math.maxInt(c.JPH_BodyID);
 const temp_allocator_bytes: u32 = 10 * 1024 * 1024;
+pub const max_bodies: u32 = 10_240;
 
 /// JoltC exposes process-global initialization without reference counting.
 /// Keep that detail private to this adapter so multiple Physics worlds cannot
@@ -266,7 +267,7 @@ pub const Physics = struct {
         try failInitAt(failure_point, .after_filter_bundle);
 
         const settings = c.JPH_PhysicsSystemSettings{
-            .maxBodies = 10_240,
+            .maxBodies = max_bodies,
             .numBodyMutexes = 0,
             .maxBodyPairs = 65_536,
             .maxContactConstraints = 10_240,
@@ -332,6 +333,11 @@ pub const Physics = struct {
     /// feature is generic over this concrete capability and never imports
     /// Jolt or this adapter directly.
     pub fn crateBodies(self: *Physics) CrateBodies {
+        return .{ .physics = self };
+    }
+
+    /// Expose only static-body ownership to district environment features.
+    pub fn districtBodies(self: *Physics) DistrictBodies {
         return .{ .physics = self };
     }
 
@@ -1397,6 +1403,63 @@ pub const CrateBodies = struct {
 
     pub fn activeBodyCount(self: *CrateBodies) u32 {
         return self.physics.getActiveBodyCount();
+    }
+};
+
+/// Static-body capability for district environment features. Creation is
+/// transactional: a body whose rotation cannot be applied is removed before
+/// the error crosses the adapter boundary.
+pub const DistrictBodies = struct {
+    physics: *Physics,
+
+    pub const Handle = BodyId;
+
+    pub fn createStaticBox(
+        self: *DistrictBodies,
+        desc: engine.physics.StaticBoxDesc,
+    ) !Handle {
+        const normalized = try desc.normalized();
+        const body_id = try self.physics.createStaticBox(
+            normalized.pose.position,
+            normalized.half_extents,
+        );
+        errdefer _ = self.physics.removeBody(body_id);
+
+        try self.physics.setBodyRotation(body_id, normalized.pose.rotation);
+        return body_id;
+    }
+
+    pub fn destroyBody(self: *DistrictBodies, body_id: Handle) !void {
+        try self.physics.validateBody(body_id);
+        const body = c.JPH_PhysicsSystem_GetBodyPtr(
+            self.physics.system,
+            body_id.toJolt(),
+        ) orelse return error.InvalidBodyId;
+        var bounds: c.JPH_AABox = undefined;
+        c.JPH_Body_GetWorldSpaceBounds(body, &bounds);
+        const wake_padding: f32 = 0.05;
+        bounds.min.x -= wake_padding;
+        bounds.min.y -= wake_padding;
+        bounds.min.z -= wake_padding;
+        bounds.max.x += wake_padding;
+        bounds.max.y += wake_padding;
+        bounds.max.z += wake_padding;
+        // Removing static streaming support must wake sleeping moving bodies
+        // that touched it; otherwise they can remain suspended indefinitely.
+        c.JPH_PhysicsSystem_ActivateBodiesInAABox(
+            self.physics.system,
+            &bounds,
+            object_layers.moving,
+        );
+        if (!self.physics.removeBody(body_id)) {
+            @panic("validated district body could not be removed");
+        }
+    }
+
+    /// Host-only diagnostic. This is intentionally not part of the static-body
+    /// feature contract.
+    pub fn bodyCount(self: *DistrictBodies) u32 {
+        return self.physics.getBodyCount();
     }
 };
 
@@ -2589,4 +2652,90 @@ test "crate capability preserves accepted boundary velocities without clamping" 
     for (desc.velocity.angular, state.velocity.angular) |expected, actual| {
         try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
     }
+}
+
+test "district capability creates rotated static bodies and tears them down" {
+    comptime engine.physics.assertStaticBodyImplementation(DistrictBodies);
+
+    var physics = try Physics.init();
+    defer physics.deinit();
+    var bodies = physics.districtBodies();
+
+    const half_angle = std.math.pi / 8.0;
+    const desc = engine.physics.StaticBoxDesc{
+        .pose = .{
+            .position = .{ 4.5, 2.0, -7.25 },
+            // Exercise both normalization and a non-identity rotation.
+            .rotation = .{ 0, 2 * @sin(half_angle), 0, 2 * @cos(half_angle) },
+        },
+        .half_extents = .{ 3.0, 1.5, 0.75 },
+    };
+
+    const body = try bodies.createStaticBox(desc);
+    try std.testing.expectEqual(@as(u32, 1), bodies.bodyCount());
+    try std.testing.expectEqual(MotionType.static, try physics.getMotionType(body));
+
+    const position = try physics.getBodyPosition(body);
+    for (desc.pose.position, position) |expected, actual| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
+    const expected_pose = try desc.pose.normalized();
+    try expectEquivalentRotation(
+        expected_pose.rotation,
+        try physics.getBodyRotation(body),
+    );
+
+    try bodies.destroyBody(body);
+    try std.testing.expectEqual(@as(u32, 0), bodies.bodyCount());
+    try std.testing.expectError(error.InvalidBodyId, bodies.destroyBody(body));
+}
+
+test "district capability rejects invalid input and foreign handles" {
+    var first = try Physics.init();
+    defer first.deinit();
+    var second = try Physics.init();
+    defer second.deinit();
+    var first_bodies = first.districtBodies();
+    var second_bodies = second.districtBodies();
+
+    try std.testing.expectError(
+        error.InvalidHalfExtents,
+        first_bodies.createStaticBox(.{
+            .pose = .{},
+            .half_extents = .{ 1, -1, 1 },
+        }),
+    );
+    try std.testing.expectError(
+        error.NonFinitePhysicsValue,
+        first_bodies.createStaticBox(.{
+            .pose = .{},
+            .half_extents = .{ 1, std.math.nan(f32), 1 },
+        }),
+    );
+    try std.testing.expectError(
+        error.DegenerateQuaternion,
+        first_bodies.createStaticBox(.{
+            .pose = .{ .rotation = .{ 0, 0, 0, 0 } },
+            .half_extents = .{ 1, 1, 1 },
+        }),
+    );
+    try std.testing.expectEqual(@as(u32, 0), first_bodies.bodyCount());
+
+    const body = try first_bodies.createStaticBox(.{
+        .pose = .{ .position = .{ 2, 3, 4 } },
+        .half_extents = .{ 1, 1, 1 },
+    });
+    try std.testing.expectError(
+        error.ForeignBodyId,
+        second_bodies.destroyBody(body),
+    );
+    try std.testing.expectEqual(@as(u32, 0), second_bodies.bodyCount());
+    try std.testing.expectEqual(@as(u32, 1), first_bodies.bodyCount());
+
+    try first_bodies.destroyBody(body);
+    try std.testing.expectError(
+        error.InvalidBodyId,
+        first_bodies.destroyBody(body),
+    );
+    try std.testing.expectEqual(@as(u32, 0), first_bodies.bodyCount());
 }

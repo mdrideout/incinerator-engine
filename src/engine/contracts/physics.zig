@@ -52,6 +52,30 @@ pub const BodyState = struct {
     }
 };
 
+/// Static box creation data shared by district-style environment features and
+/// their host physics adapter. The descriptor contains no backend identifiers
+/// or lifetime state.
+pub const StaticBoxDesc = struct {
+    pose: Pose,
+    half_extents: [3]f32,
+
+    pub fn validate(self: StaticBoxDesc) !void {
+        try self.pose.validate();
+        try validateFinite(self.half_extents);
+        for (self.half_extents) |extent| {
+            if (extent <= 0) return error.InvalidHalfExtents;
+        }
+    }
+
+    pub fn normalized(self: StaticBoxDesc) !StaticBoxDesc {
+        try self.validate();
+        return .{
+            .pose = try self.pose.normalized(),
+            .half_extents = self.half_extents,
+        };
+    }
+};
+
 pub const DynamicBoxDesc = struct {
     pose: Pose,
     velocity: Velocity = .{},
@@ -444,6 +468,33 @@ pub fn assertImplementation(comptime Bodies: type) void {
     }
 }
 
+/// Check the deliberately narrow static-body capability used by environment
+/// features. Static features can create and release their own bodies, but do
+/// not receive mutation, query, or world-step access through this seam.
+pub fn assertStaticBodyImplementation(comptime Bodies: type) void {
+    comptime {
+        if (!@hasDecl(Bodies, "Handle")) {
+            @compileError("static physics implementation must declare Handle");
+        }
+        if (@TypeOf(Bodies.Handle) != type) {
+            @compileError("static physics implementation Handle must be a type");
+        }
+
+        assertFallibleMethod(
+            Bodies,
+            "createStaticBox",
+            .{ *Bodies, StaticBoxDesc },
+            Bodies.Handle,
+        );
+        assertFallibleMethod(
+            Bodies,
+            "destroyBody",
+            .{ *Bodies, Bodies.Handle },
+            void,
+        );
+    }
+}
+
 /// Check the world-step capability consumed by a simulation composition.
 /// Features do not own or schedule the shared physics step.
 pub fn assertWorldStepImplementation(comptime Stepper: type) void {
@@ -714,6 +765,55 @@ test "compile-time physics contracts separate feature bodies from host stepping"
 
     comptime assertImplementation(FakeBodies);
     comptime assertWorldStepImplementation(FakeWorldStepper);
+}
+
+test "static body contract validates normalized boxes and adapter shape" {
+    const FakeStaticBodies = struct {
+        pub const Handle = enum(u32) { building = 1 };
+
+        pub fn createStaticBox(_: *@This(), _: StaticBoxDesc) !Handle {
+            return .building;
+        }
+        pub fn destroyBody(_: *@This(), _: Handle) !void {}
+    };
+
+    comptime assertStaticBodyImplementation(FakeStaticBodies);
+
+    const normalized = try (StaticBoxDesc{
+        .pose = .{
+            .position = .{ 1, 2, 3 },
+            .rotation = .{ 0, 0, 0, 2 },
+        },
+        .half_extents = .{ 4, 5, 6 },
+    }).normalized();
+    try std.testing.expectEqual([3]f32{ 1, 2, 3 }, normalized.pose.position);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 1),
+        normalized.pose.rotation[3],
+        0.00001,
+    );
+
+    try std.testing.expectError(
+        error.InvalidHalfExtents,
+        (StaticBoxDesc{
+            .pose = .{},
+            .half_extents = .{ 1, 0, 1 },
+        }).validate(),
+    );
+    try std.testing.expectError(
+        error.NonFinitePhysicsValue,
+        (StaticBoxDesc{
+            .pose = .{},
+            .half_extents = .{ 1, std.math.inf(f32), 1 },
+        }).validate(),
+    );
+    try std.testing.expectError(
+        error.DegenerateQuaternion,
+        (StaticBoxDesc{
+            .pose = .{ .rotation = .{ 0, 0, 0, 0 } },
+            .half_extents = .{ 1, 1, 1 },
+        }).validate(),
+    );
 }
 
 test "character contract validates a bottom-anchored capsule and adapter" {

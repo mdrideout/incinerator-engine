@@ -85,9 +85,13 @@ jobs:
             -Dspirv-cross=/definitely/missing/spirv-cross \
             -Dshadercross=/definitely/missing/shadercross --prefix "$prefix"
           nm "$prefix/bin/incinerator_headless" > "$RUNNER_TEMP/headless-nm.txt"
-          ! grep -E 'SDL_|ImGui|cgltf|stbi_|meshopt_' "$RUNNER_TEMP/headless-nm.txt"
+          if grep -E 'SDL_|ImGui|cgltf|stbi_|meshopt_' "$RUNNER_TEMP/headless-nm.txt"; then
+            exit 1
+          fi
           otool -L "$prefix/bin/incinerator_headless" > "$RUNNER_TEMP/headless-libraries.txt"
-          ! grep -E 'SDL|Metal|QuartzCore|AppKit' "$RUNNER_TEMP/headless-libraries.txt"
+          if grep -E 'SDL|Metal|QuartzCore|AppKit' "$RUNNER_TEMP/headless-libraries.txt"; then
+            exit 1
+          fi
           "$prefix/bin/incinerator_headless"
 
       - name: Tests without editor
@@ -215,6 +219,67 @@ jobs:
               .post_despawn_entities == 0 and
               .post_despawn_bodies == 1 and
               .post_despawn_active_bodies == 0)
+          ' "$report"
+          cat "$report"
+
+      - name: S3-A measurement schema smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/s3-measure.json"
+          zig build measure-s3 -Doptimize=ReleaseFast -Deditor=false -- \
+            --warmup=16 --samples=32 --trials=1 --cycles=3 > "$report"
+          jq -e '
+            .schema_version == 1 and
+            .benchmark == "s3a_district_streaming" and
+            .optimize == "ReleaseFast" and
+            .warmup == 16 and .samples == 32 and .trials == 1 and
+            .cycles == 3 and (.results | length) == 1 and
+            all(.results[];
+              (has("cancellation_request_tick_ns") and
+                has("cancellation_wall_ns") and
+                has("request_to_cancellation_ticks") and
+                has("cancellation_completion_ticks")) and
+              .cancelled_districts == 0 and
+              .cancelled_district_bodies == 0 and
+              .cancelled_entities == 0 and
+              .cancelled_physics_bodies == 1 and
+              .cancelled_active_bodies == 0 and
+              (.request_to_activation_wall.samples == 3 and
+                (.request_to_activation_wall | has("mean_ns") and
+                  has("p50_ns") and has("p95_ns") and
+                  has("p99_ns") and has("max_ns"))) and
+              (.request_to_activation_ticks.samples == 3 and
+                (.request_to_activation_ticks | has("mean_ticks") and
+                  has("p50_ticks") and has("p95_ticks") and
+                  has("p99_ticks") and has("max_ticks"))) and
+              (.activation_tick.samples == 3 and
+                (.activation_tick | has("mean_ns") and has("p50_ns") and
+                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
+              (.unload_tick.samples == 3 and
+                (.unload_tick | has("mean_ns") and has("p50_ns") and
+                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
+              (.steady_tick.samples == 32 and
+                (.steady_tick | has("mean_ns") and has("p50_ns") and
+                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
+              (.district_extraction.samples == 32 and
+                (.district_extraction | has("mean_ns") and has("p50_ns") and
+                  has("p95_ns") and has("p99_ns") and has("max_ns"))) and
+              .active_districts == 1 and
+              .active_district_bodies == 3 and
+              .active_static_boxes == 3 and
+              .active_decoded_bytes == 120 and
+              .active_entities == 1 and
+              .active_physics_bodies == 4 and
+              .active_awake_bodies == 0 and
+              .cleanup_cycles_requested == 3 and
+              .cleanup_cycles_completed == 3 and
+              .clean_cleanup_cycles == 3 and
+              .post_cleanup_districts == 0 and
+              .post_cleanup_district_bodies == 0 and
+              .post_cleanup_entities == 0 and
+              .post_cleanup_physics_bodies == 1 and
+              .post_cleanup_active_bodies == 0)
           ' "$report"
           cat "$report"
 

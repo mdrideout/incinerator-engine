@@ -155,7 +155,7 @@ test "real Jolt lifecycle saves destroys restores and destroys" {
     }
 }
 
-test "V3 snapshot composes crate and character records under one runtime envelope" {
+test "V4 snapshot composes crate and character records under one runtime envelope" {
     const allocator = std.testing.allocator;
     var saved: []u8 = undefined;
     var crate_id: simulation.PersistentId = undefined;
@@ -325,8 +325,8 @@ fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
         .linear_velocity = .{ 0.5, 0.25, -0.25 },
         .angular_velocity = .{ 0.1, 0.2, 0.3 },
     }};
-    const initial = simulation.SnapshotV3{
-        .schema_version = 3,
+    const initial = simulation.SnapshotV4{
+        .schema_version = 4,
         .completed_ticks = 10,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 99,
@@ -336,10 +336,11 @@ fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
         .crates = &crate_records,
         .characters = &.{},
         .vehicles = &.{},
+        .districts = &.{},
     };
-    const initial_v3 = try std.json.Stringify.valueAlloc(allocator, initial, .{});
-    defer allocator.free(initial_v3);
-    var world = try simulation.Simulation.fromSnapshot(allocator, initial_v3, .{});
+    const initial_v4 = try std.json.Stringify.valueAlloc(allocator, initial, .{});
+    defer allocator.free(initial_v4);
+    var world = try simulation.Simulation.fromSnapshot(allocator, initial_v4, .{});
     defer world.deinit();
     const id = simulation.PersistentId{ .namespace = 99, .local = 1 };
     var samples: [4]TimelineSample = undefined;
@@ -361,7 +362,7 @@ fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
     return samples;
 }
 
-test "the same V3 command timeline repeats at multiple samples on one target" {
+test "the same V4 command timeline repeats at multiple samples on one target" {
     const first = try runTimeline(std.testing.allocator);
     const second = try runTimeline(std.testing.allocator);
     try std.testing.expectEqual([4]u64{ 10, 15, 16, 36 }, .{
@@ -534,7 +535,7 @@ test "live-world restore fails cleanly and leaves the caller usable" {
     try std.testing.expectEqual(@as(u64, 1), world.tickIndex());
 }
 
-test "multi-record V3 save is sorted and byte-stable across fresh restore" {
+test "multi-record V4 save is sorted and byte-stable across fresh restore" {
     const allocator = std.testing.allocator;
     const crate_records = [_]simulation.CrateV1{
         .{
@@ -558,8 +559,8 @@ test "multi-record V3 save is sorted and byte-stable across fresh restore" {
             .angular_velocity = .{ -0.3, 0.4, -0.2 },
         },
     };
-    const snapshot = simulation.SnapshotV3{
-        .schema_version = 3,
+    const snapshot = simulation.SnapshotV4{
+        .schema_version = 4,
         .completed_ticks = 17,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 700,
@@ -569,6 +570,7 @@ test "multi-record V3 save is sorted and byte-stable across fresh restore" {
         .crates = &crate_records,
         .characters = &.{},
         .vehicles = &.{},
+        .districts = &.{},
     };
     const unsorted = try std.json.Stringify.valueAlloc(allocator, snapshot, .{});
     defer allocator.free(unsorted);
@@ -598,7 +600,7 @@ test "multi-record V3 save is sorted and byte-stable across fresh restore" {
         .{ .ignore_unknown_fields = true },
     );
     defer parsed.deinit();
-    try std.testing.expectEqual(@as(u16, 3), parsed.value.schema_version);
+    try std.testing.expectEqual(@as(u16, 4), parsed.value.schema_version);
     try std.testing.expectEqual(@as(u64, 17), parsed.value.completed_ticks);
     try std.testing.expectEqual(@as(u64, 700), parsed.value.namespace);
     try std.testing.expectEqual(@as(u64, 42), parsed.value.next_local_id);
@@ -657,8 +659,8 @@ test "failed fresh loads do not mutate a live simulation" {
         error.SnapshotTooLarge,
         simulation.Simulation.fromSnapshot(allocator, oversized, .{}),
     );
-    const empty_snapshot = simulation.SnapshotV3{
-        .schema_version = 3,
+    const empty_snapshot = simulation.SnapshotV4{
+        .schema_version = 4,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 702,
@@ -668,6 +670,7 @@ test "failed fresh loads do not mutate a live simulation" {
         .crates = &.{},
         .characters = &.{},
         .vehicles = &.{},
+        .districts = &.{},
     };
     const valid_empty = try std.json.Stringify.valueAlloc(allocator, empty_snapshot, .{});
     defer allocator.free(valid_empty);
@@ -707,8 +710,8 @@ fn restoreAllocationCase(allocator: std.mem.Allocator) !void {
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0.25,
     }};
-    const logical_snapshot = simulation.SnapshotV3{
-        .schema_version = 3,
+    const logical_snapshot = simulation.SnapshotV4{
+        .schema_version = 4,
         .completed_ticks = 3,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 703,
@@ -718,6 +721,7 @@ fn restoreAllocationCase(allocator: std.mem.Allocator) !void {
         .crates = &crate_records,
         .characters = &character_records,
         .vehicles = &.{},
+        .districts = &.{},
     };
     const snapshot = try std.json.Stringify.valueAlloc(allocator, logical_snapshot, .{});
     defer allocator.free(snapshot);
@@ -761,6 +765,248 @@ test "owned simulation teardown accepts live crates pending commands and outcome
     defer replacement.deinit();
     try std.testing.expectEqual(@as(usize, 0), replacement.entityCount());
     try std.testing.expectEqual(@as(u32, 1), replacement.bodyCount());
+}
+
+const district_test_assets = simulation.DistrictAssets{
+    .mesh = .{ .index = 17, .generation = 2 },
+    .material = .{ .index = 23, .generation = 4 },
+};
+
+fn requestDistrict(
+    world: *simulation.Simulation,
+    request_id: u64,
+) !simulation.LoadTicket {
+    try world.submitDistrict(.{ .request_load = .{
+        .request_id = request_id,
+        .coord = .{ .x = 0, .z = -4 },
+        .assets = district_test_assets,
+    } });
+    try world.tick();
+    const outcome = world.pollDistrictOutcome() orelse
+        return error.DistrictRequestOutcomeMissing;
+    const ticket = switch (outcome) {
+        .load_requested => |requested| requested.ticket,
+        else => return error.UnexpectedDistrictOutcome,
+    };
+    if (world.pollDistrictOutcome() != null) return error.ExtraDistrictOutcome;
+    while (world.pollDistrictEvent() != null) {}
+    return ticket;
+}
+
+fn waitForDistrictActivation(
+    world: *simulation.Simulation,
+    expected: simulation.LoadTicket,
+) !void {
+    for (0..10_000) |_| {
+        std.Thread.yield() catch {};
+        try world.tick();
+        while (world.pollDistrictOutcome()) |outcome| switch (outcome) {
+            .activated => |activated| {
+                if (!std.meta.eql(expected, activated.ticket)) {
+                    return error.UnexpectedDistrictTicket;
+                }
+                while (world.pollDistrictEvent() != null) {}
+                return;
+            },
+            .load_failed => return error.DistrictLoadFailed,
+            .cancelled => return error.DistrictLoadCancelled,
+            else => return error.UnexpectedDistrictOutcome,
+        };
+        while (world.pollDistrictEvent() != null) {}
+    }
+    return error.DistrictWorkerDidNotComplete;
+}
+
+fn waitForDistrictCancellation(
+    world: *simulation.Simulation,
+    expected: simulation.LoadTicket,
+) !void {
+    var cancellation_requested = false;
+    for (0..10_000) |_| {
+        std.Thread.yield() catch {};
+        try world.tick();
+        while (world.pollDistrictOutcome()) |outcome| switch (outcome) {
+            .cancellation_requested => |requested| {
+                if (!std.meta.eql(expected, requested.ticket)) {
+                    return error.UnexpectedDistrictTicket;
+                }
+                cancellation_requested = true;
+            },
+            .cancelled => |cancelled| {
+                if (!std.meta.eql(expected, cancelled.ticket) or !cancellation_requested) {
+                    return error.UnexpectedDistrictCancellation;
+                }
+                while (world.pollDistrictEvent() != null) {}
+                return;
+            },
+            else => return error.UnexpectedDistrictOutcome,
+        };
+        while (world.pollDistrictEvent() != null) {}
+    }
+    return error.DistrictWorkerDidNotCancel;
+}
+
+fn unloadDistrict(
+    world: *simulation.Simulation,
+    request_id: u64,
+    ticket: simulation.LoadTicket,
+) !void {
+    try world.submitDistrict(.{ .unload = .{
+        .request_id = request_id,
+        .ticket = ticket,
+    } });
+    try world.tick();
+    const outcome = world.pollDistrictOutcome() orelse
+        return error.DistrictUnloadOutcomeMissing;
+    switch (outcome) {
+        .unloaded => |unloaded| {
+            if (!std.meta.eql(ticket, unloaded.ticket)) {
+                return error.UnexpectedDistrictTicket;
+            }
+        },
+        else => return error.UnexpectedDistrictOutcome,
+    }
+    if (world.pollDistrictOutcome() != null) return error.ExtraDistrictOutcome;
+    while (world.pollDistrictEvent() != null) {}
+}
+
+test "real district worker cancels activates collides unloads and repeats cleanly" {
+    const allocator = std.testing.allocator;
+    var world = try simulation.Simulation.init(allocator, .{
+        .namespace = 801,
+    });
+    defer world.deinit();
+
+    const cancelled_ticket = try requestDistrict(&world, 1);
+    try std.testing.expectEqual(simulation.DistrictStateTag.loading, world.districtState());
+    try std.testing.expectError(error.DistrictTransitionPending, world.save(allocator));
+    try world.submitDistrict(.{ .cancel_load = .{
+        .request_id = 2,
+        .ticket = cancelled_ticket,
+    } });
+    try waitForDistrictCancellation(&world, cancelled_ticket);
+    try std.testing.expectEqual(simulation.DistrictStateTag.absent, world.districtState());
+    try std.testing.expectEqual(@as(usize, 0), world.entityCount());
+    try std.testing.expectEqual(@as(u32, 1), world.bodyCount());
+
+    const active_ticket = try requestDistrict(&world, 3);
+    try waitForDistrictActivation(&world, active_ticket);
+    try std.testing.expectEqual(simulation.DistrictStateTag.active, world.districtState());
+    try std.testing.expectEqual(@as(usize, 1), world.districtCount());
+    try std.testing.expectEqual(@as(usize, 3), world.districtBodyCount());
+    try std.testing.expectEqual(@as(usize, 1), world.entityCount());
+    try std.testing.expectEqual(@as(u32, 4), world.bodyCount());
+    const district_draws = try world.districtPresentation();
+    try std.testing.expectEqual(@as(usize, 1), district_draws.len);
+    try std.testing.expectEqual(@as(u8, 3), district_draws[0].build.static_box_count);
+    try std.testing.expectEqual(district_test_assets.mesh, district_draws[0].assets.mesh);
+    try std.testing.expectEqual(
+        district_test_assets.material,
+        district_draws[0].assets.material,
+    );
+
+    // The crate settles on the raised district obstacle, not the district floor.
+    try world.submit(.{ .spawn = .{
+        .request_id = 4,
+        .pose = .{ .position = .{ -5.5, 6, -66 } },
+    } });
+    try world.tick();
+    const crate_id = world.pollOutcome().?.spawned.id;
+    for (0..360) |_| try world.tick();
+    const supported_y = (try world.crate(crate_id)).state.pose.position[1];
+    try std.testing.expect(supported_y > 2.4);
+    try std.testing.expect(supported_y < 2.7);
+
+    try unloadDistrict(&world, 5, active_ticket);
+    try std.testing.expectEqual(@as(usize, 1), world.entityCount());
+    try std.testing.expectEqual(@as(u32, 2), world.bodyCount());
+    try std.testing.expectEqual(@as(usize, 0), (try world.districtPresentation()).len);
+    for (0..120) |_| try world.tick();
+    try std.testing.expect(
+        (try world.crate(crate_id)).state.pose.position[1] < supported_y - 3,
+    );
+    try world.submit(.{ .despawn = .{ .id = crate_id } });
+    try world.tick();
+    _ = world.pollOutcome();
+
+    for (0..3) |cycle| {
+        const ticket = try requestDistrict(&world, 10 + cycle * 2);
+        try waitForDistrictActivation(&world, ticket);
+        try std.testing.expectEqual(@as(usize, 1), world.entityCount());
+        try std.testing.expectEqual(@as(u32, 4), world.bodyCount());
+        try unloadDistrict(&world, 11 + cycle * 2, ticket);
+        try std.testing.expectEqual(@as(usize, 0), world.entityCount());
+        try std.testing.expectEqual(@as(u32, 1), world.bodyCount());
+    }
+}
+
+test "CharacterVirtual leaves removed district support without stale ground state" {
+    var world = try simulation.Simulation.init(std.testing.allocator, .{
+        .namespace = 803,
+    });
+    defer world.deinit();
+    const ticket = try requestDistrict(&world, 1);
+    try waitForDistrictActivation(&world, ticket);
+
+    try world.submitCharacter(.{ .spawn = .{
+        .request_id = 2,
+        .position = .{ -5.5, 6, -66 },
+    } });
+    try world.tick();
+    const character_id = world.pollCharacterOutcome().?.spawned.id;
+    while (world.pollCharacterEvent() != null) {}
+    for (0..360) |_| try world.tick();
+    const supported = try world.character(character_id);
+    try std.testing.expectEqual(simulation.GroundState.on_ground, supported.ground_state);
+    try std.testing.expect(supported.position[1] > 1.9);
+    try std.testing.expect(supported.position[1] < 2.1);
+
+    try unloadDistrict(&world, 3, ticket);
+    const after_unload = try world.character(character_id);
+    try std.testing.expect(after_unload.ground_state != .on_ground);
+    for (0..120) |_| try world.tick();
+    try std.testing.expect(
+        (try world.character(character_id)).position[1] < supported.position[1] - 3,
+    );
+    try world.submitCharacter(.{ .despawn = .{ .id = character_id } });
+    try world.tick();
+    _ = world.pollCharacterOutcome();
+    try std.testing.expectEqual(@as(usize, 0), world.entityCount());
+    try std.testing.expectEqual(@as(u32, 1), world.bodyCount());
+}
+
+test "active district Snapshot V4 restore is byte-stable and rebuilds logical ownership" {
+    const allocator = std.testing.allocator;
+    var bytes: []u8 = undefined;
+    {
+        var original = try simulation.Simulation.init(allocator, .{
+            .namespace = 802,
+            .create_ground = false,
+        });
+        defer original.deinit();
+        const ticket = try requestDistrict(&original, 1);
+        try waitForDistrictActivation(&original, ticket);
+        bytes = try original.save(allocator);
+        const repeated = try original.save(allocator);
+        defer allocator.free(repeated);
+        try std.testing.expectEqualSlices(u8, bytes, repeated);
+    }
+    defer allocator.free(bytes);
+
+    var restored = try simulation.Simulation.fromSnapshot(allocator, bytes, .{
+        .create_ground = false,
+        .district_assets = district_test_assets,
+    });
+    defer restored.deinit();
+    try std.testing.expectEqual(@as(usize, 1), restored.districtCount());
+    try std.testing.expectEqual(@as(usize, 1), restored.entityCount());
+    try std.testing.expectEqual(@as(u32, 3), restored.bodyCount());
+    const draw = (try restored.districtPresentation())[0];
+    try std.testing.expectEqual(district_test_assets.mesh, draw.assets.mesh);
+    try std.testing.expectEqual(district_test_assets.material, draw.assets.material);
+    const resaved = try restored.save(allocator);
+    defer allocator.free(resaved);
+    try std.testing.expectEqualSlices(u8, bytes, resaved);
 }
 
 test "all imported sandbox module tests are discovered" {

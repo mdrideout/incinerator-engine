@@ -97,15 +97,17 @@ Jolt step. No feature adapter privately advances the shared world. Expected
 domain rejection is reported as a typed outcome;
 infrastructure, adapter, and invariant errors put the runtime into a terminal
 fault state that permits diagnostics and teardown but rejects further normal
-ticks, command submission, and persistence. The composition owns the V3 world
-schema, runtime clock/identity metadata, global identity policy, and validated
-character/vehicle driver relationships;
+ticks, command submission, and persistence. The composition owns the V4 world
+schema, runtime clock/identity metadata, global identity policy, validated
+character/vehicle driver relationships, and logical district reconstruction;
 features own their logical V1 records and feature-specific persisted tuning.
-Character and vehicle simulation tuning is required in the V3 envelope and
+Character and vehicle simulation tuning is required in the V4 envelope and
 authoritative on restore; host capacity and presentation assets remain
 restore-time policy. Occupied restore creates characters and vehicles before
-linking authority, and any partial link failure rolls back before the candidate
-world is discarded.
+linking authority, while district restore rebuilds its validated procedural
+recipe and static-body ownership without persisting worker or backend handles.
+Any partial link or activation failure rolls back before the candidate world is
+discarded.
 
 The current zflecs wrapper permits one live engine-owned world per process. A
 shared lease rejects a second owner before entering zflecs and preserves the

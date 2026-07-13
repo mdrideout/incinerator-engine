@@ -5,6 +5,9 @@ const engine = @import("incinerator_engine");
 const crates = @import("crate_feature");
 const characters = @import("character_feature");
 const vehicles = @import("vehicle_feature");
+const districts = @import("district_feature");
+const district_contract = @import("district_contract");
+const district_worker = @import("district_worker");
 const jolt = @import("jolt_physics");
 
 pub const Command = crates.Command;
@@ -45,13 +48,22 @@ pub const VehicleDraw = vehicles.VehicleDraw;
 pub const VehicleConfig = vehicles.Config;
 pub const VehicleConfigV1 = vehicles.VehicleConfigV1;
 pub const VehicleV1 = vehicles.VehicleV1;
+pub const DistrictCommand = districts.Command;
+pub const DistrictOutcome = districts.Outcome;
+pub const DistrictEvent = districts.Event;
+pub const DistrictDraw = districts.DistrictDraw;
+pub const DistrictAssets = districts.Assets;
+pub const DistrictStateTag = districts.StateTag;
+pub const DistrictV1 = districts.DistrictV1;
+pub const ChunkCoord = district_contract.ChunkCoord;
+pub const LoadTicket = district_contract.LoadTicket;
 
 pub const StaticBox = struct {
     position: [3]f32,
     half_extents: [3]f32,
 };
 
-pub const SnapshotV3 = struct {
+pub const SnapshotV4 = struct {
     schema_version: u16,
     completed_ticks: u64,
     fixed_delta_seconds: f32,
@@ -62,6 +74,7 @@ pub const SnapshotV3 = struct {
     crates: []const CrateV1,
     characters: []const CharacterV1,
     vehicles: []const VehicleV1,
+    districts: []const DistrictV1,
 };
 
 pub const max_snapshot_bytes: usize = 8 * 1024 * 1024;
@@ -69,6 +82,7 @@ pub const max_snapshot_bytes: usize = 8 * 1024 * 1024;
 const CrateFeature = crates.Feature(jolt.CrateBodies);
 const CharacterFeature = characters.Feature(jolt.CharacterControllers);
 const VehicleFeature = vehicles.Feature(jolt.Vehicles, CharacterFeature.DriverAccess);
+const DistrictFeature = districts.Feature(jolt.DistrictBodies, district_worker.Worker);
 
 pub const Config = struct {
     namespace: u64,
@@ -97,6 +111,7 @@ pub const RestoreConfig = struct {
     create_ground: bool = true,
     character: CharacterRestoreOptions = .{},
     vehicle: VehicleRestoreOptions = .{},
+    district_assets: DistrictAssets = .{},
     block: ?StaticBox = null,
 };
 
@@ -112,6 +127,9 @@ const State = struct {
     character_feature: CharacterFeature,
     driver_access: CharacterFeature.DriverAccess,
     vehicle_feature: VehicleFeature,
+    district_bodies: jolt.DistrictBodies,
+    district_worker: district_worker.Worker,
+    district_feature: DistrictFeature,
     ground: ?jolt.BodyId,
     block: ?jolt.BodyId,
 };
@@ -165,6 +183,10 @@ pub const Simulation = struct {
         try simulation.state.crate_feature.restoreRecords(parsed.value.crates);
         try simulation.state.character_feature.restoreRecords(parsed.value.characters);
         try simulation.state.vehicle_feature.restoreRecords(parsed.value.vehicles);
+        try simulation.state.district_feature.restoreRecords(
+            parsed.value.districts,
+            config.district_assets,
+        );
         simulation.state.runtime.finishRegistration();
         return simulation;
     }
@@ -176,6 +198,7 @@ pub const Simulation = struct {
         completed_ticks: u64,
     ) !Simulation {
         if (config.max_crates == 0) return error.InvalidCrateLimit;
+        try validatePhysicsBodyBudget(config);
         const state = try allocator.create(State);
         errdefer allocator.destroy(state);
         const physics = try allocator.create(jolt.Physics);
@@ -198,6 +221,9 @@ pub const Simulation = struct {
         state.bodies = physics.crateBodies();
         state.controllers = physics.characterControllers();
         state.vehicle_adapter = physics.vehicles();
+        state.district_bodies = physics.districtBodies();
+        state.district_worker = district_worker.Worker.init();
+        errdefer state.district_worker.deinit();
         state.crate_feature = try CrateFeature.init(
             allocator,
             &state.runtime,
@@ -222,11 +248,19 @@ pub const Simulation = struct {
             config.vehicle,
         );
         errdefer state.vehicle_feature.deinit();
+        state.district_feature = DistrictFeature.init(
+            allocator,
+            &state.runtime,
+            &state.district_bodies,
+            &state.district_worker,
+        );
+        errdefer state.district_feature.deinit();
 
         var registry = state.runtime.registry();
         try state.crate_feature.register(&registry);
         try state.character_feature.register(&registry);
         try state.vehicle_feature.register(&registry);
+        try state.district_feature.register(&registry);
         try registry.addSystem(.physics, "physics.step", &state.stepper, stepPhysics);
 
         if (config.create_ground) {
@@ -246,6 +280,9 @@ pub const Simulation = struct {
 
     pub fn deinit(self: *Simulation) void {
         const state = self.state;
+        state.runtime.assertOwnerThread();
+        state.district_feature.deinit();
+        state.district_worker.deinit();
         state.vehicle_feature.deinit();
         state.character_feature.deinit();
         state.crate_feature.deinit();
@@ -268,15 +305,23 @@ pub const Simulation = struct {
     }
 
     pub fn submit(self: *Simulation, command: Command) !void {
+        try self.state.runtime.ensureOwnerThread();
         try self.state.crate_feature.enqueue(command);
     }
 
     pub fn submitCharacter(self: *Simulation, command: CharacterCommand) !void {
+        try self.state.runtime.ensureOwnerThread();
         try self.state.character_feature.enqueue(command);
     }
 
     pub fn submitVehicle(self: *Simulation, command: VehicleCommand) !void {
+        try self.state.runtime.ensureOwnerThread();
         try self.state.vehicle_feature.enqueue(command);
+    }
+
+    pub fn submitDistrict(self: *Simulation, command: DistrictCommand) !void {
+        try self.state.runtime.ensureOwnerThread();
+        try self.state.district_feature.enqueue(command);
     }
 
     pub fn tick(self: *Simulation) !void {
@@ -284,29 +329,45 @@ pub const Simulation = struct {
     }
 
     pub fn pollOutcome(self: *Simulation) ?Outcome {
+        self.state.runtime.assertOwnerThread();
         return self.state.crate_feature.pollOutcome();
     }
 
     pub fn pollCharacterOutcome(self: *Simulation) ?CharacterOutcome {
+        self.state.runtime.assertOwnerThread();
         return self.state.character_feature.pollOutcome();
     }
 
     pub fn pollCharacterEvent(self: *Simulation) ?CharacterEvent {
+        self.state.runtime.assertOwnerThread();
         return self.state.character_feature.pollEvent();
     }
 
     pub fn pollVehicleOutcome(self: *Simulation) ?VehicleOutcome {
+        self.state.runtime.assertOwnerThread();
         return self.state.vehicle_feature.pollOutcome();
     }
 
     pub fn pollVehicleEvent(self: *Simulation) ?VehicleEvent {
+        self.state.runtime.assertOwnerThread();
         return self.state.vehicle_feature.pollEvent();
+    }
+
+    pub fn pollDistrictOutcome(self: *Simulation) ?DistrictOutcome {
+        self.state.runtime.assertOwnerThread();
+        return self.state.district_feature.pollOutcome();
+    }
+
+    pub fn pollDistrictEvent(self: *Simulation) ?DistrictEvent {
+        self.state.runtime.assertOwnerThread();
+        return self.state.district_feature.pollEvent();
     }
 
     pub fn presentation(
         self: *Simulation,
         alpha: f32,
     ) ![]const CrateDraw {
+        try self.state.runtime.ensureOwnerThread();
         return self.state.crate_feature.extract(alpha);
     }
 
@@ -314,6 +375,7 @@ pub const Simulation = struct {
         self: *Simulation,
         alpha: f32,
     ) ![]const CharacterDraw {
+        try self.state.runtime.ensureOwnerThread();
         return self.state.character_feature.extract(alpha);
     }
 
@@ -321,18 +383,27 @@ pub const Simulation = struct {
         self: *Simulation,
         alpha: f32,
     ) ![]const VehicleDraw {
+        try self.state.runtime.ensureOwnerThread();
         return self.state.vehicle_feature.extract(alpha);
     }
 
+    pub fn districtPresentation(self: *Simulation) ![]const DistrictDraw {
+        try self.state.runtime.ensureOwnerThread();
+        return self.state.district_feature.extract();
+    }
+
     pub fn crate(self: *Simulation, id: engine.PersistentId) !CrateView {
+        try self.state.runtime.ensureOwnerThread();
         return self.state.crate_feature.view(id);
     }
 
     pub fn character(self: *Simulation, id: engine.PersistentId) !CharacterView {
+        try self.state.runtime.ensureOwnerThread();
         return self.state.character_feature.view(id);
     }
 
     pub fn vehicle(self: *Simulation, id: engine.PersistentId) !VehicleView {
+        try self.state.runtime.ensureOwnerThread();
         return self.state.vehicle_feature.view(id);
     }
 
@@ -340,7 +411,8 @@ pub const Simulation = struct {
         try self.state.runtime.ensureSnapshotBoundary();
         if (self.state.crate_feature.hasPendingCommands() or
             self.state.character_feature.hasPendingCommands() or
-            self.state.vehicle_feature.hasPendingCommands())
+            self.state.vehicle_feature.hasPendingCommands() or
+            self.state.district_feature.hasPendingCommands())
         {
             return error.CommandsPending;
         }
@@ -350,8 +422,10 @@ pub const Simulation = struct {
         defer allocator.free(character_records);
         const vehicle_records = try self.state.vehicle_feature.snapshotRecords(allocator);
         defer allocator.free(vehicle_records);
-        return std.json.Stringify.valueAlloc(allocator, SnapshotV3{
-            .schema_version = 3,
+        const district_records = try self.state.district_feature.snapshotRecords(allocator);
+        defer allocator.free(district_records);
+        return std.json.Stringify.valueAlloc(allocator, SnapshotV4{
+            .schema_version = 4,
             .completed_ticks = self.state.runtime.tickIndex(),
             .fixed_delta_seconds = self.state.runtime.fixedDelta(),
             .namespace = self.state.runtime.namespace(),
@@ -365,35 +439,63 @@ pub const Simulation = struct {
             .crates = crate_records,
             .characters = character_records,
             .vehicles = vehicle_records,
+            .districts = district_records,
         }, .{});
     }
 
     pub fn crateCount(self: *const Simulation) usize {
+        self.state.runtime.assertOwnerThread();
         return self.state.crate_feature.count();
     }
 
     pub fn characterCount(self: *const Simulation) usize {
+        self.state.runtime.assertOwnerThread();
         return self.state.character_feature.count();
     }
 
     pub fn vehicleCount(self: *const Simulation) usize {
+        self.state.runtime.assertOwnerThread();
         return self.state.vehicle_feature.count();
     }
 
+    pub fn districtCount(self: *const Simulation) usize {
+        self.state.runtime.assertOwnerThread();
+        return self.state.district_feature.count();
+    }
+
+    pub fn districtBodyCount(self: *const Simulation) usize {
+        self.state.runtime.assertOwnerThread();
+        return self.state.district_feature.bodyCount();
+    }
+
+    pub fn districtState(self: *const Simulation) DistrictStateTag {
+        self.state.runtime.assertOwnerThread();
+        return self.state.district_feature.stateTag();
+    }
+
+    pub fn activeDistrictTicket(self: *const Simulation) ?LoadTicket {
+        self.state.runtime.assertOwnerThread();
+        return self.state.district_feature.activeTicket();
+    }
+
     pub fn entityCount(self: *const Simulation) usize {
+        self.state.runtime.assertOwnerThread();
         return self.state.runtime.entityCount();
     }
 
     pub fn bodyCount(self: *Simulation) u32 {
+        self.state.runtime.assertOwnerThread();
         return self.state.bodies.bodyCount();
     }
 
     /// Adapter diagnostic used by S0 characterization, not feature policy.
     pub fn activeBodyCount(self: *Simulation) u32 {
+        self.state.runtime.assertOwnerThread();
         return self.state.bodies.activeBodyCount();
     }
 
     pub fn tickIndex(self: *const Simulation) u64 {
+        self.state.runtime.assertOwnerThread();
         return self.state.runtime.tickIndex();
     }
 };
@@ -404,21 +506,21 @@ pub fn parseSnapshot(
     max_crates: usize,
     max_characters: usize,
     max_vehicles: usize,
-) !std.json.Parsed(SnapshotV3) {
+) !std.json.Parsed(SnapshotV4) {
     if (bytes.len > max_snapshot_bytes) return error.SnapshotTooLarge;
-    var parsed = try std.json.parseFromSlice(SnapshotV3, allocator, bytes, .{});
+    var parsed = try std.json.parseFromSlice(SnapshotV4, allocator, bytes, .{});
     errdefer parsed.deinit();
     try validateSnapshot(parsed.value, max_crates, max_characters, max_vehicles);
     return parsed;
 }
 
 pub fn validateSnapshot(
-    snapshot: SnapshotV3,
+    snapshot: SnapshotV4,
     max_crates: usize,
     max_characters: usize,
     max_vehicles: usize,
 ) !void {
-    if (snapshot.schema_version != 3) return error.UnsupportedSchemaVersion;
+    if (snapshot.schema_version != 4) return error.UnsupportedSchemaVersion;
     if (snapshot.namespace == 0) return error.InvalidIdentityNamespace;
     if (snapshot.next_local_id == 0) return error.InvalidIdentityCursor;
     if (!std.math.isFinite(snapshot.fixed_delta_seconds) or
@@ -431,6 +533,7 @@ pub fn validateSnapshot(
     try crates.validateRecords(snapshot.crates, max_crates);
     if (snapshot.characters.len > max_characters) return error.TooManyCharacters;
     try vehicles.validateRecords(snapshot.vehicles, max_vehicles);
+    try districts.validateRecords(snapshot.districts);
 
     for (snapshot.crates) |record| {
         try validateSnapshotIdentity(record.id, snapshot);
@@ -478,11 +581,43 @@ pub fn validateSnapshot(
             }
         }
     }
+    for (snapshot.districts) |record| {
+        try validateSnapshotIdentity(record.id, snapshot);
+        for (snapshot.crates) |crate_record| {
+            if (std.meta.eql(crate_record.id, record.id)) return error.DuplicatePersistentId;
+        }
+        for (snapshot.characters) |character_record| {
+            if (std.meta.eql(character_record.id, record.id)) {
+                return error.DuplicatePersistentId;
+            }
+        }
+        for (snapshot.vehicles) |vehicle_record| {
+            if (std.meta.eql(vehicle_record.id, record.id)) {
+                return error.DuplicatePersistentId;
+            }
+        }
+    }
 }
 
-fn validateSnapshotIdentity(id: engine.PersistentId, snapshot: SnapshotV3) !void {
+fn validateSnapshotIdentity(id: engine.PersistentId, snapshot: SnapshotV4) !void {
     if (id.namespace != snapshot.namespace) return error.ForeignIdentityNamespace;
     if (id.local >= snapshot.next_local_id) return error.IdentityCursorWouldCollide;
+}
+
+fn validatePhysicsBodyBudget(config: Config) !void {
+    var required = std.math.add(usize, config.max_crates, config.vehicle.max_vehicles) catch
+        return error.PhysicsBodyBudgetExceeded;
+    required = std.math.add(usize, required, district_contract.max_static_boxes) catch
+        return error.PhysicsBodyBudgetExceeded;
+    if (config.create_ground) {
+        required = std.math.add(usize, required, 1) catch
+            return error.PhysicsBodyBudgetExceeded;
+    }
+    if (config.block != null) {
+        required = std.math.add(usize, required, 1) catch
+            return error.PhysicsBodyBudgetExceeded;
+    }
+    if (required > jolt.max_bodies) return error.PhysicsBodyBudgetExceeded;
 }
 
 fn stepPhysics(
@@ -502,6 +637,40 @@ test "simulation type composes crate and character features with Jolt" {
         @compileError("crate capability must not own the shared physics step");
     };
     _ = Simulation;
+}
+
+test "composition rejects an impossible Jolt body budget before acquiring a world" {
+    try std.testing.expectError(
+        error.PhysicsBodyBudgetExceeded,
+        Simulation.init(std.testing.allocator, .{
+            .namespace = 7011,
+            .max_crates = jolt.max_bodies,
+        }),
+    );
+    var usable = try Simulation.init(std.testing.allocator, .{ .namespace = 7012 });
+    defer usable.deinit();
+}
+
+test "composition rejects fallible district submission from a non-owner thread" {
+    var simulation = try Simulation.init(std.testing.allocator, .{ .namespace = 7013 });
+    defer simulation.deinit();
+    var rejected = std.atomic.Value(bool).init(false);
+    const Probe = struct {
+        fn run(target: *Simulation, result: *std.atomic.Value(bool)) void {
+            target.submitDistrict(.{ .request_load = .{
+                .request_id = 1,
+                .coord = .{ .x = 0, .z = -4 },
+                .assets = .{},
+            } }) catch |err| {
+                result.store(err == error.WrongRuntimeThread, .release);
+            };
+        }
+    };
+    const thread = try std.Thread.spawn(.{}, Probe.run, .{ &simulation, &rejected });
+    thread.join();
+    try std.testing.expect(rejected.load(.acquire));
+    try std.testing.expectEqual(DistrictStateTag.absent, simulation.districtState());
+    try simulation.tick();
 }
 
 test "real Jolt character walks, jumps, and stops at the composed block" {
@@ -690,7 +859,7 @@ test "same-tick character commands and vehicle authority follow declared registr
     }
 }
 
-test "Snapshot V3 restores occupied and unoccupied real vehicles logically" {
+test "Snapshot V4 restores occupied and unoccupied real vehicles logically" {
     const allocator = std.testing.allocator;
     var original = try Simulation.init(allocator, .{ .namespace = 92 });
     var original_live = true;
@@ -841,8 +1010,8 @@ test "snapshot owns character tuning and preserves canonical yaw bytes" {
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = tiny_yaw,
     }};
-    const initial = try std.json.Stringify.valueAlloc(allocator, SnapshotV3{
-        .schema_version = 3,
+    const initial = try std.json.Stringify.valueAlloc(allocator, SnapshotV4{
+        .schema_version = 4,
         .completed_ticks = 3,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 75,
@@ -852,6 +1021,7 @@ test "snapshot owns character tuning and preserves canonical yaw bytes" {
         .crates = &.{},
         .characters = &records,
         .vehicles = &.{},
+        .districts = &.{},
     }, .{});
     defer allocator.free(initial);
 
@@ -898,8 +1068,8 @@ test "snapshot tuning and host character capacity fail before world construction
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
     }};
-    var snapshot = SnapshotV3{
-        .schema_version = 3,
+    var snapshot = SnapshotV4{
+        .schema_version = 4,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 76,
@@ -909,6 +1079,7 @@ test "snapshot tuning and host character capacity fail before world construction
         .crates = &.{},
         .characters = &records,
         .vehicles = &.{},
+        .districts = &.{},
     };
     snapshot.character_config.gravity = 0;
     const invalid = try std.json.Stringify.valueAlloc(allocator, snapshot, .{});
@@ -1118,7 +1289,7 @@ test "character climbs a physical step within configured height" {
     try std.testing.expect(state.position[2] < -2.5);
 }
 
-test "V3 validation owns schema cursor and cross-feature identity policy" {
+test "V4 validation owns schema cursor and cross-feature identity policy" {
     const crate_records = [_]CrateV1{.{
         .id = .{ .namespace = 73, .local = 1 },
         .half_extents = .{ 0.5, 0.5, 0.5 },
@@ -1132,8 +1303,8 @@ test "V3 validation owns schema cursor and cross-feature identity policy" {
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
     }};
-    const snapshot = SnapshotV3{
-        .schema_version = 3,
+    const snapshot = SnapshotV4{
+        .schema_version = 4,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 73,
@@ -1143,6 +1314,7 @@ test "V3 validation owns schema cursor and cross-feature identity policy" {
         .crates = &crate_records,
         .characters = &character_records,
         .vehicles = &.{},
+        .districts = &.{},
     };
     try std.testing.expectError(
         error.DuplicatePersistentId,
@@ -1161,9 +1333,27 @@ test "V3 validation owns schema cursor and cross-feature identity policy" {
         error.IdentityCursorWouldCollide,
         validateSnapshot(colliding_cursor, 8, 1, 1),
     );
+
+    const build = district_contract.proceduralBuild(
+        .{ .x = 0, .z = -4 },
+        district_contract.current_recipe_version,
+    ).ready;
+    const district_records = [_]DistrictV1{.{
+        .id = crate_records[0].id,
+        .coord = build.coord,
+        .recipe_version = build.recipe_version,
+        .checksum = build.checksum,
+    }};
+    var district_collision = snapshot;
+    district_collision.characters = &.{};
+    district_collision.districts = &district_records;
+    try std.testing.expectError(
+        error.DuplicatePersistentId,
+        validateSnapshot(district_collision, 8, 1, 1),
+    );
 }
 
-test "V3 validation rejects missing and multiply assigned vehicle drivers" {
+test "V4 validation rejects missing and multiply assigned vehicle drivers" {
     const character_records = [_]CharacterV1{
         .{
             .id = .{ .namespace = 731, .local = 1 },
@@ -1204,8 +1394,8 @@ test "V3 validation rejects missing and multiply assigned vehicle drivers" {
             .driver_id = .{ .namespace = 731, .local = 1 },
         },
     };
-    const snapshot = SnapshotV3{
-        .schema_version = 3,
+    const snapshot = SnapshotV4{
+        .schema_version = 4,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 731,
@@ -1215,6 +1405,7 @@ test "V3 validation rejects missing and multiply assigned vehicle drivers" {
         .crates = &.{},
         .characters = &character_records,
         .vehicles = &vehicle_records,
+        .districts = &.{},
     };
 
     try std.testing.expectError(

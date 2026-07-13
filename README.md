@@ -86,7 +86,7 @@ zig build check-headless -Deditor=false \
   -Dspirv-cross=/definitely/missing/spirv-cross \
   -Dshadercross=/definitely/missing/shadercross
 
-# Run the SDL-free crate + character sandbox
+# Run the SDL-free sandbox composition
 zig build run-headless -Deditor=false
 
 # Run the renderer-free Jolt integration test
@@ -112,6 +112,9 @@ zig build measure-s1 -Doptimize=ReleaseFast -Deditor=false
 
 # Record the ReleaseFast S2 occupied-vehicle characterization
 zig build measure-s2 -Doptimize=ReleaseFast -Deditor=false
+
+# Record the ReleaseFast S3-A procedural district characterization
+zig build measure-s3 -Doptimize=ReleaseFast -Deditor=false
 
 # Self-terminating native visual cadence/shutdown checks
 zig build run -Deditor=false -- \
@@ -152,6 +155,13 @@ zig build smoke-init-failures-macos \
 
 The engine package intentionally excludes `assets`. Any GLB files under the working tree's `assets/models` directory are game-owned development content, not engine package or startup dependencies. The current sandbox uses generated primitives, and `--verify-install` does not load game content or initialize the GPU.
 
+Production runtime streaming will consume versioned renderer-neutral cooked
+bundles from an explicit content root; it will not parse authoring glTF or infer
+content from the working directory. S3-A currently uses deterministic procedural
+conformance data to prove worker, physics, persistence, and cancellation
+ownership. The self-authored cook fixture, installed bundle, and Metal residency
+path remain explicit S3-B work under ADR-009.
+
 ## Controls
 
 | Key | Action |
@@ -183,6 +193,10 @@ The overhaul is converging on a thin kernel, feature-owned vertical slices, narr
 - [`S2 Vehicle Slice Design`](docs/design/s2-vehicle-slice.md)
 - [`S2 Acceptance Record`](docs/validation/s2-headless-acceptance.md)
 - [`S2 Performance Baseline`](docs/performance/s2-baseline.md)
+- [`S3 District Streaming Design`](docs/design/s3-district-streaming.md)
+- [`S3-A Acceptance Record`](docs/validation/s3a-headless-acceptance.md)
+- [`S3-A Performance Baseline`](docs/performance/s3a-baseline.md)
+- [`ADR-009: Runtime Content and Streaming Boundary`](docs/adr/009-runtime-content-and-streaming.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 
@@ -192,7 +206,7 @@ The engine loop separates input, fixed-rate simulation, and presentation:
 input pump (per frame) -> simulation ticks (fixed 120 Hz) -> presentation
 ```
 
-The current M2/S2 boundary is intentionally concrete rather than a future
+The current S3-A boundary is intentionally concrete rather than a future
 asset/framework abstraction:
 
 - GPU textures have explicit `OwnedTexture` owners and copy-safe borrowed views;
@@ -217,9 +231,15 @@ asset/framework abstraction:
 - `VehicleFeature` owns typed spawn/enter/drive/exit/despawn commands, explicit
   driver authority, logical vehicle records, and chassis/four-wheel extraction
   through backend-neutral vehicle and driver ports;
-- the sandbox composition owns the V3 save envelope, runtime clock and identity
+- `DistrictFeature` owns a bounded asynchronous logical lifecycle, one
+  persistent district entity, transactional static-body ownership, typed
+  outcomes/events, and renderer-neutral extraction through loader/static-body
+  ports; the real worker publishes only fixed plain data and never touches
+  Runtime, Flecs, Jolt, SDL, or renderer state;
+- the sandbox composition owns the V4 save envelope, runtime clock and identity
   cursor, cross-feature identity validation, and authoritative restoration of
-  feature-owned character/vehicle tuning and occupied relationships;
+  feature-owned character/vehicle tuning, occupied relationships, and logical
+  district state;
 - exactly one composition-owned physics step advances crates, characters, and
   vehicles; no feature adapter privately advances the shared Jolt world;
 - the public engine module exposes feature-authoring contracts and a type-erased
@@ -228,7 +248,7 @@ asset/framework abstraction:
 - the headless artifact and its extracted-package tests contain no SDL, ImGui,
   renderer, asset-loader, or shader-tool edge.
 
-The visual sandbox and headless host now construct the same owned S2
+The visual sandbox and headless host now construct the same owned S3-A
 `Simulation`; the former `GameWorld`, borrowed Flecs/Jolt composition, direct
 ECS render query, and editor mutation path have been removed. The editor keeps
 stats, camera, and render panels. Scene inspection/manipulation returns in a

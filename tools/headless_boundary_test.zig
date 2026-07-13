@@ -26,12 +26,17 @@ const root_files = [_][]const u8{
     "src/adapters/physics/jolt_c.zig",
     "src/hosts/headless.zig",
     "src/hosts/simulation.zig",
+    "src/features/driver_contract.zig",
+    "src/features/district_contract.zig",
+    "src/district_worker.zig",
 };
 
 const root_directories = [_][]const u8{
     "src/engine",
     "src/features/crates",
     "src/features/character",
+    "src/features/vehicle",
+    "src/features/district",
 };
 
 pub fn main(init: std.process.Init) !void {

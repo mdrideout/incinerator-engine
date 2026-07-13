@@ -59,6 +59,7 @@ const State = struct {
     issued_identities: std.AutoHashMap(PersistentId, void),
     identity_source: identity_module.IdentitySource,
     runtime_token: u64,
+    owner_thread: std.Thread.Id,
     next_entity_serial: u64 = 1,
     systems: std.ArrayListUnmanaged(System) = .empty,
     fixed_delta_seconds: f32,
@@ -95,6 +96,7 @@ pub const Runtime = struct {
                 config.next_local_id,
             ),
             .runtime_token = try allocateRuntimeToken(),
+            .owner_thread = std.Thread.getCurrentId(),
             .fixed_delta_seconds = config.fixed_delta_seconds,
             .completed_ticks = config.completed_ticks,
         };
@@ -104,6 +106,7 @@ pub const Runtime = struct {
     }
 
     pub fn deinit(self: *Runtime) void {
+        self.assertOwnerThread();
         if (self.statePtr().lifecycle == .deinitialized or
             self.statePtr().lifecycle == .ticking)
         {
@@ -130,15 +133,18 @@ pub const Runtime = struct {
     }
 
     pub fn allocator(self: *const Runtime) std.mem.Allocator {
+        self.assertOwnerThread();
         return self.statePtr().gpa;
     }
 
     pub fn ensureHealthy(self: *const Runtime) !void {
+        try self.requireOwnerThread();
         if (self.statePtr().lifecycle == .deinitialized) return error.RuntimeDeinitialized;
         if (self.statePtr().lifecycle == .faulted) return error.RuntimeFaulted;
     }
 
     pub fn isFaulted(self: *const Runtime) bool {
+        self.assertOwnerThread();
         return self.statePtr().lifecycle == .faulted;
     }
 
@@ -157,10 +163,12 @@ pub const Runtime = struct {
     }
 
     pub fn registry(self: *Runtime) FeatureRegistry {
+        self.assertOwnerThread();
         return .{ .runtime = self };
     }
 
     pub fn finishRegistration(self: *Runtime) void {
+        self.assertOwnerThread();
         if (self.statePtr().lifecycle == .registering) {
             // Explicit restore IDs are accepted only during registration.
             // Automatic runtime IDs are monotonic, so retaining restore
@@ -171,6 +179,7 @@ pub const Runtime = struct {
     }
 
     pub fn tick(self: *Runtime) !void {
+        try self.requireOwnerThread();
         if (self.statePtr().lifecycle == .deinitialized) return error.RuntimeDeinitialized;
         if (self.statePtr().lifecycle == .ticking) return error.ReentrantTick;
         if (self.statePtr().lifecycle == .faulted) return error.RuntimeFaulted;
@@ -300,6 +309,7 @@ pub const Runtime = struct {
     }
 
     pub fn resolve(self: *const Runtime, id: PersistentId) ?RuntimeId {
+        self.assertOwnerThread();
         return self.statePtr().identities.get(id);
     }
 
@@ -317,11 +327,13 @@ pub const Runtime = struct {
     }
 
     pub fn get(self: *const Runtime, runtime_id: RuntimeId, comptime T: type) ?*const T {
+        self.assertOwnerThread();
         const entity = self.rawEntity(runtime_id) catch return null;
         return flecs.get(self.statePtr().world, entity, T);
     }
 
     pub fn getMut(self: *Runtime, runtime_id: RuntimeId, comptime T: type) ?*T {
+        self.assertOwnerThread();
         self.ensureHealthy() catch return null;
         const entity = self.rawEntity(runtime_id) catch return null;
         return flecs.get_mut(self.statePtr().world, entity, T);
@@ -348,27 +360,34 @@ pub const Runtime = struct {
     }
 
     pub fn entityCount(self: *const Runtime) usize {
+        self.assertOwnerThread();
         return self.statePtr().tracked_entity_count;
     }
     pub fn persistentCount(self: *const Runtime) usize {
+        self.assertOwnerThread();
         return self.statePtr().identities.count();
     }
     pub fn tickIndex(self: *const Runtime) u64 {
+        self.assertOwnerThread();
         return self.statePtr().completed_ticks;
     }
     pub fn fixedDelta(self: *const Runtime) f32 {
+        self.assertOwnerThread();
         return self.statePtr().fixed_delta_seconds;
     }
     pub fn namespace(self: *const Runtime) u64 {
+        self.assertOwnerThread();
         return self.statePtr().identity_source.namespace;
     }
     pub fn nextLocalId(self: *const Runtime) !u64 {
+        try self.requireOwnerThread();
         return self.statePtr().identity_source.cursor() orelse error.IdentitySourceExhausted;
     }
 
     /// Persistence-only cursor/clock restoration. It is legal only before the
     /// startup registry is frozen.
     pub fn restoreClock(self: *Runtime, completed_ticks: u64, next_local_id: u64) !void {
+        try self.requireOwnerThread();
         if (self.statePtr().lifecycle != .registering) return error.RegistrationClosed;
         const current_cursor = try self.nextLocalId();
         if (next_local_id < current_cursor) return error.IdentityCursorWouldCollide;
@@ -384,7 +403,22 @@ pub const Runtime = struct {
         if (self.statePtr().lifecycle != .registering) return error.RegistrationClosed;
     }
     fn requireLive(self: *const Runtime) !void {
+        try self.requireOwnerThread();
         if (self.statePtr().lifecycle == .deinitialized) return error.RuntimeDeinitialized;
+    }
+
+    pub fn ensureOwnerThread(self: *const Runtime) !void {
+        try self.requireOwnerThread();
+    }
+
+    fn requireOwnerThread(self: *const Runtime) !void {
+        if (std.Thread.getCurrentId() != self.statePtr().owner_thread) {
+            return error.WrongRuntimeThread;
+        }
+    }
+
+    pub fn assertOwnerThread(self: *const Runtime) void {
+        self.requireOwnerThread() catch @panic("runtime accessed from a non-owner thread");
     }
 };
 
@@ -483,6 +517,40 @@ test "runtime separates persistent and live identity" {
         error.PersistentIdAlreadyIssued,
         runtime.createWithPersistentId(restored_id),
     );
+}
+
+test "runtime rejects fallible health and restore access from a worker thread" {
+    var runtime = try Runtime.init(std.testing.allocator, .{
+        .namespace = 441,
+        .fixed_delta_seconds = 1.0 / 120.0,
+    });
+    defer runtime.deinit();
+
+    const Probe = struct {
+        fn run(
+            target: *Runtime,
+            health_rejected: *std.atomic.Value(bool),
+            restore_rejected: *std.atomic.Value(bool),
+        ) void {
+            target.ensureHealthy() catch |err| {
+                health_rejected.store(err == error.WrongRuntimeThread, .release);
+            };
+            target.restoreClock(0, 1) catch |err| {
+                restore_rejected.store(err == error.WrongRuntimeThread, .release);
+            };
+        }
+    };
+    var health_rejected = std.atomic.Value(bool).init(false);
+    var restore_rejected = std.atomic.Value(bool).init(false);
+    const thread = try std.Thread.spawn(
+        .{},
+        Probe.run,
+        .{ &runtime, &health_rejected, &restore_rejected },
+    );
+    thread.join();
+    try std.testing.expect(health_rejected.load(.acquire));
+    try std.testing.expect(restore_rejected.load(.acquire));
+    try runtime.ensureHealthy();
 }
 
 test "registration allocation failure does not consume an automatic identity" {
