@@ -768,8 +768,7 @@ test "owned simulation teardown accepts live crates pending commands and outcome
 }
 
 const district_test_assets = simulation.DistrictAssets{
-    .mesh = .{ .index = 17, .generation = 2 },
-    .material = .{ .index = 23, .generation = 4 },
+    .scene = .{ .index = 17, .generation = 2 },
 };
 
 fn requestDistrict(
@@ -899,11 +898,7 @@ test "real district worker cancels activates collides unloads and repeats cleanl
     const district_draws = try world.districtPresentation();
     try std.testing.expectEqual(@as(usize, 1), district_draws.len);
     try std.testing.expectEqual(@as(u8, 3), district_draws[0].build.static_box_count);
-    try std.testing.expectEqual(district_test_assets.mesh, district_draws[0].assets.mesh);
-    try std.testing.expectEqual(
-        district_test_assets.material,
-        district_draws[0].assets.material,
-    );
+    try std.testing.expectEqual(district_test_assets.scene, district_draws[0].assets.scene);
 
     // The crate settles on the raised district obstacle, not the district floor.
     try world.submit(.{ .spawn = .{
@@ -1002,8 +997,7 @@ test "active district Snapshot V4 restore is byte-stable and rebuilds logical ow
     try std.testing.expectEqual(@as(usize, 1), restored.entityCount());
     try std.testing.expectEqual(@as(u32, 3), restored.bodyCount());
     const draw = (try restored.districtPresentation())[0];
-    try std.testing.expectEqual(district_test_assets.mesh, draw.assets.mesh);
-    try std.testing.expectEqual(district_test_assets.material, draw.assets.material);
+    try std.testing.expectEqual(district_test_assets.scene, draw.assets.scene);
     const resaved = try restored.save(allocator);
     defer allocator.free(resaved);
     try std.testing.expectEqualSlices(u8, bytes, resaved);

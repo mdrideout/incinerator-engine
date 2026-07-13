@@ -32,12 +32,36 @@ pub const MaterialHandle = struct {
     }
 };
 
+/// A typed, generational reference to one renderer-owned scene resource.
+///
+/// A scene may contain multiple nodes, mesh instances, materials, and
+/// textures. Simulation and gameplay carry only this inert identity; they do
+/// not flatten authored scene structure or observe GPU residency.
+pub const SceneHandle = struct {
+    index: u32,
+    generation: u32,
+
+    pub const invalid = SceneHandle{
+        .index = std.math.maxInt(u32),
+        .generation = 0,
+    };
+
+    pub fn isValid(self: SceneHandle) bool {
+        return self.index != std.math.maxInt(u32) and self.generation != 0;
+    }
+};
+
 test "render handles are typed and detect stale sentinel values" {
     const mesh = MeshHandle{ .index = 3, .generation = 2 };
     const material = MaterialHandle{ .index = 3, .generation = 2 };
+    const scene = SceneHandle{ .index = 3, .generation = 2 };
     try std.testing.expect(mesh.isValid());
     try std.testing.expect(material.isValid());
+    try std.testing.expect(scene.isValid());
     try std.testing.expect(!MeshHandle.invalid.isValid());
     try std.testing.expect(!MaterialHandle.invalid.isValid());
+    try std.testing.expect(!SceneHandle.invalid.isValid());
     try std.testing.expect(MeshHandle != MaterialHandle);
+    try std.testing.expect(MeshHandle != SceneHandle);
+    try std.testing.expect(MaterialHandle != SceneHandle);
 }

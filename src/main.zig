@@ -30,6 +30,7 @@
 
 const std = @import("std");
 const build_options = @import("build_options");
+const engine = @import("incinerator_engine");
 const zm = @import("zmath");
 const timing = @import("timing.zig");
 const input = @import("input.zig");
@@ -37,6 +38,10 @@ const renderer = @import("renderer.zig");
 const mesh = @import("mesh.zig");
 const primitives = @import("primitives.zig");
 const sandbox_visual_resources = @import("sandbox_visual_resources.zig");
+const district_gpu_registry = @import("district_gpu_registry.zig");
+const district_scene_adapter = @import("district_scene_adapter.zig");
+const district_presentation = @import("district_presentation");
+const content = @import("content");
 const sandbox_controls = @import("sandbox_controls.zig");
 const camera = @import("camera.zig");
 const sdl = @import("sdl.zig");
@@ -91,6 +96,29 @@ const s2_brake_tick: u64 = 581;
 const s2_steer_tick: u64 = 601;
 const s2_exit_tick: u64 = 661;
 const s2_required_ticks: u64 = 720;
+
+const district_content_key = "district/s3_fixture";
+const district_stream_coord = sandbox_host.ChunkCoord{ .x = 0, .z = 0 };
+const DistrictPresentation = district_presentation.Coordinator(
+    district_gpu_registry.DistrictGpuRegistry,
+    sandbox_host.LoadTicket,
+);
+
+const DistrictStreamBound = struct {
+    scene: engine.rendering.SceneHandle,
+    ticket: sandbox_host.LoadTicket,
+};
+
+const DistrictStreamState = union(enum) {
+    disabled,
+    reading: struct {
+        scene: engine.rendering.SceneHandle,
+        generation: u64,
+    },
+    request_submitted: engine.rendering.SceneHandle,
+    loading: DistrictStreamBound,
+    active: DistrictStreamBound,
+};
 
 const sandbox_block = sandbox_host.StaticBox{
     .position = .{ 0, 1, -5 },
@@ -235,6 +263,7 @@ fn parseProgramMode(args: anytype) !ProgramMode {
     var init_failure_smoke = false;
     var frames: ?u64 = null;
     var virtual_render_hz: ?u32 = null;
+    var content_root_seen = false;
 
     for (args[1..args.len]) |raw_arg| {
         const arg: []const u8 = raw_arg;
@@ -270,6 +299,10 @@ fn parseProgramMode(args: anytype) !ProgramMode {
             if (virtual_render_hz.? == 0 or virtual_render_hz.? > 10_000) {
                 return error.InvalidVirtualRenderRate;
             }
+        } else if (std.mem.startsWith(u8, arg, "--content-root=")) {
+            if (content_root_seen) return error.DuplicateArgument;
+            _ = try content.ContentRootPath.parse(arg["--content-root=".len..]);
+            content_root_seen = true;
         } else {
             return error.UnknownArgument;
         }
@@ -289,6 +322,7 @@ fn parseProgramMode(args: anytype) !ProgramMode {
         @as(u8, @intFromBool(window_lifecycle_smoke)) +
         @as(u8, @intFromBool(init_failure_smoke));
     if (explicit_mode_count > 1) return error.ConflictingProgramModes;
+    if (content_root_seen and explicit_mode_count != 0) return error.ConflictingProgramModes;
     if (!visual_smoke and !s1_visual_smoke and !s2_visual_smoke and
         (frames != null or virtual_render_hz != null))
     {
@@ -311,6 +345,89 @@ fn parseProgramMode(args: anytype) !ProgramMode {
         .{ .s1_visual_smoke = config }
     else
         .{ .visual_smoke = config };
+}
+
+fn parseContentRootOverride(args: anytype) !?content.ContentRootPath {
+    var result: ?content.ContentRootPath = null;
+    for (args[1..args.len]) |raw_arg| {
+        const arg: []const u8 = raw_arg;
+        if (!std.mem.startsWith(u8, arg, "--content-root=")) continue;
+        if (result != null) return error.DuplicateArgument;
+        result = try content.ContentRootPath.parse(arg["--content-root=".len..]);
+    }
+    return result;
+}
+
+fn resolveContentRoot(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    configured: ?content.ContentRootPath,
+) !content.ContentRootPath {
+    if (configured) |root| return root;
+    var executable_dir_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const executable_dir_len = try std.process.executableDirPath(io, &executable_dir_buffer);
+    const resolved = try std.fs.path.resolve(
+        allocator,
+        &.{ executable_dir_buffer[0..executable_dir_len], "../share/incinerator/content" },
+    );
+    defer allocator.free(resolved);
+    return content.ContentRootPath.parse(resolved);
+}
+
+fn validateCookedLogicalDistrict(view: content.bundle.BundleView) !void {
+    const expected = try sandbox_host.proceduralDistrictBuild(district_stream_coord);
+    if (view.static_boxes.len != expected.boxes().len) {
+        return error.CookedDistrictLogicalShapeMismatch;
+    }
+    for (view.static_boxes, expected.boxes()) |cooked, logical| {
+        if (!std.meta.eql(cooked.position, logical.pose.position) or
+            !std.meta.eql(cooked.rotation, logical.pose.rotation) or
+            !std.meta.eql(cooked.half_extents, logical.half_extents))
+        {
+            return error.CookedDistrictLogicalShapeMismatch;
+        }
+    }
+}
+
+fn isRetryableDistrictStageError(err: anyerror) bool {
+    return err == error.DistrictStagingBudgetExceeded or
+        err == error.DistrictResidentBudgetExceeded;
+}
+
+fn submitLogicalBeforeStage(
+    context: anytype,
+    comptime submit_logical: anytype,
+    comptime stage_visual: anytype,
+) !bool {
+    try submit_logical(context);
+    return try stage_visual(context);
+}
+
+fn verifyInstalledContent(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    root_path: content.ContentRootPath,
+) !void {
+    var root = try content.ContentRoot.open(io, root_path);
+    defer root.deinit(io);
+    const key = try content.BundleKey.parse(district_content_key);
+    var result = try root.load(io, allocator, key, .{});
+    switch (result) {
+        .failed => |failure| {
+            std.debug.print("Installed cooked content failed validation: {any}\n", .{failure});
+            return error.InstalledContentInvalid;
+        },
+        .scene => |*scene| {
+            defer scene.deinit();
+            const view = scene.view();
+            try validateCookedLogicalDistrict(view);
+            if (view.nodes.len < 2 or view.meshes.len == 0 or view.materials.len == 0 or
+                view.textures.len == 0)
+            {
+                return error.InstalledContentIncomplete;
+            }
+        },
+    }
 }
 
 // ============================================================================
@@ -337,16 +454,27 @@ const App = struct {
     ground_mesh: mesh.Mesh,
     block_mesh: mesh.Mesh,
     visuals: sandbox_visual_resources.SandboxVisualResources,
+    district_registry: *district_gpu_registry.DistrictGpuRegistry,
+    district_presentation: DistrictPresentation,
+    district_content_worker: ?*content.SceneWorker,
+    district_pending_scene: ?content.bundle.OwnedBundle,
+    district_stream_state: DistrictStreamState,
 
     // Debug counters
     debug_frame_counter: u32,
 
-    pub fn init(profile: BootstrapProfile) !App {
-        return initWithFailurePoint(profile, null);
+    pub fn init(
+        io: std.Io,
+        profile: BootstrapProfile,
+        content_root: ?content.ContentRootPath,
+    ) !App {
+        return initWithFailurePoint(io, profile, content_root, null);
     }
 
     fn initWithFailurePoint(
+        io: std.Io,
         profile: BootstrapProfile,
+        content_root: ?content.ContentRootPath,
         failure_point: ?AppInitFailurePoint,
     ) !App {
         // Initialize SDL3 with video subsystem
@@ -389,6 +517,19 @@ const App = struct {
         var block_mesh = try primitives.createCube(gpu_renderer.getDevice());
         errdefer block_mesh.deinit();
 
+        const district_registry = try std.heap.page_allocator.create(
+            district_gpu_registry.DistrictGpuRegistry,
+        );
+        errdefer std.heap.page_allocator.destroy(district_registry);
+        district_registry.* = try district_gpu_registry.DistrictGpuRegistry.init(
+            std.heap.page_allocator,
+            .{ .device = gpu_renderer.getDevice() },
+            .{},
+            .{},
+        );
+        errdefer district_registry.deinit();
+        var district_presentation_owner = DistrictPresentation.init(district_registry);
+
         const character_config = sandbox_host.CharacterConfig{
             .assets = .{
                 .mesh = sandbox_visual_resources.character_mesh_handle,
@@ -429,6 +570,32 @@ const App = struct {
         });
         errdefer simulation.deinit();
         try injectAppInitFailure(failure_point, .after_simulation);
+
+        var district_content_worker: ?*content.SceneWorker = null;
+        var district_stream_state: DistrictStreamState = .disabled;
+        if (profile == .sandbox) {
+            const configured_root = content_root orelse return error.ContentRootRequired;
+            const scene = try district_presentation_owner.beginRequest();
+            errdefer district_presentation_owner.releaseAfterSimulationTeardown() catch {};
+            const worker = try std.heap.page_allocator.create(content.SceneWorker);
+            errdefer std.heap.page_allocator.destroy(worker);
+            worker.* = content.SceneWorker.init(io, std.heap.page_allocator);
+            errdefer worker.deinit();
+            const generation: u64 = 1;
+            switch (try worker.request(.{
+                .generation = generation,
+                .content_root = configured_root,
+                .key = try content.BundleKey.parse(district_content_key),
+            })) {
+                .accepted => {},
+                else => return error.DistrictContentWorkerAdmissionFailed,
+            }
+            district_content_worker = worker;
+            district_stream_state = .{ .reading = .{
+                .scene = scene,
+                .generation = generation,
+            } };
+        }
         try simulation.submit(.{ .spawn = .{
             .request_id = 1,
             .pose = .{ .position = switch (profile) {
@@ -496,6 +663,11 @@ const App = struct {
             .ground_mesh = ground_mesh,
             .block_mesh = block_mesh,
             .visuals = visuals,
+            .district_registry = district_registry,
+            .district_presentation = district_presentation_owner,
+            .district_content_worker = district_content_worker,
+            .district_pending_scene = null,
+            .district_stream_state = district_stream_state,
             .game_camera = .{
                 .position = .{ 0, 3, 10, 1 },
                 .yaw = 0,
@@ -512,7 +684,18 @@ const App = struct {
 
         // Clean up editor first (needs GPU device to still be valid)
         editor.deinit();
+        if (self.district_content_worker) |worker| {
+            worker.deinit();
+            std.heap.page_allocator.destroy(worker);
+            self.district_content_worker = null;
+        }
+        self.clearPendingDistrictScene();
         self.simulation.deinit();
+        self.district_presentation.releaseAfterSimulationTeardown() catch |err| {
+            std.debug.panic("district presentation teardown failed: {s}", .{@errorName(err)});
+        };
+        self.district_registry.deinit();
+        std.heap.page_allocator.destroy(self.district_registry);
         self.ground_mesh.deinit();
         self.block_mesh.deinit();
         self.visuals.deinit();
@@ -565,6 +748,7 @@ const App = struct {
             } else {
                 self.frame_timer.beginFrame();
             }
+            try self.pumpDistrictContent();
 
             // ================================================================
             // PHASE 2: SIMULATION TICK (Fixed 120Hz)
@@ -972,6 +1156,182 @@ const App = struct {
         });
     }
 
+    fn pumpDistrictContent(self: *App) !void {
+        try self.retryPendingDistrictScene();
+        const reading = switch (self.district_stream_state) {
+            .reading => |value| value,
+            else => return,
+        };
+        const worker = self.district_content_worker orelse
+            return error.DistrictContentWorkerMissing;
+        switch (worker.poll(reading.generation)) {
+            .pending => {},
+            .idle, .stale => return error.DistrictContentWorkerStateMismatch,
+            .completion => |completion| switch (completion) {
+                .cancelled => return error.DistrictContentLoadCancelled,
+                .failed => |failed| {
+                    std.debug.print("Cooked district load failed: {any}\n", .{failed.failure});
+                    return error.DistrictContentLoadFailed;
+                },
+                .ready => |ready_value| {
+                    if (ready_value.generation != reading.generation) {
+                        var stale_scene = ready_value.scene;
+                        stale_scene.deinit();
+                        return error.DistrictContentGenerationMismatch;
+                    }
+                    var scene = ready_value.scene;
+                    errdefer scene.deinit();
+                    const view = scene.view();
+                    try validateCookedLogicalDistrict(view);
+                    var upload_plan = try district_scene_adapter.build(view);
+                    // A validated logical district is submitted before GPU
+                    // staging admission. Expected registry backpressure keeps
+                    // the scene on fallback and retries on a later frame.
+                    const Admission = struct {
+                        app: *App,
+                        scene_handle: engine.rendering.SceneHandle,
+                        plan: *district_scene_adapter.UploadPlan,
+
+                        fn submitLogical(context: *@This()) !void {
+                            try context.app.simulation.submitDistrict(.{ .request_load = .{
+                                .request_id = 1,
+                                .coord = district_stream_coord,
+                                .assets = .{ .scene = context.scene_handle },
+                            } });
+                            context.app.district_stream_state = .{
+                                .request_submitted = context.scene_handle,
+                            };
+                        }
+
+                        fn stageVisual(context: *@This()) !bool {
+                            return context.app.stageDistrictUpload(context.scene_handle, context.plan);
+                        }
+                    };
+                    var admission = Admission{
+                        .app = self,
+                        .scene_handle = reading.scene,
+                        .plan = &upload_plan,
+                    };
+                    if (try submitLogicalBeforeStage(
+                        &admission,
+                        Admission.submitLogical,
+                        Admission.stageVisual,
+                    )) {
+                        scene.deinit();
+                    } else {
+                        self.district_pending_scene = scene;
+                    }
+                },
+            },
+        }
+    }
+
+    fn stageDistrictUpload(
+        self: *App,
+        scene_handle: engine.rendering.SceneHandle,
+        upload_plan: *district_scene_adapter.UploadPlan,
+    ) !bool {
+        self.district_registry.stage(scene_handle, upload_plan.sceneUpload()) catch |err| {
+            if (isRetryableDistrictStageError(err)) return false;
+            return err;
+        };
+        const staged_stats = try self.district_registry.stats();
+        std.debug.print(
+            "Cooked district staged: primitives={d} textures={d} cpu_bytes={d}\n",
+            .{
+                upload_plan.mesh_count,
+                upload_plan.texture_count,
+                staged_stats.staged_cpu_bytes,
+            },
+        );
+        return true;
+    }
+
+    fn retryPendingDistrictScene(self: *App) !void {
+        const pending = if (self.district_pending_scene) |*scene| scene else return;
+        const scene_handle = switch (self.district_stream_state) {
+            .request_submitted => |value| value,
+            .loading, .active => |value| value.scene,
+            .disabled, .reading => return error.DistrictPendingSceneStateMismatch,
+        };
+        var upload_plan = try district_scene_adapter.build(pending.view());
+        if (!try self.stageDistrictUpload(scene_handle, &upload_plan)) return;
+        pending.deinit();
+        self.district_pending_scene = null;
+    }
+
+    fn clearPendingDistrictScene(self: *App) void {
+        if (self.district_pending_scene) |*scene| scene.deinit();
+        self.district_pending_scene = null;
+    }
+
+    fn processDistrictOutcomes(self: *App) !void {
+        while (self.simulation.pollDistrictOutcome()) |outcome| {
+            switch (outcome) {
+                .load_requested => |requested| {
+                    const scene = switch (self.district_stream_state) {
+                        .request_submitted => |value| value,
+                        else => return error.UnexpectedDistrictOutcome,
+                    };
+                    try self.district_presentation.loadAdmitted(scene, requested.ticket);
+                    self.district_stream_state = .{ .loading = .{
+                        .scene = scene,
+                        .ticket = requested.ticket,
+                    } };
+                },
+                .activated => |activated| {
+                    const loading = switch (self.district_stream_state) {
+                        .loading => |value| value,
+                        else => return error.UnexpectedDistrictOutcome,
+                    };
+                    if (!std.meta.eql(loading.ticket, activated.ticket)) {
+                        return error.UnexpectedDistrictOutcome;
+                    }
+                    try self.district_presentation.logicalActivated(activated.ticket);
+                    self.district_stream_state = .{ .active = loading };
+                    std.debug.print(
+                        "Logical district active: coord=({d},{d}) generation={d}\n",
+                        .{
+                            activated.coord.x,
+                            activated.coord.z,
+                            activated.ticket.generation,
+                        },
+                    );
+                },
+                .rejected => {
+                    const scene = switch (self.district_stream_state) {
+                        .request_submitted => |value| value,
+                        else => return error.UnexpectedDistrictOutcome,
+                    };
+                    self.clearPendingDistrictScene();
+                    try self.district_presentation.loadRejected(scene);
+                    self.district_stream_state = .disabled;
+                    return error.DistrictLoadRejected;
+                },
+                .cancelled => |cancelled| {
+                    self.clearPendingDistrictScene();
+                    try self.district_presentation.loadTerminated(cancelled.ticket);
+                    self.district_stream_state = .disabled;
+                },
+                .load_failed => |failed| {
+                    self.clearPendingDistrictScene();
+                    try self.district_presentation.loadTerminated(failed.ticket);
+                    self.district_stream_state = .disabled;
+                    return error.DistrictLogicalLoadFailed;
+                },
+                .unloaded => |unloaded| {
+                    self.clearPendingDistrictScene();
+                    try self.district_presentation.logicalUnloaded(unloaded.ticket);
+                    const draws = try self.simulation.districtPresentation();
+                    try self.district_presentation.presentationAbsent(draws.len);
+                    self.district_stream_state = .disabled;
+                },
+                .cancellation_requested => return error.UnexpectedDistrictOutcome,
+            }
+        }
+        while (self.simulation.pollDistrictEvent()) |_| {}
+    }
+
     /// Submit one device-independent action sample before each fixed tick.
     fn simulateTick(self: *App, scenario: ScriptedScenario) !void {
         const actions = switch (scenario) {
@@ -1028,6 +1388,7 @@ const App = struct {
         while (self.simulation.pollCharacterEvent()) |_| {}
         try self.processVehicleOutcomes(scenario);
         while (self.simulation.pollVehicleEvent()) |_| {}
+        try self.processDistrictOutcomes();
         if (scenario == .s2_vehicle) try self.observeS2State();
     }
 
@@ -1202,6 +1563,19 @@ const App = struct {
     /// Render the current frame using SDL3 GPU API
     /// `alpha` is the interpolation factor (0.0 to 1.0) for smooth visuals.
     fn render(self: *App, alpha: f32) !RenderResult {
+        // Streamed submissions are independent of the frame command buffer.
+        // Poll fences without waiting, then submit at most one bounded batch.
+        const district_gpu_progress = try self.district_registry.pump();
+        if (district_gpu_progress.published_scenes > 0) {
+            std.debug.print(
+                "Cooked district GPU resident: scenes={d} bytes={d}\n",
+                .{
+                    district_gpu_progress.published_scenes,
+                    (try self.district_registry.stats()).resident_gpu_bytes,
+                },
+            );
+        }
+
         // Begin the frame (clears screen)
         switch (try self.gpu_renderer.beginFrame(renderer.Colors.CORNFLOWER_BLUE)) {
             .ready => {},
@@ -1269,6 +1643,63 @@ const App = struct {
                 zm.mul(block_scale, block_translation),
                 view_proj,
             );
+        }
+
+        const district_draws = try self.simulation.districtPresentation();
+        for (district_draws) |draw| {
+            const scene = try self.district_presentation.resolve(
+                draw.ticket,
+                draw.assets.scene,
+            );
+            if (scene.meshes().len == 0) {
+                // Logical activation is visible immediately, even while a
+                // cooked scene is staged or its Metal fence is unsignaled.
+                for (draw.build.boxes()) |box| {
+                    const scale = zm.scaling(
+                        box.half_extents[0] * 2,
+                        box.half_extents[1] * 2,
+                        box.half_extents[2] * 2,
+                    );
+                    const rotation = zm.quatToMat(zm.f32x4(
+                        box.pose.rotation[0],
+                        box.pose.rotation[1],
+                        box.pose.rotation[2],
+                        box.pose.rotation[3],
+                    ));
+                    const translation = zm.translation(
+                        box.pose.position[0],
+                        box.pose.position[1],
+                        box.pose.position[2],
+                    );
+                    self.gpu_renderer.drawMesh(
+                        &self.block_mesh,
+                        zm.mul(zm.mul(scale, rotation), translation),
+                        view_proj,
+                    );
+                }
+            } else {
+                const root_translation = zm.translation(
+                    @as(f32, @floatFromInt(draw.build.coord.x)) * 16.0,
+                    0,
+                    @as(f32, @floatFromInt(draw.build.coord.z)) * 16.0,
+                );
+                for (scene.instances()) |instance| {
+                    if (instance.mesh_index >= scene.meshes().len) {
+                        return error.DistrictResidentInstanceInvalid;
+                    }
+                    const resident_mesh = scene.meshes()[instance.mesh_index];
+                    const texture_view = scene.materialTexture(resident_mesh.material_index);
+                    const base_color = scene.materialBaseColor(resident_mesh.material_index);
+                    const authored_transform = zm.loadMat(instance.transform[0..]);
+                    self.gpu_renderer.drawMeshWithMaterial(
+                        resident_mesh.mesh,
+                        texture_view,
+                        base_color,
+                        zm.mul(authored_transform, root_translation),
+                        view_proj,
+                    );
+                }
+            }
         }
 
         // CrateFeature extraction is immutable plain data. The visual host is
@@ -1426,7 +1857,7 @@ const App = struct {
 // Entry Point
 // ============================================================================
 
-fn runInitFailureSmoke() !RunSummary {
+fn runInitFailureSmoke(io: std.Io) !RunSummary {
     const failure_points = [_]AppInitFailurePoint{
         .renderer_after_window_claim,
         .renderer_after_pipelines,
@@ -1437,7 +1868,7 @@ fn runInitFailureSmoke() !RunSummary {
     };
 
     for (failure_points) |failure_point| {
-        var unexpected = App.initWithFailurePoint(.s1_smoke, failure_point) catch |err| {
+        var unexpected = App.initWithFailurePoint(io, .s1_smoke, null, failure_point) catch |err| {
             const expected: anyerror = if (rendererFailurePoint(failure_point) != null)
                 error.InjectedRendererInitFailure
             else
@@ -1452,7 +1883,7 @@ fn runInitFailureSmoke() !RunSummary {
     // A successful lifecycle in the same process proves that each injected
     // unwind released the SDL video runtime, window, Metal device, Jolt world,
     // and all intermediate resources needed by a later initialization.
-    var healthy = try App.init(.s1_smoke);
+    var healthy = try App.init(io, .s1_smoke, null);
     defer healthy.deinit();
     return healthy.run(.{ .frames = 160, .virtual_render_hz = 80 }, .s1_character);
 }
@@ -1460,10 +1891,35 @@ fn runInitFailureSmoke() !RunSummary {
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     const mode = try parseProgramMode(args);
+    const cli_content_root = try parseContentRootOverride(args);
+    const configured_content_root = cli_content_root orelse if (init.environ_map.get(
+        "INCINERATOR_CONTENT_ROOT",
+    )) |environment_root|
+        try content.ContentRootPath.parse(environment_root)
+    else
+        null;
+    const resolved_content_root = switch (mode) {
+        .normal, .verify_install => try resolveContentRoot(
+            init.io,
+            init.arena.allocator(),
+            configured_content_root,
+        ),
+        else => null,
+    };
     if (mode == .verify_install) {
+        try verifyInstalledContent(
+            init.io,
+            init.arena.allocator(),
+            resolved_content_root.?,
+        );
         std.debug.print(
-            "Incinerator install verified (shader format: {s}, GPU driver: {s}, editor: {})\n",
-            .{ @tagName(shader_assets.format), shader_assets.driver, build_options.editor_enabled },
+            "Incinerator install verified (content: {s}, shader format: {s}, GPU driver: {s}, editor: {})\n",
+            .{
+                district_content_key,
+                @tagName(shader_assets.format),
+                shader_assets.driver,
+                build_options.editor_enabled,
+            },
         );
         return;
     }
@@ -1474,7 +1930,7 @@ pub fn main(init: std.process.Init) !void {
         .s1_visual_smoke, .window_lifecycle_smoke => .s1_smoke,
         .s2_visual_smoke => .s2_smoke,
         .init_failure_smoke => {
-            const summary = try runInitFailureSmoke();
+            const summary = try runInitFailureSmoke(init.io);
             const expected = try smokeExpectation(.{
                 .frames = 160,
                 .virtual_render_hz = 80,
@@ -1493,7 +1949,7 @@ pub fn main(init: std.process.Init) !void {
         },
         .verify_install => unreachable,
     };
-    var app = try App.init(profile);
+    var app = try App.init(init.io, profile, resolved_content_root);
     var visual_smoke_succeeded = false;
     var s1_visual_smoke_succeeded = false;
     var s2_visual_smoke_succeeded = false;
@@ -1657,6 +2113,13 @@ test "program mode parsing keeps visual smoke explicit and bounded" {
     const normal_args = [_][]const u8{"incinerator"};
     const normal = try parseProgramMode(&normal_args);
     try std.testing.expect(normal == .normal);
+    const configured_root_args = [_][]const u8{
+        "incinerator",
+        "--content-root=/tmp/incinerator-content",
+    };
+    try std.testing.expect((try parseProgramMode(&configured_root_args)) == .normal);
+    const configured_root = (try parseContentRootOverride(&configured_root_args)).?;
+    try std.testing.expectEqualStrings("/tmp/incinerator-content", configured_root.bytes());
     const smoke_args = [_][]const u8{
         "incinerator",
         "--visual-smoke",
@@ -1743,6 +2206,52 @@ test "program mode parsing keeps visual smoke explicit and bounded" {
         error.InvalidVirtualRenderRate,
         parseProgramMode(&[_][]const u8{ "incinerator", "--visual-smoke", "--virtual-render-hz=0" }),
     );
+    try std.testing.expectError(
+        error.InvalidContentRoot,
+        parseProgramMode(&[_][]const u8{ "incinerator", "--content-root=relative" }),
+    );
+    try std.testing.expectError(
+        error.ConflictingProgramModes,
+        parseProgramMode(&[_][]const u8{
+            "incinerator",
+            "--s2-visual-smoke",
+            "--content-root=/tmp/incinerator-content",
+        }),
+    );
+}
+
+test "district GPU budget backpressure is retryable without blocking logical activation" {
+    try std.testing.expect(isRetryableDistrictStageError(error.DistrictStagingBudgetExceeded));
+    try std.testing.expect(isRetryableDistrictStageError(error.DistrictResidentBudgetExceeded));
+    try std.testing.expect(!isRetryableDistrictStageError(error.OutOfMemory));
+    try std.testing.expect(!isRetryableDistrictStageError(error.InvalidSceneMaterial));
+
+    const FakeAdmission = struct {
+        events: [2]u8 = undefined,
+        count: usize = 0,
+        logical_submitted: bool = false,
+
+        fn submitLogical(self: *@This()) !void {
+            self.events[self.count] = 1;
+            self.count += 1;
+            self.logical_submitted = true;
+        }
+
+        fn stageBackpressured(self: *@This()) !bool {
+            if (!self.logical_submitted) return error.StageRanBeforeLogicalSubmit;
+            self.events[self.count] = 2;
+            self.count += 1;
+            return false;
+        }
+    };
+    var admission = FakeAdmission{};
+    try std.testing.expect(!try submitLogicalBeforeStage(
+        &admission,
+        FakeAdmission.submitLogical,
+        FakeAdmission.stageBackpressured,
+    ));
+    try std.testing.expect(admission.logical_submitted);
+    try std.testing.expectEqualSlices(u8, &.{ 1, 2 }, admission.events[0..admission.count]);
 }
 
 test "all engine module tests are discovered" {
@@ -1752,7 +2261,9 @@ test "all engine module tests are discovered" {
     std.testing.refAllDecls(@import("sandbox_controls.zig"));
     std.testing.refAllDecls(@import("sandbox_visual_resources.zig"));
     std.testing.refAllDecls(@import("editor/tool.zig"));
-    std.testing.refAllDecls(@import("gltf_loader.zig"));
+    std.testing.refAllDecls(@import("district_gpu_registry.zig"));
+    std.testing.refAllDecls(@import("district_scene_adapter.zig"));
+    std.testing.refAllDecls(@import("district_presentation"));
     std.testing.refAllDecls(@import("input.zig"));
     std.testing.refAllDecls(@import("mesh.zig"));
     std.testing.refAllDecls(@import("renderer.zig"));

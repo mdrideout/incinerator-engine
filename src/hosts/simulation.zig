@@ -57,6 +57,19 @@ pub const DistrictStateTag = districts.StateTag;
 pub const DistrictV1 = districts.DistrictV1;
 pub const ChunkCoord = district_contract.ChunkCoord;
 pub const LoadTicket = district_contract.LoadTicket;
+pub const DistrictBuild = district_contract.DistrictBuild;
+
+/// Renderer-neutral logical recipe used to reject cooked visual/collision
+/// drift before the visual host submits a production district request.
+pub fn proceduralDistrictBuild(coord: ChunkCoord) !DistrictBuild {
+    return switch (district_contract.proceduralBuild(
+        coord,
+        district_contract.current_recipe_version,
+    )) {
+        .ready => |build| build,
+        .failed => error.InvalidDistrictRecipe,
+    };
+}
 
 pub const StaticBox = struct {
     position: [3]f32,

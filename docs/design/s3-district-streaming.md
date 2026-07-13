@@ -1,7 +1,7 @@
-# S3-A Procedural District Streaming Foundation
+# S3 District Streaming
 
 **Date:** 2026-07-12
-**Status:** S3-A complete; full S3 remains open
+**Status:** S3-A and S3-B complete; full S3 remains open for S3-C
 
 ## Outcome
 
@@ -12,12 +12,11 @@ Repeated cycles, cancellation, stale completion, bounded capacity,
 save/restore, and shutdown are explicit behavior rather than incidental
 cleanup.
 
-This is the first streaming vertical slice, not a general asset framework. It
-proves the ownership and thread-affinity boundary needed by future cooked and
-visual district content. Full S3 remains open until S3-B/C add the cooked
-fixture, installed content, generational GPU residency, nonblocking uploads,
-native boundary smoke, and complete performance evidence required by the
-master plan.
+This is a streaming vertical slice, not a general asset framework. S3-A proves
+logical ownership and thread affinity. S3-B adds the cooked fixture, installed
+content, scene generations, fallback, and nonblocking Metal residency. Full S3
+remains open until S3-C adds proximity policy, repeated installed lifecycle
+smokes, and complete end-to-end evidence.
 
 ## Content Policy
 
@@ -27,12 +26,11 @@ deterministic procedural recipe compiled into the engine test sandbox. This
 keeps the open engine package independent of unlicensed game content and makes
 worker, cancellation, physics, persistence, and GPU ownership reproducible.
 
-Future source import is an offline/editor or cook-time concern. A future cooked
-district package may populate the same build contract after it defines a
-versioned manifest, content root, provenance, integrity checks, and complete
-glTF node/material/instancing behavior. The existing `loadGlb` function is not
-a streaming boundary: it combines source parsing, image decoding, GPU upload,
-and fence waiting and intentionally remains outside S3's worker graph.
+Source import is an offline/editor or cook-time concern. S3-B installs a
+versioned package with an explicit content root, provenance, integrity checks,
+and preserved glTF node/material/instancing behavior. The former runtime
+`loadGlb` prototype was removed because it combined source parsing, image
+decoding, GPU upload, and fence waiting.
 
 ## Bounded Contract
 
@@ -121,22 +119,25 @@ slice uses. The Jolt adapter translates it to world-qualified body handles and
 strict create/destroy ordering. Jolt identifiers never cross the feature
 boundary.
 
-### Future visual host boundary
+### Visual host boundary
 
-S3-B/C will let the visual host own proximity policy, a district resource
+S3-B makes the visual host own the cooked scene worker, district scene
 registry, SDL/Metal upload, and fallback resolution. The host reserves a typed
-generation when it requests a load. Logical activation may immediately become
-visible through a fallback mesh; GPU residency later changes only host-side
-handle resolution and never simulation authority or collision.
+scene generation before it requests a logical load. Logical activation may
+immediately become visible through collision-box fallback geometry; GPU
+residency later changes only host-side handle resolution and never simulation
+authority or collision. S3-C will add host-owned proximity policy.
 
 After a successful `unload`, extraction is empty before the host releases
-the mesh. The registry owns a typed generational mesh/material pair; unloading
-invalidates the old generation, so stale draws or double release fail.
+the scene. One scene generation preserves nodes, shared mesh instances,
+materials, textures, and authored transforms. Unloading invalidates the old
+generation, so stale draws or double release fail.
 
-The current blocking mesh/texture helpers are not the S3-B upload boundary.
-S3-B must add a narrow fence-polled pending upload whose post-submit
-cancellation becomes logical discard-on-completion. That work remains an
-explicit full-S3 gate and is not claimed by S3-A.
+The older procedural mesh/texture startup helpers remain synchronous, but they
+are not used by streamed districts. The streamed path batches a bounded set of
+scenes into one transfer buffer, copy pass, command buffer, and fence; it polls
+with `SDL_QueryGPUFence` and turns post-submit cancellation into
+discard-on-completion. It never waits for a streamed upload fence.
 
 ## State Machine
 
@@ -198,16 +199,15 @@ are gates; local timings are characterization evidence.
 
 ## Remaining Full-S3 Gates
 
-### S3-B: cooked content and GPU residency
+### S3-B: cooked content and GPU residency — complete
 
-- Complete D-006's cooked/staging/resident budgets and implement ADR-009 with
-  a versioned cooked manifest and explicit content root.
-- Add a tiny self-authored, provenance-recorded glTF cook input that proves
-  nodes, transforms, instances, materials, and texture relationships.
-- Cook renderer-neutral content into the Zig cache and install it under the
-  application prefix; runtime workers read only cooked bytes.
-- Add the district generational registry, fallback resolution, bounded staging,
-  nonblocking fence polling, upload budgets, and post-submit cancellation.
+- The explicit little-endian V1 bundle, absolute content root, structured
+  loader failures, joined runtime worker, self-authored glTF/provenance,
+  deterministic cooker, installed relocation proof, scene-level registry,
+  fallback, bounded batching, nonblocking polling, and cancellation state
+  machine are implemented.
+- Renderer queues, hardware instancing, culling, and LOD remain deliberately
+  absent because the one-scene measurements do not justify them.
 
 ### S3-C: boundary host and native evidence
 
@@ -215,7 +215,8 @@ are gates; local timings are characterization evidence.
   `DistrictFeature`.
 - Run the installed cooked-content/Metal lifecycle smoke from `/tmp` above and
   below the fixed tick rate, including repeated cancel/load/unload/reload.
-- Record end-to-end CPU/GPU budgets and repeat full independent reviews.
+- Record repeated lifecycle timing/peak profiles and repeat final full-S3
+  independent reviews.
 
 ## Acceptance Evidence
 
@@ -230,15 +231,14 @@ are gates; local timings are characterization evidence.
 - ReleaseFast S3-A measurement records job latency, command/commit/unload cost,
   complete tick/extraction distributions, byte/count budgets, and final cleanup.
 
-## Explicit S3-A Deferrals
+## Explicit Full-S3 Deferrals
 
 - multiple resident chunks, dependency graphs, portals, cross-chunk references,
   and world-origin rebasing;
-- runtime source glTF parsing, a VFS/content-root API, cooked package manifests,
-  content hashes, patching, compression, and game asset distribution;
+- runtime source glTF parsing, a general VFS, patching, compression, and game
+  asset distribution;
 - general mesh/material/texture registries and shared-resource deduplication;
-- asynchronous submitted-GPU fence polling, batch staging, upload heaps, and
-  device-loss recovery;
+- general upload heaps and device-loss recovery;
 - culling, instancing, LOD, occlusion, streaming mipmaps, and render queues;
 - navigation meshes, AI population, audio zones, lighting, terrain, and gameplay
   entities owned by district content;

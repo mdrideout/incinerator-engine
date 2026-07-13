@@ -104,6 +104,11 @@ zig build -Deditor=false
 # Verify an installed executable without initializing a window or GPU
 zig build run -- --verify-install
 
+# Exercise only the cooked bundle/schema and installed /tmp relocation gates
+zig build test-content -Deditor=false
+zig build test-content-cooker -Deditor=false
+zig build smoke-installed-content -Deditor=false
+
 # Record the ReleaseFast S0 characterization as versioned JSON
 zig build measure-s0 -Doptimize=ReleaseFast -Deditor=false
 
@@ -153,14 +158,26 @@ zig build smoke-init-failures-macos \
 
 ## Content Boundary
 
-The engine package intentionally excludes `assets`. Any GLB files under the working tree's `assets/models` directory are game-owned development content, not engine package or startup dependencies. The current sandbox uses generated primitives, and `--verify-install` does not load game content or initialize the GPU.
+The engine package intentionally excludes `assets`. Any GLB files under the
+working tree's `assets/models` directory are game-owned development content,
+not engine package or startup dependencies.
 
-Production runtime streaming will consume versioned renderer-neutral cooked
-bundles from an explicit content root; it will not parse authoring glTF or infer
-content from the working directory. S3-A currently uses deterministic procedural
-conformance data to prove worker, physics, persistence, and cancellation
-ownership. The self-authored cook fixture, installed bundle, and Metal residency
-path remain explicit S3-B work under ADR-009.
+The S3-B runtime now consumes a versioned renderer-neutral cooked bundle from
+an explicit absolute content root. Source glTF and image decoding exist only in
+the host cooker; the runtime executable does not import the former prototype
+glTF loader, zmesh, or zstbi. The build cooks the self-authored fixture into the
+Zig cache and installs it beneath
+`share/incinerator/content/district/s3_fixture.icdb` with its provenance record.
+`zig build run` configures the installed content root explicitly, while a
+relocated installed executable derives the same root from its application
+prefix. `--content-root=/absolute/path` overrides either behavior.
+
+Normal sandbox startup reads and validates the cooked bundle on a joined worker,
+activates logical collision independently, resolves a fallback until the Metal
+fence signals, and then draws the authored scene instances. `--verify-install`
+validates the installed cooked content without initializing SDL or a GPU.
+Host-owned proximity hysteresis and repeated installed load/cancel/unload/reload
+evidence remain S3-C work.
 
 ## Controls
 
@@ -196,6 +213,8 @@ The overhaul is converging on a thin kernel, feature-owned vertical slices, narr
 - [`S3 District Streaming Design`](docs/design/s3-district-streaming.md)
 - [`S3-A Acceptance Record`](docs/validation/s3a-headless-acceptance.md)
 - [`S3-A Performance Baseline`](docs/performance/s3a-baseline.md)
+- [`S3-B Acceptance Record`](docs/validation/s3b-acceptance.md)
+- [`S3-B Resource Baseline`](docs/performance/s3b-baseline.md)
 - [`ADR-009: Runtime Content and Streaming Boundary`](docs/adr/009-runtime-content-and-streaming.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
@@ -206,8 +225,9 @@ The engine loop separates input, fixed-rate simulation, and presentation:
 input pump (per frame) -> simulation ticks (fixed 120 Hz) -> presentation
 ```
 
-The current S3-A boundary is intentionally concrete rather than a future
-asset/framework abstraction:
+The current overhaul boundary is intentionally concrete rather than a future
+asset/framework abstraction. S3-A owns logical simulation; S3-B owns cooked
+visual content and streamed GPU residency:
 
 - GPU textures have explicit `OwnedTexture` owners and copy-safe borrowed views;
 - glTF/resource initialization unwinds transactionally with checked upload sizes;
@@ -248,8 +268,9 @@ asset/framework abstraction:
 - the headless artifact and its extracted-package tests contain no SDL, ImGui,
   renderer, asset-loader, or shader-tool edge.
 
-The visual sandbox and headless host now construct the same owned S3-A
-`Simulation`; the former `GameWorld`, borrowed Flecs/Jolt composition, direct
+The visual sandbox and headless host construct the same owned logical
+`Simulation`; the visual host additionally composes S3-B content and residency.
+The former `GameWorld`, borrowed Flecs/Jolt composition, direct
 ECS render query, and editor mutation path have been removed. The editor keeps
 stats, camera, and render panels. Scene inspection/manipulation returns in a
 later tooling slice through persistent IDs and typed feature commands rather

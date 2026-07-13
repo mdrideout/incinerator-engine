@@ -1,6 +1,24 @@
 const std = @import("std");
 const zgui_sdl3_gpu = @import("tools/build/zgui_sdl3_gpu.zig");
 
+const CookedContent = struct {
+    step: *std.Build.Step,
+    output: std.Build.LazyPath,
+};
+
+fn runContentCooker(
+    b: *std.Build,
+    cooker: *std.Build.Step.Compile,
+    output_name: []const u8,
+) CookedContent {
+    const run = b.addRunArtifact(cooker);
+    run.addFileArg(b.path("fixtures/s3_district/district.gltf"));
+    run.addFileArg(b.path("fixtures/s3_district/PROVENANCE.md"));
+    const output = run.addOutputFileArg(output_name);
+    run.addArg("district/s3_fixture");
+    return .{ .step = &run.step, .output = output };
+}
+
 const WindowsGpu = enum {
     d3d12,
     vulkan,
@@ -87,6 +105,16 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
+    const content_module = b.createModule(.{
+        .root_source_file = b.path("src/content/root.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const content_host_module = b.createModule(.{
+        .root_source_file = b.path("src/content/root.zig"),
+        .target = b.graph.host,
+        .optimize = optimize,
+    });
 
     const mod = b.addModule("incinerator_engine", .{
         // The root source file is the "entry point" of this module. Users of
@@ -154,6 +182,7 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    exe.root_module.addImport("content", content_module);
 
     // ---------------------------------------------------------
     // SDL3 (castholm/SDL)
@@ -171,6 +200,32 @@ pub fn build(b: *std.Build) void {
     });
     const sdl_lib = sdl_dep.artifact("SDL3");
     exe.root_module.linkLibrary(sdl_lib);
+
+    const district_gpu_registry_module = b.createModule(.{
+        .root_source_file = b.path("src/district_gpu_registry.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    district_gpu_registry_module.addImport("incinerator_engine", mod);
+    district_gpu_registry_module.linkLibrary(sdl_lib);
+    const district_scene_adapter_module = b.createModule(.{
+        .root_source_file = b.path("src/district_scene_adapter.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "content", .module = content_module },
+            .{ .name = "incinerator_engine", .module = mod },
+        },
+    });
+    district_scene_adapter_module.linkLibrary(sdl_lib);
+
+    const district_presentation_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/district_presentation.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
+    });
+    exe.root_module.addImport("district_presentation", district_presentation_module);
 
     // ---------------------------------------------------------
     // Jolt Physics 5.5 through the engine-owned JoltC build package.
@@ -235,29 +290,108 @@ pub fn build(b: *std.Build) void {
     });
     exe.root_module.addImport("zmath", zmath.module("root"));
 
-    // ---------------------------------------------------------
-    // Mesh Loading (zmesh) - glTF/GLB loader + mesh utilities
-    // ---------------------------------------------------------
-    // zmesh wraps cgltf for glTF loading and meshoptimizer for optimization.
-    // Used to load 3D models exported from Blender, AI generators, etc.
-    const zmesh = b.dependency("zmesh", .{
-        .target = target,
-        .optimize = optimize,
+    // Source glTF decoding exists only in this host cooker. Shipped runtime
+    // content code imports the renderer-neutral codec/explicit-root reader and
+    // never links zmesh, zstbi, SDL, or a source-format parser.
+    const host_zmesh = b.dependency("zmesh", .{
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
         .shape_use_32bit_indices = true,
         .shared = false,
     });
-    exe.root_module.addImport("zmesh", zmesh.module("root"));
-    exe.root_module.linkLibrary(zmesh.artifact("zmesh"));
-
-    // ---------------------------------------------------------
-    // Image Loading (zstbi) - stb_image wrapper
-    // ---------------------------------------------------------
-    // Used to decode PNG/JPEG textures embedded in GLB files.
-    const zstbi = b.dependency("zstbi", .{
-        .target = target,
-        .optimize = optimize,
+    const host_zstbi = b.dependency("zstbi", .{
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
     });
-    exe.root_module.addImport("zstbi", zstbi.module("root"));
+    const content_cooker = b.addExecutable(.{
+        .name = "incinerator_content_cooker",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/content_cooker.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+            .imports = &.{
+                .{ .name = "content", .module = content_host_module },
+                .{ .name = "zmesh", .module = host_zmesh.module("root") },
+                .{ .name = "zstbi", .module = host_zstbi.module("root") },
+            },
+        }),
+    });
+    content_cooker.root_module.linkLibrary(host_zmesh.artifact("zmesh"));
+
+    const cooked_fixture = runContentCooker(b, content_cooker, "s3_fixture.icdb");
+    const cooked_fixture_repeat = runContentCooker(b, content_cooker, "s3_fixture_repeat.icdb");
+    const cook_content_step = b.step(
+        "cook-content",
+        "Cook the self-authored S3-B district fixture",
+    );
+    cook_content_step.dependOn(cooked_fixture.step);
+    const install_cooked_fixture = b.addInstallFile(
+        cooked_fixture.output,
+        "share/incinerator/content/district/s3_fixture.icdb",
+    );
+    const install_fixture_provenance = b.addInstallFile(
+        b.path("fixtures/s3_district/PROVENANCE.md"),
+        "share/incinerator/content/district/s3_fixture.PROVENANCE.md",
+    );
+    b.getInstallStep().dependOn(&install_cooked_fixture.step);
+    b.getInstallStep().dependOn(&install_fixture_provenance.step);
+
+    const content_tests = b.addTest(.{ .root_module = content_host_module });
+    const run_content_tests = b.addRunArtifact(content_tests);
+    const content_test_step = b.step(
+        "test-content",
+        "Run cooked bundle, explicit-root loader, and async worker tests",
+    );
+    content_test_step.dependOn(&run_content_tests.step);
+
+    const content_bundle_verify = b.addExecutable(.{
+        .name = "content_bundle_verify",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/content_bundle_verify.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "content", .module = content_host_module }},
+        }),
+    });
+    const verify_cooked_bundle = b.addRunArtifact(content_bundle_verify);
+    verify_cooked_bundle.addFileArg(cooked_fixture.output);
+    verify_cooked_bundle.addFileArg(cooked_fixture_repeat.output);
+    const content_cooker_test_step = b.step(
+        "test-content-cooker",
+        "Prove deterministic glTF cooking and preserved fixture semantics",
+    );
+    content_cooker_test_step.dependOn(&verify_cooked_bundle.step);
+    const content_cooker_tests = b.addTest(.{ .root_module = content_cooker.root_module });
+    const run_content_cooker_tests = b.addRunArtifact(content_cooker_tests);
+    content_cooker_test_step.dependOn(&run_content_cooker_tests.step);
+
+    const content_relocation_test = b.addExecutable(.{
+        .name = "content_relocation_test",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/content_relocation_test.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "content", .module = content_host_module }},
+        }),
+    });
+    const install_content_relocation_test = b.addInstallArtifact(content_relocation_test, .{
+        .dest_dir = .{ .override = .{ .custom = "libexec/incinerator" } },
+    });
+    const installed_content_relocation_path = b.getInstallPath(
+        .{ .custom = "libexec/incinerator" },
+        content_relocation_test.out_filename,
+    );
+    const run_content_relocation = b.addSystemCommand(&.{installed_content_relocation_path});
+    run_content_relocation.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    run_content_relocation.setCwd(.{ .cwd_relative = "/tmp" });
+    run_content_relocation.step.dependOn(&install_cooked_fixture.step);
+    run_content_relocation.step.dependOn(&install_fixture_provenance.step);
+    run_content_relocation.step.dependOn(&install_content_relocation_test.step);
+    const content_relocation_step = b.step(
+        "smoke-installed-content",
+        "Load installed cooked content from /tmp through an explicit root",
+    );
+    content_relocation_step.dependOn(&run_content_relocation.step);
 
     // ---------------------------------------------------------
     // ECS (zflecs) - Entity Component System
@@ -787,6 +921,10 @@ pub fn build(b: *std.Build) void {
     // Keep the installation current before launching the cache artifact. Use
     // the dedicated installed-smoke steps above when cwd/relocation matters.
     run_cmd.step.dependOn(b.getInstallStep());
+    run_cmd.setEnvironmentVariable(
+        "INCINERATOR_CONTENT_ROOT",
+        b.getInstallPath(.prefix, "share/incinerator/content"),
+    );
 
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
@@ -870,6 +1008,36 @@ pub fn build(b: *std.Build) void {
     );
     district_feature_test_step.dependOn(&run_district_feature_tests.step);
 
+    const district_gpu_registry_tests = b.addTest(.{
+        .root_module = district_gpu_registry_module,
+    });
+    const run_district_gpu_registry_tests = b.addRunArtifact(district_gpu_registry_tests);
+    const district_gpu_registry_test_step = b.step(
+        "test-district-gpu-registry",
+        "Run bounded streamed district GPU registry tests",
+    );
+    district_gpu_registry_test_step.dependOn(&run_district_gpu_registry_tests.step);
+
+    const district_scene_adapter_tests = b.addTest(.{
+        .root_module = district_scene_adapter_module,
+    });
+    const run_district_scene_adapter_tests = b.addRunArtifact(district_scene_adapter_tests);
+    const district_scene_adapter_test_step = b.step(
+        "test-district-scene-adapter",
+        "Run cooked-scene to GPU-staging adapter tests",
+    );
+    district_scene_adapter_test_step.dependOn(&run_district_scene_adapter_tests.step);
+
+    const district_presentation_tests = b.addTest(.{
+        .root_module = district_presentation_module,
+    });
+    const run_district_presentation_tests = b.addRunArtifact(district_presentation_tests);
+    const district_presentation_test_step = b.step(
+        "test-district-presentation",
+        "Run district visual-host lifecycle coordination tests",
+    );
+    district_presentation_test_step.dependOn(&run_district_presentation_tests.step);
+
     const sandbox_controls_tests = b.addTest(.{ .root_module = sandbox_controls_module });
     const run_sandbox_controls_tests = b.addRunArtifact(sandbox_controls_tests);
     const sandbox_controls_test_step = b.step(
@@ -907,6 +1075,9 @@ pub fn build(b: *std.Build) void {
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_content_tests.step);
+    test_step.dependOn(&verify_cooked_bundle.step);
+    test_step.dependOn(&run_content_cooker_tests.step);
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_contracts_tests.step);
     test_step.dependOn(&run_crate_feature_tests.step);
@@ -916,6 +1087,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_district_contract_tests.step);
     test_step.dependOn(&run_district_worker_tests.step);
     test_step.dependOn(&run_district_feature_tests.step);
+    test_step.dependOn(&run_district_gpu_registry_tests.step);
+    test_step.dependOn(&run_district_scene_adapter_tests.step);
+    test_step.dependOn(&run_district_presentation_tests.step);
     test_step.dependOn(&run_sandbox_controls_tests.step);
     test_step.dependOn(&run_sandbox_simulation_tests.step);
     test_step.dependOn(&run_exe_tests.step);

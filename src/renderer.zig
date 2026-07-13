@@ -46,6 +46,7 @@ const texture_module = @import("texture.zig");
 
 const c = sdl.c;
 const Mesh = mesh_module.Mesh;
+const Texture = texture_module.Texture;
 const Vertex = mesh_module.Vertex;
 const VertexPNU = mesh_module.VertexPNU;
 const VertexFormat = mesh_module.VertexFormat;
@@ -69,7 +70,12 @@ pub const ModelUniforms = extern struct {
 pub const FragmentSettings = extern struct {
     use_texture: f32, // 1.0 = use texture, 0.0 = use white
     _padding: [3]f32 = .{ 0, 0, 0 }, // Pad to 16 bytes for GPU alignment
+    base_color: [4]f32 = .{ 1, 1, 1, 1 },
 };
+
+comptime {
+    std.debug.assert(@sizeOf(FragmentSettings) == 32);
+}
 
 /// Render settings that can be toggled at runtime.
 /// These control debug visualization modes.
@@ -548,6 +554,45 @@ pub const Renderer = struct {
     /// and handles both indexed and non-indexed rendering.
     ///
     pub fn drawMesh(self: *Renderer, m: *const Mesh, model: zm.Mat, view_projection: zm.Mat) void {
+        self.drawMeshWithMaterial(
+            m,
+            m.diffuse_texture,
+            .{ 1, 1, 1, 1 },
+            model,
+            view_projection,
+        );
+    }
+
+    /// Draw a mesh with an explicitly resolved material texture.
+    ///
+    /// Streamed scene registries keep mesh and material ownership separate;
+    /// this seam lets them supply a borrowed texture without mutating `Mesh`.
+    /// Legacy callers continue through `drawMesh` and its mesh-local view.
+    pub fn drawMeshWithTexture(
+        self: *Renderer,
+        m: *const Mesh,
+        diffuse_texture: ?Texture,
+        model: zm.Mat,
+        view_projection: zm.Mat,
+    ) void {
+        self.drawMeshWithMaterial(
+            m,
+            diffuse_texture,
+            .{ 1, 1, 1, 1 },
+            model,
+            view_projection,
+        );
+    }
+
+    /// Draw a mesh with independently resolved material inputs.
+    pub fn drawMeshWithMaterial(
+        self: *Renderer,
+        m: *const Mesh,
+        diffuse_texture: ?Texture,
+        base_color: [4]f32,
+        model: zm.Mat,
+        view_projection: zm.Mat,
+    ) void {
         const render_pass = self.current_render_pass orelse {
             std.debug.print("drawMesh called outside of beginFrame/endFrame\n", .{});
             return;
@@ -595,7 +640,7 @@ pub const Renderer = struct {
         // =====================================================================
         if (m.vertex_format == .pos_normal_uv) {
             // Use mesh's texture if available, otherwise use placeholder (white)
-            const texture_handle = if (m.diffuse_texture) |*tex|
+            const texture_handle = if (diffuse_texture) |tex|
                 tex.getHandle()
             else
                 self.placeholder_texture.borrow().getHandle();
@@ -609,6 +654,7 @@ pub const Renderer = struct {
             // Push fragment settings (texture toggle)
             const frag_settings = FragmentSettings{
                 .use_texture = if (self.render_settings.show_textures) 1.0 else 0.0,
+                .base_color = base_color,
             };
             c.SDL_PushGPUFragmentUniformData(cmd, 0, &frag_settings, @sizeOf(FragmentSettings));
         }

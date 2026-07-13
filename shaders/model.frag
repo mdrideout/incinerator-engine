@@ -16,6 +16,7 @@ layout(set = 3, binding = 0) uniform FragmentSettings {
     float _padding1;
     float _padding2;
     float _padding3;
+    vec4 base_color;
 } settings;
 
 // Texture sampler (bound at slot 0)
@@ -45,6 +46,8 @@ void main() {
     float diffuse = 0.7 * ndotl;
     float lighting = ambient + diffuse;
 
-    // Apply lighting to texture color
-    out_color = vec4(tex_color.rgb * lighting, tex_color.a);
+    // The sampler performs sRGB-to-linear conversion for authored base-color
+    // textures. Apply the authored linear factor before lighting.
+    vec4 material_color = tex_color * settings.base_color;
+    out_color = vec4(material_color.rgb * lighting, material_color.a);
 }

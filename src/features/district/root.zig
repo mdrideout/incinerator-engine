@@ -13,8 +13,11 @@ pub const max_outcomes: usize = 32;
 pub const max_events: usize = 16;
 
 pub const Assets = struct {
-    mesh: engine.rendering.MeshHandle = .invalid,
-    material: engine.rendering.MaterialHandle = .invalid,
+    /// One scene-level identity preserves cooked nodes, authored transforms,
+    /// mesh instances, material relationships, and textures behind the
+    /// renderer-owned registry boundary. Its residency is never an activation
+    /// prerequisite.
+    scene: engine.rendering.SceneHandle = .invalid,
 };
 
 pub const StateTag = enum { absent, loading, cancelling, active };
@@ -944,8 +947,7 @@ const FakeLoader = struct {
 const TestFeature = Feature(FakeStaticBodies, FakeLoader);
 const test_coord = district_contract.ChunkCoord{ .x = 0, .z = -4 };
 const test_assets = Assets{
-    .mesh = .{ .index = 7, .generation = 2 },
-    .material = .{ .index = 9, .generation = 3 },
+    .scene = .{ .index = 7, .generation = 2 },
 };
 
 fn expectLoadTicket(outcome: Outcome) !district_contract.LoadTicket {
