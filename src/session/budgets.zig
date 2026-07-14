@@ -23,6 +23,7 @@ pub const inbound_bytes_per_connection: usize = 512 * 1024;
 pub const outbound_bytes_per_connection: usize = 2 * 1024 * 1024;
 
 pub const input_history_ticks: u32 = 256;
+pub const vehicle_prediction_horizon_ticks: u16 = 12;
 pub const max_future_input_ticks: u64 = 6;
 pub const input_hold_ticks: u64 = 6;
 pub const max_input_messages_per_tick: u16 = 8;
@@ -69,6 +70,16 @@ pub const PredictionThresholds = struct {
 
 pub const prediction_thresholds = PredictionThresholds{};
 
+pub const VehiclePredictionThresholds = struct {
+    soft_position_error_m: f32 = 0.15,
+    hard_position_error_m: f32 = 2.5,
+    soft_orientation_error_degrees: f32 = 4.0,
+    hard_orientation_error_degrees: f32 = 45.0,
+    maximum_soft_corrections_per_minute: u16 = 180,
+};
+
+pub const vehicle_prediction_thresholds = VehiclePredictionThresholds{};
+
 comptime {
     if (authority_tick_hz % snapshot_hz != 0) {
         @compileError("snapshot rate must divide authority tick rate");
@@ -81,6 +92,11 @@ comptime {
     }
     if (max_snapshot_bytes > max_wire_message_bytes) {
         @compileError("snapshot ceiling exceeds wire message ceiling");
+    }
+    if (vehicle_prediction_horizon_ticks == 0 or
+        vehicle_prediction_horizon_ticks > input_history_ticks)
+    {
+        @compileError("vehicle prediction horizon must fit the input history");
     }
 }
 

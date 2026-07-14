@@ -364,8 +364,16 @@ pub fn main(init: std.process.Init) !void {
     }
     try pumpUntil(&harness, init.io, vehicleMoved, max_pump_steps);
     const driven_vehicle_position = firstVehicle(&harness.peers[0]).?.position;
+    if (harness.peers[0].client.localVehiclePresentation() == null) {
+        return error.VehiclePredictionNotInitialized;
+    }
 
     try harness.closePeerForReconnect(0);
+    if (harness.peers[0].client.localVehiclePresentation() != null or
+        harness.peers[0].client.vehicle_prediction.transport_resets != 1)
+    {
+        return error.VehiclePredictionNotResetForReconnect;
+    }
     try pumpUntil(&harness, init.io, firstPeerDisconnected, max_pump_steps);
     if (harness.authority.diagnostics().reconnecting_participants != 1) {
         return error.ReconnectGraceNotEntered;
@@ -375,9 +383,15 @@ pub fn main(init: std.process.Init) !void {
     if (!std.meta.eql(first_join_participant, harness.peers[0].client.participant)) {
         return error.ParticipantIdentityChangedAcrossReconnect;
     }
+    if (harness.peers[0].client.localVehiclePresentation() == null) {
+        return error.VehiclePredictionNotRestoredAfterReconnect;
+    }
 
     try harness.sendVehicleAction(0, .exit, vehicle.entity);
     try pumpUntil(&harness, init.io, firstPeerExited, max_pump_steps);
+    if (harness.peers[0].client.localVehiclePresentation() != null) {
+        return error.VehiclePredictionRetainedAfterExit;
+    }
     const initial_position = characterPosition(&harness.peers[0]) orelse
         return error.LocalCharacterMissing;
 

@@ -349,6 +349,14 @@ pub fn Feature(comptime Controllers: type) type {
             ) void {
                 self.feature.cancelDrivingNow(character_id, vehicle_id);
             }
+
+            pub fn abandonDriving(
+                self: *DriverAccess,
+                character_id: engine.PersistentId,
+                vehicle_id: engine.PersistentId,
+            ) !void {
+                try self.feature.abandonDrivingNow(character_id, vehicle_id);
+            }
         };
 
         /// Gameplay port consumed by InteractionFeature. It exposes only the
@@ -1095,6 +1103,37 @@ pub fn Feature(comptime Controllers: type) type {
                 @panic("restore rollback character has no saved driver state");
             locomotion.move = rollback.move;
             locomotion.jump_requested = rollback.jump_requested;
+            drive.rollback = null;
+            drive.mode = .on_foot;
+        }
+
+        /// Teardown-only inverse used after every collision-safe exit candidate
+        /// is blocked. The character remains hidden and must be despawned by
+        /// the caller; no collision-invalid on-foot pose is ever presented.
+        fn abandonDrivingNow(
+            self: *Self,
+            character_id: engine.PersistentId,
+            vehicle_id: engine.PersistentId,
+        ) !void {
+            try character_id.validate();
+            try vehicle_id.validate();
+            const runtime_id = self.runtime.resolve(character_id) orelse
+                return error.CharacterNotFound;
+            _ = self.runtime.get(runtime_id, Character) orelse
+                return error.NotACharacter;
+            const locomotion = self.runtime.getMut(runtime_id, Locomotion) orelse
+                return error.CharacterLocomotionInvariantBroken;
+            const drive = self.runtime.getMut(runtime_id, DriveState) orelse
+                return error.CharacterDriveStateInvariantBroken;
+            switch (drive.mode) {
+                .driving => |current| if (!std.meta.eql(current, vehicle_id)) {
+                    return error.CharacterDrivingDifferentVehicle;
+                },
+                .on_foot => return error.CharacterNotDriving,
+            }
+            locomotion.move = .{ 0, 0 };
+            locomotion.jump_requested = false;
+            locomotion.velocity = .{ 0, 0, 0 };
             drive.rollback = null;
             drive.mode = .on_foot;
         }
@@ -2053,6 +2092,12 @@ test "driver access makes CharacterVirtual dormant and exits transactionally" {
     const draws = try feature.extract(0.5);
     try std.testing.expectEqual(@as(usize, 1), draws.len);
     try std.testing.expectEqual(exit_pose.position, draws[0].pose.position);
+    try std.testing.expectEqual(@as(usize, 3), controllers.relocate_calls);
+
+    try drivers.beginDriving(character_id, vehicle_id);
+    try drivers.abandonDriving(character_id, vehicle_id);
+    const abandoned = (try drivers.driverState(character_id)).?;
+    try std.testing.expectEqual(driver_contract.DriverMode.on_foot, abandoned.mode);
     try std.testing.expectEqual(@as(usize, 3), controllers.relocate_calls);
 }
 

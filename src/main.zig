@@ -129,7 +129,7 @@ fn interactiveVehicleRejectionExpected(
         .enter => rejected.reason == .too_far or
             rejected.reason == .driver_carrying,
         .exit => rejected.reason == .exit_blocked,
-        .spawn, .drive, .despawn => false,
+        .spawn, .drive, .abandon, .despawn => false,
     };
 }
 
@@ -6577,6 +6577,7 @@ const App = struct {
                         self.validation.s2_smoke.exited = true;
                     }
                 },
+                .abandoned => return error.UnexpectedVehicleAbandonOutcome,
                 .rejected => |rejected| if (validation_composition) switch (scenario) {
                     .s1_character, .s2_vehicle, .s3_streaming, .s4_physics_debug, .s7_interaction => return error.ScriptedVehicleCommandRejected,
                     .none => if (interactiveVehicleRejectionExpected(rejected)) {

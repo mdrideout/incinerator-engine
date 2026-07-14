@@ -43,10 +43,13 @@ pub const ExitDisposition = enum {
 ///
 /// Implementations guarantee that begin/exit transitions are atomic: an error
 /// or `.blocked` result leaves the driver's prior mode and pose unchanged.
-/// `cancelDriving` is the infallible inverse of the immediately preceding
-/// successful `beginDriving`: it restores every driver value mutated by begin,
-/// not only the mode. It is reserved for candidate-world transaction rollback;
-/// normal gameplay must use `attemptEndDriving`.
+/// `abandonDriving` is a fallible teardown-only transition that releases the
+/// relationship without relocating the hidden character; its caller must
+/// immediately despawn that character. `cancelDriving` is the infallible
+/// inverse of the immediately preceding successful `beginDriving`: it restores
+/// every driver value mutated by begin, not only the mode. It is reserved for
+/// candidate-world transaction rollback; normal gameplay must use
+/// `attemptEndDriving`.
 pub fn assertImplementation(comptime DriverAccess: type) void {
     comptime {
         assertFallibleMethod(
@@ -71,6 +74,12 @@ pub fn assertImplementation(comptime DriverAccess: type) void {
                 engine.physics.Pose,
             },
             ExitDisposition,
+        );
+        assertFallibleMethod(
+            DriverAccess,
+            "abandonDriving",
+            .{ *DriverAccess, engine.PersistentId, engine.PersistentId },
+            void,
         );
         assertInfallibleMethod(
             DriverAccess,
@@ -171,6 +180,12 @@ const ContractExample = struct {
         _: engine.PersistentId,
         _: engine.PersistentId,
     ) void {}
+
+    pub fn abandonDriving(
+        _: *ContractExample,
+        _: engine.PersistentId,
+        _: engine.PersistentId,
+    ) !void {}
 };
 
 test "driver access example satisfies the structural port" {

@@ -863,6 +863,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
             if (state.vehicle_exited) return error.UnexpectedVehicleOutcome;
             state.vehicle_exited = true;
         },
+        .abandoned => return error.UnexpectedVehicleOutcome,
         .despawned => |id| {
             if (state.vehicle_id == null or
                 !std.meta.eql(id, state.vehicle_id.?) or

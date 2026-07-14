@@ -228,6 +228,13 @@ pub const ExitVehicle = struct {
     driver_id: engine.PersistentId,
 };
 
+/// Teardown-only release after every collision-safe exit candidate is blocked.
+/// The caller must immediately despawn the hidden driver.
+pub const AbandonVehicle = struct {
+    vehicle_id: engine.PersistentId,
+    driver_id: engine.PersistentId,
+};
+
 pub const DespawnVehicle = struct { id: engine.PersistentId };
 
 pub const Command = union(enum) {
@@ -235,6 +242,7 @@ pub const Command = union(enum) {
     enter: EnterVehicle,
     drive: DriveVehicle,
     exit: ExitVehicle,
+    abandon: AbandonVehicle,
     despawn: DespawnVehicle,
 };
 
@@ -260,7 +268,7 @@ pub const Exited = struct {
     exit_pose: engine.physics.Pose,
 };
 
-pub const CommandKind = enum { spawn, enter, drive, exit, despawn };
+pub const CommandKind = enum { spawn, enter, drive, exit, abandon, despawn };
 pub const RejectionReason = enum {
     capacity_reached,
     vehicle_not_found,
@@ -288,6 +296,7 @@ pub const Outcome = union(enum) {
     entered: DriverTransition,
     drive_applied: DriveApplied,
     exited: Exited,
+    abandoned: DriverTransition,
     despawned: engine.PersistentId,
     rejected: CommandRejected,
 };
@@ -945,6 +954,13 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                         error.VehicleFeatureExitBlocked => try self.rejectFor(.exit, .exit_blocked, exit_command),
                         else => return err,
                     },
+                    .abandon => |abandon| self.abandonNow(abandon) catch |err| switch (err) {
+                        error.VehicleFeatureNotFound => try self.rejectFor(.abandon, .vehicle_not_found, abandon),
+                        error.VehicleFeatureNotOwned => try self.rejectFor(.abandon, .not_owned, abandon),
+                        error.VehicleFeatureDriverNotFound => try self.rejectFor(.abandon, .driver_not_found, abandon),
+                        error.VehicleFeatureWrongDriver => try self.rejectFor(.abandon, .wrong_driver, abandon),
+                        else => return err,
+                    },
                     .despawn => |despawn| self.despawnNow(despawn.id, true) catch |err| switch (err) {
                         error.VehicleFeatureNotFound => try self.reject(.{
                             .command = .despawn,
@@ -1148,7 +1164,7 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
         fn exitNow(self: *Self, exit_command: ExitVehicle) !void {
             const runtime_id = self.runtime.resolve(exit_command.vehicle_id) orelse
                 return error.VehicleFeatureNotFound;
-            _ = self.runtime.get(runtime_id, Vehicle) orelse
+            const vehicle = self.runtime.get(runtime_id, Vehicle) orelse
                 return error.VehicleFeatureNotOwned;
             try self.requirePhysicsAuthority(runtime_id);
             const control = self.runtime.getMut(runtime_id, Control) orelse
@@ -1170,15 +1186,25 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
             const live = self.runtime.get(runtime_id, RuntimeVehicle) orelse
                 return error.VehicleHandleInvariantBroken;
             const state = try canonicalState(try self.vehicleStateFromPort(live.handle));
-            const exit_pose = try localOffsetPose(state.chassis.pose, self.config.exit_offset);
-
             std.debug.assert(self.outcomes.len < max_outcomes);
-            const disposition = try self.attemptEndDrivingThroughPort(
-                exit_command.driver_id,
-                exit_command.vehicle_id,
-                exit_pose,
+            const candidates = exitCandidateOffsets(
+                self.config.exit_offset,
+                vehicle.chassis_half_extents,
             );
-            if (disposition == .blocked) return error.VehicleFeatureExitBlocked;
+            var selected_exit_pose: ?engine.physics.Pose = null;
+            for (candidates) |offset| {
+                const candidate = try localOffsetPose(state.chassis.pose, offset);
+                const disposition = try self.attemptEndDrivingThroughPort(
+                    exit_command.driver_id,
+                    exit_command.vehicle_id,
+                    candidate,
+                );
+                if (disposition == .blocked) continue;
+                selected_exit_pose = candidate;
+                break;
+            }
+            const exit_pose = selected_exit_pose orelse
+                return error.VehicleFeatureExitBlocked;
             control.driver_id = null;
             control.input = .{};
             self.outcomes.pushAssumeCapacity(.{ .exited = .{
@@ -1211,6 +1237,41 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
             self.destroyRuntimeOrPanic(runtime_id);
             _ = self.active.orderedRemove(index);
             if (emit_outcome) self.outcomes.pushAssumeCapacity(.{ .despawned = id });
+        }
+
+        fn abandonNow(self: *Self, command: AbandonVehicle) !void {
+            const runtime_id = self.runtime.resolve(command.vehicle_id) orelse
+                return error.VehicleFeatureNotFound;
+            _ = self.runtime.get(runtime_id, Vehicle) orelse
+                return error.VehicleFeatureNotOwned;
+            const control = self.runtime.getMut(runtime_id, Control) orelse
+                return error.VehicleControlInvariantBroken;
+            if (control.driver_id == null or
+                !std.meta.eql(control.driver_id.?, command.driver_id))
+            {
+                return error.VehicleFeatureWrongDriver;
+            }
+            const driver = (try self.driverStateFromPort(command.driver_id)) orelse
+                return error.VehicleFeatureDriverNotFound;
+            switch (driver.mode) {
+                .driving => |vehicle_id| if (!std.meta.eql(vehicle_id, command.vehicle_id)) {
+                    return error.VehicleFeatureWrongDriver;
+                },
+                .on_foot => return error.VehicleFeatureWrongDriver,
+            }
+            std.debug.assert(self.outcomes.len < max_outcomes);
+            try self.abandonDrivingThroughPort(command.driver_id, command.vehicle_id);
+            control.driver_id = null;
+            control.input = .{};
+            self.outcomes.pushAssumeCapacity(.{ .abandoned = .{
+                .vehicle_id = command.vehicle_id,
+                .driver_id = command.driver_id,
+            } });
+            self.emitEvent(.{ .occupancy_changed = .{
+                .vehicle_id = command.vehicle_id,
+                .previous = command.driver_id,
+                .current = null,
+            } });
         }
 
         fn rejectFor(
@@ -1312,6 +1373,11 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                     writer.writeU8(5);
                     writePersistentId(writer, despawn.id);
                 },
+                .abandon => |abandon| {
+                    writer.writeU8(6);
+                    writePersistentId(writer, abandon.vehicle_id);
+                    writePersistentId(writer, abandon.driver_id);
+                },
             }
         }
 
@@ -1391,6 +1457,15 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
             ) catch return error.VehicleDriverPortFailure;
         }
 
+        fn abandonDrivingThroughPort(
+            self: *Self,
+            driver_id: engine.PersistentId,
+            vehicle_id: engine.PersistentId,
+        ) !void {
+            self.drivers.abandonDriving(driver_id, vehicle_id) catch
+                return error.VehicleDriverPortFailure;
+        }
+
         fn rollbackDrivers(self: *Self, rollbacks: []const DriverRollback) void {
             var index = rollbacks.len;
             while (index > 0) {
@@ -1451,12 +1526,36 @@ fn validateCommand(command: Command) !void {
             try exit_command.vehicle_id.validate();
             try exit_command.driver_id.validate();
         },
+        .abandon => |abandon| {
+            try abandon.vehicle_id.validate();
+            try abandon.driver_id.validate();
+        },
         .despawn => |despawn| try despawn.id.validate(),
     }
 }
 
 fn zeroWheelDynamics() [engine.physics.vehicle_wheel_count]engine.physics.VehicleWheelDynamics {
     return .{ .{}, .{}, .{}, .{} };
+}
+
+/// The configured side remains first. The other deterministic candidates are
+/// authority policy for ordinary obstruction and disconnect cleanup; callers
+/// never choose or trust an exit transform.
+fn exitCandidateOffsets(
+    primary: [3]f32,
+    half_extents: [3]f32,
+) [5][3]f32 {
+    const side_clearance = @max(@abs(primary[0]), half_extents[0] + 0.75);
+    const end_clearance = @max(@abs(primary[2]), half_extents[2] + 0.75);
+    const vertical_clearance = @max(primary[1], half_extents[1] + 1.75);
+    const alternate_side: f32 = if (primary[0] >= 0) -side_clearance else side_clearance;
+    return .{
+        primary,
+        .{ alternate_side, primary[1], 0 },
+        .{ 0, primary[1], end_clearance },
+        .{ 0, primary[1], -end_clearance },
+        .{ 0, vertical_clearance, 0 },
+    };
 }
 
 fn canonicalState(input: engine.physics.VehicleState) !engine.physics.VehicleState {
@@ -1764,11 +1863,13 @@ const FakeDrivers = struct {
     count: usize = 0,
     begin_calls: usize = 0,
     exit_calls: usize = 0,
+    abandon_calls: usize = 0,
     fail_begin: bool = false,
     fail_begin_call: ?usize = null,
     fail_begin_with_domain_name: bool = false,
     fail_exit: bool = false,
     block_exit: bool = false,
+    blocked_exit_attempts: usize = 0,
     last_exit_pose: ?engine.physics.Pose = null,
 
     fn add(self: *FakeDrivers, id: engine.PersistentId, pose: engine.physics.Pose) void {
@@ -1822,7 +1923,7 @@ const FakeDrivers = struct {
             },
             .on_foot => return error.FakeDriverNotDriving,
         }
-        if (self.block_exit) return .blocked;
+        if (self.block_exit or self.exit_calls <= self.blocked_exit_attempts) return .blocked;
         try exit_pose.validate();
         self.entries[index].state.pose = exit_pose;
         self.entries[index].state.mode = .on_foot;
@@ -1842,6 +1943,22 @@ const FakeDrivers = struct {
                 @panic("fake restore rollback vehicle mismatch");
             },
             .on_foot => @panic("fake restore rollback driver already on foot"),
+        }
+        self.entries[index].state.mode = .on_foot;
+    }
+
+    pub fn abandonDriving(
+        self: *FakeDrivers,
+        driver_id: engine.PersistentId,
+        vehicle_id: engine.PersistentId,
+    ) !void {
+        self.abandon_calls += 1;
+        const index = self.indexOf(driver_id) orelse return error.FakeDriverNotFound;
+        switch (self.entries[index].state.mode) {
+            .driving => |current| if (!std.meta.eql(current, vehicle_id)) {
+                return error.FakeDriverVehicleMismatch;
+            },
+            .on_foot => return error.FakeDriverNotDriving,
         }
         self.entries[index].state.mode = .on_foot;
     }
@@ -2477,12 +2594,32 @@ test "authority blocked exit and occupied despawn preserve the relationship" {
     );
 
     drivers.block_exit = false;
+    const attempts_before_fallback = drivers.exit_calls;
+    drivers.blocked_exit_attempts = attempts_before_fallback + 3;
     try feature.enqueue(.{ .exit = .{ .vehicle_id = vehicle_id, .driver_id = driver_id } });
     try runtime.tick();
     const exited = feature.pollOutcome().?.exited;
+    try std.testing.expectEqual(attempts_before_fallback + 4, drivers.exit_calls);
     try std.testing.expectEqual(driver_id, exited.driver_id);
     try std.testing.expect((try feature.view(vehicle_id)).driver_id == null);
     try std.testing.expectEqual(driver_contract.DriverMode.on_foot, (try drivers.driverState(driver_id)).?.mode);
+
+    try feature.enqueue(.{ .enter = .{ .vehicle_id = vehicle_id, .driver_id = driver_id } });
+    try runtime.tick();
+    _ = feature.pollOutcome().?.entered;
+    drivers.block_exit = true;
+    try feature.enqueue(.{ .exit = .{ .vehicle_id = vehicle_id, .driver_id = driver_id } });
+    try runtime.tick();
+    try expectRejected(&feature, .exit, .exit_blocked);
+    try feature.enqueue(.{ .abandon = .{
+        .vehicle_id = vehicle_id,
+        .driver_id = driver_id,
+    } });
+    try runtime.tick();
+    const abandoned = feature.pollOutcome().?.abandoned;
+    try std.testing.expectEqual(driver_id, abandoned.driver_id);
+    try std.testing.expectEqual(@as(usize, 1), drivers.abandon_calls);
+    try std.testing.expect((try feature.view(vehicle_id)).driver_id == null);
 }
 
 test "domain-named driver adapter failure remains terminal and preserves authority" {

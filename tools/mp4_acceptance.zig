@@ -24,6 +24,7 @@ const Result = struct {
     rejected_actions: u64,
     invalid_controls: u64,
     ingress_fingerprint: u64,
+    vehicle_prediction: @FieldType(session_client.Diagnostics, "vehicle_prediction"),
     link: impaired.Diagnostics,
 };
 
@@ -53,6 +54,7 @@ pub fn main(init: std.process.Init) !void {
             );
             if (result.ingress_fingerprint != repeat.ingress_fingerprint or
                 !std.meta.eql(result.link, repeat.link) or
+                !std.meta.eql(result.vehicle_prediction, repeat.vehicle_prediction) or
                 result.movement_m != repeat.movement_m)
             {
                 return error.ImpairedVehicleTrialWasNotDeterministic;
@@ -92,6 +94,7 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
     var brake_sent: u64 = 0;
     var neutral_sent: u64 = 0;
     var character_sequence_sent: u64 = 0;
+    var immediate_response_observed = false;
 
     for (0..total_ticks) |tick| {
         try link.advanceTo(tick);
@@ -127,14 +130,21 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
         if (client.ownedVehicle()) |vehicle| {
             saw_owned_vehicle = true;
             if (throttle_sent < throttle_ticks) {
-                try link.sendFromClient(try client.vehicleInput(
+                const before = client.localVehiclePresentation() orelse
+                    return error.VehiclePredictionNotInitialized;
+                const message = try client.vehicleInput(
                     authority.diagnostics().tick + 1,
                     vehicle.entity,
                     1,
                     0,
                     0,
                     0,
-                ));
+                );
+                const after = client.localVehiclePresentation() orelse
+                    return error.VehiclePredictionNotInitialized;
+                immediate_response_observed = immediate_response_observed or
+                    distance(before.position, after.position) > 0.000001;
+                try link.sendFromClient(message);
                 throttle_sent += 1;
             } else if (brake_sent < brake_ticks) {
                 try link.sendFromClient(try client.vehicleInput(
@@ -203,6 +213,33 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
     {
         return error.VehicleActionAccountingMismatch;
     }
+    if (!immediate_response_observed) return error.VehiclePredictionDidNotRespondLocally;
+    if (client_diagnostics.vehicle_prediction.initialized or
+        client_diagnostics.vehicle_prediction.history_overflows != 0 or
+        client_diagnostics.vehicle_prediction.ownership_resets == 0)
+    {
+        return error.VehiclePredictionLifecycleMismatch;
+    }
+    const prediction = client_diagnostics.vehicle_prediction;
+    if (!expect_blackout and
+        (prediction.hard_corrections != 0 or
+            prediction.maximum_position_error_m >=
+                budgets.vehicle_prediction_thresholds.hard_position_error_m or
+            prediction.maximum_orientation_error_degrees >=
+                budgets.vehicle_prediction_thresholds.hard_orientation_error_degrees))
+    {
+        return error.VehiclePredictionCorrectionBudgetExceeded;
+    }
+    const allowed_soft_corrections =
+        (@as(u64, budgets.vehicle_prediction_thresholds.maximum_soft_corrections_per_minute) *
+            total_ticks + budgets.authority_tick_hz * 60 - 1) /
+        (budgets.authority_tick_hz * 60);
+    if (prediction.soft_corrections > allowed_soft_corrections) {
+        return error.VehiclePredictionCorrectionRateExceeded;
+    }
+    if (expect_blackout and prediction.horizon_clamps == 0) {
+        return error.VehiclePredictionHorizonWasNotExercised;
+    }
     if (link_diagnostics.client_to_authority.queue_overflows != 0 or
         link_diagnostics.authority_to_client.queue_overflows != 0)
     {
@@ -239,6 +276,7 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
         .rejected_actions = authority_diagnostics.vehicle_actions_rejected,
         .invalid_controls = authority_diagnostics.invalid_control_inputs,
         .ingress_fingerprint = authority_diagnostics.ingress_fingerprint,
+        .vehicle_prediction = client_diagnostics.vehicle_prediction,
         .link = link_diagnostics,
     };
 }
@@ -350,6 +388,7 @@ fn report(result: Result) !void {
     std.debug.print(
         "MP4_TRIAL profile={s} seed={d} movement_m={d:.2} snapshot_age_ticks={d} " ++
             "actions={d}/{d} invalid_controls={d} " ++
+            "prediction_soft/hard/clamped={d}/{d}/{d} prediction_error={d:.3}m/{d:.2}deg/{d:.2}mps " ++
             "up_sent/delivered/lost/dup/reorder={d}/{d}/{d}/{d}/{d} " ++
             "down_sent/delivered/lost/dup/reorder={d}/{d}/{d}/{d}/{d} " ++
             "bytes_per_second={d}/{d} queue_high={d}/{d} ingress={x}\n",
@@ -361,6 +400,12 @@ fn report(result: Result) !void {
             result.accepted_actions,
             result.rejected_actions,
             result.invalid_controls,
+            result.vehicle_prediction.soft_corrections,
+            result.vehicle_prediction.hard_corrections,
+            result.vehicle_prediction.horizon_clamps,
+            result.vehicle_prediction.maximum_position_error_m,
+            result.vehicle_prediction.maximum_orientation_error_degrees,
+            result.vehicle_prediction.maximum_velocity_error_mps,
             up.sent_messages,
             up.delivered_messages,
             up.lost_messages,

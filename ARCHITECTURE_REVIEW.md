@@ -1,7 +1,7 @@
 # Incinerator Engine Architecture Review
 
-**Status:** Living assessment; MP0-MP3 and MP4-A1 are implemented and accepted;
-residual MP1 cohesion, vehicle prediction, and MP4-B+ pressure points are recorded
+**Status:** Living assessment; MP0-MP3 and MP4-A are implemented and accepted;
+residual MP1 cohesion and MP4-B+ pressure points are recorded
 
 **Last reviewed:** 2026-07-13
 
@@ -54,8 +54,10 @@ prediction, deterministic network impairment, and accepted-ingress replay for
 the character slice. MP4-A1 adds real feature-owned vehicle requests,
 authoritative Jolt driving, dynamic seat ownership, lightweight client
 projection, reconnect, and mixed-ingress replay without generic ECS
-replication. Its measured latency now pulls the focused MP4-A2 vehicle
-responsiveness decision; broad file-only cleanup remains unjustified.
+replication. MP4-A2 adds a separate bounded input-driven vehicle predictor,
+correction diagnostics, lifecycle resets, and installed graphical A/B testing
+without adding a client Flecs/Jolt world; broad file-only cleanup remains
+unjustified.
 
 ## Accepted Architectural Thesis
 
@@ -139,7 +141,7 @@ already accepted S0-S8/M3 evidence.
 | A-F004 | Feature root files combine public protocol, private components, systems, persistence, diagnostics, and extensive tests | P2 | Split a feature internally when its replication extension is added | Open |
 | A-F005 | Schedule order inside each phase is registration order with no declared access or before/after constraint | P1 | MP1/MP2 authority ingress and replication boundaries | Open |
 | A-F006 | The visual product had no client/authority separation or local-session seam; character input reached `Simulation` directly | P0 | MP1 | Resolved for the character slice: typed local session plus separate MP2 products |
-| A-F007 | Client replicated-state, bounded character prediction/reconciliation, and character/vehicle interpolation owners exist without a second Flecs/Jolt world; local vehicle prediction is not yet selected | P1 | MP3 / MP4-A2 | Resolved for character; vehicle responsiveness open |
+| A-F007 | Client replicated-state plus bounded character and owned-vehicle prediction/reconciliation exist without a second Flecs/Jolt world; remote vehicles remain interpolated | P1 | MP3 / MP4-A2 | Resolved and contract-tested through MP4-A2 |
 | A-F008 | Persistent/runtime and session/account/participant/connection/replicated/input/snapshot identities must remain distinct | P0 | MP0/MP2 | Resolved and contract-tested |
 | A-F009 | The durable snapshot is suitable for restore but must not become a bandwidth-oriented network snapshot or protocol DTO | P0 | ADR-017 before protocol implementation | Guardrail recorded |
 | A-F010 | Accepted character input, vehicle input, enter, and exit now record participant, generational connection, sequence, target/admission tick, target entity, intent, and fingerprint and replay into a fresh authority; later interaction/district/NPC commands still need equivalent records | P1 | Expand per MP4 feature | Resolved through MP4-A1; later feature expansion open |
@@ -148,7 +150,7 @@ already accepted S0-S8/M3 evidence.
 | A-F013 | Engine/game dependency direction exists internally, but no separately built game package currently proves the intended open-engine/separate-game consumer boundary | P1 | First production game composition | Open |
 | A-F014 | Validation and operational rigor have advanced faster than player-visible game depth, risking further infrastructure without product pressure | P1 | Every new shared abstraction must be pulled by MP1-MP4 or a real gameplay slice | Active guardrail |
 | A-F015 | The engine has no selected license, third-party notice set, stable public API promise, or external consumer guide | Release | Before public distribution, not before multiplayer architecture work | Deferred by owner |
-| A-F016 | Vehicle exit currently has one feature-configured placement; a blocked exit during disconnect cleanup has no bounded alternate-placement or forced-cleanup policy | P1 | Resolve before district collision/relevance makes blocked exits routine | Open pressure exposed by MP4-A1 |
+| A-F016 | Vehicle exit needs bounded collision-safe placement and disconnect teardown even when every candidate is blocked | P1 | Resolve before district collision/relevance makes blocked exits routine | Resolved in MP4-A2: five deterministic candidates, then typed teardown-only release and immediate hidden-character despawn |
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,

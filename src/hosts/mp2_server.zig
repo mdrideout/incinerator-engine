@@ -270,6 +270,7 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print(
                 "MP2_SERVER tick={d} connections={d} participants={d} reconnecting={d} " ++
                     "outbox_high={d} accepted={d} rejected={d} malformed={d} snapshots={d} " ++
+                    "vehicle_actions={d}/{d} forced_cleanup={d} " ++
                     "ping_max_ms={d} out_Bps={d:.0} in_Bps={d:.0} pending={d}/{d} " ++
                     "dropped_events={d}\n",
                 .{
@@ -282,6 +283,9 @@ pub fn main(init: std.process.Init) !void {
                     diagnostics.rejected_messages,
                     diagnostics.malformed_messages,
                     diagnostics.snapshots_emitted,
+                    diagnostics.vehicle_actions_accepted,
+                    diagnostics.vehicle_actions_rejected,
+                    diagnostics.forced_vehicle_cleanup,
                     transport.maximum_ping_ms,
                     transport.outgoing_bytes_per_second,
                     transport.incoming_bytes_per_second,
@@ -299,8 +303,13 @@ pub fn main(init: std.process.Init) !void {
     const diagnostics = server.authority.diagnostics();
     try server.stop(init.io);
     std.debug.print(
-        "MP2_SERVER_STOP tick={d} participants={d} snapshots={d}\n",
-        .{ diagnostics.tick, diagnostics.active_participants, diagnostics.snapshots_emitted },
+        "MP2_SERVER_STOP tick={d} participants={d} snapshots={d} forced_cleanup={d}\n",
+        .{
+            diagnostics.tick,
+            diagnostics.active_participants,
+            diagnostics.snapshots_emitted,
+            diagnostics.forced_vehicle_cleanup,
+        },
     );
 }
 

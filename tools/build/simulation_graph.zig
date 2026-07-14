@@ -73,6 +73,7 @@ pub const Graph = struct {
     reconnect_policy: *std.Build.Module,
     client_clock: *std.Build.Module,
     session_prediction: *std.Build.Module,
+    vehicle_prediction: *std.Build.Module,
     impaired_link: *std.Build.Module,
     session_local_link: *std.Build.Module,
     replicated_world: *std.Build.Module,
@@ -535,6 +536,16 @@ pub fn create(
             .{ .name = "session_protocol", .module = session_protocol },
         },
     });
+    const vehicle_prediction = b.createModule(.{
+        .root_source_file = b.path("src/session/vehicle_prediction.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets },
+            .{ .name = "session_identity", .module = session_identity },
+            .{ .name = "session_protocol", .module = session_protocol },
+        },
+    });
     const impaired_link = b.createModule(.{
         .root_source_file = b.path("src/session/impaired_link.zig"),
         .target = target,
@@ -574,6 +585,7 @@ pub fn create(
             .{ .name = "session_protocol", .module = session_protocol },
             .{ .name = "replicated_world", .module = replicated_world },
             .{ .name = "session_prediction", .module = session_prediction },
+            .{ .name = "vehicle_prediction", .module = vehicle_prediction },
         },
     });
     const local_solo_session = b.createModule(.{
@@ -643,6 +655,7 @@ pub fn create(
         .reconnect_policy = reconnect_policy,
         .client_clock = client_clock,
         .session_prediction = session_prediction,
+        .vehicle_prediction = vehicle_prediction,
         .impaired_link = impaired_link,
         .session_local_link = session_local_link,
         .replicated_world = replicated_world,

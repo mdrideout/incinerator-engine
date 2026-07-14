@@ -1228,7 +1228,14 @@ fn encodeContentCohort(sink: anytype, value: ContentCohort) !void {
 const CrateCommandTag = enum(u8) { spawn = 1, despawn = 2, impulse = 3, relocate = 4 };
 const CrateRelocationVelocityTag = enum(u8) { preserve = 1, zero = 2, exact = 3 };
 const CharacterCommandTag = enum(u8) { spawn = 1, actions = 2, despawn = 3 };
-const VehicleCommandTag = enum(u8) { spawn = 1, enter = 2, drive = 3, exit = 4, despawn = 5 };
+const VehicleCommandTag = enum(u8) {
+    spawn = 1,
+    enter = 2,
+    drive = 3,
+    exit = 4,
+    despawn = 5,
+    abandon = 6,
+};
 const InteractionCommandTag = enum(u8) { spawn = 1, despawn = 2, collect = 3, drop = 4 };
 const NpcCommandTag = enum(u8) { spawn = 1, set_goal = 2, despawn = 3 };
 const NpcGoalTag = enum(u8) { hold = 1, navigate_to = 2, patrol_between = 3 };
@@ -1398,6 +1405,11 @@ fn encodeVehicleCommand(sink: anytype, command: vehicles.Command) !void {
             try sink.writeU8(@intFromEnum(VehicleCommandTag.exit));
             try encodePersistentId(sink, exit_command.vehicle_id);
             try encodePersistentId(sink, exit_command.driver_id);
+        },
+        .abandon => |abandon| {
+            try sink.writeU8(@intFromEnum(VehicleCommandTag.abandon));
+            try encodePersistentId(sink, abandon.vehicle_id);
+            try encodePersistentId(sink, abandon.driver_id);
         },
         .despawn => |despawn| {
             try sink.writeU8(@intFromEnum(VehicleCommandTag.despawn));
@@ -1628,6 +1640,10 @@ fn validateNormalizedCommand(command: NormalizedCommand) !void {
             .exit => |exit_command| {
                 try exit_command.vehicle_id.validate();
                 try exit_command.driver_id.validate();
+            },
+            .abandon => |abandon| {
+                try abandon.vehicle_id.validate();
+                try abandon.driver_id.validate();
             },
             .despawn => |despawn| try despawn.id.validate(),
         },
@@ -2336,6 +2352,10 @@ fn decodeVehicleCommand(reader: *Reader) !vehicles.Command {
             },
         } },
         .exit => .{ .exit = .{
+            .vehicle_id = try decodePersistentId(reader),
+            .driver_id = try decodePersistentId(reader),
+        } },
+        .abandon => .{ .abandon = .{
             .vehicle_id = try decodePersistentId(reader),
             .driver_id = try decodePersistentId(reader),
         } },

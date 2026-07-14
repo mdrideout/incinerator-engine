@@ -2936,6 +2936,7 @@ fn drainS4cLifecycle(
     while (world.pollVehicleOutcome()) |outcome| switch (outcome) {
         .drive_applied => evidence.vehicle_drives +|= 1,
         .exited => evidence.vehicle_exits +|= 1,
+        .abandoned => evidence.unexpected +|= 1,
         .rejected => evidence.rejections +|= 1,
         .spawned => evidence.unexpected +|= 1,
         .entered => evidence.unexpected +|= 1,

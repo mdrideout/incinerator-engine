@@ -185,6 +185,7 @@ pub fn build(b: *std.Build) void {
     const reconnect_policy_module = graph.reconnect_policy;
     const client_clock_module = graph.client_clock;
     const session_prediction_module = graph.session_prediction;
+    const vehicle_prediction_module = graph.vehicle_prediction;
     const impaired_link_module = graph.impaired_link;
     const session_local_link_module = graph.session_local_link;
     const replicated_world_module = graph.replicated_world;
@@ -2339,6 +2340,8 @@ pub fn build(b: *std.Build) void {
     const run_client_clock_tests = b.addRunArtifact(client_clock_tests);
     const session_prediction_tests = b.addTest(.{ .root_module = session_prediction_module });
     const run_session_prediction_tests = b.addRunArtifact(session_prediction_tests);
+    const vehicle_prediction_tests = b.addTest(.{ .root_module = vehicle_prediction_module });
+    const run_vehicle_prediction_tests = b.addRunArtifact(vehicle_prediction_tests);
     const impaired_link_tests = b.addTest(.{ .root_module = impaired_link_module });
     const run_impaired_link_tests = b.addRunArtifact(impaired_link_tests);
     const session_local_link_tests = b.addTest(.{ .root_module = session_local_link_module });
@@ -2373,6 +2376,7 @@ pub fn build(b: *std.Build) void {
     session_contract_test_step.dependOn(&run_reconnect_policy_tests.step);
     session_contract_test_step.dependOn(&run_client_clock_tests.step);
     session_contract_test_step.dependOn(&run_session_prediction_tests.step);
+    session_contract_test_step.dependOn(&run_vehicle_prediction_tests.step);
     session_contract_test_step.dependOn(&run_impaired_link_tests.step);
     session_contract_test_step.dependOn(&run_session_local_link_tests.step);
     session_contract_test_step.dependOn(&run_replicated_world_tests.step);
@@ -2485,6 +2489,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_reconnect_policy_tests.step);
     test_step.dependOn(&run_client_clock_tests.step);
     test_step.dependOn(&run_session_prediction_tests.step);
+    test_step.dependOn(&run_vehicle_prediction_tests.step);
     test_step.dependOn(&run_impaired_link_tests.step);
     test_step.dependOn(&run_session_local_link_tests.step);
     test_step.dependOn(&run_replicated_world_tests.step);

@@ -1,7 +1,7 @@
 # Incinerator Multiplayer-First Architecture and Delivery Plan
 
-**Status:** MP0-MP3 and MP4-A1 are implemented and accepted; vehicle
-responsiveness, broader MP1 physical decomposition, and MP4-B+ remain open
+**Status:** MP0-MP3 and MP4-A are implemented and accepted; broader MP1
+physical decomposition and MP4-B+ remain open
 
 **Last reviewed:** 2026-07-13
 
@@ -396,14 +396,14 @@ reordering.
 
 ### MP4 — Feature Replication and District Interest
 
-**Status:** MP4-A1 authoritative vehicle replication is complete. MP4-A2 local
-vehicle responsiveness and MP4-B through MP4-E remain.
+**Status:** MP4-A authoritative vehicle replication and bounded local
+responsiveness are complete. MP4-B through MP4-E remain.
 
 **Detailed sequence:**
 [`docs/design/mp4-feature-replication-sequence.md`](docs/design/mp4-feature-replication-sequence.md)
 
 **Latest acceptance evidence:**
-[`docs/validation/mp4a-acceptance.md`](docs/validation/mp4a-acceptance.md)
+[`docs/validation/mp4a2-acceptance.md`](docs/validation/mp4a2-acceptance.md)
 
 **Outcome:** Vehicle, interaction, district, and NPC semantics work through the
 same server authority with explicit per-feature replication and bounded
@@ -412,8 +412,9 @@ district relevance.
 - [x] Add server-authoritative vehicle enter/drive/exit, dynamic seat
   ownership, reconnect retention, graphical presentation, deterministic fault
   evidence, and mixed-ingress replay.
-- [ ] Complete the explicit MP4-A2 vehicle prediction/reconciliation decision;
-  A1 measured 9-tick nominal and 12-15-tick adverse snapshot age.
+- [x] Implement bounded owned-vehicle prediction/reconciliation with a 200 ms
+  horizon, measured correction limits, lifecycle resets, live graphical A/B,
+  and no second Flecs/Jolt world.
 - [ ] Replicate carry/drop requests, outcomes, and ownership transitions.
 - [ ] Use district ownership/residency as the first relevance partition.
 - [ ] Replicate relevant NPC state at a measured rate without exposing NPC

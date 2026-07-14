@@ -6,6 +6,7 @@ const identity = @import("session_identity");
 const protocol = @import("session_protocol");
 const replicated = @import("replicated_world");
 const prediction_module = @import("session_prediction");
+const vehicle_prediction_module = @import("vehicle_prediction");
 
 pub const State = enum { disconnected, hello_sent, joined, rejected, stopped };
 
@@ -20,6 +21,7 @@ pub const Diagnostics = struct {
     last_server_tick: u64,
     disconnect_reason: ?protocol.DisconnectReason,
     prediction: prediction_module.Diagnostics,
+    vehicle_prediction: vehicle_prediction_module.Diagnostics,
 };
 
 pub const Client = struct {
@@ -37,6 +39,7 @@ pub const Client = struct {
     prejoin_snapshots: u64 = 0,
     disconnect_reason: ?protocol.DisconnectReason = null,
     prediction: prediction_module.Prediction = .{},
+    vehicle_prediction: vehicle_prediction_module.Prediction = .{},
     next_vehicle_action: identity.ActionSequence = .{ .value = 1 },
     pending_vehicle_action: ?protocol.VehicleAction = null,
     last_vehicle_action_result: ?protocol.VehicleActionResult = null,
@@ -86,12 +89,19 @@ pub const Client = struct {
                 };
                 self.last_acknowledged_input = snapshot.acknowledged_input;
                 self.snapshots_applied +|= 1;
-                if (self.ownedVehicle() != null) {
+                if (self.ownedVehicle()) |vehicle| {
                     self.prediction.clearOwnership();
+                    self.vehicle_prediction.reconcile(
+                        vehicle,
+                        snapshot.acknowledged_input,
+                        snapshot.server_tick,
+                    );
                 } else if (self.ownedCharacter()) |character| {
+                    self.vehicle_prediction.clearOwnership();
                     self.prediction.reconcile(character, snapshot.acknowledged_input);
                 } else {
                     self.prediction.clearOwnership();
+                    self.vehicle_prediction.clearOwnership();
                 }
             },
             .vehicle_action_result => |result| {
@@ -114,6 +124,7 @@ pub const Client = struct {
                 self.rejections +|= 1;
                 self.state = .rejected;
                 self.prediction.clearOwnership();
+                self.vehicle_prediction.clearOwnership();
                 self.pending_vehicle_action = null;
             },
             .disconnected => |reason| {
@@ -124,7 +135,13 @@ pub const Client = struct {
                 };
                 self.connection = .invalid;
                 self.pending_vehicle_action = null;
-                if (self.state == .stopped) self.prediction.clearOwnership();
+                if (self.state == .stopped) {
+                    self.prediction.clearOwnership();
+                    self.vehicle_prediction.clearOwnership();
+                } else {
+                    self.prediction.transportDisconnected();
+                    self.vehicle_prediction.transportDisconnected();
+                }
             },
         }
     }
@@ -180,6 +197,7 @@ pub const Client = struct {
             .hand_brake = hand_brake,
         } };
         try protocol.validateClient(message);
+        self.vehicle_prediction.record(message.vehicle_input);
         return message;
     }
 
@@ -221,12 +239,18 @@ pub const Client = struct {
         self.connection = .invalid;
         self.disconnect_reason = .transport_lost;
         self.prediction.transportDisconnected();
+        self.vehicle_prediction.transportDisconnected();
         self.pending_vehicle_action = null;
     }
 
     pub fn localPresentation(self: *const Client) ?protocol.CharacterState {
         if (!self.prediction.initialized) return null;
         return self.prediction.presentation();
+    }
+
+    pub fn localVehiclePresentation(self: *const Client) ?protocol.VehicleState {
+        if (!self.vehicle_prediction.initialized) return null;
+        return self.vehicle_prediction.presentation();
     }
 
     pub fn ownedVehicle(self: *const Client) ?protocol.VehicleState {
@@ -250,6 +274,7 @@ pub const Client = struct {
             .last_server_tick = self.world.server_tick,
             .disconnect_reason = self.disconnect_reason,
             .prediction = self.prediction.diagnostics(),
+            .vehicle_prediction = self.vehicle_prediction.diagnostics(),
         };
     }
 
@@ -358,6 +383,8 @@ test "vehicle control follows snapshot ownership and reliable action correlation
     snapshot.sequence.value = 2;
     snapshot.vehicles[0].driver = participant;
     try client.receive(.{ .snapshot = snapshot });
+    const before_prediction = client.localVehiclePresentation() orelse
+        return error.MissingVehiclePrediction;
     try std.testing.expect((try client.vehicleInput(
         2,
         snapshot.vehicles[0].entity,
@@ -366,8 +393,18 @@ test "vehicle control follows snapshot ownership and reliable action correlation
         0,
         0,
     )) == .vehicle_input);
+    const after_prediction = client.localVehiclePresentation() orelse
+        return error.MissingVehiclePrediction;
+    try std.testing.expect(after_prediction.position[2] < before_prediction.position[2]);
     try std.testing.expectError(
         error.CharacterControlUnavailable,
         client.input(2, .{ 0, 1 }, 0, false),
     );
+
+    snapshot.sequence.value = 3;
+    snapshot.server_tick = 2;
+    snapshot.acknowledged_input.value = 1;
+    snapshot.vehicles[0].driver = null;
+    try client.receive(.{ .snapshot = snapshot });
+    try std.testing.expect(client.localVehiclePresentation() == null);
 }

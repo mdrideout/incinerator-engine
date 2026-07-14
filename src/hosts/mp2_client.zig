@@ -45,6 +45,8 @@ const App = struct {
     running: bool = true,
     hello_sent: bool = false,
     vehicle_action_requested: bool = false,
+    vehicle_prediction_enabled: bool = true,
+    reconnect_requested: bool = false,
     frame: u64 = 0,
     last_input_tick: u64 = 0,
     clock: client_clock.Clock = .{},
@@ -60,7 +62,7 @@ const App = struct {
         var title_buffer: [128]u8 = undefined;
         const title = try std.fmt.bufPrintZ(
             &title_buffer,
-            "Incinerator MP2 Client {d}",
+            "Incinerator MP4-A2 Client {d}",
             .{invocation.account},
         );
         const window = c.SDL_CreateWindow(
@@ -121,6 +123,7 @@ const App = struct {
             const now = std.Io.Clock.Timestamp.now(self.io, .awake);
             const now_ns = elapsedNs(start, now);
             try self.pumpNetwork(now_ns);
+            self.forceReconnect(now_ns);
             try self.reconnectIfDue(now_ns);
             try self.sendVehicleActionIfRequested();
             if (self.client.state == .joined and self.clock.anchored) {
@@ -150,6 +153,16 @@ const App = struct {
                 if (index < self.keys.len) self.keys[index] = true;
                 if (event.key.scancode == c.SDL_SCANCODE_E and !was_down) {
                     self.vehicle_action_requested = true;
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_P and !was_down) {
+                    self.vehicle_prediction_enabled = !self.vehicle_prediction_enabled;
+                    std.debug.print("MP4_VEHICLE_PREDICTION enabled={}\n", .{
+                        self.vehicle_prediction_enabled,
+                    });
+                    self.updateTitle();
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_F8 and !was_down) {
+                    self.reconnect_requested = true;
                 }
                 if (event.key.scancode == c.SDL_SCANCODE_ESCAPE) self.running = false;
             },
@@ -262,6 +275,28 @@ const App = struct {
         });
     }
 
+    fn forceReconnect(self: *App, now_ns: u64) void {
+        if (!self.reconnect_requested) return;
+        self.reconnect_requested = false;
+        if (!self.connection.isValid() or self.client.state != .joined) return;
+        self.network.close(
+            self.connection,
+            1001,
+            "manual reconnect test",
+            .immediate,
+        );
+        self.connection = .invalid;
+        self.hello_sent = false;
+        self.client.transportDisconnected();
+        const delay = self.retry.schedule(now_ns) orelse {
+            self.running = false;
+            return;
+        };
+        std.debug.print("MP4_CLIENT_MANUAL_RECONNECT reconnect_in_ms={d}\n", .{
+            delay / std.time.ns_per_ms,
+        });
+    }
+
     fn sendInput(self: *App, target_tick: u64) !void {
         if (self.client.state != .joined) return;
         if (self.client.ownedVehicle()) |vehicle| {
@@ -275,7 +310,7 @@ const App = struct {
                 throttle,
                 steering,
                 @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_SPACE))),
-                0,
+                @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_LSHIFT))),
             ));
             return;
         }
@@ -328,7 +363,7 @@ const App = struct {
         const size = self.gpu.getWindowSize();
         const aspect = @as(f32, @floatFromInt(size.width)) /
             @as(f32, @floatFromInt(size.height));
-        if (self.client.ownedVehicle()) |owned| {
+        if (self.ownedVehiclePresentation(now_ns)) |owned| {
             self.camera.followTarget(.{
                 owned.position[0],
                 owned.position[1] + 0.75,
@@ -398,15 +433,18 @@ const App = struct {
         const stats = self.network.stats(self.connection);
         const title = std.fmt.bufPrintZ(
             &title_storage,
-            "Incinerator MP4 | {s} | entities {d} | ping {d} ms | age {d}t | mode {s} | corrections {d}/{d}",
+            "Incinerator MP4-A2 | {s} | entities {d} | ping {d} ms | age {d}t | mode {s} | pred {s} | correction {d}/{d} max {d:.2}m/{d:.1}deg",
             .{
                 @tagName(self.client.state),
                 self.client.world.character_count + self.client.world.vehicle_count,
                 if (stats) |value| value.ping_ms else -1,
                 self.last_input_tick -| self.client.world.server_tick,
                 if (self.client.ownedVehicle() != null) "vehicle" else "on-foot",
-                self.client.prediction.soft_corrections,
-                self.client.prediction.hard_corrections,
+                if (self.vehicle_prediction_enabled) "on" else "off",
+                self.client.vehicle_prediction.soft_corrections,
+                self.client.vehicle_prediction.hard_corrections,
+                self.client.vehicle_prediction.maximum_position_error_m,
+                self.client.vehicle_prediction.maximum_orientation_error_degrees,
             },
         ) catch return;
         _ = c.SDL_SetWindowTitle(self.window, title.ptr);
@@ -439,6 +477,11 @@ const App = struct {
         entry: replicated_world.VehicleEntry,
         now_ns: u64,
     ) protocol.VehicleState {
+        if (self.vehicle_prediction_enabled and entry.current.driver != null and
+            std.meta.eql(entry.current.driver.?, self.client.participant))
+        {
+            if (self.client.localVehiclePresentation()) |predicted| return predicted;
+        }
         const elapsed = now_ns -| self.last_snapshot_ns;
         const alpha = if (self.snapshot_interval_ns == 0)
             @as(f32, 1)
@@ -446,6 +489,17 @@ const App = struct {
             @as(f32, @floatFromInt(elapsed)) /
                 @as(f32, @floatFromInt(self.snapshot_interval_ns));
         return replicated_world.World.interpolateVehicle(entry, alpha);
+    }
+
+    fn ownedVehiclePresentation(self: *const App, now_ns: u64) ?protocol.VehicleState {
+        for (self.client.world.vehicleSlice()) |entry| {
+            if (entry.current.driver) |driver| {
+                if (std.meta.eql(driver, self.client.participant)) {
+                    return self.presentedVehicle(entry, now_ns);
+                }
+            }
+        }
+        return null;
     }
 
     fn participantDriving(self: *const App, participant: @TypeOf(self.client.participant)) bool {
@@ -464,7 +518,7 @@ pub fn main(init: std.process.Init) !void {
     var app = try App.init(init, invocation);
     defer app.deinit();
     std.debug.print(
-        "MP4_CLIENT_CONNECT endpoint={s} account={d} controls=WASD/SPACE/E enter-exit/ESC\n",
+        "MP4_CLIENT_CONNECT endpoint={s} account={d} controls=WASD/SPACE/LSHIFT/E enter-exit/P prediction/F8 reconnect/ESC\n",
         .{ invocation.endpoint, invocation.account },
     );
     try app.run(invocation.max_frames);

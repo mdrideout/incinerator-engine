@@ -1,7 +1,7 @@
 # MP4 Feature Replication Sequence
 
-**Status:** MP4-A1 authoritative vehicle replication is implemented and
-accepted; MP4-A2 and MP4-B through MP4-E remain
+**Status:** MP4-A authoritative replication and bounded local responsiveness
+are implemented and accepted; MP4-B through MP4-E remain
 
 **Last reviewed:** 2026-07-13
 
@@ -35,23 +35,27 @@ Design: [`mp4a-authoritative-vehicle-replication.md`](mp4a-authoritative-vehicle
 
 Evidence: [`../validation/mp4a-acceptance.md`](../validation/mp4a-acceptance.md)
 
-### MP4-A2 local vehicle responsiveness — next decision slice
+### MP4-A2 local vehicle responsiveness — complete
 
-The A1 measurements show 9-tick nominal and 12-15-tick adverse maximum
-snapshot age. Interpolation makes remote vehicles smooth but cannot make the
-local throttle/steering response immediate. The next slice must evaluate the
-installed graphical client and choose one explicit policy:
+- A separate lightweight predictor records actual owned-vehicle inputs,
+  replays unacknowledged history from authority, and immediately updates only
+  local presentation.
+- Prediction is capped at 12 ticks/200 ms and cannot survive ownership or
+  transport loss. Remote vehicles remain interpolated.
+- Soft position/quaternion correction is measured; 2.5 m or 45 degree errors
+  snap to authority. Nominal/adverse trials produced no hard correction.
+- Static collision-stop and dynamic-impact corrections, blackout recovery,
+  real-GNS reconnect, enter/exit, and ownership contention are covered.
+- `P` provides live prediction/interpolation A/B testing and `F8` manufactures
+  a reconnect in the installed graphical client.
+- Vehicle exit tries five authority-selected placements. Exhausted disconnect
+  cleanup uses a typed teardown-only seat release before hidden-character
+  despawn; it never publishes a collision-invalid client pose.
 
-1. a bounded local Jolt prediction scene with authoritative reconciliation;
-2. a deliberately smaller vehicle motion predictor with measured correction
-   limits; or
-3. authority-only vehicle presentation if playtesting demonstrates that the
-   latency target is acceptable.
+Design:
+[`mp4a2-bounded-vehicle-prediction.md`](mp4a2-bounded-vehicle-prediction.md)
 
-It may not silently call velocity extrapolation "prediction," run a second
-authoritative Flecs world, or depend on cross-machine Jolt determinism. The
-choice needs correction, collision, ownership-loss, enter/exit, and blackout
-evidence before MP4-B.
+Evidence: [`../validation/mp4a2-acceptance.md`](../validation/mp4a2-acceptance.md)
 
 ## MP4-B — Carry interaction
 

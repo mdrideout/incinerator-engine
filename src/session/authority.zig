@@ -93,6 +93,7 @@ pub const Diagnostics = struct {
     vehicle_actions_accepted: u64,
     vehicle_actions_rejected: u64,
     stale_vehicle_actions: u64,
+    forced_vehicle_cleanup: u64,
     ingress_entries: u16,
     ingress_high_water: u16,
     ingress_overwrites: u64,
@@ -175,6 +176,7 @@ pub const Authority = struct {
     vehicle_actions_accepted: u64 = 0,
     vehicle_actions_rejected: u64 = 0,
     stale_vehicle_actions: u64 = 0,
+    forced_vehicle_cleanup: u64 = 0,
     ingress: IngressJournal = .{},
     force_snapshot: bool = false,
 
@@ -363,6 +365,7 @@ pub const Authority = struct {
             .vehicle_actions_accepted = self.vehicle_actions_accepted,
             .vehicle_actions_rejected = self.vehicle_actions_rejected,
             .stale_vehicle_actions = self.stale_vehicle_actions,
+            .forced_vehicle_cleanup = self.forced_vehicle_cleanup,
             .ingress_entries = self.ingress.count,
             .ingress_high_water = self.ingress.high_water,
             .ingress_overwrites = self.ingress.overwrites,
@@ -948,6 +951,24 @@ pub const Authority = struct {
                 }
                 self.force_snapshot = true;
             },
+            .abandoned => |abandoned| {
+                const participant_index = self.findParticipantByCharacter(abandoned.driver_id) orelse
+                    return error.UnknownVehicleDriver;
+                const participant = &self.participants[participant_index];
+                if (!participant.despawn_pending or !participant.exit_pending or
+                    participant.pending_vehicle_action != null)
+                {
+                    return error.UnexpectedVehicleAbandonOutcome;
+                }
+                participant.driving_vehicle_index = null;
+                participant.exit_pending = false;
+                participant.held_input = null;
+                try self.simulation.submitCharacter(.{ .despawn = .{
+                    .id = abandoned.driver_id,
+                } });
+                self.forced_vehicle_cleanup +|= 1;
+                self.force_snapshot = true;
+            },
             .despawned => return error.UnexpectedVehicleDespawnOutcome,
             .rejected => |rejected| {
                 const driver = rejected.driver_id orelse
@@ -956,7 +977,16 @@ pub const Authority = struct {
                     return error.UnknownVehicleDriver;
                 const participant = &self.participants[participant_index];
                 if (participant.despawn_pending and participant.exit_pending) {
-                    return error.VehicleCleanupExitRejected;
+                    if (rejected.command != .exit or rejected.reason != .exit_blocked or
+                        rejected.vehicle_id == null)
+                    {
+                        return error.VehicleCleanupExitRejected;
+                    }
+                    try self.simulation.submitVehicle(.{ .abandon = .{
+                        .vehicle_id = rejected.vehicle_id.?,
+                        .driver_id = driver,
+                    } });
+                    continue;
                 }
                 const action = participant.pending_vehicle_action orelse
                     return error.UnexpectedVehicleRejection;
