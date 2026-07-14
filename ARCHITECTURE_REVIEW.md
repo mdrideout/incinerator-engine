@@ -1,8 +1,7 @@
 # Incinerator Engine Architecture Review
 
-**Status:** Living assessment; MP0-MP3 are implemented and accepted for the
-bounded character slice; residual MP1 cohesion and MP4+ pressure points are
-recorded
+**Status:** Living assessment; MP0-MP3 and MP4-A1 are implemented and accepted;
+residual MP1 cohesion, vehicle prediction, and MP4-B+ pressure points are recorded
 
 **Last reviewed:** 2026-07-13
 
@@ -15,7 +14,7 @@ multiplayer-first product
 **Multiplayer strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
 **Latest implementation audit:**
-[`docs/validation/mp3-acceptance.md`](docs/validation/mp3-acceptance.md)
+[`docs/validation/mp4a-acceptance.md`](docs/validation/mp4a-acceptance.md)
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 
@@ -49,11 +48,14 @@ coarse level but relies on registration order within a phase. Flecs is safely
 encapsulated, although current feature iteration uses private active arrays and
 point access more than archetype queries or declared data access.
 
-None of those findings invalidates the completed foundation. MP1-MP3 now prove
-the graphical-client/authority boundary, direct GNS placement, bounded local
+None of those findings invalidates the completed foundation. MP1-MP3 prove the
+graphical-client/authority boundary, direct GNS placement, bounded local
 prediction, deterministic network impairment, and accepted-ingress replay for
-the character slice. The next architecture pressure should come from MP4-A's
-real vehicle ownership/replication slice rather than a broad file-only cleanup.
+the character slice. MP4-A1 adds real feature-owned vehicle requests,
+authoritative Jolt driving, dynamic seat ownership, lightweight client
+projection, reconnect, and mixed-ingress replay without generic ECS
+replication. Its measured latency now pulls the focused MP4-A2 vehicle
+responsiveness decision; broad file-only cleanup remains unjustified.
 
 ## Accepted Architectural Thesis
 
@@ -137,15 +139,16 @@ already accepted S0-S8/M3 evidence.
 | A-F004 | Feature root files combine public protocol, private components, systems, persistence, diagnostics, and extensive tests | P2 | Split a feature internally when its replication extension is added | Open |
 | A-F005 | Schedule order inside each phase is registration order with no declared access or before/after constraint | P1 | MP1/MP2 authority ingress and replication boundaries | Open |
 | A-F006 | The visual product had no client/authority separation or local-session seam; character input reached `Simulation` directly | P0 | MP1 | Resolved for the character slice: typed local session plus separate MP2 products |
-| A-F007 | Client replicated-state, bounded prediction history, reconciliation, and remote interpolation owners exist without a second Flecs/Jolt world | P1 | MP3 | Resolved for character slice |
+| A-F007 | Client replicated-state, bounded character prediction/reconciliation, and character/vehicle interpolation owners exist without a second Flecs/Jolt world; local vehicle prediction is not yet selected | P1 | MP3 / MP4-A2 | Resolved for character; vehicle responsiveness open |
 | A-F008 | Persistent/runtime and session/account/participant/connection/replicated/input/snapshot identities must remain distinct | P0 | MP0/MP2 | Resolved and contract-tested |
 | A-F009 | The durable snapshot is suitable for restore but must not become a bandwidth-oriented network snapshot or protocol DTO | P0 | ADR-017 before protocol implementation | Guardrail recorded |
-| A-F010 | Accepted character input now records participant, generational connection, sequence, target/admission tick, intent, and fingerprint and replays into a fresh authority with category-first divergence; later feature commands/rejections still need their own records | P1 | MP3 / expand per MP4 feature | Resolved for character input; feature expansion open |
+| A-F010 | Accepted character input, vehicle input, enter, and exit now record participant, generational connection, sequence, target/admission tick, target entity, intent, and fingerprint and replay into a fresh authority; later interaction/district/NPC commands still need equivalent records | P1 | Expand per MP4 feature | Resolved through MP4-A1; later feature expansion open |
 | A-F011 | Feature iteration relies on private active arrays and point component access; city-scale query locality and parallel access are not demonstrated | P2 | Profile the first substantially larger replicated population before changing the model | Accepted pressure point |
 | A-F012 | The zflecs cohort permits one owned world per process, constraining an embedded authority plus any future full client ECS | P1 | Accepted topology starts with one authority world plus lightweight client state | Accepted constraint |
 | A-F013 | Engine/game dependency direction exists internally, but no separately built game package currently proves the intended open-engine/separate-game consumer boundary | P1 | First production game composition | Open |
 | A-F014 | Validation and operational rigor have advanced faster than player-visible game depth, risking further infrastructure without product pressure | P1 | Every new shared abstraction must be pulled by MP1-MP4 or a real gameplay slice | Active guardrail |
 | A-F015 | The engine has no selected license, third-party notice set, stable public API promise, or external consumer guide | Release | Before public distribution, not before multiplayer architecture work | Deferred by owner |
+| A-F016 | Vehicle exit currently has one feature-configured placement; a blocked exit during disconnect cleanup has no bounded alternate-placement or forced-cleanup policy | P1 | Resolve before district collision/relevance makes blocked exits routine | Open pressure exposed by MP4-A1 |
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,
@@ -235,9 +238,10 @@ not as an unbounded file-reorganization phase.
 5. **MP3 adds responsiveness and fault evidence — complete for character.**
    Bounded prediction, reconciliation, impairment, quotas, network diagnostics,
    terminal lifecycle, and accepted-ingress replay are accepted.
-6. **MP4 decomposes features when touched.** Add feature-owned replication for
-   vehicles, interaction, districts, and NPCs while splitting only the feature
-   internals materially changed.
+6. **MP4 decomposes features when touched — vehicle seam complete.** Vehicle
+   replication reused the existing typed feature surface without exposing its
+   internals. Continue with vehicle responsiveness, interaction, districts, and
+   NPCs while splitting only internals materially changed.
 7. **Reassess scale and ECS access.** Use measured replicated populations and
    snapshot budgets before adding Flecs queries, access declarations, or
    parallel scheduling.

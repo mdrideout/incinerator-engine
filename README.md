@@ -118,6 +118,10 @@ zig build verify-mp2 --summary all
 # and independent authority-stop process acceptance.
 zig build verify-mp3 --summary all
 
+# Run MP4-A1 authoritative vehicle enter/drive/exit, mixed-ingress replay,
+# deterministic vehicle fault profiles, and all MP3/GNS regressions.
+zig build verify-mp4 --summary all
+
 # Manual three-terminal MP2 test. Build/install once, then launch one authority
 # and two graphical clients with distinct development accounts.
 zig build install-mp2
@@ -125,9 +129,10 @@ zig build install-mp2
 ./zig-out/bin/incinerator_mp2_client --connect 127.0.0.1:27020 --account 1
 ./zig-out/bin/incinerator_mp2_client --connect 127.0.0.1:27020 --account 2
 
-# Client controls: WASD move, Space jump, Escape quit. Recoverable transport
-# loss uses monotonic capped retry; rejection and authority shutdown terminate
-# cleanly without reconnecting.
+# Client controls: WASD move, Space jump, E enter/exit, Escape quit. While
+# driving, W/S are throttle/reverse, A/D steer, and Space brakes. Recoverable
+# transport loss uses monotonic capped retry; rejection and authority shutdown
+# terminate cleanly without reconnecting.
 # The authority binds loopback by default. `--allow-remote` is only for trusted
 # LAN/development testing because MP2 AccountId values are not authenticated.
 

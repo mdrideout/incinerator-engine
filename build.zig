@@ -918,6 +918,30 @@ pub fn build(b: *std.Build) void {
     verify_mp3_step.dependOn(&run_mp2_server_tests.step);
     verify_mp3_step.dependOn(&run_mp2_client_tests.step);
 
+    const mp4_acceptance_module = b.createModule(.{
+        .root_source_file = b.path("tools/mp4_acceptance.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_client", .module = session_client_module },
+            .{ .name = "session_authority", .module = session_authority_module },
+            .{ .name = "impaired_link", .module = impaired_link_module },
+        },
+    });
+    const mp4_acceptance_exe = b.addExecutable(.{
+        .name = "incinerator_mp4_acceptance",
+        .root_module = mp4_acceptance_module,
+    });
+    const run_mp4_acceptance = b.addRunArtifact(mp4_acceptance_exe);
+    const verify_mp4_step = b.step(
+        "verify-mp4",
+        "Run authoritative vehicle replication under deterministic faults and real GNS",
+    );
+    verify_mp4_step.dependOn(&run_mp4_acceptance.step);
+    verify_mp4_step.dependOn(verify_mp3_step);
+
     // The headless host is intentionally not installed by the default build.
     // Its allowlisted module graph has no SDL, editor, asset, or shader edge.
     const external_producers_module = b.createModule(.{

@@ -110,6 +110,7 @@ const State = struct {
                 } });
                 self.last_input = input.sequence;
             },
+            .vehicle_input, .vehicle_action => return error.LocalSessionUnexpectedNetworkVehicleCommand,
             .disconnect => |reason| {
                 try self.link.sendFromAuthority(.{ .disconnected = reason });
             },
@@ -126,7 +127,7 @@ const State = struct {
         snapshot.acknowledged_input = self.last_input;
         if (self.local_character) |character_id| {
             const view = try self.authority.character(character_id);
-            snapshot.count = 1;
+            snapshot.character_count = 1;
             snapshot.characters[0] = .{
                 .entity = .{ .index = 1, .generation = 1 },
                 .owner = self.client.participant,
@@ -331,7 +332,7 @@ pub const Session = struct {
                 .material = self.state.character_assets.material,
             };
         }
-        return self.state.character_draws[0..world.count];
+        return self.state.character_draws[0..world.character_count];
     }
     pub fn vehiclePresentation(self: *Session, alpha: f32) ![]const sandbox.VehicleDraw {
         return self.state.authority.vehiclePresentation(alpha);

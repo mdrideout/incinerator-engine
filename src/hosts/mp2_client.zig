@@ -1,4 +1,5 @@
-//! Minimal graphical MP2 client. It renders only replicated character state;
+//! Minimal graphical multiplayer client. It renders replicated character and
+//! vehicle state;
 //! no Simulation, Flecs world, Jolt body, save authority, or feature internals
 //! are linked into this product.
 
@@ -33,6 +34,7 @@ const App = struct {
     gpu: renderer.Renderer,
     ground: mesh.Mesh,
     character: mesh.Mesh,
+    vehicle: mesh.Mesh,
     camera: camera.Camera,
     network: gns.Network,
     connection: gns.Connection,
@@ -42,6 +44,7 @@ const App = struct {
     keys: [512]bool = @splat(false),
     running: bool = true,
     hello_sent: bool = false,
+    vehicle_action_requested: bool = false,
     frame: u64 = 0,
     last_input_tick: u64 = 0,
     clock: client_clock.Clock = .{},
@@ -73,6 +76,8 @@ const App = struct {
         errdefer ground.deinit();
         var character = try primitives.createCharacterCapsule(gpu.getDevice(), 0.4, 0.5);
         errdefer character.deinit();
+        var vehicle = try primitives.createCube(gpu.getDevice());
+        errdefer vehicle.deinit();
         var network = try gns.Network.init();
         errdefer network.deinit();
         var endpoint_buffer: [256]u8 = @splat(0);
@@ -84,6 +89,7 @@ const App = struct {
             .gpu = gpu,
             .ground = ground,
             .character = character,
+            .vehicle = vehicle,
             .camera = .{ .pitch = -0.25 },
             .network = network,
             .connection = connection,
@@ -99,6 +105,7 @@ const App = struct {
             self.network.close(self.connection, 1000, "client shutdown", .immediate);
         }
         self.network.deinit();
+        self.vehicle.deinit();
         self.character.deinit();
         self.ground.deinit();
         self.gpu.deinit();
@@ -115,6 +122,7 @@ const App = struct {
             const now_ns = elapsedNs(start, now);
             try self.pumpNetwork(now_ns);
             try self.reconnectIfDue(now_ns);
+            try self.sendVehicleActionIfRequested();
             if (self.client.state == .joined and self.clock.anchored) {
                 const due_tick = self.clock.inputTick(now_ns);
                 var catch_up: u8 = 0;
@@ -138,7 +146,11 @@ const App = struct {
             c.SDL_EVENT_WINDOW_CLOSE_REQUESTED => self.running = false,
             c.SDL_EVENT_KEY_DOWN => {
                 const index: usize = @intCast(event.key.scancode);
+                const was_down = index < self.keys.len and self.keys[index];
                 if (index < self.keys.len) self.keys[index] = true;
+                if (event.key.scancode == c.SDL_SCANCODE_E and !was_down) {
+                    self.vehicle_action_requested = true;
+                }
                 if (event.key.scancode == c.SDL_SCANCODE_ESCAPE) self.running = false;
             },
             c.SDL_EVENT_KEY_UP => {
@@ -209,6 +221,17 @@ const App = struct {
                     }
                     self.last_snapshot_ns = now_ns;
                 },
+                .vehicle_action_result => |result| {
+                    std.debug.print(
+                        "MP4_VEHICLE_ACTION action={s} result={s} vehicle={d}:{d}\n",
+                        .{
+                            @tagName(result.action),
+                            @tagName(result.disposition),
+                            result.vehicle.index,
+                            result.vehicle.generation,
+                        },
+                    );
+                },
                 .rejected => |rejected| {
                     std.debug.print(
                         "MP2_CLIENT_REJECTED reason={s}\n",
@@ -241,6 +264,21 @@ const App = struct {
 
     fn sendInput(self: *App, target_tick: u64) !void {
         if (self.client.state != .joined) return;
+        if (self.client.ownedVehicle()) |vehicle| {
+            const throttle = @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_W)))) -
+                @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_S))));
+            const steering = @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_D)))) -
+                @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_A))));
+            try self.sendClientMessage(try self.client.vehicleInput(
+                target_tick,
+                vehicle.entity,
+                throttle,
+                steering,
+                @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_SPACE))),
+                0,
+            ));
+            return;
+        }
         const move = normalizedMove(.{
             @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_D)))) -
                 @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_A)))),
@@ -252,6 +290,22 @@ const App = struct {
             move,
             self.camera.yaw,
             self.key(c.SDL_SCANCODE_SPACE),
+        ));
+    }
+
+    fn sendVehicleActionIfRequested(self: *App) !void {
+        if (!self.vehicle_action_requested) return;
+        self.vehicle_action_requested = false;
+        if (self.client.state != .joined or self.client.pending_vehicle_action != null) return;
+        if (self.client.ownedVehicle()) |vehicle| {
+            try self.sendClientMessage(try self.client.vehicleAction(.exit, vehicle.entity));
+            return;
+        }
+        const vehicle_entries = self.client.world.vehicleSlice();
+        if (vehicle_entries.len == 0) return;
+        try self.sendClientMessage(try self.client.vehicleAction(
+            .enter,
+            vehicle_entries[0].current.entity,
         ));
     }
 
@@ -274,21 +328,27 @@ const App = struct {
         const size = self.gpu.getWindowSize();
         const aspect = @as(f32, @floatFromInt(size.width)) /
             @as(f32, @floatFromInt(size.height));
-        for (self.client.world.slice()) |entry| {
+        if (self.client.ownedVehicle()) |owned| {
+            self.camera.followTarget(.{
+                owned.position[0],
+                owned.position[1] + 0.75,
+                owned.position[2],
+            }, 9);
+        } else for (self.client.world.slice()) |entry| {
             const state = self.presentedState(entry, now_ns);
-            if (std.meta.eql(state.owner, self.client.participant)) {
-                self.camera.followTarget(.{
-                    state.position[0],
-                    state.position[1] + 0.9,
-                    state.position[2],
-                }, 7);
-                break;
-            }
+            if (!std.meta.eql(state.owner, self.client.participant)) continue;
+            self.camera.followTarget(.{
+                state.position[0],
+                state.position[1] + 0.9,
+                state.position[2],
+            }, 7);
+            break;
         }
         const view_projection = self.camera.getViewProjectionMatrix(aspect);
         self.gpu.drawMesh(&self.ground, zm.identity(), view_projection);
         for (self.client.world.slice()) |entry| {
             const state = self.presentedState(entry, now_ns);
+            if (self.participantDriving(state.owner)) continue;
             const half_yaw = state.facing_yaw * 0.5;
             const rotation = zm.quatToMat(zm.f32x4(0, @sin(half_yaw), 0, @cos(half_yaw)));
             const translation = zm.translation(
@@ -307,6 +367,28 @@ const App = struct {
                 view_projection,
             );
         }
+        for (self.client.world.vehicleSlice()) |entry| {
+            const state = self.presentedVehicle(entry, now_ns);
+            const scale = zm.scaling(1.8, 0.5, 4.0);
+            const rotation = zm.quatToMat(zm.f32x4(
+                state.rotation[0],
+                state.rotation[1],
+                state.rotation[2],
+                state.rotation[3],
+            ));
+            const translation = zm.translation(
+                state.position[0],
+                state.position[1],
+                state.position[2],
+            );
+            self.gpu.drawMeshWithMaterial(
+                &self.vehicle,
+                null,
+                if (state.driver != null) .{ 0.95, 0.65, 0.10, 1 } else .{ 0.25, 0.35, 0.95, 1 },
+                zm.mul(zm.mul(scale, rotation), translation),
+                view_projection,
+            );
+        }
         self.gpu.endRenderPass();
         try self.gpu.submitFrame();
     }
@@ -316,13 +398,13 @@ const App = struct {
         const stats = self.network.stats(self.connection);
         const title = std.fmt.bufPrintZ(
             &title_storage,
-            "Incinerator MP3 | {s} | entities {d} | ping {d} ms | age {d}t | error {d:.2}m | corrections {d}/{d}",
+            "Incinerator MP4 | {s} | entities {d} | ping {d} ms | age {d}t | mode {s} | corrections {d}/{d}",
             .{
                 @tagName(self.client.state),
-                self.client.world.count,
+                self.client.world.character_count + self.client.world.vehicle_count,
                 if (stats) |value| value.ping_ms else -1,
                 self.last_input_tick -| self.client.world.server_tick,
-                self.client.prediction.current_error_m,
+                if (self.client.ownedVehicle() != null) "vehicle" else "on-foot",
                 self.client.prediction.soft_corrections,
                 self.client.prediction.hard_corrections,
             },
@@ -351,6 +433,29 @@ const App = struct {
                 @as(f32, @floatFromInt(self.snapshot_interval_ns));
         return replicated_world.World.interpolate(entry, alpha);
     }
+
+    fn presentedVehicle(
+        self: *const App,
+        entry: replicated_world.VehicleEntry,
+        now_ns: u64,
+    ) protocol.VehicleState {
+        const elapsed = now_ns -| self.last_snapshot_ns;
+        const alpha = if (self.snapshot_interval_ns == 0)
+            @as(f32, 1)
+        else
+            @as(f32, @floatFromInt(elapsed)) /
+                @as(f32, @floatFromInt(self.snapshot_interval_ns));
+        return replicated_world.World.interpolateVehicle(entry, alpha);
+    }
+
+    fn participantDriving(self: *const App, participant: @TypeOf(self.client.participant)) bool {
+        for (self.client.world.vehicleSlice()) |entry| {
+            if (entry.current.driver) |driver| {
+                if (std.meta.eql(driver, participant)) return true;
+            }
+        }
+        return false;
+    }
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -359,7 +464,7 @@ pub fn main(init: std.process.Init) !void {
     var app = try App.init(init, invocation);
     defer app.deinit();
     std.debug.print(
-        "MP2_CLIENT_CONNECT endpoint={s} account={d} controls=WASD/SPACE/ESC\n",
+        "MP4_CLIENT_CONNECT endpoint={s} account={d} controls=WASD/SPACE/E enter-exit/ESC\n",
         .{ invocation.endpoint, invocation.account },
     );
     try app.run(invocation.max_frames);

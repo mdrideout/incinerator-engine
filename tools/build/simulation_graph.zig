@@ -213,12 +213,12 @@ pub fn create(
     );
     const simulation_cohort_options = cohort_options.createModule();
     const network_options = b.addOptions();
-    network_options.addOption(u16, "protocol_revision", 2);
+    network_options.addOption(u16, "protocol_revision", 3);
     network_options.addOption(u64, "build_cohort", networkBuildCohort());
     network_options.addOption(
         u64,
         "content_cohort",
-        std.hash.Wyhash.hash(0x494e_434e, "mp2-character-sandbox-content-v1"),
+        std.hash.Wyhash.hash(0x494e_434e, "mp4-character-vehicle-sandbox-content-v1"),
     );
     const network_cohort_options = network_options.createModule();
 
@@ -663,7 +663,7 @@ fn networkBuildCohort() u64 {
         cohort.gns_revision,
         "authority-60hz",
         "snapshot-20hz",
-        "protocol-v2",
+        "protocol-v3",
     }) |part| fingerprint = std.hash.Wyhash.hash(fingerprint, part);
     return fingerprint;
 }

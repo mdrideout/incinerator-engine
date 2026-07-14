@@ -1,8 +1,8 @@
 # Incinerator Engine Overhaul Plan
 
 **Status:** Pre-multiplayer program and post-M3 greenfield cleanup complete;
-MP0-MP3 are implemented and accepted for the bounded character slice; MP4+
-and broader MP1 physical decomposition remain; secondary platforms are deferred
+MP0-MP3 and MP4-A1 are implemented and accepted; MP4-A2/MP4-B+ and broader MP1
+physical decomposition remain; secondary platforms are deferred
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
@@ -468,7 +468,7 @@ before dependency resolution.
 | S7 | Persistent interaction and cross-district world ownership are proven | Complete; transactional authority, save/replay, native Metal, 128-cycle measurement, and independent review pass |
 | S8 | A bounded navigation-driven population crosses streamed districts safely at representative scale | Complete and independently reviewed |
 | M3 | A server-shaped headless product is operationally ready for external producers | Complete and independently reviewed; pre-network capability gate only |
-| S9 / MP0-MP5 | Establish one multiplayer-first authority model for solo, listen, and dedicated placements, then prove two clients and the existing gameplay features | MP0-MP3 complete for the character slice; MP4-MP5 and broader feature/physical decomposition remain |
+| S9 / MP0-MP5 | Establish one multiplayer-first authority model for solo, listen, and dedicated placements, then prove two clients and the existing gameplay features | MP0-MP3 plus MP4-A1 vehicle authority complete; MP4-A2/MP4-B-MP5 and broader feature/physical decomposition remain |
 | M4 | Multiplayer foundation is ready for future gameplay slices | Not started; depends on MP0-MP5 |
 
 M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
@@ -1233,8 +1233,8 @@ down cleanly. Apple Silicon macOS remains the only active platform.
 
 ## 23. S9 — Multiplayer-First Authority Program
 
-**Status:** MP0-MP3 are implemented and accepted for the bounded character
-slice. MP4-MP5 and broader MP1 physical
+**Status:** MP0-MP3 and MP4-A1 are implemented and accepted. MP4-A2,
+MP4-B-MP5, and broader MP1 physical
 decomposition remain, as recorded in [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md).
 
 The earlier conditional S9 correctly identified the need for two clients, one
@@ -1253,7 +1253,7 @@ historical roadmap:
 | MP2 | Two macOS clients join one authoritative localhost server with sequenced character input and snapshots | Character slice implemented and audited over real GNS |
 | MP2.1 | Monotonic reconnect and explicit terminal authority shutdown semantics are proven | Complete |
 | MP3 | Local prediction/reconciliation and bounded latency/loss/reorder behavior are proven | Complete for bounded character slice |
-| MP4 | Vehicle, interaction, district, and NPC replication plus district relevance are proven | Not started |
+| MP4 | Vehicle, interaction, district, and NPC replication plus district relevance are proven | MP4-A1 authoritative vehicle replication complete; A2/B-E remain |
 | MP5 | Invite/party/room discovery connects players to listen or dedicated authority | Not started |
 | M4 | The multiplayer foundation is accepted for subsequent gameplay slices | Not started |
 
@@ -1582,6 +1582,12 @@ Record evidence rather than relying only on target numbers:
 33. [x] Implement MP3 bounded character prediction/reconciliation and the
     deterministic impaired-link acceptance matrix before adding more networked
     gameplay features.
+34. [x] Implement MP4-A1 authoritative vehicle replication: correlated
+    enter/exit, lossy owned driving input, chassis/driver snapshots, graphical
+    presentation, reconnect/seat contention, deterministic faults, and mixed
+    accepted-ingress replay.
+35. [ ] Complete MP4-A2's explicit local vehicle responsiveness decision and
+    resolve the blocked disconnect-exit policy before MP4-B carry replication.
 
 ---
 
@@ -1637,3 +1643,4 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-13 | Accepted the multiplayer authority, protocol, transport, and initial deployment direction | ADR-016/ADR-017 accepted; ADR-018 selects open-source GameNetworkingSockets through the flat C API, direct IP for the first dedicated two-client proof, dedicated authority as canonical for public rooms, optional later private listen/Steam P2P, optional non-vendored Steamworks compatibility, 2-8 player target with 16-participant validation ceiling, join-in-progress/reconnect, no host migration, and 60 Hz authority/20 Hz replication starting rates; quantitative MP0 budgets and implementation remain |
 | 2026-07-13 | Implemented MP0 and the first MP1/MP2 authoritative character slice, then completed the MP2 audit | Central quantitative ceilings and impairment profiles; distinct session/account/participant/connection/replicated/sequence identities; generated exact build/content cohort; bounded codec/local link/client replicated world; solo character input through embedded session; pinned GNS 1.5.1 C ABI; cold authority and presentation-only graphical client; real two-client GNS proof for JIP, movement, acknowledgement, cohort rejection, disconnect/reconnect, zero callback drops; handshake/idle/oversize/malformed/duplicate-account coverage; visual-linkage boundary; residual MP1 physical cohesion and MP3/MP4 scope explicitly recorded |
 | 2026-07-13 | Completed MP2.1 and MP3 character responsiveness/fault acceptance | Monotonic capped reconnect with terminal authority-stop semantics; welcome-anchored clock; bounded local horizontal prediction/reconciliation and remote interpolation; shared semantic lane policy; deterministic latency/jitter/loss/duplicate/reorder/blackout/bandwidth harness; stale-input and quota policy; 2,048-entry accepted-ingress journal replayed into a fresh one-world authority with category-first divergence; clean/three nominal/three adverse/blackout matrix; independent real-GNS shutdown processes; 199/199 and 618/618 full Debug/ReleaseFast gates; 63/63 and 31/31 MP3 Debug/ReleaseFast gates; extracted-source 98/98/196 plus cold 32/32/52 evidence |
+| 2026-07-13 | Completed MP4-A1 authoritative vehicle replication | Reliable correlated enter/exit; unreliable sequenced ownership-checked driving input with neutral expiry; backend-neutral chassis/driver snapshots; graphical vehicle/input/camera presentation; real-GNS two-client contention plus reconnect-retained seat; deterministic clean/three nominal/three adverse/blackout matrix; mixed character/vehicle/action ingress replay into a fresh authority; 66/66 MP4 steps and 36/36 focused tests; 199/199 and 623/623 full Debug/ReleaseFast gates; extracted-source 98/98/196 plus cold 32/32/52 evidence; measurements trigger the focused MP4-A2 prediction decision |

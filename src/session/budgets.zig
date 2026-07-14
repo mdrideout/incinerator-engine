@@ -9,6 +9,8 @@ pub const snapshot_hz: u32 = 20;
 pub const ticks_per_snapshot: u32 = authority_tick_hz / snapshot_hz;
 pub const max_participants: usize = 16;
 pub const product_participants: usize = 8;
+pub const max_vehicles: usize = 4;
+pub const product_vehicles: usize = 1;
 
 pub const max_wire_message_bytes: usize = 64 * 1024;
 pub const max_snapshot_bytes: usize = 32 * 1024;
@@ -73,6 +75,9 @@ comptime {
     }
     if (product_participants > max_participants) {
         @compileError("product participant target exceeds validation ceiling");
+    }
+    if (product_vehicles > max_vehicles) {
+        @compileError("product vehicle target exceeds validation ceiling");
     }
     if (max_snapshot_bytes > max_wire_message_bytes) {
         @compileError("snapshot ceiling exceeds wire message ceiling");

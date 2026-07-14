@@ -50,16 +50,34 @@ const ParticipantSlot = struct {
     character: ?sandbox.PersistentId = null,
     replicated: identity.ReplicatedEntityId = .invalid,
     last_input: identity.InputSequence = .{ .value = 0 },
-    held_input: ?protocol.InputFrame = null,
+    held_input: ?HeldInput = null,
     last_input_arrival_tick: u64 = 0,
+    driving_vehicle_index: ?u8 = null,
+    last_vehicle_action: identity.ActionSequence = .{ .value = 0 },
+    pending_vehicle_action: ?protocol.VehicleAction = null,
+    exit_pending: bool = false,
     spawn_pending: bool = false,
     despawn_pending: bool = false,
+};
+
+const HeldInput = union(enum) {
+    character: protocol.InputFrame,
+    vehicle: protocol.VehicleInputFrame,
+};
+
+const VehicleSlot = struct {
+    active: bool = false,
+    spawn_pending: bool = false,
+    generation: u16 = 0,
+    persistent: ?sandbox.PersistentId = null,
+    replicated: identity.ReplicatedEntityId = .invalid,
 };
 
 pub const Diagnostics = struct {
     tick: u64,
     active_connections: u16,
     active_participants: u16,
+    active_vehicles: u16,
     connected_participants: u16,
     reconnecting_participants: u16,
     outbox_occupancy: u16,
@@ -71,6 +89,10 @@ pub const Diagnostics = struct {
     reconnects: u64,
     stale_inputs: u64,
     quota_violations: u64,
+    invalid_control_inputs: u64,
+    vehicle_actions_accepted: u64,
+    vehicle_actions_rejected: u64,
+    stale_vehicle_actions: u64,
     ingress_entries: u16,
     ingress_high_water: u16,
     ingress_overwrites: u64,
@@ -83,10 +105,21 @@ pub const AcceptedIngress = struct {
     participant: identity.ParticipantId,
     connection: identity.ConnectionId,
     sequence: identity.InputSequence,
+    action_sequence: identity.ActionSequence,
     target_tick: u64,
+    kind: Kind,
     move: [2]f32,
     facing_yaw: f32,
     jump_pressed: bool,
+    vehicle: identity.ReplicatedEntityId,
+    vehicle_control: [4]f32,
+
+    pub const Kind = enum(u8) {
+        character = 1,
+        vehicle = 2,
+        vehicle_enter = 3,
+        vehicle_exit = 4,
+    };
 };
 
 const IngressJournal = struct {
@@ -128,6 +161,7 @@ pub const Authority = struct {
     session: identity.SessionId,
     connections: [budgets.max_participants]ConnectionSlot = @splat(.{}),
     participants: [budgets.max_participants]ParticipantSlot = @splat(.{}),
+    vehicles: [budgets.max_vehicles]VehicleSlot = @splat(.{}),
     outbox: Outbox = .{},
     outbox_high_water: u16 = 0,
     accepted_messages: u64 = 0,
@@ -137,20 +171,42 @@ pub const Authority = struct {
     reconnects: u64 = 0,
     stale_inputs: u64 = 0,
     quota_violations: u64 = 0,
+    invalid_control_inputs: u64 = 0,
+    vehicle_actions_accepted: u64 = 0,
+    vehicle_actions_rejected: u64 = 0,
+    stale_vehicle_actions: u64 = 0,
     ingress: IngressJournal = .{},
     force_snapshot: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) !Authority {
-        return .{
+        var authority = Authority{
             .simulation = try sandbox.Simulation.init(allocator, .{
                 .namespace = 0x4d50_3201,
                 .fixed_delta_seconds = 1.0 /
                     @as(f32, @floatFromInt(budgets.authority_tick_hz)),
                 .create_ground = true,
                 .character = .{ .max_characters = budgets.max_participants },
+                .vehicle = .{
+                    .max_vehicles = budgets.max_vehicles,
+                    .max_entry_distance = 5,
+                },
             }),
             .session = .{ .value = 0x4d50_3200_0000_0001 },
         };
+        errdefer authority.simulation.deinit();
+        authority.vehicles[0] = .{
+            .spawn_pending = true,
+            .generation = 1,
+            .replicated = .{
+                .index = @intCast(budgets.max_participants + 1),
+                .generation = 1,
+            },
+        };
+        try authority.simulation.submitVehicle(.{ .spawn = .{
+            .request_id = vehicleSpawnRequestId(0, 1),
+            .chassis = .{ .pose = .{ .position = .{ -1.5, 2, -4 } } },
+        } });
+        return authority;
     }
 
     pub fn deinit(self: *Authority) void {
@@ -217,6 +273,8 @@ pub const Authority = struct {
         switch (message) {
             .hello => |hello| try self.ingestHello(connection_index, hello),
             .input => |input| try self.ingestInput(connection_index, input),
+            .vehicle_input => |input| try self.ingestVehicleInput(connection_index, input),
+            .vehicle_action => |action| try self.ingestVehicleAction(connection_index, action),
             .disconnect => |reason| try self.ingestDisconnect(connection_index, reason),
         }
     }
@@ -227,6 +285,7 @@ pub const Authority = struct {
         try self.applyHeldInputs(self.simulation.tickIndex());
         try self.simulation.tick();
         try self.processCharacterOutcomes();
+        try self.processVehicleOutcomes();
         const tick_index = self.simulation.tickIndex();
         if (self.force_snapshot or tick_index % budgets.ticks_per_snapshot == 0) {
             try self.publishSnapshots();
@@ -269,6 +328,7 @@ pub const Authority = struct {
     pub fn diagnostics(self: *const Authority) Diagnostics {
         var active_connections: u16 = 0;
         var active_participants: u16 = 0;
+        var active_vehicles: u16 = 0;
         var connected_participants: u16 = 0;
         var reconnecting_participants: u16 = 0;
         for (self.connections) |connection| active_connections += @intFromBool(connection.active);
@@ -282,10 +342,12 @@ pub const Authority = struct {
                     !participant.despawn_pending,
             );
         }
+        for (self.vehicles) |vehicle| active_vehicles += @intFromBool(vehicle.active);
         return .{
             .tick = self.simulation.tickIndex(),
             .active_connections = active_connections,
             .active_participants = active_participants,
+            .active_vehicles = active_vehicles,
             .connected_participants = connected_participants,
             .reconnecting_participants = reconnecting_participants,
             .outbox_occupancy = @intCast(self.outbox.len),
@@ -297,6 +359,10 @@ pub const Authority = struct {
             .reconnects = self.reconnects,
             .stale_inputs = self.stale_inputs,
             .quota_violations = self.quota_violations,
+            .invalid_control_inputs = self.invalid_control_inputs,
+            .vehicle_actions_accepted = self.vehicle_actions_accepted,
+            .vehicle_actions_rejected = self.vehicle_actions_rejected,
+            .stale_vehicle_actions = self.stale_vehicle_actions,
             .ingress_entries = self.ingress.count,
             .ingress_high_water = self.ingress.high_water,
             .ingress_overwrites = self.ingress.overwrites,
@@ -442,7 +508,11 @@ pub const Authority = struct {
             try self.rejectConnection(connection_index, .invalid_state, false);
             return;
         }
-        participant.held_input = input;
+        if (participant.driving_vehicle_index != null) {
+            self.invalid_control_inputs +|= 1;
+            return;
+        }
+        participant.held_input = .{ .character = input };
         participant.last_input_arrival_tick = tick_index;
         participant.last_input = input.sequence;
         self.ingress.append(.{
@@ -454,11 +524,193 @@ pub const Authority = struct {
                 .generation = self.connections[connection_index].generation,
             },
             .sequence = input.sequence,
+            .action_sequence = .{ .value = 0 },
             .target_tick = input.target_tick,
+            .kind = .character,
             .move = input.move,
             .facing_yaw = input.facing_yaw,
             .jump_pressed = input.jump_pressed,
+            .vehicle = .invalid,
+            .vehicle_control = .{ 0, 0, 0, 0 },
         });
+        self.accepted_messages +|= 1;
+    }
+
+    fn ingestVehicleInput(
+        self: *Authority,
+        connection_index: usize,
+        input: protocol.VehicleInputFrame,
+    ) !void {
+        const tick_index = self.simulation.tickIndex();
+        const connection = &self.connections[connection_index];
+        if (connection.input_quota_tick != tick_index) {
+            connection.input_quota_tick = tick_index;
+            connection.input_messages_this_tick = 0;
+        }
+        if (connection.input_messages_this_tick >= budgets.max_input_messages_per_tick) {
+            self.quota_violations +|= 1;
+            try self.rejectConnection(connection_index, .quota_exceeded, true);
+            return;
+        }
+        connection.input_messages_this_tick += 1;
+        const participant_index = connection.participant_index orelse {
+            try self.rejectConnection(connection_index, .unauthorized, false);
+            return;
+        };
+        const participant = &self.participants[participant_index];
+        if (!std.meta.eql(input.session, self.session) or
+            !std.meta.eql(input.participant, participantId(
+                participant_index,
+                participant.generation,
+            )))
+        {
+            try self.rejectConnection(connection_index, .stale_connection, false);
+            return;
+        }
+        if (!input.sequence.newerThan(participant.last_input)) {
+            self.stale_inputs +|= 1;
+            return;
+        }
+        if (input.target_tick > tick_index + budgets.max_future_input_ticks or
+            input.target_tick + budgets.input_history_ticks < tick_index)
+        {
+            try self.rejectConnection(connection_index, .stale_sequence, false);
+            return;
+        }
+        const vehicle_index = participant.driving_vehicle_index orelse {
+            self.invalid_control_inputs +|= 1;
+            return;
+        };
+        const vehicle = self.vehicles[vehicle_index];
+        if (!vehicle.active or !std.meta.eql(vehicle.replicated, input.vehicle)) {
+            self.invalid_control_inputs +|= 1;
+            return;
+        }
+        participant.held_input = .{ .vehicle = input };
+        participant.last_input_arrival_tick = tick_index;
+        participant.last_input = input.sequence;
+        self.ingress.append(.{
+            .admitted_tick = tick_index,
+            .account = participant.account,
+            .participant = participantId(participant_index, participant.generation),
+            .connection = .{
+                .index = @intCast(connection_index + 1),
+                .generation = connection.generation,
+            },
+            .sequence = input.sequence,
+            .action_sequence = .{ .value = 0 },
+            .target_tick = input.target_tick,
+            .kind = .vehicle,
+            .move = .{ 0, 0 },
+            .facing_yaw = 0,
+            .jump_pressed = false,
+            .vehicle = input.vehicle,
+            .vehicle_control = .{
+                input.throttle,
+                input.steering,
+                input.brake,
+                input.hand_brake,
+            },
+        });
+        self.accepted_messages +|= 1;
+    }
+
+    fn ingestVehicleAction(
+        self: *Authority,
+        connection_index: usize,
+        action: protocol.VehicleAction,
+    ) !void {
+        const participant_index = self.connections[connection_index].participant_index orelse {
+            try self.rejectConnection(connection_index, .unauthorized, false);
+            return;
+        };
+        const participant = &self.participants[participant_index];
+        if (!std.meta.eql(action.session, self.session) or
+            !std.meta.eql(action.participant, participantId(
+                participant_index,
+                participant.generation,
+            )))
+        {
+            try self.rejectConnection(connection_index, .stale_connection, false);
+            return;
+        }
+        if (!action.sequence.newerThan(participant.last_vehicle_action)) {
+            self.stale_vehicle_actions +|= 1;
+            return;
+        }
+        participant.last_vehicle_action = action.sequence;
+        const vehicle_index = self.findVehicle(action.vehicle) orelse {
+            try self.queueVehicleActionResult(
+                participant_index,
+                action,
+                .vehicle_not_found,
+            );
+            self.vehicle_actions_rejected +|= 1;
+            return;
+        };
+        if (participant.pending_vehicle_action != null or participant.despawn_pending) {
+            try self.queueVehicleActionResult(participant_index, action, .invalid_state);
+            self.vehicle_actions_rejected +|= 1;
+            return;
+        }
+        const character = participant.character orelse {
+            try self.queueVehicleActionResult(participant_index, action, .invalid_state);
+            self.vehicle_actions_rejected +|= 1;
+            return;
+        };
+        const vehicle = self.vehicles[vehicle_index];
+        const persistent = vehicle.persistent orelse {
+            try self.queueVehicleActionResult(participant_index, action, .unavailable);
+            self.vehicle_actions_rejected +|= 1;
+            return;
+        };
+        switch (action.kind) {
+            .enter => {
+                if (participant.driving_vehicle_index != null) {
+                    try self.queueVehicleActionResult(participant_index, action, .invalid_state);
+                    self.vehicle_actions_rejected +|= 1;
+                    return;
+                }
+                try self.simulation.submitVehicle(.{ .enter = .{
+                    .vehicle_id = persistent,
+                    .driver_id = character,
+                } });
+            },
+            .exit => {
+                if (participant.driving_vehicle_index == null or
+                    participant.driving_vehicle_index.? != vehicle_index)
+                {
+                    try self.queueVehicleActionResult(participant_index, action, .invalid_state);
+                    self.vehicle_actions_rejected +|= 1;
+                    return;
+                }
+                try self.simulation.submitVehicle(.{ .exit = .{
+                    .vehicle_id = persistent,
+                    .driver_id = character,
+                } });
+                participant.exit_pending = true;
+            },
+        }
+        self.ingress.append(.{
+            .admitted_tick = self.simulation.tickIndex(),
+            .account = participant.account,
+            .participant = participantId(participant_index, participant.generation),
+            .connection = .{
+                .index = @intCast(connection_index + 1),
+                .generation = self.connections[connection_index].generation,
+            },
+            .sequence = .{ .value = 0 },
+            .action_sequence = action.sequence,
+            .target_tick = self.simulation.tickIndex() + 1,
+            .kind = if (action.kind == .enter) .vehicle_enter else .vehicle_exit,
+            .move = .{ 0, 0 },
+            .facing_yaw = 0,
+            .jump_pressed = false,
+            .vehicle = action.vehicle,
+            .vehicle_control = .{ 0, 0, 0, 0 },
+        });
+        participant.pending_vehicle_action = action;
+        participant.held_input = null;
         self.accepted_messages +|= 1;
     }
 
@@ -469,18 +721,42 @@ pub const Authority = struct {
             {
                 continue;
             }
-            const input = participant.held_input orelse continue;
-            if (tick_index -| participant.last_input_arrival_tick > budgets.input_hold_ticks) {
-                participant.held_input = null;
+            const fresh = tick_index -| participant.last_input_arrival_tick <=
+                budgets.input_hold_ticks;
+            if (!fresh) participant.held_input = null;
+            if (participant.driving_vehicle_index) |vehicle_index| {
+                if (participant.exit_pending) continue;
+                const vehicle = self.vehicles[vehicle_index];
+                const persistent = vehicle.persistent orelse continue;
+                var control = engine.physics.VehicleInput{};
+                if (fresh) if (participant.held_input) |held| switch (held) {
+                    .vehicle => |input| control = .{
+                        .throttle = input.throttle,
+                        .steering = input.steering,
+                        .brake = input.brake,
+                        .hand_brake = input.hand_brake,
+                    },
+                    .character => {},
+                };
+                try self.simulation.submitVehicle(.{ .drive = .{
+                    .vehicle_id = persistent,
+                    .driver_id = participant.character.?,
+                    .input = control,
+                } });
                 continue;
             }
-            try self.simulation.submitCharacter(.{ .actions = .{
-                .id = participant.character.?,
-                .move = input.move,
-                .facing_yaw = input.facing_yaw,
-                .jump_pressed = input.jump_pressed and
-                    tick_index == participant.last_input_arrival_tick,
-            } });
+            if (!fresh) continue;
+            const held = participant.held_input orelse continue;
+            switch (held) {
+                .character => |input| try self.simulation.submitCharacter(.{ .actions = .{
+                    .id = participant.character.?,
+                    .move = input.move,
+                    .facing_yaw = input.facing_yaw,
+                    .jump_pressed = input.jump_pressed and
+                        tick_index == participant.last_input_arrival_tick,
+                } }),
+                .vehicle => {},
+            }
         }
     }
 
@@ -543,13 +819,26 @@ pub const Authority = struct {
     fn beginParticipantDespawn(self: *Authority, participant_index: usize) !void {
         const participant = &self.participants[participant_index];
         if (!participant.active or participant.despawn_pending) return;
+        participant.despawn_pending = true;
+        participant.held_input = null;
+        // A queued feature transaction cannot be cancelled after admission.
+        // Let its typed outcome settle first, then continue ordered cleanup.
+        if (participant.pending_vehicle_action != null) return;
         if (participant.character) |character| {
+            if (participant.driving_vehicle_index) |vehicle_index| {
+                const vehicle = self.vehicles[vehicle_index];
+                const persistent = vehicle.persistent orelse
+                    return error.VehicleAuthorityInvariantBroken;
+                try self.simulation.submitVehicle(.{ .exit = .{
+                    .vehicle_id = persistent,
+                    .driver_id = character,
+                } });
+                participant.exit_pending = true;
+                return;
+            }
             try self.simulation.submitCharacter(.{ .despawn = .{ .id = character } });
-            participant.despawn_pending = true;
         } else if (!participant.spawn_pending) {
             participant.active = false;
-        } else {
-            participant.despawn_pending = true;
         }
     }
 
@@ -601,6 +890,95 @@ pub const Authority = struct {
         while (self.simulation.pollCharacterEvent() != null) {}
     }
 
+    fn processVehicleOutcomes(self: *Authority) !void {
+        while (self.simulation.pollVehicleOutcome()) |outcome| switch (outcome) {
+            .spawned => |spawned| {
+                const decoded = decodeVehicleSpawnRequestId(spawned.request_id) orelse
+                    return error.UnexpectedVehicleSpawnOutcome;
+                const vehicle = &self.vehicles[decoded.index];
+                if (vehicle.generation != decoded.generation or !vehicle.spawn_pending) {
+                    return error.StaleVehicleSpawnOutcome;
+                }
+                vehicle.spawn_pending = false;
+                vehicle.active = true;
+                vehicle.persistent = spawned.id;
+                self.force_snapshot = true;
+            },
+            .entered => |entered| {
+                const participant_index = self.findParticipantByCharacter(entered.driver_id) orelse
+                    return error.UnknownVehicleDriver;
+                const vehicle_index = self.findVehicleByPersistent(entered.vehicle_id) orelse
+                    return error.UnknownVehicleOutcome;
+                const participant = &self.participants[participant_index];
+                participant.driving_vehicle_index = @intCast(vehicle_index);
+                participant.held_input = null;
+                if (participant.pending_vehicle_action) |action| {
+                    if (action.kind != .enter) return error.VehicleActionOutcomeMismatch;
+                    try self.queueVehicleActionResult(participant_index, action, .entered);
+                    participant.pending_vehicle_action = null;
+                    self.vehicle_actions_accepted +|= 1;
+                }
+                if (participant.despawn_pending) {
+                    try self.simulation.submitVehicle(.{ .exit = .{
+                        .vehicle_id = entered.vehicle_id,
+                        .driver_id = entered.driver_id,
+                    } });
+                    participant.exit_pending = true;
+                }
+                self.force_snapshot = true;
+            },
+            .drive_applied => {},
+            .exited => |exited| {
+                const participant_index = self.findParticipantByCharacter(exited.driver_id) orelse
+                    return error.UnknownVehicleDriver;
+                const participant = &self.participants[participant_index];
+                participant.driving_vehicle_index = null;
+                participant.exit_pending = false;
+                participant.held_input = null;
+                if (participant.pending_vehicle_action) |action| {
+                    if (action.kind != .exit) return error.VehicleActionOutcomeMismatch;
+                    try self.queueVehicleActionResult(participant_index, action, .exited);
+                    participant.pending_vehicle_action = null;
+                    self.vehicle_actions_accepted +|= 1;
+                }
+                if (participant.despawn_pending) {
+                    try self.simulation.submitCharacter(.{ .despawn = .{
+                        .id = exited.driver_id,
+                    } });
+                }
+                self.force_snapshot = true;
+            },
+            .despawned => return error.UnexpectedVehicleDespawnOutcome,
+            .rejected => |rejected| {
+                const driver = rejected.driver_id orelse
+                    return error.UnexpectedVehicleRejection;
+                const participant_index = self.findParticipantByCharacter(driver) orelse
+                    return error.UnknownVehicleDriver;
+                const participant = &self.participants[participant_index];
+                if (participant.despawn_pending and participant.exit_pending) {
+                    return error.VehicleCleanupExitRejected;
+                }
+                const action = participant.pending_vehicle_action orelse
+                    return error.UnexpectedVehicleRejection;
+                try self.queueVehicleActionResult(
+                    participant_index,
+                    action,
+                    vehicleRejectionDisposition(rejected.reason),
+                );
+                participant.pending_vehicle_action = null;
+                participant.exit_pending = false;
+                participant.held_input = null;
+                self.vehicle_actions_rejected +|= 1;
+                if (participant.despawn_pending and
+                    participant.driving_vehicle_index == null)
+                {
+                    try self.simulation.submitCharacter(.{ .despawn = .{ .id = driver } });
+                }
+            },
+        };
+        while (self.simulation.pollVehicleEvent() != null) {}
+    }
+
     fn publishSnapshots(self: *Authority) !void {
         var template = protocol.Snapshot.empty();
         template.sequence.value = @truncate(self.simulation.tickIndex() /
@@ -609,16 +987,36 @@ pub const Authority = struct {
         for (self.participants, 0..) |participant, participant_index| {
             if (!participant.active or participant.character == null or
                 participant.despawn_pending) continue;
-            if (template.count == budgets.max_participants) break;
+            if (template.character_count == budgets.max_participants) break;
             const view = try self.simulation.character(participant.character.?);
-            template.characters[template.count] = .{
+            template.characters[template.character_count] = .{
                 .entity = participant.replicated,
                 .owner = participantId(participant_index, participant.generation),
                 .position = view.position,
                 .velocity = view.velocity,
                 .facing_yaw = view.facing_yaw,
             };
-            template.count += 1;
+            template.character_count += 1;
+        }
+        for (self.vehicles) |vehicle| {
+            if (!vehicle.active or vehicle.persistent == null) continue;
+            if (template.vehicle_count == budgets.max_vehicles) break;
+            const view = try self.simulation.vehicle(vehicle.persistent.?);
+            template.vehicles[template.vehicle_count] = .{
+                .entity = vehicle.replicated,
+                .position = view.state.chassis.pose.position,
+                .rotation = view.state.chassis.pose.rotation,
+                .linear_velocity = view.state.chassis.velocity.linear,
+                .angular_velocity = view.state.chassis.velocity.angular,
+                .driver = if (view.driver_id) |driver|
+                    if (self.findParticipantByCharacter(driver)) |index|
+                        participantId(index, self.participants[index].generation)
+                    else
+                        null
+                else
+                    null,
+            };
+            template.vehicle_count += 1;
         }
         for (self.participants, 0..) |participant, participant_index| {
             const connection_index = participant.connection_index orelse continue;
@@ -648,6 +1046,10 @@ pub const Authority = struct {
             participant.last_input = .{ .value = 0 };
             participant.held_input = null;
             participant.last_input_arrival_tick = 0;
+            participant.driving_vehicle_index = null;
+            participant.last_vehicle_action = .{ .value = 0 };
+            participant.pending_vehicle_action = null;
+            participant.exit_pending = false;
             participant.spawn_pending = false;
             participant.despawn_pending = false;
             return index;
@@ -699,6 +1101,28 @@ pub const Authority = struct {
         });
     }
 
+    fn queueVehicleActionResult(
+        self: *Authority,
+        participant_index: usize,
+        action: protocol.VehicleAction,
+        disposition: protocol.VehicleActionDisposition,
+    ) !void {
+        const connection_index = self.participants[participant_index].connection_index orelse
+            return;
+        if (!self.connections[connection_index].active) return;
+        try self.queue(.{
+            .connection = self.connections[connection_index].transport,
+            .message = .{ .vehicle_action_result = .{
+                .sequence = action.sequence,
+                .vehicle = action.vehicle,
+                .action = action.kind,
+                .disposition = disposition,
+            } },
+            .delivery = .reliable,
+            .lane = .gameplay,
+        });
+    }
+
     fn rejectTransport(
         self: *Authority,
         transport: TransportConnection,
@@ -739,6 +1163,39 @@ pub const Authority = struct {
         }
         return null;
     }
+
+    fn findVehicle(
+        self: *const Authority,
+        replicated: identity.ReplicatedEntityId,
+    ) ?usize {
+        for (self.vehicles, 0..) |vehicle, index| {
+            if ((vehicle.active or vehicle.spawn_pending) and
+                std.meta.eql(vehicle.replicated, replicated)) return index;
+        }
+        return null;
+    }
+
+    fn findVehicleByPersistent(
+        self: *const Authority,
+        persistent: sandbox.PersistentId,
+    ) ?usize {
+        for (self.vehicles, 0..) |vehicle, index| {
+            if (vehicle.active and vehicle.persistent != null and
+                std.meta.eql(vehicle.persistent.?, persistent)) return index;
+        }
+        return null;
+    }
+
+    fn findParticipantByCharacter(
+        self: *const Authority,
+        character: sandbox.PersistentId,
+    ) ?usize {
+        for (self.participants, 0..) |participant, index| {
+            if (participant.active and participant.character != null and
+                std.meta.eql(participant.character.?, character)) return index;
+        }
+        return null;
+    }
 };
 
 fn participantId(index: usize, generation: u16) identity.ParticipantId {
@@ -755,11 +1212,19 @@ fn fingerprintIngress(seed: u64, record: AcceptedIngress) u64 {
         @as(u64, record.connection.index),
         @as(u64, record.connection.generation),
         @as(u64, record.sequence.value),
+        @as(u64, record.action_sequence.value),
         record.target_tick,
         @as(u64, @as(u32, @bitCast(record.move[0]))),
         @as(u64, @as(u32, @bitCast(record.move[1]))),
         @as(u64, @as(u32, @bitCast(record.facing_yaw))),
         @as(u64, @intFromBool(record.jump_pressed)),
+        @as(u64, @intFromEnum(record.kind)),
+        @as(u64, record.vehicle.index),
+        @as(u64, record.vehicle.generation),
+        @as(u64, @as(u32, @bitCast(record.vehicle_control[0]))),
+        @as(u64, @as(u32, @bitCast(record.vehicle_control[1]))),
+        @as(u64, @as(u32, @bitCast(record.vehicle_control[2]))),
+        @as(u64, @as(u32, @bitCast(record.vehicle_control[3]))),
     }) |value| {
         var stable: u64 = value;
         result = std.hash.Wyhash.hash(result, std.mem.asBytes(&stable));
@@ -795,6 +1260,40 @@ fn decodeSpawnRequestId(value: u64) ?struct { index: usize, generation: u16 } {
     };
 }
 
+fn vehicleSpawnRequestId(index: usize, generation: u16) u64 {
+    return 0x4d50_3400_0000_0000 |
+        (@as(u64, generation) << 16) |
+        @as(u64, @intCast(index + 1));
+}
+
+fn decodeVehicleSpawnRequestId(value: u64) ?struct { index: usize, generation: u16 } {
+    if (value & 0xffff_ffff_0000_0000 != 0x4d50_3400_0000_0000) return null;
+    const raw_index: u16 = @truncate(value);
+    if (raw_index == 0 or raw_index > budgets.max_vehicles) return null;
+    return .{
+        .index = raw_index - 1,
+        .generation = @truncate(value >> 16),
+    };
+}
+
+fn vehicleRejectionDisposition(
+    reason: @FieldType(sandbox.VehicleCommandRejected, "reason"),
+) protocol.VehicleActionDisposition {
+    return switch (reason) {
+        .vehicle_not_found => .vehicle_not_found,
+        .too_far => .too_far,
+        .exit_blocked => .exit_blocked,
+        .seat_occupied, .occupied => .unavailable,
+        .capacity_reached,
+        .not_owned,
+        .driver_not_found,
+        .driver_not_on_foot,
+        .driver_carrying,
+        .wrong_driver,
+        => .invalid_state,
+    };
+}
+
 test "authority admits two participants and emits join-in-progress snapshots" {
     var authority = try Authority.init(std.testing.allocator);
     defer authority.deinit();
@@ -806,7 +1305,8 @@ test "authority admits two participants and emits join-in-progress snapshots" {
     const welcome_one = authority.pollOutbound().?.message.welcome;
     try authority.tick();
     const first_snapshot = authority.pollOutbound().?.message.snapshot;
-    try std.testing.expectEqual(@as(u8, 1), first_snapshot.count);
+    try std.testing.expectEqual(@as(u8, 1), first_snapshot.character_count);
+    try std.testing.expectEqual(@as(u8, 1), first_snapshot.vehicle_count);
 
     _ = try authority.openConnection(.{ .value = 202 });
     try authority.ingest(.{ .value = 202 }, .{ .hello = .{
@@ -816,7 +1316,7 @@ test "authority admits two participants and emits join-in-progress snapshots" {
     try authority.tick();
     var saw_two = false;
     while (authority.pollOutbound()) |outbound| switch (outbound.message) {
-        .snapshot => |snapshot| saw_two = saw_two or snapshot.count == 2,
+        .snapshot => |snapshot| saw_two = saw_two or snapshot.character_count == 2,
         else => {},
     };
     try std.testing.expect(saw_two);
@@ -859,6 +1359,120 @@ test "authority drops stale input without terminating an unreliable stream" {
     var ingress: [1]AcceptedIngress = undefined;
     try std.testing.expectEqual(@as(usize, 1), authority.copyAcceptedIngress(&ingress));
     try std.testing.expectEqual(@as(u32, 1), ingress[0].sequence.value);
+}
+
+test "authority owns vehicle enter drive exit and dynamic seat projection" {
+    var authority = try Authority.init(std.testing.allocator);
+    defer authority.deinit();
+    const transport = TransportConnection{ .value = 1 };
+    _ = try authority.openConnection(transport);
+    try authority.ingest(transport, .{ .hello = .{
+        .account = .{ .value = 1 },
+    } });
+    const welcome = authority.pollOutbound().?.message.welcome;
+    try authority.tick();
+    var initial_snapshot: ?protocol.Snapshot = null;
+    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+        .snapshot => |snapshot| initial_snapshot = snapshot,
+        else => {},
+    };
+    const initial = initial_snapshot orelse return error.MissingInitialSnapshot;
+    try std.testing.expectEqual(@as(u8, 1), initial.vehicle_count);
+    const vehicle = initial.vehicles[0].entity;
+
+    for (0..180) |_| {
+        try authority.tick();
+        while (authority.pollOutbound() != null) {}
+    }
+    try authority.ingest(transport, .{ .vehicle_action = .{
+        .session = welcome.session,
+        .participant = welcome.participant,
+        .sequence = .{ .value = 1 },
+        .vehicle = vehicle,
+        .kind = .enter,
+    } });
+    try authority.tick();
+    var enter_disposition: ?protocol.VehicleActionDisposition = null;
+    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+        .vehicle_action_result => |result| enter_disposition = result.disposition,
+        else => {},
+    };
+    try std.testing.expectEqual(
+        protocol.VehicleActionDisposition.entered,
+        enter_disposition orelse return error.MissingVehicleEnterResult,
+    );
+
+    var last_snapshot = initial;
+    for (1..181) |sequence| {
+        try authority.ingest(transport, .{ .vehicle_input = .{
+            .session = welcome.session,
+            .participant = welcome.participant,
+            .sequence = .{ .value = @intCast(sequence) },
+            .target_tick = authority.diagnostics().tick + 1,
+            .vehicle = vehicle,
+            .throttle = 1,
+            .steering = 0,
+            .brake = 0,
+            .hand_brake = 0,
+        } });
+        try authority.tick();
+        while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+            .snapshot => |snapshot| last_snapshot = snapshot,
+            else => {},
+        };
+    }
+    try std.testing.expect(last_snapshot.vehicles[0].driver != null);
+    try std.testing.expect(last_snapshot.vehicles[0].position[2] <
+        initial.vehicles[0].position[2] - 1);
+
+    try authority.ingest(transport, .{ .vehicle_action = .{
+        .session = welcome.session,
+        .participant = welcome.participant,
+        .sequence = .{ .value = 2 },
+        .vehicle = vehicle,
+        .kind = .exit,
+    } });
+    try authority.tick();
+    var saw_exit = false;
+    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+        .vehicle_action_result => |result| saw_exit = result.disposition == .exited,
+        else => {},
+    };
+    try std.testing.expect(saw_exit);
+    try std.testing.expectEqual(@as(u64, 2), authority.diagnostics().vehicle_actions_accepted);
+}
+
+test "graceful leave orders cleanup behind an admitted vehicle transition" {
+    var authority = try Authority.init(std.testing.allocator);
+    defer authority.deinit();
+    const transport = TransportConnection{ .value = 1 };
+    _ = try authority.openConnection(transport);
+    try authority.ingest(transport, .{ .hello = .{ .account = .{ .value = 1 } } });
+    const welcome = authority.pollOutbound().?.message.welcome;
+    try authority.tick();
+    var vehicle = identity.ReplicatedEntityId.invalid;
+    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+        .snapshot => |snapshot| vehicle = snapshot.vehicles[0].entity,
+        else => {},
+    };
+    for (0..180) |_| {
+        try authority.tick();
+        while (authority.pollOutbound() != null) {}
+    }
+    try authority.ingest(transport, .{ .vehicle_action = .{
+        .session = welcome.session,
+        .participant = welcome.participant,
+        .sequence = .{ .value = 1 },
+        .vehicle = vehicle,
+        .kind = .enter,
+    } });
+    try authority.ingest(transport, .{ .disconnect = .requested });
+    for (0..4) |_| {
+        try authority.tick();
+        while (authority.pollOutbound() != null) {}
+    }
+    try std.testing.expectEqual(@as(u16, 0), authority.diagnostics().active_participants);
+    try std.testing.expectEqual(@as(u16, 1), authority.diagnostics().active_vehicles);
 }
 
 test "authority shutdown is a reliable terminal semantic message" {

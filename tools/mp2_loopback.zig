@@ -109,6 +109,30 @@ const Harness = struct {
         try self.sendClient(peer.transport, message);
     }
 
+    fn sendVehicleInput(self: *Harness, peer_index: usize, throttle: f32) !void {
+        const peer = &self.peers[peer_index];
+        const vehicle = peer.client.ownedVehicle() orelse return error.PeerDoesNotOwnVehicle;
+        const message = try peer.client.vehicleInput(
+            self.authority.diagnostics().tick + 1,
+            vehicle.entity,
+            throttle,
+            0,
+            0,
+            0,
+        );
+        try self.sendClient(peer.transport, message);
+    }
+
+    fn sendVehicleAction(
+        self: *Harness,
+        peer_index: usize,
+        kind: protocol.VehicleActionKind,
+        vehicle: @FieldType(protocol.VehicleState, "entity"),
+    ) !void {
+        const peer = &self.peers[peer_index];
+        try self.sendClient(peer.transport, try peer.client.vehicleAction(kind, vehicle));
+    }
+
     fn step(self: *Harness, io: std.Io) !void {
         self.network.runCallbacks();
         while (self.network.pollEvent()) |event| try self.handleEvent(event);
@@ -324,6 +348,36 @@ pub fn main(init: std.process.Init) !void {
 
     try harness.connectPeer(1, endpoint);
     try pumpUntil(&harness, init.io, twoPeersReady, max_pump_steps);
+    for (0..180) |_| try harness.step(init.io);
+
+    const vehicle = firstVehicle(&harness.peers[0]) orelse return error.VehicleMissing;
+    try harness.sendVehicleAction(0, .enter, vehicle.entity);
+    try pumpUntil(&harness, init.io, firstPeerDriving, max_pump_steps);
+    if (harness.peers[1].client.ownedVehicle() != null) return error.VehicleOwnershipDuplicated;
+
+    try harness.sendVehicleAction(1, .enter, vehicle.entity);
+    try pumpUntil(&harness, init.io, secondPeerDeniedVehicle, max_pump_steps);
+    const initial_vehicle_position = firstVehicle(&harness.peers[0]).?.position;
+    for (0..180) |_| {
+        try harness.sendVehicleInput(0, 1);
+        try harness.step(init.io);
+    }
+    try pumpUntil(&harness, init.io, vehicleMoved, max_pump_steps);
+    const driven_vehicle_position = firstVehicle(&harness.peers[0]).?.position;
+
+    try harness.closePeerForReconnect(0);
+    try pumpUntil(&harness, init.io, firstPeerDisconnected, max_pump_steps);
+    if (harness.authority.diagnostics().reconnecting_participants != 1) {
+        return error.ReconnectGraceNotEntered;
+    }
+    try harness.connectPeer(0, endpoint);
+    try pumpUntil(&harness, init.io, firstPeerRejoinedDriving, max_pump_steps);
+    if (!std.meta.eql(first_join_participant, harness.peers[0].client.participant)) {
+        return error.ParticipantIdentityChangedAcrossReconnect;
+    }
+
+    try harness.sendVehicleAction(0, .exit, vehicle.entity);
+    try pumpUntil(&harness, init.io, firstPeerExited, max_pump_steps);
     const initial_position = characterPosition(&harness.peers[0]) orelse
         return error.LocalCharacterMissing;
 
@@ -341,27 +395,19 @@ pub fn main(init: std.process.Init) !void {
     try harness.connectBadCohort(endpoint);
     try pumpUntil(&harness, init.io, badCohortRejected, max_pump_steps);
 
-    try harness.closePeerForReconnect(0);
-    try pumpUntil(&harness, init.io, firstPeerDisconnected, max_pump_steps);
-    if (harness.authority.diagnostics().reconnecting_participants != 1) {
-        return error.ReconnectGraceNotEntered;
-    }
-    try harness.connectPeer(0, endpoint);
-    try pumpUntil(&harness, init.io, firstPeerRejoined, max_pump_steps);
-    if (!std.meta.eql(first_join_participant, harness.peers[0].client.participant)) {
-        return error.ParticipantIdentityChangedAcrossReconnect;
-    }
-
     const diagnostics = harness.authority.diagnostics();
     std.debug.print(
-        "MP2_LOOPBACK_PASS tick={d} participants={d} reconnects={d} " ++
-            "snapshots={d} rejected={d} moved_x={d:.3} dropped_events={d}\n",
+        "MP4_LOOPBACK_PASS tick={d} participants={d} reconnects={d} " ++
+            "snapshots={d} actions={d}/{d} vehicle_moved_z={d:.3} " ++
+            "character_moved_x={d:.3} dropped_events={d}\n",
         .{
             diagnostics.tick,
             diagnostics.active_participants,
             diagnostics.reconnects,
             diagnostics.snapshots_emitted,
-            diagnostics.rejected_messages,
+            diagnostics.vehicle_actions_accepted,
+            diagnostics.vehicle_actions_rejected,
+            driven_vehicle_position[2] - initial_vehicle_position[2],
             moved_position[0] - initial_position[0],
             harness.network.droppedEvents(),
         },
@@ -383,14 +429,32 @@ fn pumpUntil(
 
 fn firstPeerReady(harness: *const Harness) bool {
     return harness.peers[0].client.state == .joined and
-        harness.peers[0].client.world.count == 1;
+        harness.peers[0].client.world.character_count == 1;
 }
 
 fn twoPeersReady(harness: *const Harness) bool {
     return harness.peers[0].client.state == .joined and
         harness.peers[1].client.state == .joined and
-        harness.peers[0].client.world.count == 2 and
-        harness.peers[1].client.world.count == 2;
+        harness.peers[0].client.world.character_count == 2 and
+        harness.peers[1].client.world.character_count == 2 and
+        harness.peers[0].client.world.vehicle_count == 1 and
+        harness.peers[1].client.world.vehicle_count == 1;
+}
+
+fn firstPeerDriving(harness: *const Harness) bool {
+    return harness.peers[0].client.ownedVehicle() != null and
+        harness.peers[0].client.last_vehicle_action_result != null and
+        harness.peers[0].client.last_vehicle_action_result.?.disposition == .entered;
+}
+
+fn secondPeerDeniedVehicle(harness: *const Harness) bool {
+    const result = harness.peers[1].client.last_vehicle_action_result orelse return false;
+    return result.action == .enter and result.disposition == .unavailable;
+}
+
+fn vehicleMoved(harness: *const Harness) bool {
+    const vehicle = firstVehicle(&harness.peers[0]) orelse return false;
+    return vehicle.position[2] < -1;
 }
 
 fn movedAndAcknowledged(harness: *const Harness) bool {
@@ -409,8 +473,15 @@ fn firstPeerDisconnected(harness: *const Harness) bool {
         harness.authority.diagnostics().reconnecting_participants == 1;
 }
 
-fn firstPeerRejoined(harness: *const Harness) bool {
-    return twoPeersReady(harness) and harness.authority.diagnostics().reconnects == 1;
+fn firstPeerRejoinedDriving(harness: *const Harness) bool {
+    return twoPeersReady(harness) and harness.authority.diagnostics().reconnects == 1 and
+        harness.peers[0].client.ownedVehicle() != null;
+}
+
+fn firstPeerExited(harness: *const Harness) bool {
+    const result = harness.peers[0].client.last_vehicle_action_result orelse return false;
+    return result.action == .exit and result.disposition == .exited and
+        harness.peers[0].client.ownedVehicle() == null;
 }
 
 fn characterPosition(peer: *const Peer) ?[3]f32 {
@@ -420,6 +491,11 @@ fn characterPosition(peer: *const Peer) ?[3]f32 {
         }
     }
     return null;
+}
+
+fn firstVehicle(peer: *const Peer) ?protocol.VehicleState {
+    const vehicles = peer.client.world.vehicleSlice();
+    return if (vehicles.len == 0) null else vehicles[0].current;
 }
 
 fn toGnsDelivery(value: transport_policy.Delivery) gns.Delivery {

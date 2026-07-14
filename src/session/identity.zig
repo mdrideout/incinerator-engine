@@ -37,6 +37,19 @@ pub const InputSequence = struct {
     }
 };
 
+pub const ActionSequence = struct {
+    value: u32,
+
+    pub fn next(self: ActionSequence) ActionSequence {
+        return .{ .value = self.value +% 1 };
+    }
+
+    pub fn newerThan(self: ActionSequence, other: ActionSequence) bool {
+        const delta = self.value -% other.value;
+        return delta != 0 and delta < 0x8000_0000;
+    }
+};
+
 pub const SnapshotSequence = struct {
     value: u32,
 

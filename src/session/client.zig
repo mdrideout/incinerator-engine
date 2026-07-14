@@ -15,6 +15,8 @@ pub const Diagnostics = struct {
     stale_snapshots: u64,
     prejoin_snapshots: u64,
     rejections: u64,
+    vehicle_actions_accepted: u64,
+    vehicle_actions_rejected: u64,
     last_server_tick: u64,
     disconnect_reason: ?protocol.DisconnectReason,
     prediction: prediction_module.Diagnostics,
@@ -35,6 +37,11 @@ pub const Client = struct {
     prejoin_snapshots: u64 = 0,
     disconnect_reason: ?protocol.DisconnectReason = null,
     prediction: prediction_module.Prediction = .{},
+    next_vehicle_action: identity.ActionSequence = .{ .value = 1 },
+    pending_vehicle_action: ?protocol.VehicleAction = null,
+    last_vehicle_action_result: ?protocol.VehicleActionResult = null,
+    vehicle_actions_accepted: u64 = 0,
+    vehicle_actions_rejected: u64 = 0,
 
     pub fn init(account: identity.AccountId) !Client {
         try account.validate();
@@ -79,16 +86,35 @@ pub const Client = struct {
                 };
                 self.last_acknowledged_input = snapshot.acknowledged_input;
                 self.snapshots_applied +|= 1;
-                if (self.ownedCharacter()) |character| {
+                if (self.ownedVehicle() != null) {
+                    self.prediction.clearOwnership();
+                } else if (self.ownedCharacter()) |character| {
                     self.prediction.reconcile(character, snapshot.acknowledged_input);
                 } else {
                     self.prediction.clearOwnership();
+                }
+            },
+            .vehicle_action_result => |result| {
+                const pending = self.pending_vehicle_action orelse
+                    return error.UnexpectedVehicleActionResult;
+                if (pending.sequence.value != result.sequence.value or
+                    !std.meta.eql(pending.vehicle, result.vehicle) or
+                    pending.kind != result.action)
+                {
+                    return error.MismatchedVehicleActionResult;
+                }
+                self.last_vehicle_action_result = result;
+                self.pending_vehicle_action = null;
+                switch (result.disposition) {
+                    .entered, .exited => self.vehicle_actions_accepted +|= 1,
+                    else => self.vehicle_actions_rejected +|= 1,
                 }
             },
             .rejected => {
                 self.rejections +|= 1;
                 self.state = .rejected;
                 self.prediction.clearOwnership();
+                self.pending_vehicle_action = null;
             },
             .disconnected => |reason| {
                 self.disconnect_reason = reason;
@@ -97,6 +123,7 @@ pub const Client = struct {
                     .requested, .protocol_failure, .authority_stopping => .stopped,
                 };
                 self.connection = .invalid;
+                self.pending_vehicle_action = null;
                 if (self.state == .stopped) self.prediction.clearOwnership();
             },
         }
@@ -110,6 +137,7 @@ pub const Client = struct {
         jump_pressed: bool,
     ) !protocol.ClientMessage {
         if (self.state != .joined) return error.ClientNotJoined;
+        if (self.ownedVehicle() != null) return error.CharacterControlUnavailable;
         const sequence = self.next_input;
         self.next_input = sequence.next();
         const message = protocol.ClientMessage{ .input = .{
@@ -126,6 +154,63 @@ pub const Client = struct {
         return message;
     }
 
+    pub fn vehicleInput(
+        self: *Client,
+        target_tick: u64,
+        vehicle: identity.ReplicatedEntityId,
+        throttle: f32,
+        steering: f32,
+        brake: f32,
+        hand_brake: f32,
+    ) !protocol.ClientMessage {
+        if (self.state != .joined) return error.ClientNotJoined;
+        const owned = self.ownedVehicle() orelse return error.VehicleControlUnavailable;
+        if (!std.meta.eql(owned.entity, vehicle)) return error.VehicleControlUnavailable;
+        const sequence = self.next_input;
+        self.next_input = sequence.next();
+        const message = protocol.ClientMessage{ .vehicle_input = .{
+            .session = self.session,
+            .participant = self.participant,
+            .sequence = sequence,
+            .target_tick = target_tick,
+            .vehicle = vehicle,
+            .throttle = throttle,
+            .steering = steering,
+            .brake = brake,
+            .hand_brake = hand_brake,
+        } };
+        try protocol.validateClient(message);
+        return message;
+    }
+
+    pub fn vehicleAction(
+        self: *Client,
+        kind: protocol.VehicleActionKind,
+        vehicle: identity.ReplicatedEntityId,
+    ) !protocol.ClientMessage {
+        if (self.state != .joined) return error.ClientNotJoined;
+        if (self.pending_vehicle_action != null) return error.VehicleActionPending;
+        switch (kind) {
+            .enter => if (self.ownedVehicle() != null) return error.AlreadyDriving,
+            .exit => {
+                const owned = self.ownedVehicle() orelse return error.NotDriving;
+                if (!std.meta.eql(owned.entity, vehicle)) return error.NotDriving;
+            },
+        }
+        const action = protocol.VehicleAction{
+            .session = self.session,
+            .participant = self.participant,
+            .sequence = self.next_vehicle_action,
+            .vehicle = vehicle,
+            .kind = kind,
+        };
+        self.next_vehicle_action = self.next_vehicle_action.next();
+        const message = protocol.ClientMessage{ .vehicle_action = action };
+        try protocol.validateClient(message);
+        self.pending_vehicle_action = action;
+        return message;
+    }
+
     /// A transport loss preserves the reconnect credential and replicated
     /// presentation, but invalidates connection-scoped identity. Calling
     /// `begin` on the next transport will therefore request a reconnect.
@@ -136,11 +221,21 @@ pub const Client = struct {
         self.connection = .invalid;
         self.disconnect_reason = .transport_lost;
         self.prediction.transportDisconnected();
+        self.pending_vehicle_action = null;
     }
 
     pub fn localPresentation(self: *const Client) ?protocol.CharacterState {
         if (!self.prediction.initialized) return null;
         return self.prediction.presentation();
+    }
+
+    pub fn ownedVehicle(self: *const Client) ?protocol.VehicleState {
+        for (self.world.vehicleSlice()) |entry| {
+            if (entry.current.driver) |driver| {
+                if (std.meta.eql(driver, self.participant)) return entry.current;
+            }
+        }
+        return null;
     }
 
     pub fn diagnostics(self: *const Client) Diagnostics {
@@ -150,6 +245,8 @@ pub const Client = struct {
             .stale_snapshots = self.world.stale_snapshots,
             .prejoin_snapshots = self.prejoin_snapshots,
             .rejections = self.rejections,
+            .vehicle_actions_accepted = self.vehicle_actions_accepted,
+            .vehicle_actions_rejected = self.vehicle_actions_rejected,
             .last_server_tick = self.world.server_tick,
             .disconnect_reason = self.disconnect_reason,
             .prediction = self.prediction.diagnostics(),
@@ -226,4 +323,51 @@ test "authority stop is terminal while transport loss remains reconnectable" {
     _ = try retry.begin();
     retry.transportDisconnected();
     try std.testing.expectEqual(State.disconnected, retry.state);
+}
+
+test "vehicle control follows snapshot ownership and reliable action correlation" {
+    var client = try Client.init(.{ .value = 9 });
+    _ = try client.begin();
+    const participant = identity.ParticipantId{ .index = 1, .generation = 1 };
+    try client.receive(.{ .welcome = .{
+        .session = .{ .value = 1 },
+        .participant = participant,
+        .connection = .{ .index = 1, .generation = 1 },
+        .reconnect = .{ .high = 1, .low = 2 },
+        .authority_tick = 0,
+    } });
+    var snapshot = protocol.Snapshot.empty();
+    snapshot.sequence.value = 1;
+    snapshot.vehicle_count = 1;
+    snapshot.vehicles[0] = .{
+        .entity = .{ .index = 17, .generation = 1 },
+        .position = .{ 0, 1, 0 },
+        .rotation = .{ 0, 0, 0, 1 },
+        .linear_velocity = .{ 0, 0, 0 },
+        .angular_velocity = .{ 0, 0, 0 },
+        .driver = null,
+    };
+    try client.receive(.{ .snapshot = snapshot });
+    const action = (try client.vehicleAction(.enter, snapshot.vehicles[0].entity)).vehicle_action;
+    try client.receive(.{ .vehicle_action_result = .{
+        .sequence = action.sequence,
+        .vehicle = action.vehicle,
+        .action = action.kind,
+        .disposition = .entered,
+    } });
+    snapshot.sequence.value = 2;
+    snapshot.vehicles[0].driver = participant;
+    try client.receive(.{ .snapshot = snapshot });
+    try std.testing.expect((try client.vehicleInput(
+        2,
+        snapshot.vehicles[0].entity,
+        1,
+        0,
+        0,
+        0,
+    )) == .vehicle_input);
+    try std.testing.expectError(
+        error.CharacterControlUnavailable,
+        client.input(2, .{ 0, 1 }, 0, false),
+    );
 }

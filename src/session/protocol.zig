@@ -52,9 +52,36 @@ pub const InputFrame = struct {
     jump_pressed: bool,
 };
 
+pub const VehicleInputFrame = struct {
+    session: identity.SessionId,
+    participant: identity.ParticipantId,
+    sequence: identity.InputSequence,
+    target_tick: u64,
+    vehicle: identity.ReplicatedEntityId,
+    throttle: f32,
+    steering: f32,
+    brake: f32,
+    hand_brake: f32,
+};
+
+pub const VehicleActionKind = enum(u8) {
+    enter = 1,
+    exit = 2,
+};
+
+pub const VehicleAction = struct {
+    session: identity.SessionId,
+    participant: identity.ParticipantId,
+    sequence: identity.ActionSequence,
+    vehicle: identity.ReplicatedEntityId,
+    kind: VehicleActionKind,
+};
+
 pub const ClientMessage = union(enum) {
     hello: Hello,
     input: InputFrame,
+    vehicle_input: VehicleInputFrame,
+    vehicle_action: VehicleAction,
     disconnect: DisconnectReason,
 };
 
@@ -74,26 +101,60 @@ pub const CharacterState = struct {
     facing_yaw: f32,
 };
 
+pub const VehicleState = struct {
+    entity: identity.ReplicatedEntityId,
+    position: [3]f32,
+    rotation: [4]f32,
+    linear_velocity: [3]f32,
+    angular_velocity: [3]f32,
+    driver: ?identity.ParticipantId,
+};
+
 pub const Snapshot = struct {
     sequence: identity.SnapshotSequence,
     server_tick: u64,
     acknowledged_input: identity.InputSequence,
-    count: u8,
+    character_count: u8,
+    vehicle_count: u8,
     characters: [budgets.max_participants]CharacterState,
+    vehicles: [budgets.max_vehicles]VehicleState,
 
     pub fn empty() Snapshot {
         return .{
             .sequence = .{ .value = 0 },
             .server_tick = 0,
             .acknowledged_input = .{ .value = 0 },
-            .count = 0,
+            .character_count = 0,
+            .vehicle_count = 0,
             .characters = undefined,
+            .vehicles = undefined,
         };
     }
 
     pub fn slice(self: *const Snapshot) []const CharacterState {
-        return self.characters[0..self.count];
+        return self.characters[0..self.character_count];
     }
+
+    pub fn vehicleSlice(self: *const Snapshot) []const VehicleState {
+        return self.vehicles[0..self.vehicle_count];
+    }
+};
+
+pub const VehicleActionDisposition = enum(u8) {
+    entered = 1,
+    exited = 2,
+    vehicle_not_found = 3,
+    unavailable = 4,
+    too_far = 5,
+    exit_blocked = 6,
+    invalid_state = 7,
+};
+
+pub const VehicleActionResult = struct {
+    sequence: identity.ActionSequence,
+    vehicle: identity.ReplicatedEntityId,
+    action: VehicleActionKind,
+    disposition: VehicleActionDisposition,
 };
 
 pub const Rejection = struct {
@@ -104,19 +165,34 @@ pub const Rejection = struct {
 pub const ServerMessage = union(enum) {
     welcome: Welcome,
     snapshot: Snapshot,
+    vehicle_action_result: VehicleActionResult,
     rejected: Rejection,
     disconnected: DisconnectReason,
 };
 
 const Direction = enum(u8) { client = 1, server = 2 };
-const ClientKind = enum(u8) { hello = 1, input = 2, disconnect = 3 };
-const ServerKind = enum(u8) { welcome = 1, snapshot = 2, rejected = 3, disconnected = 4 };
+const ClientKind = enum(u8) {
+    hello = 1,
+    input = 2,
+    vehicle_input = 3,
+    vehicle_action = 4,
+    disconnect = 5,
+};
+const ServerKind = enum(u8) {
+    welcome = 1,
+    snapshot = 2,
+    vehicle_action_result = 3,
+    rejected = 4,
+    disconnected = 5,
+};
 
 pub fn encodeClient(message: ClientMessage, storage: []u8) ![]const u8 {
     var encoder = Encoder.init(storage);
     try encoder.header(.client, switch (message) {
         .hello => @intFromEnum(ClientKind.hello),
         .input => @intFromEnum(ClientKind.input),
+        .vehicle_input => @intFromEnum(ClientKind.vehicle_input),
+        .vehicle_action => @intFromEnum(ClientKind.vehicle_action),
         .disconnect => @intFromEnum(ClientKind.disconnect),
     });
     switch (message) {
@@ -131,6 +207,8 @@ pub fn encodeClient(message: ClientMessage, storage: []u8) ![]const u8 {
         .input => |value| {
             try encodeInput(&encoder, value);
         },
+        .vehicle_input => |value| try encodeVehicleInput(&encoder, value),
+        .vehicle_action => |value| try encodeVehicleAction(&encoder, value),
         .disconnect => |reason| try encoder.u8Value(@intFromEnum(reason)),
     }
     return encoder.finish();
@@ -152,6 +230,8 @@ pub fn decodeClient(bytes: []const u8) !ClientMessage {
             },
         } },
         .input => .{ .input = try decodeInput(&decoder) },
+        .vehicle_input => .{ .vehicle_input = try decodeVehicleInput(&decoder) },
+        .vehicle_action => .{ .vehicle_action = try decodeVehicleAction(&decoder) },
         .disconnect => .{ .disconnect = enumFromInt(
             DisconnectReason,
             try decoder.u8Value(),
@@ -167,6 +247,7 @@ pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
     try encoder.header(.server, switch (message) {
         .welcome => @intFromEnum(ServerKind.welcome),
         .snapshot => @intFromEnum(ServerKind.snapshot),
+        .vehicle_action_result => @intFromEnum(ServerKind.vehicle_action_result),
         .rejected => @intFromEnum(ServerKind.rejected),
         .disconnected => @intFromEnum(ServerKind.disconnected),
     });
@@ -180,12 +261,21 @@ pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
             try encoder.u64Value(value.authority_tick);
         },
         .snapshot => |value| {
-            if (value.count > budgets.max_participants) return error.TooManyCharacters;
+            if (value.character_count > budgets.max_participants) return error.TooManyCharacters;
+            if (value.vehicle_count > budgets.max_vehicles) return error.TooManyVehicles;
             try encoder.u32Value(value.sequence.value);
             try encoder.u64Value(value.server_tick);
             try encoder.u32Value(value.acknowledged_input.value);
-            try encoder.u8Value(value.count);
+            try encoder.u8Value(value.character_count);
+            try encoder.u8Value(value.vehicle_count);
             for (value.slice()) |character| try encodeCharacter(&encoder, character);
+            for (value.vehicleSlice()) |vehicle| try encodeVehicle(&encoder, vehicle);
+        },
+        .vehicle_action_result => |value| {
+            try encoder.u32Value(value.sequence.value);
+            try encodeReplicatedEntity(&encoder, value.vehicle);
+            try encoder.u8Value(@intFromEnum(value.action));
+            try encoder.u8Value(@intFromEnum(value.disposition));
         },
         .rejected => |value| {
             try encoder.u8Value(@intFromEnum(value.reason));
@@ -223,13 +313,30 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
             snapshot.sequence.value = try decoder.u32Value();
             snapshot.server_tick = try decoder.u64Value();
             snapshot.acknowledged_input.value = try decoder.u32Value();
-            snapshot.count = try decoder.u8Value();
-            if (snapshot.count > budgets.max_participants) return error.TooManyCharacters;
-            for (snapshot.characters[0..snapshot.count]) |*character| {
+            snapshot.character_count = try decoder.u8Value();
+            snapshot.vehicle_count = try decoder.u8Value();
+            if (snapshot.character_count > budgets.max_participants) return error.TooManyCharacters;
+            if (snapshot.vehicle_count > budgets.max_vehicles) return error.TooManyVehicles;
+            for (snapshot.characters[0..snapshot.character_count]) |*character| {
                 character.* = try decodeCharacter(&decoder);
+            }
+            for (snapshot.vehicles[0..snapshot.vehicle_count]) |*vehicle| {
+                vehicle.* = try decodeVehicle(&decoder);
             }
             break :blk .{ .snapshot = snapshot };
         },
+        .vehicle_action_result => .{ .vehicle_action_result = .{
+            .sequence = .{ .value = try decoder.u32Value() },
+            .vehicle = try decodeReplicatedEntity(&decoder),
+            .action = enumFromInt(
+                VehicleActionKind,
+                try decoder.u8Value(),
+            ) catch return error.InvalidEnum,
+            .disposition = enumFromInt(
+                VehicleActionDisposition,
+                try decoder.u8Value(),
+            ) catch return error.InvalidEnum,
+        } },
         .rejected => .{ .rejected = .{
             .reason = enumFromInt(
                 RejectionReason,
@@ -258,6 +365,26 @@ pub fn validateClient(message: ClientMessage) !void {
                 !std.math.isFinite(value.facing_yaw)) return error.NonFiniteInput;
             const length_squared = value.move[0] * value.move[0] + value.move[1] * value.move[1];
             if (length_squared > 1.0001) return error.InvalidMovementInput;
+        },
+        .vehicle_input => |value| {
+            try value.session.validate();
+            try value.participant.validate();
+            try value.vehicle.validate();
+            const controls = [4]f32{
+                value.throttle,
+                value.steering,
+                value.brake,
+                value.hand_brake,
+            };
+            for (controls) |control| {
+                if (!std.math.isFinite(control)) return error.NonFiniteInput;
+                if (@abs(control) > 1) return error.InvalidVehicleInput;
+            }
+        },
+        .vehicle_action => |value| {
+            try value.session.validate();
+            try value.participant.validate();
+            try value.vehicle.validate();
         },
         .disconnect => {},
     }
@@ -290,6 +417,53 @@ fn decodeInput(decoder: *Decoder) !InputFrame {
     };
 }
 
+fn encodeVehicleInput(encoder: *Encoder, value: VehicleInputFrame) !void {
+    try encoder.u64Value(value.session.value);
+    try encodeParticipant(encoder, value.participant);
+    try encoder.u32Value(value.sequence.value);
+    try encoder.u64Value(value.target_tick);
+    try encodeReplicatedEntity(encoder, value.vehicle);
+    try encoder.f32Value(value.throttle);
+    try encoder.f32Value(value.steering);
+    try encoder.f32Value(value.brake);
+    try encoder.f32Value(value.hand_brake);
+}
+
+fn decodeVehicleInput(decoder: *Decoder) !VehicleInputFrame {
+    return .{
+        .session = .{ .value = try decoder.u64Value() },
+        .participant = try decodeParticipant(decoder),
+        .sequence = .{ .value = try decoder.u32Value() },
+        .target_tick = try decoder.u64Value(),
+        .vehicle = try decodeReplicatedEntity(decoder),
+        .throttle = try decoder.f32Value(),
+        .steering = try decoder.f32Value(),
+        .brake = try decoder.f32Value(),
+        .hand_brake = try decoder.f32Value(),
+    };
+}
+
+fn encodeVehicleAction(encoder: *Encoder, value: VehicleAction) !void {
+    try encoder.u64Value(value.session.value);
+    try encodeParticipant(encoder, value.participant);
+    try encoder.u32Value(value.sequence.value);
+    try encodeReplicatedEntity(encoder, value.vehicle);
+    try encoder.u8Value(@intFromEnum(value.kind));
+}
+
+fn decodeVehicleAction(decoder: *Decoder) !VehicleAction {
+    return .{
+        .session = .{ .value = try decoder.u64Value() },
+        .participant = try decodeParticipant(decoder),
+        .sequence = .{ .value = try decoder.u32Value() },
+        .vehicle = try decodeReplicatedEntity(decoder),
+        .kind = enumFromInt(
+            VehicleActionKind,
+            try decoder.u8Value(),
+        ) catch return error.InvalidEnum,
+    };
+}
+
 fn encodeParticipant(encoder: *Encoder, value: identity.ParticipantId) !void {
     try encoder.u16Value(value.index);
     try encoder.u16Value(value.generation);
@@ -308,9 +482,17 @@ fn decodeConnection(decoder: *Decoder) !identity.ConnectionId {
     return .{ .index = try decoder.u16Value(), .generation = try decoder.u16Value() };
 }
 
+fn encodeReplicatedEntity(encoder: *Encoder, value: identity.ReplicatedEntityId) !void {
+    try encoder.u32Value(value.index);
+    try encoder.u16Value(value.generation);
+}
+
+fn decodeReplicatedEntity(decoder: *Decoder) !identity.ReplicatedEntityId {
+    return .{ .index = try decoder.u32Value(), .generation = try decoder.u16Value() };
+}
+
 fn encodeCharacter(encoder: *Encoder, value: CharacterState) !void {
-    try encoder.u32Value(value.entity.index);
-    try encoder.u16Value(value.entity.generation);
+    try encodeReplicatedEntity(encoder, value.entity);
     try encodeParticipant(encoder, value.owner);
     for (value.position) |component| try encoder.f32Value(component);
     for (value.velocity) |component| try encoder.f32Value(component);
@@ -331,6 +513,37 @@ fn decodeCharacter(decoder: *Decoder) !CharacterState {
     for (&value.position) |*component| component.* = try decoder.f32Value();
     for (&value.velocity) |*component| component.* = try decoder.f32Value();
     value.facing_yaw = try decoder.f32Value();
+    return value;
+}
+
+fn encodeVehicle(encoder: *Encoder, value: VehicleState) !void {
+    try encodeReplicatedEntity(encoder, value.entity);
+    for (value.position) |component| try encoder.f32Value(component);
+    for (value.rotation) |component| try encoder.f32Value(component);
+    for (value.linear_velocity) |component| try encoder.f32Value(component);
+    for (value.angular_velocity) |component| try encoder.f32Value(component);
+    try encoder.u8Value(@intFromBool(value.driver != null));
+    if (value.driver) |driver| try encodeParticipant(encoder, driver);
+}
+
+fn decodeVehicle(decoder: *Decoder) !VehicleState {
+    var value = VehicleState{
+        .entity = try decodeReplicatedEntity(decoder),
+        .position = undefined,
+        .rotation = undefined,
+        .linear_velocity = undefined,
+        .angular_velocity = undefined,
+        .driver = null,
+    };
+    for (&value.position) |*component| component.* = try decoder.f32Value();
+    for (&value.rotation) |*component| component.* = try decoder.f32Value();
+    for (&value.linear_velocity) |*component| component.* = try decoder.f32Value();
+    for (&value.angular_velocity) |*component| component.* = try decoder.f32Value();
+    value.driver = switch (try decoder.u8Value()) {
+        0 => null,
+        1 => try decodeParticipant(decoder),
+        else => return error.InvalidBoolean,
+    };
     return value;
 }
 
@@ -475,8 +688,9 @@ test "snapshot round trips at the validation ceiling" {
     snapshot.sequence.value = 4;
     snapshot.server_tick = 99;
     snapshot.acknowledged_input.value = 8;
-    snapshot.count = budgets.max_participants;
-    for (snapshot.characters[0..snapshot.count], 0..) |*character, index| {
+    snapshot.character_count = budgets.max_participants;
+    snapshot.vehicle_count = budgets.max_vehicles;
+    for (snapshot.characters[0..snapshot.character_count], 0..) |*character, index| {
         character.* = .{
             .entity = .{ .index = @intCast(index + 1), .generation = 1 },
             .owner = .{ .index = @intCast(index + 1), .generation = 1 },
@@ -485,11 +699,54 @@ test "snapshot round trips at the validation ceiling" {
             .facing_yaw = 0,
         };
     }
+    for (snapshot.vehicles[0..snapshot.vehicle_count], 0..) |*vehicle, index| {
+        vehicle.* = .{
+            .entity = .{ .index = @intCast(budgets.max_participants + index + 1), .generation = 1 },
+            .position = .{ @floatFromInt(index), 0.5, 1 },
+            .rotation = .{ 0, 0, 0, 1 },
+            .linear_velocity = .{ 0, 0, -1 },
+            .angular_velocity = .{ 0, 0, 0 },
+            .driver = if (index == 0) .{ .index = 1, .generation = 1 } else null,
+        };
+    }
     var bytes: [budgets.max_snapshot_bytes]u8 = undefined;
     const encoded = try encodeServer(.{ .snapshot = snapshot }, &bytes);
     try std.testing.expect(encoded.len <= budgets.max_snapshot_bytes);
     const decoded = try decodeServer(encoded);
     try std.testing.expectEqualDeep(ServerMessage{ .snapshot = snapshot }, decoded);
+}
+
+test "vehicle input action and result round trip with explicit transport semantics" {
+    var bytes: [256]u8 = undefined;
+    const input = ClientMessage{ .vehicle_input = .{
+        .session = .{ .value = 9 },
+        .participant = .{ .index = 2, .generation = 3 },
+        .sequence = .{ .value = 5 },
+        .target_tick = 42,
+        .vehicle = .{ .index = 17, .generation = 1 },
+        .throttle = 1,
+        .steering = -0.5,
+        .brake = 0,
+        .hand_brake = 0,
+    } };
+    try std.testing.expectEqualDeep(input, try decodeClient(try encodeClient(input, &bytes)));
+
+    const action = ClientMessage{ .vehicle_action = .{
+        .session = .{ .value = 9 },
+        .participant = .{ .index = 2, .generation = 3 },
+        .sequence = .{ .value = 7 },
+        .vehicle = .{ .index = 17, .generation = 1 },
+        .kind = .enter,
+    } };
+    try std.testing.expectEqualDeep(action, try decodeClient(try encodeClient(action, &bytes)));
+
+    const result = ServerMessage{ .vehicle_action_result = .{
+        .sequence = .{ .value = 7 },
+        .vehicle = .{ .index = 17, .generation = 1 },
+        .action = .enter,
+        .disposition = .entered,
+    } };
+    try std.testing.expectEqualDeep(result, try decodeServer(try encodeServer(result, &bytes)));
 }
 
 test "protocol rejects trailing, oversized movement, and cohort-invalid input" {

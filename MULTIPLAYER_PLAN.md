@@ -1,7 +1,7 @@
 # Incinerator Multiplayer-First Architecture and Delivery Plan
 
-**Status:** MP0-MP3 are implemented and accepted for the bounded character
-slice; broader MP1 physical decomposition and MP4+ remain open
+**Status:** MP0-MP3 and MP4-A1 are implemented and accepted; vehicle
+responsiveness, broader MP1 physical decomposition, and MP4-B+ remain open
 
 **Last reviewed:** 2026-07-13
 
@@ -179,7 +179,8 @@ Do not overload one ID across lifetimes:
 - **ConnectionId:** one generational live connection; reconnect may replace it.
 - **ReplicatedEntityId:** server-issued, generational, connection-visible entity
   reference; it may map to a persistent entity without exposing storage policy.
-- **InputSequence / SnapshotSequence:** bounded ordered protocol streams.
+- **InputSequence / ActionSequence / SnapshotSequence:** independent bounded
+  ordered input, reliable gameplay-transaction, and state-update streams.
 
 Platform account or Steam IDs are authentication/discovery inputs. They are
 not ECS IDs or direct authority handles.
@@ -395,32 +396,46 @@ reordering.
 
 ### MP4 — Feature Replication and District Interest
 
+**Status:** MP4-A1 authoritative vehicle replication is complete. MP4-A2 local
+vehicle responsiveness and MP4-B through MP4-E remain.
+
 **Detailed sequence:**
 [`docs/design/mp4-feature-replication-sequence.md`](docs/design/mp4-feature-replication-sequence.md)
+
+**Latest acceptance evidence:**
+[`docs/validation/mp4a-acceptance.md`](docs/validation/mp4a-acceptance.md)
 
 **Outcome:** Vehicle, interaction, district, and NPC semantics work through the
 same server authority with explicit per-feature replication and bounded
 district relevance.
 
-- [ ] Add server-authoritative vehicle enter/drive/exit and local vehicle
-  prediction only if measured responsiveness requires it.
+- [x] Add server-authoritative vehicle enter/drive/exit, dynamic seat
+  ownership, reconnect retention, graphical presentation, deterministic fault
+  evidence, and mixed-ingress replay.
+- [ ] Complete the explicit MP4-A2 vehicle prediction/reconciliation decision;
+  A1 measured 9-tick nominal and 12-15-tick adverse snapshot age.
 - [ ] Replicate carry/drop requests, outcomes, and ownership transitions.
 - [ ] Use district ownership/residency as the first relevance partition.
 - [ ] Replicate relevant NPC state at a measured rate without exposing NPC
   internals or making clients authoritative for AI.
-- [ ] Define reliable lifecycle versus replaceable state-update message classes.
+- [x] Define reliable vehicle lifecycle versus replaceable vehicle-state/input
+  message classes; repeat the decision per later feature.
 - [ ] Bound per-client entities, bytes, snapshots, events, and baseline memory.
 - [ ] Exercise save/restart, join-in-progress, reconnect, district transfer, and
   unload while clients are present.
 
 #### MP4 acceptance
 
-- [ ] Character, vehicle, interaction, district, and NPC ownership remain
-  consistent under impairment and stale client input.
+- [x] Character and vehicle seat ownership remain consistent under impairment,
+  stale input, contention, reconnect, exit, and replay.
+- [ ] Interaction, district, and NPC ownership/relevance remain consistent
+  under impairment and stale client input.
 - [ ] Irrelevant districts/entities do not consume unbounded per-client state.
 - [ ] Join/reconnect restores relevant state without sending durable-save bytes
   or backend handles.
-- [ ] Each feature owns its network projection and remains headless-testable.
+- [x] The vehicle slice projects explicit backend-neutral state through the
+  session and remains headless-testable.
+- [ ] Interaction, district, and NPC features own equivalent narrow projections.
 
 ### MP5 — Invite, Party, and Room Experience
 
