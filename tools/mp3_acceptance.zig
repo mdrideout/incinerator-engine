@@ -11,6 +11,12 @@ const impaired = @import("impaired_link");
 const movement_input_ticks: u64 = 360;
 const total_ticks: u64 = 900;
 
+fn takeOutbound(authority: anytype) ?authority_module.Outbound {
+    const lease = authority.beginOutboundLease() orelse return null;
+    authority.commitOutboundLease(lease.generation) catch unreachable;
+    return lease.outbound;
+}
+
 const Result = struct {
     name: []const u8,
     seed: u64,
@@ -94,13 +100,27 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
             try authority.ingest(connection, message);
         }
         try authority.tick();
-        while (authority.pollOutbound()) |outbound| {
+        while (authority.beginOutboundLease()) |lease| {
+            const outbound = lease.outbound;
             if (outbound.close_after_send) saw_terminal_output = true;
-            try link.sendFromAuthority(outbound.message);
+            link.sendFromAuthority(.{
+                .delivery_id = outbound.delivery_id,
+                .message = outbound.message,
+            }) catch |err| {
+                if (outbound.delivery == .reliable) {
+                    try authority.retryOutboundLease(lease.generation);
+                } else {
+                    try authority.commitOutboundLease(lease.generation);
+                }
+                return err;
+            };
+            try authority.commitOutboundLease(lease.generation);
         }
-        while (link.receiveForClient()) |message| {
-            try client.receive(message);
+        while (link.receiveForClient()) |delivered| {
+            const message = delivered.message;
+            try client.receiveDelivered(delivered);
             if (message == .snapshot) steady_snapshot_received = true;
+            while (client.takeDeliveryReceipt()) |receipt| try link.sendFromClient(receipt);
             if (client.takeBaselineAck()) |ack| try link.sendFromClient(ack);
             if (client.takeSnapshotAck()) |ack| try link.sendFromClient(ack);
         }
@@ -228,7 +248,8 @@ fn verifyAcceptedIngressReplay(
     const connection = authority_module.TransportConnection{ .value = 1 };
     _ = try replay.openConnection(connection);
     try replay.ingest(connection, .{ .hello = .{ .account = account } });
-    const welcome = replay.pollOutbound().?.message.welcome;
+    try replay.tick();
+    const welcome = takeOutbound(replay).?.message.welcome;
     var final_state: ?protocol.CharacterState = null;
     var cursor: usize = 0;
     for (0..total_ticks) |_| {
@@ -246,7 +267,7 @@ fn verifyAcceptedIngressReplay(
             } });
         }
         try replay.tick();
-        while (replay.pollOutbound()) |outbound| switch (outbound.message) {
+        while (takeOutbound(replay)) |outbound| switch (outbound.message) {
             .snapshot => |snapshot| {
                 for (snapshot.slice()) |character| {
                     if (std.meta.eql(character.owner, welcome.participant)) {

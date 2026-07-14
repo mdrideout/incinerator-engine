@@ -175,6 +175,8 @@ pub fn build(b: *std.Build) void {
     const district_feature_module = graph.district;
     const npc_contract_module = graph.npc_contract;
     const npc_feature_module = graph.npc;
+    const vitals_contract_module = graph.vitals_contract;
+    const vitals_feature_module = graph.vitals;
     const population_contract_module = graph.population_contract;
     const interaction_feature_contract_module = graph.interaction_feature_contract;
     const interaction_feature_module = graph.interaction;
@@ -212,6 +214,28 @@ pub fn build(b: *std.Build) void {
             .{ .name = "session_budgets", .module = session_budgets_module },
             .{ .name = "session_identity", .module = session_identity_module },
             .{ .name = "session_protocol", .module = session_protocol_module },
+        },
+    });
+    const room_coordinator_module = b.createModule(.{
+        .root_source_file = b.path("src/session/room_coordinator.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_identity", .module = session_identity_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_room", .module = session_room_module },
+        },
+    });
+    const room_ticket_module = b.createModule(.{
+        .root_source_file = b.path("src/session/room_ticket.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_identity", .module = session_identity_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_room", .module = session_room_module },
         },
     });
     const gns_direct_module = b.createModule(.{
@@ -894,6 +918,21 @@ pub fn build(b: *std.Build) void {
     });
     mp2_presentation_module.linkLibrary(sdl_lib);
 
+    const client_scene_module = b.createModule(.{
+        .root_source_file = b.path("src/client_scene.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zmath", .module = zmath.module("root") },
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_client", .module = session_client_module },
+            .{ .name = "replicated_world", .module = replicated_world_module },
+            .{ .name = "mp2_presentation", .module = mp2_presentation_module },
+        },
+    });
+    client_scene_module.linkLibrary(sdl_lib);
+
     const mp2_client_module = b.createModule(.{
         .root_source_file = b.path("src/hosts/mp2_client.zig"),
         .target = target,
@@ -908,8 +947,11 @@ pub fn build(b: *std.Build) void {
             .{ .name = "session_transport_policy", .module = session_transport_policy_module },
             .{ .name = "reconnect_policy", .module = reconnect_policy_module },
             .{ .name = "client_clock", .module = client_clock_module },
+            .{ .name = "room_coordinator", .module = room_coordinator_module },
+            .{ .name = "room_ticket", .module = room_ticket_module },
             .{ .name = "gns_direct", .module = gns_direct_module },
             .{ .name = "mp2_presentation", .module = mp2_presentation_module },
+            .{ .name = "client_scene", .module = client_scene_module },
         },
     });
     mp2_client_module.linkLibrary(sdl_lib);
@@ -920,12 +962,75 @@ pub fn build(b: *std.Build) void {
     mp2_client_exe.step.dependOn(shaders.step);
     gns.link(mp2_client_exe);
 
+    const mp6_server_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/mp6_server.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_identity", .module = session_identity_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_room", .module = session_room_module },
+            .{ .name = "room_ticket", .module = room_ticket_module },
+            .{ .name = "session_authority", .module = session_authority_module },
+            .{ .name = "direct_server", .module = mp2_server_module },
+        },
+    });
+    const mp6_server_exe = b.addExecutable(.{
+        .name = "incinerator_mp6_server",
+        .root_module = mp6_server_module,
+    });
+
+    const mp6_listen_room_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/mp6_listen_room.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_identity", .module = session_identity_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_room", .module = session_room_module },
+            .{ .name = "room_coordinator", .module = room_coordinator_module },
+            .{ .name = "room_ticket", .module = room_ticket_module },
+            .{ .name = "session_client", .module = session_client_module },
+            .{ .name = "session_authority", .module = session_authority_module },
+            .{ .name = "session_local_link", .module = session_local_link_module },
+            .{ .name = "session_transport_policy", .module = session_transport_policy_module },
+            .{ .name = "gns_direct", .module = gns_direct_module },
+        },
+    });
+    const mp6_listen_client_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/mp6_listen_client.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "mp6_listen_room", .module = mp6_listen_room_module },
+            .{ .name = "client_scene", .module = client_scene_module },
+            .{ .name = "mp2_presentation", .module = mp2_presentation_module },
+        },
+    });
+    mp6_listen_client_module.linkLibrary(sdl_lib);
+    const mp6_listen_client_exe = b.addExecutable(.{
+        .name = "incinerator_mp6_listen",
+        .root_module = mp6_listen_client_module,
+    });
+    mp6_listen_client_exe.step.dependOn(shaders.step);
+
     const check_mp2_step = b.step(
         "check-mp2",
         "Compile the MP2 direct-IP authority and graphical client",
     );
     check_mp2_step.dependOn(&mp2_server_exe.step);
     check_mp2_step.dependOn(&mp2_client_exe.step);
+
+    const check_mp6_step = b.step(
+        "check-mp6",
+        "Compile the MP6 ticketed room server and graphical client",
+    );
+    check_mp6_step.dependOn(&mp6_server_exe.step);
+    check_mp6_step.dependOn(&mp2_client_exe.step);
+    check_mp6_step.dependOn(&mp6_listen_client_exe.step);
 
     const install_mp2_server = b.addInstallArtifact(mp2_server_exe, .{});
     const install_mp2_client = b.addInstallArtifact(mp2_client_exe, .{});
@@ -935,6 +1040,17 @@ pub fn build(b: *std.Build) void {
     );
     install_mp2_step.dependOn(&install_mp2_server.step);
     install_mp2_step.dependOn(&install_mp2_client.step);
+
+    const install_mp6_server = b.addInstallArtifact(mp6_server_exe, .{});
+    const install_mp6_client = b.addInstallArtifact(mp2_client_exe, .{});
+    const install_mp6_listen = b.addInstallArtifact(mp6_listen_client_exe, .{});
+    const install_mp6_step = b.step(
+        "install-mp6",
+        "Install the MP6 room server and ticket-capable graphical client",
+    );
+    install_mp6_step.dependOn(&install_mp6_server.step);
+    install_mp6_step.dependOn(&install_mp6_client.step);
+    install_mp6_step.dependOn(&install_mp6_listen.step);
 
     const run_mp2_server = b.addRunArtifact(mp2_server_exe);
     if (b.args) |args| run_mp2_server.addArgs(args);
@@ -952,6 +1068,21 @@ pub fn build(b: *std.Build) void {
     );
     run_mp2_client_step.dependOn(&run_mp2_client.step);
 
+    const run_mp6_server = b.addRunArtifact(mp6_server_exe);
+    if (b.args) |args| run_mp6_server.addArgs(args);
+    const run_mp6_server_step = b.step(
+        "run-mp6-server",
+        "Run the MP6 room-owning ticketed authority",
+    );
+    run_mp6_server_step.dependOn(&run_mp6_server.step);
+    const run_mp6_listen = b.addRunArtifact(mp6_listen_client_exe);
+    if (b.args) |args| run_mp6_listen.addArgs(args);
+    const run_mp6_listen_step = b.step(
+        "run-mp6-listen",
+        "Create and play a graphical MP6 private listen room",
+    );
+    run_mp6_listen_step.dependOn(&run_mp6_listen.step);
+
     const mp2_server_tests = b.addTest(.{ .root_module = mp2_server_module });
     const run_mp2_server_tests = b.addRunArtifact(mp2_server_tests);
     const mp2_client_tests = b.addTest(.{ .root_module = mp2_client_module });
@@ -962,6 +1093,98 @@ pub fn build(b: *std.Build) void {
     );
     mp2_host_test_step.dependOn(&run_mp2_server_tests.step);
     mp2_host_test_step.dependOn(&run_mp2_client_tests.step);
+    const mp6_server_tests = b.addTest(.{ .root_module = mp6_server_module });
+    const run_mp6_server_tests = b.addRunArtifact(mp6_server_tests);
+    const mp6_listen_room_tests = b.addTest(.{ .root_module = mp6_listen_room_module });
+    gns.link(mp6_listen_room_tests);
+    const run_mp6_listen_room_tests = b.addRunArtifact(mp6_listen_room_tests);
+    const mp6_listen_client_tests = b.addTest(.{ .root_module = mp6_listen_client_module });
+    const run_mp6_listen_client_tests = b.addRunArtifact(mp6_listen_client_tests);
+    const mp6_host_test_step = b.step(
+        "test-mp6-hosts",
+        "Run MP6 room-server and ticket-capable client composition tests",
+    );
+    mp6_host_test_step.dependOn(&run_mp6_server_tests.step);
+    mp6_host_test_step.dependOn(&run_mp6_listen_room_tests.step);
+    mp6_host_test_step.dependOn(&run_mp6_listen_client_tests.step);
+    mp6_host_test_step.dependOn(&run_mp2_client_tests.step);
+    const verify_mp6_process = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_mp6_process.sh"),
+    });
+    verify_mp6_process.addFileArg(mp6_server_exe.getEmittedBin());
+    verify_mp6_process.addFileArg(mp2_client_exe.getEmittedBin());
+    const verify_mp6_dedicated_step = b.step(
+        "verify-mp6-dedicated",
+        "Run the real-GNS two-client graphical MP6 dedicated room proof",
+    );
+    verify_mp6_dedicated_step.dependOn(&verify_mp6_process.step);
+    verify_mp6_dedicated_step.dependOn(mp6_host_test_step);
+    const verify_mp6_listen_process = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_mp6_listen_process.sh"),
+    });
+    verify_mp6_listen_process.addFileArg(mp6_listen_client_exe.getEmittedBin());
+    verify_mp6_listen_process.addFileArg(mp2_client_exe.getEmittedBin());
+    const verify_mp6_listen_step = b.step(
+        "verify-mp6-listen",
+        "Run the graphical host-local-link plus real-GNS guest MP6 proof",
+    );
+    verify_mp6_listen_step.dependOn(&verify_mp6_listen_process.step);
+    verify_mp6_listen_step.dependOn(mp6_host_test_step);
+    const verify_s10_listen_process = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_s10_listen_process.sh"),
+    });
+    verify_s10_listen_process.addFileArg(mp6_listen_client_exe.getEmittedBin());
+    verify_s10_listen_process.addFileArg(mp2_client_exe.getEmittedBin());
+    const verify_s10_listen_step = b.step(
+        "verify-s10-listen",
+        "Run the two-client graphical listen damage/death/respawn proof",
+    );
+    verify_s10_listen_step.dependOn(&verify_s10_listen_process.step);
+    verify_s10_listen_step.dependOn(mp6_host_test_step);
+    const verify_s10_dedicated_process = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_s10_dedicated_process.sh"),
+    });
+    verify_s10_dedicated_process.addFileArg(mp6_server_exe.getEmittedBin());
+    verify_s10_dedicated_process.addFileArg(mp2_client_exe.getEmittedBin());
+    const verify_s10_dedicated_step = b.step(
+        "verify-s10-dedicated",
+        "Run the two-client graphical dedicated damage/death/respawn proof",
+    );
+    verify_s10_dedicated_step.dependOn(&verify_s10_dedicated_process.step);
+    verify_s10_dedicated_step.dependOn(mp6_host_test_step);
+    const mp6_lifecycle_acceptance_module = b.createModule(.{
+        .root_source_file = b.path("tools/mp6_lifecycle_acceptance.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_room", .module = session_room_module },
+            .{ .name = "room_coordinator", .module = room_coordinator_module },
+            .{ .name = "impaired_link", .module = impaired_link_module },
+        },
+    });
+    const mp6_lifecycle_acceptance_exe = b.addExecutable(.{
+        .name = "incinerator_mp6_lifecycle_acceptance",
+        .root_module = mp6_lifecycle_acceptance_module,
+    });
+    const mp6_lifecycle_tests = b.addTest(.{
+        .root_module = mp6_lifecycle_acceptance_module,
+    });
+    const run_mp6_lifecycle_tests = b.addRunArtifact(mp6_lifecycle_tests);
+    const verify_mp6_lifecycle_step = b.step(
+        "verify-mp6-lifecycle",
+        "Run selectable clean/nominal/adverse/blackout room lifecycle proofs",
+    );
+    verify_mp6_lifecycle_step.dependOn(&run_mp6_lifecycle_tests.step);
+    inline for (.{ "clean", "nominal", "adverse", "blackout" }) |profile| {
+        const run = b.addRunArtifact(mp6_lifecycle_acceptance_exe);
+        run.addArgs(&.{ "--impairment", profile });
+        verify_mp6_lifecycle_step.dependOn(&run.step);
+    }
 
     const mp2_loopback_module = b.createModule(.{
         .root_source_file = b.path("tools/mp2_loopback.zig"),
@@ -2377,6 +2600,17 @@ pub fn build(b: *std.Build) void {
     );
     character_feature_test_step.dependOn(&run_character_feature_tests.step);
 
+    const vitals_contract_tests = b.addTest(.{ .root_module = vitals_contract_module });
+    const run_vitals_contract_tests = b.addRunArtifact(vitals_contract_tests);
+    const vitals_feature_tests = b.addTest(.{ .root_module = vitals_feature_module });
+    const run_vitals_feature_tests = b.addRunArtifact(vitals_feature_tests);
+    const vitals_feature_test_step = b.step(
+        "test-vitals-feature",
+        "Run deterministic bounded vitals contract and feature tests",
+    );
+    vitals_feature_test_step.dependOn(&run_vitals_contract_tests.step);
+    vitals_feature_test_step.dependOn(&run_vitals_feature_tests.step);
+
     const driver_contract_tests = b.addTest(.{ .root_module = driver_contract_module });
     const run_driver_contract_tests = b.addRunArtifact(driver_contract_tests);
     const driver_contract_test_step = b.step(
@@ -2734,6 +2968,10 @@ pub fn build(b: *std.Build) void {
     const run_session_authority_tests = b.addRunArtifact(session_authority_tests);
     const session_room_tests = b.addTest(.{ .root_module = session_room_module });
     const run_session_room_tests = b.addRunArtifact(session_room_tests);
+    const room_coordinator_tests = b.addTest(.{ .root_module = room_coordinator_module });
+    const run_room_coordinator_tests = b.addRunArtifact(room_coordinator_tests);
+    const room_ticket_tests = b.addTest(.{ .root_module = room_ticket_module });
+    const run_room_ticket_tests = b.addRunArtifact(room_ticket_tests);
     const gns_direct_test_module = b.createModule(.{
         .root_source_file = b.path("src/adapters/transport/gns_direct.zig"),
         .target = target,
@@ -2766,6 +3004,8 @@ pub fn build(b: *std.Build) void {
     session_contract_test_step.dependOn(&run_local_solo_session_tests.step);
     session_contract_test_step.dependOn(&run_session_authority_tests.step);
     session_contract_test_step.dependOn(&run_session_room_tests.step);
+    session_contract_test_step.dependOn(&run_room_coordinator_tests.step);
+    session_contract_test_step.dependOn(&run_room_ticket_tests.step);
     verify_mp3_step.dependOn(session_contract_test_step);
     const gns_test_step = b.step(
         "test-gns",
@@ -2825,6 +3065,15 @@ pub fn build(b: *std.Build) void {
     const run_physics_tests = b.addRunArtifact(physics_tests);
     const physics_test_step = b.step("test-physics", "Run isolated Jolt adapter tests");
     physics_test_step.dependOn(&run_physics_tests.step);
+    const verify_s10_step = b.step(
+        "verify-s10",
+        "Run focused and graphical S10 damage/death/respawn acceptance",
+    );
+    verify_s10_step.dependOn(verify_s10_listen_step);
+    verify_s10_step.dependOn(verify_s10_dedicated_step);
+    verify_s10_step.dependOn(session_contract_test_step);
+    verify_s10_step.dependOn(vitals_feature_test_step);
+    verify_s10_step.dependOn(physics_test_step);
 
     const verify_m5_architecture_command = b.addSystemCommand(&.{
         "bash",
@@ -2837,12 +3086,36 @@ pub fn build(b: *std.Build) void {
     verify_m5_architecture_step.dependOn(
         &verify_m5_architecture_command.step,
     );
+    const verify_m6_architecture_command = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_m6_architecture.sh"),
+    });
+    const verify_m6_architecture_step = b.step(
+        "verify-m6-architecture",
+        "Enforce transactional authority-cycle, delivery, receipt, replay, and durable boundaries",
+    );
+    verify_m6_architecture_step.dependOn(
+        &verify_m6_architecture_command.step,
+    );
+    const verify_mp6_architecture_command = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_mp6_architecture.sh"),
+    });
+    const verify_mp6_architecture_step = b.step(
+        "verify-mp6-room-architecture",
+        "Enforce coordinator, secret, placement, presentation, and Steam-free MP6 boundaries",
+    );
+    verify_mp6_architecture_step.dependOn(
+        &verify_mp6_architecture_command.step,
+    );
 
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(verify_m5_architecture_step);
+    test_step.dependOn(verify_m6_architecture_step);
+    test_step.dependOn(verify_mp6_architecture_step);
     test_step.dependOn(&cohort_verification.run.step);
     test_step.dependOn(&cohort_verification.tests.step);
     test_step.dependOn(&run_content_tests.step);
@@ -2855,6 +3128,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_sandbox_value_contracts_tests.step);
     test_step.dependOn(&run_crate_feature_tests.step);
     test_step.dependOn(&run_character_feature_tests.step);
+    test_step.dependOn(&run_vitals_contract_tests.step);
+    test_step.dependOn(&run_vitals_feature_tests.step);
     test_step.dependOn(&run_driver_contract_tests.step);
     test_step.dependOn(&run_interaction_contract_tests.step);
     test_step.dependOn(&run_vehicle_feature_tests.step);
@@ -2902,6 +3177,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_local_solo_session_tests.step);
     test_step.dependOn(&run_session_authority_tests.step);
     test_step.dependOn(&run_session_room_tests.step);
+    test_step.dependOn(&run_room_coordinator_tests.step);
+    test_step.dependOn(&run_room_ticket_tests.step);
     test_step.dependOn(&run_gns_direct_tests.step);
     test_step.dependOn(&run_sandbox_interaction_tests.step);
     test_step.dependOn(&run_sandbox_replay_tests.step);
@@ -2953,6 +3230,32 @@ pub fn build(b: *std.Build) void {
     test_m5_cohesion_step.dependOn(&run_local_solo_session_tests.step);
     test_m5_cohesion_step.dependOn(&run_session_authority_tests.step);
 
+    const test_m6_transaction_step = b.step(
+        "test-m6-transaction",
+        "Run focused authority transaction, delivery, receipt, replay, and durable contracts",
+    );
+    test_m6_transaction_step.dependOn(verify_m6_architecture_step);
+    test_m6_transaction_step.dependOn(&run_session_protocol_tests.step);
+    test_m6_transaction_step.dependOn(&run_snapshot_source_tests.step);
+    test_m6_transaction_step.dependOn(&run_session_transport_policy_tests.step);
+    test_m6_transaction_step.dependOn(&run_impaired_link_tests.step);
+    test_m6_transaction_step.dependOn(&run_session_local_link_tests.step);
+    test_m6_transaction_step.dependOn(&run_session_client_tests.step);
+    test_m6_transaction_step.dependOn(&run_local_solo_session_tests.step);
+    test_m6_transaction_step.dependOn(&run_session_authority_tests.step);
+    test_m6_transaction_step.dependOn(&run_sandbox_persistence_tests.step);
+
+    const test_mp6_room_step = b.step(
+        "test-mp6-room",
+        "Run focused room coordinator, ticket, host, lifecycle, and architecture contracts",
+    );
+    test_mp6_room_step.dependOn(verify_mp6_architecture_step);
+    test_mp6_room_step.dependOn(&run_session_room_tests.step);
+    test_mp6_room_step.dependOn(&run_room_coordinator_tests.step);
+    test_mp6_room_step.dependOn(&run_room_ticket_tests.step);
+    test_mp6_room_step.dependOn(mp6_host_test_step);
+    test_mp6_room_step.dependOn(verify_mp6_lifecycle_step);
+
     const verify_source_package_command = b.addSystemCommand(&.{
         "bash",
         b.pathFromRoot("tools/verify_source_package.sh"),
@@ -2993,6 +3296,20 @@ pub fn build(b: *std.Build) void {
     );
     verify_m5_cold_step.dependOn(&verify_m5_cold_command.step);
     verify_m5_step.dependOn(verify_m5_cold_step);
+    const verify_m6_step = b.step(
+        "verify-m6",
+        "Run the complete Apple Silicon macOS M6 transactional authority gate",
+    );
+    verify_m6_step.dependOn(test_m6_transaction_step);
+    verify_m6_step.dependOn(verify_m5_step);
+    const verify_mp6_room_step = b.step(
+        "verify-mp6-room",
+        "Run the complete Apple Silicon macOS MP6 playable room-flow gate",
+    );
+    verify_mp6_room_step.dependOn(test_mp6_room_step);
+    verify_mp6_room_step.dependOn(verify_mp6_dedicated_step);
+    verify_mp6_room_step.dependOn(verify_mp6_listen_step);
+    verify_mp6_room_step.dependOn(verify_m6_step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

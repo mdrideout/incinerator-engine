@@ -64,6 +64,7 @@ pub const Request = union(enum) {
 pub const CommitResult = enum {
     storage_unavailable,
     deferred_authoring_transaction,
+    deferred_capture_pending,
     deferred_simulation_commands,
     deferred_district_transition,
     deferred_session_work,
@@ -89,11 +90,11 @@ pub const Result = union(enum) {
 };
 
 const OwnedSnapshot = struct {
-    allocator: std.mem.Allocator,
+    source: snapshot_source.Source,
     bytes: []u8,
 
     fn deinit(self: *OwnedSnapshot) void {
-        self.allocator.free(self.bytes);
+        self.source.release(self.bytes);
         self.* = undefined;
     }
 };
@@ -113,6 +114,7 @@ const Data = struct {
     source: snapshot_source.Source,
     state: State,
     retained_feedback: Feedback,
+    pending_capture: ?snapshot_source.RequestId = null,
 };
 
 /// Type-erased durable owner. Its public representation cannot expose the
@@ -213,19 +215,34 @@ pub const Owner = opaque {
 
     fn capture(self: *Owner) anyerror!OwnedSnapshot {
         const data = self.ownerData();
-        return .{
-            .allocator = data.allocator,
-            .bytes = try data.source.capture(data.allocator),
+        const request_id = data.pending_capture orelse blk: {
+            const queued = try data.source.request();
+            data.pending_capture = queued;
+            break :blk queued;
+        };
+        const disposition = (try data.source.take(request_id)) orelse
+            return error.CapturePending;
+        data.pending_capture = null;
+        return switch (disposition) {
+            .captured => |bytes| .{ .source = data.source, .bytes = bytes },
+            .deferred => |reason| switch (reason) {
+                .session_work => error.SessionWorkPending,
+                .simulation_commands => error.CommandsPending,
+                .district_transition => error.DistrictTransitionPending,
+                .authority_outputs => error.AuthorityOutputsPending,
+            },
+            .failed => |err| err,
         };
     }
 
     fn observe(self: *Owner) anyerror!SnapshotObservation {
-        var snapshot = try self.capture();
-        defer snapshot.deinit();
+        const data = self.ownerData();
+        const bytes = try data.source.observe(data.allocator);
+        defer data.allocator.free(bytes);
         var fingerprint: sandbox_save.Digest = undefined;
-        std.crypto.hash.sha2.Sha256.hash(snapshot.bytes, &fingerprint, .{});
+        std.crypto.hash.sha2.Sha256.hash(bytes, &fingerprint, .{});
         return .{
-            .canonical_size = snapshot.bytes.len,
+            .canonical_size = bytes.len,
             .fingerprint = fingerprint,
         };
     }
@@ -252,6 +269,10 @@ pub const Owner = opaque {
         }
 
         var snapshot = self.capture() catch |err| switch (err) {
+            error.CapturePending => {
+                self.setFeedback(.not_committed, "authority capture pending");
+                return .deferred_capture_pending;
+            },
             error.CommandsPending => {
                 self.setFeedback(.not_committed, "simulation commands pending");
                 return .deferred_simulation_commands;
@@ -369,23 +390,54 @@ const TestSource = struct {
     payload: []const u8 = "canonical-snapshot",
     calls: *usize,
     failure: TestCaptureFailure = .none,
+    pending: bool = false,
+    allocator: std.mem.Allocator = std.testing.allocator,
 
     fn asSource(self: *TestSource) snapshot_source.Source {
-        return .{ .context = self, .capture_fn = capture };
+        return .{
+            .context = self,
+            .observe_fn = observe,
+            .request_fn = request,
+            .take_fn = take,
+            .release_fn = release,
+        };
     }
 
-    fn capture(context: *anyopaque, allocator: std.mem.Allocator) anyerror![]u8 {
+    fn observe(context: *anyopaque, allocator: std.mem.Allocator) anyerror![]u8 {
         const self: *TestSource = @ptrCast(@alignCast(context));
         self.calls.* += 1;
+        return allocator.dupe(u8, self.payload);
+    }
+
+    fn request(context: *anyopaque) anyerror!snapshot_source.RequestId {
+        const self: *TestSource = @ptrCast(@alignCast(context));
+        if (self.pending) return error.CaptureBusy;
+        self.pending = true;
+        self.calls.* += 1;
+        return 1;
+    }
+
+    fn take(
+        context: *anyopaque,
+        request_id: snapshot_source.RequestId,
+    ) anyerror!?snapshot_source.Disposition {
+        const self: *TestSource = @ptrCast(@alignCast(context));
+        if (!self.pending or request_id != 1) return error.UnknownCaptureRequest;
+        self.pending = false;
         return switch (self.failure) {
-            .none => allocator.dupe(u8, self.payload),
-            .commands_pending => error.CommandsPending,
-            .district_transition_pending => error.DistrictTransitionPending,
-            .session_work_pending => error.SessionWorkPending,
-            .authority_outputs_pending => error.AuthorityOutputsPending,
-            .authority_faulted => error.AuthorityFaulted,
-            .unexpected => error.UnexpectedCaptureFailure,
+            .none => .{ .captured = try self.allocator.dupe(u8, self.payload) },
+            .commands_pending => .{ .deferred = .simulation_commands },
+            .district_transition_pending => .{ .deferred = .district_transition },
+            .session_work_pending => .{ .deferred = .session_work },
+            .authority_outputs_pending => .{ .deferred = .authority_outputs },
+            .authority_faulted => .{ .failed = error.AuthorityFaulted },
+            .unexpected => .{ .failed = error.UnexpectedCaptureFailure },
         };
+    }
+
+    fn release(context: *anyopaque, bytes: []u8) void {
+        const self: *TestSource = @ptrCast(@alignCast(context));
+        self.allocator.free(bytes);
     }
 };
 
@@ -517,7 +569,11 @@ test "encode failure is typed and preserves the previous committed slot" {
         // Owner state and canonical capture succeed; envelope allocation fails.
         .{ .fail_index = 2 },
     );
-    var replacement_source = TestSource{ .payload = "replacement", .calls = &calls };
+    var replacement_source = TestSource{
+        .payload = "replacement",
+        .calls = &calls,
+        .allocator = failing.allocator(),
+    };
     const failing_owner = try Owner.initBorrowedForTest(
         failing.allocator(),
         temporary.dir,

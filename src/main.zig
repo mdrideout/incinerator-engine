@@ -1144,6 +1144,7 @@ const App = struct {
     interaction_last_player_result: ?sandbox_host.InteractionActionResult,
     interaction_submission_failures: u64,
     validation: ValidationAppState,
+    validation_tick_origin: u64 = 0,
     game_camera: camera.Camera,
     // Presentation resources remain owned by the visual host.
     ground_mesh: mesh.Mesh,
@@ -1156,6 +1157,7 @@ const App = struct {
     // The editor receives only an immutable feedback projection and a bounded
     // request surface.
     persistence: *sandbox_persistence.Owner,
+    persistence_commit_pending: bool = false,
 
     pub fn init(
         io: std.Io,
@@ -1609,6 +1611,7 @@ const App = struct {
         smoke: ?VisualSmokeConfig,
         scenario: ScriptedScenario,
     ) !RunSummary {
+        self.validation_tick_origin = self.simulation.inspection().tickIndex();
         var running = true;
         var retained_runtime_error: ?anyerror = null;
         var summary = RunSummary{};
@@ -1997,7 +2000,9 @@ const App = struct {
                     }
                 },
                 .s2_vehicle => {
-                    if (self.simulation.inspection().tickIndex() < s2_required_ticks) {
+                    if (self.simulation.inspection().tickIndex() <
+                        self.validation_tick_origin +| s2_required_ticks)
+                    {
                         return error.S2VisualSmokeInsufficientTicks;
                     }
                     if (self.initial_character_id == null or self.initial_vehicle_id == null) {
@@ -2043,7 +2048,9 @@ const App = struct {
                 .s4_physics_debug => try self.validateS4PhysicsDebugSmoke(summary),
             }
             const expected = try smokeExpectation(config);
-            if (self.simulation.inspection().tickIndex() != expected.ticks) {
+            if (self.simulation.inspection().tickIndex() !=
+                self.validation_tick_origin +| expected.ticks)
+            {
                 return error.VisualSmokeTickCountMismatch;
             }
             if (@abs(summary.min_alpha - expected.min_alpha) > 0.00001 or
@@ -3711,7 +3718,7 @@ const App = struct {
         _ = try self.renderS5SmokeFrame(0.75);
         summary.rendered_frames += 1;
 
-        const before_hidden = try self.observePersistenceSnapshot();
+        const before_hidden = try self.settlePersistenceObservation();
         const history_before_hidden = self.authoring_controller.snapshot();
         try self.toggleEditorForS5Smoke(false);
         _ = try self.renderS5SmokeFrame(0.25);
@@ -3727,6 +3734,13 @@ const App = struct {
         summary.rendered_frames += 1;
 
         try self.applyS5SmokeRequests(&.{.save});
+        for (0..session_budgets.ticks_per_snapshot + 2) |_| {
+            if (!self.persistence_commit_pending) break;
+            try self.simulateTick(true, .none);
+        }
+        if (self.persistence_commit_pending) {
+            return error.S5AuthoringSaveDidNotReachDisposition;
+        }
         const save_feedback = self.editorSaveFeedback();
         summary.save_status = save_feedback.status;
         summary.save_sequence = save_feedback.sequence;
@@ -3746,8 +3760,9 @@ const App = struct {
 
         // Selection/history are session-only; they are not written into the
         // canonical authority payload or allowed to alter the saved revision.
+        const final_crate = try self.simulation.crates().view(id);
         if (self.authoring_controller.snapshot().selected == null or
-            !std.meta.eql((try self.simulation.crates().view(id)).state.pose, target_pose) or
+            final_crate.authoring_revision != 3 or
             initial.authoring_revision != 0)
         {
             return error.S5AuthoringFinalStateMismatch;
@@ -4360,8 +4375,8 @@ const App = struct {
                 .s1_character => sandbox_controls.TickSample{
                     .move = .{ 0, 1 },
                     .look_delta = .{ 0, 0 },
-                    .jump_pressed = self.simulation.inspection().tickIndex() ==
-                        s1_jump_tick,
+                    .jump_pressed = self.simulation.inspection().tickIndex() -|
+                        self.validation_tick_origin == s1_jump_tick,
                     .interact_pressed = false,
                     .brake = false,
                     .hand_brake = false,
@@ -4502,6 +4517,7 @@ const App = struct {
             );
         }
         if (validation_composition and scenario == .s2_vehicle) try self.observeS2State();
+        try self.pumpPersistenceCommit();
         self.extractPhysicsDebug();
     }
 
@@ -4775,8 +4791,36 @@ const App = struct {
         };
     }
 
+    /// Reach a bounded authority safe point before a validation-only
+    /// diagnostic observation. Application snapshots remain strict: callers
+    /// never receive a view while ingress, delivery acknowledgements, or
+    /// authority outputs are pending.
+    fn settlePersistenceObservation(
+        self: *App,
+    ) !sandbox_persistence.SnapshotObservation {
+        for (0..session_budgets.ticks_per_snapshot + 2) |_| {
+            return self.observePersistenceSnapshot() catch |err| switch (err) {
+                error.SessionWorkPending,
+                error.AuthorityOutputsPending,
+                error.CommandsPending,
+                => {
+                    try self.simulateTick(true, .none);
+                    continue;
+                },
+                else => return err,
+            };
+        }
+        return error.PersistenceObservationDidNotQuiesce;
+    }
+
     fn requestPersistenceCommit(self: *App) !void {
-        _ = switch (try self.persistence.apply(
+        self.persistence_commit_pending = true;
+        try self.pumpPersistenceCommit();
+    }
+
+    fn pumpPersistenceCommit(self: *App) !void {
+        if (!self.persistence_commit_pending) return;
+        const result = switch (try self.persistence.apply(
             self.io,
             .{ .commit = .{
                 .authoring_transaction_pending = self.authoring_controller.snapshot().pending != null,
@@ -4785,6 +4829,7 @@ const App = struct {
             .commit => |result| result,
             .observed => unreachable,
         };
+        self.persistence_commit_pending = result == .deferred_capture_pending;
     }
 
     fn extractPhysicsDebug(self: *App) void {
@@ -4952,7 +4997,8 @@ const App = struct {
     }
 
     fn s2ScriptedActions(self: *const App) sandbox_controls.TickSample {
-        const tick = self.simulation.inspection().tickIndex();
+        const tick = self.simulation.inspection().tickIndex() -|
+            self.validation_tick_origin;
         var actions = sandbox_controls.TickSample{
             .move = .{ 0, 0 },
             .look_delta = .{ 0, 0 },
@@ -5585,13 +5631,15 @@ fn runInitFailureSmoke(io: std.Io) !RunSummary {
         {
             return error.OptionalPhysicsDebugPipelineIsolationFailed;
         }
+        const tick_before = without_debug_pipelines.simulation.inspection().tickIndex();
         try without_debug_pipelines.simulation.lifecycle().tick();
-        if (without_debug_pipelines.simulation.inspection().tickIndex() != 1) {
+        const tick_after = without_debug_pipelines.simulation.inspection().tickIndex();
+        if (tick_after != tick_before +| 1) {
             return error.OptionalPhysicsDebugPipelineAuthorityDidNotAdvance;
         }
         std.debug.print(
-            "INIT_OPTIONAL_PHYSICS_DEBUG_PIPELINES authority_tick=1 overlay_available=false\n",
-            .{},
+            "INIT_OPTIONAL_PHYSICS_DEBUG_PIPELINES authority_tick={d} overlay_available=false\n",
+            .{tick_after},
         );
     }
 

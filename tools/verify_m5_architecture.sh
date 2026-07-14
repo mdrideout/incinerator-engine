@@ -119,7 +119,7 @@ for developer_owner_source in "${developer_owner_sources[@]}"; do
 done
 reject_matches \
   "the developer-owner closure imports mutable authority, persistence, physics, or private feature implementations" \
-  '@import[[:space:]]*\([[:space:]]*"([^"/]*/)*(local_solo_session|session_authority|sandbox_simulation|simulation_snapshot|sandbox_persistence|sandbox_authoring|sandbox_interaction|save_slots|jolt_physics|jolt_c|zflecs|crate_feature|character_feature|vehicle_feature|district_feature|interaction_feature|npc_feature)(\.zig)?"' \
+  '@import[[:space:]]*\([[:space:]]*"([^"/]*/)*(local_solo_session|session_authority|sandbox_simulation|simulation_snapshot|sandbox_persistence|sandbox_authoring|sandbox_interaction|save_slots|jolt_physics|jolt_c|zflecs|crate_feature|character_feature|vehicle_feature|district_feature|interaction_feature|npc_feature|vitals_feature)(\.zig)?"' \
   "${developer_owner_sources[@]}"
 reject_matches \
   "session authority republishes compatibility diagnostics aliases" \
@@ -270,6 +270,7 @@ pure_authority_value_sources=(
   "$root/src/features/npc/contract.zig"
   "$root/src/features/npc/snapshot_validation.zig"
   "$root/src/features/population/contract.zig"
+  "$root/src/features/vitals/contract.zig"
   "$root/src/district_worker_contract.zig"
   "$root/src/hosts/sandbox_diagnostics_contract.zig"
   "$root/src/hosts/sandbox_host_contracts.zig"
@@ -282,12 +283,12 @@ for pure_authority_value_source in "${pure_authority_value_sources[@]}"; do
 done
 reject_matches \
   "a pure authority/value source imports feature implementation, mutable simulation, replay, storage, or a visual/backend implementation" \
-  '(@import[[:space:]]*\([[:space:]]*"([^"/]*/)*(crate_feature|character_feature|vehicle_feature|district_feature|interaction_feature|npc_feature|session_authority|sandbox_simulation|simulation_diagnostics|sandbox_replay|sandbox_save|save_slots|district_worker|jolt_physics|jolt_c|zflecs|sdl|renderer|physics_debug_gpu|mesh|texture|editor|zgui|shader_assets)(\.zig)?"|@cInclude[[:space:]]*\([[:space:]]*"(SDL|Jolt|jolt|jph)[^"]*")' \
+  '(@import[[:space:]]*\([[:space:]]*"([^"/]*/)*(crate_feature|character_feature|vehicle_feature|district_feature|interaction_feature|npc_feature|vitals_feature|session_authority|sandbox_simulation|simulation_diagnostics|sandbox_replay|sandbox_save|save_slots|district_worker|jolt_physics|jolt_c|zflecs|sdl|renderer|physics_debug_gpu|mesh|texture|editor|zgui|shader_assets)(\.zig)?"|@cInclude[[:space:]]*\([[:space:]]*"(SDL|Jolt|jolt|jph)[^"]*")' \
   "${pure_authority_value_sources[@]}"
 
 reject_matches \
   "the canonical simulation snapshot imports live authority, storage, feature implementation, or visual/backend code" \
-  '(@import[[:space:]]*\([[:space:]]*"([^"/]*/)*(crate_feature|character_feature|vehicle_feature|district_feature|interaction_feature|npc_feature|session_authority|sandbox_simulation|simulation_diagnostics|sandbox_save|save_slots|district_worker|jolt_physics|jolt_c|zflecs|sdl|renderer|physics_debug_gpu|mesh|texture|editor|zgui|shader_assets)(\.zig)?"|@cInclude[[:space:]]*\([[:space:]]*"(SDL|Jolt|jolt|jph)[^"]*")' \
+  '(@import[[:space:]]*\([[:space:]]*"([^"/]*/)*(crate_feature|character_feature|vehicle_feature|district_feature|interaction_feature|npc_feature|vitals_feature|session_authority|sandbox_simulation|simulation_diagnostics|sandbox_save|save_slots|district_worker|jolt_physics|jolt_c|zflecs|sdl|renderer|physics_debug_gpu|mesh|texture|editor|zgui|shader_assets)(\.zig)?"|@cInclude[[:space:]]*\([[:space:]]*"(SDL|Jolt|jolt|jph)[^"]*")' \
   "$root/src/hosts/simulation_snapshot.zig"
 require_match \
   "the canonical simulation snapshot does not consume pure NPC snapshot validation" \
@@ -296,7 +297,7 @@ require_match \
 
 reject_matches \
   "the mutable simulation facade republishes a canonical value contract" \
-  '^[[:space:]]*pub const [A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(crates|characters|vehicles|districts|interactions|npcs|sandbox_host_contracts|sandbox_diagnostics|engine\.physics_debug)\.' \
+  '^[[:space:]]*pub const [A-Za-z_][A-Za-z0-9_]*[[:space:]]*=[[:space:]]*(crates|characters|vehicles|districts|interactions|npcs|vitals|sandbox_host_contracts|sandbox_diagnostics|engine\.physics_debug)\.' \
   "$root/src/hosts/simulation.zig"
 reject_matches \
   "a feature implementation root republishes canonical value declarations" \
@@ -306,7 +307,8 @@ reject_matches \
   "$root/src/features/vehicle/root.zig" \
   "$root/src/features/district/root.zig" \
   "$root/src/features/interaction/root.zig" \
-  "$root/src/features/npc/root.zig"
+  "$root/src/features/npc/root.zig" \
+  "$root/src/features/vitals/root.zig"
 require_match \
   "the physics adapter does not consume the backend-neutral debug policy" \
   'const DebugConfig[[:space:]]*=[[:space:]]*physics_debug\.Config;' \
@@ -392,7 +394,7 @@ district_streaming_sources=(
 )
 reject_matches \
   "the district-streaming owner closure imports mutable authority, persistence, physics, or private feature implementations" \
-  '@import[[:space:]]*\([[:space:]]*"([^"/]*/)*(local_solo_session|session_authority|sandbox_simulation|simulation_snapshot|sandbox_persistence|sandbox_save|save_slots|jolt_physics|jolt_c|zflecs|crate_feature|character_feature|vehicle_feature|district_feature|interaction_feature|npc_feature)(\.zig)?"' \
+  '@import[[:space:]]*\([[:space:]]*"([^"/]*/)*(local_solo_session|session_authority|sandbox_simulation|simulation_snapshot|sandbox_persistence|sandbox_save|save_slots|jolt_physics|jolt_c|zflecs|crate_feature|character_feature|vehicle_feature|district_feature|interaction_feature|npc_feature|vitals_feature)(\.zig)?"' \
   "${district_streaming_sources[@]}"
 
 authority_focus="$({
@@ -420,7 +422,7 @@ require_match \
   "$local_solo_source"
 require_match \
   "local_solo does not drain shared authority egress" \
-  'authority\.session\(\)\.pollOutbound\(\)' \
+  'authority\.session\(\)\.beginOutboundLease\(\)' \
   "$local_solo_source"
 reject_matches \
   "local_solo imports mutable simulation or authority admission policy" \
@@ -553,7 +555,11 @@ require_match \
 # gate owner to classify and scan it, instead of silently expanding authority.
 client_sources=(
   "$mp2_client_source"
+  "$root/src/client_scene.zig"
   "$root/src/mp2_presentation.zig"
+  "$root/src/session/room_coordinator.zig"
+  "$root/src/session/room_ticket.zig"
+  "$root/src/session/room.zig"
   "$root/src/session/client.zig"
   "$root/src/session/replicated_world.zig"
   "$root/src/session/prediction.zig"
@@ -577,7 +583,7 @@ for client_source in "${client_sources[@]}"; do
 done
 reject_matches \
   "the graphical client closure imports authority, physics, storage, or feature internals" \
-  '(@import[[:space:]]*\([^)]*(sandbox_simulation|simulation_snapshot|session_authority|jolt_physics|jolt_c|zflecs|save_slots|sandbox_save|sandbox_replay|crate_feature|character_feature|vehicle_feature|district_feature|interaction_feature|npc_feature|district_worker)|@cInclude[[:space:]]*\([^)]*(jolt|jph)|\bJPH_)' \
+  '(@import[[:space:]]*\([^)]*(sandbox_simulation|simulation_snapshot|session_authority|jolt_physics|jolt_c|zflecs|save_slots|sandbox_save|sandbox_replay|crate_feature|character_feature|vehicle_feature|district_feature|interaction_feature|npc_feature|vitals_feature|district_worker)|@cInclude[[:space:]]*\([^)]*(jolt|jph)|\bJPH_)' \
   "${client_sources[@]}"
 
 client_imports="$({
@@ -588,7 +594,7 @@ client_imports="$({
 })"
 for imported in $client_imports; do
   case "$imported" in
-    std|zmath|network_cohort_options|shader_assets|session_budgets|session_protocol|session_client|replicated_world|session_transport_policy|reconnect_policy|client_clock|gns_direct|mp2_presentation|session_identity|session_prediction|vehicle_prediction|sdl.zig|renderer.zig|primitives.zig|mesh.zig|camera.zig|texture.zig) ;;
+    std|zmath|network_cohort_options|shader_assets|session_budgets|session_protocol|session_client|session_room|room_coordinator|room_ticket|client_scene|replicated_world|session_transport_policy|reconnect_policy|client_clock|gns_direct|mp2_presentation|session_identity|session_prediction|vehicle_prediction|sdl.zig|renderer.zig|primitives.zig|mesh.zig|camera.zig|texture.zig) ;;
     *) fail "unclassified dependency entered the graphical client closure: $imported" ;;
   esac
 done
@@ -649,7 +655,7 @@ authority_imports="$({
 })"
 for imported in $authority_imports; do
   case "$imported" in
-    ../identity.zig|../transform.zig|builtin|character_contract|character_feature|contracts/diagnostics.zig|contracts/physics.zig|contracts/physics_debug.zig|contracts/rendering.zig|contracts/replay.zig|crate_contract|crate_feature|diagnostics.zig|district_contract|district_feature_contract|district_feature|district_replay_loader|district_worker_contract|district_worker|driver_contract|engine/bounded_queue.zig|engine/diagnostics.zig|engine/fixed_step.zig|engine/runtime.zig|engine_contracts|gameplay_admission|gns_direct|identity.zig|incinerator_engine|interaction_contract|interaction_feature_contract|interaction_feature|jolt_c|jolt_physics|navigation_contract|network_cohort_options|npc_contract|npc_feature|npc_snapshot_validation|sandbox_diagnostics_contract|sandbox_district_recipe|sandbox_host_contracts|sandbox_navigation|sandbox_replay|sandbox_simulation|session_authority|session_authority_diagnostics|session_budgets|session_identity|session_protocol|session_transport_policy|simulation_cohort_options|simulation_diagnostics|simulation_snapshot|snapshot_source|std|transform.zig|vehicle_contract|vehicle_feature|zflecs) ;;
+    ../identity.zig|../transform.zig|builtin|character_contract|character_feature|contracts/diagnostics.zig|contracts/physics.zig|contracts/physics_debug.zig|contracts/rendering.zig|contracts/replay.zig|crate_contract|crate_feature|diagnostics.zig|district_contract|district_feature_contract|district_feature|district_replay_loader|district_worker_contract|district_worker|driver_contract|engine/bounded_queue.zig|engine/diagnostics.zig|engine/fixed_step.zig|engine/runtime.zig|engine_contracts|gameplay_admission|gns_direct|identity.zig|incinerator_engine|interaction_contract|interaction_feature_contract|interaction_feature|jolt_c|jolt_physics|navigation_contract|network_cohort_options|npc_contract|npc_feature|npc_snapshot_validation|sandbox_diagnostics_contract|sandbox_district_recipe|sandbox_host_contracts|sandbox_navigation|sandbox_replay|sandbox_simulation|session_authority|session_authority_diagnostics|session_budgets|session_identity|session_protocol|session_transport_policy|simulation_cohort_options|simulation_diagnostics|simulation_snapshot|snapshot_source|std|transform.zig|vehicle_contract|vehicle_feature|vitals_contract|vitals_feature|zflecs) ;;
     *) fail "unclassified dependency entered the dedicated authority closure: $imported" ;;
   esac
 done

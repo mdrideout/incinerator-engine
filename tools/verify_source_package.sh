@@ -69,11 +69,17 @@ grep -Fxq 'src/session/local_link.zig' "$tmp/package-files"
 grep -Fxq 'src/session/local_solo.zig' "$tmp/package-files"
 grep -Fxq 'src/session/protocol.zig' "$tmp/package-files"
 grep -Fxq 'src/session/replicated_world.zig' "$tmp/package-files"
+grep -Fxq 'src/session/room_coordinator.zig' "$tmp/package-files"
+grep -Fxq 'src/session/room_ticket.zig' "$tmp/package-files"
 grep -Fxq 'src/session/snapshot_source.zig' "$tmp/package-files"
 grep -Fxq 'src/session/vehicle_prediction.zig' "$tmp/package-files"
 grep -Fxq 'src/adapters/transport/gns_direct.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/mp2_server.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/mp2_client.zig' "$tmp/package-files"
+grep -Fxq 'src/client_scene.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/mp6_server.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/mp6_listen_room.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/mp6_listen_client.zig' "$tmp/package-files"
 grep -Fxq 'tools/mp2_loopback.zig' "$tmp/package-files"
 grep -Fxq 'tools/mp3_acceptance.zig' "$tmp/package-files"
 grep -Fxq 'tools/mp4_acceptance.zig' "$tmp/package-files"
@@ -97,6 +103,8 @@ grep -Fxq 'src/features/npc/snapshot_validation.zig' "$tmp/package-files"
 grep -Fxq 'src/features/npc/root.zig' "$tmp/package-files"
 grep -Fxq 'src/features/population/contract.zig' "$tmp/package-files"
 reject_package_path 'src/features/population/root.zig'
+grep -Fxq 'src/features/vitals/contract.zig' "$tmp/package-files"
+grep -Fxq 'src/features/vitals/root.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/sandbox_navigation.zig' "$tmp/package-files"
 grep -Fxq 'src/features/district/root.zig' "$tmp/package-files"
 grep -Fxq 'src/features/interaction/contract.zig' "$tmp/package-files"
@@ -161,6 +169,13 @@ grep -Fxq 'tools/verify_headless_product.sh' "$tmp/package-files"
 grep -Fxq 'tools/verify_headless_cold_product.sh' "$tmp/package-files"
 grep -Fxq 'tools/verify_m3_headless_lifecycle.sh' "$tmp/package-files"
 grep -Fxq 'tools/verify_m5_architecture.sh' "$tmp/package-files"
+grep -Fxq 'tools/verify_m6_architecture.sh' "$tmp/package-files"
+grep -Fxq 'tools/verify_mp6_architecture.sh' "$tmp/package-files"
+grep -Fxq 'tools/verify_mp6_process.sh' "$tmp/package-files"
+grep -Fxq 'tools/verify_mp6_listen_process.sh' "$tmp/package-files"
+grep -Fxq 'tools/verify_s10_dedicated_process.sh' "$tmp/package-files"
+grep -Fxq 'tools/verify_s10_listen_process.sh' "$tmp/package-files"
+grep -Fxq 'tools/mp6_lifecycle_acceptance.zig' "$tmp/package-files"
 grep -Fxq 'tools/headless_boundary_test.zig' "$tmp/package-files"
 grep -Fxq 'tools/headless_linkage_test.zig' "$tmp/package-files"
 reject_package_pattern '^tools/s[0-3]_measure\.zig$'
@@ -233,6 +248,11 @@ grep -Fxq 'docs/design/s8-navigation-population.md' "$tmp/package-files"
 grep -Fxq 'docs/design/m3-pre-server-readiness.md' "$tmp/package-files"
 grep -Fxq 'docs/design/m5-client-authority-cohesion.md' "$tmp/package-files"
 grep -Fxq 'docs/design/post-m5-transactional-authority-cycle.md' "$tmp/package-files"
+grep -Fxq 'docs/design/mp6-playable-multiplayer-room-flow.md' "$tmp/package-files"
+grep -Fxq 'docs/design/s10-damage-death-respawn.md' "$tmp/package-files"
+grep -Fxq 'docs/validation/m6-transactional-authority-cycle.md' "$tmp/package-files"
+grep -Fxq 'docs/validation/mp6-playable-multiplayer-room-flow.md' "$tmp/package-files"
+grep -Fxq 'docs/validation/s10-damage-death-respawn.md' "$tmp/package-files"
 grep -Fxq 'docs/validation/s0-acceptance.md' "$tmp/package-files"
 grep -Fxq 'docs/validation/s1-acceptance.md' "$tmp/package-files"
 grep -Fxq 'docs/validation/s2-headless-acceptance.md' "$tmp/package-files"
@@ -260,12 +280,14 @@ test -n "$package_root"
   "$zig" build test-headless test-content test-content-cooker \
     test-district-content-catalog test-replay \
     test-navigation-contract test-sandbox-navigation \
-    test-npc-feature test-population-contract test-physics test-sandbox-value-contracts \
+    test-npc-feature test-population-contract test-vitals-feature test-physics \
+    test-sandbox-value-contracts \
     test-sandbox-authoring test-sandbox-interaction test-sandbox-save test-save-slots \
     test-sandbox-persistence test-simulation-snapshot test-session-contracts \
     test-s7-measure test-s8-measure test-m3-soak \
     test-external-producers test-headless-authority \
     check-replay check-s5-save check-s8-measure check-m3-soak verify-m5-architecture \
+    verify-m6-architecture verify-mp6-room-architecture \
     -Deditor=false \
     -Dglslc=/definitely/missing/glslc \
     -Dspirv-cross=/definitely/missing/spirv-cross \
@@ -277,4 +299,4 @@ test -n "$package_root"
   "$zig" build -Dproduct=headless test test-m3-lifecycle --summary all
 )
 
-echo "Filtered source package membership, M5 boundaries, and extracted execution verified."
+echo "Filtered source package membership, M5/M6/MP6 boundaries, and extracted execution verified."

@@ -1,26 +1,28 @@
 # Incinerator Engine Architecture Review
 
-**Status:** Living assessment; MP0-MP5, the M4 Apple Silicon macOS multiplayer
-foundation, and M5 client/authority cohesion are implemented and accepted
+**Status:** Living assessment; MP0-MP6, the M4 Apple Silicon macOS multiplayer
+foundation, M5 client/authority cohesion, M6 transactional authority, and S10
+authoritative damage/death/respawn are implemented and accepted
 
 **Last reviewed:** 2026-07-14
 
-**Scope:** Current post-M5 architecture, its demonstrated strengths, its
-structural weaknesses, and the transactional authority pressure point planned
-before further product expansion
+**Scope:** Current post-S10 architecture, its demonstrated strengths, and its
+remaining structural pressure before another product or service slice
 
 **Related roadmap:** [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md)
 
 **Multiplayer strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
-**Latest accepted foundation:**
-[`docs/validation/m5-client-authority-cohesion.md`](docs/validation/m5-client-authority-cohesion.md)
+**Latest accepted slice:**
+[`docs/validation/s10-damage-death-respawn.md`](docs/validation/s10-damage-death-respawn.md)
 
 **Accepted cohesion contract:**
 [`docs/design/m5-client-authority-cohesion.md`](docs/design/m5-client-authority-cohesion.md)
 
-**Recorded post-M5 pressure point:**
-[`docs/design/post-m5-transactional-authority-cycle.md`](docs/design/post-m5-transactional-authority-cycle.md)
+**Current phase sequence:**
+[`M6 accepted`](docs/validation/m6-transactional-authority-cycle.md)
+→ [`MP6 accepted`](docs/validation/mp6-playable-multiplayer-room-flow.md)
+→ [`S10 accepted`](docs/validation/s10-damage-death-respawn.md)
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 
@@ -75,11 +77,25 @@ independently paced from presentation, with 20 Hz replication. The complete
 owner boundary, regression matrix, documentation, and independent review are
 accepted in the M5 evidence record.
 
-The accepted M5 tree records real nested placement, authority, and runtime phase
-traces with an immutable first authority-cycle fault. It does not yet provide a
-single atomic ingress-to-publication transaction. Mailbox batching, prepared
-derivatives, atomic outbox publication, delivery leases, and a queued durable
-decision are an explicit post-M5 pressure point rather than a completion claim.
+The accepted M6 tree closes the post-M5 transactional pressure point with a
+class-reserved stable-prefix mailbox, eight explicit fail-stop stages,
+preflighted admission, double-buffered publication metadata, generational
+delivery leases, per-lane application receipts, bounded reconnect replay, and a
+stage-seven durable disposition. Physical network delivery and blocking storage
+remain separate owner state machines. The guarantee is atomic publication, not
+rollback of an already stepped Flecs/Jolt world.
+
+The accepted MP6 tree returns the program to player-visible product pressure.
+It presents the room/admission core through one generation-safe graphical
+coordinator and proves constrained localhost/LAN listen plus dedicated direct-IP
+play without Steam/NAT/public-service scope. S10 is the accepted gameplay
+slice that adds feature-owned vitals, server-derived damage, exactly-once death cleanup,
+and a stable participant possessing a generational disposable avatar. It
+closes that slice with a backend-neutral bounded vitals owner, authoritative
+Jolt-queried melee, typed death cleanup, dead reconnect, deterministic safe
+explicit respawn, protocol revision 10 lifecycle projection, and real graphical
+listen/dedicated process evidence. Health, death, and spawn placement remain
+server truth in every placement.
 
 ## Accepted Architectural Thesis
 
@@ -178,7 +194,7 @@ already accepted S0-S8/M3 evidence.
 | A-F002 | `Simulation` remains a broad private live-authority facade; canonical DTOs and the durable snapshot codec/preflight are extracted, while live composition, restore, replay capture, ticking, outcomes, diagnostics, and queries remain together where they share the world | P1 | Keep the authority surface narrow; split only responsibilities that gain an independent lifecycle or consumer | Mitigated and accepted for current scope; retain as a measured pressure point |
 | A-F003 | The Jolt adapter combines runtime/world, bodies, characters, vehicles, contacts, and debug extraction in one physical module | P2 | Before a multiplayer phase materially changes two or more physics concerns | Open |
 | A-F004 | Feature implementation roots still combine private components, systems, persistence/restore, extraction, diagnostics, and extensive tests; canonical public value/protocol contracts are now extracted | P2 | Split only roots materially changed by M5 or the next gameplay slice; do not perform unrelated file-only churn | Partially mitigated; open measured pressure point |
-| A-F005 | M5 makes placement, authority mutation, and nested runtime phase order executable with completion-aware traces and a retained first fault, but ingress admission, derivative preparation/publication, adapter delivery, and durable decision are not one atomic authority cycle; intra-phase feature order remains registration order | P1 | Post-M5 transactional authority-cycle plan; retain intra-phase scheduling as a separate measured pressure point | Partially mitigated; follow-up recorded |
+| A-F005 | M6 now provides class-reserved ingress, preflighted admission, eight-stage fail-stop execution, atomic derivative/metadata publication, leased adapter delivery, application receipts, reconnect replay, and staged durable decisions; intra-phase feature order remains registration order | P1 | Retain intra-phase scheduling as a separate measured pressure point; change only after profiling demonstrates a need | Transactional boundary resolved and accepted in M6; scheduling pressure retained |
 | A-F006 | The visual product had no client/authority separation or local-session seam; character input reached `Simulation` directly | P0 | MP1 | Resolved for the character slice: typed local session plus separate MP2 products |
 | A-F007 | Client replicated-state plus bounded character and owned-vehicle prediction/reconciliation exist without a second Flecs/Jolt world; remote vehicles remain interpolated | P1 | MP3 / MP4-A2 | Resolved and contract-tested through MP4-A2 |
 | A-F008 | Persistent/runtime and session/account/participant/connection/replicated/input/snapshot identities must remain distinct | P0 | MP0/MP2 | Resolved and contract-tested |
@@ -193,6 +209,10 @@ already accepted S0-S8/M3 evidence.
 | A-F017 | At M5 entry, embedded solo owned a separate `Simulation` dispatcher and sent only character gameplay through the local protocol; M5 uses the shared authority behavior and routes character, vehicle, and carry gameplay through admission | P0 | M5 local/remote semantic parity and final regression | Resolved and accepted in M5 |
 | A-F018 | Embedded solo advanced authority from the historical 120 Hz presentation accumulator while the accepted session authority was 60 Hz; its three-tick snapshot divisor therefore yielded 40 Hz rather than 20 Hz | P0 | M5 independent 60 Hz authority clock plus product-level cadence tests | Resolved: embedded authority is 60 Hz, replication is 20 Hz, and 80/240 Hz cadence contracts cover independent presentation |
 | A-F019 | The M4 static check scanned one graphical client file for direct import names rather than proving the complete client-facing source/API closure | P1 | M5 transitive source-boundary and negative API checks | Resolved by the accepted M5 transitive architecture gate |
+| A-F020 | The implemented MP5 registry models bounded room/admission state, but the graphical product has no single generation-safe create/join/connect/synchronize/reconnect coordinator and listen placement is not executable | P1 | MP6 playable room flow | Resolved and accepted in MP6: one sanitized generation-safe coordinator drives graphical listen and dedicated placements |
+| A-F021 | Participant lifecycle formerly assumed one active character identity and had no explicit stable-player/disposable-avatar incarnation contract for death and replacement | P1 | S10 damage/death/respawn | Resolved and accepted in S10: the participant survives death/reconnect while each physical avatar has a checked disposable incarnation |
+| A-F022 | No feature formerly owned generic player/NPC vitals, deterministic same-tick damage application, exactly-once death, or typed cross-feature death cleanup | P1 | S10 damage/death/respawn | Resolved and accepted in S10 through the backend-neutral bounded vitals feature and authority-coordinated typed cleanup |
+| A-F023 | `AuthorityCore` now contains substantial transaction, replication, room-facing session, and player-lifecycle coordination in one physical module even though those responsibilities retain explicit private contracts | P2 | Before a second combat producer or materially broader player lifecycle policy | Open measured pressure point; extract a cohesive owner only when the next slice creates an independent lifecycle or test seam, not as file-count churn |
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,
@@ -211,10 +231,12 @@ NPC decisions, physics, vehicle occupancy, carried-object ownership, district
 ownership, spawn/despawn, and durable saves remain server-owned. Lobby and
 party services discover or assemble a session; they do not own world state.
 
-Dedicated authority is canonical for public multiplayer. Listen hosting is an
-optional later private-friend placement with explicit host trust, performance,
-latency, availability, and shutdown limitations. P2P may describe how guests
-reach that listen authority; it never means shared authority or peer lockstep.
+Dedicated authority is canonical for public multiplayer. MP6 implements one
+accepted constrained localhost/LAN private listen proof with explicit host trust,
+performance, latency, availability, and shutdown limitations. Public Internet,
+Steam P2P/SDR, NAT/relay, and host migration remain later work. P2P may
+describe how guests reach that listen authority; it never means shared
+authority or peer lockstep.
 
 Authority placement (`embedded`, `listen`, `dedicated`), connection route
 (`local`, `direct_ip`, `steam_p2p`, `steam_sdr`), and identity provider remain
@@ -291,22 +313,36 @@ not as an unbounded file-reorganization phase.
 7. **MP5/M4 close the open multiplayer foundation — complete.** Open room
    admission, real-GNS placement, bounded relevance/deltas, and architecture
    evidence are accepted without proprietary service dependencies.
-8. **Harden the authority transaction — planned after M5.** Freeze bounded
-   ingress, separate admission from semantic work, prepare derivatives, publish
-   outputs atomically, lease delivery, and queue durable decisions as specified
-   in the
-   [`Post-M5 Transactional Authority Cycle`](docs/design/post-m5-transactional-authority-cycle.md).
-9. **Reassess scale and ECS access.** Use measured replicated populations and
+8. **M6 hardens the authority transaction — complete and accepted.** The
+   implementation freezes class-reserved bounded ingress, separates admission from semantic work,
+   prepare immutable derivatives, publish outputs atomically, lease delivery,
+   acknowledge reliable application per lane, and queue durable decisions as
+   specified in the
+   [`M6 Transactional Authority Cycle`](docs/design/post-m5-transactional-authority-cycle.md).
+9. **MP6 makes room flow playable — complete and accepted.** The
+   generation-safe client coordinator, graphical room lifecycle, constrained
+   localhost/LAN listen placement, dedicated direct-IP parity, real-GNS process
+   proofs, and deterministic lifecycle harness are accepted in
+   [`MP6 Playable Multiplayer Room Flow Acceptance`](docs/validation/mp6-playable-multiplayer-room-flow.md).
+10. **S10 adds damage/death/respawn — complete and accepted.** Backend-neutral
+    bounded vitals, authoritative melee, exactly-once death cleanup, dead
+    reconnect, and deterministic generational avatar respawn are accepted in
+    [`S10 Damage, Death, And Respawn Acceptance`](docs/validation/s10-damage-death-respawn.md).
+11. **Reassess scale and ECS access.** Use measured replicated populations and
    snapshot budgets before adding Flecs queries, access declarations, or
    parallel scheduling.
 
-## Architecture Definition of Done Through M5
+## Architecture Definition of Done Through S10
 
-M4 satisfies the remote multiplayer foundation. M5 satisfies the embedded-
-specific criteria below; the linked acceptance record contains the evidence.
+M4 satisfies the remote multiplayer foundation. M5 satisfies embedded
+cohesion. M6 satisfies the transactional authority boundary. MP6 satisfies the
+playable room and constrained listen/dedicated placement criteria. S10 proves
+that a player-visible combat/lifecycle feature can extend those boundaries
+without moving source of truth into the client; the linked acceptance records
+contain the evidence.
 
-- Embedded solo and dedicated placement share one authority model; listen-host
-  productization remains a future placement of that model.
+- Embedded solo, constrained listen, and dedicated placement share one authority
+  model; public Internet/Steam/NAT listen-host productization remains future work.
 - The visual client cannot mutate `Simulation`, Flecs, Jolt, or durable storage
   directly.
 - The authority product can run without SDL, GPU, renderer, editor, visual
@@ -320,9 +356,12 @@ specific criteria below; the linked acceptance record contains the evidence.
   types.
 - All remote ingress has bounded sequencing, ownership, quota, and outcome
   policy.
-- The placement and authority traces prove their actual nested owner order,
-  completed prefixes, and retained first fault without claiming one atomic
-  eight-stage transaction.
+- The placement and authority traces prove their actual nested owner order. The
+  authority trace covers all eight transactional stages, completed failure
+  prefixes, retained first fault, and absent publication after failure.
+- Adapter acceptance, client application receipt, reconnect replay, and durable
+  storage are explicit bounded owner state machines rather than hidden inside
+  simulation mutation.
 - Existing save, replay, diagnostics, package, and macOS readiness guarantees
   remain intact or are deliberately superseded by reviewed evidence.
 
@@ -355,6 +394,20 @@ These are comparison points, not frameworks Incinerator promises to reproduce:
 - [Jolt deterministic-simulation guidance](https://jrouwe.github.io/JoltPhysicsDocs/3.0.1/)
   motivates the exact-cohort replay nonclaims and server-snapshot approach
   rather than peer lockstep assumptions.
+- [GameNetworkingSockets API contracts](https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/include/steam/isteamnetworkingsockets.h)
+  distinguish transport queue acceptance from application observation and
+  guarantee reliable ordering only within one lane.
+- [Steam matchmaking and lobbies](https://partner.steamgames.com/doc/features/multiplayer/matchmaking?language=english)
+  provide a mature comparison for lobby assembly followed by a separate host
+  or game-server connection.
+- [Unreal Gameplay Framework](https://dev.epicgames.com/documentation/en-us/unreal-engine/gameplay-framework-in-unreal-engine)
+  is a comparison for persistent player/controller lifetime possessing a
+  replaceable physical avatar.
+- [Jolt narrow-phase queries](https://jrouwe.github.io/JoltPhysics/class_narrow_phase_query.html)
+  provide the accepted backend capability for authoritative melee and safe
+  spawn occupancy checks.
+- [Valve lag compensation](https://developer.valvesoftware.com/wiki/Lag_Compensation)
+  is a later bounded-rewind reference and is explicitly not part of S10.
 
 ## Review Cadence
 

@@ -361,6 +361,20 @@ fn collectCharacterRelocationHit(
     return 0;
 }
 
+fn collectCharacterPlacementHit(
+    raw: ?*anyopaque,
+    result: [*c]const c.JPH_CollideShapeResult,
+) callconv(.c) void {
+    const query: *CharacterRelocationQuery = @ptrCast(@alignCast(raw.?));
+    const hit = result[0];
+    if (hit.penetrationDepth <= query.max_penetration_depth or
+        c.JPH_BodyInterface_IsSensor(query.body_interface, hit.bodyID2))
+    {
+        return;
+    }
+    query.blocked = true;
+}
+
 /// Deterministic checkpoints for testing cleanup across Jolt's real ownership
 /// transitions. This stays private to the adapter: production callers cannot
 /// request a partially initialized world.
@@ -956,6 +970,88 @@ pub const Physics = struct {
         const state = try self.virtualCharacterState(character_id);
         committed = true;
         return state;
+    }
+
+    fn characterPlacementClear(
+        self: *Physics,
+        desc: engine.physics.CharacterDesc,
+        max_penetration_depth: f32,
+    ) !bool {
+        self.assertOwnerThread();
+        try desc.validate();
+        if (!std.math.isFinite(max_penetration_depth) or max_penetration_depth < 0) {
+            return error.InvalidCharacterPlacementTolerance;
+        }
+        const capsule = c.JPH_CapsuleShape_Create(desc.half_height, desc.radius) orelse
+            return error.CharacterShapeCreationFailed;
+        const shape: *c.JPH_Shape = @ptrCast(capsule);
+        defer c.JPH_Shape_Destroy(shape);
+        const transform = c.JPH_RMat4{ .column = .{
+            .{ .x = 1, .y = 0, .z = 0, .w = 0 },
+            .{ .x = 0, .y = 1, .z = 0, .w = 0 },
+            .{ .x = 0, .y = 0, .z = 1, .w = 0 },
+            .{
+                .x = desc.position[0],
+                .y = desc.position[1] + desc.half_height + desc.radius,
+                .z = desc.position[2],
+                .w = 1,
+            },
+        } };
+        var settings: c.JPH_CollideShapeSettings = undefined;
+        c.JPH_CollideShapeSettings_Init(&settings);
+        settings.maxSeparationDistance = 0;
+        var scale = toVec3(.{ 1, 1, 1 });
+        var base_offset = toRVec3(.{ 0, 0, 0 });
+        const narrow_phase = c.JPH_PhysicsSystem_GetNarrowPhaseQuery(self.system) orelse
+            return error.CharacterQueryInvariantBroken;
+        var query = CharacterRelocationQuery{
+            .body_interface = self.body_interface,
+            .max_penetration_depth = max_penetration_depth,
+        };
+        _ = c.JPH_NarrowPhaseQuery_CollideShape2(
+            narrow_phase,
+            shape,
+            &scale,
+            &transform,
+            &settings,
+            &base_offset,
+            c.JPH_CollisionCollectorType_AllHit,
+            collectCharacterPlacementHit,
+            &query,
+            null,
+            null,
+            null,
+            null,
+        );
+        return !query.blocked;
+    }
+
+    fn lineUnobstructed(self: *Physics, start: [3]f32, end: [3]f32) !bool {
+        self.assertOwnerThread();
+        for (start ++ end) |component| {
+            if (!std.math.isFinite(component)) return error.InvalidLineQuery;
+        }
+        var origin = toRVec3(start);
+        var direction = toVec3(.{
+            end[0] - start[0],
+            end[1] - start[1],
+            end[2] - start[2],
+        });
+        const narrow_phase = c.JPH_PhysicsSystem_GetNarrowPhaseQuery(self.system) orelse
+            return error.CharacterQueryInvariantBroken;
+        var hit = c.JPH_RayCastResult{
+            .bodyID = std.math.maxInt(c.JPH_BodyID),
+            .fraction = 1.0 + std.math.floatEps(f32),
+        };
+        return !c.JPH_NarrowPhaseQuery_CastRay(
+            narrow_phase,
+            &origin,
+            &direction,
+            &hit,
+            null,
+            null,
+            null,
+        );
     }
 
     fn vehicleRecord(
@@ -2626,6 +2722,22 @@ pub const CharacterControllers = struct {
     ) !?engine.physics.CharacterState {
         return self.physics.tryRelocateVirtualCharacter(character_id, relocation);
     }
+
+    pub fn placementClear(
+        self: *CharacterControllers,
+        desc: engine.physics.CharacterDesc,
+        max_penetration_depth: f32,
+    ) !bool {
+        return self.physics.characterPlacementClear(desc, max_penetration_depth);
+    }
+
+    pub fn lineUnobstructed(
+        self: *CharacterControllers,
+        start: [3]f32,
+        end: [3]f32,
+    ) !bool {
+        return self.physics.lineUnobstructed(start, end);
+    }
 };
 
 /// Compile-time capability consumed by the first four-wheel vehicle slice.
@@ -2919,6 +3031,24 @@ test "Jolt 5.5 falling body lifecycle" {
     try std.testing.expect(physics.removeBody(crate));
     try std.testing.expect(physics.removeBody(ground));
     try std.testing.expectEqual(@as(u32, 0), physics.getBodyCount());
+}
+
+test "character spawn capsule query accepts support and rejects blocking geometry" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 10, 1, 10 });
+    const blocker = try physics.createStaticBox(.{ 3, 1, 0 }, .{ 0.75, 1, 0.75 });
+    var controllers = physics.characterControllers();
+    try std.testing.expect(try controllers.placementClear(.{
+        .position = .{ 0, 0, 0 },
+    }, 0.05));
+    try std.testing.expect(!try controllers.placementClear(.{
+        .position = .{ 3, 0, 0 },
+    }, 0.05));
+    try std.testing.expect(try controllers.lineUnobstructed(.{ 0, 1, 0 }, .{ 0, 1, 3 }));
+    try std.testing.expect(!try controllers.lineUnobstructed(.{ 0, 1, 0 }, .{ 6, 1, 0 }));
+    try std.testing.expect(physics.removeBody(blocker));
+    try std.testing.expect(physics.removeBody(ground));
 }
 
 test "Jolt rigid matrix conversion covers identity and 180 degree branches" {

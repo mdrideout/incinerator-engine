@@ -14,6 +14,7 @@ const districts = @import("district_feature_contract");
 const district_contract = @import("district_contract");
 const interactions = @import("interaction_feature_contract");
 const npcs = @import("npc_contract");
+const vitals = @import("vitals_contract");
 const sandbox_district_recipe = @import("sandbox_district_recipe");
 const sandbox_navigation = @import("sandbox_navigation");
 const sandbox_replay = @import("sandbox_replay");
@@ -47,6 +48,7 @@ pub const SnapshotV7 = struct {
     districts: []const districts.DistrictV1,
     interactions: []const interactions.InteractionV1,
     npcs: []const npcs.NpcV1,
+    vitals: []const vitals.VitalsV1 = &.{},
 };
 
 pub const CharacterRestoreOptions = struct {
@@ -219,6 +221,7 @@ pub fn validate(
         &canonical_navigation,
         snapshot.npcs,
     );
+    try vitals.validateRecords(snapshot.vitals);
 
     for (snapshot.crates) |record| {
         try validateIdentity(record.id, snapshot);
@@ -234,6 +237,18 @@ pub fn validate(
                 return error.DuplicatePersistentId;
             }
         }
+    }
+    for (snapshot.vitals) |record| {
+        try validateIdentity(record.target.id, snapshot);
+        const present = switch (record.target.kind) {
+            .player => for (snapshot.characters) |character_record| {
+                if (std.meta.eql(character_record.id, record.target.id)) break true;
+            } else false,
+            .npc => for (snapshot.npcs) |npc_record| {
+                if (std.meta.eql(npc_record.id, record.target.id)) break true;
+            } else false,
+        };
+        if (!present) return error.VitalsTargetNotFound;
     }
     for (snapshot.vehicles, 0..) |record, index| {
         try validateIdentity(record.id, snapshot);
@@ -434,6 +449,7 @@ fn emptySnapshot() SnapshotV7 {
         .districts = &.{},
         .interactions = &.{},
         .npcs = &.{},
+        .vitals = &.{},
     };
 }
 

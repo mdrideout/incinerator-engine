@@ -363,6 +363,44 @@ fn formatCompletedAuthorityStagesAlloc(
                 @tagName(trace.stages[3]),
             },
         ),
+        5 => std.fmt.allocPrint(
+            allocator,
+            "{s},{s},{s},{s},{s}",
+            .{
+                @tagName(trace.stages[0]), @tagName(trace.stages[1]),
+                @tagName(trace.stages[2]), @tagName(trace.stages[3]),
+                @tagName(trace.stages[4]),
+            },
+        ),
+        6 => std.fmt.allocPrint(
+            allocator,
+            "{s},{s},{s},{s},{s},{s}",
+            .{
+                @tagName(trace.stages[0]), @tagName(trace.stages[1]),
+                @tagName(trace.stages[2]), @tagName(trace.stages[3]),
+                @tagName(trace.stages[4]), @tagName(trace.stages[5]),
+            },
+        ),
+        7 => std.fmt.allocPrint(
+            allocator,
+            "{s},{s},{s},{s},{s},{s},{s}",
+            .{
+                @tagName(trace.stages[0]), @tagName(trace.stages[1]),
+                @tagName(trace.stages[2]), @tagName(trace.stages[3]),
+                @tagName(trace.stages[4]), @tagName(trace.stages[5]),
+                @tagName(trace.stages[6]),
+            },
+        ),
+        8 => std.fmt.allocPrint(
+            allocator,
+            "{s},{s},{s},{s},{s},{s},{s},{s}",
+            .{
+                @tagName(trace.stages[0]), @tagName(trace.stages[1]),
+                @tagName(trace.stages[2]), @tagName(trace.stages[3]),
+                @tagName(trace.stages[4]), @tagName(trace.stages[5]),
+                @tagName(trace.stages[6]), @tagName(trace.stages[7]),
+            },
+        ),
         else => error.InvalidAuthorityCycleTrace,
     };
 }
@@ -381,7 +419,7 @@ fn formatAuthoritySessionAlloc(
         return std.fmt.allocPrint(
             allocator,
             "authority_tick={d} authority_cycle=target:{d} completed:{d}->{d} " ++
-                "stages:{d}/4[{s}] failed:{s} authority_fault={s}/{s} " ++
+                "stages:{d}/8[{s}] failed:{s} authority_fault={s}/{s} " ++
                 "fault_target={d} fault_completed={d} fault_code={d}",
             .{
                 session.tick,
@@ -402,7 +440,7 @@ fn formatAuthoritySessionAlloc(
     return std.fmt.allocPrint(
         allocator,
         "authority_tick={d} authority_cycle=target:{d} completed:{d}->{d} " ++
-            "stages:{d}/4[{s}] failed:{s} authority_fault=none",
+            "stages:{d}/8[{s}] failed:{s} authority_fault=none",
         .{
             session.tick,
             trace.target_tick,
@@ -802,12 +840,16 @@ test "authority-only cycle fault is truthful in text and JSON" {
         .completed_tick_before = 7,
         .completed_tick_after = 8,
         .stages = .{
-            .pre_simulation,
+            .ingress_freeze,
+            .admission,
+            .semantic_work,
             .simulation,
-            .outcome_drain,
-            .pre_simulation,
+            .ingress_freeze,
+            .ingress_freeze,
+            .ingress_freeze,
+            .ingress_freeze,
         },
-        .count = 2,
+        .count = 4,
         .failed_stage = .outcome_drain,
     };
     session.first_cycle_fault = .{
@@ -849,7 +891,7 @@ test "authority-only cycle fault is truthful in text and JSON" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         text_value,
-        "stages:2/4[pre_simulation,simulation] failed:outcome_drain",
+        "stages:4/8[ingress_freeze,admission,semantic_work,simulation] failed:outcome_drain",
     ) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,
@@ -873,7 +915,7 @@ test "authority-only cycle fault is truthful in text and JSON" {
     const authority = parsed.value.object.get("snapshot").?.object
         .get("authority_session").?.object;
     try std.testing.expectEqual(
-        @as(i64, 2),
+        @as(i64, 4),
         authority.get("last_cycle").?.object.get("count").?.integer,
     );
     try std.testing.expectEqualStrings(

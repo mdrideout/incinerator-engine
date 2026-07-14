@@ -4,7 +4,8 @@
 
 **Last reviewed:** 2026-07-14
 
-**Status:** Accepted through the M5 full-readiness refresh
+**Status:** Accepted through the M5 full-readiness refresh; MP6 and S10 add
+separate native graphical room and gameplay-lifecycle acceptance
 
 ## Scope
 
@@ -14,7 +15,11 @@ refresh. MP0-MP5/M4 are accepted separately in
 [`m4-multiplayer-foundation.md`](m4-multiplayer-foundation.md); the current M5
 ownership and clock result is accepted in
 [`m5-client-authority-cohesion.md`](m5-client-authority-cohesion.md). Detailed
-scenario counts explicitly labeled historical below remain baseline evidence,
+MP6 listen/dedicated graphical and real-GNS evidence is recorded separately in
+[`mp6-playable-multiplayer-room-flow.md`](mp6-playable-multiplayer-room-flow.md).
+S10's two-client graphical damage/death/respawn evidence is recorded in
+[`s10-damage-death-respawn.md`](s10-damage-death-respawn.md).
+Scenario counts explicitly labeled historical below remain baseline evidence,
 not current clock claims. Apple Silicon macOS with Metal is the sole current
 platform target. Linux/SteamOS and Windows are future/deferred and impose no
 build, shader, headless, runtime, packaging, CI, or compatibility gates.

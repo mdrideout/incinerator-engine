@@ -5,11 +5,18 @@ and an accepted Apple Silicon macOS multiplayer foundation. MP0-MP5/M4 prove a
 server-authoritative direct-IP session with characters, vehicles, carry
 interaction, district relevance, NPCs, prediction, reconnect, bounded delta
 replication, and open room admission. M5 client/authority cohesion is accepted:
-solo is a cohesive placement of the same client/authority model. The intended
+solo is a cohesive placement of the same client/authority model. M6 is also
+accepted: authority ingress, mutation, durable disposition, and derivative
+publication now follow one bounded fail-stop atomic-publication cycle. MP6 is
+accepted as well: graphical clients now use one generation-safe room lifecycle
+across constrained private listen and dedicated direct-IP placements. The S10
+damage/death/respawn slice is accepted: players and NPCs share bounded
+authoritative vitals, clients request server-validated melee, death tears down
+the disposable physical avatar while retaining the participant, and explicit
+safe respawn creates a new avatar incarnation. The intended
 experience supports solo play as a local placement of the same authority model
 used by optional private listen/invite and canonical public dedicated sessions.
-The selected first
-network transport is the open-source GameNetworkingSockets flat C API over
+The selected network transport is the open-source GameNetworkingSockets flat C API over
 direct IP; Steam networking remains an optional non-vendored integration. It
 uses Zig, SDL3, Jolt Physics, Flecs, and ImGui.
 
@@ -21,11 +28,12 @@ file formats may change without compatibility shims. See
 [`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md) for the living architectural
 assessment, [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md) for the completed
 MP0-MP5/M4 foundation and accepted M5 cohesion gate, and
-[`CLEANUP_PLAN.md`](CLEANUP_PLAN.md) for the completed
-post-M3 consolidation record. The deeper transactional authority-cycle pressure
-point is separately planned in
-[`docs/design/post-m5-transactional-authority-cycle.md`](docs/design/post-m5-transactional-authority-cycle.md);
-it is not a current M5 guarantee.
+[`CLEANUP_PLAN.md`](CLEANUP_PLAN.md) for the completed post-M3 consolidation
+record. M6 transactional authority hardening, MP6 playable room flow, and S10
+damage/death/respawn are complete and accepted:
+[`M6 (accepted)`](docs/validation/m6-transactional-authority-cycle.md) →
+[`MP6 (accepted)`](docs/validation/mp6-playable-multiplayer-room-flow.md) →
+[`S10 (accepted)`](docs/validation/s10-damage-death-respawn.md).
 
 ## Toolchain Cohort
 
@@ -149,6 +157,16 @@ zig build verify-m4 -j1 --summary all
 # matrix are linked below.
 zig build verify-m5 -j1 --summary all
 
+# Run the accepted M6 transactional-authority gate, then the complete playable
+# MP6 room gate (listen, dedicated, fault lifecycle, architecture, and inherited
+# regressions).
+zig build verify-m6 -j1 --summary all
+zig build verify-mp6-room -j1 --summary failures
+
+# Run the accepted authoritative damage/death/respawn slice. This starts two
+# real graphical clients in both listen and dedicated placements.
+zig build verify-s10 -Deditor=false -j1 --summary failures
+
 # Verify that the filtered Zig source package retains the M5 architecture gate
 # and can compile/run its headless, persistence, snapshot, and session closure.
 zig build verify-source-package -Deditor=false --summary all
@@ -160,7 +178,8 @@ zig build install-mp2
 ./zig-out/bin/incinerator_mp2_client --connect 127.0.0.1:27020 --account 1
 ./zig-out/bin/incinerator_mp2_client --connect 127.0.0.1:27020 --account 2
 
-# Client controls: WASD move, Space jump, E enter/exit, F collect/drop, Escape quit. While
+# Client controls: WASD move, Space jump, E enter/exit, F collect/drop,
+# Q melee, R request respawn after death, Escape quit. While
 # driving, W/S are throttle/reverse, A/D steer, Space brakes, and Left Shift is
 # the hand brake. P toggles vehicle prediction for live A/B comparison. F8
 # manufactures a transport loss and reconnect while playing. Recoverable
@@ -168,6 +187,22 @@ zig build install-mp2
 # terminate cleanly without reconnecting.
 # The authority binds loopback by default. `--allow-remote` is only for trusted
 # LAN/development testing because MP2 AccountId values are not authenticated.
+
+# Manual MP6 listen-room test. The host writes a permission-restricted guest
+# ticket and prints its path; launch the graphical guest with that exact path.
+zig build install-mp6
+./zig-out/bin/incinerator_mp6_listen --port 27020 --ticket /tmp/incinerator-guest.room
+./zig-out/bin/incinerator_mp2_client --ticket /tmp/incinerator-guest.room
+
+# Manual MP6 dedicated-room test. The server writes one signed ticket per
+# configured account; launch one graphical client for each printed ticket path.
+./zig-out/bin/incinerator_mp6_server --port 27020 --ticket-dir /tmp/incinerator-room
+./zig-out/bin/incinerator_mp2_client --ticket /tmp/incinerator-room/account-1.room
+./zig-out/bin/incinerator_mp2_client --ticket /tmp/incinerator-room/account-2.room
+
+# MP6 controls add C to cancel the active room operation and L to leave/close;
+# Q performs authoritative melee, R requests respawn after death, and F8 still
+# manufactures guest transport loss and bounded reconnect.
 
 # Compile or explicitly install the separate visual-validation host. Normal
 # `zig build` does not install validation; validation lives in libexec.
@@ -456,7 +491,12 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`M4 Multiplayer Foundation Gate`](docs/validation/m4-multiplayer-foundation.md)
 - [`M5 Client/Authority Cohesion Contract`](docs/design/m5-client-authority-cohesion.md)
 - [`M5 Acceptance Record`](docs/validation/m5-client-authority-cohesion.md)
-- [`Post-M5 Transactional Authority Cycle Plan`](docs/design/post-m5-transactional-authority-cycle.md)
+- [`M6 Transactional Authority Cycle`](docs/design/post-m5-transactional-authority-cycle.md)
+- [`M6 Acceptance Record`](docs/validation/m6-transactional-authority-cycle.md)
+- [`MP6 Playable Multiplayer Room Flow`](docs/design/mp6-playable-multiplayer-room-flow.md)
+- [`MP6 Acceptance Record`](docs/validation/mp6-playable-multiplayer-room-flow.md)
+- [`S10 Damage, Death, and Respawn`](docs/design/s10-damage-death-respawn.md)
+- [`S10 Acceptance Record`](docs/validation/s10-damage-death-respawn.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 
@@ -534,8 +574,20 @@ presentation, explicit streaming/persistence owners, and one opaque heap-stable
 developer owner. The complete aggregate regression and independent acceptance
 review are recorded in the M5 acceptance document.
 M5 records separate completion-aware placement and authority traces plus the
-nested runtime phase observer. It does not claim atomic ingress-to-publication;
-that is the separate post-M5 transactional authority-cycle plan linked above.
+nested runtime phase observer. M6 completes the next boundary with
+class-reserved ingress, an eight-stage fail-stop cycle, double-buffered
+publication metadata, delivery leases and application receipts, bounded
+reconnect replay, and stage-seven durable dispositions. Physical transport and
+blocking storage remain outside the fixed tick, and M6 does not claim rollback
+of an already stepped Jolt world.
+MP6 composes that authority through one generation-safe room coordinator in a
+constrained listen owner and a ticketed dedicated owner. The host uses the
+typed local link, guests use real GNS, graphical presentation remains
+client-owned, and room closure deliberately provides no host migration.
+S10 adds a backend-neutral bounded vitals feature plus authority-owned melee,
+death cleanup, dead reconnect, safe explicit respawn, and disposable avatar
+incarnation. The same protocol semantics are playable in local/listen and
+dedicated placements; health and hit confirmation are never client authority.
 The former `GameWorld`, borrowed Flecs/Jolt composition, direct ECS render
 query, and editor mutation path have been removed. The editor keeps stats,
 camera, render, diagnostics, profiling, physics-debug, and crate-authoring

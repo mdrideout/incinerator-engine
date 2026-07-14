@@ -11,7 +11,7 @@ const ClientQueue = engine.BoundedQueue(
     budgets.inbound_message_capacity,
 );
 const ServerQueue = engine.BoundedQueue(
-    protocol.ServerMessage,
+    protocol.DeliveredServerMessage,
     budgets.outbound_message_capacity,
 );
 
@@ -51,12 +51,15 @@ pub const Link = struct {
         return self.client_to_authority.pop();
     }
 
-    pub fn sendFromAuthority(self: *Link, message: protocol.ServerMessage) !void {
-        protocol.validateServer(message) catch |err| {
+    pub fn sendFromAuthority(
+        self: *Link,
+        delivered: protocol.DeliveredServerMessage,
+    ) !void {
+        protocol.validateServer(delivered.message) catch |err| {
             self.rejected_server_messages +|= 1;
             return err;
         };
-        self.authority_to_client.push(message) catch {
+        self.authority_to_client.push(delivered) catch {
             self.rejected_server_messages +|= 1;
             return error.LocalServerQueueFull;
         };
@@ -66,7 +69,7 @@ pub const Link = struct {
         );
     }
 
-    pub fn receiveForClient(self: *Link) ?protocol.ServerMessage {
+    pub fn receiveForClient(self: *Link) ?protocol.DeliveredServerMessage {
         return self.authority_to_client.pop();
     }
 
@@ -86,8 +89,8 @@ test "local link is typed bounded FIFO in both directions" {
     var link = Link{};
     try link.sendFromClient(.{ .hello = .{ .account = .{ .value = 7 } } });
     try std.testing.expect(link.receiveForAuthority().? == .hello);
-    try link.sendFromAuthority(.{ .rejected = .{ .reason = .unauthorized } });
-    try std.testing.expect(link.receiveForClient().? == .rejected);
+    try link.sendFromAuthority(.{ .message = .{ .rejected = .{ .reason = .unauthorized } } });
+    try std.testing.expect(link.receiveForClient().?.message == .rejected);
     const diagnostics = link.diagnostics();
     try std.testing.expectEqual(@as(u32, 1), diagnostics.client_to_authority_high_water);
     try std.testing.expectEqual(@as(u32, 1), diagnostics.authority_to_client_high_water);
@@ -101,7 +104,7 @@ test "local link rejects server messages outside the shared semantic contract" {
 
     try std.testing.expectError(
         error.InvalidNpcProjection,
-        link.sendFromAuthority(.{ .snapshot = invalid }),
+        link.sendFromAuthority(.{ .message = .{ .snapshot = invalid } }),
     );
     try std.testing.expect(link.receiveForClient() == null);
     const diagnostics = link.diagnostics();
@@ -136,7 +139,7 @@ test "local link rejects duplicate replicated identities without enqueueing" {
     var link = Link{};
     try std.testing.expectError(
         error.DuplicateActiveProjectionEntity,
-        link.sendFromAuthority(.{ .snapshot = invalid }),
+        link.sendFromAuthority(.{ .message = .{ .snapshot = invalid } }),
     );
     try std.testing.expect(link.receiveForClient() == null);
     const diagnostics = link.diagnostics();
@@ -150,7 +153,7 @@ test "local link rejects impossible snapshot and action semantics before enqueue
     var invalid_snapshot = protocol.Snapshot.empty();
     try std.testing.expectError(
         error.InvalidSnapshotSequence,
-        link.sendFromAuthority(.{ .snapshot = invalid_snapshot }),
+        link.sendFromAuthority(.{ .message = .{ .snapshot = invalid_snapshot } }),
     );
     invalid_snapshot.sequence.value = 1;
     invalid_snapshot.vehicle_count = 1;
@@ -164,16 +167,16 @@ test "local link rejects impossible snapshot and action semantics before enqueue
     };
     try std.testing.expectError(
         error.DegenerateQuaternion,
-        link.sendFromAuthority(.{ .snapshot = invalid_snapshot }),
+        link.sendFromAuthority(.{ .message = .{ .snapshot = invalid_snapshot } }),
     );
     try std.testing.expectError(
         error.InvalidVehicleActionResultDisposition,
-        link.sendFromAuthority(.{ .vehicle_action_result = .{
+        link.sendFromAuthority(.{ .message = .{ .vehicle_action_result = .{
             .sequence = .{ .value = 1 },
             .vehicle = .{ .index = 17, .generation = 1 },
             .action = .enter,
             .disposition = .exited,
-        } }),
+        } } }),
     );
 
     try std.testing.expect(link.receiveForClient() == null);

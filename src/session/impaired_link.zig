@@ -147,7 +147,10 @@ fn ScheduledQueue(comptime Message: type, comptime capacity: usize) type {
 }
 
 const ClientQueue = ScheduledQueue(protocol.ClientMessage, budgets.inbound_message_capacity);
-const ServerQueue = ScheduledQueue(protocol.ServerMessage, budgets.outbound_message_capacity);
+const ServerQueue = ScheduledQueue(
+    protocol.DeliveredServerMessage,
+    budgets.outbound_message_capacity,
+);
 
 pub const Link = struct {
     config: Config,
@@ -199,15 +202,21 @@ pub const Link = struct {
         );
     }
 
-    pub fn sendFromAuthority(self: *Link, message: protocol.ServerMessage) !void {
+    pub fn sendFromAuthority(
+        self: *Link,
+        delivered: protocol.DeliveredServerMessage,
+    ) !void {
         var storage: [budgets.max_wire_message_bytes]u8 = undefined;
-        const size: u32 = @intCast((try protocol.encodeServer(message, &storage)).len);
-        const class = transport.serverClass(message);
+        const size: u32 = @intCast((try protocol.encodeDeliveredServer(
+            delivered,
+            &storage,
+        )).len);
+        const class = transport.serverClass(delivered.message);
         try self.schedule(
-            protocol.ServerMessage,
+            protocol.DeliveredServerMessage,
             self.server_queue,
             &self.server_diagnostics,
-            message,
+            delivered,
             size,
             class,
             1,
@@ -227,9 +236,9 @@ pub const Link = struct {
         );
     }
 
-    pub fn receiveForClient(self: *Link) ?protocol.ServerMessage {
+    pub fn receiveForClient(self: *Link) ?protocol.DeliveredServerMessage {
         return self.receive(
-            protocol.ServerMessage,
+            protocol.DeliveredServerMessage,
             self.server_queue,
             &self.server_diagnostics,
             self.config.downstream_bytes_per_tick,

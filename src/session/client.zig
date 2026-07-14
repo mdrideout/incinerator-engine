@@ -27,11 +27,19 @@ pub const Diagnostics = struct {
     interaction_action_results_late: u64,
     interaction_action_results_stale: u64,
     interaction_action_correlations_evicted: u64,
+    melee_actions_accepted: u64,
+    melee_actions_rejected: u64,
+    respawns_accepted: u64,
+    respawns_rejected: u64,
+    life_events: u64,
     baselines_applied: u64,
     delta_snapshots_applied: u64,
     full_snapshots_applied: u64,
     delta_base_misses: u64,
     active_baseline_id: u32,
+    last_control_delivery: u64,
+    last_gameplay_delivery: u64,
+    duplicate_reliable_deliveries: u64,
     last_server_tick: u64,
     last_acknowledged_input: identity.InputSequence,
     disconnect_reason: ?protocol.DisconnectReason,
@@ -116,6 +124,23 @@ pub const Client = struct {
     interaction_action_results_late: u64 = 0,
     interaction_action_results_stale: u64 = 0,
     interaction_action_correlations_evicted: u64 = 0,
+    next_melee_action: identity.ActionSequence = .{ .value = 1 },
+    pending_melee_action: ?protocol.MeleeAction = null,
+    retired_melee_action: ?protocol.MeleeAction = null,
+    melee_action_results: ResultQueue(protocol.MeleeActionResult) = .{},
+    melee_actions_accepted: u64 = 0,
+    melee_actions_rejected: u64 = 0,
+    next_respawn_action: identity.ActionSequence = .{ .value = 1 },
+    pending_respawn_action: ?protocol.RespawnAction = null,
+    retired_respawn_action: ?protocol.RespawnAction = null,
+    respawn_action_results: ResultQueue(protocol.RespawnActionResult) = .{},
+    respawns_accepted: u64 = 0,
+    respawns_rejected: u64 = 0,
+    life_event_results: ResultQueue(protocol.LifeEvent) = .{},
+    life_events: u64 = 0,
+    avatar_incarnation: u16 = 0,
+    avatar_entity: identity.ReplicatedEntityId = .invalid,
+    avatar_life_state: ?protocol.AvatarLifeState = null,
     baselines_applied: u64 = 0,
     active_baseline_id: u32 = 0,
     pending_baseline_ack: ?u32 = null,
@@ -127,6 +152,11 @@ pub const Client = struct {
     delta_base_misses: u64 = 0,
     relevant_district_count: u8 = 0,
     relevant_districts: [protocol.max_relevant_districts]protocol.DistrictCoord = @splat(.{}),
+    last_control_delivery: u64 = 0,
+    last_gameplay_delivery: u64 = 0,
+    pending_control_receipt: ?u64 = null,
+    pending_gameplay_receipt: ?u64 = null,
+    duplicate_reliable_deliveries: u64 = 0,
 
     pub fn init(account: identity.AccountId) !Client {
         try account.validate();
@@ -183,6 +213,13 @@ pub const Client = struct {
                 self.participant = welcome.participant;
                 self.connection = welcome.connection;
                 self.reconnect = welcome.reconnect;
+                self.avatar_entity = welcome.avatar;
+                self.avatar_incarnation = welcome.avatar_incarnation;
+                self.avatar_life_state = welcome.life_state;
+                if (welcome.life_state == .dead) {
+                    self.prediction.clearOwnership();
+                    self.vehicle_prediction.clearOwnership();
+                }
                 self.disconnect_reason = null;
                 self.state = .joined;
             },
@@ -215,6 +252,21 @@ pub const Client = struct {
             },
             .vehicle_action_result => |result| try self.receiveVehicleActionResult(result),
             .interaction_action_result => |result| try self.receiveInteractionActionResult(result),
+            .melee_action_result => |result| try self.receiveMeleeActionResult(result),
+            .respawn_action_result => |result| try self.receiveRespawnActionResult(result),
+            .life_event => |event| {
+                try self.life_event_results.push(event);
+                self.life_events +|= 1;
+                if (self.ownsReplicatedAvatar(event.avatar)) {
+                    self.avatar_entity = event.avatar;
+                    self.avatar_incarnation = event.incarnation;
+                    self.avatar_life_state = event.state;
+                    if (event.state == .dead) {
+                        self.prediction.clearOwnership();
+                        self.vehicle_prediction.clearOwnership();
+                    }
+                }
+            },
             .rejected => {
                 self.rejections +|= 1;
                 self.state = .rejected;
@@ -224,8 +276,15 @@ pub const Client = struct {
                 self.retired_vehicle_action = null;
                 self.pending_interaction_action = null;
                 self.retired_interaction_action = null;
+                self.pending_melee_action = null;
+                self.retired_melee_action = null;
+                self.pending_respawn_action = null;
+                self.retired_respawn_action = null;
                 self.vehicle_action_results.clear();
                 self.interaction_action_results.clear();
+                self.melee_action_results.clear();
+                self.respawn_action_results.clear();
+                self.life_event_results.clear();
                 self.pending_baseline_ack = null;
                 self.pending_snapshot_ack = null;
             },
@@ -242,6 +301,10 @@ pub const Client = struct {
                     self.retired_vehicle_action = null;
                     self.pending_interaction_action = null;
                     self.retired_interaction_action = null;
+                    self.pending_melee_action = null;
+                    self.retired_melee_action = null;
+                    self.pending_respawn_action = null;
+                    self.retired_respawn_action = null;
                     self.prediction.clearOwnership();
                     self.vehicle_prediction.clearOwnership();
                 } else {
@@ -251,6 +314,44 @@ pub const Client = struct {
                 }
             },
         }
+    }
+
+    pub fn receiveDelivered(
+        self: *Client,
+        delivered: protocol.DeliveredServerMessage,
+    ) !void {
+        if (delivered.delivery_id == 0) {
+            try self.receive(delivered.message);
+            return;
+        }
+        const lane: protocol.ReliableLane = switch (delivered.message) {
+            .welcome, .relevance_baseline => .control,
+            .vehicle_action_result,
+            .interaction_action_result,
+            .melee_action_result,
+            .respawn_action_result,
+            .life_event,
+            => .gameplay,
+            .snapshot => return error.UnexpectedReliableSnapshot,
+            .rejected, .disconnected => return error.UnexpectedReceiptedTerminalMessage,
+        };
+        const last = switch (lane) {
+            .control => &self.last_control_delivery,
+            .gameplay => &self.last_gameplay_delivery,
+        };
+        const pending = switch (lane) {
+            .control => &self.pending_control_receipt,
+            .gameplay => &self.pending_gameplay_receipt,
+        };
+        if (delivered.delivery_id <= last.*) {
+            self.duplicate_reliable_deliveries +|= 1;
+            pending.* = last.*;
+            return;
+        }
+        if (delivered.delivery_id != last.* +| 1) return error.ReliableDeliveryGap;
+        try self.receive(delivered.message);
+        last.* = delivered.delivery_id;
+        pending.* = delivered.delivery_id;
     }
 
     fn receiveVehicleActionResult(
@@ -335,6 +436,47 @@ pub const Client = struct {
         return error.UnexpectedInteractionActionResult;
     }
 
+    fn receiveMeleeActionResult(self: *Client, result: protocol.MeleeActionResult) !void {
+        if (self.pending_melee_action) |pending| {
+            if (pending.sequence.value == result.sequence.value) {
+                try self.melee_action_results.push(result);
+                self.pending_melee_action = null;
+                if (result.disposition == .hit) self.melee_actions_accepted +|= 1 else self.melee_actions_rejected +|= 1;
+                return;
+            }
+        }
+        if (self.retired_melee_action) |retired| {
+            if (retired.sequence.value == result.sequence.value) {
+                self.retired_melee_action = null;
+                return;
+            }
+        }
+        return error.UnexpectedMeleeActionResult;
+    }
+
+    fn receiveRespawnActionResult(self: *Client, result: protocol.RespawnActionResult) !void {
+        if (self.pending_respawn_action) |pending| {
+            if (pending.sequence.value == result.sequence.value) {
+                try self.respawn_action_results.push(result);
+                self.pending_respawn_action = null;
+                self.avatar_incarnation = result.incarnation;
+                if (result.disposition == .respawned) {
+                    self.avatar_entity = result.avatar;
+                    self.avatar_life_state = .alive;
+                }
+                if (result.disposition == .respawned) self.respawns_accepted +|= 1 else self.respawns_rejected +|= 1;
+                return;
+            }
+        }
+        if (self.retired_respawn_action) |retired| {
+            if (retired.sequence.value == result.sequence.value) {
+                self.retired_respawn_action = null;
+                return;
+            }
+        }
+        return error.UnexpectedRespawnActionResult;
+    }
+
     fn retirePendingActions(self: *Client) void {
         if (self.pending_vehicle_action) |pending| {
             if (self.retired_vehicle_action != null) {
@@ -349,6 +491,14 @@ pub const Client = struct {
             }
             self.retired_interaction_action = pending;
             self.pending_interaction_action = null;
+        }
+        if (self.pending_melee_action) |pending| {
+            self.retired_melee_action = pending;
+            self.pending_melee_action = null;
+        }
+        if (self.pending_respawn_action) |pending| {
+            self.retired_respawn_action = pending;
+            self.pending_respawn_action = null;
         }
     }
 
@@ -497,6 +647,60 @@ pub const Client = struct {
         return self.interaction_action_results.pop();
     }
 
+    pub fn meleeAction(self: *Client, target_tick: u64) !protocol.ClientMessage {
+        if (self.state != .joined) return error.ClientNotJoined;
+        if (self.pending_melee_action != null) return error.MeleeActionPending;
+        if (!self.melee_action_results.hasCapacity()) return error.MeleeActionResultsPending;
+        if (self.avatar_life_state != .alive) return error.AvatarDead;
+        const character = self.ownedCharacter() orelse return error.AvatarUnavailable;
+        if (character.life_state != .alive) return error.AvatarDead;
+        const action = protocol.MeleeAction{
+            .session = self.session,
+            .participant = self.participant,
+            .sequence = self.next_melee_action,
+            .avatar_incarnation = character.incarnation,
+            .target_tick = target_tick,
+        };
+        const message = protocol.ClientMessage{ .melee_action = action };
+        try protocol.validateClient(message);
+        self.next_melee_action = self.next_melee_action.next();
+        self.pending_melee_action = action;
+        self.avatar_incarnation = character.incarnation;
+        return message;
+    }
+
+    pub fn respawnAction(self: *Client) !protocol.ClientMessage {
+        if (self.state != .joined) return error.ClientNotJoined;
+        if (self.pending_respawn_action != null) return error.RespawnActionPending;
+        if (!self.respawn_action_results.hasCapacity()) return error.RespawnResultsPending;
+        const life_state = self.avatar_life_state orelse return error.AvatarLifecycleUnavailable;
+        if (life_state == .alive) return error.AvatarAlive;
+        if (self.avatar_incarnation == 0) return error.AvatarLifecycleUnavailable;
+        const action = protocol.RespawnAction{
+            .session = self.session,
+            .participant = self.participant,
+            .sequence = self.next_respawn_action,
+            .dead_incarnation = self.avatar_incarnation,
+        };
+        const message = protocol.ClientMessage{ .respawn_action = action };
+        try protocol.validateClient(message);
+        self.next_respawn_action = self.next_respawn_action.next();
+        self.pending_respawn_action = action;
+        return message;
+    }
+
+    pub fn takeMeleeActionResult(self: *Client) ?protocol.MeleeActionResult {
+        return self.melee_action_results.pop();
+    }
+
+    pub fn takeRespawnActionResult(self: *Client) ?protocol.RespawnActionResult {
+        return self.respawn_action_results.pop();
+    }
+
+    pub fn takeLifeEvent(self: *Client) ?protocol.LifeEvent {
+        return self.life_event_results.pop();
+    }
+
     pub fn takeBaselineAck(self: *Client) ?protocol.ClientMessage {
         const baseline_id = self.pending_baseline_ack orelse return null;
         self.pending_baseline_ack = null;
@@ -518,6 +722,23 @@ pub const Client = struct {
         } };
     }
 
+    pub fn takeDeliveryReceipt(self: *Client) ?protocol.ClientMessage {
+        const lane: protocol.ReliableLane, const delivery_id: u64 = if (self.pending_control_receipt) |value| .{ .control, value } else if (self.pending_gameplay_receipt) |value|
+            .{ .gameplay, value }
+        else
+            return null;
+        switch (lane) {
+            .control => self.pending_control_receipt = null,
+            .gameplay => self.pending_gameplay_receipt = null,
+        }
+        return .{ .delivery_receipt = .{
+            .session = self.session,
+            .participant = self.participant,
+            .lane = lane,
+            .delivery_id = delivery_id,
+        } };
+    }
+
     /// A transport loss preserves the reconnect credential and replicated
     /// presentation, but invalidates connection-scoped identity. Calling
     /// `begin` on the next transport will therefore request a reconnect.
@@ -531,6 +752,8 @@ pub const Client = struct {
         self.vehicle_prediction.transportDisconnected();
         self.retirePendingActions();
         self.pending_snapshot_ack = null;
+        self.pending_control_receipt = null;
+        self.pending_gameplay_receipt = null;
     }
 
     pub fn localPresentation(self: *const Client) ?protocol.CharacterState {
@@ -578,11 +801,19 @@ pub const Client = struct {
             .interaction_action_results_late = self.interaction_action_results_late,
             .interaction_action_results_stale = self.interaction_action_results_stale,
             .interaction_action_correlations_evicted = self.interaction_action_correlations_evicted,
+            .melee_actions_accepted = self.melee_actions_accepted,
+            .melee_actions_rejected = self.melee_actions_rejected,
+            .respawns_accepted = self.respawns_accepted,
+            .respawns_rejected = self.respawns_rejected,
+            .life_events = self.life_events,
             .baselines_applied = self.baselines_applied,
             .delta_snapshots_applied = self.delta_snapshots_applied,
             .full_snapshots_applied = self.full_snapshots_applied,
             .delta_base_misses = self.delta_base_misses,
             .active_baseline_id = self.active_baseline_id,
+            .last_control_delivery = self.last_control_delivery,
+            .last_gameplay_delivery = self.last_gameplay_delivery,
+            .duplicate_reliable_deliveries = self.duplicate_reliable_deliveries,
             .last_server_tick = self.world.server_tick,
             .last_acknowledged_input = self.last_acknowledged_input,
             .disconnect_reason = self.disconnect_reason,
@@ -598,6 +829,15 @@ pub const Client = struct {
         return null;
     }
 
+    fn ownsReplicatedAvatar(
+        self: *const Client,
+        entity: identity.ReplicatedEntityId,
+    ) bool {
+        if (std.meta.eql(entity, self.avatar_entity)) return true;
+        const character = self.ownedCharacter() orelse return false;
+        return std.meta.eql(character.entity, entity);
+    }
+
     fn applySnapshot(
         self: *Client,
         snapshot: protocol.Snapshot,
@@ -609,6 +849,15 @@ pub const Client = struct {
         };
         self.last_acknowledged_input = snapshot.acknowledged_input;
         self.snapshots_applied +|= 1;
+        if (self.ownedCharacter()) |character| {
+            self.avatar_incarnation = character.incarnation;
+            self.avatar_entity = character.entity;
+            self.avatar_life_state = character.life_state;
+            if (character.life_state == .dead) {
+                self.prediction.clearOwnership();
+                self.vehicle_prediction.clearOwnership();
+            }
+        }
         if (self.ownedVehicle()) |vehicle| {
             self.prediction.clearOwnership();
             self.vehicle_prediction.reconcile(
@@ -700,6 +949,9 @@ fn joinedTestClient(account_value: u64) !Client {
         .connection = .{ .index = 1, .generation = 1 },
         .reconnect = .{ .high = 1, .low = 2 },
         .authority_tick = 0,
+        .avatar = .{ .index = 1, .generation = 1 },
+        .avatar_incarnation = 1,
+        .life_state = .alive,
     } });
     return client;
 }
@@ -716,6 +968,9 @@ fn reconnectTestClient(client: *Client, connection_generation: u16) !void {
             .low = @as(u64, connection_generation) + 100,
         },
         .authority_tick = client.world.server_tick,
+        .avatar = client.avatar_entity,
+        .avatar_incarnation = client.avatar_incarnation,
+        .life_state = .alive,
     } });
 }
 
@@ -752,10 +1007,52 @@ test "client owns admission identity and sequenced input" {
         .connection = .{ .index = 1, .generation = 1 },
         .reconnect = .{ .high = 1, .low = 2 },
         .authority_tick = 0,
+        .avatar = .{ .index = 1, .generation = 1 },
+        .avatar_incarnation = 1,
+        .life_state = .alive,
     } });
     const first = (try client.input(1, .{ 0, 1 }, 0, false)).input;
     const second = (try client.input(2, .{ 0, 1 }, 0, false)).input;
     try std.testing.expect(second.sequence.newerThan(first.sequence));
+}
+
+test "reliable application delivery is cumulative and duplicate replay is idempotent" {
+    var client = try Client.init(.{ .value = 9 });
+    _ = try client.begin();
+    const delivered = protocol.DeliveredServerMessage{
+        .delivery_id = 1,
+        .message = .{ .welcome = .{
+            .session = .{ .value = 1 },
+            .participant = .{ .index = 1, .generation = 1 },
+            .connection = .{ .index = 1, .generation = 1 },
+            .reconnect = .{ .high = 1, .low = 2 },
+            .authority_tick = 0,
+            .avatar = .{ .index = 1, .generation = 1 },
+            .avatar_incarnation = 1,
+            .life_state = .alive,
+        } },
+    };
+    try client.receiveDelivered(delivered);
+    const receipt = (client.takeDeliveryReceipt() orelse
+        return error.MissingDeliveryReceipt).delivery_receipt;
+    try std.testing.expectEqual(protocol.ReliableLane.control, receipt.lane);
+    try std.testing.expectEqual(@as(u64, 1), receipt.delivery_id);
+
+    try client.receiveDelivered(delivered);
+    try std.testing.expectEqual(State.joined, client.state);
+    try std.testing.expectEqual(@as(u64, 1), client.duplicate_reliable_deliveries);
+    try std.testing.expectEqual(
+        @as(u64, 1),
+        (client.takeDeliveryReceipt() orelse
+            return error.MissingDuplicateDeliveryReceipt).delivery_receipt.delivery_id,
+    );
+    try std.testing.expectError(
+        error.ReliableDeliveryGap,
+        client.receiveDelivered(.{
+            .delivery_id = 3,
+            .message = delivered.message,
+        }),
+    );
 }
 
 test "transport loss preserves the credential required for reconnect" {
@@ -767,10 +1064,45 @@ test "transport loss preserves the credential required for reconnect" {
         .connection = .{ .index = 1, .generation = 1 },
         .reconnect = .{ .high = 1, .low = 2 },
         .authority_tick = 0,
+        .avatar = .{ .index = 1, .generation = 1 },
+        .avatar_incarnation = 1,
+        .life_state = .alive,
     } });
     client.transportDisconnected();
     const hello = (try client.begin()).hello;
     try std.testing.expect(hello.reconnect.isValid());
+}
+
+test "dead reconnect welcome overrides a retained alive projection for respawn admission" {
+    var client = try joinedTestClient(19);
+    var snapshot = protocol.Snapshot.empty();
+    snapshot.sequence.value = 1;
+    snapshot.character_count = 1;
+    snapshot.characters[0] = .{
+        .entity = client.avatar_entity,
+        .owner = client.participant,
+        .position = .{ 0, 0, 0 },
+        .velocity = .{ 0, 0, 0 },
+        .facing_yaw = 0,
+    };
+    try client.receive(.{ .snapshot = snapshot });
+    try std.testing.expect(client.ownedCharacter() != null);
+
+    client.transportDisconnected();
+    _ = try client.begin();
+    try client.receive(.{ .welcome = .{
+        .session = client.session,
+        .participant = client.participant,
+        .connection = .{ .index = 1, .generation = 2 },
+        .reconnect = .{ .high = 3, .low = 4 },
+        .authority_tick = 2,
+        .avatar = client.avatar_entity,
+        .avatar_incarnation = client.avatar_incarnation,
+        .life_state = .dead,
+    } });
+
+    const request = (try client.respawnAction()).respawn_action;
+    try std.testing.expectEqual(client.avatar_incarnation, request.dead_incarnation);
 }
 
 test "reordered unreliable snapshots are dropped without failing the client" {
@@ -782,6 +1114,9 @@ test "reordered unreliable snapshots are dropped without failing the client" {
         .connection = .{ .index = 1, .generation = 1 },
         .reconnect = .{ .high = 1, .low = 2 },
         .authority_tick = 0,
+        .avatar = .{ .index = 1, .generation = 1 },
+        .avatar_incarnation = 1,
+        .life_state = .alive,
     } });
     var newer = protocol.Snapshot.empty();
     newer.sequence.value = 2;
@@ -803,6 +1138,9 @@ test "off-lane delta advances common state without replacing NPC interpolation e
         .connection = .{ .index = 1, .generation = 1 },
         .reconnect = .{ .high = 1, .low = 2 },
         .authority_tick = 0,
+        .avatar = .{ .index = 1, .generation = 1 },
+        .avatar_incarnation = 1,
+        .life_state = .alive,
     } });
 
     var baseline_snapshot = protocol.Snapshot.empty();
@@ -886,6 +1224,9 @@ test "vehicle control follows snapshot ownership and reliable action correlation
         .connection = .{ .index = 1, .generation = 1 },
         .reconnect = .{ .high = 1, .low = 2 },
         .authority_tick = 0,
+        .avatar = .{ .index = 1, .generation = 1 },
+        .avatar_incarnation = 1,
+        .life_state = .alive,
     } });
     var snapshot = protocol.Snapshot.empty();
     snapshot.sequence.value = 1;
@@ -945,6 +1286,9 @@ test "carry interaction follows snapshot ownership and reliable action correlati
         .connection = .{ .index = 1, .generation = 1 },
         .reconnect = .{ .high = 1, .low = 2 },
         .authority_tick = 0,
+        .avatar = .{ .index = 1, .generation = 1 },
+        .avatar_incarnation = 1,
+        .life_state = .alive,
     } });
     var snapshot = protocol.Snapshot.empty();
     snapshot.sequence.value = 1;

@@ -60,7 +60,7 @@ pub fn main(init: std.process.Init) !void {
         };
         if (connection.isValid()) {
             while (try network.receive(connection, &receive_storage)) |received| {
-                const message = try protocol.decodeServer(received.bytes);
+                const message = (try protocol.decodeDeliveredServer(received.bytes)).message;
                 if (!transport_policy.matches(
                     transport_policy.serverClass(message),
                     fromGnsDelivery(received.delivery),

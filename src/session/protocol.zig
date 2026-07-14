@@ -120,6 +120,21 @@ pub const InteractionAction = struct {
     kind: InteractionActionKind,
 };
 
+pub const MeleeAction = struct {
+    session: identity.SessionId,
+    participant: identity.ParticipantId,
+    sequence: identity.ActionSequence,
+    avatar_incarnation: u16,
+    target_tick: u64,
+};
+
+pub const RespawnAction = struct {
+    session: identity.SessionId,
+    participant: identity.ParticipantId,
+    sequence: identity.ActionSequence,
+    dead_incarnation: u16,
+};
+
 pub const BaselineAck = struct {
     session: identity.SessionId,
     participant: identity.ParticipantId,
@@ -133,14 +148,29 @@ pub const SnapshotAck = struct {
     sequence: identity.SnapshotSequence,
 };
 
+pub const ReliableLane = enum(u8) {
+    gameplay = 2,
+    control = 3,
+};
+
+pub const DeliveryReceipt = struct {
+    session: identity.SessionId,
+    participant: identity.ParticipantId,
+    lane: ReliableLane,
+    delivery_id: u64,
+};
+
 pub const ClientMessage = union(enum) {
     hello: Hello,
     input: InputFrame,
     vehicle_input: VehicleInputFrame,
     vehicle_action: VehicleAction,
     interaction_action: InteractionAction,
+    melee_action: MeleeAction,
+    respawn_action: RespawnAction,
     baseline_ack: BaselineAck,
     snapshot_ack: SnapshotAck,
+    delivery_receipt: DeliveryReceipt,
     disconnect: DisconnectReason,
 };
 
@@ -150,6 +180,9 @@ pub const Welcome = struct {
     connection: identity.ConnectionId,
     reconnect: identity.ReconnectToken,
     authority_tick: u64,
+    avatar: identity.ReplicatedEntityId,
+    avatar_incarnation: u16,
+    life_state: AvatarLifeState,
 };
 
 pub const CharacterState = struct {
@@ -158,6 +191,10 @@ pub const CharacterState = struct {
     position: [3]f32,
     velocity: [3]f32,
     facing_yaw: f32,
+    incarnation: u16 = 1,
+    health: u16 = 100,
+    maximum_health: u16 = 100,
+    life_state: AvatarLifeState = .alive,
 };
 
 pub const VehicleState = struct {
@@ -184,12 +221,21 @@ pub const NpcPresentationState = enum(u8) {
     waiting_at_boundary = 2,
 };
 
+pub const AvatarLifeState = enum(u8) {
+    alive = 1,
+    dead = 2,
+};
+
 pub const NpcState = struct {
     entity: identity.ReplicatedEntityId,
     position: [3]f32,
     velocity: [3]f32,
     facing_yaw: f32,
     state: NpcPresentationState,
+    incarnation: u16 = 1,
+    health: u16 = 100,
+    maximum_health: u16 = 100,
+    life_state: AvatarLifeState = .alive,
 };
 
 pub const SnapshotKind = enum(u8) {
@@ -321,6 +367,51 @@ pub const InteractionActionResult = struct {
     disposition: InteractionActionDisposition,
 };
 
+pub const MeleeActionDisposition = enum(u8) {
+    hit = 1,
+    miss = 2,
+    cooldown = 3,
+    dead = 4,
+    wrong_incarnation = 5,
+    invalid_state = 6,
+};
+
+pub const MeleeActionResult = struct {
+    sequence: identity.ActionSequence,
+    disposition: MeleeActionDisposition,
+    target: identity.ReplicatedEntityId = .invalid,
+    target_incarnation: u16 = 0,
+    applied_damage: u16 = 0,
+    remaining_health: u16 = 0,
+    killed: bool = false,
+};
+
+pub const RespawnActionDisposition = enum(u8) {
+    respawned = 1,
+    alive = 2,
+    cooldown = 3,
+    cleanup_pending = 4,
+    no_safe_spawn = 5,
+    wrong_incarnation = 6,
+    invalid_state = 7,
+};
+
+pub const RespawnActionResult = struct {
+    sequence: identity.ActionSequence,
+    disposition: RespawnActionDisposition,
+    avatar: identity.ReplicatedEntityId = .invalid,
+    incarnation: u16,
+};
+
+pub const LifeEvent = struct {
+    avatar: identity.ReplicatedEntityId,
+    incarnation: u16,
+    health: u16,
+    maximum_health: u16,
+    state: AvatarLifeState,
+    instigator: ?identity.ParticipantId = null,
+};
+
 pub const Rejection = struct {
     reason: RejectionReason,
     detail_code: u16 = 0,
@@ -332,8 +423,18 @@ pub const ServerMessage = union(enum) {
     relevance_baseline: RelevanceBaseline,
     vehicle_action_result: VehicleActionResult,
     interaction_action_result: InteractionActionResult,
+    melee_action_result: MeleeActionResult,
+    respawn_action_result: RespawnActionResult,
+    life_event: LifeEvent,
     rejected: Rejection,
     disconnected: DisconnectReason,
+};
+
+/// Wire/link envelope for the application-observation commit point. Delivery
+/// ID zero denotes an unreliable or non-replayable semantic message.
+pub const DeliveredServerMessage = struct {
+    delivery_id: u64 = 0,
+    message: ServerMessage,
 };
 
 const Direction = enum(u8) { client = 1, server = 2 };
@@ -346,6 +447,9 @@ const ClientKind = enum(u8) {
     interaction_action = 6,
     baseline_ack = 7,
     snapshot_ack = 8,
+    delivery_receipt = 9,
+    melee_action = 10,
+    respawn_action = 11,
 };
 const ServerKind = enum(u8) {
     welcome = 1,
@@ -355,6 +459,9 @@ const ServerKind = enum(u8) {
     disconnected = 5,
     interaction_action_result = 6,
     relevance_baseline = 7,
+    melee_action_result = 8,
+    respawn_action_result = 9,
+    life_event = 10,
 };
 
 pub fn encodeClient(message: ClientMessage, storage: []u8) ![]const u8 {
@@ -366,8 +473,11 @@ pub fn encodeClient(message: ClientMessage, storage: []u8) ![]const u8 {
         .vehicle_input => @intFromEnum(ClientKind.vehicle_input),
         .vehicle_action => @intFromEnum(ClientKind.vehicle_action),
         .interaction_action => @intFromEnum(ClientKind.interaction_action),
+        .melee_action => @intFromEnum(ClientKind.melee_action),
+        .respawn_action => @intFromEnum(ClientKind.respawn_action),
         .baseline_ack => @intFromEnum(ClientKind.baseline_ack),
         .snapshot_ack => @intFromEnum(ClientKind.snapshot_ack),
+        .delivery_receipt => @intFromEnum(ClientKind.delivery_receipt),
         .disconnect => @intFromEnum(ClientKind.disconnect),
     });
     switch (message) {
@@ -393,6 +503,19 @@ pub fn encodeClient(message: ClientMessage, storage: []u8) ![]const u8 {
         .vehicle_input => |value| try encodeVehicleInput(&encoder, value),
         .vehicle_action => |value| try encodeVehicleAction(&encoder, value),
         .interaction_action => |value| try encodeInteractionAction(&encoder, value),
+        .melee_action => |value| {
+            try encoder.u64Value(value.session.value);
+            try encodeParticipant(&encoder, value.participant);
+            try encoder.u32Value(value.sequence.value);
+            try encoder.u16Value(value.avatar_incarnation);
+            try encoder.u64Value(value.target_tick);
+        },
+        .respawn_action => |value| {
+            try encoder.u64Value(value.session.value);
+            try encodeParticipant(&encoder, value.participant);
+            try encoder.u32Value(value.sequence.value);
+            try encoder.u16Value(value.dead_incarnation);
+        },
         .baseline_ack => |value| {
             try encoder.u64Value(value.session.value);
             try encodeParticipant(&encoder, value.participant);
@@ -403,6 +526,12 @@ pub fn encodeClient(message: ClientMessage, storage: []u8) ![]const u8 {
             try encodeParticipant(&encoder, value.participant);
             try encoder.u32Value(value.baseline_id);
             try encoder.u32Value(value.sequence.value);
+        },
+        .delivery_receipt => |value| {
+            try encoder.u64Value(value.session.value);
+            try encodeParticipant(&encoder, value.participant);
+            try encoder.u8Value(@intFromEnum(value.lane));
+            try encoder.u64Value(value.delivery_id);
         },
         .disconnect => |reason| try encoder.u8Value(@intFromEnum(reason)),
     }
@@ -421,6 +550,19 @@ pub fn decodeClient(bytes: []const u8) !ClientMessage {
         .interaction_action => .{
             .interaction_action = try decodeInteractionAction(&decoder),
         },
+        .melee_action => .{ .melee_action = .{
+            .session = .{ .value = try decoder.u64Value() },
+            .participant = try decodeParticipant(&decoder),
+            .sequence = .{ .value = try decoder.u32Value() },
+            .avatar_incarnation = try decoder.u16Value(),
+            .target_tick = try decoder.u64Value(),
+        } },
+        .respawn_action => .{ .respawn_action = .{
+            .session = .{ .value = try decoder.u64Value() },
+            .participant = try decodeParticipant(&decoder),
+            .sequence = .{ .value = try decoder.u32Value() },
+            .dead_incarnation = try decoder.u16Value(),
+        } },
         .baseline_ack => .{ .baseline_ack = .{
             .session = .{ .value = try decoder.u64Value() },
             .participant = try decodeParticipant(&decoder),
@@ -431,6 +573,15 @@ pub fn decodeClient(bytes: []const u8) !ClientMessage {
             .participant = try decodeParticipant(&decoder),
             .baseline_id = try decoder.u32Value(),
             .sequence = .{ .value = try decoder.u32Value() },
+        } },
+        .delivery_receipt => .{ .delivery_receipt = .{
+            .session = .{ .value = try decoder.u64Value() },
+            .participant = try decodeParticipant(&decoder),
+            .lane = enumFromInt(
+                ReliableLane,
+                try decoder.u8Value(),
+            ) catch return error.InvalidEnum,
+            .delivery_id = try decoder.u64Value(),
         } },
         .disconnect => .{ .disconnect = enumFromInt(
             DisconnectReason,
@@ -451,6 +602,9 @@ pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
         .relevance_baseline => @intFromEnum(ServerKind.relevance_baseline),
         .vehicle_action_result => @intFromEnum(ServerKind.vehicle_action_result),
         .interaction_action_result => @intFromEnum(ServerKind.interaction_action_result),
+        .melee_action_result => @intFromEnum(ServerKind.melee_action_result),
+        .respawn_action_result => @intFromEnum(ServerKind.respawn_action_result),
+        .life_event => @intFromEnum(ServerKind.life_event),
         .rejected => @intFromEnum(ServerKind.rejected),
         .disconnected => @intFromEnum(ServerKind.disconnected),
     });
@@ -462,6 +616,9 @@ pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
             try encoder.u64Value(value.reconnect.high);
             try encoder.u64Value(value.reconnect.low);
             try encoder.u64Value(value.authority_tick);
+            try encodeReplicatedEntity(&encoder, value.avatar);
+            try encoder.u16Value(value.avatar_incarnation);
+            try encoder.u8Value(@intFromEnum(value.life_state));
         },
         .snapshot => |value| try encodeSnapshot(&encoder, value),
         .relevance_baseline => |value| {
@@ -484,6 +641,30 @@ pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
             try encodeReplicatedEntity(&encoder, value.carryable);
             try encoder.u8Value(@intFromEnum(value.action));
             try encoder.u8Value(@intFromEnum(value.disposition));
+        },
+        .melee_action_result => |value| {
+            try encoder.u32Value(value.sequence.value);
+            try encoder.u8Value(@intFromEnum(value.disposition));
+            try encodeReplicatedEntity(&encoder, value.target);
+            try encoder.u16Value(value.target_incarnation);
+            try encoder.u16Value(value.applied_damage);
+            try encoder.u16Value(value.remaining_health);
+            try encoder.u8Value(@intFromBool(value.killed));
+        },
+        .respawn_action_result => |value| {
+            try encoder.u32Value(value.sequence.value);
+            try encoder.u8Value(@intFromEnum(value.disposition));
+            try encodeReplicatedEntity(&encoder, value.avatar);
+            try encoder.u16Value(value.incarnation);
+        },
+        .life_event => |value| {
+            try encodeReplicatedEntity(&encoder, value.avatar);
+            try encoder.u16Value(value.incarnation);
+            try encoder.u16Value(value.health);
+            try encoder.u16Value(value.maximum_health);
+            try encoder.u8Value(@intFromEnum(value.state));
+            try encoder.u8Value(@intFromBool(value.instigator != null));
+            if (value.instigator) |instigator| try encodeParticipant(&encoder, instigator);
         },
         .rejected => |value| {
             try encoder.u8Value(@intFromEnum(value.reason));
@@ -515,6 +696,9 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
                 .low = try decoder.u64Value(),
             },
             .authority_tick = try decoder.u64Value(),
+            .avatar = try decodeReplicatedEntity(&decoder),
+            .avatar_incarnation = try decoder.u16Value(),
+            .life_state = try enumFromInt(AvatarLifeState, try decoder.u8Value()),
         } },
         .snapshot => .{ .snapshot = try decodeSnapshot(&decoder) },
         .relevance_baseline => blk: {
@@ -565,6 +749,46 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
                 try decoder.u8Value(),
             ) catch return error.InvalidEnum,
         } },
+        .melee_action_result => .{ .melee_action_result = .{
+            .sequence = .{ .value = try decoder.u32Value() },
+            .disposition = enumFromInt(
+                MeleeActionDisposition,
+                try decoder.u8Value(),
+            ) catch return error.InvalidEnum,
+            .target = try decodeReplicatedEntity(&decoder),
+            .target_incarnation = try decoder.u16Value(),
+            .applied_damage = try decoder.u16Value(),
+            .remaining_health = try decoder.u16Value(),
+            .killed = switch (try decoder.u8Value()) {
+                0 => false,
+                1 => true,
+                else => return error.InvalidBoolean,
+            },
+        } },
+        .respawn_action_result => .{ .respawn_action_result = .{
+            .sequence = .{ .value = try decoder.u32Value() },
+            .disposition = enumFromInt(
+                RespawnActionDisposition,
+                try decoder.u8Value(),
+            ) catch return error.InvalidEnum,
+            .avatar = try decodeReplicatedEntity(&decoder),
+            .incarnation = try decoder.u16Value(),
+        } },
+        .life_event => .{ .life_event = .{
+            .avatar = try decodeReplicatedEntity(&decoder),
+            .incarnation = try decoder.u16Value(),
+            .health = try decoder.u16Value(),
+            .maximum_health = try decoder.u16Value(),
+            .state = enumFromInt(
+                AvatarLifeState,
+                try decoder.u8Value(),
+            ) catch return error.InvalidEnum,
+            .instigator = switch (try decoder.u8Value()) {
+                0 => null,
+                1 => try decodeParticipant(&decoder),
+                else => return error.InvalidBoolean,
+            },
+        } },
         .rejected => .{ .rejected = .{
             .reason = enumFromInt(
                 RejectionReason,
@@ -580,6 +804,24 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
     try decoder.finish();
     try validateServer(message);
     return message;
+}
+
+pub fn encodeDeliveredServer(
+    delivered: DeliveredServerMessage,
+    storage: []u8,
+) ![]const u8 {
+    if (storage.len < 8) return error.MessageTooLarge;
+    std.mem.writeInt(u64, storage[0..8], delivered.delivery_id, .little);
+    const message = try encodeServer(delivered.message, storage[8..]);
+    return storage[0 .. 8 + message.len];
+}
+
+pub fn decodeDeliveredServer(bytes: []const u8) !DeliveredServerMessage {
+    if (bytes.len < 8) return error.TruncatedMessage;
+    return .{
+        .delivery_id = std.mem.readInt(u64, bytes[0..8], .little),
+        .message = try decodeServer(bytes[8..]),
+    };
 }
 
 pub fn validateClient(message: ClientMessage) !void {
@@ -649,6 +891,20 @@ pub fn validateClient(message: ClientMessage) !void {
             try value.sequence.validate();
             try value.carryable.validate();
         },
+        .melee_action => |value| {
+            try value.session.validate();
+            try value.participant.validate();
+            try value.sequence.validate();
+            if (value.avatar_incarnation == 0 or value.target_tick == 0) {
+                return error.InvalidMeleeAction;
+            }
+        },
+        .respawn_action => |value| {
+            try value.session.validate();
+            try value.participant.validate();
+            try value.sequence.validate();
+            if (value.dead_incarnation == 0) return error.InvalidRespawnAction;
+        },
         .baseline_ack => |value| {
             try value.session.validate();
             try value.participant.validate();
@@ -660,6 +916,11 @@ pub fn validateClient(message: ClientMessage) !void {
             if (value.baseline_id == 0 or value.sequence.value == 0) {
                 return error.InvalidSnapshotAck;
             }
+        },
+        .delivery_receipt => |value| {
+            try value.session.validate();
+            try value.participant.validate();
+            if (value.delivery_id == 0) return error.InvalidDeliveryReceipt;
         },
         .disconnect => {},
     }
@@ -675,6 +936,12 @@ pub fn validateServer(message: ServerMessage) !void {
             try value.participant.validate();
             try value.connection.validate();
             if (!value.reconnect.isValid()) return error.InvalidReconnectToken;
+            try value.avatar.validate();
+            if (value.avatar_incarnation == 0 or
+                value.avatar.generation != value.avatar_incarnation)
+            {
+                return error.InvalidWelcomeAvatar;
+            }
         },
         .snapshot => |value| try validateSnapshot(value),
         .relevance_baseline => |value| {
@@ -700,6 +967,41 @@ pub fn validateServer(message: ServerMessage) !void {
             try value.sequence.validate();
             try value.carryable.validate();
             try validateInteractionActionResult(value);
+        },
+        .melee_action_result => |value| {
+            try value.sequence.validate();
+            const hit = value.disposition == .hit;
+            if (hit) {
+                try value.target.validate();
+                if (value.target_incarnation == 0 or value.applied_damage == 0) {
+                    return error.InvalidMeleeActionResult;
+                }
+            } else if (value.target.isValid() or value.target_incarnation != 0 or
+                value.applied_damage != 0 or value.remaining_health != 0 or value.killed)
+            {
+                return error.InvalidMeleeActionResult;
+            }
+        },
+        .respawn_action_result => |value| {
+            try value.sequence.validate();
+            if (value.incarnation == 0) return error.InvalidRespawnActionResult;
+            if (value.disposition == .respawned) {
+                try value.avatar.validate();
+            } else if (value.avatar.isValid()) return error.InvalidRespawnActionResult;
+        },
+        .life_event => |value| {
+            try value.avatar.validate();
+            if (value.incarnation == 0 or value.maximum_health == 0 or
+                value.health > value.maximum_health)
+            {
+                return error.InvalidLifeEvent;
+            }
+            if ((value.state == .alive and value.health == 0) or
+                (value.state == .dead and value.health != 0))
+            {
+                return error.InvalidLifeEvent;
+            }
+            if (value.instigator) |instigator| try instigator.validate();
         },
         .rejected, .disconnected => {},
     }
@@ -870,6 +1172,13 @@ fn validateSnapshot(value: Snapshot) !void {
         try validateFiniteComponents(&character.position);
         try validateFiniteComponents(&character.velocity);
         if (!std.math.isFinite(character.facing_yaw)) return error.NonFiniteProjection;
+        try validateVitalsProjection(
+            character.entity,
+            character.incarnation,
+            character.health,
+            character.maximum_health,
+            character.life_state,
+        );
     }
     for (value.vehicleSlice()) |vehicle| {
         try vehicle.entity.validate();
@@ -896,6 +1205,13 @@ fn validateSnapshot(value: Snapshot) !void {
         try validateFiniteComponents(&npc.position);
         try validateFiniteComponents(&npc.velocity);
         if (!std.math.isFinite(npc.facing_yaw)) return error.NonFiniteProjection;
+        try validateVitalsProjection(
+            npc.entity,
+            npc.incarnation,
+            npc.health,
+            npc.maximum_health,
+            npc.life_state,
+        );
     }
     for (value.removed_characters[0..value.removed_character_count]) |entity| {
         try entity.validate();
@@ -910,6 +1226,21 @@ fn validateSnapshot(value: Snapshot) !void {
         try entity.validate();
     }
     try validateProjectionIdentities(value);
+}
+
+fn validateVitalsProjection(
+    entity: identity.ReplicatedEntityId,
+    incarnation: u16,
+    health: u16,
+    maximum_health: u16,
+    life_state: AvatarLifeState,
+) !void {
+    _ = entity;
+    if (incarnation == 0 or maximum_health == 0 or health > maximum_health) {
+        return error.InvalidVitalsProjection;
+    }
+    if ((life_state == .alive and health == 0) or
+        (life_state == .dead and health != 0)) return error.InvalidVitalsProjection;
 }
 
 fn validateFiniteComponents(values: []const f32) !void {
@@ -1463,6 +1794,10 @@ fn encodeCharacter(encoder: *Encoder, value: CharacterState) !void {
     for (value.position) |component| try encoder.f32Value(component);
     for (value.velocity) |component| try encoder.f32Value(component);
     try encoder.f32Value(value.facing_yaw);
+    try encoder.u16Value(value.incarnation);
+    try encoder.u16Value(value.health);
+    try encoder.u16Value(value.maximum_health);
+    try encoder.u8Value(@intFromEnum(value.life_state));
 }
 
 fn decodeCharacter(decoder: *Decoder) !CharacterState {
@@ -1475,10 +1810,21 @@ fn decodeCharacter(decoder: *Decoder) !CharacterState {
         .position = undefined,
         .velocity = undefined,
         .facing_yaw = 0,
+        .incarnation = 0,
+        .health = 0,
+        .maximum_health = 0,
+        .life_state = undefined,
     };
     for (&value.position) |*component| component.* = try decoder.f32Value();
     for (&value.velocity) |*component| component.* = try decoder.f32Value();
     value.facing_yaw = try decoder.f32Value();
+    value.incarnation = try decoder.u16Value();
+    value.health = try decoder.u16Value();
+    value.maximum_health = try decoder.u16Value();
+    value.life_state = enumFromInt(
+        AvatarLifeState,
+        try decoder.u8Value(),
+    ) catch return error.InvalidEnum;
     return value;
 }
 
@@ -1553,6 +1899,10 @@ fn encodeNpc(encoder: *Encoder, value: NpcState) !void {
     for (value.velocity) |component| try encoder.f32Value(component);
     try encoder.f32Value(value.facing_yaw);
     try encoder.u8Value(@intFromEnum(value.state));
+    try encoder.u16Value(value.incarnation);
+    try encoder.u16Value(value.health);
+    try encoder.u16Value(value.maximum_health);
+    try encoder.u8Value(@intFromEnum(value.life_state));
 }
 
 fn decodeNpc(decoder: *Decoder) !NpcState {
@@ -1562,12 +1912,23 @@ fn decodeNpc(decoder: *Decoder) !NpcState {
         .velocity = undefined,
         .facing_yaw = undefined,
         .state = undefined,
+        .incarnation = 0,
+        .health = 0,
+        .maximum_health = 0,
+        .life_state = undefined,
     };
     for (&value.position) |*component| component.* = try decoder.f32Value();
     for (&value.velocity) |*component| component.* = try decoder.f32Value();
     value.facing_yaw = try decoder.f32Value();
     value.state = enumFromInt(
         NpcPresentationState,
+        try decoder.u8Value(),
+    ) catch return error.InvalidEnum;
+    value.incarnation = try decoder.u16Value();
+    value.health = try decoder.u16Value();
+    value.maximum_health = try decoder.u16Value();
+    value.life_state = enumFromInt(
+        AvatarLifeState,
         try decoder.u8Value(),
     ) catch return error.InvalidEnum;
     return value;
@@ -1871,6 +2232,19 @@ test "client action semantic validation reserves sequence zero" {
             .carryable = .{ .index = 21, .generation = 1 },
             .kind = .collect,
         } },
+        .{ .melee_action = .{
+            .session = .{ .value = 9 },
+            .participant = .{ .index = 2, .generation = 3 },
+            .sequence = .{ .value = 0 },
+            .avatar_incarnation = 3,
+            .target_tick = 42,
+        } },
+        .{ .respawn_action = .{
+            .session = .{ .value = 9 },
+            .participant = .{ .index = 2, .generation = 3 },
+            .sequence = .{ .value = 0 },
+            .dead_incarnation = 3,
+        } },
     };
     var storage: [256]u8 = undefined;
     for (messages) |message| {
@@ -1893,6 +2267,21 @@ test "client action semantic validation reserves sequence zero" {
             .interaction_action => |action| {
                 try encoder.header(.client, @intFromEnum(ClientKind.interaction_action));
                 try encodeInteractionAction(&encoder, action);
+            },
+            .melee_action => |action| {
+                try encoder.header(.client, @intFromEnum(ClientKind.melee_action));
+                try encoder.u64Value(action.session.value);
+                try encodeParticipant(&encoder, action.participant);
+                try encoder.u32Value(action.sequence.value);
+                try encoder.u16Value(action.avatar_incarnation);
+                try encoder.u64Value(action.target_tick);
+            },
+            .respawn_action => |action| {
+                try encoder.header(.client, @intFromEnum(ClientKind.respawn_action));
+                try encoder.u64Value(action.session.value);
+                try encodeParticipant(&encoder, action.participant);
+                try encoder.u32Value(action.sequence.value);
+                try encoder.u16Value(action.dead_incarnation);
             },
             else => unreachable,
         }
@@ -2208,6 +2597,75 @@ test "interaction action and result round trip with explicit ownership semantics
         .disposition = .collected,
     } };
     try std.testing.expectEqualDeep(result, try decodeServer(try encodeServer(result, &bytes)));
+}
+
+test "melee respawn and life messages preserve avatar incarnation" {
+    var bytes: [256]u8 = undefined;
+    const melee = ClientMessage{ .melee_action = .{
+        .session = .{ .value = 9 },
+        .participant = .{ .index = 2, .generation = 3 },
+        .sequence = .{ .value = 11 },
+        .avatar_incarnation = 7,
+        .target_tick = 42,
+    } };
+    try std.testing.expectEqualDeep(melee, try decodeClient(try encodeClient(melee, &bytes)));
+    const respawn = ClientMessage{ .respawn_action = .{
+        .session = .{ .value = 9 },
+        .participant = .{ .index = 2, .generation = 3 },
+        .sequence = .{ .value = 12 },
+        .dead_incarnation = 7,
+    } };
+    try std.testing.expectEqualDeep(respawn, try decodeClient(try encodeClient(respawn, &bytes)));
+    const hit = ServerMessage{ .melee_action_result = .{
+        .sequence = .{ .value = 11 },
+        .disposition = .hit,
+        .target = .{ .index = 4, .generation = 7 },
+        .target_incarnation = 7,
+        .applied_damage = 34,
+        .remaining_health = 66,
+    } };
+    try std.testing.expectEqualDeep(hit, try decodeServer(try encodeServer(hit, &bytes)));
+    const replaced = ServerMessage{ .respawn_action_result = .{
+        .sequence = .{ .value = 12 },
+        .disposition = .respawned,
+        .avatar = .{ .index = 4, .generation = 8 },
+        .incarnation = 8,
+    } };
+    try std.testing.expectEqualDeep(replaced, try decodeServer(try encodeServer(replaced, &bytes)));
+    const death = ServerMessage{ .life_event = .{
+        .avatar = .{ .index = 4, .generation = 7 },
+        .incarnation = 7,
+        .health = 0,
+        .maximum_health = 100,
+        .state = .dead,
+        .instigator = .{ .index = 2, .generation = 3 },
+    } };
+    try std.testing.expectEqualDeep(death, try decodeServer(try encodeServer(death, &bytes)));
+}
+
+test "snapshot delta carries authoritative health and life changes" {
+    var base = Snapshot.empty();
+    base.baseline_id = 1;
+    base.sequence.value = 1;
+    base.character_count = 1;
+    base.characters[0] = .{
+        .entity = .{ .index = 1, .generation = 4 },
+        .owner = .{ .index = 1, .generation = 1 },
+        .position = .{ 0, 0, 0 },
+        .velocity = .{ 0, 0, 0 },
+        .facing_yaw = 0,
+        .incarnation = 4,
+    };
+    var current = base;
+    current.sequence.value = 2;
+    current.characters[0].health = 0;
+    current.characters[0].life_state = .dead;
+    const delta = try makeDelta(base, current, true);
+    try std.testing.expectEqual(@as(u8, 1), delta.character_count);
+    const materialized = try materializeDelta(base, delta);
+    try std.testing.expectEqual(@as(u16, 0), materialized.characters[0].health);
+    try std.testing.expectEqual(AvatarLifeState.dead, materialized.characters[0].life_state);
+    try std.testing.expectEqual(@as(u16, 4), materialized.characters[0].incarnation);
 }
 
 test "protocol rejects trailing, oversized movement, and cohort-invalid input" {

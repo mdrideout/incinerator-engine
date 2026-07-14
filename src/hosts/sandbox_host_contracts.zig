@@ -37,7 +37,7 @@ pub const district_presentation_policies = sandbox_district_recipe.presentation_
 pub const navigation_east_coord = sandbox_district_recipe.navigation_east_coord;
 pub const navigation_west_coord = sandbox_district_recipe.navigation_west_coord;
 pub const npc_capacity = npcs.max_npcs;
-pub const snapshot_schema: u16 = 7;
+pub const snapshot_schema: u16 = 8;
 
 /// Renderer-neutral optional collision primitive in the sandbox recipe.
 pub const StaticBox = struct {
@@ -82,5 +82,5 @@ test "graphical sandbox contracts publish values without mutable authority" {
 
     const config = Config{ .namespace = 42 };
     try std.testing.expectEqual(@as(u64, 42), config.namespace);
-    try std.testing.expectEqual(snapshot_schema, @as(u16, 7));
+    try std.testing.expectEqual(snapshot_schema, @as(u16, 8));
 }

@@ -26,15 +26,26 @@ const TransportDiagnostics = struct {
     pending_reliable_bytes: i64 = 0,
 };
 
-const Server = struct {
+pub const Server = struct {
     network: gns.Network,
     listen_socket: gns.ListenSocket,
     authority: *authority_module.DedicatedAuthority,
     connections: [budgets.max_participants]gns.Connection = @splat(.invalid),
     receive_storage: [budgets.max_wire_message_bytes]u8 = undefined,
     encode_storage: [budgets.max_wire_message_bytes]u8 = undefined,
+    admission_time_unix_seconds: ?u64 = null,
 
-    fn init(allocator: std.mem.Allocator, port: u16, allow_remote: bool) !Server {
+    pub fn init(allocator: std.mem.Allocator, port: u16, allow_remote: bool) !Server {
+        return initWithOptions(allocator, port, allow_remote, .{}, null);
+    }
+
+    pub fn initWithOptions(
+        allocator: std.mem.Allocator,
+        port: u16,
+        allow_remote: bool,
+        authority_options: authority_module.Options,
+        admission_time_unix_seconds: ?u64,
+    ) !Server {
         var network = try gns.Network.init();
         errdefer network.deinit();
         const listen_socket = try network.listen(
@@ -42,16 +53,20 @@ const Server = struct {
             if (allow_remote) .any_interface else .loopback,
         );
         errdefer network.closeListen(listen_socket);
-        const authority = try authority_module.DedicatedAuthority.init(allocator);
+        const authority = try authority_module.DedicatedAuthority.initWithOptions(
+            allocator,
+            authority_options,
+        );
         errdefer authority.deinit();
         return .{
             .network = network,
             .listen_socket = listen_socket,
             .authority = authority,
+            .admission_time_unix_seconds = admission_time_unix_seconds,
         };
     }
 
-    fn deinit(self: *Server) void {
+    pub fn deinit(self: *Server) void {
         for (self.connections) |connection| {
             if (connection.isValid()) {
                 self.network.close(connection, 1000, "authority stopping", .immediate);
@@ -63,7 +78,7 @@ const Server = struct {
         self.* = undefined;
     }
 
-    fn stop(self: *Server, io: std.Io) !void {
+    pub fn stop(self: *Server, io: std.Io) !void {
         try self.authority.stop();
         try self.flushAuthorityOutput();
         // Give the GNS networking thread a bounded opportunity to transmit the
@@ -73,7 +88,7 @@ const Server = struct {
         while (self.network.pollEvent()) |event| try self.handleEvent(event);
     }
 
-    fn pumpNetwork(self: *Server) !void {
+    pub fn pumpNetwork(self: *Server) !void {
         self.network.runCallbacks();
         while (self.network.pollEvent()) |event| try self.handleEvent(event);
         for (&self.connections) |*connection| {
@@ -108,17 +123,36 @@ const Server = struct {
                         "protocol delivery class mismatch",
                         .immediate,
                     );
-                    self.authority.transportClosed(.{ .value = connection.value });
+                    _ = try self.authority.transportClosed(.{ .value = connection.value });
                     connection.* = .invalid;
                     break;
                 }
-                try self.authority.ingest(.{ .value = connection.value }, message);
+                if (self.admission_time_unix_seconds) |now| {
+                    try self.authority.ingestAtUnixTime(
+                        .{ .value = connection.value },
+                        message,
+                        now,
+                    );
+                } else {
+                    try self.authority.ingest(.{ .value = connection.value }, message);
+                }
             }
         }
         try self.flushAuthorityOutput();
     }
 
-    fn tick(self: *Server) !void {
+    /// Advances the wall-clock used only for bounded room-admission checks.
+    /// Never moving it backwards keeps reconnect behavior deterministic if the
+    /// host clock is adjusted while the process is running.
+    pub fn updateAdmissionTime(self: *Server, now_unix_seconds: u64) void {
+        if (self.admission_time_unix_seconds == null or
+            now_unix_seconds > self.admission_time_unix_seconds.?)
+        {
+            self.admission_time_unix_seconds = now_unix_seconds;
+        }
+    }
+
+    pub fn tick(self: *Server) !void {
         try self.authority.tick();
         try self.flushAuthorityOutput();
     }
@@ -155,7 +189,7 @@ const Server = struct {
                 }
             },
             .closed_by_peer, .problem_detected_locally => {
-                self.authority.transportClosed(.{ .value = event.connection.value });
+                _ = try self.authority.transportClosed(.{ .value = event.connection.value });
                 self.removeConnection(event.connection);
                 self.network.close(
                     event.connection,
@@ -173,10 +207,17 @@ const Server = struct {
     }
 
     fn flushAuthorityOutput(self: *Server) !void {
-        while (self.authority.pollOutbound()) |outbound| {
+        while (self.authority.beginOutboundLease()) |lease| {
+            const outbound = lease.outbound;
             const connection = gns.Connection{ .value = outbound.connection.value };
-            if (self.findConnection(connection) == null) continue;
-            const bytes = try protocol.encodeServer(outbound.message, &self.encode_storage);
+            if (self.findConnection(connection) == null) {
+                try self.authority.commitOutboundLease(lease.generation);
+                continue;
+            }
+            const bytes = try protocol.encodeDeliveredServer(.{
+                .delivery_id = outbound.delivery_id,
+                .message = outbound.message,
+            }, &self.encode_storage);
             self.network.send(
                 connection,
                 bytes,
@@ -191,8 +232,12 @@ const Server = struct {
                     .control => .control,
                 },
             ) catch |err| {
-                if (outbound.delivery == .reliable) return err;
+                if (outbound.delivery == .reliable) {
+                    try self.authority.retryOutboundLease(lease.generation);
+                    return err;
+                }
             };
+            try self.authority.commitOutboundLease(lease.generation);
             if (outbound.close_after_send) {
                 self.network.close(connection, 1000, "session closed", .linger);
                 self.removeConnection(connection);
@@ -218,7 +263,7 @@ const Server = struct {
         if (self.findConnection(target)) |index| self.connections[index] = .invalid;
     }
 
-    fn transportDiagnostics(self: *Server) TransportDiagnostics {
+    pub fn transportDiagnostics(self: *Server) TransportDiagnostics {
         var result = TransportDiagnostics{};
         for (self.connections) |connection| {
             const stats = self.network.stats(connection) orelse continue;

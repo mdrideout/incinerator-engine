@@ -64,6 +64,8 @@ pub const Graph = struct {
     npc_contract: *std.Build.Module,
     npc_snapshot_validation: *std.Build.Module,
     npc: *std.Build.Module,
+    vitals_contract: *std.Build.Module,
+    vitals: *std.Build.Module,
     population_contract: *std.Build.Module,
     interaction_feature_contract: *std.Build.Module,
     interaction: *std.Build.Module,
@@ -229,12 +231,12 @@ pub fn create(
     );
     const simulation_cohort_options = cohort_options.createModule();
     const network_options = b.addOptions();
-    network_options.addOption(u16, "protocol_revision", 8);
+    network_options.addOption(u16, "protocol_revision", 10);
     network_options.addOption(u64, "build_cohort", networkBuildCohort());
     network_options.addOption(
         u64,
         "content_cohort",
-        std.hash.Wyhash.hash(0x494e_434e, "mp5-room-admission-sandbox-content-v1"),
+        std.hash.Wyhash.hash(0x494e_434e, "s10-vitals-sandbox-content-v1"),
     );
     const network_cohort_options = network_options.createModule();
 
@@ -480,6 +482,21 @@ pub fn create(
             .{ .name = "npc_snapshot_validation", .module = npc_snapshot_validation },
         },
     });
+    const vitals_contract = b.createModule(.{
+        .root_source_file = b.path("src/features/vitals/contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "engine_contracts", .module = contracts }},
+    });
+    const vitals = b.createModule(.{
+        .root_source_file = b.path("src/features/vitals/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "vitals_contract", .module = vitals_contract },
+        },
+    });
     const population_contract = b.createModule(.{
         .root_source_file = b.path("src/features/population/contract.zig"),
         .target = target,
@@ -618,6 +635,7 @@ pub fn create(
             .{ .name = "district_feature_contract", .module = district_feature_contract },
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "vitals_contract", .module = vitals_contract },
             .{ .name = "npc_snapshot_validation", .module = npc_snapshot_validation },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
             .{ .name = "sandbox_navigation", .module = sandbox_navigation },
@@ -646,6 +664,8 @@ pub fn create(
             .{ .name = "interaction_feature", .module = interaction },
             .{ .name = "npc_contract", .module = npc_contract },
             .{ .name = "npc_feature", .module = npc },
+            .{ .name = "vitals_contract", .module = vitals_contract },
+            .{ .name = "vitals_feature", .module = vitals },
             .{ .name = "district_worker_contract", .module = district_worker_contract },
             .{ .name = "district_replay_loader", .module = district_replay_loader },
             .{ .name = "jolt_physics", .module = jolt_physics },
@@ -810,6 +830,7 @@ pub fn create(
             .{ .name = "district_feature_contract", .module = district_feature_contract },
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "vitals_contract", .module = vitals_contract },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
             .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract },
             .{ .name = "session_budgets", .module = session_budgets },
@@ -852,6 +873,8 @@ pub fn create(
         .npc_contract = npc_contract,
         .npc_snapshot_validation = npc_snapshot_validation,
         .npc = npc,
+        .vitals_contract = vitals_contract,
+        .vitals = vitals,
         .population_contract = population_contract,
         .interaction_feature_contract = interaction_feature_contract,
         .interaction = interaction,
@@ -897,7 +920,7 @@ fn networkBuildCohort() u64 {
         cohort.gns_revision,
         "authority-60hz",
         "snapshot-20hz",
-        "protocol-v8",
+        "protocol-v10",
     }) |part| fingerprint = std.hash.Wyhash.hash(fingerprint, part);
     return fingerprint;
 }

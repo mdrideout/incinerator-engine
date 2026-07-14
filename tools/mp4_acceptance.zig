@@ -15,6 +15,12 @@ const throttle_ticks: u64 = 300;
 const brake_ticks: u64 = 90;
 const neutral_ticks: u64 = 60;
 
+fn takeOutbound(authority: anytype) ?authority_module.Outbound {
+    const lease = authority.beginOutboundLease() orelse return null;
+    authority.commitOutboundLease(lease.generation) catch unreachable;
+    return lease.outbound;
+}
+
 const Result = struct {
     name: []const u8,
     seed: u64,
@@ -103,19 +109,36 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
         try link.advanceTo(tick);
         while (link.receiveForAuthority()) |message| try authority.ingest(connection, message);
         try authority.tick();
-        while (authority.pollOutbound()) |outbound| {
-            if (outbound.close_after_send) return error.VehicleTrialSessionTerminated;
+        while (authority.beginOutboundLease()) |lease| {
+            const outbound = lease.outbound;
+            if (outbound.close_after_send) {
+                try authority.commitOutboundLease(lease.generation);
+                return error.VehicleTrialSessionTerminated;
+            }
             if (outbound.message == .snapshot) {
                 last_authority_snapshot = outbound.message.snapshot;
                 if (outbound.message.snapshot.vehicle_count != 0) {
                     last_relevant_vehicle = outbound.message.snapshot.vehicles[0];
                 }
             }
-            try link.sendFromAuthority(outbound.message);
+            link.sendFromAuthority(.{
+                .delivery_id = outbound.delivery_id,
+                .message = outbound.message,
+            }) catch |err| {
+                if (outbound.delivery == .reliable) {
+                    try authority.retryOutboundLease(lease.generation);
+                } else {
+                    try authority.commitOutboundLease(lease.generation);
+                }
+                return err;
+            };
+            try authority.commitOutboundLease(lease.generation);
         }
-        while (link.receiveForClient()) |message| {
-            try client.receive(message);
+        while (link.receiveForClient()) |delivered| {
+            const message = delivered.message;
+            try client.receiveDelivered(delivered);
             if (message == .snapshot) steady_snapshot_received = true;
+            while (client.takeDeliveryReceipt()) |receipt| try link.sendFromClient(receipt);
             if (client.takeBaselineAck()) |ack| try link.sendFromClient(ack);
             if (client.takeSnapshotAck()) |ack| try link.sendFromClient(ack);
         }
@@ -306,7 +329,8 @@ fn verifyAcceptedIngressReplay(
     const connection = authority_module.TransportConnection{ .value = 1 };
     _ = try replay.openConnection(connection);
     try replay.ingest(connection, .{ .hello = .{ .account = account } });
-    const welcome = replay.pollOutbound().?.message.welcome;
+    try replay.tick();
+    const welcome = takeOutbound(replay).?.message.welcome;
     var cursor: usize = 0;
     var last_snapshot: ?protocol.Snapshot = null;
     for (0..total_ticks) |_| {
@@ -348,11 +372,24 @@ fn verifyAcceptedIngressReplay(
                     .carryable = record.carryable,
                     .kind = if (record.kind == .interaction_collect) .collect else .drop,
                 } },
+                .melee => .{ .melee_action = .{
+                    .session = welcome.session,
+                    .participant = welcome.participant,
+                    .sequence = record.action_sequence,
+                    .avatar_incarnation = record.avatar_incarnation,
+                    .target_tick = record.target_tick,
+                } },
+                .respawn => .{ .respawn_action = .{
+                    .session = welcome.session,
+                    .participant = welcome.participant,
+                    .sequence = record.action_sequence,
+                    .dead_incarnation = record.avatar_incarnation,
+                } },
             };
             try replay.ingest(connection, message);
         }
         try replay.tick();
-        while (replay.pollOutbound()) |outbound| switch (outbound.message) {
+        while (takeOutbound(replay)) |outbound| switch (outbound.message) {
             .snapshot => |snapshot| {
                 last_snapshot = switch (snapshot.kind) {
                     .full => snapshot,
@@ -382,14 +419,25 @@ fn verifyAcceptedIngressReplay(
     if (cursor != records.len) return error.AcceptedIngressReplayDidNotConsumeJournal;
     const actual = last_snapshot orelse return error.AcceptedIngressReplayMissingState;
     if (actual.character_count != expected.character_count or
-        actual.vehicle_count != expected.vehicle_count)
+        actual.vehicle_count != expected.vehicle_count or
+        actual.npc_count != expected.npc_count)
     {
         return error.AcceptedIngressMembershipDivergence;
     }
     for (expected.slice(), actual.slice()) |expected_character, actual_character| {
         if (!std.meta.eql(expected_character.entity, actual_character.entity) or
-            !std.meta.eql(expected_character.owner, actual_character.owner) or
-            distance(expected_character.position, actual_character.position) > 0.0001 or
+            !std.meta.eql(expected_character.owner, actual_character.owner))
+        {
+            return error.AcceptedIngressCharacterDivergence;
+        }
+        if (expected_character.incarnation != actual_character.incarnation or
+            expected_character.health != actual_character.health or
+            expected_character.maximum_health != actual_character.maximum_health or
+            expected_character.life_state != actual_character.life_state)
+        {
+            return error.AcceptedIngressVitalsDivergence;
+        }
+        if (distance(expected_character.position, actual_character.position) > 0.0001 or
             distance(expected_character.velocity, actual_character.velocity) > 0.0001)
         {
             return error.AcceptedIngressCharacterDivergence;
@@ -404,6 +452,16 @@ fn verifyAcceptedIngressReplay(
             quaternionDifference(expected_vehicle.rotation, actual_vehicle.rotation) > 0.0001)
         {
             return error.AcceptedIngressVehicleDivergence;
+        }
+    }
+    for (expected.npcSlice(), actual.npcSlice()) |expected_npc, actual_npc| {
+        if (!std.meta.eql(expected_npc.entity, actual_npc.entity) or
+            expected_npc.incarnation != actual_npc.incarnation or
+            expected_npc.health != actual_npc.health or
+            expected_npc.maximum_health != actual_npc.maximum_health or
+            expected_npc.life_state != actual_npc.life_state)
+        {
+            return error.AcceptedIngressVitalsDivergence;
         }
     }
 }

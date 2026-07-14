@@ -15,12 +15,15 @@ pub const Class = struct {
 
 pub fn clientClass(message: protocol.ClientMessage) Class {
     return switch (message) {
-        .hello, .baseline_ack, .disconnect => .{ .delivery = .reliable, .lane = .control },
+        .hello, .baseline_ack, .delivery_receipt, .disconnect => .{
+            .delivery = .reliable,
+            .lane = .control,
+        },
         .input, .vehicle_input, .snapshot_ack => .{
             .delivery = .unreliable,
             .lane = .input,
         },
-        .vehicle_action, .interaction_action => .{
+        .vehicle_action, .interaction_action, .melee_action, .respawn_action => .{
             .delivery = .reliable,
             .lane = .gameplay,
         },
@@ -30,7 +33,12 @@ pub fn clientClass(message: protocol.ClientMessage) Class {
 pub fn serverClass(message: protocol.ServerMessage) Class {
     return switch (message) {
         .snapshot => .{ .delivery = .unreliable, .lane = .snapshot },
-        .vehicle_action_result, .interaction_action_result => .{
+        .vehicle_action_result,
+        .interaction_action_result,
+        .melee_action_result,
+        .respawn_action_result,
+        .life_event,
+        => .{
             .delivery = .reliable,
             .lane = .gameplay,
         },

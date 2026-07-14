@@ -8,6 +8,12 @@ const authority_module = @import("session_authority");
 
 const total_ticks: u64 = 420;
 
+fn takeOutbound(authority: anytype) ?authority_module.Outbound {
+    const lease = authority.beginOutboundLease() orelse return null;
+    authority.commitOutboundLease(lease.generation) catch unreachable;
+    return lease.outbound;
+}
+
 pub fn main(init: std.process.Init) !void {
     _ = init;
     const authority = try authority_module.DedicatedAuthority.initWithOptions(
@@ -36,9 +42,13 @@ pub fn main(init: std.process.Init) !void {
             ));
         }
         try authority.tick();
-        while (authority.pollOutbound()) |outbound| {
+        while (takeOutbound(authority)) |outbound| {
             if (outbound.close_after_send) return error.UnexpectedSessionClose;
-            try client.receive(outbound.message);
+            try client.receiveDelivered(.{
+                .delivery_id = outbound.delivery_id,
+                .message = outbound.message,
+            });
+            while (client.takeDeliveryReceipt()) |receipt| try authority.ingest(connection, receipt);
             if (client.takeBaselineAck()) |ack| try authority.ingest(connection, ack);
             if (client.takeSnapshotAck()) |ack| try authority.ingest(connection, ack);
         }

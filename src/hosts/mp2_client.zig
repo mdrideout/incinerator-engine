@@ -4,42 +4,43 @@
 //! are linked into this product.
 
 const std = @import("std");
-const zm = @import("zmath");
 const budgets = @import("session_budgets");
 const protocol = @import("session_protocol");
 const session_client = @import("session_client");
-const replicated_world = @import("replicated_world");
 const transport_policy = @import("session_transport_policy");
 const reconnect_policy = @import("reconnect_policy");
 const client_clock = @import("client_clock");
+const room_coordinator = @import("room_coordinator");
+const room_ticket = @import("room_ticket");
 const gns = @import("gns_direct");
 const presentation = @import("mp2_presentation");
-const renderer = presentation.renderer;
-const primitives = presentation.primitives;
-const mesh = presentation.mesh;
-const camera = presentation.camera;
+const client_scene = @import("client_scene");
 
 const c = presentation.c;
 const default_endpoint = "127.0.0.1:27020";
 
+const S10SmokeRole = enum { none, attacker, victim };
+
 const Invocation = struct {
     endpoint: []const u8 = default_endpoint,
     account: u64 = 1,
+    endpoint_explicit: bool = false,
+    account_explicit: bool = false,
+    ticket_path: ?[]const u8 = null,
     max_frames: ?u64 = null,
+    smoke_actions: bool = false,
+    s10_smoke_role: S10SmokeRole = .none,
 };
 
 const App = struct {
     io: std.Io,
     window: *c.SDL_Window,
-    gpu: renderer.Renderer,
-    ground: mesh.Mesh,
-    character: mesh.Mesh,
-    vehicle: mesh.Mesh,
-    carryable: mesh.Mesh,
-    camera: camera.Camera,
+    scene: client_scene.Scene,
     network: gns.Network,
     connection: gns.Connection,
     client: session_client.Client,
+    room: ?room_coordinator.Coordinator = null,
+    room_generation: u64 = 0,
     endpoint: [256]u8,
     endpoint_len: u16,
     keys: [512]bool = @splat(false),
@@ -47,25 +48,67 @@ const App = struct {
     hello_sent: bool = false,
     vehicle_action_requested: bool = false,
     interaction_action_requested: bool = false,
-    vehicle_prediction_enabled: bool = true,
+    melee_action_requested: bool = false,
+    respawn_action_requested: bool = false,
     reconnect_requested: bool = false,
+    smoke_actions: bool = false,
+    smoke_milestones: u8 = 0,
+    smoke_vehicle_start: ?[3]f32 = null,
+    smoke_vehicle_moved: bool = false,
+    smoke_walk_start: ?[3]f32 = null,
+    smoke_walked: bool = false,
+    smoke_reconnect_started: bool = false,
+    smoke_reconnect_disconnected: bool = false,
+    smoke_reconnect_completed: bool = false,
+    s10_start_tick: ?u64 = null,
+    s10_dead_tick: ?u64 = null,
+    s10_milestones: u8 = 0,
+    s10_respawn_requested: bool = false,
+    s10_pass_printed: bool = false,
+    s10_smoke_role: S10SmokeRole = .none,
     frame: u64 = 0,
     last_input_tick: u64 = 0,
     clock: client_clock.Clock = .{},
     retry: reconnect_policy.Policy,
-    last_snapshot_ns: u64 = 0,
-    snapshot_interval_ns: u64 = std.time.ns_per_s / budgets.snapshot_hz,
     receive_storage: [budgets.max_wire_message_bytes]u8 = undefined,
     encode_storage: [budgets.max_wire_message_bytes]u8 = undefined,
 
     fn init(process_init: std.process.Init, invocation: Invocation) !App {
+        if (invocation.ticket_path != null and invocation.endpoint_explicit) {
+            return error.TicketOwnsEndpoint;
+        }
+        var ticket_artifact: ?room_ticket.Artifact = null;
+        if (invocation.ticket_path) |path| {
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(
+                process_init.io,
+                path,
+                process_init.gpa,
+                .limited(room_ticket.maximum_bytes),
+            );
+            defer process_init.gpa.free(bytes);
+            ticket_artifact = try room_ticket.decode(bytes);
+            if (invocation.account_explicit and
+                invocation.account != ticket_artifact.?.intent.account.value)
+            {
+                return error.TicketAccountMismatch;
+            }
+        }
+        const account = if (ticket_artifact) |artifact|
+            artifact.intent.account.value
+        else
+            invocation.account;
+        const endpoint_text = if (ticket_artifact) |*artifact| switch (artifact.intent.route) {
+            .direct_ip => |*endpoint| endpoint.slice(),
+            else => return error.UnsupportedRoomTicketRoute,
+        } else invocation.endpoint;
+
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) return error.SDLInitFailed;
         errdefer c.SDL_Quit();
         var title_buffer: [128]u8 = undefined;
         const title = try std.fmt.bufPrintZ(
             &title_buffer,
             "Incinerator MP4-B Client {d}",
-            .{invocation.account},
+            .{account},
         );
         const window = c.SDL_CreateWindow(
             title.ptr,
@@ -74,34 +117,53 @@ const App = struct {
             c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_HIGH_PIXEL_DENSITY,
         ) orelse return error.SDLWindowFailed;
         errdefer c.SDL_DestroyWindow(window);
-        var gpu = try renderer.Renderer.init(window);
-        errdefer gpu.deinit();
-        var ground = try primitives.createGroundPlane(gpu.getDevice());
-        errdefer ground.deinit();
-        var character = try primitives.createCharacterCapsule(gpu.getDevice(), 0.4, 0.5);
-        errdefer character.deinit();
-        var vehicle = try primitives.createCube(gpu.getDevice());
-        errdefer vehicle.deinit();
-        var carryable = try primitives.createCube(gpu.getDevice());
-        errdefer carryable.deinit();
+        var scene = try client_scene.Scene.init(window);
+        errdefer scene.deinit();
         var network = try gns.Network.init();
         errdefer network.deinit();
         var endpoint_buffer: [256]u8 = @splat(0);
-        const endpoint = try std.fmt.bufPrintZ(&endpoint_buffer, "{s}", .{invocation.endpoint});
+        const endpoint = try std.fmt.bufPrintZ(&endpoint_buffer, "{s}", .{endpoint_text});
         const connection = try network.connect(endpoint);
+        var client = try session_client.Client.init(.{ .value = account });
+        var coordinator: ?room_coordinator.Coordinator = null;
+        var coordinator_generation: u64 = 0;
+        if (ticket_artifact) |artifact| {
+            try client.configureJoin(
+                artifact.intent.external_identity,
+                artifact.intent.authorization,
+            );
+            var value = room_coordinator.Coordinator{};
+            coordinator_generation = try value.begin(.join);
+            var members: [budgets.max_participants]room_coordinator.Member = undefined;
+            for (artifact.memberSlice(), 0..) |member, index| members[index] = .{
+                .account = member,
+                .lobby_present = true,
+                .ready = false,
+                .connection = .none,
+                .local = std.meta.eql(member, artifact.intent.account),
+            };
+            _ = try value.completeJoin(
+                coordinator_generation,
+                artifact.intent,
+                members[0..artifact.member_count],
+            );
+            _ = try value.markReady(coordinator_generation);
+            _ = try value.beginRouteResolution(coordinator_generation);
+            _ = try value.routeResolved(coordinator_generation);
+            coordinator = value;
+        }
         return .{
             .io = process_init.io,
             .window = window,
-            .gpu = gpu,
-            .ground = ground,
-            .character = character,
-            .vehicle = vehicle,
-            .carryable = carryable,
-            .camera = .{ .pitch = -0.25 },
+            .scene = scene,
             .network = network,
             .connection = connection,
-            .client = try session_client.Client.init(.{ .value = invocation.account }),
-            .retry = reconnect_policy.Policy.init(invocation.account),
+            .client = client,
+            .room = coordinator,
+            .room_generation = coordinator_generation,
+            .retry = reconnect_policy.Policy.init(account),
+            .smoke_actions = invocation.smoke_actions,
+            .s10_smoke_role = invocation.s10_smoke_role,
             .endpoint = endpoint_buffer,
             .endpoint_len = @intCast(endpoint.len),
         };
@@ -112,11 +174,7 @@ const App = struct {
             self.network.close(self.connection, 1000, "client shutdown", .immediate);
         }
         self.network.deinit();
-        self.carryable.deinit();
-        self.vehicle.deinit();
-        self.character.deinit();
-        self.ground.deinit();
-        self.gpu.deinit();
+        self.scene.deinit();
         c.SDL_DestroyWindow(self.window);
         c.SDL_Quit();
         self.* = undefined;
@@ -131,8 +189,12 @@ const App = struct {
             try self.pumpNetwork(now_ns);
             self.forceReconnect(now_ns);
             try self.reconnectIfDue(now_ns);
+            self.scheduleSmokeActions();
+            self.scheduleS10Actions();
             try self.sendVehicleActionIfRequested();
             try self.sendInteractionActionIfRequested();
+            try self.sendMeleeActionIfRequested();
+            try self.sendRespawnActionIfRequested();
             if (self.client.state == .joined and self.clock.anchored) {
                 const due_tick = self.clock.inputTick(now_ns);
                 var catch_up: u8 = 0;
@@ -142,11 +204,14 @@ const App = struct {
                 }
                 if (self.last_input_tick < due_tick) self.last_input_tick = due_tick;
             }
-            try self.render(now_ns);
+            self.observeSmokeProgress();
+            self.finishS10Smoke();
+            try self.scene.render(&self.client, now_ns);
             self.frame += 1;
             if (self.frame % 60 == 0) self.updateTitle();
             try std.Io.sleep(self.io, .fromMilliseconds(1), .awake);
         }
+        try self.finishSmokeActions();
     }
 
     fn pumpEvents(self: *App) void {
@@ -164,15 +229,27 @@ const App = struct {
                 if (event.key.scancode == c.SDL_SCANCODE_F and !was_down) {
                     self.interaction_action_requested = true;
                 }
+                if (event.key.scancode == c.SDL_SCANCODE_Q and !was_down) {
+                    self.melee_action_requested = true;
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_R and !was_down) {
+                    self.respawn_action_requested = true;
+                }
                 if (event.key.scancode == c.SDL_SCANCODE_P and !was_down) {
-                    self.vehicle_prediction_enabled = !self.vehicle_prediction_enabled;
+                    const enabled = self.scene.toggleVehiclePrediction();
                     std.debug.print("MP4_VEHICLE_PREDICTION enabled={}\n", .{
-                        self.vehicle_prediction_enabled,
+                        enabled,
                     });
                     self.updateTitle();
                 }
                 if (event.key.scancode == c.SDL_SCANCODE_F8 and !was_down) {
                     self.reconnect_requested = true;
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_C and !was_down) {
+                    self.cancelRoomFlow();
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_L and !was_down) {
+                    self.leaveRoom();
                 }
                 if (event.key.scancode == c.SDL_SCANCODE_ESCAPE) self.running = false;
             },
@@ -190,6 +267,9 @@ const App = struct {
             .connected => {
                 if (event.connection.value == self.connection.value and !self.hello_sent) {
                     try self.network.configureConnected(self.connection);
+                    if (self.room) |*coordinator| {
+                        _ = try coordinator.transportConnected(self.room_generation);
+                    }
                     try self.sendClientMessage(try self.client.begin());
                     self.hello_sent = true;
                 }
@@ -197,6 +277,7 @@ const App = struct {
             .closed_by_peer, .problem_detected_locally => {
                 if (event.connection.value != self.connection.value) continue;
                 self.client.transportDisconnected();
+                self.noteRoomNetworkLoss();
                 self.connection = .invalid;
                 self.hello_sent = false;
                 if (self.client.state == .disconnected) {
@@ -218,7 +299,8 @@ const App = struct {
 
         if (!self.connection.isValid()) return;
         while (try self.network.receive(self.connection, &self.receive_storage)) |received| {
-            const message = try protocol.decodeServer(received.bytes);
+            const delivered = try protocol.decodeDeliveredServer(received.bytes);
+            const message = delivered.message;
             if (!transport_policy.matches(
                 transport_policy.serverClass(message),
                 fromGnsDelivery(received.delivery),
@@ -226,11 +308,17 @@ const App = struct {
             )) {
                 return error.ServerDeliveryClassMismatch;
             }
-            try self.client.receive(message);
+            try self.client.receiveDelivered(delivered);
+            while (self.client.takeDeliveryReceipt()) |receipt| {
+                try self.sendClientMessage(receipt);
+            }
             if (self.client.takeBaselineAck()) |ack| try self.sendClientMessage(ack);
             if (self.client.takeSnapshotAck()) |ack| try self.sendClientMessage(ack);
             switch (message) {
                 .welcome => |welcome| {
+                    if (self.room) |*coordinator| {
+                        _ = try coordinator.authorityAccepted(self.room_generation);
+                    }
                     self.clock.synchronize(welcome.authority_tick, now_ns);
                     self.last_input_tick = welcome.authority_tick;
                     self.retry.reset();
@@ -241,14 +329,12 @@ const App = struct {
                 },
                 .snapshot => |snapshot| {
                     self.clock.observe(snapshot.server_tick);
-                    if (self.last_snapshot_ns != 0 and now_ns > self.last_snapshot_ns) {
-                        self.snapshot_interval_ns = now_ns - self.last_snapshot_ns;
-                    }
-                    self.last_snapshot_ns = now_ns;
+                    self.scene.observeSnapshot(now_ns);
+                    try self.finishRoomSynchronization();
                 },
                 .relevance_baseline => |baseline| {
                     self.clock.observe(baseline.snapshot.server_tick);
-                    self.last_snapshot_ns = now_ns;
+                    self.scene.observeSnapshot(now_ns);
                     std.debug.print(
                         "MP4_BASELINE id={d} districts={d} entities={d}\n",
                         .{
@@ -260,6 +346,7 @@ const App = struct {
                                 baseline.snapshot.npc_count,
                         },
                     );
+                    try self.finishRoomSynchronization();
                 },
                 .vehicle_action_result => |result| {
                     std.debug.print(
@@ -283,16 +370,69 @@ const App = struct {
                         },
                     );
                 },
+                .melee_action_result => |result| {
+                    _ = self.client.takeMeleeActionResult();
+                    std.debug.print(
+                        "S10_CLIENT_MELEE result={s} damage={d} health={d} killed={}\n",
+                        .{
+                            @tagName(result.disposition),
+                            result.applied_damage,
+                            result.remaining_health,
+                            result.killed,
+                        },
+                    );
+                },
+                .respawn_action_result => |result| {
+                    _ = self.client.takeRespawnActionResult();
+                    std.debug.print(
+                        "S10_CLIENT_RESPAWN result={s} incarnation={d}\n",
+                        .{ @tagName(result.disposition), result.incarnation },
+                    );
+                },
+                .life_event => |event| {
+                    _ = self.client.takeLifeEvent();
+                    std.debug.print(
+                        "S10_CLIENT_LIFE avatar={d}:{d} incarnation={d} state={s} health={d}\n",
+                        .{
+                            event.avatar.index,
+                            event.avatar.generation,
+                            event.incarnation,
+                            @tagName(event.state),
+                            event.health,
+                        },
+                    );
+                    if (self.s10_smoke_role == .victim and event.state == .dead and
+                        event.avatar.index == self.client.participant.index)
+                    {
+                        self.s10_dead_tick = self.client.world.server_tick;
+                    }
+                },
                 .rejected => |rejected| {
                     std.debug.print(
                         "MP2_CLIENT_REJECTED reason={s}\n",
                         .{@tagName(rejected.reason)},
                     );
-                    self.running = false;
+                    if (self.room) |*coordinator| {
+                        _ = try coordinator.fail(
+                            self.room_generation,
+                            failureFromRejection(rejected.reason),
+                            rejected.reason == .protocol_mismatch or
+                                rejected.reason == .build_mismatch or
+                                rejected.reason == .content_mismatch,
+                        );
+                    } else self.running = false;
                 },
                 .disconnected => |reason| {
                     std.debug.print("MP2_CLIENT_SESSION_ENDED reason={s}\n", .{@tagName(reason)});
-                    if (self.client.state == .stopped) self.running = false;
+                    if (self.client.state == .stopped) {
+                        if (self.room) |*coordinator| {
+                            _ = coordinator.fail(
+                                self.room_generation,
+                                .host_closed,
+                                true,
+                            ) catch {};
+                        } else self.running = false;
+                    }
                 },
             }
         }
@@ -326,6 +466,7 @@ const App = struct {
         self.connection = .invalid;
         self.hello_sent = false;
         self.client.transportDisconnected();
+        self.noteRoomNetworkLoss();
         const delay = self.retry.schedule(now_ns) orelse {
             self.running = false;
             return;
@@ -338,8 +479,14 @@ const App = struct {
     fn sendInput(self: *App, target_tick: u64) !void {
         if (self.client.state != .joined) return;
         if (self.client.ownedVehicle()) |vehicle| {
-            const throttle = @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_W)))) -
-                @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_S))));
+            const scripted_drive = self.smoke_actions and
+                self.client.world.server_tick >= 150 and
+                self.client.world.server_tick < 165;
+            const throttle = if (scripted_drive)
+                @as(f32, 1)
+            else
+                @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_W)))) -
+                    @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_S))));
             const steering = @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_D)))) -
                 @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_A))));
             try self.sendClientMessage(try self.client.vehicleInput(
@@ -352,16 +499,34 @@ const App = struct {
             ));
             return;
         }
-        const move = normalizedMove(.{
-            @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_D)))) -
-                @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_A)))),
-            @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_W)))) -
-                @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_S)))),
-        });
+        const tick = self.client.world.server_tick;
+        if (self.s10_smoke_role != .none) {
+            try self.sendClientMessage(try self.client.input(
+                target_tick,
+                .{ 0, 0 },
+                if (self.s10_smoke_role == .attacker)
+                    s10TargetYaw(&self.client) orelse self.scene.camera.yaw
+                else
+                    -std.math.pi / 2.0,
+                false,
+            ));
+            return;
+        }
+        const move = if (self.smoke_actions and tick >= 40 and tick < 54)
+            normalizedMove(.{ -0.25, 1 })
+        else if (self.smoke_actions and tick >= 190 and tick < 220)
+            [2]f32{ 1, 0 }
+        else
+            normalizedMove(.{
+                @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_D)))) -
+                    @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_A)))),
+                @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_W)))) -
+                    @as(f32, @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_S)))),
+            });
         try self.sendClientMessage(try self.client.input(
             target_tick,
             move,
-            self.camera.yaw,
+            self.scene.camera.yaw,
             self.key(c.SDL_SCANCODE_SPACE),
         ));
     }
@@ -400,6 +565,26 @@ const App = struct {
         ));
     }
 
+    fn sendMeleeActionIfRequested(self: *App) !void {
+        if (!self.melee_action_requested) return;
+        self.melee_action_requested = false;
+        if (self.client.state != .joined or self.client.pending_melee_action != null) return;
+        try self.sendClientMessage(try self.client.meleeAction(
+            self.client.world.server_tick +| 1,
+        ));
+    }
+
+    fn sendRespawnActionIfRequested(self: *App) !void {
+        if (!self.respawn_action_requested) return;
+        self.respawn_action_requested = false;
+        if (self.client.state != .joined or self.client.pending_respawn_action != null) return;
+        const message = self.client.respawnAction() catch |err| switch (err) {
+            error.AvatarLifecycleUnavailable => return,
+            else => return err,
+        };
+        try self.sendClientMessage(message);
+    }
+
     fn sendClientMessage(self: *App, message: protocol.ClientMessage) !void {
         const bytes = try protocol.encodeClient(message, &self.encode_storage);
         const class = transport_policy.clientClass(message);
@@ -411,129 +596,161 @@ const App = struct {
         );
     }
 
-    fn render(self: *App, now_ns: u64) !void {
-        switch (try self.gpu.beginFrame(renderer.Colors.CORNFLOWER_BLUE)) {
-            .unavailable => return,
-            .ready => {},
+    fn scheduleS10Actions(self: *App) void {
+        if (self.s10_smoke_role == .none or self.client.state != .joined) {
+            return;
         }
-        const size = self.gpu.getWindowSize();
-        const aspect = @as(f32, @floatFromInt(size.width)) /
-            @as(f32, @floatFromInt(size.height));
-        if (self.ownedVehiclePresentation(now_ns)) |owned| {
-            self.camera.followTarget(.{
-                owned.position[0],
-                owned.position[1] + 0.75,
-                owned.position[2],
-            }, 9);
-        } else for (self.client.world.slice()) |entry| {
-            const state = self.presentedState(entry, now_ns);
-            if (!std.meta.eql(state.owner, self.client.participant)) continue;
-            self.camera.followTarget(.{
-                state.position[0],
-                state.position[1] + 0.9,
-                state.position[2],
-            }, 7);
-            break;
+        const tick = self.client.world.server_tick;
+        if (self.s10_smoke_role == .attacker) {
+            if (self.client.world.character_count < 2) return;
+            if (self.s10_start_tick == null) self.s10_start_tick = tick;
+            const elapsed = tick -| self.s10_start_tick.?;
+            inline for (.{
+                .{ @as(u64, 5), @as(u8, 1) },
+                .{ @as(u64, 40), @as(u8, 2) },
+                .{ @as(u64, 75), @as(u8, 4) },
+            }) |milestone| {
+                if (elapsed >= milestone[0] and self.s10_milestones & milestone[1] == 0) {
+                    self.melee_action_requested = true;
+                    self.s10_milestones |= milestone[1];
+                }
+            }
+        } else if (self.s10_dead_tick) |death_tick| {
+            if (!self.s10_respawn_requested and tick >= death_tick +| 185) {
+                self.respawn_action_requested = true;
+                self.s10_respawn_requested = true;
+            }
         }
-        const view_projection = self.camera.getViewProjectionMatrix(aspect);
-        self.gpu.drawMesh(&self.ground, zm.identity(), view_projection);
-        for (self.client.world.slice()) |entry| {
-            const state = self.presentedState(entry, now_ns);
-            if (self.participantDriving(state.owner)) continue;
-            const half_yaw = state.facing_yaw * 0.5;
-            const rotation = zm.quatToMat(zm.f32x4(0, @sin(half_yaw), 0, @cos(half_yaw)));
-            const translation = zm.translation(
-                state.position[0],
-                state.position[1],
-                state.position[2],
+    }
+
+    fn finishS10Smoke(self: *App) void {
+        if (self.s10_pass_printed) return;
+        if (self.s10_smoke_role == .attacker and
+            self.client.melee_actions_accepted >= 3 and self.client.life_events >= 2)
+        {
+            std.debug.print(
+                "S10_CLIENT_ATTACKER_PASS hits={d} life_events={d}\n",
+                .{ self.client.melee_actions_accepted, self.client.life_events },
             );
-            self.gpu.drawMeshWithMaterial(
-                &self.character,
-                null,
-                if (std.meta.eql(state.owner, self.client.participant))
-                    .{ 0.15, 0.95, 0.25, 1 }
-                else
-                    .{ 0.95, 0.25, 0.15, 1 },
-                zm.mul(rotation, translation),
-                view_projection,
+            self.s10_pass_printed = true;
+            self.running = false;
+        } else if (self.s10_smoke_role == .victim and
+            self.client.respawns_accepted >= 1 and localCharacterPosition(&self.client) != null)
+        {
+            std.debug.print(
+                "S10_CLIENT_VICTIM_PASS respawns={d} incarnation={d}\n",
+                .{ self.client.respawns_accepted, self.client.avatar_incarnation },
             );
+            self.s10_pass_printed = true;
+            self.running = false;
         }
-        for (self.client.world.npcSlice()) |entry| {
-            const state = self.presentedNpc(entry, now_ns);
-            const half_yaw = state.facing_yaw * 0.5;
-            const rotation = zm.quatToMat(zm.f32x4(0, @sin(half_yaw), 0, @cos(half_yaw)));
-            const translation = zm.translation(
-                state.position[0],
-                state.position[1],
-                state.position[2],
-            );
-            self.gpu.drawMeshWithMaterial(
-                &self.character,
-                null,
-                if (state.state == .active) .{ 0.65, 0.25, 0.95, 1 } else .{ 0.45, 0.45, 0.55, 1 },
-                zm.mul(rotation, translation),
-                view_projection,
-            );
+    }
+
+    fn scheduleSmokeActions(self: *App) void {
+        if (!self.smoke_actions or self.client.state != .joined) return;
+        const tick = self.client.world.server_tick;
+        if (tick >= 100 and self.smoke_milestones & 1 == 0) {
+            self.interaction_action_requested = true;
+            self.smoke_milestones |= 1;
         }
-        for (self.client.world.vehicleSlice()) |entry| {
-            const state = self.presentedVehicle(entry, now_ns);
-            const scale = zm.scaling(1.8, 0.5, 4.0);
-            const rotation = zm.quatToMat(zm.f32x4(
-                state.rotation[0],
-                state.rotation[1],
-                state.rotation[2],
-                state.rotation[3],
-            ));
-            const translation = zm.translation(
-                state.position[0],
-                state.position[1],
-                state.position[2],
-            );
-            self.gpu.drawMeshWithMaterial(
-                &self.vehicle,
-                null,
-                if (state.driver != null) .{ 0.95, 0.65, 0.10, 1 } else .{ 0.25, 0.35, 0.95, 1 },
-                zm.mul(zm.mul(scale, rotation), translation),
-                view_projection,
-            );
+        if (tick >= 120 and self.smoke_milestones & 2 == 0) {
+            self.interaction_action_requested = true;
+            self.smoke_milestones |= 2;
         }
-        for (self.client.world.carryableSlice()) |entry| {
-            const state = self.presentedCarryable(entry, now_ns);
-            const scale = zm.scaling(
-                state.half_extents[0] * 2,
-                state.half_extents[1] * 2,
-                state.half_extents[2] * 2,
-            );
-            const rotation = zm.quatToMat(zm.f32x4(
-                state.rotation[0],
-                state.rotation[1],
-                state.rotation[2],
-                state.rotation[3],
-            ));
-            const translation = zm.translation(
-                state.position[0],
-                state.position[1],
-                state.position[2],
-            );
-            self.gpu.drawMeshWithMaterial(
-                &self.carryable,
-                null,
-                if (state.holder != null) .{ 0.15, 0.90, 0.95, 1 } else .{ 0.95, 0.85, 0.15, 1 },
-                zm.mul(zm.mul(scale, rotation), translation),
-                view_projection,
-            );
+        if (tick >= 140 and self.smoke_milestones & 4 == 0) {
+            self.vehicle_action_requested = true;
+            self.smoke_milestones |= 4;
         }
-        self.gpu.endRenderPass();
-        try self.gpu.submitFrame();
+        if (tick >= 175 and self.smoke_milestones & 8 == 0) {
+            self.vehicle_action_requested = true;
+            self.smoke_milestones |= 8;
+        }
+        if (tick >= 230 and self.smoke_milestones & 16 == 0) {
+            self.reconnect_requested = true;
+            self.smoke_reconnect_started = true;
+            self.smoke_milestones |= 16;
+        }
+    }
+
+    fn observeSmokeProgress(self: *App) void {
+        if (!self.smoke_actions) return;
+        if (self.smoke_reconnect_started and self.client.state == .disconnected) {
+            self.smoke_reconnect_disconnected = true;
+        }
+        if (self.smoke_reconnect_disconnected and self.client.state == .joined) {
+            if (self.room) |*coordinator| {
+                if (coordinator.view().state == .playable) {
+                    self.smoke_reconnect_completed = true;
+                }
+            }
+        }
+        if (self.client.state != .joined) return;
+        const tick = self.client.world.server_tick;
+        if (self.client.ownedVehicle()) |vehicle| {
+            if (self.smoke_vehicle_start == null) {
+                self.smoke_vehicle_start = vehicle.position;
+            } else if (distanceSquared(self.smoke_vehicle_start.?, vehicle.position) > 0.0004) {
+                self.smoke_vehicle_moved = true;
+            }
+        }
+        if (tick >= 185 and self.client.ownedVehicle() == null) {
+            if (localCharacterPosition(&self.client)) |position| {
+                if (self.smoke_walk_start == null) {
+                    self.smoke_walk_start = position;
+                } else if (tick >= 215 and
+                    distanceSquared(self.smoke_walk_start.?, position) > 0.01)
+                {
+                    self.smoke_walked = true;
+                }
+            }
+        }
+    }
+
+    fn finishSmokeActions(self: *const App) !void {
+        if (!self.smoke_actions) return;
+        if (self.client.world.server_tick < 215 or
+            self.client.vehicle_actions_accepted < 2 or
+            self.client.interaction_actions_accepted < 2 or
+            !self.smoke_vehicle_moved or !self.smoke_walked or
+            !self.smoke_reconnect_completed)
+        {
+            return error.GraphicalClientSmokeActionsIncomplete;
+        }
+        std.debug.print(
+            "MP6_CLIENT_SMOKE_PASS account={d} walk=true drive=true carry=true reconnect=true vehicle_actions={d} interaction_actions={d}\n",
+            .{
+                self.client.account.value,
+                self.client.vehicle_actions_accepted,
+                self.client.interaction_actions_accepted,
+            },
+        );
     }
 
     fn updateTitle(self: *App) void {
         var title_storage: [256]u8 = undefined;
         const stats = self.network.stats(self.connection);
+        const room_view = if (self.room) |*coordinator| coordinator.view() else null;
+        const room_state = if (room_view) |view| @tagName(view.state) else "direct-development";
+        const room_members = if (room_view) |view| view.member_count else 0;
+        var ready_members: u8 = 0;
+        var connected_members: u8 = 0;
+        if (room_view) |*view| for (view.memberSlice()) |member| {
+            ready_members += @intFromBool(member.ready);
+            connected_members += @intFromBool(member.connection == .connected);
+        };
+        const room_failure = if (room_view) |view|
+            if (view.failure) |failure| @tagName(failure) else "none"
+        else
+            "none";
         const title = std.fmt.bufPrintZ(
             &title_storage,
-            "Incinerator Multiplayer | {s} | entities {d} | ping {d} ms | age {d}t | net d/f/m {d}/{d}/{d} | mode {s} | carry {s} | pred {s} | correction {d}/{d} max {d:.2}m/{d:.1}deg",
+            "Room {s} members {d} ready {d} connected {d} failure {s} | session {s} | entities {d} | ping {d} ms | age {d}t | net d/f/m {d}/{d}/{d} | mode {s} | carry {s} | pred {s} | correction {d}/{d} max {d:.2}m/{d:.1}deg",
             .{
+                room_state,
+                room_members,
+                ready_members,
+                connected_members,
+                room_failure,
                 @tagName(self.client.state),
                 self.client.world.character_count + self.client.world.vehicle_count +
                     self.client.world.carryable_count + self.client.world.npc_count,
@@ -544,7 +761,7 @@ const App = struct {
                 self.client.delta_base_misses,
                 if (self.client.ownedVehicle() != null) "vehicle" else "on-foot",
                 if (self.client.heldCarryable() != null) "holding" else "empty",
-                if (self.vehicle_prediction_enabled) "on" else "off",
+                if (self.scene.vehicle_prediction_enabled) "on" else "off",
                 self.client.vehicle_prediction.soft_corrections,
                 self.client.vehicle_prediction.hard_corrections,
                 self.client.vehicle_prediction.maximum_position_error_m,
@@ -554,91 +771,43 @@ const App = struct {
         _ = c.SDL_SetWindowTitle(self.window, title.ptr);
     }
 
+    fn finishRoomSynchronization(self: *App) !void {
+        if (!self.client.world.initialized) return;
+        if (self.room) |*coordinator| {
+            if (coordinator.view().state == .synchronizing) {
+                _ = try coordinator.synchronized(self.room_generation);
+                self.updateTitle();
+            }
+        }
+    }
+
+    fn noteRoomNetworkLoss(self: *App) void {
+        if (self.room) |*coordinator| switch (coordinator.view().state) {
+            .playable, .authenticating, .synchronizing => {
+                self.room_generation = coordinator.networkLost() catch return;
+                self.updateTitle();
+            },
+            else => {},
+        };
+    }
+
+    fn cancelRoomFlow(self: *App) void {
+        const coordinator = if (self.room) |*value| value else return;
+        const generation = coordinator.cancel() catch return;
+        _ = coordinator.cancelled(generation) catch return;
+        self.running = false;
+    }
+
+    fn leaveRoom(self: *App) void {
+        const coordinator = if (self.room) |*value| value else return;
+        const generation = coordinator.leave() catch return;
+        _ = coordinator.left(generation) catch return;
+        self.running = false;
+    }
+
     fn key(self: *const App, scancode: c.SDL_Scancode) bool {
         const index: usize = @intCast(scancode);
         return index < self.keys.len and self.keys[index];
-    }
-
-    fn presentedState(
-        self: *const App,
-        entry: replicated_world.Entry,
-        now_ns: u64,
-    ) protocol.CharacterState {
-        if (std.meta.eql(entry.current.owner, self.client.participant)) {
-            if (self.client.localPresentation()) |predicted| return predicted;
-        }
-        const elapsed = now_ns -| self.last_snapshot_ns;
-        const alpha = if (self.snapshot_interval_ns == 0)
-            @as(f32, 1)
-        else
-            @as(f32, @floatFromInt(elapsed)) /
-                @as(f32, @floatFromInt(self.snapshot_interval_ns));
-        return replicated_world.World.interpolate(entry, alpha);
-    }
-
-    fn presentedVehicle(
-        self: *const App,
-        entry: replicated_world.VehicleEntry,
-        now_ns: u64,
-    ) protocol.VehicleState {
-        if (self.vehicle_prediction_enabled and entry.current.driver != null and
-            std.meta.eql(entry.current.driver.?, self.client.participant))
-        {
-            if (self.client.localVehiclePresentation()) |predicted| return predicted;
-        }
-        const elapsed = now_ns -| self.last_snapshot_ns;
-        const alpha = if (self.snapshot_interval_ns == 0)
-            @as(f32, 1)
-        else
-            @as(f32, @floatFromInt(elapsed)) /
-                @as(f32, @floatFromInt(self.snapshot_interval_ns));
-        return replicated_world.World.interpolateVehicle(entry, alpha);
-    }
-
-    fn presentedCarryable(
-        self: *const App,
-        entry: replicated_world.CarryableEntry,
-        now_ns: u64,
-    ) protocol.CarryableState {
-        const elapsed = now_ns -| self.last_snapshot_ns;
-        const alpha = if (self.snapshot_interval_ns == 0)
-            @as(f32, 1)
-        else
-            @as(f32, @floatFromInt(elapsed)) /
-                @as(f32, @floatFromInt(self.snapshot_interval_ns));
-        return replicated_world.World.interpolateCarryable(entry, alpha);
-    }
-
-    fn presentedNpc(
-        self: *const App,
-        entry: replicated_world.NpcEntry,
-        now_ns: u64,
-    ) protocol.NpcState {
-        const elapsed = now_ns -| self.last_snapshot_ns;
-        const interval = std.time.ns_per_s / budgets.npc_snapshot_hz;
-        const alpha = @as(f32, @floatFromInt(elapsed)) /
-            @as(f32, @floatFromInt(interval));
-        return replicated_world.World.interpolateNpc(entry, alpha);
-    }
-
-    fn ownedVehiclePresentation(self: *const App, now_ns: u64) ?protocol.VehicleState {
-        for (self.client.world.vehicleSlice()) |entry| {
-            if (entry.current.driver) |driver| {
-                if (std.meta.eql(driver, self.client.participant)) {
-                    return self.presentedVehicle(entry, now_ns);
-                }
-            }
-        }
-        return null;
-    }
-
-    fn participantDriving(self: *const App, participant: @TypeOf(self.client.participant)) bool {
-        for (self.client.world.vehicleSlice()) |entry| {
-            if (entry.current.driver) |driver| {
-                if (std.meta.eql(driver, participant)) return true;
-            }
-        }
-        return false;
     }
 };
 
@@ -648,8 +817,12 @@ pub fn main(init: std.process.Init) !void {
     var app = try App.init(init, invocation);
     defer app.deinit();
     std.debug.print(
-        "MP4_CLIENT_CONNECT endpoint={s} account={d} controls=WASD/SPACE/LSHIFT/E enter-exit/F collect-drop/P prediction/F8 reconnect/ESC\n",
-        .{ invocation.endpoint, invocation.account },
+        "MP6_CLIENT_CONNECT endpoint={s} account={d} ticketed={} controls=WASD/SPACE/LSHIFT/E enter-exit/F collect-drop/Q melee/R respawn/P prediction/F8 reconnect/C cancel/L leave/ESC\n",
+        .{
+            app.endpoint[0..app.endpoint_len],
+            app.client.account.value,
+            invocation.ticket_path != null,
+        },
     );
     try app.run(invocation.max_frames);
 }
@@ -677,6 +850,38 @@ fn normalizedMove(value: [2]f32) [2]f32 {
     return .{ value[0] * scale, value[1] * scale };
 }
 
+fn localCharacterPosition(client: *const session_client.Client) ?[3]f32 {
+    for (client.world.slice()) |entry| {
+        if (std.meta.eql(entry.current.owner, client.participant)) {
+            return entry.current.position;
+        }
+    }
+    return null;
+}
+
+fn s10TargetYaw(client: *const session_client.Client) ?f32 {
+    const own = localCharacterPosition(client) orelse return null;
+    var selected: ?[3]f32 = null;
+    var selected_distance = std.math.inf(f32);
+    for (client.world.slice()) |entry| {
+        if (std.meta.eql(entry.current.owner, client.participant)) continue;
+        const distance = distanceSquared(own, entry.current.position);
+        if (distance < selected_distance) {
+            selected_distance = distance;
+            selected = entry.current.position;
+        }
+    }
+    const target = selected orelse return null;
+    return std.math.atan2(target[0] - own[0], -(target[2] - own[2]));
+}
+
+fn distanceSquared(a: [3]f32, b: [3]f32) f32 {
+    const x = b[0] - a[0];
+    const y = b[1] - a[1];
+    const z = b[2] - a[2];
+    return x * x + y * y + z * z;
+}
+
 fn parseInvocation(args: []const []const u8) !Invocation {
     var result = Invocation{};
     var index: usize = 1;
@@ -687,18 +892,43 @@ fn parseInvocation(args: []const []const u8) !Invocation {
                 return error.InvalidEndpoint;
             }
             result.endpoint = args[index];
+            result.endpoint_explicit = true;
         } else if (std.mem.eql(u8, args[index], "--account")) {
             index += 1;
             if (index >= args.len) return error.MissingAccount;
             result.account = try std.fmt.parseInt(u64, args[index], 10);
             if (result.account == 0) return error.InvalidAccount;
+            result.account_explicit = true;
+        } else if (std.mem.eql(u8, args[index], "--ticket")) {
+            index += 1;
+            if (index >= args.len or args[index].len == 0) return error.MissingRoomTicket;
+            result.ticket_path = args[index];
         } else if (std.mem.eql(u8, args[index], "--max-frames")) {
             index += 1;
             if (index >= args.len) return error.MissingMaxFrames;
             result.max_frames = try std.fmt.parseInt(u64, args[index], 10);
+        } else if (std.mem.eql(u8, args[index], "--smoke-actions")) {
+            result.smoke_actions = true;
+        } else if (std.mem.eql(u8, args[index], "--s10-attacker")) {
+            if (result.s10_smoke_role != .none) return error.DuplicateS10SmokeRole;
+            result.s10_smoke_role = .attacker;
+        } else if (std.mem.eql(u8, args[index], "--s10-victim")) {
+            if (result.s10_smoke_role != .none) return error.DuplicateS10SmokeRole;
+            result.s10_smoke_role = .victim;
         } else return error.UnknownArgument;
     }
     return result;
+}
+
+fn failureFromRejection(reason: protocol.RejectionReason) room_coordinator.Failure {
+    return switch (reason) {
+        .protocol_mismatch, .build_mismatch => .version_mismatch,
+        .content_mismatch => .content_mismatch,
+        .session_full => .room_full,
+        .unauthorized => .authorization_rejected,
+        .reconnect_expired => .reconnect_expired,
+        else => .authority_unavailable,
+    };
 }
 
 fn elapsedNs(start: std.Io.Clock.Timestamp, end: std.Io.Clock.Timestamp) u64 {

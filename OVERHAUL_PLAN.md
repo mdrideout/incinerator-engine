@@ -1,8 +1,9 @@
 # Incinerator Engine Overhaul Plan
 
-**Status:** Pre-multiplayer program, post-M3 greenfield cleanup, MP0-MP5, the
-M4 multiplayer foundation, and M5 client/authority cohesion are complete;
-secondary platforms are deferred
+**Status:** Pre-multiplayer program, post-M3 greenfield cleanup, MP0-MP6, the
+M4 multiplayer foundation, M5 client/authority cohesion, M6 transactional
+authority, and S10 damage/death/respawn are complete and accepted; secondary
+platforms are deferred
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
@@ -17,8 +18,10 @@ secondary platforms are deferred
 
 **Multiplayer-first strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
-**Post-M5 authority hardening:**
-[`docs/design/post-m5-transactional-authority-cycle.md`](docs/design/post-m5-transactional-authority-cycle.md)
+**Current phase sequence:**
+[`M6 accepted`](docs/validation/m6-transactional-authority-cycle.md)
+→ [`MP6 accepted`](docs/validation/mp6-playable-multiplayer-room-flow.md)
+→ [`S10 accepted`](docs/validation/s10-damage-death-respawn.md)
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
 
@@ -463,8 +466,8 @@ before dependency resolution.
 |---|---|---|
 | M0 | Reproducible baseline and blocking decisions | Complete |
 | M1 | Trustworthy Apple Silicon macOS build, shader, dependency, CI, and packaging gate | Complete for the macOS-only scope; all secondary-platform work is deferred |
-| M2 | Immediate ownership and correctness hazards removed | Complete for its foundational scope; S3 owns the later streamed-content lifecycle and evidence |
-| S0 | Crate lifecycle slice proves the kernel and feature contract | Complete; one-world-per-process and pre-network queue backpressure are accepted follow-on constraints |
+| M2 | Immediate ownership and correctness hazards removed | Complete; the later streamed-content lifecycle and evidence were completed in S3 |
+| S0 | Crate lifecycle slice proves the kernel and feature contract | Complete; later multiplayer backpressure work is complete through M4/M5 and one-world-per-process remains an accepted constraint |
 | S1 | Character walks around one block | Complete; independent architecture, correctness, and build/evidence reviews pass with no remaining P0/P1/P2 finding |
 | S2 | Player enters and drives one vehicle | Complete; real Jolt vehicle, driver authority, Snapshot V3, procedural presentation, native Metal lifecycle smokes, ReleaseFast baseline, and independent reviews pass |
 | S3 | One district/chunk loads and unloads asynchronously | Complete; procedural/headless ownership, cooked/Metal residency, host proximity, cancellation/drain, repeated installed lifecycle evidence, and independent reviews pass |
@@ -473,11 +476,13 @@ before dependency resolution.
 | S6 | Two authored districts cook, install, select, and stream deterministically | Complete; exact catalog admission, two-slot logical/visual authority, durable/replay cohorts, native overlap/drain evidence, and independent reviews pass |
 | S7 | Persistent interaction and cross-district world ownership are proven | Complete; transactional authority, save/replay, native Metal, 128-cycle measurement, and independent review pass |
 | S8 | A bounded navigation-driven population crosses streamed districts safely at representative scale | Complete and independently reviewed |
-| M3 | A server-shaped headless product is operationally ready for external producers | Complete and independently reviewed; pre-network capability gate only |
-| S9 / MP0-MP5 | Establish one multiplayer-first authority model for solo, listen, and dedicated placements, then prove two clients and the existing gameplay features | MP0-MP5 complete for the Apple Silicon macOS foundation scope; M5 subsequently closed the residual broad embedded-solo facade |
+| M3 | A server-shaped headless product is operationally ready for external producers | Complete and independently reviewed |
+| S9 / MP0-MP5 | Establish one multiplayer-first authority model, prove two clients, and network the completed gameplay surface | Complete for the Apple Silicon macOS foundation scope; M5 subsequently closed the residual embedded-solo facade |
 | M4 | Multiplayer foundation is ready for future gameplay slices | Complete and accepted on Apple Silicon macOS |
 | M5 | Embedded solo becomes a cohesive placement of the same client/authority model before another gameplay slice | Complete and accepted on Apple Silicon macOS |
-| Post-M5 authority transaction | Bounded ingress and derivative outputs commit as one authority mutation cycle while adapters/storage retain separate lifecycles | Planned; explicitly not part of the current M5 completion claim |
+| M6 | Bounded ingress and prepared derivatives use one fail-stop atomic-publication cycle while delivery/storage retain separate lifecycles | Complete, independently reviewed, and accepted on Apple Silicon macOS |
+| MP6 | Graphical create/join/ready/connect/reconnect/close works through solo, constrained listen/LAN, and dedicated direct-IP placements | Complete, independently reviewed, and accepted on Apple Silicon macOS |
+| S10 | Players and NPCs use authoritative vitals, death cleanup, and generational avatar respawn | Complete, independently reviewed, and accepted on Apple Silicon macOS |
 
 M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
 slices. M3 is a narrow pre-network readiness gate, not a speculative server
@@ -490,9 +495,13 @@ impairment, accepted-ingress replay, feature-owned replication, bounded district
 relevance/deltas, and open room admission. M5 closes the deliberately retained
 embedded-solo physical and semantic cohesion gap before a new gameplay slice.
 That M5 gate is complete and accepted.
-The separately recorded post-M5 authority transaction then hardens bounded
-ingress, derivative publication, delivery, and durable-decision boundaries; it
-does not move network I/O or blocking storage into the simulation tick.
+M6 now hardens bounded ingress, derivative publication, delivery, and
+durable-decision boundaries without moving network I/O or blocking storage into
+the simulation tick. MP6 now makes the completed room core playable and proves
+a constrained localhost/LAN listen placement plus dedicated ticketed parity
+without Steam/NAT/public-service scope. S10 now closes the next product slice:
+authoritative melee, shared player/NPC vitals, death, typed ownership cleanup,
+dead reconnect, and generational safe avatar respawn.
 Shared diagnostics, storage, content, rendering, and server-shaped capabilities
 are extracted only as concrete slices prove their consumers.
 
@@ -1388,11 +1397,13 @@ narrow owned capabilities rather than sharing the broad legacy `App` and
 - [x] Architecture, correctness, build, native macOS, and documentation reviews
   leave no unrecorded actionable P0/P1/P2 issue in M5 scope.
 
-M5 does not claim a single transactional eight-stage ingress-to-publication
-cycle. That follow-up is specified in
-[`Post-M5 Transactional Authority Cycle`](docs/design/post-m5-transactional-authority-cycle.md)
-and remains planned until its own implementation and exact final-tree evidence
-exist.
+M5 did not claim a single transactional eight-stage ingress-to-publication
+cycle. M6 now closes that boundary as recorded in
+[`M6 Transactional Authority Cycle Acceptance`](docs/validation/m6-transactional-authority-cycle.md).
+The accepted sequence after M6 is
+[`MP6 Playable Multiplayer Room Flow`](docs/design/mp6-playable-multiplayer-room-flow.md),
+then
+[`S10 Damage, Death, And Respawn`](docs/design/s10-damage-death-respawn.md).
 
 ---
 
@@ -1681,9 +1692,15 @@ Record evidence rather than relying only on target numbers:
 38. [x] Complete and independently review M5 client/authority cohesion using
     `docs/design/m5-client-authority-cohesion.md`; do not begin another gameplay
     slice until the acceptance record is fully evidenced.
-39. [ ] After M5 acceptance, implement and review the bounded transactional
-    authority cycle in `docs/design/post-m5-transactional-authority-cycle.md`
-    before treating ingress-to-publication atomicity as an engine guarantee.
+39. [x] Implement and independently review M6 in
+    `docs/design/post-m5-transactional-authority-cycle.md`; claim fail-stop
+    atomic publication, not rollback of an already-stepped Flecs/Jolt world.
+40. [x] After M6 acceptance, implement and independently review the graphical
+    MP6 room flow in `docs/design/mp6-playable-multiplayer-room-flow.md`,
+    including constrained localhost/LAN listen and dedicated direct-IP play.
+41. [x] After MP6 acceptance, implement and independently review the S10
+    authoritative damage/death/respawn slice in
+    `docs/design/s10-damage-death-respawn.md`.
 
 ---
 
@@ -1747,3 +1764,7 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-14 | Began M5 client/authority cohesion | Recorded the in-progress contract and pending evidence matrix to replace the broad embedded-solo facade, unify local/dedicated authority semantics and clock, separate graphical/streaming/developer/persistence owners, and retain complete playable M4 behavior without compatibility shims |
 | 2026-07-14 | Recorded the post-M5 transactional authority pressure point | Kept M5's real nested placement/authority/runtime traces distinct from a future atomic eight-stage cycle; planned bounded mailbox batching, prepared derivatives, atomic publication, delivery leases, and queued durable decisions without putting transport or blocking storage inside the fixed tick |
 | 2026-07-14 | Completed and independently reviewed M5 client/authority cohesion | One shared embedded/dedicated authority core; ordinary gameplay through semantic admission and correlated client results; replicated-only player presentation; opaque graphical support owners; private snapshot/diagnostic boundaries; CSPRNG/HMAC reconnect credentials; fault-latched authority mutation; 60 Hz authority and 20 Hz replication independent of presentation; focused, architecture, M4, full Debug/ReleaseFast, cold, source-package, and 81-step installed macOS gates; no unrecorded actionable P0/P1/P2 M5 issue, with atomic ingress/publication retained as the explicit post-M5 pressure point |
+| 2026-07-14 | Researched and accepted the next planning sequence without claiming implementation | M6 now defines fail-stop atomic publication, class-reserved ingress, adapter leases, application receipts, and durable dispositions; MP6 defines a generation-safe graphical room coordinator plus constrained localhost/LAN listen and dedicated direct-IP play; S10 defines feature-owned vitals, authoritative melee, exactly-once death cleanup, and generational avatar respawn; all prior M0-M5/S0-S9/MP0-MP5 completion claims remain closed |
+| 2026-07-14 | Completed and independently reviewed M6 transactional authority cycle | Class-reserved stable-prefix ingress; eight explicit fail-stop stages; preflighted admission with participant/nonce/credential rollback evidence; double-buffered participant/replication publication metadata; generational outbound leases; per-lane application delivery IDs and receipts; 32-record reconnect replay after welcome confirmation; stage-seven durable dispositions with storage outside the tick; focused, source-package, cold, M4/M5, and installed Metal aggregate gates passed with no unrecorded actionable P0/P1/P2 M6 finding |
+| 2026-07-14 | Completed and independently reviewed MP6 playable multiplayer room flow | Generation-safe sanitized room coordinator; bounded account-bound signed tickets; constrained listen composition with host typed local link and guest real GNS; ticketed dedicated parity; shared client-owned Metal presentation; selectable deterministic lifecycle impairment; two graphical clients walking, driving, carrying, reconnecting, and closing without migration; 153/153 extracted-source steps with 316/316 tests plus 32/32 cold steps with 52/52 tests; no remaining actionable P0/P1/P2 MP6 finding |
+| 2026-07-14 | Completed and independently reviewed S10 authoritative damage/death/respawn | Backend-neutral bounded integer vitals for players/NPCs; deterministic overkill clamp and exactly-once death; protocol revision 10 health/life/incarnation projection; authority-derived Jolt-queried melee; typed vehicle/carry/character teardown; stable participant with disposable generational avatar; dead reconnect; three-second explicit collision/threat-aware respawn; reliable M6 gameplay results/life events; canonical dead-vitals restart; two-client graphical listen and dedicated proofs; complete inherited MP6/M6/M5/M4/package/cold/macOS regression; no remaining actionable P0/P1/P2 S10 finding |

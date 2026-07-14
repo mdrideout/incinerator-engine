@@ -15,6 +15,7 @@ const vehicle_contract = @import("vehicle_contract");
 const district_feature_contract = @import("district_feature_contract");
 const interaction_feature_contract = @import("interaction_feature_contract");
 const npc_contract = @import("npc_contract");
+const vitals_contract = @import("vitals_contract");
 const district_contract = @import("district_contract");
 const sandbox_district_recipe = @import("sandbox_district_recipe");
 const sandbox_diagnostics_contract = @import("sandbox_diagnostics_contract");
@@ -34,10 +35,244 @@ pub const Outbound = struct {
     message: protocol.ServerMessage,
     delivery: transport_policy.Delivery,
     lane: transport_policy.Lane,
+    delivery_id: u64 = 0,
     close_after_send: bool = false,
 };
 
+const ReplayMessage = union(enum) {
+    vehicle_action_result: protocol.VehicleActionResult,
+    interaction_action_result: protocol.InteractionActionResult,
+    melee_action_result: protocol.MeleeActionResult,
+    respawn_action_result: protocol.RespawnActionResult,
+    life_event: protocol.LifeEvent,
+
+    fn serverMessage(self: ReplayMessage) protocol.ServerMessage {
+        return switch (self) {
+            .vehicle_action_result => |value| .{ .vehicle_action_result = value },
+            .interaction_action_result => |value| .{ .interaction_action_result = value },
+            .melee_action_result => |value| .{ .melee_action_result = value },
+            .respawn_action_result => |value| .{ .respawn_action_result = value },
+            .life_event => |value| .{ .life_event = value },
+        };
+    }
+};
+
+const ReliableReplayRecord = struct {
+    active: bool = false,
+    delivery_id: u64 = 0,
+    message: ReplayMessage = undefined,
+};
+
+/// One adapter-owned view of the live publication head. The authority keeps
+/// the message until the adapter explicitly commits this generation.
+pub const OutboundLease = struct {
+    generation: u64,
+    outbound: Outbound,
+};
+
 const Outbox = engine.BoundedQueue(Outbound, budgets.outbound_message_capacity);
+
+const IngressClass = enum { control, gameplay, input, notice };
+
+const IngressPayload = union(enum) {
+    connection_opened: TransportConnection,
+    connection_closed: TransportConnection,
+    decoded: struct {
+        transport: TransportConnection,
+        message: protocol.ClientMessage,
+        admission_time_unix_seconds: ?u64,
+    },
+    malformed: TransportConnection,
+    oversized: TransportConnection,
+};
+
+const IngressEnvelope = struct {
+    ordinal: u64,
+    payload: IngressPayload,
+};
+
+fn IngressQueue(comptime capacity: usize) type {
+    return engine.BoundedQueue(IngressEnvelope, capacity);
+}
+
+/// Single-owner, class-reserved mailbox. Each class has guaranteed space and
+/// the frozen cycle prefix is merged back into original arrival order.
+const IngressMailbox = struct {
+    control: IngressQueue(budgets.inbound_control_capacity) = .{},
+    gameplay: IngressQueue(budgets.inbound_gameplay_capacity) = .{},
+    input: IngressQueue(budgets.inbound_input_capacity) = .{},
+    notice: IngressQueue(budgets.inbound_notice_capacity) = .{},
+    next_ordinal: u64 = 1,
+    high_water: u16 = 0,
+    rejected: u64 = 0,
+
+    fn push(self: *IngressMailbox, class: IngressClass, payload: IngressPayload) !u64 {
+        const ordinal = self.next_ordinal;
+        if (ordinal == 0) return error.IngressOrdinalExhausted;
+        const envelope = IngressEnvelope{ .ordinal = ordinal, .payload = payload };
+        (switch (class) {
+            .control => self.control.push(envelope),
+            .gameplay => self.gameplay.push(envelope),
+            .input => self.input.push(envelope),
+            .notice => self.notice.push(envelope),
+        }) catch {
+            self.rejected +|= 1;
+            return error.IngressClassCapacityReached;
+        };
+        self.next_ordinal +%= 1;
+        self.high_water = @max(self.high_water, @as(u16, @intCast(self.len())));
+        return ordinal;
+    }
+
+    fn len(self: *const IngressMailbox) usize {
+        return self.control.len + self.gameplay.len + self.input.len + self.notice.len;
+    }
+
+    fn popOldest(self: *IngressMailbox) ?IngressEnvelope {
+        var oldest: ?struct { class: IngressClass, ordinal: u64 } = null;
+        inline for (.{
+            .{ IngressClass.control, &self.control },
+            .{ IngressClass.gameplay, &self.gameplay },
+            .{ IngressClass.input, &self.input },
+            .{ IngressClass.notice, &self.notice },
+        }) |candidate| {
+            if (candidate[1].peek()) |envelope| {
+                if (oldest == null or envelope.ordinal < oldest.?.ordinal) {
+                    oldest = .{ .class = candidate[0], .ordinal = envelope.ordinal };
+                }
+            }
+        }
+        const selected = oldest orelse return null;
+        return switch (selected.class) {
+            .control => self.control.pop(),
+            .gameplay => self.gameplay.pop(),
+            .input => self.input.pop(),
+            .notice => self.notice.pop(),
+        };
+    }
+};
+
+const CycleScratch = struct {
+    ingress: [budgets.inbound_message_capacity]IngressEnvelope = undefined,
+    admission: [budgets.inbound_message_capacity]AdmissionDisposition = undefined,
+    ingress_len: u16 = 0,
+
+    fn clear(self: *CycleScratch) void {
+        self.ingress_len = 0;
+    }
+
+    fn freeze(self: *CycleScratch, mailbox: *IngressMailbox) void {
+        self.clear();
+        const frozen_len = mailbox.len();
+        std.debug.assert(frozen_len <= self.ingress.len);
+        while (self.ingress_len < frozen_len) {
+            self.ingress[self.ingress_len] = mailbox.popOldest().?;
+            self.ingress_len += 1;
+        }
+    }
+
+    fn slice(self: *const CycleScratch) []const IngressEnvelope {
+        return self.ingress[0..self.ingress_len];
+    }
+};
+
+const AdmissionDisposition = enum {
+    apply,
+    discard,
+};
+
+const DurableCaptureResult = struct {
+    request_id: snapshot_source.RequestId,
+    disposition: snapshot_source.Disposition,
+};
+
+const DurableRequestQueue = struct {
+    next_request_id: snapshot_source.RequestId = 1,
+    pending: ?snapshot_source.RequestId = null,
+    result: ?DurableCaptureResult = null,
+
+    fn request(self: *DurableRequestQueue) !snapshot_source.RequestId {
+        if (self.pending != null or self.result != null) return error.CaptureBusy;
+        const request_id = self.next_request_id;
+        if (request_id == 0) return error.CaptureRequestIdExhausted;
+        self.next_request_id +%= 1;
+        self.pending = request_id;
+        return request_id;
+    }
+
+    fn take(
+        self: *DurableRequestQueue,
+        request_id: snapshot_source.RequestId,
+    ) !?snapshot_source.Disposition {
+        const result = self.result orelse {
+            if (self.pending == request_id) return null;
+            return error.UnknownCaptureRequest;
+        };
+        if (result.request_id != request_id) return error.UnknownCaptureRequest;
+        self.result = null;
+        return result.disposition;
+    }
+};
+
+fn ingressClass(message: protocol.ClientMessage) IngressClass {
+    return switch (message) {
+        .hello, .baseline_ack, .snapshot_ack, .delivery_receipt, .disconnect => .control,
+        .vehicle_action, .interaction_action, .melee_action, .respawn_action => .gameplay,
+        .input, .vehicle_input => .input,
+    };
+}
+
+fn reliableMessageReceipted(message: protocol.ServerMessage) bool {
+    return switch (message) {
+        .welcome => true,
+        .vehicle_action_result,
+        .interaction_action_result,
+        .melee_action_result,
+        .respawn_action_result,
+        .life_event,
+        => true,
+        .snapshot, .relevance_baseline, .rejected, .disconnected => false,
+    };
+}
+
+test "ingress mailbox reserves control capacity and freezes a stable ordered prefix" {
+    var mailbox = IngressMailbox{};
+    var input_ordinals: [budgets.inbound_input_capacity]u64 = undefined;
+    for (&input_ordinals, 0..) |*ordinal, index| {
+        ordinal.* = try mailbox.push(.input, .{ .connection_closed = .{
+            .value = @intCast(index + 1),
+        } });
+    }
+    try std.testing.expectError(
+        error.IngressClassCapacityReached,
+        mailbox.push(.input, .{ .connection_closed = .{ .value = 10_000 } }),
+    );
+
+    const control_ordinal = try mailbox.push(
+        .control,
+        .{ .connection_opened = .{ .value = 20_000 } },
+    );
+    try std.testing.expect(control_ordinal > input_ordinals[input_ordinals.len - 1]);
+
+    var scratch = CycleScratch{};
+    scratch.freeze(&mailbox);
+    try std.testing.expectEqual(input_ordinals.len + 1, scratch.slice().len);
+    for (scratch.slice(), 0..) |envelope, index| {
+        const expected = if (index < input_ordinals.len)
+            input_ordinals[index]
+        else
+            control_ordinal;
+        try std.testing.expectEqual(expected, envelope.ordinal);
+    }
+
+    const next_cycle_ordinal = try mailbox.push(
+        .control,
+        .{ .connection_closed = .{ .value = 20_000 } },
+    );
+    try std.testing.expectEqual(@as(usize, 1), mailbox.len());
+    try std.testing.expectEqual(next_cycle_ordinal, mailbox.control.peek().?.ordinal);
+    try std.testing.expectEqual(input_ordinals.len + 1, scratch.slice().len);
+}
 
 const ConnectionSlot = struct {
     active: bool = false,
@@ -54,6 +289,8 @@ const ConnectionSlot = struct {
     reliable_events_this_tick: u16 = 0,
 };
 
+const PlayerLifecycle = enum { spawning, alive, dead, respawn_pending };
+
 const ParticipantSlot = struct {
     active: bool = false,
     generation: u16 = 0,
@@ -63,9 +300,15 @@ const ParticipantSlot = struct {
     reconnect: identity.ReconnectToken = .invalid,
     retained_reconnect: identity.ReconnectToken = .invalid,
     reconnect_confirmation_pending: bool = false,
+    pending_welcome_delivery_id: u64 = 0,
     reconnect_deadline_tick: u64 = 0,
     character: ?engine.PersistentId = null,
     replicated: identity.ReplicatedEntityId = .invalid,
+    avatar_incarnation: u16 = 1,
+    lifecycle: PlayerLifecycle = .spawning,
+    vitals_pending: bool = false,
+    death_tick: u64 = 0,
+    respawn_available_tick: u64 = 0,
     last_received_input: identity.InputSequence = .{ .value = 0 },
     last_applied_input: identity.InputSequence = .{ .value = 0 },
     pending_inputs: PendingInputs = .{},
@@ -78,11 +321,24 @@ const ParticipantSlot = struct {
     holding_carryable_index: ?u8 = null,
     last_interaction_action: identity.ActionSequence = .{ .value = 0 },
     pending_interaction_action: ?protocol.InteractionAction = null,
+    last_melee_action: identity.ActionSequence = .{ .value = 0 },
+    pending_melee_action: ?protocol.MeleeAction = null,
+    melee_cooldown_until_tick: u64 = 0,
+    last_respawn_action: identity.ActionSequence = .{ .value = 0 },
+    pending_respawn_action: ?protocol.RespawnAction = null,
     interaction_cleanup_pending: bool = false,
     relevance_coord: district_contract.ChunkCoord = sandbox_district_recipe.navigation_west_coord,
     baseline_id: u32 = 0,
     baseline_acknowledged: u32 = 0,
     baseline_sent: bool = false,
+    baseline_eligible_tick: u64 = 0,
+    next_control_delivery_id: u64 = 1,
+    next_gameplay_delivery_id: u64 = 1,
+    applied_control_delivery_id: u64 = 0,
+    applied_gameplay_delivery_id: u64 = 0,
+    replay_cursor_delivery_id: u64 = 0,
+    replay_records: [budgets.reliable_replay_records_per_participant]ReliableReplayRecord =
+        @splat(.{}),
     exit_pending: bool = false,
     spawn_pending: bool = false,
     host_spawn_request_id: ?u64 = null,
@@ -169,6 +425,11 @@ fn clearParticipantInputs(participant: *ParticipantSlot) void {
     participant.held_input_started_tick = 0;
 }
 
+fn nextGeneration(current: u16) u16 {
+    const candidate = current +% 1;
+    return if (candidate == 0) 1 else candidate;
+}
+
 const VehicleSlot = struct {
     active: bool = false,
     spawn_pending: bool = false,
@@ -191,6 +452,22 @@ const NpcSlot = struct {
     generation: u16 = 0,
     persistent: ?engine.PersistentId = null,
     replicated: identity.ReplicatedEntityId = .invalid,
+    vitals_pending: bool = false,
+    despawn_pending: bool = false,
+};
+
+const melee_damage: u16 = 34;
+const melee_range: f32 = 2.75;
+const melee_minimum_forward_dot: f32 = 0.2;
+const melee_cooldown_ticks: u64 = budgets.authority_tick_hz / 2;
+const respawn_cooldown_ticks: u64 = budgets.authority_tick_hz * 3;
+
+const MeleeTarget = struct {
+    kind: vitals_contract.TargetKind,
+    persistent: engine.PersistentId,
+    replicated: identity.ReplicatedEntityId,
+    incarnation: u16,
+    distance_squared: f32,
 };
 
 pub const Options = struct {
@@ -470,6 +747,7 @@ pub const AcceptedIngress = struct {
     vehicle: identity.ReplicatedEntityId,
     carryable: identity.ReplicatedEntityId = .invalid,
     vehicle_control: [4]f32,
+    avatar_incarnation: u16 = 0,
 
     pub const Kind = enum(u8) {
         character = 1,
@@ -478,6 +756,8 @@ pub const AcceptedIngress = struct {
         vehicle_exit = 4,
         interaction_collect = 5,
         interaction_drop = 6,
+        melee = 7,
+        respawn = 8,
     };
 };
 
@@ -527,19 +807,32 @@ const AuthorityCore = struct {
     observation_mode: ObservationMode,
     observations: HostObservations = .{},
     snapshot_source_issued: bool = false,
+    durable_requests: DurableRequestQueue = .{},
+    prepared_durable_result: ?DurableCaptureResult = null,
     persistence_cohort: PersistenceCohort,
     credential_issuer: CredentialIssuer,
     session: identity.SessionId,
     connections: [budgets.max_participants]ConnectionSlot = @splat(.{}),
-    participants: [budgets.max_participants]ParticipantSlot = @splat(.{}),
+    participants: *[budgets.max_participants]ParticipantSlot,
+    prepared_participants: *[budgets.max_participants]ParticipantSlot,
     vehicles: [budgets.max_vehicles]VehicleSlot = @splat(.{}),
     carryables: [budgets.max_carryables]CarryableSlot = @splat(.{}),
     npcs: [budgets.max_npcs]NpcSlot = @splat(.{}),
     replication: *[budgets.max_participants]ReplicationState,
+    prepared_replication: *[budgets.max_participants]ReplicationState,
     options: Options,
     admission_time_unix_seconds: u64 = 0,
+    mailbox: IngressMailbox = .{},
+    scratch: CycleScratch = .{},
     outbox: *Outbox,
+    prepared_outbox: *Outbox,
+    publication_preparing: bool = false,
+    publication_metadata_staged: bool = false,
+    lease_active: bool = false,
+    lease_generation: u64 = 0,
     outbox_high_water: u16 = 0,
+    delivery_receipts: u64 = 0,
+    reliable_replays: u64 = 0,
     accepted_messages: u64 = 0,
     rejected_messages: u64 = 0,
     malformed_messages: u64 = 0,
@@ -556,6 +849,10 @@ const AuthorityCore = struct {
     interaction_actions_rejected: u64 = 0,
     stale_interaction_actions: u64 = 0,
     forced_interaction_cleanup: u64 = 0,
+    melee_actions_admitted: u64 = 0,
+    melee_hits: u64 = 0,
+    deaths: u64 = 0,
+    respawns: u64 = 0,
     baselines_emitted: u64 = 0,
     baselines_acknowledged: u64 = 0,
     stale_baseline_acks: u64 = 0,
@@ -577,6 +874,7 @@ const AuthorityCore = struct {
     active_districts: [2]bool = @splat(false),
     ingress: IngressJournal = .{},
     force_snapshot: bool = false,
+    defer_replication_this_cycle: bool = false,
     last_cycle: authority_diagnostics.CycleTrace = .{},
     first_cycle_fault: ?authority_diagnostics.CycleFault = null,
     fn init(
@@ -621,9 +919,25 @@ const AuthorityCore = struct {
         const outbox = try allocator.create(Outbox);
         errdefer allocator.destroy(outbox);
         outbox.* = .{};
+        const prepared_outbox = try allocator.create(Outbox);
+        errdefer allocator.destroy(prepared_outbox);
+        prepared_outbox.* = .{};
+        const participants = try allocator.create([budgets.max_participants]ParticipantSlot);
+        errdefer allocator.destroy(participants);
+        participants.* = @splat(.{});
+        const prepared_participants = try allocator.create(
+            [budgets.max_participants]ParticipantSlot,
+        );
+        errdefer allocator.destroy(prepared_participants);
+        prepared_participants.* = @splat(.{});
         const replication = try allocator.create([budgets.max_participants]ReplicationState);
         errdefer allocator.destroy(replication);
         replication.* = @splat(.{});
+        const prepared_replication = try allocator.create(
+            [budgets.max_participants]ReplicationState,
+        );
+        errdefer allocator.destroy(prepared_replication);
+        prepared_replication.* = @splat(.{});
         var authority = AuthorityCore{
             .allocator = allocator,
             .simulation = if (diagnostic_fault_probe)
@@ -639,8 +953,12 @@ const AuthorityCore = struct {
             .persistence_cohort = persistence_cohort,
             .credential_issuer = credential_issuer,
             .session = session,
+            .participants = participants,
+            .prepared_participants = prepared_participants,
             .outbox = outbox,
+            .prepared_outbox = prepared_outbox,
             .replication = replication,
+            .prepared_replication = prepared_replication,
             .options = options,
         };
         errdefer authority.simulation.deinit();
@@ -686,14 +1004,35 @@ const AuthorityCore = struct {
     }
 
     fn deinit(self: *AuthorityCore) void {
+        if (self.prepared_durable_result) |result| switch (result.disposition) {
+            .captured => |bytes| self.allocator.free(bytes),
+            .deferred, .failed => {},
+        };
+        if (self.durable_requests.result) |result| switch (result.disposition) {
+            .captured => |bytes| self.allocator.free(bytes),
+            .deferred, .failed => {},
+        };
         self.simulation.deinit();
+        self.allocator.destroy(self.prepared_replication);
         self.allocator.destroy(self.replication);
+        self.allocator.destroy(self.prepared_participants);
+        self.allocator.destroy(self.participants);
+        self.allocator.destroy(self.prepared_outbox);
         self.allocator.destroy(self.outbox);
         self.credential_issuer.deinit();
         self.* = undefined;
     }
 
     fn openConnection(
+        self: *AuthorityCore,
+        transport: TransportConnection,
+    ) !u64 {
+        try self.ensureOperationalMutation();
+        if (transport.value == 0) return error.InvalidTransportConnection;
+        return self.mailbox.push(.control, .{ .connection_opened = transport });
+    }
+
+    fn applyConnectionOpened(
         self: *AuthorityCore,
         transport: TransportConnection,
     ) !identity.ConnectionId {
@@ -721,6 +1060,18 @@ const AuthorityCore = struct {
     }
 
     fn transportClosed(
+        self: *AuthorityCore,
+        transport: TransportConnection,
+    ) !u64 {
+        if (transport.value == 0) return error.InvalidTransportConnection;
+        if (self.first_cycle_fault != null) {
+            self.applyTransportClosed(transport);
+            return 0;
+        }
+        return self.mailbox.push(.control, .{ .connection_closed = transport });
+    }
+
+    fn applyTransportClosed(
         self: *AuthorityCore,
         transport: TransportConnection,
     ) void {
@@ -867,25 +1218,31 @@ const AuthorityCore = struct {
         self.snapshot_source_issued = true;
         return .{
             .context = self,
-            .capture_fn = captureSnapshotForPersistence,
+            .observe_fn = observeSnapshotForDiagnostics,
+            .request_fn = requestSnapshotForPersistence,
+            .take_fn = takeSnapshotForPersistence,
+            .release_fn = releaseSnapshotForPersistence,
         };
     }
 
-    fn captureSnapshotForPersistence(
+    fn observeSnapshotForDiagnostics(
         context: *anyopaque,
         allocator: std.mem.Allocator,
     ) anyerror![]u8 {
         const self: *AuthorityCore = @ptrCast(@alignCast(context));
         if (self.first_cycle_fault != null) return error.AuthorityFaulted;
-        if (self.outbox.len != 0 or !self.observations.empty()) {
-            return error.AuthorityOutputsPending;
-        }
+        if (self.mailbox.len() != 0) return error.SessionWorkPending;
+        if (self.publication_preparing or self.lease_active or self.outbox.len != 0 or
+            !self.observations.empty()) return error.AuthorityOutputsPending;
         for (self.participants) |participant| {
             if (participant.pending_inputs.len != 0 or
                 (participant.held_input != null and !participant.held_input_applied) or
                 participant.spawn_pending or participant.despawn_pending or
                 participant.pending_vehicle_action != null or
                 participant.pending_interaction_action != null or
+                participant.pending_melee_action != null or
+                participant.pending_respawn_action != null or
+                participant.vitals_pending or
                 participant.interaction_cleanup_pending or participant.exit_pending)
             {
                 return error.SessionWorkPending;
@@ -903,6 +1260,30 @@ const AuthorityCore = struct {
         return self.simulation.save(allocator);
     }
 
+    fn requestSnapshotForPersistence(
+        context: *anyopaque,
+    ) anyerror!snapshot_source.RequestId {
+        const self: *AuthorityCore = @ptrCast(@alignCast(context));
+        if (self.first_cycle_fault != null) return error.AuthorityFaulted;
+        return self.durable_requests.request();
+    }
+
+    fn takeSnapshotForPersistence(
+        context: *anyopaque,
+        request_id: snapshot_source.RequestId,
+    ) anyerror!?snapshot_source.Disposition {
+        const self: *AuthorityCore = @ptrCast(@alignCast(context));
+        if (self.first_cycle_fault != null and self.durable_requests.result == null) {
+            return error.AuthorityFaulted;
+        }
+        return self.durable_requests.take(request_id);
+    }
+
+    fn releaseSnapshotForPersistence(context: *anyopaque, bytes: []u8) void {
+        const self: *AuthorityCore = @ptrCast(@alignCast(context));
+        self.allocator.free(bytes);
+    }
+
     fn ingestBytes(
         self: *AuthorityCore,
         transport: TransportConnection,
@@ -910,8 +1291,7 @@ const AuthorityCore = struct {
     ) !void {
         try self.ensureOperationalMutation();
         const message = protocol.decodeClient(bytes) catch {
-            self.malformed_messages +|= 1;
-            try self.rejectTransport(transport, .malformed, true);
+            _ = try self.mailbox.push(.notice, .{ .malformed = transport });
             return;
         };
         try self.ingest(transport, message);
@@ -941,23 +1321,31 @@ const AuthorityCore = struct {
         now_unix_seconds: ?u64,
     ) !void {
         try self.ensureOperationalMutation();
-        // Hello retains its explicit admission/rejection policy below. Every
-        // other typed ingress must cross the same semantic boundary as byte
-        // decoding and the in-process link before authority state is touched.
-        if (message != .hello) try protocol.validateClient(message);
-        if (now_unix_seconds) |now| try self.updateAdmissionTime(now);
+        try protocol.validateClient(message);
         if (message == .hello and self.options.room_admission != null and
             !message.hello.reconnect.isValid() and now_unix_seconds == null)
         {
             return error.RoomAdmissionRequiresTimestampedIngress;
         }
+        _ = try self.mailbox.push(ingressClass(message), .{ .decoded = .{
+            .transport = transport,
+            .message = message,
+            .admission_time_unix_seconds = now_unix_seconds,
+        } });
+    }
+
+    fn applyDecodedIngress(
+        self: *AuthorityCore,
+        transport: TransportConnection,
+        message: protocol.ClientMessage,
+        now_unix_seconds: ?u64,
+    ) !void {
+        if (now_unix_seconds) |now| try self.applyAdmissionTime(now);
         const connection_index = self.findConnection(transport) orelse
             return error.UnknownTransportConnection;
         const connection = &self.connections[connection_index];
         connection.received_messages +|= 1;
         connection.last_message_tick = self.simulation.tickIndex();
-        const accepted_messages_before = self.accepted_messages;
-
         switch (message) {
             .hello => |hello| try self.ingestHello(connection_index, hello),
             .input => |input| try self.ingestInput(connection_index, input),
@@ -967,12 +1355,15 @@ const AuthorityCore = struct {
                 connection_index,
                 action,
             ),
+            .melee_action => |action| try self.ingestMeleeAction(connection_index, action),
+            .respawn_action => |action| try self.ingestRespawnAction(connection_index, action),
             .baseline_ack => |ack| try self.ingestBaselineAck(connection_index, ack),
             .snapshot_ack => |ack| try self.ingestSnapshotAck(connection_index, ack),
+            .delivery_receipt => |receipt| try self.ingestDeliveryReceipt(
+                connection_index,
+                receipt,
+            ),
             .disconnect => |reason| try self.ingestDisconnect(connection_index, reason),
-        }
-        if (message != .hello and self.accepted_messages != accepted_messages_before) {
-            self.confirmReconnectCredential(connection_index);
         }
     }
 
@@ -993,22 +1384,52 @@ const AuthorityCore = struct {
         comptime fault_stage: ?authority_diagnostics.CycleStage,
     ) !void {
         try self.ensureOperationalMutation();
+        if (self.outbox.len != 0 or self.lease_active) {
+            return error.AuthorityOutputsPending;
+        }
+        std.debug.assert(self.prepared_outbox.len == 0);
         self.last_cycle = beginAuthorityCycle(self.simulation.tickIndex());
+        self.defer_replication_this_cycle = false;
+        self.publication_preparing = true;
+        errdefer self.publication_preparing = false;
 
-        try self.maybeInjectCycleFault(fault_stage, .pre_simulation);
-        self.prepareSimulationTick() catch |err| {
-            self.latchCycleFault(.pre_simulation, err);
+        try self.maybeInjectCycleFault(fault_stage, .ingress_freeze);
+        self.scratch.freeze(&self.mailbox);
+        recordAuthorityCycleStage(
+            &self.last_cycle,
+            .ingress_freeze,
+            self.simulation.tickIndex(),
+        );
+
+        try self.maybeInjectCycleFault(fault_stage, .admission);
+        self.planFrozenIngress() catch |err| {
+            self.failCycle(.admission, err);
             return err;
         };
         recordAuthorityCycleStage(
             &self.last_cycle,
-            .pre_simulation,
+            .admission,
+            self.simulation.tickIndex(),
+        );
+
+        try self.maybeInjectCycleFault(fault_stage, .semantic_work);
+        self.applyFrozenIngress() catch |err| {
+            self.failCycle(.semantic_work, err);
+            return err;
+        };
+        self.prepareSimulationTick() catch |err| {
+            self.failCycle(.semantic_work, err);
+            return err;
+        };
+        recordAuthorityCycleStage(
+            &self.last_cycle,
+            .semantic_work,
             self.simulation.tickIndex(),
         );
 
         try self.maybeInjectCycleFault(fault_stage, .simulation);
         self.simulation.tickObserved(observer) catch |err| {
-            self.latchCycleFault(.simulation, err);
+            self.failCycle(.simulation, err);
             return err;
         };
         recordAuthorityCycleStage(
@@ -1019,7 +1440,7 @@ const AuthorityCore = struct {
 
         try self.maybeInjectCycleFault(fault_stage, .outcome_drain);
         self.drainSimulationOutcomes() catch |err| {
-            self.latchCycleFault(.outcome_drain, err);
+            self.failCycle(.outcome_drain, err);
             return err;
         };
         recordAuthorityCycleStage(
@@ -1028,16 +1449,34 @@ const AuthorityCore = struct {
             self.simulation.tickIndex(),
         );
 
-        try self.maybeInjectCycleFault(fault_stage, .replication_extraction);
+        try self.maybeInjectCycleFault(fault_stage, .derivative_preparation);
+        self.stagePublicationMetadata();
         self.extractReplication() catch |err| {
-            self.latchCycleFault(.replication_extraction, err);
+            self.failCycle(.derivative_preparation, err);
             return err;
         };
         recordAuthorityCycleStage(
             &self.last_cycle,
-            .replication_extraction,
+            .derivative_preparation,
             self.simulation.tickIndex(),
         );
+
+        try self.maybeInjectCycleFault(fault_stage, .durable_disposition);
+        self.evaluateDurableRequest();
+        recordAuthorityCycleStage(
+            &self.last_cycle,
+            .durable_disposition,
+            self.simulation.tickIndex(),
+        );
+
+        try self.maybeInjectCycleFault(fault_stage, .publication);
+        self.publishPrepared();
+        recordAuthorityCycleStage(
+            &self.last_cycle,
+            .publication,
+            self.simulation.tickIndex(),
+        );
+        self.publication_preparing = false;
     }
 
     inline fn maybeInjectCycleFault(
@@ -1046,9 +1485,189 @@ const AuthorityCore = struct {
         comptime current_stage: authority_diagnostics.CycleStage,
     ) !void {
         if (fault_stage == current_stage) {
-            self.latchCycleFault(current_stage, error.InjectedAuthorityCycleFault);
+            self.failCycle(current_stage, error.InjectedAuthorityCycleFault);
             return error.InjectedAuthorityCycleFault;
         }
+    }
+
+    fn planFrozenIngress(self: *AuthorityCore) !void {
+        var projected_connections: [budgets.max_participants]TransportConnection =
+            @splat(.{ .value = 0 });
+        for (self.connections, 0..) |connection, index| {
+            if (connection.active) projected_connections[index] = connection.transport;
+        }
+        for (self.scratch.slice(), 0..) |envelope, index| {
+            self.scratch.admission[index] = .apply;
+            switch (envelope.payload) {
+                .connection_opened => |transport| {
+                    if (transport.value == 0) return error.InvalidTransportConnection;
+                    var free_index: ?usize = null;
+                    for (projected_connections, 0..) |projected, projected_index| {
+                        if (std.meta.eql(projected, transport)) {
+                            self.scratch.admission[index] = .discard;
+                            break;
+                        }
+                        if (projected.value == 0 and free_index == null) {
+                            free_index = projected_index;
+                        }
+                    } else if (free_index) |available| {
+                        projected_connections[available] = transport;
+                    } else {
+                        self.scratch.admission[index] = .discard;
+                    }
+                },
+                .connection_closed => |transport| {
+                    if (transport.value == 0) return error.InvalidTransportConnection;
+                    for (&projected_connections) |*projected| {
+                        if (std.meta.eql(projected.*, transport)) {
+                            projected.* = .{ .value = 0 };
+                            break;
+                        }
+                    }
+                },
+                .decoded => |decoded| {
+                    if (decoded.transport.value == 0) return error.InvalidTransportConnection;
+                    try protocol.validateClient(decoded.message);
+                    for (projected_connections) |projected| {
+                        if (std.meta.eql(projected, decoded.transport)) break;
+                    } else self.scratch.admission[index] = .discard;
+                },
+                .malformed, .oversized => |transport| {
+                    if (transport.value == 0) return error.InvalidTransportConnection;
+                },
+            }
+        }
+    }
+
+    fn applyFrozenIngress(self: *AuthorityCore) !void {
+        for (self.scratch.slice(), 0..) |envelope, index| {
+            if (self.scratch.admission[index] == .discard) {
+                self.rejected_messages +|= 1;
+                continue;
+            }
+            switch (envelope.payload) {
+                .connection_opened => |transport| {
+                    _ = self.applyConnectionOpened(transport) catch |err| switch (err) {
+                        error.DuplicateTransportConnection,
+                        error.ConnectionCapacityReached,
+                        => {
+                            self.rejected_messages +|= 1;
+                            continue;
+                        },
+                        else => return err,
+                    };
+                },
+                .connection_closed => |transport| self.applyTransportClosed(transport),
+                .decoded => |decoded| self.applyDecodedIngress(
+                    decoded.transport,
+                    decoded.message,
+                    decoded.admission_time_unix_seconds,
+                ) catch |err| switch (err) {
+                    error.UnknownTransportConnection => {
+                        self.rejected_messages +|= 1;
+                        continue;
+                    },
+                    error.AdmissionNonceHistoryCapacityReached => {
+                        const connection_index = self.findConnection(decoded.transport) orelse {
+                            self.rejected_messages +|= 1;
+                            continue;
+                        };
+                        try self.rejectConnection(connection_index, .session_full, false);
+                        continue;
+                    },
+                    error.AdmissionClockMovedBackward,
+                    error.CredentialIssuerExhausted,
+                    error.ReliableEventBudgetExceeded,
+                    error.CharacterCommandQueueFull,
+                    => {
+                        const connection_index = self.findConnection(decoded.transport) orelse {
+                            self.rejected_messages +|= 1;
+                            continue;
+                        };
+                        try self.rejectConnection(connection_index, .invalid_state, false);
+                        continue;
+                    },
+                    else => return err,
+                },
+                .malformed => |transport| {
+                    self.malformed_messages +|= 1;
+                    if (self.findConnection(transport) != null) {
+                        try self.rejectTransport(transport, .malformed, true);
+                    } else {
+                        self.rejected_messages +|= 1;
+                    }
+                },
+                .oversized => |transport| {
+                    if (self.findConnection(transport) != null) {
+                        try self.rejectTransport(transport, .oversized, true);
+                    } else {
+                        self.rejected_messages +|= 1;
+                    }
+                },
+            }
+        }
+    }
+
+    fn publishPrepared(self: *AuthorityCore) void {
+        std.debug.assert(self.outbox.len == 0);
+        std.debug.assert(!self.lease_active);
+        const previous_live = self.outbox;
+        self.outbox = self.prepared_outbox;
+        self.prepared_outbox = previous_live;
+        std.debug.assert(self.prepared_outbox.len == 0);
+        self.outbox_high_water = @max(
+            self.outbox_high_water,
+            @as(u16, @intCast(self.outbox.len)),
+        );
+        if (self.prepared_durable_result) |result| {
+            std.debug.assert(self.durable_requests.pending == result.request_id);
+            std.debug.assert(self.durable_requests.result == null);
+            self.durable_requests.pending = null;
+            self.durable_requests.result = result;
+            self.prepared_durable_result = null;
+        }
+        self.publication_metadata_staged = false;
+        self.scratch.clear();
+    }
+
+    fn failCycle(
+        self: *AuthorityCore,
+        stage: authority_diagnostics.CycleStage,
+        err: anyerror,
+    ) void {
+        self.prepared_outbox.clear();
+        self.rollbackPublicationMetadata();
+        if (self.prepared_durable_result) |result| switch (result.disposition) {
+            .captured => |bytes| self.allocator.free(bytes),
+            .deferred, .failed => {},
+        };
+        self.prepared_durable_result = null;
+        self.publication_preparing = false;
+        self.latchCycleFault(stage, err);
+    }
+
+    fn stagePublicationMetadata(self: *AuthorityCore) void {
+        std.debug.assert(!self.publication_metadata_staged);
+        self.prepared_participants.* = self.participants.*;
+        self.prepared_replication.* = self.replication.*;
+        const live_participants = self.participants;
+        self.participants = self.prepared_participants;
+        self.prepared_participants = live_participants;
+        const live_replication = self.replication;
+        self.replication = self.prepared_replication;
+        self.prepared_replication = live_replication;
+        self.publication_metadata_staged = true;
+    }
+
+    fn rollbackPublicationMetadata(self: *AuthorityCore) void {
+        if (!self.publication_metadata_staged) return;
+        const staged_participants = self.participants;
+        self.participants = self.prepared_participants;
+        self.prepared_participants = staged_participants;
+        const staged_replication = self.replication;
+        self.replication = self.prepared_replication;
+        self.prepared_replication = staged_replication;
+        self.publication_metadata_staged = false;
     }
 
     fn prepareSimulationTick(self: *AuthorityCore) !void {
@@ -1060,6 +1679,7 @@ const AuthorityCore = struct {
 
     fn drainSimulationOutcomes(self: *AuthorityCore) !void {
         self.processCrateOutcomes();
+        try self.processVitalsOutcomes();
         try self.processCharacterOutcomes();
         try self.processVehicleOutcomes();
         try self.processDistrictOutcomes();
@@ -1068,11 +1688,72 @@ const AuthorityCore = struct {
     }
 
     fn extractReplication(self: *AuthorityCore) !void {
+        try self.prepareReliableReplay();
+        if (self.defer_replication_this_cycle) {
+            self.force_snapshot = self.force_snapshot or self.hasPendingBaseline();
+            return;
+        }
         const tick_index = self.simulation.tickIndex();
         if (self.force_snapshot or tick_index % budgets.ticks_per_snapshot == 0) {
             try self.publishSnapshots();
-            self.force_snapshot = false;
+            self.force_snapshot = self.hasPendingBaseline();
         }
+    }
+
+    fn hasPendingBaseline(self: *const AuthorityCore) bool {
+        for (self.participants) |participant| {
+            if (participant.active and participant.connection_index != null and
+                !participant.baseline_sent) return true;
+        }
+        return false;
+    }
+
+    fn evaluateDurableRequest(self: *AuthorityCore) void {
+        const request_id = self.durable_requests.pending orelse return;
+        std.debug.assert(self.prepared_durable_result == null);
+        const disposition: snapshot_source.Disposition = if (self.durableDeferral()) |deferral|
+            .{ .deferred = deferral }
+        else if (self.simulation.save(self.allocator)) |bytes|
+            .{ .captured = bytes }
+        else |err|
+            .{ .failed = err };
+        self.prepared_durable_result = .{
+            .request_id = request_id,
+            .disposition = disposition,
+        };
+    }
+
+    fn durableDeferral(self: *AuthorityCore) ?snapshot_source.Deferral {
+        if (self.mailbox.len() != 0) return .session_work;
+        if (self.lease_active or self.outbox.len != 0 or
+            self.prepared_outbox.len != 0 or !self.observations.empty())
+        {
+            return .authority_outputs;
+        }
+        for (self.participants) |participant| {
+            if (participant.pending_inputs.len != 0 or
+                (participant.held_input != null and !participant.held_input_applied) or
+                participant.spawn_pending or participant.despawn_pending or
+                participant.pending_vehicle_action != null or
+                participant.pending_interaction_action != null or
+                participant.pending_melee_action != null or
+                participant.pending_respawn_action != null or
+                participant.vitals_pending or
+                participant.interaction_cleanup_pending or participant.exit_pending)
+            {
+                return .session_work;
+            }
+        }
+        if (self.simulation.operationalQuiescenceReason()) |reason| return switch (reason) {
+            .runtime_faulted => null,
+            .commands_pending => .simulation_commands,
+            .district_transition,
+            .district_outcome_reservations,
+            .district_worker_busy,
+            => .district_transition,
+            .outputs_pending => .authority_outputs,
+        };
+        return null;
     }
 
     fn latchCycleFault(
@@ -1093,14 +1774,41 @@ const AuthorityCore = struct {
         }
     }
 
-    fn pollOutbound(self: *AuthorityCore) ?Outbound {
-        return self.outbox.pop();
+    fn beginOutboundLease(self: *AuthorityCore) ?OutboundLease {
+        if (self.lease_active) {
+            return .{
+                .generation = self.lease_generation,
+                .outbound = self.outbox.peek().?,
+            };
+        }
+        const outbound = self.outbox.peek() orelse return null;
+        self.lease_generation +%= 1;
+        if (self.lease_generation == 0) self.lease_generation = 1;
+        self.lease_active = true;
+        return .{ .generation = self.lease_generation, .outbound = outbound };
+    }
+
+    fn commitOutboundLease(self: *AuthorityCore, generation: u64) !void {
+        if (!self.lease_active or generation != self.lease_generation) {
+            return error.StaleOutboundLease;
+        }
+        _ = self.outbox.pop() orelse return error.OutboundLeaseInvariant;
+        self.lease_active = false;
+    }
+
+    fn retryOutboundLease(self: *AuthorityCore, generation: u64) !void {
+        if (!self.lease_active or generation != self.lease_generation) {
+            return error.StaleOutboundLease;
+        }
     }
 
     fn stop(self: *AuthorityCore) !void {
+        if (self.publication_preparing or self.lease_active or self.outbox.len != 0) {
+            return error.AuthorityOutputsPending;
+        }
         for (0..self.connections.len) |connection_index| {
             if (!self.connections[connection_index].active) continue;
-            try self.queue(.{
+            try self.queueLive(.{
                 .connection = self.connections[connection_index].transport,
                 .message = .{ .disconnected = .authority_stopping },
                 .delivery = .reliable,
@@ -1123,13 +1831,10 @@ const AuthorityCore = struct {
         transport: TransportConnection,
     ) !void {
         try self.ensureOperationalMutation();
-        try self.rejectTransport(transport, .oversized, true);
+        _ = try self.mailbox.push(.notice, .{ .oversized = transport });
     }
 
-    /// Updated by the room/service ingress owner before ticket admission. It
-    /// is intentionally separate from deterministic simulation time.
-    fn updateAdmissionTime(self: *AuthorityCore, now_unix_seconds: u64) !void {
-        try self.ensureOperationalMutation();
+    fn applyAdmissionTime(self: *AuthorityCore, now_unix_seconds: u64) !void {
         if (now_unix_seconds < self.admission_time_unix_seconds) {
             return error.AdmissionClockMovedBackward;
         }
@@ -1143,14 +1848,23 @@ const AuthorityCore = struct {
     fn diagnostics(self: *const AuthorityCore) authority_diagnostics.Diagnostics {
         var active_connections: u16 = 0;
         var active_participants: u16 = 0;
+        var alive_participants: u16 = 0;
+        var dead_participants: u16 = 0;
+        var spawning_participants: u16 = 0;
         var active_vehicles: u16 = 0;
         var active_carryables: u16 = 0;
         var active_npcs: u16 = 0;
         var connected_participants: u16 = 0;
         var reconnecting_participants: u16 = 0;
+        var reliable_replay_records: u16 = 0;
         for (self.connections) |connection| active_connections += @intFromBool(connection.active);
         for (self.participants) |participant| {
             active_participants += @intFromBool(participant.active);
+            if (participant.active) switch (participant.lifecycle) {
+                .alive => alive_participants += 1,
+                .dead, .respawn_pending => dead_participants += 1,
+                .spawning => spawning_participants += 1,
+            };
             connected_participants += @intFromBool(
                 participant.active and participant.connection_index != null,
             );
@@ -1158,6 +1872,9 @@ const AuthorityCore = struct {
                 participant.active and participant.connection_index == null and
                     !participant.despawn_pending,
             );
+            for (participant.replay_records) |record| {
+                reliable_replay_records += @intFromBool(record.active);
+            }
         }
         for (self.vehicles) |vehicle| active_vehicles += @intFromBool(vehicle.active);
         for (self.carryables) |carryable| active_carryables += @intFromBool(carryable.active);
@@ -1168,13 +1885,23 @@ const AuthorityCore = struct {
             .first_cycle_fault = self.first_cycle_fault,
             .active_connections = active_connections,
             .active_participants = active_participants,
+            .alive_participants = alive_participants,
+            .dead_participants = dead_participants,
+            .spawning_participants = spawning_participants,
             .active_vehicles = active_vehicles,
             .active_carryables = active_carryables,
             .active_npcs = active_npcs,
             .connected_participants = connected_participants,
             .reconnecting_participants = reconnecting_participants,
+            .mailbox_occupancy = @intCast(self.mailbox.len()),
+            .mailbox_high_water = self.mailbox.high_water,
+            .mailbox_rejected = self.mailbox.rejected,
             .outbox_occupancy = @intCast(self.outbox.len),
             .outbox_high_water = self.outbox_high_water,
+            .outbound_lease_active = self.lease_active,
+            .reliable_replay_records = reliable_replay_records,
+            .delivery_receipts = self.delivery_receipts,
+            .reliable_replays = self.reliable_replays,
             .accepted_messages = self.accepted_messages,
             .rejected_messages = self.rejected_messages,
             .malformed_messages = self.malformed_messages,
@@ -1191,6 +1918,10 @@ const AuthorityCore = struct {
             .interaction_actions_rejected = self.interaction_actions_rejected,
             .stale_interaction_actions = self.stale_interaction_actions,
             .forced_interaction_cleanup = self.forced_interaction_cleanup,
+            .melee_actions_admitted = self.melee_actions_admitted,
+            .melee_hits = self.melee_hits,
+            .deaths = self.deaths,
+            .respawns = self.respawns,
             .baselines_emitted = self.baselines_emitted,
             .baselines_acknowledged = self.baselines_acknowledged,
             .stale_baseline_acks = self.stale_baseline_acks,
@@ -1262,44 +1993,60 @@ const AuthorityCore = struct {
                 return error.AdmissionNonceHistoryCapacityReached
         else
             null;
-        const participant_index = self.allocateParticipant() orelse {
+        const participant_index = self.availableParticipantIndex() orelse {
             try self.rejectConnection(connection_index, .session_full, true);
             return;
         };
+        try self.preflightReliablePublication(connection_index, 1);
+        const next_generation = nextGeneration(self.participants[participant_index].generation);
+        const planned_participant = participantId(participant_index, next_generation);
+        const credential_serial_before = self.credential_issuer.next_serial;
+        const reconnect = try self.issueReconnectCredential(
+            hello.account,
+            external_identity,
+            planned_participant,
+        );
+        if (self.participant_spawn == .automatic) {
+            const lane = participant_index % 4;
+            const row = participant_index / 4;
+            self.simulation.submitCharacter(.{ .spawn = .{
+                .request_id = spawnRequestId(participant_index, next_generation),
+                .position = .{
+                    @as(f32, @floatFromInt(lane)) * 2.0 - 3.0,
+                    0,
+                    @as(f32, @floatFromInt(row)) * 2.0,
+                },
+            } }) catch |err| {
+                self.credential_issuer.next_serial = credential_serial_before;
+                return err;
+            };
+        }
+        const allocated_index = self.allocateParticipant() orelse unreachable;
+        std.debug.assert(allocated_index == participant_index);
         const participant = &self.participants[participant_index];
+        std.debug.assert(participant.generation == next_generation);
         if (admission_nonce_slot) |slot| {
             self.commitAdmissionNonce(slot, hello.join_authorization);
         }
         participant.account = hello.account;
         participant.external_identity = external_identity;
         participant.connection_index = @intCast(connection_index);
-        participant.reconnect = try self.issueReconnectCredential(
-            hello.account,
-            external_identity,
-            participantId(participant_index, participant.generation),
-        );
+        participant.reconnect = reconnect;
+        participant.avatar_incarnation = participant.generation;
+        participant.lifecycle = .spawning;
         participant.replicated = .{
             .index = @intCast(participant_index + 1),
-            .generation = participant.generation,
+            .generation = participant.avatar_incarnation,
         };
         participant.relevance_coord = sandbox_district_recipe.navigation_west_coord;
         participant.baseline_id = 1;
         participant.baseline_acknowledged = 0;
         participant.baseline_sent = false;
+        participant.baseline_eligible_tick = self.simulation.tickIndex() +| 2;
         self.resetReplicationBaseline(participant_index);
         self.connections[connection_index].participant_index = @intCast(participant_index);
         if (self.participant_spawn == .automatic) {
             participant.spawn_pending = true;
-            const lane = participant_index % 4;
-            const row = participant_index / 4;
-            try self.simulation.submitCharacter(.{ .spawn = .{
-                .request_id = spawnRequestId(participant_index, participant.generation),
-                .position = .{
-                    @as(f32, @floatFromInt(lane)) * 2.0 - 3.0,
-                    0,
-                    @as(f32, @floatFromInt(row)) * 2.0,
-                },
-            } });
         }
         try self.queueWelcome(connection_index, participant_index);
         self.accepted_messages +|= 1;
@@ -1313,7 +2060,7 @@ const AuthorityCore = struct {
     ) !bool {
         const tick_index = self.simulation.tickIndex();
         const external_identity = normalizedExternalIdentity(hello);
-        for (&self.participants, 0..) |*participant, participant_index| {
+        for (self.participants, 0..) |*participant, participant_index| {
             const current_credential = reconnectCredentialsEqual(
                 participant.reconnect,
                 hello.reconnect,
@@ -1321,7 +2068,7 @@ const AuthorityCore = struct {
             const retained_credential = participant.reconnect_confirmation_pending and
                 reconnectCredentialsEqual(participant.retained_reconnect, hello.reconnect);
             if (!participant.active or participant.connection_index != null or
-                participant.despawn_pending or
+                (participant.despawn_pending and participant.lifecycle != .dead) or
                 !std.meta.eql(participant.account, hello.account) or
                 !std.meta.eql(participant.external_identity, external_identity) or
                 (!current_credential and !retained_credential) or
@@ -1329,6 +2076,7 @@ const AuthorityCore = struct {
             {
                 continue;
             }
+            try self.preflightReliablePublication(connection_index, 1);
             const next_reconnect = try self.issueReconnectCredential(
                 participant.account,
                 participant.external_identity,
@@ -1337,6 +2085,9 @@ const AuthorityCore = struct {
             const previous_reconnect = participant.reconnect;
             const previous_retained_reconnect = participant.retained_reconnect;
             const previous_confirmation_pending = participant.reconnect_confirmation_pending;
+            const previous_pending_welcome = participant.pending_welcome_delivery_id;
+            const previous_next_control_delivery = participant.next_control_delivery_id;
+            const previous_replay_cursor = participant.replay_cursor_delivery_id;
             const connection = &self.connections[connection_index];
             const previous_event_quota_tick = connection.event_quota_tick;
             const previous_reliable_events = connection.reliable_events_this_tick;
@@ -1352,16 +2103,22 @@ const AuthorityCore = struct {
                 participant.reconnect = previous_reconnect;
                 participant.retained_reconnect = previous_retained_reconnect;
                 participant.reconnect_confirmation_pending = previous_confirmation_pending;
+                participant.pending_welcome_delivery_id = previous_pending_welcome;
+                participant.next_control_delivery_id = previous_next_control_delivery;
+                participant.replay_cursor_delivery_id = previous_replay_cursor;
                 connection.event_quota_tick = previous_event_quota_tick;
                 connection.reliable_events_this_tick = previous_reliable_events;
                 self.max_reliable_events_per_connection_tick = previous_max_reliable_events;
                 return err;
             };
+            participant.replay_cursor_delivery_id =
+                participant.applied_gameplay_delivery_id +| 1;
             participant.connection_index = @intCast(connection_index);
             participant.baseline_id +%= 1;
             if (participant.baseline_id == 0) participant.baseline_id = 1;
             participant.baseline_acknowledged = 0;
             participant.baseline_sent = false;
+            participant.baseline_eligible_tick = self.simulation.tickIndex() +| 2;
             self.resetReplicationBaseline(participant_index);
             self.connections[connection_index].participant_index = @intCast(participant_index);
             self.reconnects +|= 1;
@@ -1370,20 +2127,6 @@ const AuthorityCore = struct {
             return true;
         }
         return false;
-    }
-
-    fn confirmReconnectCredential(self: *AuthorityCore, connection_index: usize) void {
-        const participant_index = self.connections[connection_index].participant_index orelse
-            return;
-        const participant = &self.participants[participant_index];
-        if (!participant.active or participant.connection_index == null or
-            @as(usize, participant.connection_index.?) != connection_index or
-            !participant.reconnect_confirmation_pending)
-        {
-            return;
-        }
-        participant.retained_reconnect = .invalid;
-        participant.reconnect_confirmation_pending = false;
     }
 
     fn ingestInput(
@@ -1435,8 +2178,12 @@ const AuthorityCore = struct {
                 return;
             },
         }
+        if (participant.lifecycle != .alive) {
+            self.invalid_control_inputs +|= 1;
+            return;
+        }
         if (participant.character == null and !participant.spawn_pending) {
-            try self.rejectConnection(connection_index, .invalid_state, false);
+            self.invalid_control_inputs +|= 1;
             return;
         }
         if (participant.driving_vehicle_index != null) {
@@ -1509,6 +2256,10 @@ const AuthorityCore = struct {
             input.participant,
         )) {
             try self.rejectConnection(connection_index, .stale_connection, false);
+            return;
+        }
+        if (participant.lifecycle != .alive) {
+            self.invalid_control_inputs +|= 1;
             return;
         }
         switch (gameplay_admission.classifyInput(
@@ -1615,7 +2366,9 @@ const AuthorityCore = struct {
             self.vehicle_actions_rejected +|= 1;
             return;
         };
-        if (participant.pending_vehicle_action != null or participant.despawn_pending) {
+        if (participant.lifecycle != .alive or participant.pending_vehicle_action != null or
+            participant.despawn_pending)
+        {
             try self.queueVehicleActionResult(participant_index, action, .invalid_state);
             self.vehicle_actions_rejected +|= 1;
             return;
@@ -1722,7 +2475,7 @@ const AuthorityCore = struct {
             self.interaction_actions_rejected +|= 1;
             return;
         };
-        if (participant.pending_interaction_action != null or
+        if (participant.lifecycle != .alive or participant.pending_interaction_action != null or
             participant.pending_vehicle_action != null or
             participant.despawn_pending)
         {
@@ -1788,6 +2541,292 @@ const AuthorityCore = struct {
         self.accepted_messages +|= 1;
     }
 
+    fn ingestMeleeAction(
+        self: *AuthorityCore,
+        connection_index: usize,
+        action: protocol.MeleeAction,
+    ) !void {
+        const participant_index = self.connections[connection_index].participant_index orelse {
+            try self.rejectConnection(connection_index, .unauthorized, false);
+            return;
+        };
+        const participant = &self.participants[participant_index];
+        if (!gameplay_admission.identitiesMatch(
+            self.session,
+            participantId(participant_index, participant.generation),
+            action.session,
+            action.participant,
+        )) {
+            try self.rejectConnection(connection_index, .stale_connection, false);
+            return;
+        }
+        if (!gameplay_admission.actionIsNewer(participant.last_melee_action, action.sequence)) {
+            return;
+        }
+        participant.last_melee_action = action.sequence;
+        if (action.avatar_incarnation != participant.avatar_incarnation) {
+            try self.queueMeleeActionResult(participant_index, action, .wrong_incarnation);
+            return;
+        }
+        if (participant.lifecycle != .alive or participant.character == null or
+            participant.despawn_pending)
+        {
+            try self.queueMeleeActionResult(participant_index, action, .dead);
+            return;
+        }
+        if (participant.vitals_pending) {
+            try self.queueMeleeActionResult(participant_index, action, .invalid_state);
+            return;
+        }
+        const tick_index = self.simulation.tickIndex();
+        if (action.target_tick < tick_index -| budgets.input_history_ticks or
+            action.target_tick > tick_index +| budgets.max_future_input_ticks)
+        {
+            try self.queueMeleeActionResult(participant_index, action, .invalid_state);
+            return;
+        }
+        if (participant.pending_melee_action != null) {
+            try self.queueMeleeActionResult(participant_index, action, .invalid_state);
+            return;
+        }
+        if (tick_index < participant.melee_cooldown_until_tick) {
+            try self.queueMeleeActionResult(participant_index, action, .cooldown);
+            return;
+        }
+        participant.melee_cooldown_until_tick = tick_index +| melee_cooldown_ticks;
+        self.recordMeleeIngress(connection_index, participant_index, action);
+        const target = try self.selectMeleeTarget(participant_index);
+        if (target == null) {
+            try self.queueMeleeActionResult(participant_index, action, .miss);
+            self.accepted_messages +|= 1;
+            return;
+        }
+        const character = participant.character.?;
+        try self.simulation.submitVitals(.{ .damage = .{
+            .source = .{
+                .kind = .player,
+                .id = character,
+                .incarnation = .{ .value = participant.avatar_incarnation },
+                .action_sequence = action.sequence.value,
+            },
+            .target = .{
+                .kind = target.?.kind,
+                .id = target.?.persistent,
+                .incarnation = .{ .value = target.?.incarnation },
+            },
+            .cause = .melee,
+            .authority_tick = tick_index +| 1,
+            .correlation = damageCorrelation(participant_index, action.sequence),
+            .base_amount = melee_damage,
+            .ordinal = 1,
+        } });
+        participant.pending_melee_action = action;
+        self.accepted_messages +|= 1;
+    }
+
+    fn ingestRespawnAction(
+        self: *AuthorityCore,
+        connection_index: usize,
+        action: protocol.RespawnAction,
+    ) !void {
+        const participant_index = self.connections[connection_index].participant_index orelse {
+            try self.rejectConnection(connection_index, .unauthorized, false);
+            return;
+        };
+        const participant = &self.participants[participant_index];
+        if (!gameplay_admission.identitiesMatch(
+            self.session,
+            participantId(participant_index, participant.generation),
+            action.session,
+            action.participant,
+        )) {
+            try self.rejectConnection(connection_index, .stale_connection, false);
+            return;
+        }
+        if (!gameplay_admission.actionIsNewer(participant.last_respawn_action, action.sequence)) {
+            return;
+        }
+        participant.last_respawn_action = action.sequence;
+        if (action.dead_incarnation != participant.avatar_incarnation) {
+            try self.queueRespawnActionResult(participant_index, action, .wrong_incarnation);
+            return;
+        }
+        if (participant.lifecycle == .alive or participant.lifecycle == .spawning) {
+            try self.queueRespawnActionResult(participant_index, action, .alive);
+            return;
+        }
+        if (participant.character != null or participant.despawn_pending or
+            participant.vitals_pending)
+        {
+            try self.queueRespawnActionResult(participant_index, action, .cleanup_pending);
+            return;
+        }
+        if (self.simulation.tickIndex() < participant.respawn_available_tick) {
+            try self.queueRespawnActionResult(participant_index, action, .cooldown);
+            return;
+        }
+        const spawn_position = try self.selectRespawnPosition(participant_index) orelse {
+            participant.lifecycle = .respawn_pending;
+            try self.queueRespawnActionResult(participant_index, action, .no_safe_spawn);
+            return;
+        };
+        try self.simulation.submitCharacter(.{ .spawn = .{
+            .request_id = spawnRequestId(participant_index, participant.generation),
+            .position = spawn_position,
+        } });
+        participant.lifecycle = .spawning;
+        participant.spawn_pending = true;
+        participant.pending_respawn_action = action;
+        self.ingress.append(.{
+            .admitted_tick = self.simulation.tickIndex(),
+            .account = participant.account,
+            .participant = participantId(participant_index, participant.generation),
+            .connection = .{
+                .index = @intCast(connection_index + 1),
+                .generation = self.connections[connection_index].generation,
+            },
+            .sequence = .{ .value = 0 },
+            .action_sequence = action.sequence,
+            .target_tick = self.simulation.tickIndex() +| 1,
+            .kind = .respawn,
+            .move = .{ 0, 0 },
+            .facing_yaw = 0,
+            .jump_pressed = false,
+            .vehicle = .invalid,
+            .vehicle_control = .{ 0, 0, 0, 0 },
+            .avatar_incarnation = action.dead_incarnation,
+        });
+        self.accepted_messages +|= 1;
+    }
+
+    fn recordMeleeIngress(
+        self: *AuthorityCore,
+        connection_index: usize,
+        participant_index: usize,
+        action: protocol.MeleeAction,
+    ) void {
+        const participant = self.participants[participant_index];
+        self.ingress.append(.{
+            .admitted_tick = self.simulation.tickIndex(),
+            .account = participant.account,
+            .participant = participantId(participant_index, participant.generation),
+            .connection = .{
+                .index = @intCast(connection_index + 1),
+                .generation = self.connections[connection_index].generation,
+            },
+            .sequence = .{ .value = 0 },
+            .action_sequence = action.sequence,
+            .target_tick = action.target_tick,
+            .kind = .melee,
+            .move = .{ 0, 0 },
+            .facing_yaw = 0,
+            .jump_pressed = false,
+            .vehicle = .invalid,
+            .vehicle_control = .{ 0, 0, 0, 0 },
+            .avatar_incarnation = action.avatar_incarnation,
+        });
+        self.melee_actions_admitted +|= 1;
+    }
+
+    fn selectMeleeTarget(
+        self: *AuthorityCore,
+        attacker_index: usize,
+    ) !?MeleeTarget {
+        const attacker = self.participants[attacker_index];
+        const source = try self.simulation.character(attacker.character.?);
+        const forward = [2]f32{ @sin(source.facing_yaw), -@cos(source.facing_yaw) };
+        var selected: ?MeleeTarget = null;
+        for (self.participants, 0..) |candidate, index| {
+            if (index == attacker_index or !candidate.active or
+                candidate.lifecycle != .alive or candidate.character == null or
+                candidate.despawn_pending or candidate.vitals_pending)
+            {
+                continue;
+            }
+            const view = try self.simulation.character(candidate.character.?);
+            if (!try self.simulation.meleeLineClear(source.position, view.position)) continue;
+            considerMeleeTarget(&selected, source.position, forward, .{
+                .kind = .player,
+                .persistent = candidate.character.?,
+                .replicated = candidate.replicated,
+                .incarnation = candidate.avatar_incarnation,
+                .distance_squared = horizontalDistanceSquared(source.position, view.position),
+            }, view.position);
+        }
+        for (self.npcs) |npc| {
+            if (!npc.active or npc.persistent == null or npc.despawn_pending or
+                npc.vitals_pending)
+            {
+                continue;
+            }
+            const vitals = self.simulation.currentVitals(.npc, npc.persistent.?) orelse continue;
+            if (vitals.life_state != .alive) continue;
+            const view = try self.simulation.npc(npc.persistent.?);
+            if (!try self.simulation.meleeLineClear(source.position, view.position)) continue;
+            considerMeleeTarget(&selected, source.position, forward, .{
+                .kind = .npc,
+                .persistent = npc.persistent.?,
+                .replicated = npc.replicated,
+                .incarnation = npc.generation,
+                .distance_squared = horizontalDistanceSquared(source.position, view.position),
+            }, view.position);
+        }
+        return selected;
+    }
+
+    fn selectRespawnPosition(
+        self: *AuthorityCore,
+        participant_index: usize,
+    ) !?[3]f32 {
+        const candidates = [_][3]f32{
+            .{ -3, 0, 0 },  .{ 3, 0, 0 },  .{ -3, 0, 4 }, .{ 3, 0, 4 },
+            .{ -6, 0, -3 }, .{ 6, 0, -3 }, .{ 0, 0, 7 },  .{ 0, 0, -7 },
+        };
+        const participant = self.participants[participant_index];
+        const rotation = (@as(usize, participant_index) + participant.avatar_incarnation) %
+            candidates.len;
+        var selected: ?[3]f32 = null;
+        var selected_score: f32 = -1;
+        for (0..candidates.len) |offset| {
+            const candidate = candidates[(rotation + offset) % candidates.len];
+            if (!try self.simulation.characterSpawnClear(candidate)) continue;
+            var nearest_threat: f32 = std.math.inf(f32);
+            var blocked = false;
+            for (self.participants, 0..) |other, other_index| {
+                if (other_index == participant_index or !other.active or
+                    other.lifecycle != .alive or other.character == null or
+                    other.despawn_pending)
+                {
+                    continue;
+                }
+                const view = try self.simulation.character(other.character.?);
+                const distance = horizontalDistanceSquared(candidate, view.position);
+                if (distance < 2.25) {
+                    blocked = true;
+                    break;
+                }
+                nearest_threat = @min(nearest_threat, distance);
+            }
+            if (blocked) continue;
+            for (self.npcs) |npc| {
+                if (!npc.active or npc.persistent == null or npc.despawn_pending) continue;
+                const view = try self.simulation.npc(npc.persistent.?);
+                const distance = horizontalDistanceSquared(candidate, view.position);
+                if (distance < 2.25) {
+                    blocked = true;
+                    break;
+                }
+                nearest_threat = @min(nearest_threat, distance);
+            }
+            if (blocked) continue;
+            if (nearest_threat > selected_score) {
+                selected = candidate;
+                selected_score = nearest_threat;
+            }
+        }
+        return selected;
+    }
+
     fn ingestBaselineAck(
         self: *AuthorityCore,
         connection_index: usize,
@@ -1822,6 +2861,7 @@ const AuthorityCore = struct {
             self.force_snapshot = true;
         }
         self.accepted_messages +|= 1;
+        self.delivery_receipts +|= 1;
     }
 
     fn ingestSnapshotAck(
@@ -1862,6 +2902,60 @@ const AuthorityCore = struct {
         self.accepted_messages +|= 1;
     }
 
+    fn ingestDeliveryReceipt(
+        self: *AuthorityCore,
+        connection_index: usize,
+        receipt: protocol.DeliveryReceipt,
+    ) !void {
+        const participant_index = self.connections[connection_index].participant_index orelse {
+            try self.rejectConnection(connection_index, .unauthorized, false);
+            return;
+        };
+        const participant = &self.participants[participant_index];
+        if (!std.meta.eql(receipt.session, self.session) or
+            !std.meta.eql(receipt.participant, participantId(
+                participant_index,
+                participant.generation,
+            )))
+        {
+            try self.rejectConnection(connection_index, .stale_connection, false);
+            return;
+        }
+        const next_id = switch (receipt.lane) {
+            .control => participant.next_control_delivery_id,
+            .gameplay => participant.next_gameplay_delivery_id,
+        };
+        if (receipt.delivery_id >= next_id) {
+            try self.rejectConnection(connection_index, .stale_sequence, false);
+            return;
+        }
+        const applied = switch (receipt.lane) {
+            .control => &participant.applied_control_delivery_id,
+            .gameplay => &participant.applied_gameplay_delivery_id,
+        };
+        if (receipt.delivery_id > applied.*) applied.* = receipt.delivery_id;
+        if (receipt.lane == .gameplay) {
+            for (&participant.replay_records) |*record| {
+                if (record.active and record.delivery_id <= applied.*) record.active = false;
+            }
+            if (participant.replay_cursor_delivery_id != 0 and
+                participant.replay_cursor_delivery_id <= applied.*)
+            {
+                const next = applied.* +| 1;
+                participant.replay_cursor_delivery_id = if (next >= participant.next_gameplay_delivery_id) 0 else next;
+            }
+        }
+        if (receipt.lane == .control and participant.reconnect_confirmation_pending and
+            participant.pending_welcome_delivery_id != 0 and
+            receipt.delivery_id >= participant.pending_welcome_delivery_id)
+        {
+            participant.retained_reconnect = .invalid;
+            participant.reconnect_confirmation_pending = false;
+            participant.pending_welcome_delivery_id = 0;
+        }
+        self.accepted_messages +|= 1;
+    }
+
     fn replenishReplicationBudgets(self: *AuthorityCore) void {
         const per_second = self.options.downstream_bytes_per_second;
         const whole = per_second / budgets.authority_tick_hz;
@@ -1880,9 +2974,10 @@ const AuthorityCore = struct {
 
     fn applyHeldInputs(self: *AuthorityCore, tick_index: u64) !void {
         const next_tick = tick_index +| 1;
-        for (&self.participants) |*participant| {
+        for (self.participants) |*participant| {
             if (!participant.active or participant.connection_index == null or
-                participant.character == null or participant.despawn_pending)
+                participant.lifecycle != .alive or participant.character == null or
+                participant.despawn_pending)
             {
                 continue;
             }
@@ -1992,7 +3087,7 @@ const AuthorityCore = struct {
 
     fn expireReconnects(self: *AuthorityCore) !void {
         const tick_index = self.simulation.tickIndex();
-        for (&self.participants, 0..) |participant, index| {
+        for (self.participants, 0..) |participant, index| {
             if (participant.active and participant.connection_index == null and
                 !participant.despawn_pending and tick_index >= participant.reconnect_deadline_tick)
             {
@@ -2094,16 +3189,38 @@ const AuthorityCore = struct {
                     }
                     participant.spawn_pending = false;
                     participant.character = spawned.id;
+                    participant.vitals_pending = true;
+                    if (participant.pending_respawn_action != null) {
+                        const incarnation = nextGeneration(participant.avatar_incarnation);
+                        participant.avatar_incarnation = incarnation;
+                        participant.replicated.generation = incarnation;
+                        participant.lifecycle = .spawning;
+                        participant.baseline_id +%= 1;
+                        if (participant.baseline_id == 0) participant.baseline_id = 1;
+                        participant.baseline_acknowledged = 0;
+                        participant.baseline_sent = false;
+                        participant.baseline_eligible_tick = self.simulation.tickIndex() +| 2;
+                        self.resetReplicationBaseline(decoded.index);
+                    } else {
+                        participant.lifecycle = .alive;
+                    }
+                    try self.simulation.submitVitals(.{ .register = .{
+                        .target = playerVitalsTarget(participant.*, spawned.id),
+                    } });
                     if (participant.despawn_pending) {
                         try self.simulation.submitCharacter(.{ .despawn = .{ .id = spawned.id } });
                     }
                     self.force_snapshot = true;
                 },
                 .despawned => |id| {
-                    for (&self.participants) |*participant| {
+                    for (self.participants) |*participant| {
                         if (participant.active and participant.character != null and
                             std.meta.eql(participant.character.?, id))
                         {
+                            const removed_target = playerVitalsTarget(participant.*, id);
+                            if (self.simulation.vitals(removed_target) != null) {
+                                try self.simulation.submitVitals(.{ .remove = removed_target });
+                            }
                             const retain_participant = participant.retain_after_despawn and
                                 participant.connection_index != null;
                             participant.active = retain_participant;
@@ -2113,6 +3230,7 @@ const AuthorityCore = struct {
                             participant.holding_carryable_index = null;
                             participant.pending_vehicle_action = null;
                             participant.pending_interaction_action = null;
+                            participant.pending_melee_action = null;
                             participant.exit_pending = false;
                             participant.interaction_cleanup_pending = false;
                             participant.spawn_pending = false;
@@ -2135,11 +3253,19 @@ const AuthorityCore = struct {
                             observed = .{ .rejected = remapped };
                             participant.host_spawn_request_id = null;
                         }
-                        if (participant.connection_index) |connection_index| {
+                        if (participant.pending_respawn_action) |action| {
+                            try self.queueRespawnActionResult(
+                                decoded.index,
+                                action,
+                                .no_safe_spawn,
+                            );
+                            participant.pending_respawn_action = null;
+                            participant.lifecycle = .dead;
+                        } else if (participant.connection_index) |connection_index| {
                             try self.rejectConnection(connection_index, .invalid_state, true);
+                            participant.active = false;
                         }
                         participant.spawn_pending = false;
-                        participant.active = false;
                     } else return error.UnexpectedCharacterRejection;
                 },
             }
@@ -2582,8 +3708,19 @@ const AuthorityCore = struct {
                         npc.spawn_pending = false;
                         npc.active = true;
                         npc.persistent = spawned.id;
+                        npc.vitals_pending = true;
+                        try self.simulation.submitVitals(.{ .register = .{
+                            .target = npcVitalsTarget(npc.*, spawned.id),
+                        } });
                     } else if (self.world_bootstrap == .host_managed) {
                         try self.registerHostNpc(spawned.id);
+                        const npc_index = self.findNpcByPersistent(spawned.id) orelse
+                            return error.HostNpcRegistrationMissing;
+                        const npc = &self.npcs[npc_index];
+                        npc.vitals_pending = true;
+                        try self.simulation.submitVitals(.{ .register = .{
+                            .target = npcVitalsTarget(npc.*, spawned.id),
+                        } });
                     } else {
                         return error.UnexpectedNpcSpawnOutcome;
                     }
@@ -2593,11 +3730,35 @@ const AuthorityCore = struct {
                     return error.UnexpectedNpcMutationOutcome;
                 },
                 .despawned => |despawned| {
-                    if (self.world_bootstrap != .host_managed) {
+                    if (decodeNpcDeathRequestId(despawned.request_id)) |decoded| {
+                        const npc = &self.npcs[decoded.index];
+                        if (npc.generation != decoded.generation or !npc.despawn_pending or
+                            npc.persistent == null or
+                            !std.meta.eql(npc.persistent.?, despawned.id))
+                        {
+                            return error.StaleNpcDeathDespawnOutcome;
+                        }
+                        const removed_target = npcVitalsTarget(npc.*, despawned.id);
+                        if (self.simulation.vitals(removed_target) != null) {
+                            try self.simulation.submitVitals(.{ .remove = removed_target });
+                        }
+                        npc.active = false;
+                        npc.despawn_pending = false;
+                        npc.persistent = null;
+                        self.force_snapshot = true;
+                    } else if (self.world_bootstrap != .host_managed) {
                         return error.UnexpectedNpcMutationOutcome;
+                    } else {
+                        const npc_index = self.findNpcByPersistent(despawned.id) orelse
+                            return error.UnknownHostNpcDespawn;
+                        const npc = self.npcs[npc_index];
+                        const removed_target = npcVitalsTarget(npc, despawned.id);
+                        if (self.simulation.vitals(removed_target) != null) {
+                            try self.simulation.submitVitals(.{ .remove = removed_target });
+                        }
+                        self.unregisterHostNpc(despawned.id);
+                        self.force_snapshot = true;
                     }
-                    self.unregisterHostNpc(despawned.id);
-                    self.force_snapshot = true;
                 },
                 .rejected => if (self.world_bootstrap != .host_managed) {
                     return error.NpcBootstrapRejected;
@@ -2613,7 +3774,175 @@ const AuthorityCore = struct {
         }
     }
 
+    fn processVitalsOutcomes(self: *AuthorityCore) !void {
+        while (self.simulation.pollVitalsOutcome()) |outcome| switch (outcome) {
+            .registered => |target| switch (target.kind) {
+                .player => {
+                    const participant_index = self.findParticipantByCharacter(target.id) orelse
+                        return error.UnknownPlayerVitalsRegistration;
+                    const participant = &self.participants[participant_index];
+                    if (participant.avatar_incarnation != target.incarnation.value or
+                        !participant.vitals_pending)
+                    {
+                        return error.StalePlayerVitalsRegistration;
+                    }
+                    participant.vitals_pending = false;
+                    participant.lifecycle = .alive;
+                    participant.death_tick = 0;
+                    if (participant.pending_respawn_action) |action| {
+                        try self.queueRespawnActionResult(
+                            participant_index,
+                            action,
+                            .respawned,
+                        );
+                        participant.pending_respawn_action = null;
+                        self.respawns +|= 1;
+                        try self.publishLifeEvent(.{
+                            .avatar = participant.replicated,
+                            .incarnation = participant.avatar_incarnation,
+                            .health = vitals_contract.default_max_health,
+                            .maximum_health = vitals_contract.default_max_health,
+                            .state = .alive,
+                        });
+                    }
+                    self.force_snapshot = true;
+                },
+                .npc => {
+                    const npc_index = self.findNpcByPersistent(target.id) orelse
+                        return error.UnknownNpcVitalsRegistration;
+                    const npc = &self.npcs[npc_index];
+                    if (npc.generation != target.incarnation.value or !npc.vitals_pending) {
+                        return error.StaleNpcVitalsRegistration;
+                    }
+                    npc.vitals_pending = false;
+                    self.force_snapshot = true;
+                },
+            },
+            .removed => {},
+            .damage => |damage| {
+                switch (damage.proposal.source.kind) {
+                    .player => {
+                        const attacker_index = self.findParticipantByCharacter(
+                            damage.proposal.source.id,
+                        ) orelse return error.UnknownDamageInstigator;
+                        const attacker = &self.participants[attacker_index];
+                        const action = attacker.pending_melee_action orelse
+                            return error.UnexpectedDamageOutcome;
+                        if (damage.proposal.correlation !=
+                            damageCorrelation(attacker_index, action.sequence))
+                        {
+                            return error.DamageCorrelationMismatch;
+                        }
+                        const replicated = self.replicatedVitalsTarget(
+                            damage.proposal.target,
+                        ) orelse identity.ReplicatedEntityId.invalid;
+                        try self.queueDamageResult(attacker_index, action, replicated, damage);
+                        if (damage.disposition == .applied) self.melee_hits +|= 1;
+                        attacker.pending_melee_action = null;
+                    },
+                    .npc => {
+                        const npc_index = self.findNpcByPersistent(
+                            damage.proposal.source.id,
+                        ) orelse return error.UnknownDamageInstigator;
+                        if (self.npcs[npc_index].generation !=
+                            damage.proposal.source.incarnation.value)
+                        {
+                            return error.StaleNpcDamageInstigator;
+                        }
+                    },
+                }
+                self.force_snapshot = true;
+            },
+            .rejected => return error.AuthorityVitalsCommandRejected,
+        };
+        while (self.simulation.pollVitalsEvent()) |event| switch (event) {
+            .died => |died| try self.processDeathEvent(died),
+        };
+    }
+
+    fn processDeathEvent(
+        self: *AuthorityCore,
+        died: vitals_contract.DeathEvent,
+    ) !void {
+        const instigator = if (died.source.kind == .player)
+            if (self.findParticipantByCharacter(died.source.id)) |index|
+                participantId(index, self.participants[index].generation)
+            else
+                null
+        else
+            null;
+        const replicated = self.replicatedVitalsTarget(died.target) orelse
+            return error.UnknownDeathTarget;
+        try self.publishLifeEvent(.{
+            .avatar = replicated,
+            .incarnation = died.target.incarnation.value,
+            .health = 0,
+            .maximum_health = vitals_contract.default_max_health,
+            .state = .dead,
+            .instigator = instigator,
+        });
+        switch (died.target.kind) {
+            .player => {
+                const participant_index = self.findParticipantByCharacter(died.target.id) orelse
+                    return error.UnknownPlayerDeathTarget;
+                const participant = &self.participants[participant_index];
+                if (participant.avatar_incarnation != died.target.incarnation.value or
+                    participant.lifecycle != .alive)
+                {
+                    return error.StalePlayerDeathEvent;
+                }
+                participant.lifecycle = .dead;
+                participant.death_tick = died.authority_tick;
+                participant.respawn_available_tick = died.authority_tick +|
+                    respawn_cooldown_ticks;
+                participant.retain_after_despawn = true;
+                participant.despawn_pending = true;
+                clearParticipantInputs(participant);
+                try self.continueParticipantDespawn(participant_index);
+            },
+            .npc => {
+                const npc_index = self.findNpcByPersistent(died.target.id) orelse
+                    return error.UnknownNpcDeathTarget;
+                const npc = &self.npcs[npc_index];
+                if (npc.despawn_pending) return error.DuplicateNpcDeathEvent;
+                npc.despawn_pending = true;
+                try self.simulation.submitNpc(.{ .despawn = .{
+                    .request_id = npcDeathRequestId(npc_index, npc.generation),
+                    .id = died.target.id,
+                } });
+            },
+        }
+        self.deaths +|= 1;
+        self.force_snapshot = true;
+    }
+
+    fn replicatedVitalsTarget(
+        self: *const AuthorityCore,
+        target: vitals_contract.Target,
+    ) ?identity.ReplicatedEntityId {
+        return switch (target.kind) {
+            .player => if (self.findParticipantByCharacter(target.id)) |index|
+                self.participants[index].replicated
+            else
+                null,
+            .npc => if (self.findNpcByPersistent(target.id)) |index|
+                self.npcs[index].replicated
+            else
+                null,
+        };
+    }
+
     fn publishSnapshots(self: *AuthorityCore) !void {
+        var publication_ceiling: usize = 0;
+        for (self.participants) |participant| {
+            if (participant.active and participant.connection_index != null and
+                !participant.despawn_pending) publication_ceiling += 1;
+        }
+        if (self.prepared_outbox.len + publication_ceiling >
+            budgets.outbound_message_capacity)
+        {
+            return error.QueueFull;
+        }
         for (0..self.participants.len) |participant_index| {
             const participant = &self.participants[participant_index];
             const connection_index = participant.connection_index orelse continue;
@@ -2638,6 +3967,7 @@ const AuthorityCore = struct {
                 return error.RelevantEntityBudgetExceeded;
             }
             if (!participant.baseline_sent) {
+                if (self.simulation.tickIndex() < participant.baseline_eligible_tick) continue;
                 var baseline = protocol.RelevanceBaseline{
                     .baseline_id = participant.baseline_id,
                     .district_count = 1,
@@ -2763,6 +4093,13 @@ const AuthorityCore = struct {
             if (!participant.active or participant.character == null or
                 participant.despawn_pending) continue;
             const view = try self.simulation.character(participant.character.?);
+            const vital = self.simulation.vitals(playerVitalsTarget(
+                participant,
+                participant.character.?,
+            )) orelse if (participant.vitals_pending)
+                pendingVitalsView(playerVitalsTarget(participant, participant.character.?))
+            else
+                continue;
             const relevant = index == participant_index or std.meta.eql(
                 try district_contract.chunkCoordForWorldPosition(view.position),
                 target.relevance_coord,
@@ -2774,6 +4111,10 @@ const AuthorityCore = struct {
                 .position = view.position,
                 .velocity = view.velocity,
                 .facing_yaw = view.facing_yaw,
+                .incarnation = participant.avatar_incarnation,
+                .health = vital.current_health,
+                .maximum_health = vital.maximum_health,
+                .life_state = protocolLifeState(vital.life_state),
             };
             snapshot.character_count += 1;
         }
@@ -2841,6 +4182,16 @@ const AuthorityCore = struct {
             const npc_index = self.findNpcByPersistent(draw.persistent_id) orelse
                 return error.UnknownNpcPresentation;
             const view = try self.simulation.npc(draw.persistent_id);
+            const vital = self.simulation.vitals(npcVitalsTarget(
+                self.npcs[npc_index],
+                draw.persistent_id,
+            )) orelse if (self.npcs[npc_index].vitals_pending)
+                pendingVitalsView(npcVitalsTarget(
+                    self.npcs[npc_index],
+                    draw.persistent_id,
+                ))
+            else
+                continue;
             snapshot.npcs[snapshot.npc_count] = .{
                 .entity = self.npcs[npc_index].replicated,
                 .position = view.position,
@@ -2851,6 +4202,10 @@ const AuthorityCore = struct {
                     .waiting_at_boundary => .waiting_at_boundary,
                     .dormant => continue,
                 },
+                .incarnation = self.npcs[npc_index].generation,
+                .health = vital.current_health,
+                .maximum_health = vital.maximum_health,
+                .life_state = protocolLifeState(vital.life_state),
             };
             snapshot.npc_count += 1;
         }
@@ -2917,7 +4272,7 @@ const AuthorityCore = struct {
     }
 
     fn allocateParticipant(self: *AuthorityCore) ?usize {
-        for (&self.participants, 0..) |*participant, index| {
+        for (self.participants, 0..) |*participant, index| {
             if (participant.active) continue;
             participant.generation +%= 1;
             if (participant.generation == 0) participant.generation = 1;
@@ -2928,9 +4283,15 @@ const AuthorityCore = struct {
             participant.reconnect = .invalid;
             participant.retained_reconnect = .invalid;
             participant.reconnect_confirmation_pending = false;
+            participant.pending_welcome_delivery_id = 0;
             participant.reconnect_deadline_tick = 0;
             participant.character = null;
             participant.replicated = .invalid;
+            participant.avatar_incarnation = participant.generation;
+            participant.lifecycle = .spawning;
+            participant.vitals_pending = false;
+            participant.death_tick = 0;
+            participant.respawn_available_tick = 0;
             participant.last_received_input = .{ .value = 0 };
             participant.last_applied_input = .{ .value = 0 };
             clearParticipantInputs(participant);
@@ -2940,11 +4301,23 @@ const AuthorityCore = struct {
             participant.holding_carryable_index = null;
             participant.last_interaction_action = .{ .value = 0 };
             participant.pending_interaction_action = null;
+            participant.last_melee_action = .{ .value = 0 };
+            participant.pending_melee_action = null;
+            participant.melee_cooldown_until_tick = 0;
+            participant.last_respawn_action = .{ .value = 0 };
+            participant.pending_respawn_action = null;
             participant.interaction_cleanup_pending = false;
             participant.relevance_coord = sandbox_district_recipe.navigation_west_coord;
             participant.baseline_id = 0;
             participant.baseline_acknowledged = 0;
             participant.baseline_sent = false;
+            participant.baseline_eligible_tick = 0;
+            participant.next_control_delivery_id = 1;
+            participant.next_gameplay_delivery_id = 1;
+            participant.applied_control_delivery_id = 0;
+            participant.applied_gameplay_delivery_id = 0;
+            participant.replay_cursor_delivery_id = 0;
+            participant.replay_records = @splat(.{});
             self.replication[index] = .{
                 .byte_credit = self.options.downstream_bytes_per_second,
             };
@@ -2958,6 +4331,32 @@ const AuthorityCore = struct {
         return null;
     }
 
+    fn availableParticipantIndex(self: *const AuthorityCore) ?usize {
+        for (self.participants, 0..) |participant, index| {
+            if (!participant.active) return index;
+        }
+        return null;
+    }
+
+    fn preflightReliablePublication(
+        self: *const AuthorityCore,
+        connection_index: usize,
+        count: usize,
+    ) !void {
+        if (self.prepared_outbox.len + count > budgets.outbound_message_capacity) {
+            return error.QueueFull;
+        }
+        const connection = self.connections[connection_index];
+        const current_tick = self.simulation.tickIndex();
+        const used: usize = if (connection.event_quota_tick == current_tick)
+            connection.reliable_events_this_tick
+        else
+            0;
+        if (used + count > budgets.max_reliable_events_per_tick) {
+            return error.ReliableEventBudgetExceeded;
+        }
+    }
+
     fn detachConnection(self: *AuthorityCore, connection_index: usize, allow_reconnect: bool) void {
         const connection = &self.connections[connection_index];
         if (!connection.active) return;
@@ -2967,6 +4366,7 @@ const AuthorityCore = struct {
                 @as(usize, participant.connection_index.?) == connection_index)
             {
                 participant.connection_index = null;
+                participant.replay_cursor_delivery_id = 0;
                 clearParticipantInputs(participant);
                 participant.reconnect_deadline_tick = if (allow_reconnect)
                     self.simulation.tickIndex() + budgets.reconnect_grace_ticks
@@ -2984,8 +4384,9 @@ const AuthorityCore = struct {
         connection_index: usize,
         participant_index: usize,
     ) !void {
+        self.defer_replication_this_cycle = true;
         const participant = self.participants[participant_index];
-        try self.queue(.{
+        const delivery_id = try self.queuePrepared(.{
             .connection = self.connections[connection_index].transport,
             .message = .{ .welcome = .{
                 .session = self.session,
@@ -2996,10 +4397,18 @@ const AuthorityCore = struct {
                 },
                 .reconnect = participant.reconnect,
                 .authority_tick = self.simulation.tickIndex(),
+                .avatar = participant.replicated,
+                .avatar_incarnation = participant.avatar_incarnation,
+                .life_state = if (participant.lifecycle == .dead or
+                    participant.lifecycle == .respawn_pending)
+                    .dead
+                else
+                    .alive,
             } },
             .delivery = .reliable,
             .lane = .control,
         });
+        self.participants[participant_index].pending_welcome_delivery_id = delivery_id;
     }
 
     fn queueVehicleActionResult(
@@ -3008,20 +4417,12 @@ const AuthorityCore = struct {
         action: protocol.VehicleAction,
         disposition: protocol.VehicleActionDisposition,
     ) !void {
-        const connection_index = self.participants[participant_index].connection_index orelse
-            return;
-        if (!self.connections[connection_index].active) return;
-        try self.queue(.{
-            .connection = self.connections[connection_index].transport,
-            .message = .{ .vehicle_action_result = .{
-                .sequence = action.sequence,
-                .vehicle = action.vehicle,
-                .action = action.kind,
-                .disposition = disposition,
-            } },
-            .delivery = .reliable,
-            .lane = .gameplay,
-        });
+        try self.queueGameplayResult(participant_index, .{ .vehicle_action_result = .{
+            .sequence = action.sequence,
+            .vehicle = action.vehicle,
+            .action = action.kind,
+            .disposition = disposition,
+        } });
     }
 
     fn queueInteractionActionResult(
@@ -3030,20 +4431,67 @@ const AuthorityCore = struct {
         action: protocol.InteractionAction,
         disposition: protocol.InteractionActionDisposition,
     ) !void {
-        const connection_index = self.participants[participant_index].connection_index orelse
-            return;
-        if (!self.connections[connection_index].active) return;
-        try self.queue(.{
-            .connection = self.connections[connection_index].transport,
-            .message = .{ .interaction_action_result = .{
-                .sequence = action.sequence,
-                .carryable = action.carryable,
-                .action = action.kind,
-                .disposition = disposition,
-            } },
-            .delivery = .reliable,
-            .lane = .gameplay,
-        });
+        try self.queueGameplayResult(participant_index, .{ .interaction_action_result = .{
+            .sequence = action.sequence,
+            .carryable = action.carryable,
+            .action = action.kind,
+            .disposition = disposition,
+        } });
+    }
+
+    fn queueMeleeActionResult(
+        self: *AuthorityCore,
+        participant_index: usize,
+        action: protocol.MeleeAction,
+        disposition: protocol.MeleeActionDisposition,
+    ) !void {
+        try self.queueGameplayResult(participant_index, .{ .melee_action_result = .{
+            .sequence = action.sequence,
+            .disposition = disposition,
+        } });
+    }
+
+    fn queueDamageResult(
+        self: *AuthorityCore,
+        participant_index: usize,
+        action: protocol.MeleeAction,
+        target: identity.ReplicatedEntityId,
+        outcome: vitals_contract.DamageOutcome,
+    ) !void {
+        try self.queueGameplayResult(participant_index, .{ .melee_action_result = .{
+            .sequence = action.sequence,
+            .disposition = if (outcome.disposition == .applied) .hit else .invalid_state,
+            .target = target,
+            .target_incarnation = outcome.proposal.target.incarnation.value,
+            .applied_damage = outcome.applied_amount,
+            .remaining_health = outcome.remaining_health,
+            .killed = outcome.killed,
+        } });
+    }
+
+    fn queueRespawnActionResult(
+        self: *AuthorityCore,
+        participant_index: usize,
+        action: protocol.RespawnAction,
+        disposition: protocol.RespawnActionDisposition,
+    ) !void {
+        const participant = self.participants[participant_index];
+        try self.queueGameplayResult(participant_index, .{ .respawn_action_result = .{
+            .sequence = action.sequence,
+            .disposition = disposition,
+            .avatar = if (disposition == .respawned) participant.replicated else .invalid,
+            .incarnation = if (disposition == .respawned)
+                participant.avatar_incarnation
+            else
+                action.dead_incarnation,
+        } });
+    }
+
+    fn publishLifeEvent(self: *AuthorityCore, event: protocol.LifeEvent) !void {
+        for (self.participants, 0..) |participant, participant_index| {
+            if (!participant.active) continue;
+            try self.queueGameplayResult(participant_index, .{ .life_event = event });
+        }
     }
 
     fn rejectTransport(
@@ -3063,6 +4511,7 @@ const AuthorityCore = struct {
         reason: protocol.RejectionReason,
         close_after_send: bool,
     ) !void {
+        self.defer_replication_this_cycle = true;
         self.connections[connection_index].rejected_messages +|= 1;
         self.rejected_messages +|= 1;
         try self.queue(.{
@@ -3076,7 +4525,17 @@ const AuthorityCore = struct {
     }
 
     fn queue(self: *AuthorityCore, outbound: Outbound) !void {
-        if (outbound.delivery == .reliable) {
+        _ = try self.queuePrepared(outbound);
+    }
+
+    fn queuePrepared(self: *AuthorityCore, outbound: Outbound) !u64 {
+        if (!self.publication_preparing) return error.PublicationNotPreparing;
+        if (self.prepared_outbox.isFull()) return error.QueueFull;
+        var prepared = outbound;
+        if (outbound.delivery == .reliable and switch (outbound.message) {
+            .rejected, .disconnected => false,
+            else => true,
+        }) {
             const connection_index = self.findConnection(outbound.connection) orelse
                 return error.UnknownOutboundConnection;
             const connection = &self.connections[connection_index];
@@ -3094,8 +4553,130 @@ const AuthorityCore = struct {
                 connection.reliable_events_this_tick,
             );
         }
+        if (reliableMessageReceipted(outbound.message)) {
+            const participant_index = self.outboundParticipantIndex(outbound) orelse
+                return error.UnknownOutboundParticipant;
+            const participant = &self.participants[participant_index];
+            const next = switch (outbound.lane) {
+                .control => &participant.next_control_delivery_id,
+                .gameplay => &participant.next_gameplay_delivery_id,
+                .input, .snapshot => return error.InvalidReliableLane,
+            };
+            if (next.* == 0) return error.DeliveryIdExhausted;
+            prepared.delivery_id = next.*;
+            next.* +%= 1;
+        }
+        self.prepared_outbox.pushAssumeCapacity(prepared);
+        return prepared.delivery_id;
+    }
+
+    fn queueGameplayResult(
+        self: *AuthorityCore,
+        participant_index: usize,
+        message: ReplayMessage,
+    ) !void {
+        const participant = &self.participants[participant_index];
+        const record = for (&participant.replay_records) |*candidate| {
+            if (!candidate.active) break candidate;
+        } else return error.ReliableReplayCapacityReached;
+        const delivery_id = participant.next_gameplay_delivery_id;
+        if (delivery_id == 0) return error.DeliveryIdExhausted;
+        if (participant.connection_index) |connection_index| {
+            if (self.connections[connection_index].active) {
+                if (self.prepared_outbox.isFull()) return error.QueueFull;
+                try self.consumeReliableQuota(connection_index);
+                self.prepared_outbox.pushAssumeCapacity(.{
+                    .connection = self.connections[connection_index].transport,
+                    .message = message.serverMessage(),
+                    .delivery = .reliable,
+                    .lane = .gameplay,
+                    .delivery_id = delivery_id,
+                });
+            }
+        }
+        participant.next_gameplay_delivery_id +%= 1;
+        record.* = .{
+            .active = true,
+            .delivery_id = delivery_id,
+            .message = message,
+        };
+    }
+
+    fn prepareReliableReplay(self: *AuthorityCore) !void {
+        for (self.participants) |*participant| {
+            const connection_index = participant.connection_index orelse continue;
+            if (!participant.active or participant.reconnect_confirmation_pending or
+                participant.replay_cursor_delivery_id == 0 or
+                !self.connections[connection_index].active)
+            {
+                continue;
+            }
+            var cursor = participant.replay_cursor_delivery_id;
+            while (cursor < participant.next_gameplay_delivery_id) {
+                const record = for (participant.replay_records) |candidate| {
+                    if (candidate.active and candidate.delivery_id == cursor) break candidate;
+                } else return error.ReliableReplayLedgerGap;
+                if (self.prepared_outbox.isFull()) break;
+                const connection = &self.connections[connection_index];
+                const used = if (connection.event_quota_tick == self.simulation.tickIndex())
+                    connection.reliable_events_this_tick
+                else
+                    0;
+                if (used >= budgets.max_reliable_events_per_tick - 1) break;
+                self.consumeReliableQuota(connection_index) catch break;
+                self.prepared_outbox.pushAssumeCapacity(.{
+                    .connection = self.connections[connection_index].transport,
+                    .message = record.message.serverMessage(),
+                    .delivery = .reliable,
+                    .lane = .gameplay,
+                    .delivery_id = record.delivery_id,
+                });
+                cursor = record.delivery_id +| 1;
+                self.reliable_replays +|= 1;
+            }
+            participant.replay_cursor_delivery_id = if (cursor >= participant.next_gameplay_delivery_id) 0 else cursor;
+        }
+    }
+
+    fn consumeReliableQuota(self: *AuthorityCore, connection_index: usize) !void {
+        const connection = &self.connections[connection_index];
+        const current_tick = self.simulation.tickIndex();
+        if (connection.event_quota_tick != current_tick) {
+            connection.event_quota_tick = current_tick;
+            connection.reliable_events_this_tick = 0;
+        }
+        if (connection.reliable_events_this_tick >= budgets.max_reliable_events_per_tick) {
+            return error.ReliableEventBudgetExceeded;
+        }
+        connection.reliable_events_this_tick += 1;
+        self.max_reliable_events_per_connection_tick = @max(
+            self.max_reliable_events_per_connection_tick,
+            connection.reliable_events_this_tick,
+        );
+    }
+
+    fn outboundParticipantIndex(
+        self: *const AuthorityCore,
+        outbound: Outbound,
+    ) ?usize {
+        if (self.findConnection(outbound.connection)) |connection_index| {
+            if (self.connections[connection_index].participant_index) |index| return index;
+        }
+        return switch (outbound.message) {
+            .welcome => |welcome| if (welcome.participant.index == 0)
+                null
+            else
+                @as(usize, welcome.participant.index) - 1,
+            else => null,
+        };
+    }
+
+    fn queueLive(self: *AuthorityCore, outbound: Outbound) !void {
         try self.outbox.push(outbound);
-        self.outbox_high_water = @max(self.outbox_high_water, @as(u16, @intCast(self.outbox.len)));
+        self.outbox_high_water = @max(
+            self.outbox_high_water,
+            @as(u16, @intCast(self.outbox.len)),
+        );
     }
 
     fn findConnection(self: *const AuthorityCore, transport: TransportConnection) ?usize {
@@ -3198,7 +4779,7 @@ const AuthorityCore = struct {
         persistent: engine.PersistentId,
     ) void {
         const index = self.findCarryableByPersistent(persistent) orelse return;
-        for (&self.participants) |*participant| {
+        for (self.participants) |*participant| {
             if (participant.holding_carryable_index != null and
                 participant.holding_carryable_index.? == index)
             {
@@ -3555,15 +5136,15 @@ pub const DedicatedAuthority = opaque {
     pub fn openConnection(
         self: *DedicatedAuthority,
         transport: TransportConnection,
-    ) !identity.ConnectionId {
+    ) !u64 {
         return self.state().openConnection(transport);
     }
 
     pub fn transportClosed(
         self: *DedicatedAuthority,
         transport: TransportConnection,
-    ) void {
-        self.state().transportClosed(transport);
+    ) !u64 {
+        return self.state().transportClosed(transport);
     }
 
     pub fn ingestBytes(
@@ -3595,8 +5176,16 @@ pub const DedicatedAuthority = opaque {
         try self.state().tick();
     }
 
-    pub fn pollOutbound(self: *DedicatedAuthority) ?Outbound {
-        return self.state().pollOutbound();
+    pub fn beginOutboundLease(self: *DedicatedAuthority) ?OutboundLease {
+        return self.state().beginOutboundLease();
+    }
+
+    pub fn commitOutboundLease(self: *DedicatedAuthority, generation: u64) !void {
+        try self.state().commitOutboundLease(generation);
+    }
+
+    pub fn retryOutboundLease(self: *DedicatedAuthority, generation: u64) !void {
+        try self.state().retryOutboundLease(generation);
     }
 
     pub fn stop(self: *DedicatedAuthority) !void {
@@ -3615,13 +5204,6 @@ pub const DedicatedAuthority = opaque {
         transport: TransportConnection,
     ) !void {
         try self.state().rejectOversized(transport);
-    }
-
-    pub fn updateAdmissionTime(
-        self: *DedicatedAuthority,
-        now_unix_seconds: u64,
-    ) !void {
-        try self.state().updateAdmissionTime(now_unix_seconds);
     }
 
     pub fn diagnostics(
@@ -3742,15 +5324,15 @@ pub const EmbeddedSessionRole = struct {
     pub fn openConnection(
         self: EmbeddedSessionRole,
         transport: TransportConnection,
-    ) !identity.ConnectionId {
+    ) !u64 {
         return authorityCore(self.context).openConnection(transport);
     }
 
     pub fn transportClosed(
         self: EmbeddedSessionRole,
         transport: TransportConnection,
-    ) void {
-        authorityCore(self.context).transportClosed(transport);
+    ) !u64 {
+        return authorityCore(self.context).transportClosed(transport);
     }
 
     pub fn ingest(
@@ -3759,6 +5341,14 @@ pub const EmbeddedSessionRole = struct {
         message: protocol.ClientMessage,
     ) !void {
         try authorityCore(self.context).ingest(transport, message);
+    }
+
+    pub fn ingestBytes(
+        self: EmbeddedSessionRole,
+        transport: TransportConnection,
+        bytes: []const u8,
+    ) !void {
+        try authorityCore(self.context).ingestBytes(transport, bytes);
     }
 
     pub fn ingestAtUnixTime(
@@ -3785,8 +5375,16 @@ pub const EmbeddedSessionRole = struct {
         try authorityCore(self.context).tickObserved(observer);
     }
 
-    pub fn pollOutbound(self: EmbeddedSessionRole) ?Outbound {
-        return authorityCore(self.context).pollOutbound();
+    pub fn beginOutboundLease(self: EmbeddedSessionRole) ?OutboundLease {
+        return authorityCore(self.context).beginOutboundLease();
+    }
+
+    pub fn commitOutboundLease(self: EmbeddedSessionRole, generation: u64) !void {
+        try authorityCore(self.context).commitOutboundLease(generation);
+    }
+
+    pub fn retryOutboundLease(self: EmbeddedSessionRole, generation: u64) !void {
+        try authorityCore(self.context).retryOutboundLease(generation);
     }
 
     pub fn stop(self: EmbeddedSessionRole) !void {
@@ -4183,6 +5781,47 @@ fn insideDistrictHysteresis(position: [3]f32, coord: district_contract.ChunkCoor
         @abs(position[2] - center_z) <= inner_half_span;
 }
 
+fn horizontalDistanceSquared(lhs: [3]f32, rhs: [3]f32) f32 {
+    const x = rhs[0] - lhs[0];
+    const z = rhs[2] - lhs[2];
+    return x * x + z * z;
+}
+
+fn considerMeleeTarget(
+    selected: *?MeleeTarget,
+    source: [3]f32,
+    forward: [2]f32,
+    candidate: MeleeTarget,
+    target_position: [3]f32,
+) void {
+    if (candidate.distance_squared <= 0.0001 or
+        candidate.distance_squared > melee_range * melee_range)
+    {
+        return;
+    }
+    const inverse_distance = 1.0 / @sqrt(candidate.distance_squared);
+    const direction = [2]f32{
+        (target_position[0] - source[0]) * inverse_distance,
+        (target_position[2] - source[2]) * inverse_distance,
+    };
+    if (direction[0] * forward[0] + direction[1] * forward[1] <
+        melee_minimum_forward_dot)
+    {
+        return;
+    }
+    if (selected.* == null or candidate.distance_squared < selected.*.?.distance_squared or
+        (candidate.distance_squared == selected.*.?.distance_squared and
+            persistentLessThan(candidate.persistent, selected.*.?.persistent)))
+    {
+        selected.* = candidate;
+    }
+}
+
+fn persistentLessThan(lhs: engine.PersistentId, rhs: engine.PersistentId) bool {
+    return lhs.namespace < rhs.namespace or
+        (lhs.namespace == rhs.namespace and lhs.local < rhs.local);
+}
+
 fn fingerprintIngress(seed: u64, record: AcceptedIngress) u64 {
     var result = seed;
     inline for (.{
@@ -4204,6 +5843,7 @@ fn fingerprintIngress(seed: u64, record: AcceptedIngress) u64 {
         @as(u64, record.vehicle.generation),
         @as(u64, record.carryable.index),
         @as(u64, record.carryable.generation),
+        @as(u64, record.avatar_incarnation),
         @as(u64, @as(u32, @bitCast(record.vehicle_control[0]))),
         @as(u64, @as(u32, @bitCast(record.vehicle_control[1]))),
         @as(u64, @as(u32, @bitCast(record.vehicle_control[2]))),
@@ -4213,6 +5853,64 @@ fn fingerprintIngress(seed: u64, record: AcceptedIngress) u64 {
         result = std.hash.Wyhash.hash(result, std.mem.asBytes(&stable));
     }
     return result;
+}
+
+fn playerVitalsTarget(
+    participant: ParticipantSlot,
+    id: engine.PersistentId,
+) vitals_contract.Target {
+    return .{
+        .kind = .player,
+        .id = id,
+        .incarnation = .{ .value = participant.avatar_incarnation },
+    };
+}
+
+fn npcVitalsTarget(npc: NpcSlot, id: engine.PersistentId) vitals_contract.Target {
+    return .{
+        .kind = .npc,
+        .id = id,
+        .incarnation = .{ .value = npc.generation },
+    };
+}
+
+fn protocolLifeState(state: vitals_contract.LifeState) protocol.AvatarLifeState {
+    return switch (state) {
+        .alive => .alive,
+        .dead => .dead,
+    };
+}
+
+fn pendingVitalsView(target: vitals_contract.Target) vitals_contract.View {
+    return .{
+        .target = target,
+        .current_health = vitals_contract.default_max_health,
+        .maximum_health = vitals_contract.default_max_health,
+        .life_state = .alive,
+        .death_tick = 0,
+    };
+}
+
+fn damageCorrelation(index: usize, sequence: identity.ActionSequence) u64 {
+    return 0x5331_3000_0000_0000 |
+        (@as(u64, @intCast(index + 1)) << 32) |
+        @as(u64, sequence.value);
+}
+
+fn npcDeathRequestId(index: usize, generation: u16) u64 {
+    return 0x5331_3001_0000_0000 |
+        (@as(u64, generation) << 16) |
+        @as(u64, @intCast(index + 1));
+}
+
+fn decodeNpcDeathRequestId(value: u64) ?struct { index: usize, generation: u16 } {
+    if (value & 0xffff_ffff_0000_0000 != 0x5331_3001_0000_0000) return null;
+    const raw_index: u16 = @truncate(value);
+    if (raw_index == 0 or raw_index > budgets.max_npcs) return null;
+    return .{
+        .index = raw_index - 1,
+        .generation = @truncate(value >> 16),
+    };
 }
 
 fn spawnRequestId(index: usize, generation: u16) u64 {
@@ -4424,6 +6122,19 @@ fn legacyReconnectGuess(
     };
 }
 
+/// Test code consumes a lease immediately because it has no physical adapter.
+/// Product adapters must commit only after their own acceptance point.
+fn takeOutboundForTest(owner: anytype) ?Outbound {
+    if (owner.beginOutboundLease() == null and
+        owner.diagnostics().mailbox_occupancy != 0)
+    {
+        owner.tick() catch return null;
+    }
+    const lease = owner.beginOutboundLease() orelse return null;
+    owner.commitOutboundLease(lease.generation) catch unreachable;
+    return lease.outbound;
+}
+
 test "authority placement facades expose opaque role-scoped state" {
     try std.testing.expect(switch (@typeInfo(DedicatedAuthority)) {
         .@"opaque" => true,
@@ -4473,7 +6184,7 @@ test "authority issues bound one-time reconnect credentials and unique sessions"
         .account = account,
         .external_identity = external_identity,
     } });
-    const initial = first.session().pollOutbound().?.message.welcome;
+    const initial = takeOutboundForTest(first.session()).?.message.welcome;
     try std.testing.expect(initial.reconnect.isValid());
     try std.testing.expect(!reconnectCredentialsEqual(
         initial.reconnect,
@@ -4483,10 +6194,10 @@ test "authority issues bound one-time reconnect credentials and unique sessions"
     const other_account = identity.AccountId{ .value = 42 };
     _ = try first.session().openConnection(.{ .value = 2 });
     try first.session().ingest(.{ .value = 2 }, .{ .hello = .{ .account = other_account } });
-    const other = first.session().pollOutbound().?.message.welcome;
+    const other = takeOutboundForTest(first.session()).?.message.welcome;
     try std.testing.expect(!reconnectCredentialsEqual(initial.reconnect, other.reconnect));
 
-    first.session().transportClosed(initial_transport);
+    _ = try first.session().transportClosed(initial_transport);
 
     // Possession of a valid credential does not authorize a different account
     // or external platform identity.
@@ -4498,7 +6209,7 @@ test "authority issues bound one-time reconnect credentials and unique sessions"
     } });
     try std.testing.expectEqual(
         protocol.RejectionReason.reconnect_expired,
-        first.session().pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(first.session()).?.message.rejected.reason,
     );
 
     _ = try first.session().openConnection(.{ .value = 5 });
@@ -4509,7 +6220,7 @@ test "authority issues bound one-time reconnect credentials and unique sessions"
     } });
     try std.testing.expectEqual(
         protocol.RejectionReason.reconnect_expired,
-        first.session().pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(first.session()).?.message.rejected.reason,
     );
 
     _ = try first.session().openConnection(.{ .value = 6 });
@@ -4518,13 +6229,14 @@ test "authority issues bound one-time reconnect credentials and unique sessions"
         .external_identity = external_identity,
         .reconnect = initial.reconnect,
     } });
-    const rotated = first.session().pollOutbound().?.message.welcome;
+    const rotated_outbound = takeOutboundForTest(first.session()).?;
+    const rotated = rotated_outbound.message.welcome;
     try std.testing.expectEqual(initial.participant, rotated.participant);
     try std.testing.expect(!reconnectCredentialsEqual(initial.reconnect, rotated.reconnect));
 
     try first.session().tick();
     var reconnect_baseline: ?protocol.RelevanceBaseline = null;
-    while (first.session().pollOutbound()) |outbound| {
+    while (takeOutboundForTest(first.session())) |outbound| {
         if (outbound.connection.value == 6 and outbound.message == .relevance_baseline) {
             reconnect_baseline = outbound.message.relevance_baseline;
         }
@@ -4536,8 +6248,14 @@ test "authority issues bound one-time reconnect credentials and unique sessions"
         .participant = rotated.participant,
         .baseline_id = confirmed_baseline.baseline_id,
     } });
+    try first.session().ingest(.{ .value = 6 }, .{ .delivery_receipt = .{
+        .session = rotated.session,
+        .participant = rotated.participant,
+        .lane = .control,
+        .delivery_id = rotated_outbound.delivery_id,
+    } });
 
-    first.session().transportClosed(.{ .value = 6 });
+    _ = try first.session().transportClosed(.{ .value = 6 });
     _ = try first.session().openConnection(.{ .value = 7 });
     try first.session().ingest(.{ .value = 7 }, .{ .hello = .{
         .account = account,
@@ -4546,7 +6264,7 @@ test "authority issues bound one-time reconnect credentials and unique sessions"
     } });
     try std.testing.expectEqual(
         protocol.RejectionReason.reconnect_expired,
-        first.session().pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(first.session()).?.message.rejected.reason,
     );
 
     _ = try first.session().openConnection(.{ .value = 8 });
@@ -4555,7 +6273,7 @@ test "authority issues bound one-time reconnect credentials and unique sessions"
         .external_identity = external_identity,
         .reconnect = rotated.reconnect,
     } });
-    const rotated_again = first.session().pollOutbound().?.message.welcome;
+    const rotated_again = takeOutboundForTest(first.session()).?.message.welcome;
     try std.testing.expectEqual(initial.participant, rotated_again.participant);
     try std.testing.expect(!reconnectCredentialsEqual(rotated.reconnect, rotated_again.reconnect));
 
@@ -4570,7 +6288,7 @@ test "authority issues bound one-time reconnect credentials and unique sessions"
     defer second.deinit();
     _ = try second.session().openConnection(.{ .value = 3 });
     try second.session().ingest(.{ .value = 3 }, .{ .hello = .{ .account = account } });
-    const other_session = second.session().pollOutbound().?.message.welcome;
+    const other_session = takeOutboundForTest(second.session()).?.message.welcome;
     try std.testing.expect(first_session.value != other_session.session.value);
 }
 
@@ -4586,8 +6304,8 @@ test "reconnect retains one presented credential until Welcome is confirmed" {
 
     _ = try authority.session().openConnection(.{ .value = 1 });
     try authority.session().ingest(.{ .value = 1 }, .{ .hello = .{ .account = account } });
-    const initial = authority.session().pollOutbound().?.message.welcome;
-    authority.session().transportClosed(.{ .value = 1 });
+    const initial = takeOutboundForTest(authority.session()).?.message.welcome;
+    _ = try authority.session().transportClosed(.{ .value = 1 });
 
     // The first rotated Welcome is lost. The client can still retry with the
     // credential it actually possesses.
@@ -4596,20 +6314,20 @@ test "reconnect retains one presented credential until Welcome is confirmed" {
         .account = account,
         .reconnect = initial.reconnect,
     } });
-    const first_rotation = authority.session().pollOutbound().?.message.welcome;
-    authority.session().transportClosed(.{ .value = 2 });
+    const first_rotation = takeOutboundForTest(authority.session()).?.message.welcome;
+    _ = try authority.session().transportClosed(.{ .value = 2 });
 
     _ = try authority.session().openConnection(.{ .value = 3 });
     try authority.session().ingest(.{ .value = 3 }, .{ .hello = .{
         .account = account,
         .reconnect = initial.reconnect,
     } });
-    const second_rotation = authority.session().pollOutbound().?.message.welcome;
+    const second_rotation = takeOutboundForTest(authority.session()).?.message.welcome;
     try std.testing.expect(!reconnectCredentialsEqual(
         first_rotation.reconnect,
         second_rotation.reconnect,
     ));
-    authority.session().transportClosed(.{ .value = 3 });
+    _ = try authority.session().transportClosed(.{ .value = 3 });
 
     // A client that did receive the latest Welcome can also reconnect with
     // the current credential. Only that presented value is retained.
@@ -4618,8 +6336,8 @@ test "reconnect retains one presented credential until Welcome is confirmed" {
         .account = account,
         .reconnect = second_rotation.reconnect,
     } });
-    _ = authority.session().pollOutbound().?.message.welcome;
-    authority.session().transportClosed(.{ .value = 4 });
+    _ = takeOutboundForTest(authority.session()).?.message.welcome;
+    _ = try authority.session().transportClosed(.{ .value = 4 });
     const participant_index = @as(usize, initial.participant.index) - 1;
     try std.testing.expect(core.participants[participant_index].reconnect_confirmation_pending);
     try std.testing.expect(reconnectCredentialsEqual(
@@ -4634,20 +6352,21 @@ test "reconnect retains one presented credential until Welcome is confirmed" {
     } });
     try std.testing.expectEqual(
         protocol.RejectionReason.reconnect_expired,
-        authority.session().pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(authority.session()).?.message.rejected.reason,
     );
 
-    // The one retained credential remains a recovery path until a valid
-    // post-Hello baseline acknowledgement confirms delivery.
+    // The one retained credential remains a recovery path until an explicit
+    // application receipt confirms the reconnect Welcome.
     _ = try authority.session().openConnection(.{ .value = 6 });
     try authority.session().ingest(.{ .value = 6 }, .{ .hello = .{
         .account = account,
         .reconnect = second_rotation.reconnect,
     } });
-    const confirmed_rotation = authority.session().pollOutbound().?.message.welcome;
+    const confirmed_outbound = takeOutboundForTest(authority.session()).?;
+    const confirmed_rotation = confirmed_outbound.message.welcome;
     try authority.session().tick();
     var baseline: ?protocol.RelevanceBaseline = null;
-    while (authority.session().pollOutbound()) |outbound| {
+    while (takeOutboundForTest(authority.session())) |outbound| {
         if (outbound.connection.value == 6 and outbound.message == .relevance_baseline) {
             baseline = outbound.message.relevance_baseline;
         }
@@ -4658,9 +6377,17 @@ test "reconnect retains one presented credential until Welcome is confirmed" {
         .participant = confirmed_rotation.participant,
         .baseline_id = confirmation.baseline_id,
     } });
+    try authority.session().ingest(.{ .value = 6 }, .{ .delivery_receipt = .{
+        .session = confirmed_rotation.session,
+        .participant = confirmed_rotation.participant,
+        .lane = .control,
+        .delivery_id = confirmed_outbound.delivery_id,
+    } });
+    try authority.session().tick();
     try std.testing.expect(!core.participants[participant_index].reconnect_confirmation_pending);
     try std.testing.expect(!core.participants[participant_index].retained_reconnect.isValid());
-    authority.session().transportClosed(.{ .value = 6 });
+    while (takeOutboundForTest(authority.session()) != null) {}
+    _ = try authority.session().transportClosed(.{ .value = 6 });
 
     _ = try authority.session().openConnection(.{ .value = 7 });
     try authority.session().ingest(.{ .value = 7 }, .{ .hello = .{
@@ -4669,11 +6396,11 @@ test "reconnect retains one presented credential until Welcome is confirmed" {
     } });
     try std.testing.expectEqual(
         protocol.RejectionReason.reconnect_expired,
-        authority.session().pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(authority.session()).?.message.rejected.reason,
     );
 }
 
-test "failed reconnect Welcome queueing rolls credential rotation back atomically" {
+test "pending publication prevents reconnect mutation before a new cycle" {
     const authority = try initTestEmbeddedAuthority(
         testEmbeddedCoreConfig(0x454d_4408, .host_managed),
         .{},
@@ -4686,9 +6413,10 @@ test "failed reconnect Welcome queueing rolls credential rotation back atomicall
 
     _ = try authority.session().openConnection(.{ .value = 1 });
     try authority.session().ingest(.{ .value = 1 }, .{ .hello = .{ .account = account } });
-    const initial = authority.session().pollOutbound().?.message.welcome;
-    authority.session().transportClosed(.{ .value = 1 });
+    const initial = takeOutboundForTest(authority.session()).?.message.welcome;
+    _ = try authority.session().transportClosed(.{ .value = 1 });
     _ = try authority.session().openConnection(reconnect_transport);
+    try authority.session().tick();
     const participant_index = @as(usize, initial.participant.index) - 1;
     const connection_index = core.findConnection(reconnect_transport) orelse
         return error.MissingReconnectRollbackConnection;
@@ -4705,12 +6433,13 @@ test "failed reconnect Welcome queueing rolls credential rotation back atomicall
             .lane = .control,
         });
     }
+    try authority.session().ingest(reconnect_transport, .{ .hello = .{
+        .account = account,
+        .reconnect = initial.reconnect,
+    } });
     try std.testing.expectError(
-        error.QueueFull,
-        authority.session().ingest(reconnect_transport, .{ .hello = .{
-            .account = account,
-            .reconnect = initial.reconnect,
-        } }),
+        error.AuthorityOutputsPending,
+        authority.session().tick(),
     );
     try std.testing.expect(reconnectCredentialsEqual(
         participant_before.reconnect,
@@ -4744,7 +6473,7 @@ test "failed reconnect Welcome queueing rolls credential rotation back atomicall
         .account = account,
         .reconnect = initial.reconnect,
     } });
-    const recovered = authority.session().pollOutbound().?.message.welcome;
+    const recovered = takeOutboundForTest(authority.session()).?.message.welcome;
     try std.testing.expectEqual(initial.participant, recovered.participant);
     try std.testing.expect(!reconnectCredentialsEqual(initial.reconnect, recovered.reconnect));
 }
@@ -4780,8 +6509,8 @@ test "room reconnect validates signed identity before rotating its credential" {
         .external_identity = external_identity,
         .join_authorization = authorization,
     } }, 10);
-    const initial = authority.session().pollOutbound().?.message.welcome;
-    authority.session().transportClosed(.{ .value = 1 });
+    const initial = takeOutboundForTest(authority.session()).?.message.welcome;
+    _ = try authority.session().transportClosed(.{ .value = 1 });
 
     // The original ticket cannot be replayed under a different external
     // identity even when the attacker also presents the reconnect token.
@@ -4794,7 +6523,7 @@ test "room reconnect validates signed identity before rotating its credential" {
     } }, 100);
     try std.testing.expectEqual(
         protocol.RejectionReason.unauthorized,
-        authority.session().pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(authority.session()).?.message.rejected.reason,
     );
 
     // Reconnect remains independent of a live room service and of extending
@@ -4807,7 +6536,7 @@ test "room reconnect validates signed identity before rotating its credential" {
         .join_authorization = authorization,
         .reconnect = initial.reconnect,
     } }, 100);
-    const reconnected = authority.session().pollOutbound().?.message.welcome;
+    const reconnected = takeOutboundForTest(authority.session()).?.message.welcome;
     try std.testing.expectEqual(initial.participant, reconnected.participant);
     try std.testing.expect(!reconnectCredentialsEqual(initial.reconnect, reconnected.reconnect));
 }
@@ -4843,10 +6572,10 @@ test "faulted authority rejects every operational mutation but preserves shutdow
     try authority.session().ingest(participant_transport, .{ .hello = .{
         .account = .{ .value = 61 },
     } });
-    _ = authority.session().pollOutbound().?.message.welcome;
+    _ = takeOutboundForTest(authority.session()).?.message.welcome;
     try std.testing.expectError(
         error.InjectedAuthorityCycleFault,
-        core.tickImpl(null, .pre_simulation),
+        core.tickImpl(null, .ingress_freeze),
     );
 
     const diagnostics_before = authority.session().diagnostics();
@@ -4881,7 +6610,6 @@ test "faulted authority rejects every operational mutation but preserves shutdow
         error.AuthorityFaulted,
         core.rejectOversized(participant_transport),
     );
-    try std.testing.expectError(error.AuthorityFaulted, core.updateAdmissionTime(10));
     try std.testing.expectError(
         error.AuthorityFaulted,
         authority.characters().spawnParticipant(participant_transport, .{
@@ -4933,9 +6661,9 @@ test "faulted authority rejects every operational mutation but preserves shutdow
     try std.testing.expectEqual(admission_time_before, core.admission_time_unix_seconds);
     try std.testing.expectEqual(source_issued_before, core.snapshot_source_issued);
 
-    authority.session().transportClosed(participant_transport);
+    _ = try authority.session().transportClosed(participant_transport);
     try authority.session().stop();
-    const shutdown = authority.session().pollOutbound() orelse
+    const shutdown = takeOutboundForTest(authority.session()) orelse
         return error.MissingFaultedAuthorityShutdown;
     try std.testing.expectEqual(
         protocol.DisconnectReason.authority_stopping,
@@ -4978,20 +6706,25 @@ test "admission nonce capacity preflight leaves no participant and reuses only e
     );
     const transport = TransportConnection{ .value = 1 };
     _ = try authority.session().openConnection(transport);
-    try std.testing.expectError(
-        error.AdmissionNonceHistoryCapacityReached,
-        authority.session().ingestAtUnixTime(transport, .{ .hello = .{
-            .account = account,
-            .external_identity = external_identity,
-            .join_authorization = authorization,
-        } }, 10),
+    try authority.session().ingestAtUnixTime(transport, .{ .hello = .{
+        .account = account,
+        .external_identity = external_identity,
+        .join_authorization = authorization,
+    } }, 10);
+    try authority.session().tick();
+    try std.testing.expectEqual(
+        protocol.RejectionReason.session_full,
+        takeOutboundForTest(authority.session()).?.message.rejected.reason,
     );
     try std.testing.expectEqual(@as(u16, 0), authority.session().diagnostics().active_participants);
     const connection_index = core.findConnection(transport) orelse
         return error.MissingNonceCapacityConnection;
     try std.testing.expect(core.connections[connection_index].participant_index == null);
     try std.testing.expectEqual(@as(usize, 0), core.outbox.len);
-    try std.testing.expect(std.meta.eql(simulation_before, authority.developer().diagnostics()));
+    try std.testing.expectEqual(
+        simulation_before.entity_count,
+        authority.developer().diagnostics().entity_count,
+    );
     try std.testing.expect(std.meta.eql(nonces_before, core.used_admission_nonces));
 
     const expired_slot: usize = 37;
@@ -5001,6 +6734,7 @@ test "admission nonce capacity preflight leaves no participant and reuses only e
         .external_identity = external_identity,
         .join_authorization = authorization,
     } }, 10);
+    try std.testing.expect(takeOutboundForTest(authority.session()).?.message == .welcome);
     try std.testing.expectEqual(
         authorization.nonce,
         core.used_admission_nonces[expired_slot].nonce,
@@ -5014,7 +6748,120 @@ test "admission nonce capacity preflight leaves no participant and reuses only e
         try std.testing.expectEqual(nonces_before[index], used);
     }
     try std.testing.expectEqual(@as(u16, 1), authority.session().diagnostics().active_participants);
-    try std.testing.expect(authority.session().pollOutbound().?.message == .welcome);
+}
+
+test "fresh admission failures preserve participant nonce and credential state" {
+    const room_secret: protocol.AdmissionSecret = @splat(0x7c);
+    const Fixture = struct {
+        fn create(namespace: u64, secret: protocol.AdmissionSecret) !*EmbeddedAuthority {
+            return initTestEmbeddedAuthority(
+                testEmbeddedCoreConfig(namespace, .automatic),
+                .{ .room_admission = .{
+                    .room_id = 71,
+                    .authority_id = 9_001,
+                    .room_generation = 3,
+                    .secret = secret,
+                } },
+                0x71,
+            );
+        }
+
+        fn hello(secret: protocol.AdmissionSecret, nonce: u64) protocol.Hello {
+            const account = identity.AccountId{ .value = nonce };
+            const external = protocol.ExternalIdentity{
+                .provider = .steam,
+                .subject = nonce + 10_000,
+            };
+            return .{
+                .account = account,
+                .external_identity = external,
+                .join_authorization = testRoomAuthorization(
+                    secret,
+                    account,
+                    external,
+                    nonce,
+                    100,
+                ),
+            };
+        }
+
+        fn expectUnchanged(
+            core: *AuthorityCore,
+            connection_index: usize,
+            nonces: [budgets.admission_nonce_history_capacity]UsedAdmissionNonce,
+            credential_serial: u64,
+        ) !void {
+            try std.testing.expectEqual(@as(u16, 0), core.diagnostics().active_participants);
+            try std.testing.expect(core.connections[connection_index].participant_index == null);
+            try std.testing.expect(std.meta.eql(nonces, core.used_admission_nonces));
+            try std.testing.expectEqual(credential_serial, core.credential_issuer.next_serial);
+        }
+    };
+
+    {
+        const authority = try Fixture.create(0x454d_4413, room_secret);
+        defer authority.deinit();
+        const core = embeddedAuthorityCore(authority);
+        const connection_index = @as(usize, (try core.applyConnectionOpened(.{
+            .value = 1,
+        })).index) - 1;
+        core.publication_preparing = true;
+        core.credential_issuer.next_serial = std.math.maxInt(u64);
+        const nonces = core.used_admission_nonces;
+        const credential_serial = core.credential_issuer.next_serial;
+        try std.testing.expectError(
+            error.CredentialIssuerExhausted,
+            core.ingestHello(connection_index, Fixture.hello(room_secret, 1)),
+        );
+        try Fixture.expectUnchanged(core, connection_index, nonces, credential_serial);
+    }
+
+    {
+        const authority = try Fixture.create(0x454d_4414, room_secret);
+        defer authority.deinit();
+        const core = embeddedAuthorityCore(authority);
+        const connection_index = @as(usize, (try core.applyConnectionOpened(.{
+            .value = 2,
+        })).index) - 1;
+        core.publication_preparing = true;
+        for (0..character_contract.max_pending_commands) |index| {
+            try core.simulation.submitCharacter(.{ .spawn = .{
+                .request_id = 10_000 + index,
+                .position = .{ 0, 0, 0 },
+            } });
+        }
+        const nonces = core.used_admission_nonces;
+        const credential_serial = core.credential_issuer.next_serial;
+        try std.testing.expectError(
+            error.CharacterCommandQueueFull,
+            core.ingestHello(connection_index, Fixture.hello(room_secret, 2)),
+        );
+        try Fixture.expectUnchanged(core, connection_index, nonces, credential_serial);
+    }
+
+    {
+        const authority = try Fixture.create(0x454d_4415, room_secret);
+        defer authority.deinit();
+        const core = embeddedAuthorityCore(authority);
+        const transport = TransportConnection{ .value = 3 };
+        const connection_index = @as(usize, (try core.applyConnectionOpened(transport)).index) - 1;
+        core.publication_preparing = true;
+        for (0..budgets.outbound_message_capacity) |_| {
+            try core.prepared_outbox.push(.{
+                .connection = transport,
+                .message = .{ .rejected = .{ .reason = .invalid_state } },
+                .delivery = .reliable,
+                .lane = .control,
+            });
+        }
+        const nonces = core.used_admission_nonces;
+        const credential_serial = core.credential_issuer.next_serial;
+        try std.testing.expectError(
+            error.QueueFull,
+            core.ingestHello(connection_index, Fixture.hello(room_secret, 3)),
+        );
+        try Fixture.expectUnchanged(core, connection_index, nonces, credential_serial);
+    }
 }
 
 test "embedded authority rejects a simulation clock outside the session contract" {
@@ -5125,8 +6972,7 @@ test "authority cycle faults stop later stages and latch the first failure" {
             diagnostics.last_cycle.count,
         );
         try std.testing.expectEqual(stage, diagnostics.last_cycle.failed_stage.?);
-        const expected_completed_tick: u64 = if (stage == .pre_simulation or
-            stage == .simulation) 0 else 1;
+        const expected_completed_tick: u64 = if (@intFromEnum(stage) <= @intFromEnum(authority_diagnostics.CycleStage.simulation)) 0 else 1;
         try std.testing.expectEqual(expected_completed_tick, diagnostics.tick);
         const first_fault = diagnostics.first_cycle_fault orelse
             return error.MissingAuthorityCycleFault;
@@ -5137,6 +6983,75 @@ test "authority cycle faults stop later stages and latch the first failure" {
         );
         try std.testing.expectError(error.AuthorityFaulted, authority.session().tick());
     }
+}
+
+test "publication failure rolls back unpublished derivatives and durable disposition" {
+    const authority = try initTestEmbeddedAuthority(
+        testEmbeddedCoreConfig(0x454d_4416, .host_managed),
+        .{},
+        0x16,
+    );
+    defer authority.deinit();
+    const core = embeddedAuthorityCore(authority);
+    const transport = TransportConnection{ .value = 1 };
+    const connection_index = @as(usize, (try core.applyConnectionOpened(transport)).index) - 1;
+    const participant_index = core.allocateParticipant() orelse
+        return error.MissingPublicationTestParticipant;
+    core.connections[connection_index].participant_index = @intCast(participant_index);
+    core.participants[participant_index].connection_index = @intCast(connection_index);
+    core.participants[participant_index].replicated = .{
+        .index = @intCast(participant_index + 1),
+        .generation = core.participants[participant_index].generation,
+    };
+    core.participants[participant_index].baseline_id = 1;
+    core.participants[participant_index].baseline_eligible_tick = 0;
+    core.force_snapshot = true;
+    const sequence_before = core.replication[participant_index].next_sequence;
+    const source = try authority.persistence().issueSource();
+    const request_id = try source.request();
+
+    try std.testing.expectError(
+        error.InjectedAuthorityCycleFault,
+        core.tickImpl(null, .publication),
+    );
+    try std.testing.expect(!core.participants[participant_index].baseline_sent);
+    try std.testing.expectEqual(
+        sequence_before,
+        core.replication[participant_index].next_sequence,
+    );
+    try std.testing.expectEqual(@as(usize, 0), core.outbox.len);
+    try std.testing.expectEqual(@as(usize, 0), core.prepared_outbox.len);
+    try std.testing.expect(core.prepared_durable_result == null);
+    try std.testing.expectError(error.AuthorityFaulted, source.take(request_id));
+}
+
+test "unexpected real feature outcome faults the outcome-drain stage without publication" {
+    const authority = try initTestEmbeddedAuthority(
+        testEmbeddedCoreConfig(0x454d_4417, .automatic),
+        .{},
+        0x17,
+    );
+    defer authority.deinit();
+    const core = embeddedAuthorityCore(authority);
+    try core.simulation.submitCharacter(.{ .spawn = .{
+        .request_id = 1,
+        .position = .{ 0, 0, 0 },
+    } });
+
+    try std.testing.expectError(
+        error.UnexpectedCharacterSpawnOutcome,
+        authority.session().tick(),
+    );
+    const diagnostics = authority.session().diagnostics();
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.tick);
+    try std.testing.expectEqual(
+        authority_diagnostics.CycleStage.outcome_drain,
+        diagnostics.last_cycle.failed_stage.?,
+    );
+    try std.testing.expectEqual(@as(u8, 4), diagnostics.last_cycle.count);
+    try std.testing.expectEqual(@as(usize, 0), core.outbox.len);
+    try std.testing.expectEqual(@as(usize, 0), core.prepared_outbox.len);
+    try std.testing.expectError(error.AuthorityFaulted, authority.session().tick());
 }
 
 test "host-managed participant spawn preserves caller correlation and publishes state" {
@@ -5150,7 +7065,7 @@ test "host-managed participant spawn preserves caller correlation and publishes 
     try authority.session().ingest(transport, .{ .hello = .{
         .account = .{ .value = 7 },
     } });
-    try std.testing.expect(authority.session().pollOutbound().?.message == .welcome);
+    try std.testing.expect(takeOutboundForTest(authority.session()).?.message == .welcome);
     try authority.characters().spawnParticipant(transport, .{
         .request_id = 1,
         .position = .{ 0, 0, 0 },
@@ -5164,7 +7079,7 @@ test "host-managed participant spawn preserves caller correlation and publishes 
 
     var saw_baseline = false;
     var replicated_character = identity.ReplicatedEntityId.invalid;
-    while (authority.session().pollOutbound()) |outbound| {
+    while (takeOutboundForTest(authority.session())) |outbound| {
         if (outbound.message == .relevance_baseline) {
             saw_baseline = true;
             try std.testing.expectEqual(
@@ -5292,18 +7207,69 @@ test "embedded persistence transfers one opaque quiescent snapshot source" {
     } });
     try std.testing.expectError(
         error.CommandsPending,
-        source.capture(std.testing.allocator),
+        source.observe(std.testing.allocator),
     );
     try authority.session().tick();
     try std.testing.expectError(
         error.AuthorityOutputsPending,
-        source.capture(std.testing.allocator),
+        source.observe(std.testing.allocator),
     );
     _ = authority.crates().pollOutcome() orelse
         return error.MissingPersistenceSafePointOutcome;
-    const bytes = try source.capture(std.testing.allocator);
+    const bytes = try source.observe(std.testing.allocator);
     defer std.testing.allocator.free(bytes);
     try std.testing.expect(bytes.len != 0);
+}
+
+test "durable capture is decided at cycle stage seven and released by its owner" {
+    const authority = try EmbeddedAuthority.init(
+        std.testing.allocator,
+        testEmbeddedCoreConfig(0x454d_4411, .host_managed),
+    );
+    defer authority.deinit();
+    const source = try authority.persistence().issueSource();
+    const request_id = try source.request();
+    try std.testing.expect((try source.take(request_id)) == null);
+    try authority.session().tick();
+    const disposition = (try source.take(request_id)) orelse
+        return error.MissingDurableCaptureDisposition;
+    switch (disposition) {
+        .captured => |bytes| {
+            defer source.release(bytes);
+            try std.testing.expect(bytes.len != 0);
+        },
+        .deferred => return error.UnexpectedDurableCaptureDeferral,
+        .failed => |err| return err,
+    }
+    try std.testing.expectEqual(
+        authority_diagnostics.CycleStage.durable_disposition,
+        authority.session().diagnostics().last_cycle.stages[6],
+    );
+}
+
+test "durable capture returns a typed stage-seven deferral while publication is pending" {
+    const authority = try initTestEmbeddedAuthority(
+        testEmbeddedCoreConfig(0x454d_4412, .host_managed),
+        .{},
+        0x12,
+    );
+    defer authority.deinit();
+    const source = try authority.persistence().issueSource();
+    const transport = TransportConnection{ .value = 1 };
+    _ = try authority.session().openConnection(transport);
+    try authority.session().ingest(transport, .{ .hello = .{
+        .account = .{ .value = 1 },
+    } });
+    const request_id = try source.request();
+
+    try authority.session().tick();
+    const disposition = (try source.take(request_id)) orelse
+        return error.MissingDurableDeferral;
+    try std.testing.expectEqual(
+        snapshot_source.Deferral.authority_outputs,
+        disposition.deferred,
+    );
+    try std.testing.expect(authority.session().beginOutboundLease() != null);
 }
 
 fn testTakeAndAcknowledgeBaseline(
@@ -5311,7 +7277,7 @@ fn testTakeAndAcknowledgeBaseline(
     transport: TransportConnection,
 ) !protocol.Snapshot {
     var baseline: ?protocol.RelevanceBaseline = null;
-    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+    while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
         .relevance_baseline => |value| baseline = value,
         else => {},
     };
@@ -5339,7 +7305,7 @@ test "authority admits two participants and emits join-in-progress snapshots" {
     try authority.ingest(.{ .value = 101 }, .{ .hello = .{
         .account = .{ .value = 1 },
     } });
-    const welcome_one = authority.pollOutbound().?.message.welcome;
+    const welcome_one = takeOutboundForTest(authority).?.message.welcome;
     try authority.tick();
     const first_snapshot = try testTakeAndAcknowledgeBaseline(
         authority,
@@ -5352,23 +7318,23 @@ test "authority admits two participants and emits join-in-progress snapshots" {
     try authority.ingest(.{ .value = 202 }, .{ .hello = .{
         .account = .{ .value = 2 },
     } });
-    _ = authority.pollOutbound().?.message.welcome;
+    _ = takeOutboundForTest(authority).?.message.welcome;
     try authority.tick();
     var saw_two = false;
-    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+    while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
         .snapshot => |snapshot| saw_two = saw_two or snapshot.character_count == 2,
         .relevance_baseline => |baseline| saw_two = saw_two or baseline.snapshot.character_count == 2,
         else => {},
     };
     try std.testing.expect(saw_two);
 
-    authority.transportClosed(.{ .value = 101 });
+    _ = try authority.transportClosed(.{ .value = 101 });
     _ = try authority.openConnection(.{ .value = 303 });
     try authority.ingest(.{ .value = 303 }, .{ .hello = .{
         .account = .{ .value = 1 },
         .reconnect = welcome_one.reconnect,
     } });
-    const reconnected = authority.pollOutbound().?.message.welcome;
+    const reconnected = takeOutboundForTest(authority).?.message.welcome;
     try std.testing.expect(std.meta.eql(welcome_one.participant, reconnected.participant));
     try std.testing.expectEqual(@as(u64, 1), authority.diagnostics().reconnects);
 }
@@ -5380,9 +7346,9 @@ test "authority drops stale input without terminating an unreliable stream" {
     try authority.ingest(.{ .value = 1 }, .{ .hello = .{
         .account = .{ .value = 1 },
     } });
-    const welcome = authority.pollOutbound().?.message.welcome;
+    const welcome = takeOutboundForTest(authority).?.message.welcome;
     try authority.tick();
-    while (authority.pollOutbound() != null) {}
+    while (takeOutboundForTest(authority) != null) {}
     const input = protocol.ClientMessage{ .input = .{
         .session = welcome.session,
         .participant = welcome.participant,
@@ -5394,6 +7360,7 @@ test "authority drops stale input without terminating an unreliable stream" {
     } };
     try authority.ingest(.{ .value = 1 }, input);
     try authority.ingest(.{ .value = 1 }, input);
+    try authority.tick();
     try std.testing.expectEqual(@as(u64, 1), authority.diagnostics().stale_inputs);
     try std.testing.expectEqual(@as(u64, 0), authority.diagnostics().rejected_messages);
     try std.testing.expectEqual(@as(u16, 1), authority.diagnostics().ingress_entries);
@@ -5402,17 +7369,173 @@ test "authority drops stale input without terminating an unreliable stream" {
     try std.testing.expectEqual(@as(u32, 1), ingress[0].sequence.value);
 }
 
+test "authoritative melee kills once and explicit respawn replaces avatar incarnation" {
+    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    defer authority.deinit();
+    const attacker_transport = TransportConnection{ .value = 801 };
+    const victim_transport = TransportConnection{ .value = 802 };
+    _ = try authority.openConnection(attacker_transport);
+    try authority.ingest(attacker_transport, .{ .hello = .{
+        .account = .{ .value = 801 },
+    } });
+    _ = try authority.openConnection(victim_transport);
+    try authority.ingest(victim_transport, .{ .hello = .{
+        .account = .{ .value = 802 },
+    } });
+    try authority.tick();
+    var attacker_welcome: ?protocol.Welcome = null;
+    var victim_welcome: ?protocol.Welcome = null;
+    while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
+        .welcome => |welcome| if (outbound.connection.value == attacker_transport.value) {
+            attacker_welcome = welcome;
+        } else if (outbound.connection.value == victim_transport.value) {
+            victim_welcome = welcome;
+        },
+        else => {},
+    };
+    const attacker = attacker_welcome orelse return error.MissingAttackerWelcome;
+    const victim = victim_welcome orelse return error.MissingVictimWelcome;
+    for (0..2) |_| {
+        try authority.tick();
+        while (takeOutboundForTest(authority) != null) {}
+    }
+    try authority.ingest(attacker_transport, .{ .input = .{
+        .session = attacker.session,
+        .participant = attacker.participant,
+        .sequence = .{ .value = 1 },
+        .target_tick = authority.state().simulation.tickIndex() +| 1,
+        .move = .{ 0, 0 },
+        .facing_yaw = std.math.pi / 2.0,
+        .jump_pressed = false,
+    } });
+    try authority.tick();
+    while (takeOutboundForTest(authority) != null) {}
+
+    const attacker_index: usize = attacker.participant.index - 1;
+    const victim_index: usize = victim.participant.index - 1;
+    const first_incarnation = authority.state().participants[victim_index].avatar_incarnation;
+    for (1..4) |raw_sequence| {
+        const sequence = identity.ActionSequence{ .value = @intCast(raw_sequence) };
+        try authority.ingest(attacker_transport, .{ .melee_action = .{
+            .session = attacker.session,
+            .participant = attacker.participant,
+            .sequence = sequence,
+            .avatar_incarnation = authority.state().participants[attacker_index].avatar_incarnation,
+            .target_tick = authority.state().simulation.tickIndex() +| 1,
+        } });
+        try authority.tick();
+        var result: ?protocol.MeleeActionResult = null;
+        var deaths: u8 = 0;
+        while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
+            .melee_action_result => |value| if (outbound.connection.value ==
+                attacker_transport.value)
+            {
+                result = value;
+            },
+            .life_event => |value| if (value.state == .dead) {
+                deaths += 1;
+            },
+            else => {},
+        };
+        const applied = result orelse return error.MissingMeleeResult;
+        try std.testing.expectEqual(protocol.MeleeActionDisposition.hit, applied.disposition);
+        try std.testing.expectEqual(
+            @as(u16, if (raw_sequence == 3) 32 else melee_damage),
+            applied.applied_damage,
+        );
+        try std.testing.expectEqual(raw_sequence == 3, applied.killed);
+        if (raw_sequence == 3) {
+            try std.testing.expectEqual(@as(u8, 2), deaths);
+        } else {
+            try std.testing.expectEqual(@as(u8, 0), deaths);
+        }
+        if (raw_sequence != 3) for (0..melee_cooldown_ticks) |_| {
+            try authority.tick();
+            while (takeOutboundForTest(authority) != null) {}
+        };
+    }
+    for (0..3) |_| {
+        try authority.tick();
+        while (takeOutboundForTest(authority) != null) {}
+    }
+    try std.testing.expectEqual(PlayerLifecycle.dead, authority.state().participants[victim_index].lifecycle);
+    try std.testing.expect(authority.state().participants[victim_index].character == null);
+
+    _ = try authority.transportClosed(victim_transport);
+    try authority.tick();
+    while (takeOutboundForTest(authority) != null) {}
+    const reconnected_transport = TransportConnection{ .value = 803 };
+    _ = try authority.openConnection(reconnected_transport);
+    try authority.ingest(reconnected_transport, .{ .hello = .{
+        .account = .{ .value = 802 },
+        .reconnect = victim.reconnect,
+    } });
+    try authority.tick();
+    var dead_welcome: ?protocol.Welcome = null;
+    while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
+        .welcome => |welcome| if (outbound.connection.value == reconnected_transport.value) {
+            dead_welcome = welcome;
+        },
+        else => {},
+    };
+    const reconnected = dead_welcome orelse return error.MissingDeadReconnectWelcome;
+    try std.testing.expectEqual(protocol.AvatarLifeState.dead, reconnected.life_state);
+    try std.testing.expectEqual(first_incarnation, reconnected.avatar_incarnation);
+
+    while (authority.state().simulation.tickIndex() <
+        authority.state().participants[victim_index].respawn_available_tick)
+    {
+        try authority.tick();
+        while (takeOutboundForTest(authority) != null) {}
+    }
+    try authority.ingest(reconnected_transport, .{ .respawn_action = .{
+        .session = reconnected.session,
+        .participant = reconnected.participant,
+        .sequence = .{ .value = 1 },
+        .dead_incarnation = first_incarnation,
+    } });
+    var respawn_result: ?protocol.RespawnActionResult = null;
+    for (0..3) |_| {
+        try authority.tick();
+        while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
+            .respawn_action_result => |value| if (outbound.connection.value ==
+                reconnected_transport.value)
+            {
+                respawn_result = value;
+            },
+            else => {},
+        };
+    }
+    const respawned = respawn_result orelse return error.MissingRespawnResult;
+    try std.testing.expectEqual(protocol.RespawnActionDisposition.respawned, respawned.disposition);
+    try std.testing.expect(respawned.incarnation != first_incarnation);
+    try std.testing.expectEqual(PlayerLifecycle.alive, authority.state().participants[victim_index].lifecycle);
+    try std.testing.expect(authority.state().participants[victim_index].character != null);
+    var ingress_records: [16]AcceptedIngress = undefined;
+    const ingress_count = authority.copyAcceptedIngress(&ingress_records);
+    var melee_records: u8 = 0;
+    var respawn_records: u8 = 0;
+    for (ingress_records[0..ingress_count]) |record| switch (record.kind) {
+        .melee => melee_records += 1,
+        .respawn => respawn_records += 1,
+        else => {},
+    };
+    try std.testing.expectEqual(@as(u8, 3), melee_records);
+    try std.testing.expectEqual(@as(u8, 1), respawn_records);
+}
+
 test "authority defers admitted input until its declared target tick" {
     const authority = try DedicatedAuthority.init(std.testing.allocator);
     defer authority.deinit();
     const transport = TransportConnection{ .value = 1 };
     _ = try authority.openConnection(transport);
+    try authority.tick();
     try authority.ingest(transport, .{ .hello = .{
         .account = .{ .value = 1 },
     } });
-    const welcome = authority.pollOutbound().?.message.welcome;
+    const welcome = takeOutboundForTest(authority).?.message.welcome;
     try authority.tick();
-    while (authority.pollOutbound() != null) {}
+    while (takeOutboundForTest(authority) != null) {}
 
     const connection_index = authority.state().findConnection(transport) orelse
         return error.MissingTestConnection;
@@ -5421,7 +7544,9 @@ test "authority defers admitted input until its declared target tick" {
     const character = authority.state().participants[participant_index].character orelse
         return error.MissingTestCharacter;
     const before = try authority.state().simulation.character(character);
-    const first_target_tick = authority.state().simulation.tickIndex() + 3;
+    // One cycle first admits the frozen mailbox batch; the two following
+    // cycles must still precede the declared application tick.
+    const first_target_tick = authority.state().simulation.tickIndex() + 4;
     const second_target_tick = first_target_tick + 1;
     try authority.ingest(transport, .{ .input = .{
         .session = welcome.session,
@@ -5441,6 +7566,8 @@ test "authority defers admitted input until its declared target tick" {
         .facing_yaw = 0,
         .jump_pressed = false,
     } });
+    try authority.tick();
+    while (takeOutboundForTest(authority) != null) {}
     try std.testing.expectEqual(
         @as(u8, 2),
         authority.state().participants[participant_index].pending_inputs.len,
@@ -5452,7 +7579,7 @@ test "authority defers admitted input until its declared target tick" {
 
     for (0..2) |_| {
         try authority.tick();
-        while (authority.pollOutbound() != null) {}
+        while (takeOutboundForTest(authority) != null) {}
         const deferred = try authority.state().simulation.character(character);
         try std.testing.expectApproxEqAbs(before.position[2], deferred.position[2], 0.0001);
     }
@@ -5488,6 +7615,7 @@ test "typed authority ingress rejects zero action sequences before state drift" 
     defer authority.deinit();
     const transport = TransportConnection{ .value = 1 };
     _ = try authority.openConnection(transport);
+    try authority.tick();
     const connection_index = authority.state().findConnection(transport) orelse
         return error.MissingTestConnection;
     const received_before = authority.state().connections[connection_index].received_messages;
@@ -5535,7 +7663,185 @@ test "typed authority ingress rejects zero action sequences before state drift" 
         diagnostics_before.ingress_entries,
         diagnostics_after.ingress_entries,
     );
-    try std.testing.expect(authority.pollOutbound() == null);
+    try std.testing.expect(takeOutboundForTest(authority) == null);
+}
+
+test "outbound lease retry preserves the exact publication head" {
+    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    defer authority.deinit();
+    const transport = TransportConnection{ .value = 1 };
+    _ = try authority.openConnection(transport);
+    try authority.ingest(transport, .{ .hello = .{ .account = .{ .value = 1 } } });
+    try authority.tick();
+
+    const first = authority.beginOutboundLease() orelse return error.MissingOutboundLease;
+    try std.testing.expect(first.outbound.message == .welcome);
+    try authority.retryOutboundLease(first.generation);
+    const retry = authority.beginOutboundLease() orelse return error.MissingRetriedLease;
+    try std.testing.expectEqual(first.generation, retry.generation);
+    try std.testing.expect(std.meta.eql(first.outbound, retry.outbound));
+    try authority.commitOutboundLease(retry.generation);
+    try std.testing.expect(authority.beginOutboundLease() == null);
+    try std.testing.expectError(
+        error.StaleOutboundLease,
+        authority.commitOutboundLease(retry.generation),
+    );
+}
+
+test "accepted gameplay result replays after transport loss until application receipt" {
+    const authority = try initTestEmbeddedAuthority(
+        testEmbeddedCoreConfig(0x454d_4410, .host_managed),
+        .{},
+        0x88,
+    );
+    defer authority.deinit();
+    const session = authority.session();
+    const first_transport = TransportConnection{ .value = 1 };
+    _ = try session.openConnection(first_transport);
+    try session.ingest(first_transport, .{ .hello = .{ .account = .{ .value = 17 } } });
+    try session.tick();
+    const initial_lease = session.beginOutboundLease() orelse return error.MissingInitialWelcome;
+    const initial_welcome = initial_lease.outbound.message.welcome;
+    try session.commitOutboundLease(initial_lease.generation);
+
+    const core = embeddedAuthorityCore(authority);
+    const participant_index = @as(usize, initial_welcome.participant.index) - 1;
+    core.publication_preparing = true;
+    try core.queueGameplayResult(participant_index, .{ .melee_action_result = .{
+        .sequence = .{ .value = 1 },
+        .disposition = .hit,
+        .target = .{ .index = 17, .generation = 1 },
+        .target_incarnation = 1,
+        .applied_damage = 34,
+        .remaining_health = 66,
+    } });
+    core.publishPrepared();
+    core.publication_preparing = false;
+
+    const accepted = session.beginOutboundLease() orelse return error.MissingGameplayResult;
+    const gameplay_delivery_id = accepted.outbound.delivery_id;
+    try std.testing.expect(gameplay_delivery_id != 0);
+    try session.commitOutboundLease(accepted.generation);
+
+    _ = try session.transportClosed(first_transport);
+    const reconnect_transport = TransportConnection{ .value = 2 };
+    _ = try session.openConnection(reconnect_transport);
+    try session.ingest(reconnect_transport, .{ .hello = .{
+        .account = .{ .value = 17 },
+        .reconnect = initial_welcome.reconnect,
+    } });
+    try session.tick();
+    const welcome_lease = session.beginOutboundLease() orelse return error.MissingReconnectWelcome;
+    const reconnect_welcome = welcome_lease.outbound.message.welcome;
+    const reconnect_welcome_delivery_id = welcome_lease.outbound.delivery_id;
+    try session.commitOutboundLease(welcome_lease.generation);
+    try std.testing.expect(session.beginOutboundLease() == null);
+    try session.ingest(reconnect_transport, .{ .delivery_receipt = .{
+        .session = reconnect_welcome.session,
+        .participant = reconnect_welcome.participant,
+        .lane = .control,
+        .delivery_id = reconnect_welcome_delivery_id,
+    } });
+    try session.tick();
+    const replay = session.beginOutboundLease() orelse return error.MissingGameplayReplay;
+    try std.testing.expect(replay.outbound.message == .melee_action_result);
+    try std.testing.expectEqual(gameplay_delivery_id, replay.outbound.delivery_id);
+    try session.commitOutboundLease(replay.generation);
+    while (session.beginOutboundLease()) |remaining| {
+        try session.commitOutboundLease(remaining.generation);
+    }
+
+    try session.ingest(reconnect_transport, .{ .delivery_receipt = .{
+        .session = reconnect_welcome.session,
+        .participant = reconnect_welcome.participant,
+        .lane = .gameplay,
+        .delivery_id = gameplay_delivery_id,
+    } });
+    try session.tick();
+    for (core.participants[participant_index].replay_records) |record| {
+        try std.testing.expect(!record.active);
+    }
+}
+
+test "reconnect replay drains a full bounded ledger across quota-safe cycles" {
+    const authority = try initTestEmbeddedAuthority(
+        testEmbeddedCoreConfig(0x454d_4418, .host_managed),
+        .{},
+        0x18,
+    );
+    defer authority.deinit();
+    const session = authority.session();
+    const first_transport = TransportConnection{ .value = 1 };
+    _ = try session.openConnection(first_transport);
+    try session.ingest(first_transport, .{ .hello = .{ .account = .{ .value = 18 } } });
+    try session.tick();
+    const initial = session.beginOutboundLease() orelse return error.MissingInitialWelcome;
+    const initial_welcome = initial.outbound.message.welcome;
+    try session.commitOutboundLease(initial.generation);
+
+    const core = embeddedAuthorityCore(authority);
+    const participant_index = @as(usize, initial_welcome.participant.index) - 1;
+    const participant = &core.participants[participant_index];
+    for (&participant.replay_records, 0..) |*record, index| {
+        const delivery_id = index + 1;
+        record.* = .{
+            .active = true,
+            .delivery_id = delivery_id,
+            .message = .{ .vehicle_action_result = .{
+                .sequence = .{ .value = @intCast(delivery_id) },
+                .vehicle = .{ .index = 17, .generation = 1 },
+                .action = .enter,
+                .disposition = .entered,
+            } },
+        };
+    }
+    participant.next_gameplay_delivery_id = participant.replay_records.len + 1;
+    const replay_record_count = participant.replay_records.len;
+
+    _ = try session.transportClosed(first_transport);
+    const reconnect_transport = TransportConnection{ .value = 2 };
+    _ = try session.openConnection(reconnect_transport);
+    try session.ingest(reconnect_transport, .{ .hello = .{
+        .account = .{ .value = 18 },
+        .reconnect = initial_welcome.reconnect,
+    } });
+    try session.tick();
+    const reconnect = session.beginOutboundLease() orelse return error.MissingReconnectWelcome;
+    const reconnect_welcome = reconnect.outbound.message.welcome;
+    const welcome_delivery_id = reconnect.outbound.delivery_id;
+    try session.commitOutboundLease(reconnect.generation);
+    try session.ingest(reconnect_transport, .{ .delivery_receipt = .{
+        .session = reconnect_welcome.session,
+        .participant = reconnect_welcome.participant,
+        .lane = .control,
+        .delivery_id = welcome_delivery_id,
+    } });
+
+    var expected_delivery_id: u64 = 1;
+    var replayed: usize = 0;
+    while (replayed < replay_record_count) {
+        try session.tick();
+        var replayed_this_cycle: usize = 0;
+        while (session.beginOutboundLease()) |lease| {
+            if (lease.outbound.lane == .gameplay) {
+                try std.testing.expectEqual(expected_delivery_id, lease.outbound.delivery_id);
+                expected_delivery_id += 1;
+                replayed += 1;
+                replayed_this_cycle += 1;
+            }
+            try session.commitOutboundLease(lease.generation);
+        }
+        try std.testing.expect(replayed_this_cycle <=
+            budgets.max_reliable_events_per_tick - 1);
+    }
+    try std.testing.expectEqual(
+        replay_record_count + 1,
+        expected_delivery_id,
+    );
+    try std.testing.expectEqual(
+        @as(u64, 0),
+        core.participants[participant_index].replay_cursor_delivery_id,
+    );
 }
 
 test "authority owns vehicle enter drive exit and dynamic seat projection" {
@@ -5546,7 +7852,7 @@ test "authority owns vehicle enter drive exit and dynamic seat projection" {
     try authority.ingest(transport, .{ .hello = .{
         .account = .{ .value = 1 },
     } });
-    const welcome = authority.pollOutbound().?.message.welcome;
+    const welcome = takeOutboundForTest(authority).?.message.welcome;
     try authority.tick();
     const initial = try testTakeAndAcknowledgeBaseline(authority, transport);
     try std.testing.expectEqual(@as(u8, 1), initial.vehicle_count);
@@ -5554,7 +7860,7 @@ test "authority owns vehicle enter drive exit and dynamic seat projection" {
 
     for (0..180) |_| {
         try authority.tick();
-        while (authority.pollOutbound() != null) {}
+        while (takeOutboundForTest(authority) != null) {}
     }
     try authority.ingest(transport, .{ .vehicle_action = .{
         .session = welcome.session,
@@ -5565,7 +7871,7 @@ test "authority owns vehicle enter drive exit and dynamic seat projection" {
     } });
     try authority.tick();
     var enter_disposition: ?protocol.VehicleActionDisposition = null;
-    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+    while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
         .vehicle_action_result => |result| enter_disposition = result.disposition,
         else => {},
     };
@@ -5588,7 +7894,7 @@ test "authority owns vehicle enter drive exit and dynamic seat projection" {
             .hand_brake = 0,
         } });
         try authority.tick();
-        while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+        while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
             .snapshot => |snapshot| last_snapshot = snapshot,
             else => {},
         };
@@ -5606,7 +7912,7 @@ test "authority owns vehicle enter drive exit and dynamic seat projection" {
     } });
     try authority.tick();
     var saw_exit = false;
-    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+    while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
         .vehicle_action_result => |result| saw_exit = result.disposition == .exited,
         else => {},
     };
@@ -5620,13 +7926,13 @@ test "graceful leave orders cleanup behind an admitted vehicle transition" {
     const transport = TransportConnection{ .value = 1 };
     _ = try authority.openConnection(transport);
     try authority.ingest(transport, .{ .hello = .{ .account = .{ .value = 1 } } });
-    const welcome = authority.pollOutbound().?.message.welcome;
+    const welcome = takeOutboundForTest(authority).?.message.welcome;
     try authority.tick();
     const initial = try testTakeAndAcknowledgeBaseline(authority, transport);
     const vehicle = initial.vehicles[0].entity;
     for (0..180) |_| {
         try authority.tick();
-        while (authority.pollOutbound() != null) {}
+        while (takeOutboundForTest(authority) != null) {}
     }
     try authority.ingest(transport, .{ .vehicle_action = .{
         .session = welcome.session,
@@ -5638,7 +7944,7 @@ test "graceful leave orders cleanup behind an admitted vehicle transition" {
     try authority.ingest(transport, .{ .disconnect = .requested });
     for (0..4) |_| {
         try authority.tick();
-        while (authority.pollOutbound() != null) {}
+        while (takeOutboundForTest(authority) != null) {}
     }
     try std.testing.expectEqual(@as(u16, 0), authority.diagnostics().active_participants);
     try std.testing.expectEqual(@as(u16, 1), authority.diagnostics().active_vehicles);
@@ -5651,9 +7957,9 @@ test "authority shutdown is a reliable terminal semantic message" {
     try authority.ingest(.{ .value = 1 }, .{ .hello = .{
         .account = .{ .value = 1 },
     } });
-    while (authority.pollOutbound() != null) {}
+    while (takeOutboundForTest(authority) != null) {}
     try authority.stop();
-    const outbound = authority.pollOutbound().?;
+    const outbound = takeOutboundForTest(authority).?;
     try std.testing.expectEqual(protocol.DisconnectReason.authority_stopping, outbound.message.disconnected);
     try std.testing.expect(outbound.close_after_send);
     try std.testing.expectEqual(transport_policy.Delivery.reliable, outbound.delivery);
@@ -5666,9 +7972,9 @@ test "per-tick input quota terminates abusive ingress without growth" {
     try authority.ingest(.{ .value = 1 }, .{ .hello = .{
         .account = .{ .value = 1 },
     } });
-    const welcome = authority.pollOutbound().?.message.welcome;
+    const welcome = takeOutboundForTest(authority).?.message.welcome;
     try authority.tick();
-    while (authority.pollOutbound() != null) {}
+    while (takeOutboundForTest(authority) != null) {}
     for (1..budgets.max_input_messages_per_tick + 2) |sequence| {
         try authority.ingest(.{ .value = 1 }, .{ .input = .{
             .session = welcome.session,
@@ -5679,13 +7985,13 @@ test "per-tick input quota terminates abusive ingress without growth" {
             .facing_yaw = 0,
             .jump_pressed = false,
         } });
-        if (authority.diagnostics().quota_violations != 0) break;
     }
+    try authority.tick();
     try std.testing.expectEqual(@as(u64, 1), authority.diagnostics().quota_violations);
     try std.testing.expectEqual(@as(u16, 0), authority.diagnostics().active_connections);
     try std.testing.expectEqual(
         protocol.RejectionReason.quota_exceeded,
-        authority.pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(authority).?.message.rejected.reason,
     );
 }
 
@@ -5700,7 +8006,7 @@ test "terminal admission failures release connections without partial participan
     } });
     try std.testing.expectEqual(
         protocol.RejectionReason.build_mismatch,
-        authority.pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(authority).?.message.rejected.reason,
     );
     try std.testing.expectEqual(@as(u16, 0), authority.diagnostics().active_connections);
     try std.testing.expectEqual(@as(u16, 0), authority.diagnostics().active_participants);
@@ -5709,7 +8015,7 @@ test "terminal admission failures release connections without partial participan
     try authority.rejectOversized(.{ .value = 2 });
     try std.testing.expectEqual(
         protocol.RejectionReason.oversized,
-        authority.pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(authority).?.message.rejected.reason,
     );
     try std.testing.expectEqual(@as(u16, 0), authority.diagnostics().active_connections);
 
@@ -5717,7 +8023,7 @@ test "terminal admission failures release connections without partial participan
     try authority.ingestBytes(.{ .value = 3 }, &.{ 0, 1, 2 });
     try std.testing.expectEqual(
         protocol.RejectionReason.malformed,
-        authority.pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(authority).?.message.rejected.reason,
     );
     try std.testing.expectEqual(@as(u64, 1), authority.diagnostics().malformed_messages);
     try std.testing.expectEqual(@as(u16, 0), authority.diagnostics().active_participants);
@@ -5731,9 +8037,9 @@ test "duplicate account and connection timeouts are bounded session decisions" {
     try authority.ingest(.{ .value = 1 }, .{ .hello = .{
         .account = .{ .value = 7 },
     } });
-    _ = authority.pollOutbound().?.message.welcome;
+    _ = takeOutboundForTest(authority).?.message.welcome;
     try authority.tick();
-    while (authority.pollOutbound() != null) {}
+    while (takeOutboundForTest(authority) != null) {}
 
     _ = try authority.openConnection(.{ .value = 2 });
     try authority.ingest(.{ .value = 2 }, .{ .hello = .{
@@ -5741,25 +8047,29 @@ test "duplicate account and connection timeouts are bounded session decisions" {
     } });
     try std.testing.expectEqual(
         protocol.RejectionReason.unauthorized,
-        authority.pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(authority).?.message.rejected.reason,
     );
     try std.testing.expectEqual(@as(u16, 1), authority.diagnostics().active_participants);
 
     _ = try authority.openConnection(.{ .value = 3 });
-    try authority.state().expireConnections(
-        authority.state().simulation.tickIndex() + budgets.handshake_timeout_ticks,
-    );
+    try authority.tick();
+    const primary_connection = authority.state().findConnection(.{ .value = 1 }) orelse
+        return error.MissingPrimaryTimeoutConnection;
+    authority.state().connections[primary_connection].last_message_tick =
+        std.math.maxInt(u64);
+    for (0..budgets.handshake_timeout_ticks) |_| try authority.tick();
     try std.testing.expectEqual(
         protocol.RejectionReason.invalid_state,
-        authority.pollOutbound().?.message.rejected.reason,
+        takeOutboundForTest(authority).?.message.rejected.reason,
     );
 
-    try authority.state().expireConnections(
-        authority.state().simulation.tickIndex() + budgets.idle_timeout_ticks,
-    );
+    authority.state().connections[primary_connection].last_message_tick = 0;
+    while (authority.diagnostics().tick <= budgets.idle_timeout_ticks) {
+        try authority.tick();
+    }
     try std.testing.expectEqual(
         protocol.DisconnectReason.timeout,
-        authority.pollOutbound().?.message.disconnected,
+        takeOutboundForTest(authority).?.message.disconnected,
     );
     try std.testing.expectEqual(@as(u16, 1), authority.diagnostics().reconnecting_participants);
 }

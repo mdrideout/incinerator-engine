@@ -1,7 +1,8 @@
 # Incinerator Multiplayer-First Architecture and Delivery Plan
 
-**Status:** MP0-MP5, the M4 Apple Silicon macOS foundation, and M5
-client/authority cohesion are implemented and accepted
+**Status:** MP0-MP6, the M4 Apple Silicon macOS foundation, M5 client/authority
+cohesion, M6 transactional authority, and S10 damage/death/respawn are
+implemented and accepted
 
 **Last reviewed:** 2026-07-14
 
@@ -11,8 +12,10 @@ client/authority cohesion are implemented and accepted
 
 **Main roadmap:** [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md)
 
-**Post-M5 authority hardening:**
-[`docs/design/post-m5-transactional-authority-cycle.md`](docs/design/post-m5-transactional-authority-cycle.md)
+**Current phase sequence:**
+[`M6 accepted`](docs/validation/m6-transactional-authority-cycle.md)
+→ [`MP6 accepted`](docs/validation/mp6-playable-multiplayer-room-flow.md)
+→ [`S10 accepted`](docs/validation/s10-damage-death-respawn.md)
 
 **Accepted decisions:**
 [ADR-016](docs/adr/016-authority-session-topology.md),
@@ -69,7 +72,7 @@ silently replace the topology or source-of-truth model.
 | Session shape | Invite-based 2-8 player room/instance; validate a technical ceiling of 16 participants |
 | Authority | Server-authoritative in every mode |
 | Solo | Embedded authority through a local typed link |
-| Listen host | Optional later private-friend topology with explicit host trust/performance limits |
+| Listen host | MP6 accepts a constrained localhost/LAN private-room placement; public Internet/Steam/NAT productization remains later with explicit host trust/performance limits |
 | Dedicated | Canonical public topology and first real network proof; provider independent |
 | Join model | Join-in-progress plus bounded disconnect/reconnect |
 | Host exit | Session ends cleanly; authority may create a canonical capture and the persistence owner owns any durable commit; no host migration initially |
@@ -538,10 +541,56 @@ M5 does not introduce Steamworks, listen/NAT productization, public services,
 another platform, a generic bus, automatic ECS replication, or a second client
 Flecs/Jolt world.
 
-M5 also does not claim a single atomic ingress-to-egress eight-stage authority
-transaction. Bounded mailbox batching, prepared derivatives, atomic outbox
-publication, delivery leases, and queued durable decisions are the separate
-[`Post-M5 Transactional Authority Cycle`](docs/design/post-m5-transactional-authority-cycle.md).
+M5 did not claim a single atomic ingress-to-egress eight-stage authority
+transaction. M6 subsequently closed that boundary; its exact evidence is in
+[`M6 Transactional Authority Cycle Acceptance`](docs/validation/m6-transactional-authority-cycle.md).
+
+### M6 — Transactional Authority Cycle
+
+**Status:** Complete, independently reviewed, and accepted. Design:
+[`docs/design/post-m5-transactional-authority-cycle.md`](docs/design/post-m5-transactional-authority-cycle.md).
+Acceptance evidence is recorded in
+[`docs/validation/m6-transactional-authority-cycle.md`](docs/validation/m6-transactional-authority-cycle.md).
+
+**Outcome:** One class-reserved stable-prefix mailbox feeds eight explicit
+fail-stop authority stages. Admission is preflighted; publication metadata is
+double buffered; physical delivery uses generational leases; reliable control
+and gameplay use application receipts plus bounded reconnect replay; durable
+capture is decided at stage seven while encoding and storage remain outside the
+tick. The accepted guarantee is atomic publication, not Jolt solver rollback.
+
+### MP6 — Playable Multiplayer Room Flow
+
+**Status:** Complete, independently reviewed, and accepted. Design:
+[`docs/design/mp6-playable-multiplayer-room-flow.md`](docs/design/mp6-playable-multiplayer-room-flow.md).
+Acceptance evidence is recorded in
+[`docs/validation/mp6-playable-multiplayer-room-flow.md`](docs/validation/mp6-playable-multiplayer-room-flow.md).
+
+**Outcome:** One generation-safe coordinator exposes sanitized create/join,
+connect, synchronize, play, reconnect, leave, drain, and close state. A
+constrained graphical listen owner composes the host protocol client over the
+typed local link and a guest over real GNS; the dedicated product uses the same
+ticketed graphical join lifecycle. Account-bound artifacts are bounded and
+permission-restricted, stale completions are harmless, and host closure ends
+the authority without migration. The developer-facing UX is accepted for this
+phase; public Internet/Steam/NAT/social productization remains deferred.
+
+### S10 — Damage, Death, And Respawn
+
+**Status:** Complete, independently reviewed, and accepted. Design:
+[`docs/design/s10-damage-death-respawn.md`](docs/design/s10-damage-death-respawn.md).
+Acceptance evidence is recorded in
+[`docs/validation/s10-damage-death-respawn.md`](docs/validation/s10-damage-death-respawn.md).
+
+**Outcome:** A backend-neutral bounded vitals feature owns integer health,
+deterministic damage, exactly-once death facts, and canonical state for players
+and NPCs. Client melee is intent only; the authority validates sequence,
+incarnation, timing, cooldown, facing, range, closest target, and Jolt
+line-of-sight. Death retains the admitted participant while typed cleanup
+removes its disposable physical avatar. Dead reconnect is explicit, and a
+three-second cooldown plus bounded collision/threat-aware spawn selection
+creates a new avatar incarnation. Two real graphical clients prove the full
+cycle in constrained listen and dedicated placements.
 
 ## Transport and Service Decision
 
@@ -592,7 +641,10 @@ hardening remain later programs.
 ## Explicit Deferrals
 
 - Host migration.
-- Listen-host productization; private Steam P2P remains an optional later path.
+- Public Internet listen-host productization; MP6 owns only a constrained
+  localhost/LAN proof over local link plus direct GNS.
+- Private Steam P2P remains an optional later route over the same listen
+  authority semantics.
 - Non-Steam P2P signaling, STUN/TURN, and relay operation.
 - Public-server proxy/DDoS design and Steam hosted-dedicated SDR rollout.
 - Hosting provider, containers, orchestration, Agones, and autoscaling.
@@ -628,18 +680,27 @@ hardening remain later programs.
 1. **M5 client/authority cohesion — complete and accepted.** The embedded-solo
    facade, authority-clock, direct gameplay, persistence ownership, and physical
    owner boundaries are closed without adding a new gameplay mechanic.
-2. **Transactional authority cycle — planned next.** Close the recorded
-   mailbox/publication pressure point without moving physical transport or
-   blocking storage into the simulation tick. This is an authority-hardening
-   phase, not multiplayer service expansion.
-3. **Playable room flow — after authority hardening and a product check-in.** Expose create/join,
-   ready, connect, actionable rejection, leave, reconnect, drain, and close in
-   the graphical product over the completed open MP5 core. Direct IP remains the
-   executable route; Steamworks and NAT/relay remain separately approved work.
-4. **Next authoritative gameplay slice — separately selected.** Damage/death/
-   respawn is the leading candidate because it pressures action validation,
-   ownership cleanup, NPC/player interaction, prediction limits, and eventual
-   lag-compensation policy without requiring MMO services.
+2. **M6 transactional authority cycle — complete and accepted.** The
+   mailbox/publication pressure point is closed with class-reserved ingress,
+   preflighted semantic work, immutable derivative preparation, atomic
+   publication, generational delivery leases, per-reliable-lane application
+   receipts, and queued durable decisions. M6 provides a fail-stop
+   atomic-publication guarantee, not rollback of an already-stepped Jolt world.
+3. **MP6 playable room flow — complete and accepted.** One generation-safe
+   graphical coordinator now drives create/join, ready, connect,
+   synchronization, actionable rejection, leave, reconnect, drain, and close.
+   The constrained localhost/LAN listen owner composes a host local-link client
+   and a guest GNS client on one authority, while dedicated direct IP retains
+   the same signed-ticket client lifecycle. Steamworks, NAT/relay, public
+   hosting, and host migration remain deferred.
+4. **S10 damage/death/respawn — complete and accepted.** Feature-owned integer
+   vitals, server-derived melee damage, exactly-once death, typed
+   vehicle/carry/character cleanup, stable participant ownership of a
+   generational disposable avatar, deterministic safe explicit respawn, dead
+   reconnect, reliable result replay, and two-client graphical listen/
+   dedicated evidence are closed. Firearms, authoritative ragdolls, and lag
+   compensation remain later slices.
 
-No post-M4 phase begins by silently broadening platform, public-service,
-Steamworks, listen-host, or MMO scope.
+No post-M4 phase silently broadens platform, public-service, Steamworks, public
+Internet listen-host, or MMO scope. MP6's explicit listen scope is limited to
+the accepted localhost/LAN proof in its linked design and evidence record.

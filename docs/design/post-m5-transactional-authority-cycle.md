@@ -1,6 +1,6 @@
-# Post-M5 Transactional Authority Cycle
+# M6 Transactional Authority Cycle
 
-**Status:** Planned architectural hardening; not implemented or accepted
+**Status:** Implemented, independently reviewed, and accepted
 
 **Date:** 2026-07-14
 
@@ -11,6 +11,9 @@ remain deferred product ports and add no requirements to this design.
 
 **Accepted prerequisite cohesion work:**
 [`M5 Client/Authority Cohesion`](m5-client-authority-cohesion.md)
+
+**Acceptance record:**
+[`M6 Transactional Authority Cycle Acceptance`](../validation/m6-transactional-authority-cycle.md)
 
 ## Why This Is Separate From M5
 
@@ -32,6 +35,28 @@ Forcing storage I/O, physical network delivery, and client acknowledgement into
 the fixed simulation tick would also be the wrong abstraction. This follow-up
 therefore defines one transactional authority cycle and keeps adapter delivery
 and durable storage commit as adjacent owner state machines.
+
+## Accepted Meaning Of Transactional
+
+M6 is a fail-stop atomic-publication transaction, not rollback of an already
+stepped Flecs/Jolt world.
+
+- Expected rejection, deferral, quota exhaustion, and capacity failure are
+  values. They are detected before authoritative mutation and consume no
+  participant slot, ticket nonce, sequence, replication cursor, or durable
+  request.
+- Once authoritative simulation begins, an unexpected invariant, simulation,
+  outcome, extraction, or publication failure latches the first authority
+  fault. The cycle publishes nothing, queues no durable capture, and cannot
+  advance another tick.
+- M6 does not claim to restore arbitrary Jolt solver/contact/constraint state
+  to its pre-tick value. That would require a separately designed rollback
+  simulation architecture.
+- Flecs staging remains the safe mechanism for deferred structural mutation;
+  it is not used or described as an authority rollback transaction.
+
+This is the strongest honest guarantee available without introducing a second
+world, a full-world snapshot per tick, or rollback-capable physics.
 
 ## Accepted M5 Baseline
 
@@ -81,6 +106,23 @@ The authority owns semantic mutation and derivative output publication. A link
 or socket adapter owns physical delivery. The persistence owner owns blocking
 storage. None may retain a mutable pointer into another owner's state.
 
+The implementation uses cohesive private owners inside the current authority
+rather than creating another public framework:
+
+- `IngressMailbox` owns copied ingress, arrival ordinals, class reservation,
+  and stable-prefix freezing.
+- `CycleScratch` owns reusable bounded admission plans, semantic work,
+  outcomes, derivatives, and metadata patches for one cycle.
+- Prepared publication storage is immutable after preflight and commits as one
+  bounded pointer swap with its participant and replication metadata.
+- The private live outbox, lease generation, and per-participant replay records
+  own published delivery state and application receipts across reconnect.
+- `DurableRequestQueue` owns one typed request and returns a value disposition;
+  the persistence owner alone performs encoding and blocking storage.
+
+These owners remain behind the existing private authority capability. They are
+not a generic event bus, service locator, RPC system, or second simulation.
+
 ## Required Cycle Contract
 
 One cycle operates on bounded copied data in this order:
@@ -117,6 +159,15 @@ advance the simulation until an explicitly designed recovery protocol exists.
   later future sample.
 - Snapshot acknowledgement advances only after the corresponding input affects
   a completed authoritative tick.
+- Control/lifecycle, reliable gameplay, lossy input, and malformed/oversized
+  notices receive explicit bounded reservation or deterministic fair service.
+  A saturated input producer may not starve handshake, acknowledgement,
+  disconnect, or reliable gameplay traffic.
+- Every accepted envelope receives a monotonic arrival ordinal. Separate
+  internal class queues may be drained deterministically without losing the
+  original accepted-ingress evidence order.
+- Keep the current single authority owner. Do not add a lock-free mailbox or
+  parallel simulation until a second measured producer thread requires it.
 
 ## Output and Delivery Rules
 
@@ -139,6 +190,24 @@ advance the simulation until an explicitly designed recovery protocol exists.
 - Physical GNS encoding/send and local client application are outside the
   authority mutation cycle.
 
+Reliable delivery has three distinct commit points:
+
+1. the authority publishes the semantic message;
+2. the local/GNS adapter accepts the leased bytes or typed value; and
+3. the client applies the semantic message and acknowledges its delivery ID.
+
+GameNetworkingSockets transport acceptance is not proof that the client
+application observed the result. Control and gameplay are separate reliable
+lanes, so each receives its own monotonically increasing delivery ID and
+cumulative applied acknowledgement. Reliable ordering is assumed only within
+one lane. Cross-lane dependencies are explicit: a reconnecting client applies
+`Welcome` and synchronization control before replayed gameplay results.
+
+The client deduplicates replayed delivery IDs. A compact bounded server record
+is retained until application acknowledgement or an explicit typed
+supersession policy retires it. Unreliable snapshots continue to use their
+existing baseline/snapshot acknowledgement rules rather than this ledger.
+
 ## Durable Rules
 
 - A privileged producer queues one typed capture request; it never receives
@@ -151,14 +220,18 @@ advance the simulation until an explicitly designed recovery protocol exists.
 
 ## Implementation Sequence
 
-1. Add mailbox envelopes and migrate local/GNS lifecycle plus decoded ingress.
-2. Split admission decisions from semantic-work application with bounded
-   scratch batches.
-3. Stage derivative outputs and commit replication metadata only at publication.
-4. Replace pop-before-send APIs with outbound delivery leases.
-5. Queue durable capture requests and return typed stage-seven dispositions.
-6. Expand the authority trace and fault probes across all eight stages.
-7. Run the full M5/M4/macOS regression before accepting the follow-up.
+1. [x] Add the class-reserved mailbox and migrate local/GNS lifecycle plus decoded
+   ingress while retaining accepted-ingress ordinals.
+2. [x] Split admission decisions from semantic-work application with reusable
+   bounded scratch batches and preflight every expected capacity failure.
+3. [x] Stage immutable derivative outputs and replication metadata patches; make
+   publication an infallible operation after successful preflight.
+4. [x] Replace pop-before-send APIs with generational outbound delivery leases.
+5. [x] Add per-reliable-lane application delivery IDs, cumulative receipts,
+   deduplication, reconnect replay, and welcome/token confirmation.
+6. [x] Queue durable capture requests and return typed stage-seven dispositions.
+7. [x] Expand the authority trace and fault probes across all eight stages.
+8. [x] Run the full M5/M4/macOS regression before accepting M6.
 
 Each step must preserve bounds and may not introduce an unbounded event bus,
 generic RPC framework, service locator, second authority world, or storage I/O
@@ -175,6 +248,10 @@ inside the fixed tick.
 - Extraction/outbox saturation cannot partially publish state or advance a
   replication cursor.
 - Reliable adapter failure leaves the message recoverable.
+- Gameplay/input saturation cannot starve control traffic.
+- Adapter acceptance followed by transport loss before application receipt
+  replays the reliable message after reconnect; duplicate replay is
+  idempotent.
 - Repeated transport loss before `Welcome` confirmation neither strands the
   participant nor permits an unbounded reconnect-token history; confirmed
   delivery retires the prior credential.
@@ -185,5 +262,15 @@ inside the fixed tick.
 - Existing embedded, dedicated two-client, replay, save/restore, cold authority,
   and installed Metal scenarios remain green.
 
-No completion claim should be made until an acceptance record contains the
-exact final-tree commands and results.
+The final-tree commands, results, limitation audit, and independent closeout are
+recorded in the linked M6 acceptance document.
+
+## Reference Influences
+
+- [Flecs systems and staging](https://www.flecs.dev/flecs/md_docs_2Systems.html)
+  documents deferred structural mutation and merge behavior; M6 deliberately
+  adds an engine-owned authority publication contract around it rather than
+  treating deferral as rollback.
+- [GameNetworkingSockets send, receive, and lane contracts](https://github.com/ValveSoftware/GameNetworkingSockets/blob/master/include/steam/isteamnetworkingsockets.h)
+  distinguish queued transport work from application observation and guarantee
+  reliable ordering only within one lane.

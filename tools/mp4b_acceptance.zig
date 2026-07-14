@@ -10,6 +10,12 @@ const impaired = @import("impaired_link");
 
 const total_ticks: u64 = 600;
 
+fn takeOutbound(authority: anytype) ?authority_module.Outbound {
+    const lease = authority.beginOutboundLease() orelse return null;
+    authority.commitOutboundLease(lease.generation) catch unreachable;
+    return lease.outbound;
+}
+
 const Result = struct {
     name: []const u8,
     seed: u64,
@@ -66,12 +72,28 @@ fn runTrial(name: []const u8, config: impaired.Config) !Result {
         try link.advanceTo(tick);
         while (link.receiveForAuthority()) |message| try authority.ingest(connection, message);
         try authority.tick();
-        while (authority.pollOutbound()) |outbound| {
-            if (outbound.close_after_send) return error.InteractionTrialSessionTerminated;
-            try link.sendFromAuthority(outbound.message);
+        while (authority.beginOutboundLease()) |lease| {
+            const outbound = lease.outbound;
+            if (outbound.close_after_send) {
+                try authority.commitOutboundLease(lease.generation);
+                return error.InteractionTrialSessionTerminated;
+            }
+            link.sendFromAuthority(.{
+                .delivery_id = outbound.delivery_id,
+                .message = outbound.message,
+            }) catch |err| {
+                if (outbound.delivery == .reliable) {
+                    try authority.retryOutboundLease(lease.generation);
+                } else {
+                    try authority.commitOutboundLease(lease.generation);
+                }
+                return err;
+            };
+            try authority.commitOutboundLease(lease.generation);
         }
-        while (link.receiveForClient()) |message| {
-            try client.receive(message);
+        while (link.receiveForClient()) |delivered| {
+            try client.receiveDelivered(delivered);
+            while (client.takeDeliveryReceipt()) |receipt| try link.sendFromClient(receipt);
             if (client.takeBaselineAck()) |ack| try link.sendFromClient(ack);
             if (client.takeSnapshotAck()) |ack| try link.sendFromClient(ack);
         }
@@ -159,10 +181,10 @@ fn verifyDisconnectCleanup() !void {
     if (client.heldCarryable() == null) return error.CleanupCollectFailed;
 
     try authority.ingest(connection, .{ .disconnect = .requested });
-    while (authority.pollOutbound() != null) {}
+    while (takeOutbound(authority) != null) {}
     for (0..120) |_| {
         try authority.tick();
-        while (authority.pollOutbound() != null) {}
+        while (takeOutbound(authority) != null) {}
         if (authority.diagnostics().active_participants == 0) break;
     }
     const diagnostics = authority.diagnostics();
@@ -190,8 +212,16 @@ fn drainDirect(
     authority: *authority_module.DedicatedAuthority,
     client: *session_client.Client,
 ) !void {
-    while (authority.pollOutbound()) |outbound| {
-        try client.receive(outbound.message);
+    while (authority.beginOutboundLease()) |lease| {
+        const outbound = lease.outbound;
+        try client.receiveDelivered(.{
+            .delivery_id = outbound.delivery_id,
+            .message = outbound.message,
+        });
+        try authority.commitOutboundLease(lease.generation);
+        while (client.takeDeliveryReceipt()) |receipt| {
+            try authority.ingest(.{ .value = 1 }, receipt);
+        }
         if (client.takeBaselineAck()) |ack| {
             try authority.ingest(.{ .value = 1 }, ack);
         }

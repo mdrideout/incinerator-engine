@@ -9,6 +9,12 @@ const authority_module = @import("session_authority");
 
 const secret: protocol.AdmissionSecret = @splat(0x5a);
 
+fn takeOutbound(authority: anytype) ?authority_module.Outbound {
+    const lease = authority.beginOutboundLease() orelse return null;
+    authority.commitOutboundLease(lease.generation) catch unreachable;
+    return lease.outbound;
+}
+
 pub fn main(init: std.process.Init) !void {
     _ = init;
     const endpoint = try room_module.DirectEndpoint.init("127.0.0.1:27020");
@@ -77,7 +83,7 @@ pub fn main(init: std.process.Init) !void {
         error.RoomAdmissionRequiresTimestampedIngress,
         authority.ingest(clockless_connection, try clockless.begin()),
     );
-    authority.transportClosed(clockless_connection);
+    _ = try authority.transportClosed(clockless_connection);
 
     // A ticket is bound to its account/external identity and fails before any
     // participant state is allocated.
@@ -89,8 +95,9 @@ pub fn main(init: std.process.Init) !void {
     const bad_connection = authority_module.TransportConnection{ .value = 99 };
     _ = try authority.openConnection(bad_connection);
     try authority.ingestAtUnixTime(bad_connection, try impostor.begin(), 11);
+    try authority.tick();
     var rejected = false;
-    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+    while (takeOutbound(authority)) |outbound| switch (outbound.message) {
         .rejected => |value| rejected = value.reason == .unauthorized,
         else => return error.ImpostorReceivedPartialSessionState,
     };
@@ -126,10 +133,21 @@ pub fn main(init: std.process.Init) !void {
             }
         }
         try authority.tick();
-        while (authority.pollOutbound()) |outbound| {
+        while (authority.beginOutboundLease()) |lease| {
+            const outbound = lease.outbound;
             const index: usize = if (outbound.connection.value == 1) 0 else 1;
             const client = &clients[index];
-            try client.receive(outbound.message);
+            client.receiveDelivered(.{
+                .delivery_id = outbound.delivery_id,
+                .message = outbound.message,
+            }) catch |err| {
+                try authority.retryOutboundLease(lease.generation);
+                return err;
+            };
+            try authority.commitOutboundLease(lease.generation);
+            while (client.takeDeliveryReceipt()) |receipt| {
+                try authority.ingest(connections[index], receipt);
+            }
             if (client.takeBaselineAck()) |ack| try authority.ingest(connections[index], ack);
             if (client.takeSnapshotAck()) |ack| try authority.ingest(connections[index], ack);
         }

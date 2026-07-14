@@ -24,6 +24,7 @@ pub const full_snapshot_interval_ticks: u64 = authority_tick_hz;
 pub const max_delta_base_age_ticks: u64 = authority_tick_hz * 2;
 pub const max_snapshot_starvation_ticks: u64 = authority_tick_hz / 5;
 pub const max_reliable_events_per_tick: u16 = 16;
+pub const reliable_replay_records_per_participant: usize = 32;
 pub const admission_nonce_history_capacity: usize = 256;
 
 pub const max_wire_message_bytes: usize = 64 * 1024;
@@ -32,6 +33,10 @@ pub const max_relevant_entities_per_client: usize = 2_048;
 pub const max_baseline_bytes_per_client: usize = 4 * 1024 * 1024;
 
 pub const inbound_message_capacity: usize = 256;
+pub const inbound_control_capacity: usize = 64;
+pub const inbound_gameplay_capacity: usize = 64;
+pub const inbound_input_capacity: usize = 112;
+pub const inbound_notice_capacity: usize = 16;
 pub const outbound_message_capacity: usize = 512;
 pub const inbound_bytes_per_connection: usize = 512 * 1024;
 pub const outbound_bytes_per_connection: usize = 2 * 1024 * 1024;
@@ -95,6 +100,11 @@ pub const VehiclePredictionThresholds = struct {
 pub const vehicle_prediction_thresholds = VehiclePredictionThresholds{};
 
 comptime {
+    if (inbound_control_capacity + inbound_gameplay_capacity +
+        inbound_input_capacity + inbound_notice_capacity != inbound_message_capacity)
+    {
+        @compileError("inbound class reservations must equal mailbox capacity");
+    }
     if (authority_tick_hz % snapshot_hz != 0) {
         @compileError("snapshot rate must divide authority tick rate");
     }

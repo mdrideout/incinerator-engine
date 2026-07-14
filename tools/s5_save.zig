@@ -613,9 +613,16 @@ fn verifyAuthoringSmoke(
     defer world.deinit();
     const id = sandbox_contracts.PersistentId{ .namespace = 1, .local = 1 };
     const restored = try world.crate(id);
-    if (!std.meta.eql(restored.state.pose, app_target_pose) or
-        !std.meta.eql(restored.state.velocity, engine.physics.Velocity{}) or
-        restored.authoring_revision != 0 or world.tickIndex() != 5 or
+    // M6 captures durable state at stage seven of the next authoritative
+    // cycle. The edited dynamic crate can therefore advance under physics
+    // between the UI request and its durable disposition; preserve the edited
+    // horizontal placement and orientation without pinning the verifier to an
+    // obsolete synchronous tick or vertical pose.
+    if (restored.state.pose.position[0] != app_target_pose.position[0] or
+        restored.state.pose.position[2] != app_target_pose.position[2] or
+        restored.state.pose.position[1] > app_target_pose.position[1] or
+        !std.meta.eql(restored.state.pose.rotation, app_target_pose.rotation) or
+        restored.authoring_revision != 0 or world.tickIndex() < 5 or
         world.crateCount() != 1 or world.characterCount() != 1 or
         world.vehicleCount() != 0 or world.entityCount() != 2)
     {

@@ -186,7 +186,7 @@ const Harness = struct {
             },
             .closed_by_peer, .problem_detected_locally => {
                 if (self.findServer(event.connection)) |server_index| {
-                    self.authority.transportClosed(.{ .value = event.connection.value });
+                    _ = try self.authority.transportClosed(.{ .value = event.connection.value });
                     self.server_connections[server_index] = .invalid;
                 }
                 if (self.findPeer(event.connection)) |peer_index| {
@@ -244,7 +244,8 @@ const Harness = struct {
                     peer.transport,
                     &self.receive_storage,
                 ) orelse break;
-                const message = try protocol.decodeServer(received.bytes);
+                const delivered = try protocol.decodeDeliveredServer(received.bytes);
+                const message = delivered.message;
                 if (!transport_policy.matches(
                     transport_policy.serverClass(message),
                     fromGnsDelivery(received.delivery),
@@ -252,12 +253,15 @@ const Harness = struct {
                 )) {
                     return error.ServerDeliveryClassMismatch;
                 }
-                try peer.client.receive(message);
+                try peer.client.receiveDelivered(delivered);
                 while (peer.client.takeVehicleActionResult()) |result| {
                     peer.last_vehicle_action_result = result;
                 }
                 while (peer.client.takeInteractionActionResult()) |result| {
                     peer.last_interaction_action_result = result;
+                }
+                while (peer.client.takeDeliveryReceipt()) |receipt| {
+                    try self.sendClient(peer.transport, receipt);
                 }
                 if (peer.client.takeBaselineAck()) |ack| {
                     try self.sendClient(peer.transport, ack);
@@ -274,7 +278,7 @@ const Harness = struct {
                 self.bad_transport,
                 &self.receive_storage,
             ) orelse break;
-            const message = try protocol.decodeServer(received.bytes);
+            const message = (try protocol.decodeDeliveredServer(received.bytes)).message;
             if (!transport_policy.matches(
                 transport_policy.serverClass(message),
                 fromGnsDelivery(received.delivery),
@@ -290,10 +294,17 @@ const Harness = struct {
     }
 
     fn flushAuthorityOutput(self: *Harness) !void {
-        while (self.authority.pollOutbound()) |outbound| {
+        while (self.authority.beginOutboundLease()) |lease| {
+            const outbound = lease.outbound;
             const connection = gns.Connection{ .value = outbound.connection.value };
-            if (self.findServer(connection) == null) continue;
-            const bytes = try protocol.encodeServer(outbound.message, &self.encode_storage);
+            if (self.findServer(connection) == null) {
+                try self.authority.commitOutboundLease(lease.generation);
+                continue;
+            }
+            const bytes = try protocol.encodeDeliveredServer(.{
+                .delivery_id = outbound.delivery_id,
+                .message = outbound.message,
+            }, &self.encode_storage);
             self.network.send(
                 connection,
                 bytes,
@@ -308,12 +319,17 @@ const Harness = struct {
                     .control => .control,
                 },
             ) catch |err| {
-                if (outbound.delivery == .reliable) return err;
+                if (outbound.delivery == .reliable) {
+                    try self.authority.retryOutboundLease(lease.generation);
+                    return err;
+                }
+                try self.authority.commitOutboundLease(lease.generation);
                 continue;
             };
+            try self.authority.commitOutboundLease(lease.generation);
             if (outbound.close_after_send) {
                 self.network.close(connection, 1000, "session rejection", .linger);
-                self.authority.transportClosed(.{ .value = connection.value });
+                _ = try self.authority.transportClosed(.{ .value = connection.value });
                 if (self.findServer(connection)) |server_index| {
                     self.server_connections[server_index] = .invalid;
                 }

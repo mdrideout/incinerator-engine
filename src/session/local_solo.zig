@@ -46,6 +46,9 @@ pub const VehicleActionKind = protocol.VehicleActionKind;
 pub const VehicleActionDisposition = protocol.VehicleActionDisposition;
 pub const InteractionActionKind = protocol.InteractionActionKind;
 pub const InteractionActionDisposition = protocol.InteractionActionDisposition;
+pub const MeleeActionResult = protocol.MeleeActionResult;
+pub const RespawnActionResult = protocol.RespawnActionResult;
+pub const LifeEvent = protocol.LifeEvent;
 
 pub const VehicleActionResult = struct {
     sequence: u32,
@@ -248,9 +251,24 @@ const State = struct {
         _ = try self.authority.session().openConnection(local_transport);
         try self.link.sendFromClient(try self.client.begin());
         try self.deliverClientIngress();
+        try self.authority.session().tick();
         try self.deliverAuthorityEgress();
         try self.deliverClientMessages();
         try self.deliverAcknowledgements();
+        // Finish the bounded Welcome -> application receipt -> baseline ->
+        // baseline/snapshot acknowledgement handshake before exposing the
+        // placement or persistence capability.
+        for (0..4) |_| {
+            if (self.authority.session().diagnostics().mailbox_occupancy == 0 and
+                self.link.diagnostics().client_to_authority_occupancy == 0)
+            {
+                break;
+            }
+            try self.authority.session().tick();
+            try self.deliverAuthorityEgress();
+            try self.deliverClientMessages();
+            try self.deliverAcknowledgements();
+        }
         if (self.client.state != .joined) return error.LocalSessionAdmissionFailed;
     }
 
@@ -261,19 +279,28 @@ const State = struct {
     }
 
     fn deliverAuthorityEgress(self: *State) !void {
-        while (self.authority.session().pollOutbound()) |outbound| {
+        while (self.authority.session().beginOutboundLease()) |lease| {
+            const outbound = lease.outbound;
             if (!std.meta.eql(outbound.connection, local_transport)) {
                 return error.UnexpectedLocalTransport;
             }
-            try self.link.sendFromAuthority(outbound.message);
+            self.link.sendFromAuthority(.{
+                .delivery_id = outbound.delivery_id,
+                .message = outbound.message,
+            }) catch |err| {
+                try self.authority.session().retryOutboundLease(lease.generation);
+                return err;
+            };
+            try self.authority.session().commitOutboundLease(lease.generation);
             if (outbound.close_after_send) {
-                self.authority.session().transportClosed(local_transport);
+                _ = try self.authority.session().transportClosed(local_transport);
             }
         }
     }
 
     fn deliverClientMessages(self: *State) !void {
-        while (self.link.receiveForClient()) |message| {
+        while (self.link.receiveForClient()) |delivered| {
+            const message = delivered.message;
             const projection_stamp: ?ProjectionStamp = switch (message) {
                 .snapshot => |snapshot| .{
                     .tick = snapshot.server_tick,
@@ -286,7 +313,7 @@ const State = struct {
                 else => null,
             };
             const applied_before = self.client.diagnostics().snapshots_applied;
-            try self.client.receive(message);
+            try self.client.receiveDelivered(delivered);
             const projection_applied = self.client.diagnostics().snapshots_applied !=
                 applied_before;
             if (projection_stamp) |stamp| if (projection_applied) {
@@ -297,6 +324,9 @@ const State = struct {
     }
 
     fn deliverAcknowledgements(self: *State) !void {
+        while (self.client.takeDeliveryReceipt()) |message| {
+            try self.link.sendFromClient(message);
+        }
         if (self.client.takeBaselineAck()) |message| {
             try self.link.sendFromClient(message);
         }
@@ -401,6 +431,15 @@ const State = struct {
             action,
             carryable,
         ));
+    }
+
+    fn requestMelee(self: *State) !void {
+        const target_tick = try std.math.add(u64, self.authority.inspection().tickIndex(), 1);
+        try self.link.sendFromClient(try self.client.meleeAction(target_tick));
+    }
+
+    fn requestRespawn(self: *State) !void {
+        try self.link.sendFromClient(try self.client.respawnAction());
     }
 
     fn takeVehicleActionResult(self: *State) ?VehicleActionResult {
@@ -583,7 +622,24 @@ const State = struct {
     fn issueSnapshotSource(self: *State) !snapshot_source.Source {
         if (self.canonical_snapshot_source != null) return error.SnapshotSourceAlreadyIssued;
         self.canonical_snapshot_source = try self.authority.persistence().issueSource();
-        return .{ .context = self, .capture_fn = captureSnapshot };
+        return .{
+            .context = self,
+            .observe_fn = observeSnapshot,
+            .request_fn = requestSnapshot,
+            .take_fn = takeSnapshot,
+            .release_fn = releaseSnapshot,
+        };
+    }
+
+    fn observeSnapshot(
+        context: *anyopaque,
+        allocator: std.mem.Allocator,
+    ) anyerror![]u8 {
+        const self = stateFrom(context);
+        if (self.operationalQuiescenceReason()) |reason| return reason;
+        const source = self.canonical_snapshot_source orelse
+            return error.SnapshotSourceNotIssued;
+        return source.observe(allocator);
     }
 
     fn operationalQuiescenceReason(self: *const State) ?error{
@@ -600,15 +656,30 @@ const State = struct {
         return null;
     }
 
-    fn captureSnapshot(
+    fn requestSnapshot(
         context: *anyopaque,
-        allocator: std.mem.Allocator,
-    ) anyerror![]u8 {
+    ) anyerror!snapshot_source.RequestId {
         const self = stateFrom(context);
         if (self.operationalQuiescenceReason()) |reason| return reason;
         const source = self.canonical_snapshot_source orelse
             return error.SnapshotSourceNotIssued;
-        return source.capture(allocator);
+        return source.request();
+    }
+
+    fn takeSnapshot(
+        context: *anyopaque,
+        request_id: snapshot_source.RequestId,
+    ) anyerror!?snapshot_source.Disposition {
+        const self = stateFrom(context);
+        const source = self.canonical_snapshot_source orelse
+            return error.SnapshotSourceNotIssued;
+        return source.take(request_id);
+    }
+
+    fn releaseSnapshot(context: *anyopaque, bytes: []u8) void {
+        const self = stateFrom(context);
+        const source = self.canonical_snapshot_source orelse return;
+        source.release(bytes);
     }
 };
 
@@ -778,6 +849,26 @@ pub const PlayerRole = struct {
 
     pub fn pollInteractionActionResult(self: PlayerRole) ?InteractionActionResult {
         return stateFrom(self.context).takeInteractionActionResult();
+    }
+
+    pub fn requestMelee(self: PlayerRole) !void {
+        try stateFrom(self.context).requestMelee();
+    }
+
+    pub fn requestRespawn(self: PlayerRole) !void {
+        try stateFrom(self.context).requestRespawn();
+    }
+
+    pub fn pollMeleeActionResult(self: PlayerRole) ?MeleeActionResult {
+        return stateFrom(self.context).client.takeMeleeActionResult();
+    }
+
+    pub fn pollRespawnActionResult(self: PlayerRole) ?RespawnActionResult {
+        return stateFrom(self.context).client.takeRespawnActionResult();
+    }
+
+    pub fn pollLifeEvent(self: PlayerRole) ?LifeEvent {
+        return stateFrom(self.context).client.takeLifeEvent();
     }
 
     pub fn lastAcknowledgedInput(self: PlayerRole) u32 {
@@ -1337,10 +1428,19 @@ test "solo placement joins shared authority and applies replicated movement" {
         .client_delivery,
         .acknowledgement_ingress,
     }, diagnostics.last_tick.stages[0..diagnostics.last_tick.count]);
-    try std.testing.expectEqual(@as(u8, 4), diagnostics.authority.last_cycle.count);
+    try std.testing.expectEqual(@as(u8, 8), diagnostics.authority.last_cycle.count);
     try std.testing.expectEqualSlices(
         authority_diagnostics.CycleStage,
-        &.{ .pre_simulation, .simulation, .outcome_drain, .replication_extraction },
+        &.{
+            .ingress_freeze,
+            .admission,
+            .semantic_work,
+            .simulation,
+            .outcome_drain,
+            .derivative_preparation,
+            .durable_disposition,
+            .publication,
+        },
         diagnostics.authority.last_cycle.stages[0..diagnostics.authority.last_cycle.count],
     );
     try std.testing.expect(diagnostics.authority.first_cycle_fault == null);
@@ -1386,6 +1486,13 @@ test "solo vehicle actions and control use shared authority admission" {
         .hand_brake = 0,
     });
     try placement.lifecycle().tick();
+    var ack_wait: u8 = 0;
+    while (placement.inspection().clientDiagnostics().client.last_acknowledged_input.value <
+        input_sequence and ack_wait < budgets.ticks_per_snapshot)
+    {
+        try placement.lifecycle().tick();
+        ack_wait += 1;
+    }
     try std.testing.expect(placement.vehicles().pollOutcome() == null);
     const diagnostics = placement.inspection().clientDiagnostics();
     try std.testing.expectEqual(@as(u64, 1), diagnostics.client.vehicle_actions_accepted);
@@ -1560,7 +1667,7 @@ test "composition transfers one quiescence-checked snapshot source" {
         testConfig(0x4c4f_4304),
     );
     defer composition.placement.deinit();
-    const bytes = try composition.snapshot_source.capture(std.testing.allocator);
+    const bytes = try composition.snapshot_source.observe(std.testing.allocator);
     defer std.testing.allocator.free(bytes);
     try std.testing.expect(bytes.len > 0);
 
@@ -1568,7 +1675,7 @@ test "composition transfers one quiescence-checked snapshot source" {
     try state.link.sendFromClient(.{ .disconnect = .requested });
     try std.testing.expectError(
         error.SessionWorkPending,
-        composition.snapshot_source.capture(std.testing.allocator),
+        composition.snapshot_source.observe(std.testing.allocator),
     );
 }
 
@@ -1595,7 +1702,7 @@ test "persistence rejects admitted input that has not reached its target tick" {
     try state.deliverClientIngress();
     try std.testing.expectError(
         error.SessionWorkPending,
-        composition.snapshot_source.capture(std.testing.allocator),
+        composition.snapshot_source.observe(std.testing.allocator),
     );
 
     // The held sample remains available for the declared input-hold policy,
@@ -1604,7 +1711,10 @@ test "persistence rejects admitted input that has not reached its target tick" {
     try composition.placement.lifecycle().tick();
     while (composition.placement.characters().pollOutcome()) |_| {}
     while (composition.placement.characters().pollEvent()) |_| {}
-    const bytes = try composition.snapshot_source.capture(std.testing.allocator);
+    // Snapshot application queues an acknowledgement into the next frozen
+    // ingress batch; durable capture waits until that batch is admitted too.
+    try composition.placement.lifecycle().tick();
+    const bytes = try composition.snapshot_source.observe(std.testing.allocator);
     defer std.testing.allocator.free(bytes);
     try std.testing.expect(bytes.len > 0);
 }
@@ -1616,6 +1726,7 @@ test "failed local authority tick records only successfully completed stages" {
         true,
     );
     defer placement.deinit();
+    const completed_before_fault = placement.inspection().clientDiagnostics().authority.tick;
     try placement.developer().armFaultProbe();
     try std.testing.expectError(
         error.InjectedDeveloperDiagnosticFault,
@@ -1629,9 +1740,9 @@ test "failed local authority tick records only successfully completed stages" {
         authority_diagnostics.CycleStage.simulation,
         diagnostics.authority.last_cycle.failed_stage.?,
     );
-    try std.testing.expectEqual(@as(u8, 1), diagnostics.authority.last_cycle.count);
+    try std.testing.expectEqual(@as(u8, 3), diagnostics.authority.last_cycle.count);
     try std.testing.expectEqual(
-        authority_diagnostics.CycleStage.pre_simulation,
+        authority_diagnostics.CycleStage.ingress_freeze,
         diagnostics.authority.last_cycle.stages[0],
     );
     const first_fault = diagnostics.authority.first_cycle_fault orelse
@@ -1643,7 +1754,7 @@ test "failed local authority tick records only successfully completed stages" {
 
     try std.testing.expectError(error.AuthorityFaulted, placement.lifecycle().tick());
     diagnostics = placement.inspection().clientDiagnostics();
-    try std.testing.expectEqual(@as(u64, 0), diagnostics.authority.tick);
+    try std.testing.expectEqual(completed_before_fault, diagnostics.authority.tick);
     try std.testing.expectEqual(
         first_fault.error_code,
         diagnostics.authority.first_cycle_fault.?.error_code,
@@ -1690,7 +1801,7 @@ test "ignored snapshots do not advance local interpolation clocks" {
     stale.sequence = state.client.world.sequence;
     stale.server_tick = projection_tick + 100;
     stale.npc_update = true;
-    try state.link.sendFromAuthority(.{ .snapshot = stale });
+    try state.link.sendFromAuthority(.{ .message = .{ .snapshot = stale } });
     try state.deliverClientMessages();
     try std.testing.expectEqual(projection_tick, state.projection_clock.last_tick);
     try std.testing.expectEqual(npc_projection_tick, state.npc_projection_clock.last_tick);
