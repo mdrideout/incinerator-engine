@@ -9,29 +9,12 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const contract = @import("district_contract");
+const worker_contract = @import("district_worker_contract");
 const sandbox_recipe = @import("sandbox_district_recipe");
 
-pub const WorkerState = enum {
-    idle,
-    queued,
-    working,
-    cancelling,
-    completion_ready,
-};
-
-pub const CompletionKind = enum {
-    ready,
-    cancelled,
-    failed,
-};
-
-pub const Diagnostics = struct {
-    state: WorkerState,
-    generation: ?u64,
-    started: bool,
-    cancellation_requested: bool,
-    completion_kind: ?CompletionKind,
-};
+const WorkerState = worker_contract.WorkerState;
+const CompletionKind = worker_contract.CompletionKind;
+const Diagnostics = worker_contract.Diagnostics;
 
 fn diagnosticState(
     has_active: bool,

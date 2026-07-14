@@ -10,7 +10,10 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const simulation = @import("sandbox_simulation");
-const crate_feature = @import("crate_feature");
+const simulation_snapshot = @import("simulation_snapshot");
+const sandbox_contracts = @import("sandbox_host_contracts");
+const sandbox_diagnostics = @import("sandbox_diagnostics_contract");
+const crate_feature = @import("crate_contract");
 const headless_authority = @import("headless_authority");
 const external_producers = @import("external_producers");
 const sandbox_save = @import("sandbox_save");
@@ -35,10 +38,10 @@ const allocator_peak_ceiling_bytes: usize = 64 * 1024 * 1024;
 const rss_ceiling_bytes: usize = 128 * 1024 * 1024;
 
 const CrateId = @FieldType(crate_feature.RelocateCrate, "id");
-const west = simulation.navigation_west_coord;
-const east = simulation.navigation_east_coord;
-const west_node = simulation.NavigationNodeRef{ .coord = west, .index = 0 };
-const east_node = simulation.NavigationNodeRef{ .coord = east, .index = 2 };
+const west = sandbox_contracts.navigation_west_coord;
+const east = sandbox_contracts.navigation_east_coord;
+const west_node = sandbox_contracts.NavigationNodeRef{ .coord = west, .index = 0 };
+const east_node = sandbox_contracts.NavigationNodeRef{ .coord = east, .index = 2 };
 
 const Mode = enum { routine, long };
 
@@ -343,10 +346,10 @@ const Metrics = struct {
 };
 
 const IntegratedState = struct {
-    character: simulation.PersistentId,
-    vehicle: simulation.PersistentId,
-    carryable: simulation.PersistentId,
-    npcs: [simulation.npc_capacity]simulation.PersistentId,
+    character: sandbox_contracts.PersistentId,
+    vehicle: sandbox_contracts.PersistentId,
+    carryable: sandbox_contracts.PersistentId,
+    npcs: [sandbox_contracts.npc_capacity]sandbox_contracts.PersistentId,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -607,7 +610,7 @@ fn run(allocator: std.mem.Allocator, io: std.Io, mode: Mode) !Report {
             .max_crates = @intCast(config.max_crates),
             .max_characters = @intCast(config.character.max_characters),
             .max_vehicles = @intCast(config.vehicle.max_vehicles),
-            .max_npcs = simulation.npc_capacity,
+            .max_npcs = sandbox_contracts.npc_capacity,
             .create_ground = config.create_ground,
         },
         .performance = .{
@@ -818,7 +821,7 @@ fn setupIntegratedSlices(
     const carryable = switch (authority.world.pollInteractionOutcome() orelse
         return error.M3CarryableSpawnOutcomeMissing) {
         .spawned => |spawned| if (spawned.request_id == 201 and
-            simulation.ChunkCoord.eql(spawned.owner, west))
+            sandbox_contracts.ChunkCoord.eql(spawned.owner, west))
             spawned.id
         else
             return error.M3CarryableSpawnOwnerMismatch,
@@ -848,7 +851,7 @@ fn setupIntegratedSlices(
             if (collected.transaction_id != 300 or
                 !std.meta.eql(collected.carrier_id, character) or
                 !std.meta.eql(collected.carryable_id, carryable) or
-                !simulation.ChunkCoord.eql(collected.previous_owner, west))
+                !sandbox_contracts.ChunkCoord.eql(collected.previous_owner, west))
             {
                 return error.M3CollectOutcomeMismatch;
             }
@@ -875,7 +878,7 @@ fn setupIntegratedSlices(
             if (dropped.transaction_id != 301 or
                 !std.meta.eql(dropped.carrier_id, character) or
                 !std.meta.eql(dropped.carryable_id, carryable) or
-                !simulation.ChunkCoord.eql(dropped.owner, west))
+                !sandbox_contracts.ChunkCoord.eql(dropped.owner, west))
             {
                 return error.M3DropOutcomeMismatch;
             }
@@ -890,9 +893,9 @@ fn setupIntegratedSlices(
     try requireNoTypedOutcomes(authority);
     try observe(authority, metrics, false);
 
-    var npc_ids: [simulation.npc_capacity]simulation.PersistentId = undefined;
+    var npc_ids: [sandbox_contracts.npc_capacity]sandbox_contracts.PersistentId = undefined;
     const first_npc_request_id: u64 = 1_000;
-    for (0..simulation.npc_capacity) |index| {
+    for (0..sandbox_contracts.npc_capacity) |index| {
         try authority.world.submitNpc(.{ .spawn = .{
             .request_id = first_npc_request_id + index,
             .node = west_node,
@@ -903,16 +906,16 @@ fn setupIntegratedSlices(
         } });
     }
     try tickWithoutCrateWork(authority);
-    var seen = [_]bool{false} ** simulation.npc_capacity;
-    for (0..simulation.npc_capacity) |_| {
+    var seen = [_]bool{false} ** sandbox_contracts.npc_capacity;
+    for (0..sandbox_contracts.npc_capacity) |_| {
         const spawned = switch (authority.world.pollNpcOutcome() orelse
             return error.M3NpcSpawnOutcomeMissing) {
             .spawned => |spawned| spawned,
             else => return error.M3UnexpectedNpcSpawnOutcome,
         };
         if (spawned.request_id < first_npc_request_id or
-            spawned.request_id >= first_npc_request_id + simulation.npc_capacity or
-            !simulation.ChunkCoord.eql(spawned.owner, west))
+            spawned.request_id >= first_npc_request_id + sandbox_contracts.npc_capacity or
+            !sandbox_contracts.ChunkCoord.eql(spawned.owner, west))
         {
             return error.M3NpcSpawnOutcomeMismatch;
         }
@@ -963,7 +966,7 @@ fn proveDistrictCancellation(
     authority: *headless_authority.Authority,
     metrics: *Metrics,
     request_id: u64,
-    coord: simulation.ChunkCoord,
+    coord: sandbox_contracts.ChunkCoord,
 ) !void {
     try authority.world.submitDistrict(.{ .request_load = .{
         .request_id = request_id,
@@ -996,14 +999,14 @@ fn proveDistrictCancellation(
         while (authority.world.pollDistrictOutcome()) |outcome| switch (outcome) {
             .cancellation_requested => |requested| {
                 if (requested.request_id != request_id + 1 or
-                    !simulation.LoadTicket.eql(requested.ticket, ticket))
+                    !sandbox_contracts.LoadTicket.eql(requested.ticket, ticket))
                 {
                     return error.M3DistrictCancellationRequestMismatch;
                 }
                 cancellation_requested = true;
             },
             .cancelled => |completed| {
-                if (!simulation.LoadTicket.eql(completed.ticket, ticket)) {
+                if (!sandbox_contracts.LoadTicket.eql(completed.ticket, ticket)) {
                     return error.M3DistrictCancellationTicketMismatch;
                 }
                 cancelled = true;
@@ -1027,7 +1030,7 @@ fn unloadDistrict(
     authority: *headless_authority.Authority,
     metrics: *Metrics,
     request_id: u64,
-    ticket: simulation.LoadTicket,
+    ticket: sandbox_contracts.LoadTicket,
 ) !void {
     try authority.world.submitDistrict(.{ .unload = .{
         .request_id = request_id,
@@ -1039,7 +1042,7 @@ fn unloadDistrict(
         return error.M3DistrictUnloadOutcomeMissing) {
         .unloaded => |unloaded| {
             if (unloaded.request_id != request_id or
-                !simulation.LoadTicket.eql(unloaded.ticket, ticket))
+                !sandbox_contracts.LoadTicket.eql(unloaded.ticket, ticket))
             {
                 return error.M3DistrictUnloadOutcomeMismatch;
             }
@@ -1058,8 +1061,8 @@ fn activateDistrict(
     authority: *headless_authority.Authority,
     metrics: *Metrics,
     request_id: u64,
-    coord: simulation.ChunkCoord,
-) !simulation.LoadTicket {
+    coord: sandbox_contracts.ChunkCoord,
+) !sandbox_contracts.LoadTicket {
     try authority.world.submitDistrict(.{ .request_load = .{
         .request_id = request_id,
         .coord = coord,
@@ -1086,8 +1089,8 @@ fn activateDistrict(
         while (authority.world.pollDistrictOutcome()) |outcome| switch (outcome) {
             .activated => |value| {
                 if (value.request_id != request_id or
-                    !simulation.LoadTicket.eql(value.ticket, ticket) or
-                    !simulation.ChunkCoord.eql(value.coord, coord))
+                    !sandbox_contracts.LoadTicket.eql(value.ticket, ticket) or
+                    !sandbox_contracts.ChunkCoord.eql(value.coord, coord))
                 {
                     return error.M3DistrictActivationMismatch;
                 }
@@ -1508,12 +1511,12 @@ fn requireIntegratedState(
         diagnostics.vehicles.active_count != 1 or
         diagnostics.interaction.active_count != 1 or
         diagnostics.interaction.dynamic_body_count != 1 or
-        npcCount(diagnostics) != simulation.npc_capacity or
-        diagnostics.npc.controller_count != simulation.npc_capacity or
+        npcCount(diagnostics) != sandbox_contracts.npc_capacity or
+        diagnostics.npc.controller_count != sandbox_contracts.npc_capacity or
         diagnostics.body_count != 10 or
-        diagnostics.character_controllers.native_used != simulation.npc_capacity + 1 or
+        diagnostics.character_controllers.native_used != sandbox_contracts.npc_capacity + 1 or
         diagnostics.character_controllers.native_capacity != 128 or
-        diagnostics.character_controllers.feature_owned != simulation.npc_capacity + 1 or
+        diagnostics.character_controllers.feature_owned != sandbox_contracts.npc_capacity + 1 or
         !diagnostics.character_controllers.authority_consistent)
     {
         return error.M3IntegratedSliceCountMismatch;
@@ -1539,13 +1542,13 @@ fn requireIntegratedState(
     }
 }
 
-fn npcCount(diagnostics: simulation.Diagnostics) u32 {
+fn npcCount(diagnostics: sandbox_diagnostics.Diagnostics) u32 {
     return diagnostics.npc.active_count + diagnostics.npc.waiting_count +
         diagnostics.npc.dormant_count;
 }
 
 fn featureQueueInventory(
-    diagnostics: simulation.Diagnostics,
+    diagnostics: sandbox_diagnostics.Diagnostics,
     metrics: Metrics,
 ) FeatureQueueInventory {
     return .{
@@ -1957,7 +1960,7 @@ fn validateWorldQueue(queue: anytype) !void {
     }
 }
 
-fn worldConfig() simulation.Config {
+fn worldConfig() sandbox_contracts.Config {
     return .{
         .namespace = namespace,
         .max_crates = 8,
@@ -1968,7 +1971,7 @@ fn worldConfig() simulation.Config {
     };
 }
 
-fn saveMetadata(config: simulation.Config) !sandbox_save.Metadata {
+fn saveMetadata(config: sandbox_contracts.Config) !sandbox_save.Metadata {
     var content_digest: sandbox_save.Digest = undefined;
     std.crypto.hash.sha2.Sha256.hash(
         content_cohort,
@@ -1976,9 +1979,9 @@ fn saveMetadata(config: simulation.Config) !sandbox_save.Metadata {
         .{},
     );
     return .{
-        .payload_schema = simulation.snapshot_schema,
-        .simulation_build_digest = try simulation.currentSimulationBuildFingerprint(),
-        .world_config_digest = try simulation.worldConfigFingerprint(config),
+        .payload_schema = sandbox_contracts.snapshot_schema,
+        .simulation_build_digest = try simulation_snapshot.currentSimulationBuildFingerprint(),
+        .world_config_digest = try simulation_snapshot.worldConfigFingerprint(config),
         .content_digest = content_digest,
     };
 }

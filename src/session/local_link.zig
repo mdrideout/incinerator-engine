@@ -52,6 +52,10 @@ pub const Link = struct {
     }
 
     pub fn sendFromAuthority(self: *Link, message: protocol.ServerMessage) !void {
+        protocol.validateServer(message) catch |err| {
+            self.rejected_server_messages +|= 1;
+            return err;
+        };
         self.authority_to_client.push(message) catch {
             self.rejected_server_messages +|= 1;
             return error.LocalServerQueueFull;
@@ -87,4 +91,93 @@ test "local link is typed bounded FIFO in both directions" {
     const diagnostics = link.diagnostics();
     try std.testing.expectEqual(@as(u32, 1), diagnostics.client_to_authority_high_water);
     try std.testing.expectEqual(@as(u32, 1), diagnostics.authority_to_client_high_water);
+}
+
+test "local link rejects server messages outside the shared semantic contract" {
+    var link = Link{};
+    var invalid = protocol.Snapshot.empty();
+    invalid.sequence.value = 1;
+    invalid.npc_count = 1;
+
+    try std.testing.expectError(
+        error.InvalidNpcProjection,
+        link.sendFromAuthority(.{ .snapshot = invalid }),
+    );
+    try std.testing.expect(link.receiveForClient() == null);
+    const diagnostics = link.diagnostics();
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.rejected_server_messages);
+    try std.testing.expectEqual(@as(u32, 0), diagnostics.authority_to_client_occupancy);
+}
+
+test "local link rejects duplicate replicated identities without enqueueing" {
+    var invalid = protocol.Snapshot.empty();
+    invalid.sequence.value = 1;
+    const entity: @FieldType(protocol.CharacterState, "entity") =
+        .{ .index = 7, .generation = 1 };
+    invalid.character_count = 1;
+    invalid.characters[0] = .{
+        .entity = entity,
+        .owner = .{ .index = 1, .generation = 1 },
+        .position = .{ 0, 0, 0 },
+        .velocity = .{ 0, 0, 0 },
+        .facing_yaw = 0,
+    };
+    invalid.carryable_count = 1;
+    invalid.carryables[0] = .{
+        .entity = entity,
+        .position = .{ 0, 0.5, 0 },
+        .rotation = .{ 0, 0, 0, 1 },
+        .linear_velocity = .{ 0, 0, 0 },
+        .angular_velocity = .{ 0, 0, 0 },
+        .half_extents = .{ 0.25, 0.25, 0.25 },
+        .holder = null,
+    };
+
+    var link = Link{};
+    try std.testing.expectError(
+        error.DuplicateActiveProjectionEntity,
+        link.sendFromAuthority(.{ .snapshot = invalid }),
+    );
+    try std.testing.expect(link.receiveForClient() == null);
+    const diagnostics = link.diagnostics();
+    try std.testing.expectEqual(@as(u64, 1), diagnostics.rejected_server_messages);
+    try std.testing.expectEqual(@as(u32, 0), diagnostics.authority_to_client_occupancy);
+}
+
+test "local link rejects impossible snapshot and action semantics before enqueueing" {
+    var link = Link{};
+
+    var invalid_snapshot = protocol.Snapshot.empty();
+    try std.testing.expectError(
+        error.InvalidSnapshotSequence,
+        link.sendFromAuthority(.{ .snapshot = invalid_snapshot }),
+    );
+    invalid_snapshot.sequence.value = 1;
+    invalid_snapshot.vehicle_count = 1;
+    invalid_snapshot.vehicles[0] = .{
+        .entity = .{ .index = 17, .generation = 1 },
+        .position = .{ 0, 1, 0 },
+        .rotation = .{ 0, 0, 0, 0 },
+        .linear_velocity = .{ 0, 0, 0 },
+        .angular_velocity = .{ 0, 0, 0 },
+        .driver = null,
+    };
+    try std.testing.expectError(
+        error.DegenerateQuaternion,
+        link.sendFromAuthority(.{ .snapshot = invalid_snapshot }),
+    );
+    try std.testing.expectError(
+        error.InvalidVehicleActionResultDisposition,
+        link.sendFromAuthority(.{ .vehicle_action_result = .{
+            .sequence = .{ .value = 1 },
+            .vehicle = .{ .index = 17, .generation = 1 },
+            .action = .enter,
+            .disposition = .exited,
+        } }),
+    );
+
+    try std.testing.expect(link.receiveForClient() == null);
+    const diagnostics = link.diagnostics();
+    try std.testing.expectEqual(@as(u64, 3), diagnostics.rejected_server_messages);
+    try std.testing.expectEqual(@as(u32, 0), diagnostics.authority_to_client_occupancy);
 }

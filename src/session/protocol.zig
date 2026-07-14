@@ -268,14 +268,18 @@ pub const Snapshot = struct {
 };
 
 pub const DistrictCoord = struct {
-    x: i32,
-    z: i32,
+    x: i32 = 0,
+    z: i32 = 0,
 };
 
 pub const RelevanceBaseline = struct {
     baseline_id: u32,
     district_count: u8,
-    districts: [budgets.max_relevant_districts_per_client]DistrictCoord,
+    // The inactive tail is initialized because this bounded control value is
+    // copied, retained, and compared as a whole. Only districtSlice() is sent
+    // on the wire, but leaving the tail undefined would make otherwise equal
+    // baselines depend on build mode and stack contents.
+    districts: [budgets.max_relevant_districts_per_client]DistrictCoord = @splat(.{}),
     snapshot: Snapshot,
 
     pub fn districtSlice(self: *const RelevanceBaseline) []const DistrictCoord {
@@ -354,6 +358,7 @@ const ServerKind = enum(u8) {
 };
 
 pub fn encodeClient(message: ClientMessage, storage: []u8) ![]const u8 {
+    try validateClient(message);
     var encoder = Encoder.init(storage);
     try encoder.header(.client, switch (message) {
         .hello => @intFromEnum(ClientKind.hello),
@@ -438,6 +443,7 @@ pub fn decodeClient(bytes: []const u8) !ClientMessage {
 }
 
 pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
+    try validateServer(message);
     var encoder = Encoder.init(storage);
     try encoder.header(.server, switch (message) {
         .welcome => @intFromEnum(ServerKind.welcome),
@@ -459,14 +465,6 @@ pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
         },
         .snapshot => |value| try encodeSnapshot(&encoder, value),
         .relevance_baseline => |value| {
-            if (value.baseline_id == 0 or value.snapshot.baseline_id != value.baseline_id) {
-                return error.InvalidBaseline;
-            }
-            if (value.district_count == 0 or
-                value.district_count > budgets.max_relevant_districts_per_client)
-            {
-                return error.InvalidRelevantDistrictCount;
-            }
             try encoder.u32Value(value.baseline_id);
             try encoder.u8Value(value.district_count);
             for (value.districtSlice()) |district| {
@@ -523,13 +521,13 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
             var baseline = RelevanceBaseline{
                 .baseline_id = try decoder.u32Value(),
                 .district_count = try decoder.u8Value(),
-                .districts = undefined,
                 .snapshot = undefined,
             };
-            if (baseline.baseline_id == 0 or baseline.district_count == 0 or
+            if (baseline.baseline_id == 0) return error.InvalidBaseline;
+            if (baseline.district_count == 0 or
                 baseline.district_count > budgets.max_relevant_districts_per_client)
             {
-                return error.InvalidBaseline;
+                return error.InvalidRelevantDistrictCount;
             }
             for (baseline.districts[0..baseline.district_count]) |*district| {
                 district.* = .{
@@ -580,6 +578,7 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
         ) catch return error.InvalidEnum },
     };
     try decoder.finish();
+    try validateServer(message);
     return message;
 }
 
@@ -641,11 +640,13 @@ pub fn validateClient(message: ClientMessage) !void {
         .vehicle_action => |value| {
             try value.session.validate();
             try value.participant.validate();
+            try value.sequence.validate();
             try value.vehicle.validate();
         },
         .interaction_action => |value| {
             try value.session.validate();
             try value.participant.validate();
+            try value.sequence.validate();
             try value.carryable.validate();
         },
         .baseline_ack => |value| {
@@ -661,6 +662,275 @@ pub fn validateClient(message: ClientMessage) !void {
             }
         },
         .disconnect => {},
+    }
+}
+
+/// Validates transport-independent server semantics. Byte transports call this
+/// before encoding and after decoding; typed in-process links call it before
+/// enqueueing so local play exercises the same message contract.
+pub fn validateServer(message: ServerMessage) !void {
+    switch (message) {
+        .welcome => |value| {
+            try value.session.validate();
+            try value.participant.validate();
+            try value.connection.validate();
+            if (!value.reconnect.isValid()) return error.InvalidReconnectToken;
+        },
+        .snapshot => |value| try validateSnapshot(value),
+        .relevance_baseline => |value| {
+            if (value.baseline_id == 0 or
+                value.snapshot.baseline_id != value.baseline_id or
+                value.snapshot.kind != .full)
+            {
+                return error.InvalidBaseline;
+            }
+            if (value.district_count == 0 or
+                value.district_count > budgets.max_relevant_districts_per_client)
+            {
+                return error.InvalidRelevantDistrictCount;
+            }
+            try validateSnapshot(value.snapshot);
+        },
+        .vehicle_action_result => |value| {
+            try value.sequence.validate();
+            try value.vehicle.validate();
+            try validateVehicleActionResult(value);
+        },
+        .interaction_action_result => |value| {
+            try value.sequence.validate();
+            try value.carryable.validate();
+            try validateInteractionActionResult(value);
+        },
+        .rejected, .disconnected => {},
+    }
+}
+
+fn validateVehicleActionResult(value: VehicleActionResult) !void {
+    const compatible = switch (value.action) {
+        .enter => switch (value.disposition) {
+            .entered,
+            .vehicle_not_found,
+            .unavailable,
+            .too_far,
+            .invalid_state,
+            => true,
+            .exited, .exit_blocked => false,
+        },
+        .exit => switch (value.disposition) {
+            .exited,
+            .vehicle_not_found,
+            .unavailable,
+            .exit_blocked,
+            .invalid_state,
+            => true,
+            .entered, .too_far => false,
+        },
+    };
+    if (!compatible) return error.InvalidVehicleActionResultDisposition;
+}
+
+fn validateInteractionActionResult(value: InteractionActionResult) !void {
+    const compatible = switch (value.action) {
+        .collect => switch (value.disposition) {
+            .collected,
+            .carryable_not_found,
+            .unavailable,
+            .too_far,
+            .destination_unavailable,
+            .invalid_state,
+            => true,
+            .dropped => false,
+        },
+        .drop => switch (value.disposition) {
+            .dropped,
+            .carryable_not_found,
+            .unavailable,
+            .destination_unavailable,
+            .invalid_state,
+            => true,
+            .collected, .too_far => false,
+        },
+    };
+    if (!compatible) return error.InvalidInteractionActionResultDisposition;
+}
+
+/// Validates a complete projection before it is retained by client state.
+/// Wire deltas must be materialized first; this final check catches identity
+/// conflicts between a delta and unchanged entities inherited from its base.
+pub fn validateMaterializedSnapshot(value: Snapshot) !void {
+    if (value.kind != .full) return error.SnapshotNotMaterialized;
+    try validateSnapshot(value);
+}
+
+const max_projection_identity_count = budgets.max_participants +
+    budgets.max_vehicles + budgets.max_carryables + budgets.max_npcs;
+
+const ProjectionIdentitySet = struct {
+    values: [max_projection_identity_count]identity.ReplicatedEntityId = undefined,
+    count: usize = 0,
+
+    fn contains(
+        self: *const ProjectionIdentitySet,
+        candidate: identity.ReplicatedEntityId,
+    ) bool {
+        for (self.values[0..self.count]) |value| {
+            if (std.meta.eql(value, candidate)) return true;
+        }
+        return false;
+    }
+
+    fn insert(
+        self: *ProjectionIdentitySet,
+        candidate: identity.ReplicatedEntityId,
+    ) bool {
+        if (self.contains(candidate)) return false;
+        std.debug.assert(self.count < self.values.len);
+        self.values[self.count] = candidate;
+        self.count += 1;
+        return true;
+    }
+};
+
+fn recordActiveProjectionIdentity(
+    active: *ProjectionIdentitySet,
+    entity: identity.ReplicatedEntityId,
+) !void {
+    if (!active.insert(entity)) return error.DuplicateActiveProjectionEntity;
+}
+
+fn recordRemovedProjectionIdentity(
+    active: *const ProjectionIdentitySet,
+    removed: *ProjectionIdentitySet,
+    entity: identity.ReplicatedEntityId,
+) !void {
+    if (active.contains(entity)) return error.ConflictingProjectionEntityChange;
+    if (!removed.insert(entity)) return error.DuplicateRemovedProjectionEntity;
+}
+
+fn validateProjectionIdentities(value: Snapshot) !void {
+    var active = ProjectionIdentitySet{};
+    for (value.slice()) |character| {
+        try recordActiveProjectionIdentity(&active, character.entity);
+    }
+    for (value.vehicleSlice()) |vehicle| {
+        try recordActiveProjectionIdentity(&active, vehicle.entity);
+    }
+    for (value.carryableSlice()) |carryable| {
+        try recordActiveProjectionIdentity(&active, carryable.entity);
+    }
+    for (value.npcSlice()) |npc| {
+        try recordActiveProjectionIdentity(&active, npc.entity);
+    }
+
+    if (value.kind == .full) return;
+
+    var removed = ProjectionIdentitySet{};
+    for (value.removed_characters[0..value.removed_character_count]) |entity| {
+        try recordRemovedProjectionIdentity(&active, &removed, entity);
+    }
+    for (value.removed_vehicles[0..value.removed_vehicle_count]) |entity| {
+        try recordRemovedProjectionIdentity(&active, &removed, entity);
+    }
+    for (value.removed_carryables[0..value.removed_carryable_count]) |entity| {
+        try recordRemovedProjectionIdentity(&active, &removed, entity);
+    }
+    for (value.removed_npcs[0..value.removed_npc_count]) |entity| {
+        try recordRemovedProjectionIdentity(&active, &removed, entity);
+    }
+}
+
+fn validateSnapshot(value: Snapshot) !void {
+    if (value.sequence.value == 0) return error.InvalidSnapshotSequence;
+    if (value.character_count > budgets.max_participants) return error.TooManyCharacters;
+    if (value.vehicle_count > budgets.max_vehicles) return error.TooManyVehicles;
+    if (value.carryable_count > budgets.max_carryables) return error.TooManyCarryables;
+    if (value.npc_count > budgets.max_npcs or
+        (!value.npc_update and (value.npc_count != 0 or value.removed_npc_count != 0)))
+    {
+        return error.InvalidNpcProjection;
+    }
+    if (value.removed_character_count > budgets.max_participants or
+        value.removed_vehicle_count > budgets.max_vehicles or
+        value.removed_carryable_count > budgets.max_carryables or
+        value.removed_npc_count > budgets.max_npcs)
+    {
+        return error.TooManyRemovedEntities;
+    }
+    if ((value.kind == .full and (value.base_sequence.value != 0 or
+        value.removed_character_count != 0 or value.removed_vehicle_count != 0 or
+        value.removed_carryable_count != 0 or value.removed_npc_count != 0)) or
+        (value.kind == .delta and value.base_sequence.value == 0))
+    {
+        return error.InvalidSnapshotKind;
+    }
+
+    for (value.slice()) |character| {
+        try character.entity.validate();
+        try character.owner.validate();
+        try validateFiniteComponents(&character.position);
+        try validateFiniteComponents(&character.velocity);
+        if (!std.math.isFinite(character.facing_yaw)) return error.NonFiniteProjection;
+    }
+    for (value.vehicleSlice()) |vehicle| {
+        try vehicle.entity.validate();
+        if (vehicle.driver) |driver| try driver.validate();
+        try validateFiniteComponents(&vehicle.position);
+        try validateProjectionQuaternion(vehicle.rotation);
+        try validateFiniteComponents(&vehicle.linear_velocity);
+        try validateFiniteComponents(&vehicle.angular_velocity);
+    }
+    for (value.carryableSlice()) |carryable| {
+        try carryable.entity.validate();
+        if (carryable.holder) |holder| try holder.validate();
+        try validateFiniteComponents(&carryable.position);
+        try validateProjectionQuaternion(carryable.rotation);
+        try validateFiniteComponents(&carryable.linear_velocity);
+        try validateFiniteComponents(&carryable.angular_velocity);
+        try validateFiniteComponents(&carryable.half_extents);
+        for (carryable.half_extents) |extent| {
+            if (extent <= 0) return error.InvalidCarryableExtents;
+        }
+    }
+    for (value.npcSlice()) |npc| {
+        try npc.entity.validate();
+        try validateFiniteComponents(&npc.position);
+        try validateFiniteComponents(&npc.velocity);
+        if (!std.math.isFinite(npc.facing_yaw)) return error.NonFiniteProjection;
+    }
+    for (value.removed_characters[0..value.removed_character_count]) |entity| {
+        try entity.validate();
+    }
+    for (value.removed_vehicles[0..value.removed_vehicle_count]) |entity| {
+        try entity.validate();
+    }
+    for (value.removed_carryables[0..value.removed_carryable_count]) |entity| {
+        try entity.validate();
+    }
+    for (value.removed_npcs[0..value.removed_npc_count]) |entity| {
+        try entity.validate();
+    }
+    try validateProjectionIdentities(value);
+}
+
+fn validateFiniteComponents(values: []const f32) !void {
+    for (values) |value| {
+        if (!std.math.isFinite(value)) return error.NonFiniteProjection;
+    }
+}
+
+fn validateProjectionQuaternion(value: [4]f32) !void {
+    try validateFiniteComponents(&value);
+    var scale: f32 = 0;
+    for (value) |component| scale = @max(scale, @abs(component));
+    if (scale == 0) return error.DegenerateQuaternion;
+
+    var scaled_length_squared: f32 = 0;
+    for (value) |component| {
+        const scaled = component / scale;
+        scaled_length_squared += scaled * scaled;
+    }
+    if (!std.math.isFinite(scaled_length_squared) or scaled_length_squared == 0) {
+        return error.DegenerateQuaternion;
     }
 }
 
@@ -753,26 +1023,6 @@ fn encodeInput(encoder: *Encoder, value: InputFrame) !void {
 }
 
 fn encodeSnapshot(encoder: *Encoder, value: Snapshot) !void {
-    if (value.character_count > budgets.max_participants) return error.TooManyCharacters;
-    if (value.vehicle_count > budgets.max_vehicles) return error.TooManyVehicles;
-    if (value.carryable_count > budgets.max_carryables) return error.TooManyCarryables;
-    if (value.npc_count > budgets.max_npcs or (!value.npc_update and value.npc_count != 0)) {
-        return error.InvalidNpcProjection;
-    }
-    if (value.removed_character_count > budgets.max_participants or
-        value.removed_vehicle_count > budgets.max_vehicles or
-        value.removed_carryable_count > budgets.max_carryables or
-        value.removed_npc_count > budgets.max_npcs)
-    {
-        return error.TooManyRemovedEntities;
-    }
-    if ((value.kind == .full and (value.base_sequence.value != 0 or
-        value.removed_character_count != 0 or value.removed_vehicle_count != 0 or
-        value.removed_carryable_count != 0 or value.removed_npc_count != 0)) or
-        (value.kind == .delta and value.base_sequence.value == 0))
-    {
-        return error.InvalidSnapshotKind;
-    }
     try encoder.u8Value(@intFromEnum(value.kind));
     try encoder.u32Value(value.baseline_id);
     try encoder.u32Value(value.base_sequence.value);
@@ -886,6 +1136,8 @@ pub fn makeDelta(base: Snapshot, current: Snapshot, include_npcs: bool) !Snapsho
     {
         return error.InvalidDeltaBase;
     }
+    try validateMaterializedSnapshot(base);
+    try validateMaterializedSnapshot(current);
     var delta = Snapshot.empty();
     delta.kind = .delta;
     delta.baseline_id = current.baseline_id;
@@ -944,6 +1196,7 @@ pub fn makeDelta(base: Snapshot, current: Snapshot, include_npcs: bool) !Snapsho
             delta.removed_npc_count += 1;
         };
     }
+    try validateSnapshot(delta);
     return delta;
 }
 
@@ -956,6 +1209,8 @@ pub fn materializeDelta(base: Snapshot, delta: Snapshot) !Snapshot {
     {
         return error.DeltaBaseMismatch;
     }
+    try validateMaterializedSnapshot(base);
+    try validateSnapshot(delta);
     var result = base;
     result.kind = .full;
     result.base_sequence = .{ .value = 0 };
@@ -983,6 +1238,7 @@ pub fn materializeDelta(base: Snapshot, delta: Snapshot) !Snapshot {
     result.removed_vehicle_count = 0;
     result.removed_carryable_count = 0;
     result.removed_npc_count = 0;
+    try validateMaterializedSnapshot(result);
     return result;
 }
 
@@ -1438,6 +1694,44 @@ const Decoder = struct {
     }
 };
 
+fn expectSnapshotEqual(expected: Snapshot, actual: Snapshot) !void {
+    try std.testing.expectEqual(expected.kind, actual.kind);
+    try std.testing.expectEqual(expected.baseline_id, actual.baseline_id);
+    try std.testing.expectEqual(expected.base_sequence, actual.base_sequence);
+    try std.testing.expectEqual(expected.sequence, actual.sequence);
+    try std.testing.expectEqual(expected.server_tick, actual.server_tick);
+    try std.testing.expectEqual(expected.acknowledged_input, actual.acknowledged_input);
+    try std.testing.expectEqual(expected.npc_update, actual.npc_update);
+    try std.testing.expectEqual(expected.character_count, actual.character_count);
+    try std.testing.expectEqual(expected.vehicle_count, actual.vehicle_count);
+    try std.testing.expectEqual(expected.carryable_count, actual.carryable_count);
+    try std.testing.expectEqual(expected.npc_count, actual.npc_count);
+    try std.testing.expectEqual(expected.removed_character_count, actual.removed_character_count);
+    try std.testing.expectEqual(expected.removed_vehicle_count, actual.removed_vehicle_count);
+    try std.testing.expectEqual(expected.removed_carryable_count, actual.removed_carryable_count);
+    try std.testing.expectEqual(expected.removed_npc_count, actual.removed_npc_count);
+    try std.testing.expectEqualDeep(expected.slice(), actual.slice());
+    try std.testing.expectEqualDeep(expected.vehicleSlice(), actual.vehicleSlice());
+    try std.testing.expectEqualDeep(expected.carryableSlice(), actual.carryableSlice());
+    try std.testing.expectEqualDeep(expected.npcSlice(), actual.npcSlice());
+    try std.testing.expectEqualDeep(
+        expected.removed_characters[0..expected.removed_character_count],
+        actual.removed_characters[0..actual.removed_character_count],
+    );
+    try std.testing.expectEqualDeep(
+        expected.removed_vehicles[0..expected.removed_vehicle_count],
+        actual.removed_vehicles[0..actual.removed_vehicle_count],
+    );
+    try std.testing.expectEqualDeep(
+        expected.removed_carryables[0..expected.removed_carryable_count],
+        actual.removed_carryables[0..actual.removed_carryable_count],
+    );
+    try std.testing.expectEqualDeep(
+        expected.removed_npcs[0..expected.removed_npc_count],
+        actual.removed_npcs[0..actual.removed_npc_count],
+    );
+}
+
 test "client input round trips without exposing backend identity" {
     var bytes: [256]u8 = undefined;
     const original = ClientMessage{ .input = .{
@@ -1509,7 +1803,10 @@ test "snapshot round trips at the validation ceiling" {
     const encoded = try encodeServer(.{ .snapshot = snapshot }, &bytes);
     try std.testing.expect(encoded.len <= budgets.max_snapshot_bytes);
     const decoded = try decodeServer(encoded);
-    try std.testing.expectEqualDeep(ServerMessage{ .snapshot = snapshot }, decoded);
+    switch (decoded) {
+        .snapshot => |actual| try expectSnapshotEqual(snapshot, actual),
+        else => return error.UnexpectedServerMessage,
+    }
 }
 
 test "district baseline and acknowledgement round trip as bounded control messages" {
@@ -1520,16 +1817,20 @@ test "district baseline and acknowledgement round trip as bounded control messag
     var baseline = RelevanceBaseline{
         .baseline_id = 7,
         .district_count = 1,
-        .districts = undefined,
         .snapshot = snapshot,
     };
     baseline.districts[0] = .{ .x = -2, .z = 3 };
     var storage: [budgets.max_wire_message_bytes]u8 = undefined;
     const encoded = try encodeServer(.{ .relevance_baseline = baseline }, &storage);
-    try std.testing.expectEqualDeep(
-        ServerMessage{ .relevance_baseline = baseline },
-        try decodeServer(encoded),
-    );
+    switch (try decodeServer(encoded)) {
+        .relevance_baseline => |actual| {
+            try std.testing.expectEqual(baseline.baseline_id, actual.baseline_id);
+            try std.testing.expectEqual(baseline.district_count, actual.district_count);
+            try std.testing.expectEqualDeep(baseline.districtSlice(), actual.districtSlice());
+            try expectSnapshotEqual(baseline.snapshot, actual.snapshot);
+        },
+        else => return error.UnexpectedServerMessage,
+    }
 
     const ack = ClientMessage{ .baseline_ack = .{
         .session = .{ .value = 1 },
@@ -1538,6 +1839,277 @@ test "district baseline and acknowledgement round trip as bounded control messag
     } };
     const ack_bytes = try encodeClient(ack, &storage);
     try std.testing.expectEqualDeep(ack, try decodeClient(ack_bytes));
+}
+
+test "server semantic validation is shared by typed and encoded messages" {
+    var invalid = Snapshot.empty();
+    invalid.sequence.value = 1;
+    invalid.npc_count = 1;
+    const message = ServerMessage{ .snapshot = invalid };
+    try std.testing.expectError(error.InvalidNpcProjection, validateServer(message));
+
+    var storage: [budgets.max_wire_message_bytes]u8 = undefined;
+    try std.testing.expectError(
+        error.InvalidNpcProjection,
+        encodeServer(message, &storage),
+    );
+}
+
+test "client action semantic validation reserves sequence zero" {
+    const messages = [_]ClientMessage{
+        .{ .vehicle_action = .{
+            .session = .{ .value = 9 },
+            .participant = .{ .index = 2, .generation = 3 },
+            .sequence = .{ .value = 0 },
+            .vehicle = .{ .index = 17, .generation = 1 },
+            .kind = .enter,
+        } },
+        .{ .interaction_action = .{
+            .session = .{ .value = 9 },
+            .participant = .{ .index = 2, .generation = 3 },
+            .sequence = .{ .value = 0 },
+            .carryable = .{ .index = 21, .generation = 1 },
+            .kind = .collect,
+        } },
+    };
+    var storage: [256]u8 = undefined;
+    for (messages) |message| {
+        try std.testing.expectError(
+            error.InvalidActionSequence,
+            validateClient(message),
+        );
+        try std.testing.expectError(
+            error.InvalidActionSequence,
+            encodeClient(message, &storage),
+        );
+
+        // Model an untrusted peer that did not use the validating encoder.
+        var encoder = Encoder.init(&storage);
+        switch (message) {
+            .vehicle_action => |action| {
+                try encoder.header(.client, @intFromEnum(ClientKind.vehicle_action));
+                try encodeVehicleAction(&encoder, action);
+            },
+            .interaction_action => |action| {
+                try encoder.header(.client, @intFromEnum(ClientKind.interaction_action));
+                try encodeInteractionAction(&encoder, action);
+            },
+            else => unreachable,
+        }
+        try std.testing.expectError(
+            error.InvalidActionSequence,
+            decodeClient(try encoder.finish()),
+        );
+    }
+}
+
+test "snapshot validation rejects zero sequence and invalid physical projection" {
+    var storage: [budgets.max_wire_message_bytes]u8 = undefined;
+    var snapshot = Snapshot.empty();
+    try std.testing.expectError(
+        error.InvalidSnapshotSequence,
+        validateServer(.{ .snapshot = snapshot }),
+    );
+    try std.testing.expectError(
+        error.InvalidSnapshotSequence,
+        encodeServer(.{ .snapshot = snapshot }, &storage),
+    );
+
+    snapshot.sequence.value = 1;
+    snapshot.vehicle_count = 1;
+    snapshot.vehicles[0] = .{
+        .entity = .{ .index = 17, .generation = 1 },
+        .position = .{ 0, 1, 0 },
+        .rotation = .{ 0, 0, 0, 0 },
+        .linear_velocity = .{ 0, 0, 0 },
+        .angular_velocity = .{ 0, 0, 0 },
+        .driver = null,
+    };
+    try std.testing.expectError(
+        error.DegenerateQuaternion,
+        validateServer(.{ .snapshot = snapshot }),
+    );
+
+    snapshot.vehicle_count = 0;
+    snapshot.carryable_count = 1;
+    snapshot.carryables[0] = .{
+        .entity = .{ .index = 21, .generation = 1 },
+        .position = .{ 0, 0.5, 0 },
+        .rotation = .{ 0, 0, 0, 1 },
+        .linear_velocity = .{ 0, 0, 0 },
+        .angular_velocity = .{ 0, 0, 0 },
+        .half_extents = .{ 0.25, 0, 0.25 },
+        .holder = null,
+    };
+    try std.testing.expectError(
+        error.InvalidCarryableExtents,
+        validateServer(.{ .snapshot = snapshot }),
+    );
+    try std.testing.expectError(
+        error.InvalidCarryableExtents,
+        encodeServer(.{ .snapshot = snapshot }, &storage),
+    );
+
+    snapshot.carryables[0].half_extents = .{ 0.25, 0.25, 0.25 };
+    snapshot.carryables[0].rotation = .{ 0, 0, 0, 0 };
+    try std.testing.expectError(
+        error.DegenerateQuaternion,
+        validateServer(.{ .snapshot = snapshot }),
+    );
+}
+
+test "action result validation rejects dispositions impossible for their action" {
+    const vehicle = identity.ReplicatedEntityId{ .index = 17, .generation = 1 };
+    var storage: [budgets.max_wire_message_bytes]u8 = undefined;
+    var vehicle_result = VehicleActionResult{
+        .sequence = .{ .value = 1 },
+        .vehicle = vehicle,
+        .action = .enter,
+        .disposition = .exited,
+    };
+    try std.testing.expectError(
+        error.InvalidVehicleActionResultDisposition,
+        validateServer(.{ .vehicle_action_result = vehicle_result }),
+    );
+    try std.testing.expectError(
+        error.InvalidVehicleActionResultDisposition,
+        encodeServer(.{ .vehicle_action_result = vehicle_result }, &storage),
+    );
+    vehicle_result.disposition = .exit_blocked;
+    try std.testing.expectError(
+        error.InvalidVehicleActionResultDisposition,
+        validateServer(.{ .vehicle_action_result = vehicle_result }),
+    );
+    vehicle_result.disposition = .too_far;
+    try validateServer(.{ .vehicle_action_result = vehicle_result });
+    vehicle_result.action = .exit;
+    try std.testing.expectError(
+        error.InvalidVehicleActionResultDisposition,
+        validateServer(.{ .vehicle_action_result = vehicle_result }),
+    );
+
+    var interaction_result = InteractionActionResult{
+        .sequence = .{ .value = 1 },
+        .carryable = .{ .index = 21, .generation = 1 },
+        .action = .collect,
+        .disposition = .dropped,
+    };
+    try std.testing.expectError(
+        error.InvalidInteractionActionResultDisposition,
+        validateServer(.{ .interaction_action_result = interaction_result }),
+    );
+    interaction_result.disposition = .too_far;
+    try validateServer(.{ .interaction_action_result = interaction_result });
+    interaction_result.action = .drop;
+    try std.testing.expectError(
+        error.InvalidInteractionActionResultDisposition,
+        validateServer(.{ .interaction_action_result = interaction_result }),
+    );
+}
+
+test "server validation rejects globally duplicate active projection identities" {
+    const duplicate = identity.ReplicatedEntityId{ .index = 7, .generation = 1 };
+    var snapshot = Snapshot.empty();
+    snapshot.sequence.value = 1;
+    snapshot.character_count = 1;
+    snapshot.characters[0] = .{
+        .entity = duplicate,
+        .owner = .{ .index = 1, .generation = 1 },
+        .position = .{ 0, 0, 0 },
+        .velocity = .{ 0, 0, 0 },
+        .facing_yaw = 0,
+    };
+    snapshot.vehicle_count = 1;
+    snapshot.vehicles[0] = .{
+        .entity = duplicate,
+        .position = .{ 0, 1, 0 },
+        .rotation = .{ 0, 0, 0, 1 },
+        .linear_velocity = .{ 0, 0, 0 },
+        .angular_velocity = .{ 0, 0, 0 },
+        .driver = null,
+    };
+    const message = ServerMessage{ .snapshot = snapshot };
+    try std.testing.expectError(
+        error.DuplicateActiveProjectionEntity,
+        validateServer(message),
+    );
+
+    var storage: [budgets.max_wire_message_bytes]u8 = undefined;
+    try std.testing.expectError(
+        error.DuplicateActiveProjectionEntity,
+        encodeServer(message, &storage),
+    );
+}
+
+test "delta validation rejects duplicate removals and conflicting identity edits" {
+    const entity = identity.ReplicatedEntityId{ .index = 9, .generation = 1 };
+    var delta = Snapshot.empty();
+    delta.kind = .delta;
+    delta.baseline_id = 1;
+    delta.base_sequence.value = 1;
+    delta.sequence.value = 2;
+    delta.character_count = 1;
+    delta.characters[0] = .{
+        .entity = entity,
+        .owner = .{ .index = 1, .generation = 1 },
+        .position = .{ 0, 0, 0 },
+        .velocity = .{ 0, 0, 0 },
+        .facing_yaw = 0,
+    };
+    delta.removed_character_count = 1;
+    delta.removed_characters[0] = entity;
+    try std.testing.expectError(
+        error.ConflictingProjectionEntityChange,
+        validateServer(.{ .snapshot = delta }),
+    );
+    var storage: [budgets.max_wire_message_bytes]u8 = undefined;
+    try std.testing.expectError(
+        error.ConflictingProjectionEntityChange,
+        encodeServer(.{ .snapshot = delta }, &storage),
+    );
+
+    delta.character_count = 0;
+    delta.removed_vehicle_count = 1;
+    delta.removed_vehicles[0] = entity;
+    try std.testing.expectError(
+        error.DuplicateRemovedProjectionEntity,
+        validateServer(.{ .snapshot = delta }),
+    );
+}
+
+test "materialization rejects a delta identity collision with an unchanged lane" {
+    const entity = identity.ReplicatedEntityId{ .index = 11, .generation = 1 };
+    var base = Snapshot.empty();
+    base.baseline_id = 1;
+    base.sequence.value = 1;
+    base.vehicle_count = 1;
+    base.vehicles[0] = .{
+        .entity = entity,
+        .position = .{ 0, 1, 0 },
+        .rotation = .{ 0, 0, 0, 1 },
+        .linear_velocity = .{ 0, 0, 0 },
+        .angular_velocity = .{ 0, 0, 0 },
+        .driver = null,
+    };
+
+    var delta = Snapshot.empty();
+    delta.kind = .delta;
+    delta.baseline_id = base.baseline_id;
+    delta.base_sequence = base.sequence;
+    delta.sequence.value = 2;
+    delta.character_count = 1;
+    delta.characters[0] = .{
+        .entity = entity,
+        .owner = .{ .index = 1, .generation = 1 },
+        .position = .{ 0, 0, 0 },
+        .velocity = .{ 0, 0, 0 },
+        .facing_yaw = 0,
+    };
+    try validateServer(.{ .snapshot = delta });
+    try std.testing.expectError(
+        error.DuplicateActiveProjectionEntity,
+        materializeDelta(base, delta),
+    );
 }
 
 test "acknowledged delta materializes updates removals and retained NPC state" {

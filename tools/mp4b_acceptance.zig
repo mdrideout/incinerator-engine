@@ -48,7 +48,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn runTrial(name: []const u8, config: impaired.Config) !Result {
-    var authority = try authority_module.Authority.init(std.heap.page_allocator);
+    const authority = try authority_module.DedicatedAuthority.init(std.heap.page_allocator);
     defer authority.deinit();
     var client = try session_client.Client.init(.{ .value = config.seed + 40_000 });
     var link = try impaired.Link.init(config);
@@ -93,11 +93,13 @@ fn runTrial(name: []const u8, config: impaired.Config) !Result {
         if (drop_sent and client.pending_interaction_action == null and
             client.heldCarryable() == null)
         {
-            const result = client.last_interaction_action_result orelse continue;
-            if (result.action == .drop and result.disposition == .dropped) {
-                completed_tick = authority.diagnostics().tick;
-                break;
+            while (client.takeInteractionActionResult()) |result| {
+                if (result.action == .drop and result.disposition == .dropped) {
+                    completed_tick = authority.diagnostics().tick;
+                    break;
+                }
             }
+            if (completed_tick != null) break;
         }
     }
 
@@ -132,17 +134,17 @@ fn runTrial(name: []const u8, config: impaired.Config) !Result {
 }
 
 fn verifyDisconnectCleanup() !void {
-    var authority = try authority_module.Authority.init(std.heap.page_allocator);
+    const authority = try authority_module.DedicatedAuthority.init(std.heap.page_allocator);
     defer authority.deinit();
     var client = try session_client.Client.init(.{ .value = 50_001 });
     const connection = authority_module.TransportConnection{ .value = 1 };
     _ = try authority.openConnection(connection);
     try authority.ingest(connection, try client.begin());
-    try pumpDirect(&authority, &client);
+    try pumpDirect(authority, &client);
 
     for (0..10_000) |_| {
         try authority.tick();
-        try drainDirect(&authority, &client);
+        try drainDirect(authority, &client);
         if (client.world.carryable_count == 1) break;
         std.Thread.yield() catch {};
     }
@@ -151,7 +153,7 @@ fn verifyDisconnectCleanup() !void {
     try authority.ingest(connection, try client.interactionAction(.collect, carryable));
     for (0..120) |_| {
         try authority.tick();
-        try drainDirect(&authority, &client);
+        try drainDirect(authority, &client);
         if (client.heldCarryable() != null) break;
     }
     if (client.heldCarryable() == null) return error.CleanupCollectFailed;
@@ -177,7 +179,7 @@ fn verifyDisconnectCleanup() !void {
 }
 
 fn pumpDirect(
-    authority: *authority_module.Authority,
+    authority: *authority_module.DedicatedAuthority,
     client: *session_client.Client,
 ) !void {
     try authority.tick();
@@ -185,7 +187,7 @@ fn pumpDirect(
 }
 
 fn drainDirect(
-    authority: *authority_module.Authority,
+    authority: *authority_module.DedicatedAuthority,
     client: *session_client.Client,
 ) !void {
     while (authority.pollOutbound()) |outbound| {

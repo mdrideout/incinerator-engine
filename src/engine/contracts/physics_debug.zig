@@ -9,6 +9,24 @@ const std = @import("std");
 
 pub const schema_version: u16 = 1;
 
+/// Runtime policy for renderer-neutral physics evidence.
+///
+/// Producers may keep any required backend listeners and scratch storage alive
+/// independently of this value. Toggling fields only selects which categories
+/// are copied into a caller-owned [`Storage`] after a completed step.
+pub const Config = struct {
+    shapes: bool = true,
+    bounds: bool = true,
+    contacts: bool = true,
+    centers_of_mass: bool = true,
+    velocities: bool = true,
+
+    pub fn enabled(self: Config) bool {
+        return self.shapes or self.bounds or self.contacts or
+            self.centers_of_mass or self.velocities;
+    }
+};
+
 pub const Position = [3]f32;
 /// Opaque RGB color for schema v1.
 ///
@@ -327,6 +345,17 @@ test "non-finite geometry and non-opaque schema v1 colors are rejected visibly" 
     try std.testing.expectEqual(@as(u64, 0), batch.statsFor(.velocity).lines.overflow_dropped);
     try std.testing.expectEqual(@as(u64, 1), batch.statsFor(.contact).triangles.invalid_dropped);
     try std.testing.expectEqual(@as(u64, 1), batch.statsFor(.shape).lines.invalid_dropped);
+}
+
+test "debug category policy reports whether extraction is enabled" {
+    try std.testing.expect((Config{}).enabled());
+    try std.testing.expect(!(Config{
+        .shapes = false,
+        .bounds = false,
+        .contacts = false,
+        .centers_of_mass = false,
+        .velocities = false,
+    }).enabled());
 }
 
 test "capacity drops are attributed independently by category and primitive type" {

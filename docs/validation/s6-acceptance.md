@@ -43,8 +43,11 @@ Evidence:
 - `zig build smoke-installed-content -Deditor=false --summary all`: 22/22;
   both bundles and the catalog admit from `/tmp` with an explicit installed
   root.
-- Legacy single-bundle cohort wire/fingerprint remains pinned by replay unit
-  tests while catalog cohorts use a separate domain marker.
+- At S6 close, replay unit tests still pinned the preceding single-bundle
+  wire/fingerprint while catalog cohorts used a separate domain marker. The
+  later greenfield cleanup intentionally removed that legacy identity; the
+  current cohort is recorded in the
+  [macOS readiness record](macos-readiness.md).
 
 ## S6-B — Fixed two-slot logical authority
 

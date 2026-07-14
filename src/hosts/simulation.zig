@@ -2,135 +2,81 @@
 
 const std = @import("std");
 const engine = @import("incinerator_engine");
-const crates = @import("crate_feature");
-const characters = @import("character_feature");
-const vehicles = @import("vehicle_feature");
-const districts = @import("district_feature");
-const interactions = @import("interaction_feature");
-const npcs = @import("npc_feature");
+const crate_implementation = @import("crate_feature");
+const crates = @import("crate_contract");
+const character_implementation = @import("character_feature");
+const characters = @import("character_contract");
+const vehicle_implementation = @import("vehicle_feature");
+const vehicles = @import("vehicle_contract");
+const district_implementation = @import("district_feature");
+const districts = @import("district_feature_contract");
+const interaction_implementation = @import("interaction_feature");
+const interactions = @import("interaction_feature_contract");
+const npc_implementation = @import("npc_feature");
+const npcs = @import("npc_contract");
 const district_contract = @import("district_contract");
 const sandbox_district_recipe = @import("sandbox_district_recipe");
-const district_worker = @import("district_worker");
+const district_worker_contract = @import("district_worker_contract");
 const district_replay_loader = @import("district_replay_loader");
 const jolt = @import("jolt_physics");
-const sandbox_navigation = @import("sandbox_navigation");
 const sandbox_replay = @import("sandbox_replay");
+const simulation_snapshot = @import("simulation_snapshot");
+const simulation_diagnostics = @import("simulation_diagnostics");
+const sandbox_diagnostics = @import("sandbox_diagnostics_contract");
+const sandbox_host_contracts = @import("sandbox_host_contracts");
 
-pub const Command = crates.Command;
-pub const Outcome = crates.Outcome;
-pub const SpawnCrate = crates.SpawnCrate;
-pub const DespawnEntity = crates.DespawnEntity;
-pub const ApplyImpulse = crates.ApplyImpulse;
-pub const RelocateCrate = crates.RelocateCrate;
-pub const RelocationVelocity = crates.RelocationVelocity;
-pub const Relocated = crates.Relocated;
-pub const CommandKind = crates.CommandKind;
-pub const RejectionReason = crates.RejectionReason;
-pub const CrateView = crates.CrateView;
-pub const CrateDraw = crates.CrateDraw;
-pub const Assets = crates.Assets;
-pub const PersistentId = engine.PersistentId;
+const Command = crates.Command;
+const Outcome = crates.Outcome;
+const CrateView = crates.CrateView;
+const CrateDraw = crates.CrateDraw;
+const PersistentId = engine.PersistentId;
 
-pub const CharacterCommand = characters.Command;
-pub const CharacterOutcome = characters.Outcome;
-pub const CharacterEvent = characters.Event;
-pub const SpawnCharacter = characters.SpawnCharacter;
-pub const DespawnCharacter = characters.DespawnCharacter;
-pub const CharacterView = characters.CharacterView;
-pub const CharacterDraw = characters.CharacterDraw;
-pub const CharacterConfig = characters.Config;
-pub const CharacterConfigV1 = characters.CharacterConfigV1;
-pub const GroundState = engine.physics.GroundState;
-pub const CrateV1 = crates.CrateV1;
-pub const CharacterV1 = characters.CharacterV1;
-pub const VehicleCommand = vehicles.Command;
-pub const VehicleOutcome = vehicles.Outcome;
-pub const VehicleEvent = vehicles.Event;
-pub const VehicleCommandRejected = vehicles.CommandRejected;
-pub const SpawnVehicle = vehicles.SpawnVehicle;
-pub const EnterVehicle = vehicles.EnterVehicle;
-pub const DriveVehicle = vehicles.DriveVehicle;
-pub const ExitVehicle = vehicles.ExitVehicle;
-pub const DespawnVehicle = vehicles.DespawnVehicle;
-pub const VehicleView = vehicles.VehicleView;
-pub const VehicleDraw = vehicles.VehicleDraw;
-pub const VehicleConfig = vehicles.Config;
-pub const VehicleConfigV1 = vehicles.VehicleConfigV1;
-pub const VehicleV1 = vehicles.VehicleV1;
-pub const DistrictCommand = districts.Command;
-pub const DistrictOutcome = districts.Outcome;
-pub const DistrictEvent = districts.Event;
-pub const DistrictDraw = districts.DistrictDraw;
-pub const DistrictAssets = districts.Assets;
-pub const DistrictStateTag = districts.StateTag;
-pub const DistrictV1 = districts.DistrictV1;
-pub const chunkCoordForWorldPosition = district_contract.chunkCoordForWorldPosition;
-pub const district_chunk_span = district_contract.chunk_span;
-pub const district_chunk_half_span = district_contract.chunk_half_span;
-pub const InteractionCommand = interactions.Command;
-pub const InteractionOutcome = interactions.Outcome;
-pub const SpawnCarryable = interactions.SpawnCarryable;
-pub const DespawnCarryable = interactions.DespawnCarryable;
-pub const CarryableView = interactions.CarryableView;
-pub const CarryableDraw = interactions.CarryableDraw;
-pub const InteractionConfig = interactions.Config;
-pub const InteractionConfigV1 = interactions.InteractionConfigV1;
-pub const InteractionV1 = interactions.InteractionV1;
-pub const NpcCommand = npcs.Command;
-pub const NpcOutcome = npcs.Outcome;
-pub const NpcEvent = npcs.Event;
-pub const SpawnNpc = npcs.SpawnNpc;
-pub const DespawnNpc = npcs.DespawnNpc;
-pub const NpcView = npcs.NpcView;
-pub const NpcDraw = npcs.NpcDraw;
-pub const NpcConfig = npcs.Config;
-pub const NpcConfigV1 = npcs.NpcConfigV1;
-pub const NpcV1 = npcs.NpcV1;
-pub const NpcGoal = npcs.Goal;
-pub const NpcState = npcs.State;
-pub const npc_capacity = npcs.max_npcs;
-pub const NavigationNodeRef = npcs.NodeRef;
-pub const NavigationNode = district_contract.NavigationNode;
-pub const NavigationEdge = district_contract.NavigationEdge;
-pub const navigation_west_coord = sandbox_district_recipe.navigation_west_coord;
-pub const navigation_east_coord = sandbox_district_recipe.navigation_east_coord;
-pub const district_presentation_policies = sandbox_district_recipe.presentation_policies;
-pub const ChunkCoord = district_contract.ChunkCoord;
-pub const LoadTicket = district_contract.LoadTicket;
-pub const DistrictBuild = district_contract.DistrictBuild;
-pub const FlightRecorderLimits = sandbox_replay.Limits;
-pub const FlightContentCohort = sandbox_replay.ContentCohort;
-pub const PhysicsDebugConfig = jolt.DebugConfig;
-pub const PhysicsDebugBatch = engine.physics_debug.Batch;
-pub const SaveDigest = sandbox_replay.Digest;
-pub const snapshot_schema: u16 = 7;
+const CharacterCommand = characters.Command;
+const CharacterOutcome = characters.Outcome;
+const CharacterEvent = characters.Event;
+const CharacterView = characters.CharacterView;
+const CharacterDraw = characters.CharacterDraw;
+const CharacterConfig = characters.Config;
+const CharacterConfigV1 = characters.CharacterConfigV1;
+const CrateV1 = crates.CrateV1;
+const CharacterV1 = characters.CharacterV1;
+const VehicleCommand = vehicles.Command;
+const VehicleOutcome = vehicles.Outcome;
+const VehicleEvent = vehicles.Event;
+const VehicleView = vehicles.VehicleView;
+const VehicleDraw = vehicles.VehicleDraw;
+const VehicleConfigV1 = vehicles.VehicleConfigV1;
+const VehicleV1 = vehicles.VehicleV1;
+const DistrictCommand = districts.Command;
+const DistrictOutcome = districts.Outcome;
+const DistrictEvent = districts.Event;
+const DistrictDraw = districts.DistrictDraw;
+const DistrictAssets = districts.Assets;
+const DistrictStateTag = districts.StateTag;
+const DistrictV1 = districts.DistrictV1;
+const InteractionCommand = interactions.Command;
+const InteractionOutcome = interactions.Outcome;
+const CarryableView = interactions.CarryableView;
+const CarryableDraw = interactions.CarryableDraw;
+const InteractionConfigV1 = interactions.InteractionConfigV1;
+const InteractionV1 = interactions.InteractionV1;
+const NpcCommand = npcs.Command;
+const NpcOutcome = npcs.Outcome;
+const NpcEvent = npcs.Event;
+const NpcView = npcs.NpcView;
+const NpcDraw = npcs.NpcDraw;
+const NpcConfigV1 = npcs.NpcConfigV1;
+const NpcV1 = npcs.NpcV1;
+const NpcState = npcs.State;
+const NavigationNodeRef = npcs.NodeRef;
+const navigation_west_coord = sandbox_district_recipe.navigation_west_coord;
+const navigation_east_coord = sandbox_district_recipe.navigation_east_coord;
+const ChunkCoord = district_contract.ChunkCoord;
+const LoadTicket = district_contract.LoadTicket;
+const PhysicsDebugConfig = engine.physics_debug.Config;
+const PhysicsDebugBatch = engine.physics_debug.Batch;
 
-pub const CharacterControllerDiagnostics = struct {
-    /// Physics-global CharacterVirtual handles owned by the shared Jolt world.
-    native_used: u32,
-    native_capacity: u32,
-    /// Controllers currently attached to character and NPC feature authority.
-    feature_owned: u32,
-    /// False exposes a leaked, duplicated, untracked, or over-capacity handle.
-    authority_consistent: bool,
-};
-
-pub const Diagnostics = struct {
-    tick_index: u64,
-    fixed_delta_seconds: f32,
-    first_fault: ?engine.runtime.RuntimeFault,
-    entity_count: u32,
-    body_count: u32,
-    active_body_count: u32,
-    character_controllers: CharacterControllerDiagnostics,
-    crates: crates.Diagnostics,
-    characters: characters.Diagnostics,
-    vehicles: vehicles.Diagnostics,
-    district: districts.Diagnostics,
-    interaction: interactions.Diagnostics,
-    npc: npcs.Diagnostics,
-    district_worker: district_worker.Diagnostics,
-};
+const Diagnostics = sandbox_diagnostics.Diagnostics;
 
 /// Process-lifecycle boundary for an operational host. Logical state may be
 /// serializable while process-local completions or worker ownership are still
@@ -144,10 +90,6 @@ pub const OperationalQuiescenceReason = enum {
     district_outcome_reservations,
     district_worker_busy,
 };
-
-fn diagnosticCount(value: usize) u32 {
-    return std.math.cast(u32, value) orelse std.math.maxInt(u32);
-}
 
 /// Caller-owned bounded storage for allocation-free logical digest extraction.
 /// One slice is reused serially by the runtime and every feature because each
@@ -204,126 +146,28 @@ const ActiveCapture = struct {
     }
 };
 
-/// Renderer-neutral logical recipe used to reject cooked visual/collision
-/// drift before the visual host submits a production district request.
-pub fn proceduralDistrictBuild(coord: ChunkCoord) !DistrictBuild {
-    return switch (sandbox_district_recipe.build(
-        coord,
-        sandbox_district_recipe.current_recipe_version,
-    )) {
-        .ready => |build| build,
-        .failed => error.InvalidDistrictRecipe,
-    };
-}
-
-pub const StaticBox = struct {
-    position: [3]f32,
-    half_extents: [3]f32,
-};
-
-pub const SnapshotV7 = struct {
-    schema_version: u16,
-    completed_ticks: u64,
-    fixed_delta_seconds: f32,
-    namespace: u64,
-    next_local_id: u64,
-    character_config: CharacterConfigV1,
-    vehicle_config: VehicleConfigV1,
-    interaction_config: InteractionConfigV1,
-    npc_config: NpcConfigV1,
-    crates: []const CrateV1,
-    characters: []const CharacterV1,
-    vehicles: []const VehicleV1,
-    districts: []const DistrictV1,
-    interactions: []const InteractionV1,
-    npcs: []const NpcV1,
-};
-
-pub const max_snapshot_bytes: usize = 8 * 1024 * 1024;
-
-const CrateFeature = crates.Feature(jolt.CrateBodies);
-const CharacterFeature = characters.Feature(jolt.CharacterControllers);
-const VehicleFeature = vehicles.Feature(jolt.Vehicles, CharacterFeature.DriverAccess);
-const DistrictFeature = districts.Feature(
+const CrateFeature = crate_implementation.Feature(jolt.CrateBodies);
+const CharacterFeature = character_implementation.Feature(jolt.CharacterControllers);
+const VehicleFeature = vehicle_implementation.Feature(
+    jolt.Vehicles,
+    CharacterFeature.DriverAccess,
+);
+const DistrictFeature = district_implementation.Feature(
     jolt.DistrictBodies,
     district_replay_loader.Loader,
     sandbox_district_recipe,
 );
-const InteractionFeature = interactions.Feature(
+const InteractionFeature = interaction_implementation.Feature(
     jolt.CrateBodies,
     CharacterFeature.CarrierAccess,
     DistrictFeature.DistrictAccess,
 );
-const NpcFeature = npcs.Feature(jolt.CharacterControllers, DistrictFeature.NavigationAccess);
+const NpcFeature = npc_implementation.Feature(
+    jolt.CharacterControllers,
+    DistrictFeature.NavigationAccess,
+);
 
-pub const Config = struct {
-    namespace: u64,
-    fixed_delta_seconds: f32 = 1.0 / 120.0,
-    max_crates: usize = 1024,
-    assets: Assets = .{},
-    create_ground: bool = true,
-    character: CharacterConfig = .{},
-    vehicle: VehicleConfig = .{},
-    interaction: InteractionConfig = .{},
-    npc: NpcConfig = .{},
-    block: ?StaticBox = null,
-};
-
-/// Exact cold construction identity used by replay and durable-save admission.
-/// Presentation assets are deliberately stripped by `WorldConfig`.
-pub fn worldConfig(config: Config) !sandbox_replay.WorldConfig {
-    return sandbox_replay.WorldConfig.fromFeatureConfigs(
-        config.namespace,
-        config.fixed_delta_seconds,
-        config.max_crates,
-        config.character,
-        config.vehicle,
-        config.interaction,
-        config.npc,
-        config.create_ground,
-        if (config.block) |block| .{
-            .position = block.position,
-            .half_extents = block.half_extents,
-        } else null,
-    );
-}
-
-pub fn currentSimulationBuildFingerprint() !SaveDigest {
-    return sandbox_replay.current_simulation_cohort.fingerprint();
-}
-
-pub fn worldConfigFingerprint(config: Config) !SaveDigest {
-    return (try worldConfig(config)).fingerprint();
-}
-
-pub const CharacterRestoreOptions = struct {
-    max_characters: usize = 1,
-    assets: characters.Assets = .{},
-};
-
-pub const VehicleRestoreOptions = struct {
-    max_vehicles: usize = 1,
-    assets: vehicles.Assets = .{},
-};
-
-pub const NpcRestoreOptions = struct {
-    /// S8 intentionally exposes one exact bounded NPC cohort. This is retained
-    /// in restore options so hostile or accidentally stale host capacities are
-    /// rejected before any Runtime, Flecs, or Jolt authority is acquired.
-    max_npcs: usize = npcs.max_npcs,
-    assets: npcs.Assets = .{},
-};
-
-pub const RestoreConfig = struct {
-    max_crates: usize = 1024,
-    assets: Assets = .{},
-    create_ground: bool = true,
-    character: CharacterRestoreOptions = .{},
-    vehicle: VehicleRestoreOptions = .{},
-    npc: NpcRestoreOptions = .{},
-    district_assets: DistrictAssets = .{},
-    block: ?StaticBox = null,
-};
+const Config = sandbox_host_contracts.Config;
 
 /// Explicitly composed only by the installed S4 retained-fault smoke. Normal
 /// sandbox, headless, replay, save, and M3 products never register this
@@ -408,9 +252,9 @@ pub const Simulation = struct {
     pub fn fromSnapshot(
         allocator: std.mem.Allocator,
         bytes: []const u8,
-        config: RestoreConfig,
+        config: simulation_snapshot.RestoreConfig,
     ) !Simulation {
-        var parsed = try parseSnapshot(
+        var parsed = try simulation_snapshot.parse(
             allocator,
             bytes,
             config.max_crates,
@@ -433,7 +277,7 @@ pub const Simulation = struct {
         expected: Config,
         district_assets: DistrictAssets,
     ) !Simulation {
-        var parsed = try parseSnapshot(
+        var parsed = try simulation_snapshot.parse(
             allocator,
             bytes,
             expected.max_crates,
@@ -442,7 +286,7 @@ pub const Simulation = struct {
             npcs.max_npcs,
         );
         defer parsed.deinit();
-        try validateSnapshotWorldConfig(parsed.value, expected);
+        try simulation_snapshot.validateWorldConfig(parsed.value, expected);
 
         return fromValidatedSnapshot(allocator, parsed.value, .{
             .max_crates = expected.max_crates,
@@ -467,8 +311,8 @@ pub const Simulation = struct {
 
     fn fromValidatedSnapshot(
         allocator: std.mem.Allocator,
-        snapshot: SnapshotV7,
-        config: RestoreConfig,
+        snapshot: simulation_snapshot.SnapshotV7,
+        config: simulation_snapshot.RestoreConfig,
     ) !Simulation {
         try validateNpcLimit(config.npc.max_npcs);
         const character_config = try snapshot.character_config.toConfig(
@@ -775,7 +619,7 @@ pub const Simulation = struct {
     }
 
     fn replayWorldConfig(self: *Simulation) !sandbox_replay.WorldConfig {
-        return worldConfig(self.state.config);
+        return simulation_snapshot.worldConfig(self.state.config);
     }
 
     fn hasPendingCommands(self: *const Simulation) bool {
@@ -1098,15 +942,7 @@ pub const Simulation = struct {
 
     pub fn save(self: *Simulation, allocator: std.mem.Allocator) ![]u8 {
         try self.state.runtime.ensureSnapshotBoundary();
-        if (self.state.crate_feature.hasPendingCommands() or
-            self.state.character_feature.hasPendingCommands() or
-            self.state.district_feature.hasPendingCommands() or
-            self.state.interaction_feature.hasPendingCommands() or
-            self.state.vehicle_feature.hasPendingCommands() or
-            self.state.npc_feature.hasPendingCommands())
-        {
-            return error.CommandsPending;
-        }
+        if (self.hasPendingCommands()) return error.CommandsPending;
         const crate_records = try self.state.crate_feature.snapshotRecords(allocator);
         defer allocator.free(crate_records);
         const character_records = try self.state.character_feature.snapshotRecords(allocator);
@@ -1119,29 +955,34 @@ pub const Simulation = struct {
         defer allocator.free(interaction_records);
         const npc_records = try self.state.npc_feature.snapshotRecords(allocator);
         defer allocator.free(npc_records);
-        return std.json.Stringify.valueAlloc(allocator, SnapshotV7{
-            .schema_version = snapshot_schema,
+        return simulation_snapshot.encode(allocator, .{
+            .schema_version = simulation_snapshot.schema_version,
             .completed_ticks = self.state.runtime.tickIndex(),
             .fixed_delta_seconds = self.state.runtime.fixedDelta(),
             .namespace = self.state.runtime.namespace(),
             .next_local_id = try self.state.runtime.nextLocalId(),
-            .character_config = CharacterConfigV1.fromConfig(
+            .character_config = characters.CharacterConfigV1.fromConfig(
                 self.state.character_feature.config,
             ),
-            .vehicle_config = VehicleConfigV1.fromConfig(
+            .vehicle_config = vehicles.VehicleConfigV1.fromConfig(
                 self.state.vehicle_feature.config,
             ),
-            .interaction_config = InteractionConfigV1.fromConfig(
+            .interaction_config = interactions.InteractionConfigV1.fromConfig(
                 self.state.interaction_feature.config,
             ),
-            .npc_config = NpcConfigV1.fromConfig(self.state.npc_feature.config),
+            .npc_config = npcs.NpcConfigV1.fromConfig(self.state.npc_feature.config),
             .crates = crate_records,
             .characters = character_records,
             .vehicles = vehicle_records,
             .districts = district_records,
             .interactions = interaction_records,
             .npcs = npc_records,
-        }, .{});
+        }, .{
+            .max_crates = self.state.config.max_crates,
+            .max_characters = self.state.config.character.max_characters,
+            .max_vehicles = self.state.config.vehicle.max_vehicles,
+            .max_npcs = npcs.max_npcs,
+        });
     }
 
     pub fn crateCount(self: *const Simulation) usize {
@@ -1200,7 +1041,7 @@ pub const Simulation = struct {
         return self.state.runtime.entityCount();
     }
 
-    pub fn bodyCount(self: *Simulation) u32 {
+    pub fn bodyCount(self: *const Simulation) u32 {
         self.state.runtime.assertOwnerThread();
         return self.state.bodies.bodyCount();
     }
@@ -1305,32 +1146,17 @@ pub const Simulation = struct {
         const native_capacity_count = self.state.controllers.controllerCapacity();
         const npc_native_used_count = self.state.npc_controllers.controllerCount();
         const npc_native_capacity_count = self.state.npc_controllers.controllerCapacity();
-        const native_used = diagnosticCount(native_used_count);
-        const native_capacity = diagnosticCount(native_capacity_count);
-        const feature_owned = std.math.add(
-            u32,
-            character_diagnostics.active_count,
-            npc_diagnostics.controller_count,
-        ) catch std.math.maxInt(u32);
-        return .{
+        return simulation_diagnostics.compose(.{
             .tick_index = self.state.runtime.tickIndex(),
             .fixed_delta_seconds = self.state.runtime.fixedDelta(),
             .first_fault = self.state.runtime.firstFault(),
-            .entity_count = std.math.cast(
-                u32,
-                self.state.runtime.entityCount(),
-            ) orelse std.math.maxInt(u32),
+            .entity_count = self.state.runtime.entityCount(),
             .body_count = self.state.bodies.bodyCount(),
             .active_body_count = self.state.bodies.activeBodyCount(),
-            .character_controllers = .{
-                .native_used = native_used,
-                .native_capacity = native_capacity,
-                .feature_owned = feature_owned,
-                .authority_consistent = native_used_count == npc_native_used_count and
-                    native_capacity_count == npc_native_capacity_count and
-                    native_used <= native_capacity and
-                    native_used == feature_owned,
-            },
+            .character_native_used = native_used_count,
+            .character_native_capacity = native_capacity_count,
+            .npc_native_used = npc_native_used_count,
+            .npc_native_capacity = npc_native_capacity_count,
             .crates = self.state.crate_feature.diagnostics(),
             .characters = character_diagnostics,
             .vehicles = self.state.vehicle_feature.diagnostics(),
@@ -1338,7 +1164,7 @@ pub const Simulation = struct {
             .interaction = self.state.interaction_feature.diagnostics(),
             .npc = npc_diagnostics,
             .district_worker = self.state.district_loader.diagnostics(),
-        };
+        });
     }
 
     pub fn recordDiagnostic(
@@ -1389,7 +1215,7 @@ pub fn replayCapture(
     try capture.validate(.{});
     try capture.validateCompatible(expected_content);
 
-    const config = try configFromReplayWorld(capture.world);
+    const config = try simulation_snapshot.configFromReplayWorld(capture.world);
     var simulation = try Simulation.initOwnedUnfrozen(
         allocator,
         config,
@@ -1451,29 +1277,6 @@ pub fn replayCapture(
     return .{ .matched = .{ .completed_ticks = simulation.tickIndex() } };
 }
 
-fn configFromReplayWorld(world: sandbox_replay.WorldConfig) !Config {
-    try world.validate();
-    const max_characters = std.math.cast(usize, world.max_characters) orelse
-        return error.WorldCapacityOutOfRange;
-    const max_vehicles = std.math.cast(usize, world.max_vehicles) orelse
-        return error.WorldCapacityOutOfRange;
-    return .{
-        .namespace = world.namespace,
-        .fixed_delta_seconds = world.fixed_delta_seconds,
-        .max_crates = std.math.cast(usize, world.max_crates) orelse
-            return error.WorldCapacityOutOfRange,
-        .create_ground = world.ground != null,
-        .character = try world.character.toConfig(max_characters, .{}),
-        .vehicle = try world.vehicle.toConfig(max_vehicles, .{}),
-        .interaction = try world.interaction.toConfig(),
-        .npc = try world.npc.toConfig(.{}),
-        .block = if (world.block) |block| .{
-            .position = block.position,
-            .half_extents = block.half_extents,
-        } else null,
-    };
-}
-
 fn submitNormalized(
     simulation: *Simulation,
     command: sandbox_replay.NormalizedCommand,
@@ -1499,248 +1302,6 @@ fn drainReplayOutputs(simulation: *Simulation) void {
     while (simulation.pollInteractionOutcome() != null) {}
     while (simulation.pollNpcOutcome() != null) {}
     while (simulation.pollNpcEvent() != null) {}
-}
-
-pub fn parseSnapshot(
-    allocator: std.mem.Allocator,
-    bytes: []const u8,
-    max_crates: usize,
-    max_characters: usize,
-    max_vehicles: usize,
-    max_npcs: usize,
-) !std.json.Parsed(SnapshotV7) {
-    if (bytes.len > max_snapshot_bytes) return error.SnapshotTooLarge;
-    var parsed = try std.json.parseFromSlice(SnapshotV7, allocator, bytes, .{});
-    errdefer parsed.deinit();
-    try validateSnapshot(
-        parsed.value,
-        max_crates,
-        max_characters,
-        max_vehicles,
-        max_npcs,
-    );
-    return parsed;
-}
-
-/// Bind the construction fields persisted inside a snapshot to the exact
-/// authoritative world admitted by its surrounding save envelope. Capacities,
-/// presentation assets, ground, and block remain host-owned inputs; namespace,
-/// fixed delta, and feature tuning must reproduce the same canonical world
-/// fingerprint before restore may construct authority.
-pub fn validateSnapshotWorldConfig(snapshot: SnapshotV7, expected: Config) !void {
-    const snapshot_character = try snapshot.character_config.toConfig(
-        expected.character.max_characters,
-        expected.character.assets,
-    );
-    const snapshot_vehicle = try snapshot.vehicle_config.toConfig(
-        expected.vehicle.max_vehicles,
-        expected.vehicle.assets,
-    );
-    const snapshot_interaction = try snapshot.interaction_config.toConfig();
-    const snapshot_npc = try snapshot.npc_config.toConfig(expected.npc.assets);
-    const embedded = try worldConfig(.{
-        .namespace = snapshot.namespace,
-        .fixed_delta_seconds = snapshot.fixed_delta_seconds,
-        .max_crates = expected.max_crates,
-        .assets = expected.assets,
-        .create_ground = expected.create_ground,
-        .character = snapshot_character,
-        .vehicle = snapshot_vehicle,
-        .interaction = snapshot_interaction,
-        .npc = snapshot_npc,
-        .block = expected.block,
-    });
-    const embedded_digest = try embedded.fingerprint();
-    const expected_digest = try worldConfigFingerprint(expected);
-    if (!std.mem.eql(u8, &embedded_digest, &expected_digest)) {
-        return error.SnapshotWorldConfigMismatch;
-    }
-}
-
-pub fn validateSnapshot(
-    snapshot: SnapshotV7,
-    max_crates: usize,
-    max_characters: usize,
-    max_vehicles: usize,
-    max_npcs: usize,
-) !void {
-    if (snapshot.schema_version != snapshot_schema) return error.UnsupportedSchemaVersion;
-    if (snapshot.namespace == 0) return error.InvalidIdentityNamespace;
-    if (snapshot.next_local_id == 0) return error.InvalidIdentityCursor;
-    if (!std.math.isFinite(snapshot.fixed_delta_seconds) or
-        snapshot.fixed_delta_seconds <= 0)
-    {
-        return error.InvalidFixedDelta;
-    }
-    try snapshot.character_config.validate();
-    try snapshot.vehicle_config.validate();
-    try snapshot.interaction_config.validate();
-    try snapshot.npc_config.validate();
-    try validateNpcLimit(max_npcs);
-    try validateVirtualCharacterBudget(max_characters, max_npcs);
-    try crates.validateRecords(snapshot.crates, max_crates);
-    if (snapshot.characters.len > max_characters) return error.TooManyCharacters;
-    try vehicles.validateRecords(snapshot.vehicles, max_vehicles);
-    try districts.validateRecords(sandbox_district_recipe, snapshot.districts);
-    try interactions.validateRecords(snapshot.interactions);
-    var canonical_navigation = sandbox_navigation.CanonicalAccess{};
-    try npcs.validateRecordsWithNavigation(&canonical_navigation, snapshot.npcs);
-
-    for (snapshot.crates) |record| {
-        try validateSnapshotIdentity(record.id, snapshot);
-    }
-    for (snapshot.characters, 0..) |record, index| {
-        try characters.validateRecord(record);
-        try validateSnapshotIdentity(record.id, snapshot);
-        for (snapshot.characters[0..index]) |earlier| {
-            if (std.meta.eql(earlier.id, record.id)) return error.DuplicatePersistentId;
-        }
-        for (snapshot.crates) |crate_record| {
-            if (std.meta.eql(crate_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-    }
-    for (snapshot.vehicles, 0..) |record, index| {
-        try validateSnapshotIdentity(record.id, snapshot);
-        for (snapshot.crates) |crate_record| {
-            if (std.meta.eql(crate_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-        for (snapshot.characters) |character_record| {
-            if (std.meta.eql(character_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-        if (record.driver_id) |driver_id| {
-            try validateSnapshotIdentity(driver_id, snapshot);
-            var found = false;
-            for (snapshot.characters) |character_record| {
-                if (std.meta.eql(character_record.id, driver_id)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (!found) return error.VehicleDriverNotFound;
-            for (snapshot.vehicles[0..index]) |earlier| {
-                if (earlier.driver_id) |earlier_driver| {
-                    if (std.meta.eql(earlier_driver, driver_id)) {
-                        return error.DuplicateVehicleDriver;
-                    }
-                }
-            }
-        }
-    }
-    for (snapshot.districts) |record| {
-        try validateSnapshotIdentity(record.id, snapshot);
-        for (snapshot.crates) |crate_record| {
-            if (std.meta.eql(crate_record.id, record.id)) return error.DuplicatePersistentId;
-        }
-        for (snapshot.characters) |character_record| {
-            if (std.meta.eql(character_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-        for (snapshot.vehicles) |vehicle_record| {
-            if (std.meta.eql(vehicle_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-    }
-    for (snapshot.interactions, 0..) |record, index| {
-        try validateSnapshotIdentity(record.id, snapshot);
-        for (snapshot.crates) |crate_record| {
-            if (std.meta.eql(crate_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-        for (snapshot.characters) |character_record| {
-            if (std.meta.eql(character_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-        for (snapshot.vehicles) |vehicle_record| {
-            if (std.meta.eql(vehicle_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-        for (snapshot.districts) |district_record| {
-            if (std.meta.eql(district_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-        for (snapshot.interactions[0..index]) |earlier| {
-            if (std.meta.eql(earlier.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-
-        switch (record.ownership) {
-            .district_owned => {},
-            .inventory_held => |holder| {
-                try validateSnapshotIdentity(holder, snapshot);
-                var holder_found = false;
-                for (snapshot.characters) |character_record| {
-                    if (std.meta.eql(character_record.id, holder)) {
-                        holder_found = true;
-                        break;
-                    }
-                }
-                if (!holder_found) return error.InteractionHolderNotFound;
-                for (snapshot.vehicles) |vehicle_record| {
-                    if (vehicle_record.driver_id) |driver_id| {
-                        if (std.meta.eql(driver_id, holder)) {
-                            return error.InteractionHolderDriving;
-                        }
-                    }
-                }
-                for (snapshot.interactions[0..index]) |earlier| {
-                    switch (earlier.ownership) {
-                        .district_owned => {},
-                        .inventory_held => |earlier_holder| {
-                            if (std.meta.eql(earlier_holder, holder)) {
-                                return error.DuplicateInteractionHolder;
-                            }
-                        },
-                    }
-                }
-            },
-        }
-    }
-    for (snapshot.npcs) |record| {
-        try validateSnapshotIdentity(record.id, snapshot);
-        for (snapshot.crates) |crate_record| {
-            if (std.meta.eql(crate_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-        for (snapshot.characters) |character_record| {
-            if (std.meta.eql(character_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-        for (snapshot.vehicles) |vehicle_record| {
-            if (std.meta.eql(vehicle_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-        for (snapshot.districts) |district_record| {
-            if (std.meta.eql(district_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-        for (snapshot.interactions) |interaction_record| {
-            if (std.meta.eql(interaction_record.id, record.id)) {
-                return error.DuplicatePersistentId;
-            }
-        }
-    }
-}
-
-fn validateSnapshotIdentity(id: engine.PersistentId, snapshot: SnapshotV7) !void {
-    if (id.namespace != snapshot.namespace) return error.ForeignIdentityNamespace;
-    if (id.local >= snapshot.next_local_id) return error.IdentityCursorWouldCollide;
 }
 
 fn validateNpcLimit(max_npcs: usize) !void {
@@ -1806,7 +1367,7 @@ test "simulation diagnostics compose typed feature queues and adapter counts" {
 
     var snapshot = simulation.diagnostics();
     try std.testing.expectEqual(@as(u64, 0), snapshot.tick_index);
-    try std.testing.expectEqual(@as(f32, 1.0 / 120.0), snapshot.fixed_delta_seconds);
+    try std.testing.expectEqual(@as(f32, 1.0 / 60.0), snapshot.fixed_delta_seconds);
     try std.testing.expect(snapshot.first_fault == null);
     try std.testing.expectEqual(@as(u32, 0), snapshot.entity_count);
     try std.testing.expectEqual(@as(u32, 0), snapshot.body_count);
@@ -1818,7 +1379,10 @@ test "simulation diagnostics compose typed feature queues and adapter counts" {
     );
     try std.testing.expectEqual(@as(u32, 0), snapshot.character_controllers.feature_owned);
     try std.testing.expect(snapshot.character_controllers.authority_consistent);
-    try std.testing.expectEqual(district_worker.WorkerState.idle, snapshot.district_worker.state);
+    try std.testing.expectEqual(
+        district_worker_contract.WorkerState.idle,
+        snapshot.district_worker.state,
+    );
 
     try simulation.submit(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
     try simulation.submit(.{ .spawn = .{ .request_id = 2, .pose = .{} } });
@@ -2774,8 +2338,8 @@ test "snapshot owns character tuning and preserves canonical yaw bytes" {
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = tiny_yaw,
     }};
-    const initial = try std.json.Stringify.valueAlloc(allocator, SnapshotV7{
-        .schema_version = snapshot_schema,
+    const initial = try simulation_snapshot.encode(allocator, .{
+        .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 3,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 75,
@@ -2790,7 +2354,7 @@ test "snapshot owns character tuning and preserves canonical yaw bytes" {
         .districts = &.{},
         .interactions = &.{},
         .npcs = &.{},
-    }, .{});
+    }, .{ .max_characters = 2 });
     defer allocator.free(initial);
 
     const restore_assets = characters.Assets{
@@ -2905,8 +2469,8 @@ test "snapshot tuning and host character capacity fail before world construction
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
     }};
-    var snapshot = SnapshotV7{
-        .schema_version = snapshot_schema,
+    var snapshot = simulation_snapshot.SnapshotV7{
+        .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 76,
@@ -3144,8 +2708,8 @@ test "V7 validation owns schema cursor and cross-feature identity policy" {
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
     }};
-    const snapshot = SnapshotV7{
-        .schema_version = snapshot_schema,
+    const snapshot = simulation_snapshot.SnapshotV7{
+        .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 73,
@@ -3163,20 +2727,20 @@ test "V7 validation owns schema cursor and cross-feature identity policy" {
     };
     try std.testing.expectError(
         error.DuplicatePersistentId,
-        validateSnapshot(snapshot, 8, 1, 1, npcs.max_npcs),
+        simulation_snapshot.validate(snapshot, 8, 1, 1, npcs.max_npcs),
     );
     var wrong_schema = snapshot;
     wrong_schema.schema_version = 1;
     try std.testing.expectError(
         error.UnsupportedSchemaVersion,
-        validateSnapshot(wrong_schema, 8, 1, 1, npcs.max_npcs),
+        simulation_snapshot.validate(wrong_schema, 8, 1, 1, npcs.max_npcs),
     );
     var colliding_cursor = snapshot;
     colliding_cursor.characters = &.{};
     colliding_cursor.next_local_id = 1;
     try std.testing.expectError(
         error.IdentityCursorWouldCollide,
-        validateSnapshot(colliding_cursor, 8, 1, 1, npcs.max_npcs),
+        simulation_snapshot.validate(colliding_cursor, 8, 1, 1, npcs.max_npcs),
     );
 
     const build = sandbox_district_recipe.build(
@@ -3194,7 +2758,7 @@ test "V7 validation owns schema cursor and cross-feature identity policy" {
     district_collision.districts = &district_records;
     try std.testing.expectError(
         error.DuplicatePersistentId,
-        validateSnapshot(district_collision, 8, 1, 1, npcs.max_npcs),
+        simulation_snapshot.validate(district_collision, 8, 1, 1, npcs.max_npcs),
     );
 }
 
@@ -3239,8 +2803,8 @@ test "V7 validation rejects missing and multiply assigned vehicle drivers" {
             .driver_id = .{ .namespace = 731, .local = 1 },
         },
     };
-    const snapshot = SnapshotV7{
-        .schema_version = snapshot_schema,
+    const snapshot = simulation_snapshot.SnapshotV7{
+        .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 731,
@@ -3259,18 +2823,18 @@ test "V7 validation rejects missing and multiply assigned vehicle drivers" {
 
     try std.testing.expectError(
         error.DuplicateVehicleDriver,
-        validateSnapshot(snapshot, 0, 2, 2, npcs.max_npcs),
+        simulation_snapshot.validate(snapshot, 0, 2, 2, npcs.max_npcs),
     );
 
     vehicle_records[1].driver_id = .{ .namespace = 731, .local = 2 };
     vehicle_records[0].driver_id = .{ .namespace = 731, .local = 99 };
     try std.testing.expectError(
         error.VehicleDriverNotFound,
-        validateSnapshot(snapshot, 0, 2, 2, npcs.max_npcs),
+        simulation_snapshot.validate(snapshot, 0, 2, 2, npcs.max_npcs),
     );
 
     vehicle_records[0].driver_id = .{ .namespace = 731, .local = 1 };
-    try validateSnapshot(snapshot, 0, 2, 2, npcs.max_npcs);
+    try simulation_snapshot.validate(snapshot, 0, 2, 2, npcs.max_npcs);
 }
 
 test "V7 interaction preflight rejects holder conflicts before acquiring authority" {
@@ -3304,8 +2868,8 @@ test "V7 interaction preflight rejects holder conflicts before acquiring authori
         .linear_velocity = .{ 0, 0, 0 },
         .angular_velocity = .{ 0, 0, 0 },
     }};
-    const snapshot = SnapshotV7{
-        .schema_version = snapshot_schema,
+    const snapshot = simulation_snapshot.SnapshotV7{
+        .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = character_id.namespace,
@@ -3324,7 +2888,7 @@ test "V7 interaction preflight rejects holder conflicts before acquiring authori
 
     try std.testing.expectError(
         error.InteractionHolderDriving,
-        validateSnapshot(snapshot, 1, 1, 1, npcs.max_npcs),
+        simulation_snapshot.validate(snapshot, 1, 1, 1, npcs.max_npcs),
     );
 
     const invalid_bytes = try std.json.Stringify.valueAlloc(allocator, snapshot, .{});
@@ -3344,15 +2908,15 @@ test "V7 interaction preflight rejects holder conflicts before acquiring authori
     interaction_records[0].ownership = .{ .inventory_held = vehicle_id };
     try std.testing.expectError(
         error.InteractionHolderNotFound,
-        validateSnapshot(snapshot, 1, 1, 1, npcs.max_npcs),
+        simulation_snapshot.validate(snapshot, 1, 1, 1, npcs.max_npcs),
     );
     interaction_records[0].ownership = .{ .inventory_held = character_id };
-    try validateSnapshot(snapshot, 1, 1, 1, npcs.max_npcs);
+    try simulation_snapshot.validate(snapshot, 1, 1, 1, npcs.max_npcs);
 
     interaction_records[0].id = vehicle_id;
     try std.testing.expectError(
         error.DuplicatePersistentId,
-        validateSnapshot(snapshot, 1, 1, 1, npcs.max_npcs),
+        simulation_snapshot.validate(snapshot, 1, 1, 1, npcs.max_npcs),
     );
 }
 
@@ -3363,7 +2927,7 @@ test "interaction composes real Jolt drop collect and held restore transactional
     const district_id = engine.PersistentId{ .namespace = namespace, .local = 2 };
     const carryable_id = engine.PersistentId{ .namespace = namespace, .local = 3 };
     const coord = ChunkCoord{ .x = 0, .z = 0 };
-    const build = try proceduralDistrictBuild(coord);
+    const build = try sandbox_host_contracts.proceduralDistrictBuild(coord);
     const character_records = [_]CharacterV1{.{
         .id = character_id,
         .position = .{ 0, 0, 0 },
@@ -3384,8 +2948,8 @@ test "interaction composes real Jolt drop collect and held restore transactional
         .linear_velocity = .{ 0, 0, 0 },
         .angular_velocity = .{ 0, 0, 0 },
     }};
-    const initial = try std.json.Stringify.valueAlloc(allocator, SnapshotV7{
-        .schema_version = snapshot_schema,
+    const initial = try simulation_snapshot.encode(allocator, .{
+        .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = namespace,
@@ -3668,8 +3232,8 @@ test "NPC capacity and hostile V7 snapshots fail before world authority" {
     };
     var hostile_npc = valid_npc;
     hostile_npc.position = .{ 9, 0, 3 };
-    var snapshot = SnapshotV7{
-        .schema_version = snapshot_schema,
+    var snapshot = simulation_snapshot.SnapshotV7{
+        .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 8_111,
@@ -3719,7 +3283,7 @@ test "NPC capacity and hostile V7 snapshots fail before world authority" {
     snapshot.crates = &.{duplicate_crate};
     try std.testing.expectError(
         error.DuplicatePersistentId,
-        validateSnapshot(snapshot, 1, 1, 1, npcs.max_npcs),
+        simulation_snapshot.validate(snapshot, 1, 1, 1, npcs.max_npcs),
     );
 }
 

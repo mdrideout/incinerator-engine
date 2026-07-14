@@ -2,6 +2,16 @@
 
 const std = @import("std");
 const simulation = @import("sandbox_simulation");
+const simulation_snapshot = @import("simulation_snapshot");
+const crate_contract = @import("crate_contract");
+const character_contract = @import("character_contract");
+const vehicle_contract = @import("vehicle_contract");
+const district_contract = @import("district_contract");
+const district_feature_contract = @import("district_feature_contract");
+const interaction_contract = @import("interaction_feature_contract");
+const npc_contract = @import("npc_contract");
+const sandbox_contracts = @import("sandbox_host_contracts");
+const sandbox_diagnostics = @import("sandbox_diagnostics_contract");
 const sandbox_replay = @import("sandbox_replay");
 const authoring = @import("sandbox_authoring");
 const developer_diagnostics = @import("developer_diagnostics");
@@ -14,14 +24,15 @@ const headless_clock = @import("headless_clock");
 const macos_signals = @import("macos_signals");
 const headless_authority = @import("headless_authority");
 
-const DeveloperSnapshot = developer_diagnostics.Snapshot(simulation.Diagnostics);
-const DeveloperExport = developer_diagnostics.Export(simulation.Diagnostics);
+const DeveloperSnapshot = developer_diagnostics.Snapshot(sandbox_diagnostics.Diagnostics);
+const DeveloperExport = developer_diagnostics.Export(sandbox_diagnostics.Diagnostics);
 
 fn developerSnapshot(world: *simulation.Simulation) DeveloperSnapshot {
     const journal = world.diagnosticJournal().stats();
     return .{
         .frame_index = null,
         .simulation = world.diagnostics(),
+        .authority_session = null,
         .content_worker = null,
         .district_streams = null,
         .gpu = null,
@@ -88,7 +99,7 @@ const OperationalConsumers = struct {
 
 const SyntheticProducers = struct {
     handles: [2]headless_authority.ProducerHandle,
-    crate_id: ?simulation.PersistentId = null,
+    crate_id: ?engine.PersistentId = null,
     spawn_pending: bool = false,
     next_sequence: [2]u64 = .{ 1, 1 },
     submitted: [2]u64 = .{ 0, 0 },
@@ -110,7 +121,7 @@ const SyntheticProducers = struct {
             const count = authority.world.diagnostics().crates.active_count;
             if (count > 1) return error.HeadlessSyntheticWorldShapeMismatch;
             if (count == 1) {
-                const id = simulation.PersistentId{ .namespace = namespace, .local = 1 };
+                const id = engine.PersistentId{ .namespace = namespace, .local = 1 };
                 _ = try authority.world.crate(id);
                 result.crate_id = id;
             }
@@ -276,9 +287,9 @@ pub fn main(init: std.process.Init) !void {
 
     const world_config = simulationConfig(parsed_config.value);
     const metadata = sandbox_save.Metadata{
-        .payload_schema = simulation.snapshot_schema,
-        .simulation_build_digest = try simulation.currentSimulationBuildFingerprint(),
-        .world_config_digest = try simulation.worldConfigFingerprint(world_config),
+        .payload_schema = sandbox_contracts.snapshot_schema,
+        .simulation_build_digest = try simulation_snapshot.currentSimulationBuildFingerprint(),
+        .world_config_digest = try simulation_snapshot.worldConfigFingerprint(world_config),
         .content_digest = content_digest,
     };
 
@@ -520,7 +531,7 @@ fn writeOperationalSummary(io: std.Io, summary: OperationalSummary) !void {
     try stdout_writer.interface.flush();
 }
 
-fn simulationConfig(config: headless_config.ConfigV1) simulation.Config {
+fn simulationConfig(config: headless_config.ConfigV1) sandbox_contracts.Config {
     return .{
         .namespace = config.world.namespace,
         .max_crates = config.world.max_crates,
@@ -684,7 +695,7 @@ fn runSandbox(world: *simulation.Simulation) !void {
     // a silent omission or infrastructure fault in the SDL-free host.
     try world.submitNpc(.{ .spawn = .{
         .request_id = 3,
-        .node = .{ .coord = simulation.navigation_west_coord, .index = 0 },
+        .node = .{ .coord = sandbox_contracts.navigation_west_coord, .index = 0 },
         .goal = .hold,
     } });
     try world.tick();
@@ -816,7 +827,7 @@ test "headless host exports the shared typed diagnostics as text and JSON" {
         snapshot,
     );
     defer std.testing.allocator.free(text_value);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "diagnostics_v4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "diagnostics_v5") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "tick=0") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "journal=1/256") != null);
     try std.testing.expect(std.mem.indexOf(
@@ -957,7 +968,7 @@ test "successful headless authority is not failed by diagnostic allocation loss"
 test "real Jolt lifecycle saves destroys restores and destroys" {
     const allocator = std.testing.allocator;
     var saved: []u8 = undefined;
-    var stable_id: simulation.PersistentId = undefined;
+    var stable_id: engine.PersistentId = undefined;
     var saved_position: [3]f32 = undefined;
     var saved_linear_velocity: [3]f32 = undefined;
     var saved_angular_velocity: [3]f32 = undefined;
@@ -1041,8 +1052,8 @@ test "real Jolt lifecycle saves destroys restores and destroys" {
 test "V7 snapshot composes crate character and empty NPC records under one runtime envelope" {
     const allocator = std.testing.allocator;
     var saved: []u8 = undefined;
-    var crate_id: simulation.PersistentId = undefined;
-    var character_id: simulation.PersistentId = undefined;
+    var crate_id: engine.PersistentId = undefined;
+    var character_id: engine.PersistentId = undefined;
     var character_position: [3]f32 = undefined;
     {
         var world = try simulation.Simulation.init(allocator, .{ .namespace = 706 });
@@ -1156,9 +1167,9 @@ test "a stale domain command is rejected without faulting or aliasing" {
     try world.tick();
     switch (world.pollOutcome().?) {
         .rejected => |rejected| {
-            try std.testing.expectEqual(simulation.CommandKind.despawn, rejected.command);
+            try std.testing.expectEqual(crate_contract.CommandKind.despawn, rejected.command);
             try std.testing.expectEqual(
-                simulation.RejectionReason.crate_not_found,
+                crate_contract.RejectionReason.crate_not_found,
                 rejected.reason,
             );
         },
@@ -1186,7 +1197,7 @@ const timeline_tolerance: f32 = 0.00001;
 
 fn captureTimelineSample(
     world: *simulation.Simulation,
-    id: simulation.PersistentId,
+    id: engine.PersistentId,
 ) !TimelineSample {
     const view = try world.crate(id);
     return .{
@@ -1198,7 +1209,7 @@ fn captureTimelineSample(
 }
 
 fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
-    const crate_records = [_]simulation.CrateV1{.{
+    const crate_records = [_]crate_contract.CrateV1{.{
         .id = .{ .namespace = 99, .local = 1 },
         .half_extents = .{ 0.5, 0.75, 0.25 },
         .pose = .{
@@ -1208,16 +1219,16 @@ fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
         .linear_velocity = .{ 0.5, 0.25, -0.25 },
         .angular_velocity = .{ 0.1, 0.2, 0.3 },
     }};
-    const initial = simulation.SnapshotV7{
-        .schema_version = simulation.snapshot_schema,
+    const initial = simulation_snapshot.SnapshotV7{
+        .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 10,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 99,
         .next_local_id = 2,
-        .character_config = simulation.CharacterConfigV1.fromConfig(.{}),
-        .vehicle_config = simulation.VehicleConfigV1.fromConfig(.{}),
-        .interaction_config = simulation.InteractionConfigV1.fromConfig(.{}),
-        .npc_config = simulation.NpcConfigV1.fromConfig(.{}),
+        .character_config = character_contract.CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
+        .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
+        .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
         .crates = &crate_records,
         .characters = &.{},
         .vehicles = &.{},
@@ -1229,7 +1240,7 @@ fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
     defer allocator.free(initial_v7);
     var world = try simulation.Simulation.fromSnapshot(allocator, initial_v7, .{});
     defer world.deinit();
-    const id = simulation.PersistentId{ .namespace = 99, .local = 1 };
+    const id = engine.PersistentId{ .namespace = 99, .local = 1 };
     var samples: [4]TimelineSample = undefined;
     samples[0] = try captureTimelineSample(&world, id);
     for (0..5) |_| try world.tick();
@@ -1277,7 +1288,7 @@ const CharacterTimelineSample = struct {
     position: [3]f32,
     velocity: [3]f32,
     facing_yaw: f32,
-    ground_state: simulation.GroundState,
+    ground_state: engine.physics.GroundState,
 };
 
 fn runCharacterTimeline() ![4]CharacterTimelineSample {
@@ -1319,7 +1330,7 @@ fn runCharacterTimeline() ![4]CharacterTimelineSample {
 
 fn characterTimelineSample(
     world: *simulation.Simulation,
-    id: simulation.PersistentId,
+    id: engine.PersistentId,
 ) CharacterTimelineSample {
     const view = world.character(id) catch unreachable;
     return .{
@@ -1424,7 +1435,7 @@ test "live-world restore fails cleanly and leaves the caller usable" {
 
 test "multi-record V7 save is sorted and byte-stable across fresh restore" {
     const allocator = std.testing.allocator;
-    const crate_records = [_]simulation.CrateV1{
+    const crate_records = [_]crate_contract.CrateV1{
         .{
             .id = .{ .namespace = 700, .local = 7 },
             .half_extents = .{ 0.25, 0.5, 0.75 },
@@ -1446,16 +1457,16 @@ test "multi-record V7 save is sorted and byte-stable across fresh restore" {
             .angular_velocity = .{ -0.3, 0.4, -0.2 },
         },
     };
-    const snapshot = simulation.SnapshotV7{
-        .schema_version = simulation.snapshot_schema,
+    const snapshot = simulation_snapshot.SnapshotV7{
+        .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 17,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 700,
         .next_local_id = 42,
-        .character_config = simulation.CharacterConfigV1.fromConfig(.{}),
-        .vehicle_config = simulation.VehicleConfigV1.fromConfig(.{}),
-        .interaction_config = simulation.InteractionConfigV1.fromConfig(.{}),
-        .npc_config = simulation.NpcConfigV1.fromConfig(.{}),
+        .character_config = character_contract.CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
+        .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
+        .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
         .crates = &crate_records,
         .characters = &.{},
         .vehicles = &.{},
@@ -1483,15 +1494,15 @@ test "multi-record V7 save is sorted and byte-stable across fresh restore" {
             fixed_delta_seconds: f32,
             namespace: u64,
             next_local_id: u64,
-            crates: []const struct { id: simulation.PersistentId },
-            characters: []const struct { id: simulation.PersistentId },
+            crates: []const struct { id: engine.PersistentId },
+            characters: []const struct { id: engine.PersistentId },
         },
         allocator,
         first_save,
         .{ .ignore_unknown_fields = true },
     );
     defer parsed.deinit();
-    try std.testing.expectEqual(simulation.snapshot_schema, parsed.value.schema_version);
+    try std.testing.expectEqual(sandbox_contracts.snapshot_schema, parsed.value.schema_version);
     try std.testing.expectEqual(@as(u64, 17), parsed.value.completed_ticks);
     try std.testing.expectEqual(@as(u64, 700), parsed.value.namespace);
     try std.testing.expectEqual(@as(u64, 42), parsed.value.next_local_id);
@@ -1516,7 +1527,7 @@ test "multi-record V7 save is sorted and byte-stable across fresh restore" {
             .spawned => |spawned| spawned.id,
             else => return error.UnexpectedOutcome,
         };
-        try std.testing.expectEqual(simulation.PersistentId{
+        try std.testing.expectEqual(engine.PersistentId{
             .namespace = 700,
             .local = 42,
         }, allocated);
@@ -1550,16 +1561,16 @@ test "failed fresh loads do not mutate a live simulation" {
         error.SnapshotTooLarge,
         simulation.Simulation.fromSnapshot(allocator, oversized, .{}),
     );
-    const empty_snapshot = simulation.SnapshotV7{
-        .schema_version = simulation.snapshot_schema,
+    const empty_snapshot = simulation_snapshot.SnapshotV7{
+        .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 702,
         .next_local_id = 1,
-        .character_config = simulation.CharacterConfigV1.fromConfig(.{}),
-        .vehicle_config = simulation.VehicleConfigV1.fromConfig(.{}),
-        .interaction_config = simulation.InteractionConfigV1.fromConfig(.{}),
-        .npc_config = simulation.NpcConfigV1.fromConfig(.{}),
+        .character_config = character_contract.CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
+        .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
+        .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
         .crates = &.{},
         .characters = &.{},
         .vehicles = &.{},
@@ -1583,7 +1594,7 @@ test "failed fresh loads do not mutate a live simulation" {
 }
 
 fn restoreAllocationCase(allocator: std.mem.Allocator) !void {
-    const crate_records = [_]simulation.CrateV1{
+    const crate_records = [_]crate_contract.CrateV1{
         .{
             .id = .{ .namespace = 703, .local = 1 },
             .half_extents = .{ 0.5, 0.5, 0.5 },
@@ -1599,22 +1610,22 @@ fn restoreAllocationCase(allocator: std.mem.Allocator) !void {
             .angular_velocity = .{ 0.1, 0.2, 0.3 },
         },
     };
-    const character_records = [_]simulation.CharacterV1{.{
+    const character_records = [_]character_contract.CharacterV1{.{
         .id = .{ .namespace = 703, .local = 3 },
         .position = .{ -2, 0, 1 },
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0.25,
     }};
-    const logical_snapshot = simulation.SnapshotV7{
-        .schema_version = simulation.snapshot_schema,
+    const logical_snapshot = simulation_snapshot.SnapshotV7{
+        .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 3,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = 703,
         .next_local_id = 4,
-        .character_config = simulation.CharacterConfigV1.fromConfig(.{}),
-        .vehicle_config = simulation.VehicleConfigV1.fromConfig(.{}),
-        .interaction_config = simulation.InteractionConfigV1.fromConfig(.{}),
-        .npc_config = simulation.NpcConfigV1.fromConfig(.{}),
+        .character_config = character_contract.CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
+        .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
+        .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
         .crates = &crate_records,
         .characters = &character_records,
         .vehicles = &.{},
@@ -1666,15 +1677,15 @@ test "owned simulation teardown accepts live crates pending commands and outcome
     try std.testing.expectEqual(@as(u32, 1), replacement.bodyCount());
 }
 
-const district_test_assets = simulation.DistrictAssets{
+const district_test_assets = district_feature_contract.Assets{
     .scene = .{ .index = 17, .generation = 2 },
 };
-const district_test_coord = simulation.ChunkCoord{ .x = 0, .z = -4 };
+const district_test_coord = district_contract.ChunkCoord{ .x = 0, .z = -4 };
 
 fn requestDistrict(
     world: *simulation.Simulation,
     request_id: u64,
-) !simulation.LoadTicket {
+) !district_contract.LoadTicket {
     return requestDistrictAt(
         world,
         request_id,
@@ -1686,9 +1697,9 @@ fn requestDistrict(
 fn requestDistrictAt(
     world: *simulation.Simulation,
     request_id: u64,
-    coord: simulation.ChunkCoord,
-    assets: simulation.DistrictAssets,
-) !simulation.LoadTicket {
+    coord: district_contract.ChunkCoord,
+    assets: district_feature_contract.Assets,
+) !district_contract.LoadTicket {
     try world.submitDistrict(.{ .request_load = .{
         .request_id = request_id,
         .coord = coord,
@@ -1708,8 +1719,8 @@ fn requestDistrictAt(
 
 test "two real Jolt districts restore canonically and unload independently" {
     const allocator = std.testing.allocator;
-    const west = simulation.ChunkCoord{ .x = 0, .z = 0 };
-    const east = simulation.ChunkCoord{ .x = 1, .z = 0 };
+    const west = district_contract.ChunkCoord{ .x = 0, .z = 0 };
+    const east = district_contract.ChunkCoord{ .x = 1, .z = 0 };
     var canonical_save: []u8 = undefined;
 
     {
@@ -1790,7 +1801,7 @@ test "two real Jolt districts restore canonically and unload independently" {
 
 fn waitForDistrictActivation(
     world: *simulation.Simulation,
-    expected: simulation.LoadTicket,
+    expected: district_contract.LoadTicket,
 ) !void {
     for (0..10_000) |_| {
         std.Thread.yield() catch {};
@@ -1814,7 +1825,7 @@ fn waitForDistrictActivation(
 
 fn waitForDistrictCancellation(
     world: *simulation.Simulation,
-    expected: simulation.LoadTicket,
+    expected: district_contract.LoadTicket,
 ) !void {
     var cancellation_requested = false;
     for (0..10_000) |_| {
@@ -1844,7 +1855,7 @@ fn waitForDistrictCancellation(
 fn unloadDistrict(
     world: *simulation.Simulation,
     request_id: u64,
-    ticket: simulation.LoadTicket,
+    ticket: district_contract.LoadTicket,
 ) !void {
     try world.submitDistrict(.{ .unload = .{
         .request_id = request_id,
@@ -1872,9 +1883,9 @@ fn expectNpcOutputEmpty(world: *simulation.Simulation) !void {
 
 fn expectNpcStateChanged(
     world: *simulation.Simulation,
-    id: simulation.PersistentId,
-    previous: simulation.NpcState,
-    current: simulation.NpcState,
+    id: engine.PersistentId,
+    previous: npc_contract.State,
+    current: npc_contract.State,
 ) !void {
     const event = world.pollNpcEvent() orelse return error.NpcStateEventMissing;
     switch (event) {
@@ -1890,9 +1901,9 @@ fn expectNpcStateChanged(
 
 fn expectNpcOwnerTransferred(
     world: *simulation.Simulation,
-    id: simulation.PersistentId,
-    previous: simulation.ChunkCoord,
-    current: simulation.ChunkCoord,
+    id: engine.PersistentId,
+    previous: district_contract.ChunkCoord,
+    current: district_contract.ChunkCoord,
 ) !void {
     const event = world.pollNpcEvent() orelse return error.NpcTransferEventMissing;
     switch (event) {
@@ -1908,8 +1919,8 @@ fn expectNpcOwnerTransferred(
 
 fn expectNpcGoalReached(
     world: *simulation.Simulation,
-    id: simulation.PersistentId,
-    node: simulation.NavigationNodeRef,
+    id: engine.PersistentId,
+    node: npc_contract.NodeRef,
 ) !void {
     const event = world.pollNpcEvent() orelse return error.NpcGoalEventMissing;
     switch (event) {
@@ -1924,16 +1935,16 @@ fn expectNpcGoalReached(
 
 test "S8 headless NPC patrol waits through cancellation crosses suspends and restores" {
     const allocator = std.testing.allocator;
-    const west_start = simulation.NavigationNodeRef{
-        .coord = simulation.navigation_west_coord,
+    const west_start = npc_contract.NodeRef{
+        .coord = sandbox_contracts.navigation_west_coord,
         .index = 0,
     };
-    const east_end = simulation.NavigationNodeRef{
-        .coord = simulation.navigation_east_coord,
+    const east_end = npc_contract.NodeRef{
+        .coord = sandbox_contracts.navigation_east_coord,
         .index = 2,
     };
     var saved: []u8 = undefined;
-    var npc_id: simulation.PersistentId = undefined;
+    var npc_id: engine.PersistentId = undefined;
     var event_sequence: u8 = 0;
 
     {
@@ -1946,14 +1957,14 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         const west_ticket = try requestDistrictAt(
             &world,
             1,
-            simulation.navigation_west_coord,
+            sandbox_contracts.navigation_west_coord,
             district_test_assets,
         );
         try waitForDistrictActivation(&world, west_ticket);
         const first_east_ticket = try requestDistrictAt(
             &world,
             2,
-            simulation.navigation_east_coord,
+            sandbox_contracts.navigation_east_coord,
             district_test_assets,
         );
         try waitForDistrictActivation(&world, first_east_ticket);
@@ -1973,7 +1984,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
             .spawned => |value| value.id,
             else => return error.UnexpectedNpcOutcome,
         };
-        try std.testing.expectEqual(simulation.NpcState.active, (try world.npc(npc_id)).state);
+        try std.testing.expectEqual(npc_contract.State.active, (try world.npc(npc_id)).state);
         try std.testing.expectEqual(@as(usize, 1), world.npcCount());
         const active_diagnostics = world.diagnostics();
         try std.testing.expectEqual(@as(u32, 1), active_diagnostics.npc.controller_count);
@@ -2000,7 +2011,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         }
         try std.testing.expect(observed_waiting);
         const waiting = try world.npc(npc_id);
-        try std.testing.expectEqual(simulation.navigation_west_coord, waiting.owner);
+        try std.testing.expectEqual(sandbox_contracts.navigation_west_coord, waiting.owner);
         try std.testing.expect(waiting.controller_present);
         try std.testing.expectEqual(@as(u32, 3), world.bodyCount());
         try std.testing.expectEqual(@as(u8, 0), event_sequence);
@@ -2018,7 +2029,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         const cancelled_east_ticket = try requestDistrictAt(
             &world,
             12,
-            simulation.navigation_east_coord,
+            sandbox_contracts.navigation_east_coord,
             district_test_assets,
         );
         try world.submitDistrict(.{ .cancel_load = .{
@@ -2027,10 +2038,10 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         } });
         try waitForDistrictCancellation(&world, cancelled_east_ticket);
         try std.testing.expect(
-            world.activeDistrictTicketFor(simulation.navigation_east_coord) == null,
+            world.activeDistrictTicketFor(sandbox_contracts.navigation_east_coord) == null,
         );
         try std.testing.expectEqual(
-            simulation.NpcState.waiting_at_boundary,
+            npc_contract.State.waiting_at_boundary,
             (try world.npc(npc_id)).state,
         );
         try std.testing.expectEqual(@as(u32, 1), world.diagnostics().npc.controller_count);
@@ -2040,7 +2051,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         const second_east_ticket = try requestDistrictAt(
             &world,
             14,
-            simulation.navigation_east_coord,
+            sandbox_contracts.navigation_east_coord,
             district_test_assets,
         );
         try waitForDistrictActivation(&world, second_east_ticket);
@@ -2058,9 +2069,9 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         var observed_transfer = false;
         for (0..1_000) |_| {
             try world.tick();
-            if (simulation.ChunkCoord.eql(
+            if (district_contract.ChunkCoord.eql(
                 (try world.npc(npc_id)).owner,
-                simulation.navigation_east_coord,
+                sandbox_contracts.navigation_east_coord,
             )) {
                 observed_transfer = true;
                 break;
@@ -2073,14 +2084,14 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         try expectNpcOwnerTransferred(
             &world,
             npc_id,
-            simulation.navigation_west_coord,
-            simulation.navigation_east_coord,
+            sandbox_contracts.navigation_west_coord,
+            sandbox_contracts.navigation_east_coord,
         );
         event_sequence += 1;
 
         try unloadDistrict(&world, 15, second_east_ticket);
         const dormant = try world.npc(npc_id);
-        try std.testing.expectEqual(simulation.NpcState.dormant, dormant.state);
+        try std.testing.expectEqual(npc_contract.State.dormant, dormant.state);
         try std.testing.expect(!dormant.controller_present);
         const dormant_diagnostics = world.diagnostics();
         try std.testing.expectEqual(@as(u32, 0), dormant_diagnostics.npc.controller_count);
@@ -2101,7 +2112,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         const third_east_ticket = try requestDistrictAt(
             &world,
             16,
-            simulation.navigation_east_coord,
+            sandbox_contracts.navigation_east_coord,
             district_test_assets,
         );
         try waitForDistrictActivation(&world, third_east_ticket);
@@ -2169,12 +2180,12 @@ test "S8 headless rejects hostile NPC restore and controller overflow before aut
         }),
     );
 
-    const hostile_npc = simulation.NpcV1{
+    const hostile_npc = npc_contract.NpcV1{
         .id = .{ .namespace = 8_211, .local = 1 },
-        .owner = simulation.navigation_west_coord,
+        .owner = sandbox_contracts.navigation_west_coord,
         .goal = .hold,
         .route = .{ .current = .{
-            .coord = simulation.navigation_west_coord,
+            .coord = sandbox_contracts.navigation_west_coord,
             .index = 0,
         } },
         .position = .{ 9, 0, 3 },
@@ -2183,16 +2194,16 @@ test "S8 headless rejects hostile NPC restore and controller overflow before aut
     };
     const hostile = try std.json.Stringify.valueAlloc(
         allocator,
-        simulation.SnapshotV7{
-            .schema_version = simulation.snapshot_schema,
+        simulation_snapshot.SnapshotV7{
+            .schema_version = sandbox_contracts.snapshot_schema,
             .completed_ticks = 0,
             .fixed_delta_seconds = 1.0 / 120.0,
             .namespace = 8_211,
             .next_local_id = 2,
-            .character_config = simulation.CharacterConfigV1.fromConfig(.{}),
-            .vehicle_config = simulation.VehicleConfigV1.fromConfig(.{}),
-            .interaction_config = simulation.InteractionConfigV1.fromConfig(.{}),
-            .npc_config = simulation.NpcConfigV1.fromConfig(.{}),
+            .character_config = character_contract.CharacterConfigV1.fromConfig(.{}),
+            .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
+            .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
+            .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
             .crates = &.{},
             .characters = &.{},
             .vehicles = &.{},
@@ -2216,8 +2227,8 @@ test "S8 headless rejects hostile NPC restore and controller overflow before aut
     try blocker.tick();
 }
 
-const s7_west = simulation.ChunkCoord{ .x = 0, .z = 0 };
-const s7_east = simulation.ChunkCoord{ .x = 1, .z = 0 };
+const s7_west = district_contract.ChunkCoord{ .x = 0, .z = 0 };
+const s7_east = district_contract.ChunkCoord{ .x = 1, .z = 0 };
 const s7_west_x: f32 = 6;
 const s7_east_x: f32 = 10;
 
@@ -2242,8 +2253,8 @@ fn drainS7Ambient(world: *simulation.Simulation) !void {
 fn activateS7District(
     world: *simulation.Simulation,
     request_id: u64,
-    coord: simulation.ChunkCoord,
-) !simulation.LoadTicket {
+    coord: district_contract.ChunkCoord,
+) !district_contract.LoadTicket {
     try world.submitDistrict(.{ .request_load = .{
         .request_id = request_id,
         .coord = coord,
@@ -2264,7 +2275,7 @@ fn activateS7District(
         var activated = false;
         while (world.pollDistrictOutcome()) |outcome| switch (outcome) {
             .activated => |value| {
-                if (!simulation.LoadTicket.eql(ticket, value.ticket)) {
+                if (!district_contract.LoadTicket.eql(ticket, value.ticket)) {
                     return error.UnexpectedDistrictTicket;
                 }
                 activated = true;
@@ -2295,7 +2306,7 @@ fn activateS7District(
 fn unloadS7District(
     world: *simulation.Simulation,
     request_id: u64,
-    ticket: simulation.LoadTicket,
+    ticket: district_contract.LoadTicket,
 ) !void {
     try world.submitDistrict(.{ .unload = .{
         .request_id = request_id,
@@ -2305,7 +2316,7 @@ fn unloadS7District(
     const outcome = world.pollDistrictOutcome() orelse
         return error.DistrictUnloadOutcomeMissing;
     switch (outcome) {
-        .unloaded => |value| if (!simulation.LoadTicket.eql(ticket, value.ticket)) {
+        .unloaded => |value| if (!district_contract.LoadTicket.eql(ticket, value.ticket)) {
             return error.UnexpectedDistrictTicket;
         },
         else => return error.UnexpectedDistrictOutcome,
@@ -2315,8 +2326,8 @@ fn unloadS7District(
 
 fn expectS7InteractionDraw(
     world: *simulation.Simulation,
-    carryable_id: simulation.PersistentId,
-    ownership: @TypeOf(@as(simulation.CarryableView, undefined).ownership),
+    carryable_id: engine.PersistentId,
+    ownership: @TypeOf(@as(interaction_contract.CarryableView, undefined).ownership),
 ) !void {
     const draws = try world.interactionPresentation();
     if (draws.len != 1) return error.InteractionPresentationCountMismatch;
@@ -2327,9 +2338,9 @@ fn expectS7InteractionDraw(
 fn collectS7Carryable(
     world: *simulation.Simulation,
     transaction_id: u64,
-    character_id: simulation.PersistentId,
-    carryable_id: simulation.PersistentId,
-    previous_owner: simulation.ChunkCoord,
+    character_id: engine.PersistentId,
+    carryable_id: engine.PersistentId,
+    previous_owner: district_contract.ChunkCoord,
 ) !void {
     try world.submitInteraction(.{ .collect = .{
         .transaction_id = transaction_id,
@@ -2360,7 +2371,7 @@ fn collectS7Carryable(
 
 fn moveS7CharacterToX(
     world: *simulation.Simulation,
-    character_id: simulation.PersistentId,
+    character_id: engine.PersistentId,
     target_x: f32,
 ) !void {
     for (0..256) |_| {
@@ -2392,9 +2403,9 @@ fn moveS7CharacterToX(
 fn dropS7Carryable(
     world: *simulation.Simulation,
     transaction_id: u64,
-    character_id: simulation.PersistentId,
-    carryable_id: simulation.PersistentId,
-    owner: simulation.ChunkCoord,
+    character_id: engine.PersistentId,
+    carryable_id: engine.PersistentId,
+    owner: district_contract.ChunkCoord,
 ) !void {
     try world.submitInteraction(.{ .drop = .{
         .transaction_id = transaction_id,
@@ -2421,13 +2432,13 @@ fn dropS7Carryable(
 fn runS7RepeatedCycle(
     world: *simulation.Simulation,
     request_base: u64,
-    character_id: simulation.PersistentId,
-    carryable_id: simulation.PersistentId,
-    source: simulation.ChunkCoord,
-    source_ticket: simulation.LoadTicket,
-    destination: simulation.ChunkCoord,
+    character_id: engine.PersistentId,
+    carryable_id: engine.PersistentId,
+    source: district_contract.ChunkCoord,
+    source_ticket: district_contract.LoadTicket,
+    destination: district_contract.ChunkCoord,
     destination_x: f32,
-) !simulation.LoadTicket {
+) !district_contract.LoadTicket {
     try collectS7Carryable(
         world,
         request_base,
@@ -2484,9 +2495,9 @@ fn runS7RepeatedCycle(
 fn cleanupS7World(
     world: *simulation.Simulation,
     request_id: u64,
-    character_id: simulation.PersistentId,
-    carryable_id: simulation.PersistentId,
-    district_ticket: simulation.LoadTicket,
+    character_id: engine.PersistentId,
+    carryable_id: engine.PersistentId,
+    district_ticket: district_contract.LoadTicket,
 ) !void {
     try world.submitCharacter(.{ .despawn = .{ .id = character_id } });
     try world.submitInteraction(.{ .despawn = .{ .id = carryable_id } });
@@ -2530,7 +2541,7 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
     var capture_bytes: []u8 = undefined;
     var dormant_save: []u8 = undefined;
     var completed_ticks: u64 = 0;
-    const character_id: simulation.PersistentId = blk: {
+    const character_id: engine.PersistentId = blk: {
         var world = try simulation.Simulation.init(allocator, .{
             .namespace = 8_071,
         });
@@ -2615,11 +2626,11 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
         try std.testing.expectEqual(@as(usize, 3), world.entityCount());
 
         for (0..4) |cycle| {
-            const destination = if (simulation.ChunkCoord.eql(active_coord, s7_east))
+            const destination = if (district_contract.ChunkCoord.eql(active_coord, s7_east))
                 s7_west
             else
                 s7_east;
-            const destination_x = if (simulation.ChunkCoord.eql(destination, s7_west))
+            const destination_x = if (district_contract.ChunkCoord.eql(destination, s7_west))
                 s7_west_x
             else
                 s7_east_x;
@@ -2716,7 +2727,7 @@ test "real district worker cancels activates collides unloads and repeats cleanl
 
     const cancelled_ticket = try requestDistrict(&world, 1);
     try std.testing.expectEqual(
-        simulation.DistrictStateTag.loading,
+        district_feature_contract.StateTag.loading,
         world.districtStateFor(district_test_coord).?,
     );
     try std.testing.expectError(error.DistrictTransitionPending, world.save(allocator));
@@ -2732,7 +2743,7 @@ test "real district worker cancels activates collides unloads and repeats cleanl
     const active_ticket = try requestDistrict(&world, 3);
     try waitForDistrictActivation(&world, active_ticket);
     try std.testing.expectEqual(
-        simulation.DistrictStateTag.active,
+        district_feature_contract.StateTag.active,
         world.districtStateFor(district_test_coord).?,
     );
     try std.testing.expectEqual(@as(usize, 1), world.districtCount());
@@ -2796,7 +2807,7 @@ test "CharacterVirtual leaves removed district support without stale ground stat
     while (world.pollCharacterEvent() != null) {}
     for (0..360) |_| try world.tick();
     const supported = try world.character(character_id);
-    try std.testing.expectEqual(simulation.GroundState.on_ground, supported.ground_state);
+    try std.testing.expectEqual(engine.physics.GroundState.on_ground, supported.ground_state);
     try std.testing.expect(supported.position[1] > 1.9);
     try std.testing.expect(supported.position[1] < 2.1);
 
@@ -2849,26 +2860,26 @@ test "active district Snapshot V7 restore is byte-stable and rebuilds logical ow
 
 const s4c_namespace: u64 = 840;
 const s4c_tick_count: usize = 181;
-const s4c_crate_id = simulation.PersistentId{ .namespace = s4c_namespace, .local = 1 };
-const s4c_character_id = simulation.PersistentId{ .namespace = s4c_namespace, .local = 2 };
-const s4c_vehicle_id = simulation.PersistentId{ .namespace = s4c_namespace, .local = 3 };
-const s4c_district_id = simulation.PersistentId{ .namespace = s4c_namespace, .local = 4 };
+const s4c_crate_id = engine.PersistentId{ .namespace = s4c_namespace, .local = 1 };
+const s4c_character_id = engine.PersistentId{ .namespace = s4c_namespace, .local = 2 };
+const s4c_vehicle_id = engine.PersistentId{ .namespace = s4c_namespace, .local = 3 };
+const s4c_district_id = engine.PersistentId{ .namespace = s4c_namespace, .local = 4 };
 
 fn makeS4cScenarioSnapshot(allocator: std.mem.Allocator) ![]u8 {
-    const crate_records = [_]simulation.CrateV1{.{
+    const crate_records = [_]crate_contract.CrateV1{.{
         .id = s4c_crate_id,
         .half_extents = .{ 0.5, 0.5, 0.5 },
         .pose = .{ .position = .{ 4, 2, 0 } },
         .linear_velocity = .{ 0, 0, 0 },
         .angular_velocity = .{ 0, 0, 0 },
     }};
-    const character_records = [_]simulation.CharacterV1{.{
+    const character_records = [_]character_contract.CharacterV1{.{
         .id = s4c_character_id,
         .position = .{ 0, 0, 0 },
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
     }};
-    const vehicle_records = [_]simulation.VehicleV1{.{
+    const vehicle_records = [_]vehicle_contract.VehicleV1{.{
         .id = s4c_vehicle_id,
         .chassis_pose = .{
             .position = .{ 0, 2, 0 },
@@ -2880,24 +2891,24 @@ fn makeS4cScenarioSnapshot(allocator: std.mem.Allocator) ![]u8 {
         .input = .{ .throttle = 0, .steering = 0, .brake = 0, .hand_brake = 0 },
         .driver_id = s4c_character_id,
     }};
-    const district_coord = simulation.ChunkCoord{ .x = 0, .z = -4 };
-    const build = try simulation.proceduralDistrictBuild(district_coord);
-    const district_records = [_]simulation.DistrictV1{.{
+    const district_coord = district_contract.ChunkCoord{ .x = 0, .z = -4 };
+    const build = try sandbox_contracts.proceduralDistrictBuild(district_coord);
+    const district_records = [_]district_feature_contract.DistrictV1{.{
         .id = s4c_district_id,
         .coord = district_coord,
         .recipe_version = build.recipe_version,
         .checksum = build.checksum,
     }};
-    return std.json.Stringify.valueAlloc(allocator, simulation.SnapshotV7{
-        .schema_version = simulation.snapshot_schema,
+    return simulation_snapshot.encode(allocator, .{
+        .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
         .namespace = s4c_namespace,
         .next_local_id = 5,
-        .character_config = simulation.CharacterConfigV1.fromConfig(.{}),
-        .vehicle_config = simulation.VehicleConfigV1.fromConfig(.{}),
-        .interaction_config = simulation.InteractionConfigV1.fromConfig(.{}),
-        .npc_config = simulation.NpcConfigV1.fromConfig(.{}),
+        .character_config = character_contract.CharacterConfigV1.fromConfig(.{}),
+        .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
+        .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
+        .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
         .crates = &crate_records,
         .characters = &character_records,
         .vehicles = &vehicle_records,
@@ -3034,12 +3045,12 @@ fn countDebugOverflow(batch: engine.physics_debug.Batch) u64 {
 }
 
 const S4cFinalState = struct {
-    diagnostics: simulation.Diagnostics,
-    crate: simulation.CrateView,
-    character: simulation.CharacterView,
-    vehicle: simulation.VehicleView,
-    district_state: simulation.DistrictStateTag,
-    district_ticket: ?simulation.LoadTicket,
+    diagnostics: sandbox_diagnostics.Diagnostics,
+    crate: crate_contract.CrateView,
+    character: character_contract.CharacterView,
+    vehicle: vehicle_contract.VehicleView,
+    district_state: district_feature_contract.StateTag,
+    district_ticket: ?district_contract.LoadTicket,
     district_count: usize,
     district_body_count: usize,
     entity_count: usize,
@@ -3140,7 +3151,7 @@ fn runS4cCohort(
             &toggle_lines,
             &toggle_triangles,
         );
-        const disabled = simulation.PhysicsDebugConfig{
+        const disabled = engine.physics_debug.Config{
             .shapes = false,
             .bounds = false,
             .contacts = false,
@@ -3244,7 +3255,7 @@ test "S4-C headless debug extraction and profile observation preserve authority"
     }
     try std.testing.expect(observed.state.vehicle.driver_id == null);
     try std.testing.expectEqual(
-        simulation.DistrictStateTag.active,
+        district_feature_contract.StateTag.active,
         observed.state.district_state,
     );
     try std.testing.expect(observed.state.district_ticket != null);

@@ -139,6 +139,13 @@ jobs:
           -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS"
           --summary all
 
+      - name: M5 architecture boundary
+        shell: bash
+        run: >-
+          zig build verify-m5-architecture -Deditor=false
+          -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS"
+          --summary all
+
       - name: Debug build with editor
         shell: bash
         run: >-
@@ -173,7 +180,10 @@ jobs:
 
       - name: Verify filtered source package
         shell: bash
-        run: tools/verify_source_package.sh
+        run: >-
+          zig build verify-source-package -Deditor=false
+          -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS"
+          --summary all
 
       - name: Build leaves source tree unchanged
         shell: bash

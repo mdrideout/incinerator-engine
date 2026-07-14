@@ -1,13 +1,17 @@
 # Incinerator Engine
 
 Incinerator is a game-specific 3D engine with a completed single-player sandbox
-foundation and an accepted multiplayer-first authoritative-session direction.
-The intended experience supports solo play as a local form of the same
-authority model used by optional private listen/invite and canonical public
-dedicated sessions. The selected first network transport is the open-source
-GameNetworkingSockets flat C API over direct IP; Steam networking remains an
-optional non-vendored integration. It uses Zig, SDL3, Jolt Physics, Flecs, and
-ImGui.
+and an accepted Apple Silicon macOS multiplayer foundation. MP0-MP5/M4 prove a
+server-authoritative direct-IP session with characters, vehicles, carry
+interaction, district relevance, NPCs, prediction, reconnect, bounded delta
+replication, and open room admission. M5 client/authority cohesion is accepted:
+solo is a cohesive placement of the same client/authority model. The intended
+experience supports solo play as a local placement of the same authority model
+used by optional private listen/invite and canonical public dedicated sessions.
+The selected first
+network transport is the open-source GameNetworkingSockets flat C API over
+direct IP; Steam networking remains an optional non-vendored integration. It
+uses Zig, SDL3, Jolt Physics, Flecs, and ImGui.
 
 The engine is intended to become open source and the game will be licensed
 separately. No engine license has been selected yet, so this repository
@@ -15,10 +19,13 @@ currently grants no license. The overhaul is greenfield: prototype APIs and
 file formats may change without compatibility shims. See
 [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md) for the main roadmap,
 [`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md) for the living architectural
-assessment, [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md) for the staged
-multiplayer program and current MP0-MP2 status, and
+assessment, [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md) for the completed
+MP0-MP5/M4 foundation and accepted M5 cohesion gate, and
 [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md) for the completed
-post-M3 consolidation record.
+post-M3 consolidation record. The deeper transactional authority-cycle pressure
+point is separately planned in
+[`docs/design/post-m5-transactional-authority-cycle.md`](docs/design/post-m5-transactional-authority-cycle.md);
+it is not a current M5 guarantee.
 
 ## Toolchain Cohort
 
@@ -137,6 +144,14 @@ zig build verify-mp5 --summary all
 
 # Run the complete Apple Silicon macOS multiplayer-foundation gate.
 zig build verify-m4 -j1 --summary all
+
+# Run the accepted M5 cohesion aggregate. Its contract and measured evidence
+# matrix are linked below.
+zig build verify-m5 -j1 --summary all
+
+# Verify that the filtered Zig source package retains the M5 architecture gate
+# and can compile/run its headless, persistence, snapshot, and session closure.
+zig build verify-source-package -Deditor=false --summary all
 
 # Manual three-terminal multiplayer test. Build/install once, then launch one authority
 # and two graphical clients with distinct development accounts.
@@ -384,6 +399,8 @@ The engine uses a thin kernel, feature-owned vertical slices, narrow capability
 contracts, backend adapters, and explicit host composition roots. See:
 
 - [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md)
+- [`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md)
+- [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 - [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 - [`ADR-007: Product, Platform, and Compatibility Scope`](docs/adr/007-product-platform-and-compatibility-scope.md)
 - [`ADR-008: Feature-Oriented Engine Architecture`](docs/adr/008-feature-oriented-engine-architecture.md)
@@ -429,14 +446,33 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`M3 Pre-Server Readiness Design`](docs/design/m3-pre-server-readiness.md)
 - [`M3 Acceptance Record`](docs/validation/m3-acceptance.md)
 - [`M3 Performance Baseline`](docs/performance/m3-baseline.md)
+- [`ADR-016: Authority Session Topology`](docs/adr/016-authority-session-topology.md)
+- [`ADR-017: Network Identity, Protocol, and Replication`](docs/adr/017-network-identity-protocol-and-replication.md)
+- [`ADR-018: GameNetworkingSockets and Steam-Compatible Routing`](docs/adr/018-gamenetworkingsockets-and-steam-compatible-routing.md)
+- [`MP4 Feature Replication Sequence`](docs/design/mp4-feature-replication-sequence.md)
+- [`MP4 Architecture Closeout`](docs/validation/mp4-architecture-closeout.md)
+- [`MP5 Open Room and Admission Boundary`](docs/design/mp5-open-room-and-admission-boundary.md)
+- [`MP5 Acceptance Record`](docs/validation/mp5-acceptance.md)
+- [`M4 Multiplayer Foundation Gate`](docs/validation/m4-multiplayer-foundation.md)
+- [`M5 Client/Authority Cohesion Contract`](docs/design/m5-client-authority-cohesion.md)
+- [`M5 Acceptance Record`](docs/validation/m5-client-authority-cohesion.md)
+- [`Post-M5 Transactional Authority Cycle Plan`](docs/design/post-m5-transactional-authority-cycle.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 
-The engine loop separates input, fixed-rate simulation, and presentation:
+The embedded-product loop separates input, fixed-rate authority, and
+presentation:
 
 ```text
-input pump (per frame) -> simulation ticks (fixed 120 Hz) -> presentation
+input pump (per frame) -> authority ticks (fixed 60 Hz) -> presentation
 ```
+
+Embedded and dedicated placement now share the accepted 60 Hz authority rate;
+rendering remains independently paced and embedded replication remains 20 Hz.
+The embedded product routes character, vehicle, and carry gameplay
+through the shared session behavior and consumes their replicated client state.
+M5 acceptance records the owner, regression, native, package, and independent-
+review evidence.
 
 The current overhaul boundary is intentionally concrete rather than a future
 asset/framework abstraction. S3-A owns logical simulation, S3-B owns cooked
@@ -476,9 +512,10 @@ proximity policy in the host while exercising the complete lifecycle:
 - `NpcFeature` owns bounded autonomous-character authority, semantic goals,
   district-aware navigation state, persistence, diagnostics, and presentation;
   a separate fixed population planner is only a producer;
-- the sandbox composition owns the current `SnapshotV7` save envelope, runtime
-  clock and identity cursor, cross-feature identity validation, and
-  authoritative restoration of feature-owned tuning, relationships, district,
+- a private snapshot module owns the current `SnapshotV7` value, canonical
+  codec, cold preflight, cross-feature identity validation, and exact
+  build/world fingerprints; the live sandbox authority owns transactional
+  capture/restoration of feature-owned tuning, relationships, district,
   interaction, and NPC state;
 - exactly one composition-owned physics step advances crates, characters, and
   vehicles; no feature adapter privately advances the shared Jolt world;
@@ -490,6 +527,15 @@ proximity policy in the host while exercising the complete lifecycle:
 
 The visual sandbox and headless host construct the same owned logical
 `Simulation`; the visual host additionally composes S3-B content and residency.
+M4 deliberately retained a broad `local_solo` authority-administration facade.
+M5 replaces it with an opaque embedded placement over the shared
+authority core, role-scoped capabilities, replicated player-facing
+presentation, explicit streaming/persistence owners, and one opaque heap-stable
+developer owner. The complete aggregate regression and independent acceptance
+review are recorded in the M5 acceptance document.
+M5 records separate completion-aware placement and authority traces plus the
+nested runtime phase observer. It does not claim atomic ingress-to-publication;
+that is the separate post-M5 transactional authority-cycle plan linked above.
 The former `GameWorld`, borrowed Flecs/Jolt composition, direct ECS render
 query, and editor mutation path have been removed. The editor keeps stats,
 camera, render, diagnostics, profiling, physics-debug, and crate-authoring

@@ -8,223 +8,35 @@
 
 const std = @import("std");
 const engine = @import("incinerator_engine");
+const feature_contract = @import("interaction_feature_contract");
 const district_contract = @import("district_contract");
 const interaction_contract = @import("interaction_contract");
 
 const logical_state_domain = "incinerator.interaction.logical";
 const logical_state_schema: u16 = 1;
 
-pub const max_carryables: usize = 1;
-pub const max_pending_commands: usize = 16;
-pub const max_outcomes: usize = 16;
-
-pub const Budget = struct {
-    carryables: u32 = max_carryables,
-    dynamic_bodies: u32 = max_carryables,
-    commands: u32 = max_pending_commands,
-    outcomes: u32 = max_outcomes,
-};
-
-pub const declared_budget = Budget{};
-
-pub const Config = struct {
-    collect_range: f32 = 2.5,
-    /// Local-space offset from the carrier pose used for every drop. Keeping
-    /// this fixed makes boundary ownership and replay deterministic.
-    drop_offset: [3]f32 = .{ 0, 0.75, -1.5 },
-
-    pub fn validate(self: Config) !void {
-        if (!std.math.isFinite(self.collect_range) or self.collect_range <= 0) {
-            return error.InvalidCollectRange;
-        }
-        for (self.drop_offset) |component| {
-            if (!std.math.isFinite(component)) return error.InvalidDropOffset;
-        }
-    }
-};
-
-/// Simulation-relevant cold configuration persisted/fingerprinted by the
-/// composition root. It is separate from Config so future presentation-only
-/// fields cannot accidentally enter the world cohort.
-pub const InteractionConfigV1 = struct {
-    collect_range: f32,
-    drop_offset: [3]f32,
-
-    pub fn fromConfig(config: Config) InteractionConfigV1 {
-        return .{
-            .collect_range = config.collect_range,
-            .drop_offset = config.drop_offset,
-        };
-    }
-
-    pub fn toConfig(self: InteractionConfigV1) !Config {
-        const config = Config{
-            .collect_range = self.collect_range,
-            .drop_offset = self.drop_offset,
-        };
-        try config.validate();
-        return config;
-    }
-
-    pub fn validate(self: InteractionConfigV1) !void {
-        _ = try self.toConfig();
-    }
-};
-
-/// Durable ownership is intentionally closed over the two states proven by
-/// S7. A held object remains an InteractionFeature entity; it is never moved
-/// into a second inventory registry or replaced with another identity.
-pub const Ownership = union(enum) {
-    district_owned: district_contract.ChunkCoord,
-    inventory_held: engine.PersistentId,
-};
-
-pub const SpawnCarryable = struct {
-    request_id: u64,
-    pose: engine.physics.Pose,
-    velocity: engine.physics.Velocity = .{},
-    half_extents: [3]f32 = .{ 0.35, 0.35, 0.35 },
-};
-
-pub const DespawnCarryable = struct { id: engine.PersistentId };
-
-pub const Collect = struct {
-    transaction_id: u64,
-    carrier_id: engine.PersistentId,
-    carryable_id: engine.PersistentId,
-};
-
-pub const Drop = struct {
-    transaction_id: u64,
-    carrier_id: engine.PersistentId,
-    carryable_id: engine.PersistentId,
-};
-
-pub const Command = union(enum) {
-    spawn: SpawnCarryable,
-    despawn: DespawnCarryable,
-    collect: Collect,
-    drop: Drop,
-};
-
-pub const CommandKind = enum { spawn, despawn, collect, drop };
-
-pub const RejectionReason = enum {
-    capacity_reached,
-    carryable_not_found,
-    not_owned,
-    carryable_already_held,
-    carryable_held,
-    carrier_not_found,
-    carrier_not_on_foot,
-    carrier_not_empty,
-    carrier_not_holding,
-    wrong_holder,
-    owner_district_inactive,
-    destination_district_inactive,
-    too_far,
-};
-
-pub const CommandRejected = struct {
-    command: CommandKind,
-    reason: RejectionReason,
-    request_id: ?u64 = null,
-    transaction_id: ?u64 = null,
-    carrier_id: ?engine.PersistentId = null,
-    carryable_id: ?engine.PersistentId = null,
-};
-
-pub const Spawned = struct {
-    request_id: u64,
-    id: engine.PersistentId,
-    owner: district_contract.ChunkCoord,
-};
-
-pub const Collected = struct {
-    transaction_id: u64,
-    carrier_id: engine.PersistentId,
-    carryable_id: engine.PersistentId,
-    previous_owner: district_contract.ChunkCoord,
-};
-
-pub const Dropped = struct {
-    transaction_id: u64,
-    carrier_id: engine.PersistentId,
-    carryable_id: engine.PersistentId,
-    owner: district_contract.ChunkCoord,
-    pose: engine.physics.Pose,
-};
-
-pub const Outcome = union(enum) {
-    spawned: Spawned,
-    despawned: engine.PersistentId,
-    collected: Collected,
-    dropped: Dropped,
-    rejected: CommandRejected,
-};
-
-pub const CarryableView = struct {
-    id: engine.PersistentId,
-    half_extents: [3]f32,
-    ownership: Ownership,
-    state: engine.physics.BodyState,
-    body_present: bool,
-};
-
-/// Renderer-neutral extraction. District-dormant objects are omitted. For a
-/// held object, `pose` follows the carrier at a fixed cohort-local attachment
-/// offset while `CarryableView.state` continues to expose the durable last
-/// world-body state used by save/replay.
-pub const CarryableDraw = struct {
-    persistent_id: engine.PersistentId,
-    pose: engine.physics.Pose,
-    half_extents: [3]f32,
-    ownership: Ownership,
-};
+const max_carryables = feature_contract.max_carryables;
+const max_pending_commands = feature_contract.max_pending_commands;
+const max_outcomes = feature_contract.max_outcomes;
+const declared_budget = feature_contract.declared_budget;
+const Config = feature_contract.Config;
+const InteractionConfigV1 = feature_contract.InteractionConfigV1;
+const Ownership = feature_contract.Ownership;
+const SpawnCarryable = feature_contract.SpawnCarryable;
+const DespawnCarryable = feature_contract.DespawnCarryable;
+const Collect = feature_contract.Collect;
+const Drop = feature_contract.Drop;
+const Command = feature_contract.Command;
+const CommandKind = feature_contract.CommandKind;
+const RejectionReason = feature_contract.RejectionReason;
+const Outcome = feature_contract.Outcome;
+const CarryableView = feature_contract.CarryableView;
+const CarryableDraw = feature_contract.CarryableDraw;
+const Diagnostics = feature_contract.Diagnostics;
+const InteractionV1 = feature_contract.InteractionV1;
+const validateRecords = feature_contract.validateRecords;
 
 const held_presentation_offset: [3]f32 = .{ 0, 1.0, -0.6 };
-
-pub const Diagnostics = struct {
-    active_count: u32,
-    district_owned_count: u32,
-    held_count: u32,
-    dynamic_body_count: u32,
-    dormant_count: u32,
-    bodies_suspended: u64,
-    bodies_resumed: u64,
-    commands: engine.contracts.diagnostics.QueueStats,
-    outcomes: engine.contracts.diagnostics.QueueStats,
-};
-
-/// Feature-owned persistence record. The host owns world schema, clock,
-/// identity cursor, and cross-feature validation/order.
-pub const InteractionV1 = struct {
-    id: engine.PersistentId,
-    half_extents: [3]f32,
-    ownership: Ownership,
-    pose: engine.physics.Pose,
-    linear_velocity: [3]f32,
-    angular_velocity: [3]f32,
-};
-
-pub fn validateRecords(records: []const InteractionV1) !void {
-    if (records.len > max_carryables) return error.TooManyCarryables;
-    for (records) |record| {
-        try record.id.validate();
-        switch (record.ownership) {
-            .district_owned => {},
-            .inventory_held => |holder| try holder.validate(),
-        }
-        try (engine.physics.DynamicBoxDesc{
-            .pose = record.pose,
-            .velocity = .{
-                .linear = record.linear_velocity,
-                .angular = record.angular_velocity,
-            },
-            .half_extents = record.half_extents,
-        }).validate();
-    }
-}
 
 const FixedQueue = engine.BoundedQueue;
 

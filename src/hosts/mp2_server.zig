@@ -29,7 +29,7 @@ const TransportDiagnostics = struct {
 const Server = struct {
     network: gns.Network,
     listen_socket: gns.ListenSocket,
-    authority: authority_module.Authority,
+    authority: *authority_module.DedicatedAuthority,
     connections: [budgets.max_participants]gns.Connection = @splat(.invalid),
     receive_storage: [budgets.max_wire_message_bytes]u8 = undefined,
     encode_storage: [budgets.max_wire_message_bytes]u8 = undefined,
@@ -42,7 +42,7 @@ const Server = struct {
             if (allow_remote) .any_interface else .loopback,
         );
         errdefer network.closeListen(listen_socket);
-        var authority = try authority_module.Authority.init(allocator);
+        const authority = try authority_module.DedicatedAuthority.init(allocator);
         errdefer authority.deinit();
         return .{
             .network = network,

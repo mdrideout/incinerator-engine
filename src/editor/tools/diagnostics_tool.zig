@@ -96,7 +96,66 @@ pub fn draw(ctx: *const DeveloperInput) void {
                 },
             );
         } else {
-            zgui.textColored(.{ 0.25, 0.9, 0.35, 1 }, "Runtime healthy", .{});
+            zgui.textColored(
+                .{ 0.25, 0.9, 0.35, 1 },
+                "Simulation runtime healthy",
+                .{},
+            );
+        }
+
+        if (snapshot.authority_session) |authority| {
+            const cycle = authority.last_cycle;
+            if (authority.first_cycle_fault) |fault| {
+                zgui.textColored(
+                    .{ 1, 0.25, 0.2, 1 },
+                    "AUTHORITY CYCLE FAULT",
+                    .{},
+                );
+                zgui.text(
+                    "stage {s} | target {d} | completed {d} | code {d}",
+                    .{
+                        @tagName(fault.stage),
+                        fault.target_tick,
+                        fault.completed_tick,
+                        fault.error_code,
+                    },
+                );
+                zgui.text(
+                    "error: {s}{s}",
+                    .{
+                        fault.error_name.slice(),
+                        if (fault.error_name.truncated) " [truncated]" else "",
+                    },
+                );
+            } else {
+                zgui.textColored(
+                    .{ 0.25, 0.9, 0.35, 1 },
+                    "Authority session healthy",
+                    .{},
+                );
+            }
+            zgui.text(
+                "Authority tick {d} | cycle target {d} | completed {d}->{d}",
+                .{
+                    authority.tick,
+                    cycle.target_tick,
+                    cycle.completed_tick_before,
+                    cycle.completed_tick_after,
+                },
+            );
+            zgui.text(
+                "Completed stages {d}/{d} | failed {s}",
+                .{
+                    cycle.count,
+                    cycle.stages.len,
+                    if (cycle.failed_stage) |stage| @tagName(stage) else "none",
+                },
+            );
+            for (cycle.stages[0..@as(usize, cycle.count)], 0..) |stage, index| {
+                zgui.text("  {d}: {s}", .{ index + 1, @tagName(stage) });
+            }
+        } else {
+            zgui.text("Authority session diagnostics: unavailable", .{});
         }
 
         zgui.separator();

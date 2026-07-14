@@ -7,6 +7,22 @@ zig=${ZIG:-zig}
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
+reject_package_path() {
+  local path="$1"
+  if grep -Fxq -- "$path" "$tmp/package-files"; then
+    echo "unexpected path in filtered source package: $path" >&2
+    exit 1
+  fi
+}
+
+reject_package_pattern() {
+  local pattern="$1"
+  if grep -Eq -- "$pattern" "$tmp/package-files"; then
+    echo "unexpected path pattern in filtered source package: $pattern" >&2
+    exit 1
+  fi
+}
+
 test "$($zig version)" = 0.16.0
 
 # Zig 0.16 copies a directory before applying build.zig.zon's package paths.
@@ -35,14 +51,25 @@ test -n "$package_tar"
 tar -tzf "$package_tar" | sed 's#^[^/]*/##' > "$tmp/package-files"
 
 grep -Fxq 'build.zig' "$tmp/package-files"
+grep -Fxq '.github/workflows/ci.yml' "$tmp/package-files"
 grep -Fxq 'ARCHITECTURE_REVIEW.md' "$tmp/package-files"
 grep -Fxq 'CLEANUP_PLAN.md' "$tmp/package-files"
 grep -Fxq 'MULTIPLAYER_PLAN.md' "$tmp/package-files"
+grep -Fxq 'OVERHAUL_PLAN.md' "$tmp/package-files"
+grep -Fxq 'PLAN_001.md' "$tmp/package-files"
+grep -Fxq 'README.md' "$tmp/package-files"
 grep -Fxq 'src/main.zig' "$tmp/package-files"
 grep -Fxq 'src/engine/runtime.zig' "$tmp/package-files"
 grep -Fxq 'src/engine/contracts/physics_debug.zig' "$tmp/package-files"
 grep -Fxq 'src/session/authority.zig' "$tmp/package-files"
+grep -Fxq 'src/session/authority_diagnostics.zig' "$tmp/package-files"
 grep -Fxq 'src/session/client.zig' "$tmp/package-files"
+grep -Fxq 'src/session/gameplay_admission.zig' "$tmp/package-files"
+grep -Fxq 'src/session/local_link.zig' "$tmp/package-files"
+grep -Fxq 'src/session/local_solo.zig' "$tmp/package-files"
+grep -Fxq 'src/session/protocol.zig' "$tmp/package-files"
+grep -Fxq 'src/session/replicated_world.zig' "$tmp/package-files"
+grep -Fxq 'src/session/snapshot_source.zig' "$tmp/package-files"
 grep -Fxq 'src/session/vehicle_prediction.zig' "$tmp/package-files"
 grep -Fxq 'src/adapters/transport/gns_direct.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/mp2_server.zig' "$tmp/package-files"
@@ -55,22 +82,33 @@ grep -Fxq 'tools/verify_mp3_process.sh' "$tmp/package-files"
 grep -Fxq 'tools/build_gamenetworking_sockets.sh' "$tmp/package-files"
 grep -Fxq 'src/engine/contracts/replay.zig' "$tmp/package-files"
 grep -Fxq 'src/engine/fixed_step.zig' "$tmp/package-files"
+grep -Fxq 'src/features/crates/contract.zig' "$tmp/package-files"
 grep -Fxq 'src/features/crates/root.zig' "$tmp/package-files"
+grep -Fxq 'src/features/character/contract.zig' "$tmp/package-files"
 grep -Fxq 'src/features/character/root.zig' "$tmp/package-files"
 grep -Fxq 'src/features/driver_contract.zig' "$tmp/package-files"
+grep -Fxq 'src/features/vehicle/contract.zig' "$tmp/package-files"
 grep -Fxq 'src/features/vehicle/root.zig' "$tmp/package-files"
 grep -Fxq 'src/features/district_contract.zig' "$tmp/package-files"
 grep -Fxq 'src/features/navigation_contract.zig' "$tmp/package-files"
+grep -Fxq 'src/features/district/contract.zig' "$tmp/package-files"
+grep -Fxq 'src/features/npc/contract.zig' "$tmp/package-files"
+grep -Fxq 'src/features/npc/snapshot_validation.zig' "$tmp/package-files"
 grep -Fxq 'src/features/npc/root.zig' "$tmp/package-files"
-grep -Fxq 'src/features/population/root.zig' "$tmp/package-files"
+grep -Fxq 'src/features/population/contract.zig' "$tmp/package-files"
+reject_package_path 'src/features/population/root.zig'
 grep -Fxq 'src/hosts/sandbox_navigation.zig' "$tmp/package-files"
 grep -Fxq 'src/features/district/root.zig' "$tmp/package-files"
+grep -Fxq 'src/features/interaction/contract.zig' "$tmp/package-files"
 grep -Fxq 'src/features/interaction/root.zig' "$tmp/package-files"
 grep -Fxq 'src/features/interaction_contract.zig' "$tmp/package-files"
+grep -Fxq 'src/district_worker_contract.zig' "$tmp/package-files"
 grep -Fxq 'src/district_worker.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/district_replay_loader.zig' "$tmp/package-files"
 grep -Fxq 'src/district_gpu_registry.zig' "$tmp/package-files"
 grep -Fxq 'src/district_scene_adapter.zig' "$tmp/package-files"
+grep -Fxq 'src/district_streaming_host_test.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/district_streaming_host.zig' "$tmp/package-files"
 grep -Fxq 'src/content/root.zig' "$tmp/package-files"
 grep -Fxq 'src/content/district_bundle.zig' "$tmp/package-files"
 grep -Fxq 'src/content/catalog.zig' "$tmp/package-files"
@@ -84,10 +122,19 @@ grep -Fxq 'src/hosts/headless_clock.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/external_producers.zig' "$tmp/package-files"
 grep -Fxq 'src/adapters/platform/macos_signals.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/simulation.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/simulation_snapshot.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/sandbox_host_contracts.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/sandbox_diagnostics_contract.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/sandbox_value_contracts_test.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/simulation_diagnostics.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/sandbox_interaction.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/sandbox_invocation.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/sandbox_replay.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/sandbox_authoring.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/sandbox_save.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/sandbox_persistence.zig' "$tmp/package-files"
+grep -Fxq 'src/hosts/sandbox_developer_host.zig' "$tmp/package-files"
+grep -Fxq 'src/sandbox_developer_host_test.zig' "$tmp/package-files"
 grep -Fxq 'src/adapters/storage/save_slots.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/developer_profile.zig' "$tmp/package-files"
 grep -Fxq 'src/hosts/developer_controls.zig' "$tmp/package-files"
@@ -103,7 +150,7 @@ grep -Fxq 'src/editor/tools/interaction_tool.zig' "$tmp/package-files"
 grep -Fxq 'third_party/joltc-zig/build.zig' "$tmp/package-files"
 grep -Fxq 'shaders/triangle.vert' "$tmp/package-files"
 grep -Fxq 'tools/shader-toolchain/vcpkg.json' "$tmp/package-files"
-! grep -Eq '^tools/shader-toolchain/dxil(/|$)' "$tmp/package-files"
+reject_package_pattern '^tools/shader-toolchain/dxil(/|$)'
 grep -Fxq 'tools/build/macos.zig' "$tmp/package-files"
 grep -Fxq 'tools/build/simulation_graph.zig' "$tmp/package-files"
 grep -Fxq 'tools/build/dependency_cohort.zig' "$tmp/package-files"
@@ -113,9 +160,10 @@ grep -Fxq 'tools/build/headless_product.zig' "$tmp/package-files"
 grep -Fxq 'tools/verify_headless_product.sh' "$tmp/package-files"
 grep -Fxq 'tools/verify_headless_cold_product.sh' "$tmp/package-files"
 grep -Fxq 'tools/verify_m3_headless_lifecycle.sh' "$tmp/package-files"
+grep -Fxq 'tools/verify_m5_architecture.sh' "$tmp/package-files"
 grep -Fxq 'tools/headless_boundary_test.zig' "$tmp/package-files"
 grep -Fxq 'tools/headless_linkage_test.zig' "$tmp/package-files"
-! grep -Eq '^tools/s[0-3]_measure\.zig$' "$tmp/package-files"
+reject_package_pattern '^tools/s[0-3]_measure\.zig$'
 grep -Fxq 'tools/s7_measure.zig' "$tmp/package-files"
 grep -Fxq 'tools/s8_measure.zig' "$tmp/package-files"
 grep -Fxq 'tools/m3_soak.zig' "$tmp/package-files"
@@ -183,6 +231,8 @@ grep -Fxq 'docs/design/s6-multi-district-content.md' "$tmp/package-files"
 grep -Fxq 'docs/design/s7-interaction-ownership.md' "$tmp/package-files"
 grep -Fxq 'docs/design/s8-navigation-population.md' "$tmp/package-files"
 grep -Fxq 'docs/design/m3-pre-server-readiness.md' "$tmp/package-files"
+grep -Fxq 'docs/design/m5-client-authority-cohesion.md' "$tmp/package-files"
+grep -Fxq 'docs/design/post-m5-transactional-authority-cycle.md' "$tmp/package-files"
 grep -Fxq 'docs/validation/s0-acceptance.md' "$tmp/package-files"
 grep -Fxq 'docs/validation/s1-acceptance.md' "$tmp/package-files"
 grep -Fxq 'docs/validation/s2-headless-acceptance.md' "$tmp/package-files"
@@ -197,8 +247,9 @@ grep -Fxq 'docs/validation/s6-acceptance.md' "$tmp/package-files"
 grep -Fxq 'docs/validation/s7-acceptance.md' "$tmp/package-files"
 grep -Fxq 'docs/validation/s8-acceptance.md' "$tmp/package-files"
 grep -Fxq 'docs/validation/m3-acceptance.md' "$tmp/package-files"
-! grep -Eq '^assets(/|$)' "$tmp/package-files"
-! grep -Eq '(^|/)\.DS_Store$' "$tmp/package-files"
+grep -Fxq 'docs/validation/m5-client-authority-cohesion.md' "$tmp/package-files"
+reject_package_pattern '^assets(/|$)'
+reject_package_pattern '(^|/)\.DS_Store$'
 
 mkdir "$tmp/extracted"
 tar -xzf "$package_tar" -C "$tmp/extracted"
@@ -209,11 +260,13 @@ test -n "$package_root"
   "$zig" build test-headless test-content test-content-cooker \
     test-district-content-catalog test-replay \
     test-navigation-contract test-sandbox-navigation \
-    test-npc-feature test-population-feature test-physics \
+    test-npc-feature test-population-contract test-physics test-sandbox-value-contracts \
     test-sandbox-authoring test-sandbox-interaction test-sandbox-save test-save-slots \
+    test-sandbox-persistence test-simulation-snapshot test-session-contracts \
     test-s7-measure test-s8-measure test-m3-soak \
     test-external-producers test-headless-authority \
-    check-replay check-s5-save check-s8-measure check-m3-soak -Deditor=false \
+    check-replay check-s5-save check-s8-measure check-m3-soak verify-m5-architecture \
+    -Deditor=false \
     -Dglslc=/definitely/missing/glslc \
     -Dspirv-cross=/definitely/missing/spirv-cross \
     --summary all
@@ -224,4 +277,4 @@ test -n "$package_root"
   "$zig" build -Dproduct=headless test test-m3-lifecycle --summary all
 )
 
-echo "Filtered source package membership and headless execution verified."
+echo "Filtered source package membership, M5 boundaries, and extracted execution verified."

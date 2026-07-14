@@ -26,6 +26,14 @@ pub const NpcEntry = struct {
     current: protocol.NpcState,
 };
 
+/// Selects which independently scheduled projection lanes advance when a
+/// materialized snapshot is applied. The common lanes are present in every
+/// snapshot; NPC state may intentionally retain its existing interpolation
+/// endpoints until the next lower-frequency NPC update.
+pub const ApplyLanes = struct {
+    npcs: bool,
+};
+
 pub const World = struct {
     entries: [budgets.max_participants]Entry = undefined,
     character_count: u8 = 0,
@@ -41,10 +49,23 @@ pub const World = struct {
     stale_snapshots: u64 = 0,
 
     pub fn apply(self: *World, snapshot: protocol.Snapshot) !void {
+        return self.applyLanes(snapshot, .{ .npcs = snapshot.npc_update });
+    }
+
+    pub fn applyLanes(
+        self: *World,
+        snapshot: protocol.Snapshot,
+        lanes: ApplyLanes,
+    ) !void {
+        // Transport validation is the primary trust boundary, but this owner is
+        // also a public state container. Revalidate complete projections here
+        // so a direct caller cannot install ambiguous replicated identities.
+        try protocol.validateMaterializedSnapshot(snapshot);
         if (snapshot.character_count > budgets.max_participants) return error.TooManyCharacters;
         if (snapshot.vehicle_count > budgets.max_vehicles) return error.TooManyVehicles;
         if (snapshot.carryable_count > budgets.max_carryables) return error.TooManyCarryables;
         if (snapshot.npc_count > budgets.max_npcs) return error.TooManyNpcs;
+        if (lanes.npcs and !snapshot.npc_update) return error.NpcProjectionUnavailable;
         if (self.initialized and !snapshot.sequence.newerThan(self.sequence)) {
             self.stale_snapshots +|= 1;
             return error.StaleSnapshot;
@@ -75,7 +96,7 @@ pub const World = struct {
             next_carryables[index] = .{ .previous = previous, .current = carryable };
         }
         var next_npcs: [budgets.max_npcs]NpcEntry = undefined;
-        if (snapshot.npc_update) for (snapshot.npcSlice(), 0..) |npc, index| {
+        if (lanes.npcs) for (snapshot.npcSlice(), 0..) |npc, index| {
             try npc.entity.validate();
             try validateNpcFinite(npc);
             const previous = self.findNpc(npc.entity) orelse npc;
@@ -87,7 +108,7 @@ pub const World = struct {
         self.vehicle_count = snapshot.vehicle_count;
         self.carryables = next_carryables;
         self.carryable_count = snapshot.carryable_count;
-        if (snapshot.npc_update) {
+        if (lanes.npcs) {
             self.npcs = next_npcs;
             self.npc_count = snapshot.npc_count;
         }
@@ -324,6 +345,85 @@ test "replicated world replaces membership and retains interpolation history" {
     const midpoint = World.interpolate(world.slice()[0], 0.5);
     try std.testing.expectApproxEqAbs(@as(f32, 1), midpoint.position[0], 0.0001);
     try std.testing.expectError(error.StaleSnapshot, world.apply(first));
+}
+
+test "replicated world defensively rejects duplicate projection identities" {
+    const duplicate = identity.ReplicatedEntityId{ .index = 5, .generation = 1 };
+    var snapshot = protocol.Snapshot.empty();
+    snapshot.sequence.value = 1;
+    snapshot.character_count = 1;
+    snapshot.characters[0] = .{
+        .entity = duplicate,
+        .owner = .{ .index = 1, .generation = 1 },
+        .position = .{ 0, 0, 0 },
+        .velocity = .{ 0, 0, 0 },
+        .facing_yaw = 0,
+    };
+    snapshot.vehicle_count = 1;
+    snapshot.vehicles[0] = .{
+        .entity = duplicate,
+        .position = .{ 0, 1, 0 },
+        .rotation = .{ 0, 0, 0, 1 },
+        .linear_velocity = .{ 0, 0, 0 },
+        .angular_velocity = .{ 0, 0, 0 },
+        .driver = null,
+    };
+
+    var world = World{};
+    try std.testing.expectError(
+        error.DuplicateActiveProjectionEntity,
+        world.apply(snapshot),
+    );
+    try std.testing.expect(!world.initialized);
+    try std.testing.expectEqual(@as(u8, 0), world.character_count);
+    try std.testing.expectEqual(@as(u8, 0), world.vehicle_count);
+}
+
+test "replicated world rejects invalid projection physics without mutation" {
+    var initial = protocol.Snapshot.empty();
+    initial.sequence.value = 1;
+    initial.character_count = 1;
+    initial.characters[0] = .{
+        .entity = .{ .index = 1, .generation = 1 },
+        .owner = .{ .index = 1, .generation = 1 },
+        .position = .{ 1, 0, 0 },
+        .velocity = .{ 0, 0, 0 },
+        .facing_yaw = 0,
+    };
+    var world = World{};
+    try world.apply(initial);
+
+    var invalid = protocol.Snapshot.empty();
+    invalid.sequence.value = 2;
+    invalid.vehicle_count = 1;
+    invalid.vehicles[0] = .{
+        .entity = .{ .index = 17, .generation = 1 },
+        .position = .{ 0, 1, 0 },
+        .rotation = .{ 0, 0, 0, 0 },
+        .linear_velocity = .{ 0, 0, 0 },
+        .angular_velocity = .{ 0, 0, 0 },
+        .driver = null,
+    };
+    try std.testing.expectError(error.DegenerateQuaternion, world.apply(invalid));
+    try std.testing.expectEqual(initial.sequence, world.sequence);
+    try std.testing.expectEqual(@as(u8, 1), world.character_count);
+    try std.testing.expectEqual(@as(u8, 0), world.vehicle_count);
+    try std.testing.expectEqualDeep(initial.characters[0], world.slice()[0].current);
+
+    invalid.vehicle_count = 0;
+    invalid.carryable_count = 1;
+    invalid.carryables[0] = .{
+        .entity = .{ .index = 21, .generation = 1 },
+        .position = .{ 0, 0.5, 0 },
+        .rotation = .{ 0, 0, 0, 1 },
+        .linear_velocity = .{ 0, 0, 0 },
+        .angular_velocity = .{ 0, 0, 0 },
+        .half_extents = .{ 0.25, -0.25, 0.25 },
+        .holder = null,
+    };
+    try std.testing.expectError(error.InvalidCarryableExtents, world.apply(invalid));
+    try std.testing.expectEqual(initial.sequence, world.sequence);
+    try std.testing.expectEqual(@as(u8, 0), world.carryable_count);
 }
 
 test "replicated world interpolates vehicle pose and replaces dynamic ownership" {

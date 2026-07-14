@@ -7,9 +7,14 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const simulation = @import("sandbox_simulation");
+const simulation_snapshot = @import("simulation_snapshot");
+const district_feature_contract = @import("district_feature_contract");
+const npc_contract = @import("npc_contract");
+const sandbox_contracts = @import("sandbox_host_contracts");
+const sandbox_diagnostics = @import("sandbox_diagnostics_contract");
 const sandbox_replay = @import("sandbox_replay");
 const sandbox_save = @import("sandbox_save");
-const population = @import("population_feature");
+const population = @import("population_contract");
 const district_contract = @import("district_contract");
 const jolt = @import("jolt_physics");
 const content = @import("content");
@@ -38,14 +43,14 @@ const rss_delta_ceiling_bytes: usize = 32 * 1024 * 1024;
 const p99_ceiling_ns: u64 = 4_166_000;
 const worker_progress_limit: usize = 10_000;
 
-const west = simulation.navigation_west_coord;
-const east = simulation.navigation_east_coord;
-const west_node = simulation.NavigationNodeRef{ .coord = west, .index = 0 };
-const east_node = simulation.NavigationNodeRef{ .coord = east, .index = 2 };
+const west = sandbox_contracts.navigation_west_coord;
+const east = sandbox_contracts.navigation_east_coord;
+const west_node = npc_contract.NodeRef{ .coord = west, .index = 0 };
+const east_node = npc_contract.NodeRef{ .coord = east, .index = 2 };
 const west_x: f32 = 6;
 const east_x: f32 = 10;
 const route_z: f32 = 3;
-const district_assets = simulation.DistrictAssets{
+const district_assets = district_feature_contract.Assets{
     .scene = .{ .index = 17, .generation = 2 },
 };
 
@@ -53,7 +58,7 @@ comptime {
     if (measured_ticks % measured_cycles != 0) {
         @compileError("S8 measured ticks must divide exactly into cycles");
     }
-    if (simulation.npc_capacity != npc_ceiling) {
+    if (npc_contract.max_npcs != npc_ceiling) {
         @compileError("S8 measurement and simulation NPC cohorts differ");
     }
     if (population.max_population_commands != npc_ceiling) {
@@ -620,8 +625,8 @@ const Metrics = struct {
 };
 
 const Identities = struct {
-    character: simulation.PersistentId,
-    carryable: simulation.PersistentId,
+    character: sandbox_contracts.PersistentId,
+    carryable: sandbox_contracts.PersistentId,
 };
 
 const Harness = struct {
@@ -630,7 +635,7 @@ const Harness = struct {
     metrics: *Metrics,
     samples: ?[]u64 = null,
     sample_cursor: usize = 0,
-    npc_ids: [npc_ceiling]simulation.PersistentId = undefined,
+    npc_ids: [npc_ceiling]sandbox_contracts.PersistentId = undefined,
     npc_count: usize = 0,
 
     fn tick(self: *Harness, measured: bool) !void {
@@ -664,7 +669,7 @@ const Harness = struct {
         try self.metrics.observe(self.world);
     }
 
-    fn recordNpcEvent(self: *Harness, event: simulation.NpcEvent) !void {
+    fn recordNpcEvent(self: *Harness, event: npc_contract.Event) !void {
         switch (event) {
             .state_changed => |value| {
                 try self.requireNpcId(value.id);
@@ -673,11 +678,11 @@ const Harness = struct {
             },
             .owner_transferred => |value| {
                 try self.requireNpcId(value.id);
-                if (simulation.ChunkCoord.eql(value.previous, value.current) or
-                    (!simulation.ChunkCoord.eql(value.previous, west) and
-                        !simulation.ChunkCoord.eql(value.previous, east)) or
-                    (!simulation.ChunkCoord.eql(value.current, west) and
-                        !simulation.ChunkCoord.eql(value.current, east)))
+                if (sandbox_contracts.ChunkCoord.eql(value.previous, value.current) or
+                    (!sandbox_contracts.ChunkCoord.eql(value.previous, west) and
+                        !sandbox_contracts.ChunkCoord.eql(value.previous, east)) or
+                    (!sandbox_contracts.ChunkCoord.eql(value.current, west) and
+                        !sandbox_contracts.ChunkCoord.eql(value.current, east)))
                 {
                     return error.InvalidNpcOwnerTransfer;
                 }
@@ -685,8 +690,8 @@ const Harness = struct {
             },
             .goal_reached => |value| {
                 try self.requireNpcId(value.id);
-                if (!simulation.NavigationNodeRef.eql(value.node, west_node) and
-                    !simulation.NavigationNodeRef.eql(value.node, east_node))
+                if (!npc_contract.NodeRef.eql(value.node, west_node) and
+                    !npc_contract.NodeRef.eql(value.node, east_node))
                 {
                     return error.InvalidNpcGoalEvent;
                 }
@@ -695,7 +700,7 @@ const Harness = struct {
         }
     }
 
-    fn requireNpcId(self: *const Harness, id: simulation.PersistentId) !void {
+    fn requireNpcId(self: *const Harness, id: sandbox_contracts.PersistentId) !void {
         for (self.npc_ids[0..self.npc_count]) |known| {
             if (std.meta.eql(known, id)) return;
         }
@@ -738,8 +743,8 @@ fn runTrial(
         try carryCycle(&harness, identities, &owner, east, 10, false, null);
         try requireActiveScaleState(&harness, scale, false);
         for (0..measured_cycles) |cycle| {
-            const destination = if (simulation.ChunkCoord.eql(owner, west)) east else west;
-            const target_x = if (simulation.ChunkCoord.eql(destination, east)) east_x else west_x;
+            const destination = if (sandbox_contracts.ChunkCoord.eql(owner, west)) east else west;
+            const target_x = if (sandbox_contracts.ChunkCoord.eql(destination, east)) east_x else west_x;
             const cycle_start = harness.sample_cursor;
             try carryCycle(
                 &harness,
@@ -783,7 +788,7 @@ fn runTrial(
         if (envelope.len > envelope_ceiling_bytes) return error.S8EnvelopeCeilingExceeded;
     }
 
-    var final_diagnostics: simulation.Diagnostics = undefined;
+    var final_diagnostics: sandbox_diagnostics.Diagnostics = undefined;
     var final_draw_count: u32 = undefined;
     {
         var restored = try simulation.Simulation.fromSnapshotForWorld(
@@ -868,7 +873,7 @@ fn runTrial(
     };
 }
 
-fn trialConfig(namespace: u64) simulation.Config {
+fn trialConfig(namespace: u64) sandbox_contracts.Config {
     return .{
         .namespace = namespace,
         .fixed_delta_seconds = fixed_delta_seconds,
@@ -879,8 +884,8 @@ fn trialConfig(namespace: u64) simulation.Config {
 fn activateDistrict(
     harness: *Harness,
     request_id: u64,
-    coord: simulation.ChunkCoord,
-) !simulation.LoadTicket {
+    coord: sandbox_contracts.ChunkCoord,
+) !sandbox_contracts.LoadTicket {
     try harness.world.submitDistrict(.{ .request_load = .{
         .request_id = request_id,
         .coord = coord,
@@ -901,7 +906,7 @@ fn activateDistrict(
         var activated = false;
         while (harness.world.pollDistrictOutcome()) |outcome| switch (outcome) {
             .activated => |value| {
-                if (!simulation.LoadTicket.eql(ticket, value.ticket)) {
+                if (!sandbox_contracts.LoadTicket.eql(ticket, value.ticket)) {
                     return error.UnexpectedDistrictTicket;
                 }
                 activated = true;
@@ -919,7 +924,7 @@ fn activateDistrict(
 fn unloadDistrict(
     harness: *Harness,
     request_id: u64,
-    ticket: simulation.LoadTicket,
+    ticket: sandbox_contracts.LoadTicket,
 ) !void {
     try harness.world.submitDistrict(.{ .unload = .{
         .request_id = request_id,
@@ -929,7 +934,7 @@ fn unloadDistrict(
     try harness.tick(false);
     switch (harness.world.pollDistrictOutcome() orelse
         return error.DistrictUnloadOutcomeMissing) {
-        .unloaded => |value| if (!simulation.LoadTicket.eql(ticket, value.ticket)) {
+        .unloaded => |value| if (!sandbox_contracts.LoadTicket.eql(ticket, value.ticket)) {
             return error.UnexpectedDistrictTicket;
         },
         else => return error.UnexpectedDistrictOutcome,
@@ -981,7 +986,7 @@ fn spawnPopulation(harness: *Harness) !void {
         };
         if (spawned.request_id < first_request_id or
             spawned.request_id >= first_request_id + npc_ceiling or
-            !simulation.ChunkCoord.eql(spawned.owner, west))
+            !sandbox_contracts.ChunkCoord.eql(spawned.owner, west))
         {
             return error.NpcSpawnOutcomeMismatch;
         }
@@ -1030,8 +1035,8 @@ fn spawnPopulation(harness: *Harness) !void {
 fn carryCycle(
     harness: *Harness,
     identities: Identities,
-    owner: *simulation.ChunkCoord,
-    destination: simulation.ChunkCoord,
+    owner: *sandbox_contracts.ChunkCoord,
+    destination: sandbox_contracts.ChunkCoord,
     transaction_id: u64,
     measured: bool,
     explicit_target_x: ?f32,
@@ -1039,7 +1044,7 @@ fn carryCycle(
     try collect(harness, transaction_id, identities, owner.*, measured);
     if (harness.world.bodyCount() != held_body_ceiling) return error.HeldBodyCountMismatch;
     const target_x = explicit_target_x orelse
-        if (simulation.ChunkCoord.eql(destination, east)) east_x else west_x;
+        if (sandbox_contracts.ChunkCoord.eql(destination, east)) east_x else west_x;
     try moveCharacter(harness, identities.character, target_x, measured);
     try drop(harness, transaction_id, identities, destination, measured);
     if (harness.world.bodyCount() != dropped_body_ceiling) return error.DroppedBodyCountMismatch;
@@ -1050,7 +1055,7 @@ fn collect(
     harness: *Harness,
     transaction_id: u64,
     identities: Identities,
-    previous_owner: simulation.ChunkCoord,
+    previous_owner: sandbox_contracts.ChunkCoord,
     measured: bool,
 ) !void {
     try harness.world.submitInteraction(.{ .collect = .{
@@ -1066,7 +1071,7 @@ fn collect(
             if (value.transaction_id != transaction_id or
                 !std.meta.eql(value.carrier_id, identities.character) or
                 !std.meta.eql(value.carryable_id, identities.carryable) or
-                !simulation.ChunkCoord.eql(value.previous_owner, previous_owner))
+                !sandbox_contracts.ChunkCoord.eql(value.previous_owner, previous_owner))
             {
                 return error.CollectOutcomeMismatch;
             }
@@ -1084,7 +1089,7 @@ fn drop(
     harness: *Harness,
     transaction_id: u64,
     identities: Identities,
-    owner: simulation.ChunkCoord,
+    owner: sandbox_contracts.ChunkCoord,
     measured: bool,
 ) !void {
     try harness.world.submitInteraction(.{ .drop = .{
@@ -1100,7 +1105,7 @@ fn drop(
             if (value.transaction_id != transaction_id or
                 !std.meta.eql(value.carrier_id, identities.character) or
                 !std.meta.eql(value.carryable_id, identities.carryable) or
-                !simulation.ChunkCoord.eql(value.owner, owner))
+                !sandbox_contracts.ChunkCoord.eql(value.owner, owner))
             {
                 return error.DropOutcomeMismatch;
             }
@@ -1116,7 +1121,7 @@ fn drop(
 
 fn moveCharacter(
     harness: *Harness,
-    character_id: simulation.PersistentId,
+    character_id: sandbox_contracts.PersistentId,
     target_x: f32,
     measured: bool,
 ) !void {
@@ -1174,15 +1179,15 @@ fn requireActiveScaleState(
     for (harness.npc_ids[0..harness.npc_count]) |id| {
         const view = try harness.world.npc(id);
         if (!view.controller_present or view.state != .active or
-            (!simulation.ChunkCoord.eql(view.owner, west) and
-                !simulation.ChunkCoord.eql(view.owner, east)))
+            (!sandbox_contracts.ChunkCoord.eql(view.owner, west) and
+                !sandbox_contracts.ChunkCoord.eql(view.owner, east)))
         {
             return error.S8NpcAuthorityMismatch;
         }
         switch (view.goal) {
             .patrol_between => |goal| {
-                if (!simulation.NavigationNodeRef.eql(goal.first, west_node) or
-                    !simulation.NavigationNodeRef.eql(goal.second, east_node))
+                if (!npc_contract.NodeRef.eql(goal.first, west_node) or
+                    !npc_contract.NodeRef.eql(goal.second, east_node))
                 {
                     return error.S8NpcGoalMismatch;
                 }
@@ -1260,7 +1265,7 @@ fn cleanup(harness: *Harness, scale: bool) !void {
 fn runProof(init: std.process.Init, content_root: content.ContentRootPath) !ProofReport {
     const config = trialConfig(80_009);
     const content_cohort = try admitContentCohort(init, content_root);
-    const limits = simulation.FlightRecorderLimits{
+    const limits = sandbox_replay.Limits{
         .max_file_bytes = replay_ceiling_bytes,
         .max_bootstrap = 128,
         .max_commands = 1_024,
@@ -1326,7 +1331,7 @@ fn runProof(init: std.process.Init, content_root: content.ContentRootPath) !Proo
 fn admitContentCohort(
     init: std.process.Init,
     content_root: content.ContentRootPath,
-) !simulation.FlightContentCohort {
+) !sandbox_replay.ContentCohort {
     // Admission loads both installed bundles, validates their identities and
     // complete cooked/logical navigation fragments, and validates the joined
     // route before any Flecs world or Jolt authority is constructed.
@@ -1350,20 +1355,20 @@ fn admitContentCohort(
         return error.InstalledS8CatalogSemanticsInvalid;
     }
     inline for (.{ west, east }) |coord| {
-        const build = try simulation.proceduralDistrictBuild(coord);
+        const build = try sandbox_contracts.proceduralDistrictBuild(coord);
         try admission.validateLogicalRecord(coord, build.recipe_version, build.checksum);
     }
     return admission.contentCohort();
 }
 
 fn saveMetadata(
-    config: simulation.Config,
-    content_cohort: simulation.FlightContentCohort,
+    config: sandbox_contracts.Config,
+    content_cohort: sandbox_replay.ContentCohort,
 ) !sandbox_save.Metadata {
     return .{
-        .payload_schema = simulation.snapshot_schema,
-        .simulation_build_digest = try simulation.currentSimulationBuildFingerprint(),
-        .world_config_digest = try simulation.worldConfigFingerprint(config),
+        .payload_schema = sandbox_contracts.snapshot_schema,
+        .simulation_build_digest = try simulation_snapshot.currentSimulationBuildFingerprint(),
+        .world_config_digest = try simulation_snapshot.worldConfigFingerprint(config),
         .content_digest = try content_cohort.fingerprint(),
     };
 }
@@ -1377,7 +1382,7 @@ fn setNavigationAccounting(metrics: *Metrics) void {
     std.debug.assert(metrics.navigation_cooked_wire_bytes <= 640);
 }
 
-fn npcQueueOccupancy(value: simulation.Diagnostics) u32 {
+fn npcQueueOccupancy(value: sandbox_diagnostics.Diagnostics) u32 {
     return value.npc.commands.occupancy + value.npc.outcomes.occupancy + value.npc.events.occupancy;
 }
 

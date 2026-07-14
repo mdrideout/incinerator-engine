@@ -57,7 +57,8 @@ associated journal sequence. It then force-freezes capture independently of
 the optional host condition. If the fault entry cannot be admitted because the
 journal was already frozen or exhausted, sequence zero makes that loss
 explicit while the separately retained fault remains queryable. Later failures
-and terminal `RuntimeFaulted` calls cannot replace it.
+and the shared authority's terminal `AuthorityFaulted` closure cannot replace
+it.
 
 ### Typed inspection and lifecycle correlation
 

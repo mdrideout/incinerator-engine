@@ -9,8 +9,12 @@ const replay = @import("sandbox_replay");
 const save = @import("sandbox_save");
 const slots = @import("save_slots");
 const sandbox = @import("sandbox_simulation");
+const simulation_snapshot = @import("simulation_snapshot");
+const crate_contract = @import("crate_contract");
+const npc_contract = @import("npc_contract");
+const sandbox_contracts = @import("sandbox_host_contracts");
 
-const fixture_coord = sandbox.ChunkCoord{ .x = 0, .z = 0 };
+const fixture_coord = sandbox_contracts.ChunkCoord{ .x = 0, .z = 0 };
 const smoke_slot_id = "s5-smoke";
 const smoke_boundary_slot_id = "s8-npc-waiting";
 const smoke_dormant_slot_id = "s7-dormant";
@@ -26,7 +30,7 @@ const app_target_pose = engine.physics.Pose{
 };
 
 const NpcEvidence = struct {
-    id: ?sandbox.PersistentId = null,
+    id: ?sandbox_contracts.PersistentId = null,
     spawned: bool = false,
     goal_set: bool = false,
     became_waiting: bool = false,
@@ -67,7 +71,7 @@ fn printUsage() void {
     , .{});
 }
 
-fn smokeConfig() sandbox.Config {
+fn smokeConfig() sandbox_contracts.Config {
     return .{
         .namespace = smoke_namespace,
         .max_crates = 8,
@@ -76,7 +80,7 @@ fn smokeConfig() sandbox.Config {
     };
 }
 
-fn appAuthoringConfig() sandbox.Config {
+fn appAuthoringConfig() sandbox_contracts.Config {
     return .{
         .namespace = 1,
         .block = .{
@@ -88,12 +92,12 @@ fn appAuthoringConfig() sandbox.Config {
 
 fn metadataFor(
     content_cohort: replay.ContentCohort,
-    config: sandbox.Config,
+    config: sandbox_contracts.Config,
 ) !save.Metadata {
     return .{
-        .payload_schema = sandbox.snapshot_schema,
-        .simulation_build_digest = try sandbox.currentSimulationBuildFingerprint(),
-        .world_config_digest = try sandbox.worldConfigFingerprint(config),
+        .payload_schema = sandbox_contracts.snapshot_schema,
+        .simulation_build_digest = try simulation_snapshot.currentSimulationBuildFingerprint(),
+        .world_config_digest = try simulation_snapshot.worldConfigFingerprint(config),
         .content_digest = try content_cohort.fingerprint(),
     };
 }
@@ -168,7 +172,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     const carryable_id = switch (world.pollInteractionOutcome() orelse
         return error.MissingCarryableSpawnOutcome) {
         .spawned => |spawned| blk: {
-            if (!sandbox.ChunkCoord.eql(spawned.owner, fixture_coord)) {
+            if (!sandbox_contracts.ChunkCoord.eql(spawned.owner, fixture_coord)) {
                 return error.UnexpectedCarryableOwner;
             }
             break :blk spawned.id;
@@ -186,7 +190,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
         .collected => |collected| {
             if (!std.meta.eql(collected.carrier_id, character_id) or
                 !std.meta.eql(collected.carryable_id, carryable_id) or
-                !sandbox.ChunkCoord.eql(collected.previous_owner, fixture_coord))
+                !sandbox_contracts.ChunkCoord.eql(collected.previous_owner, fixture_coord))
             {
                 return error.UnexpectedInteractionOutcome;
             }
@@ -203,7 +207,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     var npc_evidence = NpcEvidence{};
     try world.submitNpc(.{ .spawn = .{
         .request_id = 30,
-        .node = .{ .coord = sandbox.navigation_west_coord, .index = 0 },
+        .node = .{ .coord = sandbox_contracts.navigation_west_coord, .index = 0 },
         .goal = .hold,
     } });
     try world.tick();
@@ -213,7 +217,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     if (!npc_evidence.spawned or
         active_npc.state != .active or
         !active_npc.controller_present or
-        !sandbox.ChunkCoord.eql(active_npc.owner, sandbox.navigation_west_coord))
+        !sandbox_contracts.ChunkCoord.eql(active_npc.owner, sandbox_contracts.navigation_west_coord))
     {
         return error.ActiveNpcStateMismatch;
     }
@@ -236,7 +240,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
         .request_id = 31,
         .id = npc_id,
         .goal = .{ .navigate_to = .{
-            .coord = sandbox.navigation_east_coord,
+            .coord = sandbox_contracts.navigation_east_coord,
             .index = 2,
         } },
     } });
@@ -250,7 +254,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     } });
     try world.tick();
     switch (world.pollDistrictOutcome() orelse return error.MissingDistrictUnloadOutcome) {
-        .unloaded => |unloaded| if (!sandbox.LoadTicket.eql(unloaded.ticket, east_ticket)) {
+        .unloaded => |unloaded| if (!sandbox_contracts.LoadTicket.eql(unloaded.ticket, east_ticket)) {
             return error.UnexpectedDistrictTicket;
         },
         else => return error.UnexpectedDistrictOutcome,
@@ -266,7 +270,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     if (!npc_evidence.became_waiting or
         waiting_npc.state != .waiting_at_boundary or
         !waiting_npc.controller_present or
-        !sandbox.ChunkCoord.eql(waiting_npc.owner, sandbox.navigation_west_coord))
+        !sandbox_contracts.ChunkCoord.eql(waiting_npc.owner, sandbox_contracts.navigation_west_coord))
     {
         return error.WaitingNpcStateMismatch;
     }
@@ -289,7 +293,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
         init.io,
         &world,
         33,
-        sandbox.navigation_east_coord,
+        sandbox_contracts.navigation_east_coord,
     );
     try drainNpcOutputs(&world, &npc_evidence);
     const resumed_npc = try world.npc(npc_id);
@@ -307,7 +311,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     } });
     try world.tick();
     switch (world.pollInteractionOutcome() orelse return error.MissingDropOutcome) {
-        .dropped => |dropped| if (!sandbox.ChunkCoord.eql(dropped.owner, fixture_coord)) {
+        .dropped => |dropped| if (!sandbox_contracts.ChunkCoord.eql(dropped.owner, fixture_coord)) {
             return error.UnexpectedCarryableOwner;
         },
         else => return error.UnexpectedInteractionOutcome,
@@ -318,7 +322,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     } });
     try world.tick();
     switch (world.pollDistrictOutcome() orelse return error.MissingDistrictUnloadOutcome) {
-        .unloaded => |unloaded| if (!sandbox.LoadTicket.eql(unloaded.ticket, west_ticket)) {
+        .unloaded => |unloaded| if (!sandbox_contracts.LoadTicket.eql(unloaded.ticket, west_ticket)) {
             return error.UnexpectedDistrictTicket;
         },
         else => return error.UnexpectedDistrictOutcome,
@@ -329,7 +333,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     if (!npc_evidence.became_dormant or
         dormant_npc.state != .dormant or
         dormant_npc.controller_present or
-        !sandbox.ChunkCoord.eql(dormant_npc.owner, sandbox.navigation_west_coord))
+        !sandbox_contracts.ChunkCoord.eql(dormant_npc.owner, sandbox_contracts.navigation_west_coord))
     {
         return error.DormantNpcStateMismatch;
     }
@@ -482,10 +486,10 @@ fn verifySmokeOwnershipSlot(
     );
     defer world.deinit();
 
-    const crate_id = sandbox.PersistentId{ .namespace = smoke_namespace, .local = 1 };
-    const character_id = sandbox.PersistentId{ .namespace = smoke_namespace, .local = 4 };
-    const carryable_id = sandbox.PersistentId{ .namespace = smoke_namespace, .local = 5 };
-    const npc_id = sandbox.PersistentId{ .namespace = smoke_namespace, .local = 6 };
+    const crate_id = sandbox_contracts.PersistentId{ .namespace = smoke_namespace, .local = 1 };
+    const character_id = sandbox_contracts.PersistentId{ .namespace = smoke_namespace, .local = 4 };
+    const carryable_id = sandbox_contracts.PersistentId{ .namespace = smoke_namespace, .local = 5 };
+    const npc_id = sandbox_contracts.PersistentId{ .namespace = smoke_namespace, .local = 6 };
     const restored = try world.crate(crate_id);
     if (!std.meta.eql(restored.state.pose, smoke_target_pose) or
         !std.meta.eql(restored.state.velocity, engine.physics.Velocity{}) or
@@ -607,7 +611,7 @@ fn verifyAuthoringSmoke(
         .{},
     );
     defer world.deinit();
-    const id = sandbox.PersistentId{ .namespace = 1, .local = 1 };
+    const id = sandbox_contracts.PersistentId{ .namespace = 1, .local = 1 };
     const restored = try world.crate(id);
     if (!std.meta.eql(restored.state.pose, app_target_pose) or
         !std.meta.eql(restored.state.velocity, engine.physics.Velocity{}) or
@@ -641,7 +645,7 @@ fn drainNpcOutputs(world: *sandbox.Simulation, evidence: *NpcEvidence) !void {
         .spawned => |spawned| {
             if (spawned.request_id != 30 or
                 evidence.id != null or
-                !sandbox.ChunkCoord.eql(spawned.owner, sandbox.navigation_west_coord))
+                !sandbox_contracts.ChunkCoord.eql(spawned.owner, sandbox_contracts.navigation_west_coord))
             {
                 return error.UnexpectedNpcOutcome;
             }
@@ -650,8 +654,8 @@ fn drainNpcOutputs(world: *sandbox.Simulation, evidence: *NpcEvidence) !void {
         },
         .goal_set => |set| {
             const id = evidence.id orelse return error.UnexpectedNpcOutcome;
-            const expected_goal = sandbox.NpcGoal{ .navigate_to = .{
-                .coord = sandbox.navigation_east_coord,
+            const expected_goal = npc_contract.Goal{ .navigate_to = .{
+                .coord = sandbox_contracts.navigation_east_coord,
                 .index = 2,
             } };
             if (set.request_id != 31 or
@@ -705,7 +709,7 @@ fn verifyCompactNpcSnapshot(
     payload: []const u8,
     expected: SmokeOwnership,
 ) !void {
-    var parsed = try sandbox.parseSnapshot(
+    var parsed = try simulation_snapshot.parse(
         allocator,
         payload,
         smokeConfig().max_crates,
@@ -714,7 +718,7 @@ fn verifyCompactNpcSnapshot(
         replay.max_world_npcs,
     );
     defer parsed.deinit();
-    if (parsed.value.schema_version != sandbox.snapshot_schema or
+    if (parsed.value.schema_version != sandbox_contracts.snapshot_schema or
         parsed.value.npcs.len != 1 or
         std.mem.indexOf(u8, payload, "controller_present") != null or
         std.mem.indexOf(u8, payload, "owner_ticket") != null)
@@ -724,11 +728,11 @@ fn verifyCompactNpcSnapshot(
     const record = parsed.value.npcs[0];
     if (!std.meta.eql(
         record.id,
-        sandbox.PersistentId{ .namespace = smoke_namespace, .local = 6 },
+        sandbox_contracts.PersistentId{ .namespace = smoke_namespace, .local = 6 },
     ) or
-        !sandbox.ChunkCoord.eql(record.owner, sandbox.navigation_west_coord) or
+        !sandbox_contracts.ChunkCoord.eql(record.owner, sandbox_contracts.navigation_west_coord) or
         record.route.route_index != 0 or
-        !sandbox.ChunkCoord.eql(record.route.current.coord, sandbox.navigation_west_coord))
+        !sandbox_contracts.ChunkCoord.eql(record.route.current.coord, sandbox_contracts.navigation_west_coord))
     {
         return error.UnexpectedNpcSnapshotRecord;
     }
@@ -747,9 +751,9 @@ fn verifyCompactNpcSnapshot(
                 else => return error.UnexpectedNpcSnapshotRecord,
             };
             const next = record.route.next orelse return error.UnexpectedNpcSnapshotRecord;
-            if (!sandbox.ChunkCoord.eql(target.coord, sandbox.navigation_east_coord) or
+            if (!sandbox_contracts.ChunkCoord.eql(target.coord, sandbox_contracts.navigation_east_coord) or
                 target.index != 2 or
-                !sandbox.ChunkCoord.eql(next.coord, sandbox.navigation_east_coord) or
+                !sandbox_contracts.ChunkCoord.eql(next.coord, sandbox_contracts.navigation_east_coord) or
                 next.index != 0)
             {
                 return error.UnexpectedNpcSnapshotRecord;
@@ -775,7 +779,7 @@ fn requireHostileNpcRestoreRejections(
         if (err != error.InvalidNpcLimit) return err;
     }
 
-    var parsed = try sandbox.parseSnapshot(
+    var parsed = try simulation_snapshot.parse(
         allocator,
         payload,
         smokeConfig().max_crates,
@@ -785,7 +789,7 @@ fn requireHostileNpcRestoreRejections(
     );
     defer parsed.deinit();
     if (parsed.value.npcs.len != 1) return error.UnexpectedNpcSnapshotRecord;
-    var hostile_records = [1]sandbox.NpcV1{parsed.value.npcs[0]};
+    var hostile_records = [1]npc_contract.NpcV1{parsed.value.npcs[0]};
     hostile_records[0].route.route_index = 1;
     var hostile_snapshot = parsed.value;
     hostile_snapshot.npcs = &hostile_records;
@@ -810,14 +814,14 @@ fn requireHostileNpcRestoreRejections(
 }
 
 fn requireEnvelopeBudgets(payload: []const u8, envelope: []const u8) !void {
-    if (payload.len > sandbox.max_snapshot_bytes) return error.SnapshotTooLarge;
+    if (payload.len > simulation_snapshot.max_bytes) return error.SnapshotTooLarge;
     if (envelope.len > save.max_envelope_bytes) return error.SaveEnvelopeTooLarge;
 }
 
 fn applyAuthoring(
     world: *sandbox.Simulation,
     controller: *authoring.DefaultController,
-    command: sandbox.Command,
+    command: crate_contract.Command,
 ) !void {
     world.submit(command) catch |err| {
         _ = controller.submissionFailed(command.relocate.transaction_id);
@@ -834,8 +838,8 @@ fn loadDistrict(
     io: std.Io,
     world: *sandbox.Simulation,
     request_id: u64,
-    coord: sandbox.ChunkCoord,
-) !sandbox.LoadTicket {
+    coord: sandbox_contracts.ChunkCoord,
+) !sandbox_contracts.LoadTicket {
     try world.submitDistrict(.{ .request_load = .{
         .request_id = request_id,
         .coord = coord,
@@ -853,7 +857,7 @@ fn loadDistrict(
         try world.tick();
         while (world.pollDistrictOutcome()) |outcome| switch (outcome) {
             .activated => |activated| {
-                if (!sandbox.LoadTicket.eql(ticket, activated.ticket)) {
+                if (!sandbox_contracts.LoadTicket.eql(ticket, activated.ticket)) {
                     return error.UnexpectedDistrictTicket;
                 }
                 while (world.pollDistrictEvent() != null) {}
@@ -871,9 +875,9 @@ fn preflightSnapshotCatalog(
     init: std.process.Init,
     raw_content_root: []const u8,
     payload: []const u8,
-    config: sandbox.Config,
+    config: sandbox_contracts.Config,
 ) !void {
-    var parsed = try sandbox.parseSnapshot(
+    var parsed = try simulation_snapshot.parse(
         init.gpa,
         payload,
         config.max_crates,
@@ -963,7 +967,7 @@ fn loadFixtureCohort(init: std.process.Init, raw_root_path: []const u8) !replay.
         },
     };
     defer admission.deinit();
-    const build = try sandbox.proceduralDistrictBuild(fixture_coord);
+    const build = try sandbox_contracts.proceduralDistrictBuild(fixture_coord);
     try admission.validateLogicalRecord(
         fixture_coord,
         build.recipe_version,

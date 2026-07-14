@@ -6,8 +6,12 @@
 //! without entering feature or simulation internals.
 
 const std = @import("std");
-const crate_feature = @import("crate_feature");
+const crate_feature = @import("crate_contract");
 const simulation = @import("sandbox_simulation");
+const simulation_snapshot = @import("simulation_snapshot");
+const sandbox_contracts = @import("sandbox_host_contracts");
+const sandbox_diagnostics = @import("sandbox_diagnostics_contract");
+const npc_contract = @import("npc_contract");
 const external_producers = @import("external_producers");
 const sandbox_save = @import("sandbox_save");
 
@@ -38,7 +42,7 @@ pub const TickReport = struct {
 
 pub const Diagnostics = struct {
     healthy: bool,
-    world: simulation.Diagnostics,
+    world: sandbox_diagnostics.Diagnostics,
     producers: ProducerDiagnostics,
     internal_outcomes: QueueDiagnostics,
 };
@@ -55,7 +59,7 @@ pub const Authority = struct {
     router: ProducerRouter = ProducerRouter.init(),
     healthy: bool = true,
     submit_fault: ?anyerror = null,
-    internal_outcomes: [internal_outcome_capacity]simulation.Outcome = undefined,
+    internal_outcomes: [internal_outcome_capacity]crate_feature.Outcome = undefined,
     internal_head: usize = 0,
     internal_len: usize = 0,
     internal_reservations: usize = 0,
@@ -63,7 +67,7 @@ pub const Authority = struct {
 
     pub fn initFresh(
         allocator: std.mem.Allocator,
-        config: simulation.Config,
+        config: sandbox_contracts.Config,
     ) !Authority {
         return .{ .world = try simulation.Simulation.init(allocator, config) };
     }
@@ -71,7 +75,7 @@ pub const Authority = struct {
     pub fn initRestored(
         allocator: std.mem.Allocator,
         payload: []const u8,
-        config: simulation.Config,
+        config: sandbox_contracts.Config,
     ) !Authority {
         return .{ .world = try simulation.Simulation.fromSnapshotForWorld(
             allocator,
@@ -112,7 +116,7 @@ pub const Authority = struct {
     /// external producer merely because their union type is shared.
     pub fn submitInternal(
         self: *Authority,
-        command: simulation.Command,
+        command: crate_feature.Command,
     ) !void {
         if (!self.healthy) return error.HeadlessAuthorityUnhealthy;
         if (self.router.diagnostics().lifecycle != .accepting) {
@@ -141,7 +145,7 @@ pub const Authority = struct {
         self.internal_reservations += 1;
     }
 
-    pub fn pollInternalOutcome(self: *Authority) ?simulation.Outcome {
+    pub fn pollInternalOutcome(self: *Authority) ?crate_feature.Outcome {
         if (self.internal_len == 0) return null;
         const result = self.internal_outcomes[self.internal_head];
         self.internal_head = (self.internal_head + 1) % internal_outcome_capacity;
@@ -305,7 +309,7 @@ pub const Authority = struct {
 
     fn pushInternalOutcome(
         self: *Authority,
-        outcome: simulation.Outcome,
+        outcome: crate_feature.Outcome,
     ) !void {
         if (self.internal_len == internal_outcome_capacity) {
             return error.InternalOutcomeQueueFull;
@@ -330,7 +334,7 @@ fn countDiagnostic(value: usize) u32 {
     return std.math.cast(u32, value) orelse std.math.maxInt(u32);
 }
 
-fn testWorldConfig(namespace: u64) simulation.Config {
+fn testWorldConfig(namespace: u64) sandbox_contracts.Config {
     return .{
         .namespace = namespace,
         .max_crates = 8,
@@ -466,7 +470,7 @@ test "unowned relocation is retained and permanently closes the save boundary" {
     try std.testing.expectError(
         error.HeadlessSaveBoundaryNotReady,
         authority.saveEnvelope(std.testing.allocator, .{
-            .payload_schema = simulation.snapshot_schema,
+            .payload_schema = sandbox_contracts.snapshot_schema,
             .simulation_build_digest = [_]u8{1} ** 32,
             .world_config_digest = [_]u8{2} ** 32,
             .content_digest = [_]u8{3} ** 32,
@@ -570,13 +574,13 @@ test "restored tick exhaustion faults authority and closes producer ingress" {
         defer source.deinit();
         const canonical = try source.world.save(std.testing.allocator);
         defer std.testing.allocator.free(canonical);
-        var parsed = try simulation.parseSnapshot(
+        var parsed = try simulation_snapshot.parse(
             std.testing.allocator,
             canonical,
             config.max_crates,
             config.character.max_characters,
             config.vehicle.max_vehicles,
-            simulation.npc_capacity,
+            npc_contract.max_npcs,
         );
         defer parsed.deinit();
         parsed.value.completed_ticks = std.math.maxInt(u64);

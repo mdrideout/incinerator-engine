@@ -7,7 +7,7 @@
 
 const std = @import("std");
 const engine = @import("incinerator_engine");
-const crates = @import("crate_feature");
+const crates = @import("crate_contract");
 
 pub const default_history_capacity: usize = 64;
 pub const request_capacity: usize = 16;

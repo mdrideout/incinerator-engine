@@ -9,211 +9,33 @@
 const std = @import("std");
 const engine = @import("incinerator_engine");
 const district_contract = @import("district_contract");
+const feature_contract = @import("district_feature_contract");
 const interaction_contract = @import("interaction_contract");
 const navigation_contract = @import("navigation_contract");
 
 const logical_state_domain = "incinerator.district.logical";
 const logical_state_schema: u16 = 2;
 
-pub const max_districts: usize = 2;
-pub const max_pending_commands: usize = 16;
-pub const max_outcomes: usize = 32;
-pub const max_events: usize = 16;
-
-pub const Assets = struct {
-    /// One scene-level identity preserves cooked nodes, authored transforms,
-    /// mesh instances, material relationships, and textures behind the
-    /// renderer-owned registry boundary. Its residency is never an activation
-    /// prerequisite.
-    scene: engine.rendering.SceneHandle = .invalid,
-};
-
-pub const StateTag = enum { absent, loading, cancelling, active };
-
-pub const SlotDiagnostics = struct {
-    state: StateTag,
-    request_id: ?u64,
-    ticket: ?district_contract.LoadTicket,
-};
-
-pub const Diagnostics = struct {
-    active_count: u32,
-    loading_count: u32,
-    cancelling_count: u32,
-    body_count: u32,
-    slots: [max_districts]SlotDiagnostics,
-    commands: engine.contracts.diagnostics.QueueStats,
-    outcomes: engine.contracts.diagnostics.QueueStats,
-    /// Outcome slots promised to accepted commands or the one in-flight
-    /// loader transition. Occupancy plus reservations never exceeds capacity.
-    outcome_reservations: u32,
-    events: engine.contracts.diagnostics.QueueStats,
-};
-
-pub const RequestLoad = struct {
-    request_id: u64,
-    coord: district_contract.ChunkCoord,
-    assets: Assets,
-};
-
-pub const CancelLoad = struct {
-    request_id: u64,
-    ticket: district_contract.LoadTicket,
-};
-
-pub const Unload = struct {
-    request_id: u64,
-    ticket: district_contract.LoadTicket,
-};
-
-pub const Command = union(enum) {
-    request_load: RequestLoad,
-    cancel_load: CancelLoad,
-    unload: Unload,
-};
-
-pub const CommandKind = enum { request_load, cancel_load, unload };
-
-pub const RejectionReason = enum {
-    district_not_absent,
-    district_not_loading,
-    district_not_active,
-    coordinate_already_present,
-    district_capacity_reached,
-    stale_ticket,
-    loader_busy,
-    loader_stale,
-    loader_idle,
-    invalid_ticket,
-};
-
-pub const CommandRejected = struct {
-    command: CommandKind,
-    reason: RejectionReason,
-    request_id: u64,
-    ticket: ?district_contract.LoadTicket = null,
-};
-
-pub const LoadRequested = struct {
-    request_id: u64,
-    ticket: district_contract.LoadTicket,
-};
-
-pub const CancellationRequested = struct {
-    request_id: u64,
-    ticket: district_contract.LoadTicket,
-};
-
-pub const Activated = struct {
-    request_id: u64,
-    ticket: district_contract.LoadTicket,
-    id: engine.PersistentId,
-    coord: district_contract.ChunkCoord,
-    static_box_count: u8,
-};
-
-pub const LoadCancelled = struct {
-    ticket: district_contract.LoadTicket,
-};
-
-pub const LoadFailed = struct {
-    request_id: u64,
-    ticket: district_contract.LoadTicket,
-    failure: district_contract.Failure,
-};
-
-pub const Unloaded = struct {
-    request_id: u64,
-    ticket: district_contract.LoadTicket,
-    id: engine.PersistentId,
-};
-
-pub const Outcome = union(enum) {
-    load_requested: LoadRequested,
-    cancellation_requested: CancellationRequested,
-    activated: Activated,
-    cancelled: LoadCancelled,
-    load_failed: LoadFailed,
-    unloaded: Unloaded,
-    rejected: CommandRejected,
-};
-
-pub const LoadStarted = struct {
-    ticket: district_contract.LoadTicket,
-    coord: district_contract.ChunkCoord,
-};
-
-pub const DistrictActivated = struct {
-    ticket: district_contract.LoadTicket,
-    id: engine.PersistentId,
-};
-
-pub const DistrictDeactivated = struct {
-    ticket: district_contract.LoadTicket,
-    id: ?engine.PersistentId,
-    reason: enum { cancelled, failed, unloaded },
-};
-
-pub const StaleCompletion = struct {
-    expected: district_contract.LoadTicket,
-    received: district_contract.LoadTicket,
-};
-
-pub const Event = union(enum) {
-    load_started: LoadStarted,
-    cancellation_started: district_contract.LoadTicket,
-    activated: DistrictActivated,
-    deactivated: DistrictDeactivated,
-    stale_completion: StaleCompletion,
-};
-
-/// Immutable logical draw input. The renderer may resolve these handles to a
-/// fallback while an independent GPU residency operation is still pending.
-pub const DistrictDraw = struct {
-    persistent_id: engine.PersistentId,
-    ticket: district_contract.LoadTicket,
-    build: district_contract.DistrictBuild,
-    assets: Assets,
-};
-
-/// Logical persistence record. Transient jobs, tickets, physics handles,
-/// queues, and presentation resources are deliberately excluded.
-pub const DistrictV1 = struct {
-    id: engine.PersistentId,
-    coord: district_contract.ChunkCoord,
-    recipe_version: u32,
-    checksum: u64,
-};
-
-pub fn validateRecords(
-    comptime CanonicalContent: type,
-    records: []const DistrictV1,
-) !void {
-    if (records.len > max_districts) return error.TooManyDistricts;
-    for (records, 0..) |record, index| {
-        try record.id.validate();
-        for (records[0..index]) |earlier| {
-            if (district_contract.ChunkCoord.eql(earlier.coord, record.coord)) {
-                return error.DuplicateDistrictCoordinate;
-            }
-            if (std.meta.eql(earlier.id, record.id)) {
-                return error.DuplicateDistrictPersistentId;
-            }
-        }
-        if (record.recipe_version != CanonicalContent.current_recipe_version) {
-            return error.UnsupportedDistrictRecipeVersion;
-        }
-        const build = switch (CanonicalContent.build(
-            record.coord,
-            record.recipe_version,
-        )) {
-            .ready => |value| value,
-            .failed => return error.InvalidDistrictRecord,
-        };
-        try build.validate();
-        if (build.checksum != record.checksum) return error.DistrictChecksumMismatch;
-    }
-}
+const max_districts = feature_contract.max_districts;
+const max_pending_commands = feature_contract.max_pending_commands;
+const max_outcomes = feature_contract.max_outcomes;
+const max_events = feature_contract.max_events;
+const Assets = feature_contract.Assets;
+const StateTag = feature_contract.StateTag;
+const SlotDiagnostics = feature_contract.SlotDiagnostics;
+const Diagnostics = feature_contract.Diagnostics;
+const RequestLoad = feature_contract.RequestLoad;
+const CancelLoad = feature_contract.CancelLoad;
+const Unload = feature_contract.Unload;
+const Command = feature_contract.Command;
+const CommandKind = feature_contract.CommandKind;
+const RejectionReason = feature_contract.RejectionReason;
+const CommandRejected = feature_contract.CommandRejected;
+const Outcome = feature_contract.Outcome;
+const Event = feature_contract.Event;
+const DistrictDraw = feature_contract.DistrictDraw;
+const DistrictV1 = feature_contract.DistrictV1;
+const validateRecords = feature_contract.validateRecords;
 
 pub fn Feature(
     comptime StaticBodies: type,

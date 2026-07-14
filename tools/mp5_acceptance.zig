@@ -56,7 +56,7 @@ pub fn main(init: std.process.Init) !void {
 
     // The registry/service is now out of scope. Already admitted authority
     // operation must not depend on its availability.
-    var authority = try authority_module.Authority.initWithOptions(
+    const authority = try authority_module.DedicatedAuthority.initWithOptions(
         std.heap.page_allocator,
         .{
             .room_admission = .{

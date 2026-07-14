@@ -10,7 +10,7 @@ const total_ticks: u64 = 420;
 
 pub fn main(init: std.process.Init) !void {
     _ = init;
-    var authority = try authority_module.Authority.initWithOptions(
+    const authority = try authority_module.DedicatedAuthority.initWithOptions(
         std.heap.page_allocator,
         .{
             .downstream_bytes_per_second = 1_024,

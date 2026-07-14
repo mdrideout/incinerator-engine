@@ -17,7 +17,16 @@ pub fn build(
     const graph = simulation_graph.create(b, target, optimize);
     const cohort_verification = simulation_graph.addCohortVerification(b);
     const engine_module = graph.engine;
-    const crate_feature_module = graph.crates;
+    const crate_contract_module = graph.crate_contract;
+    const character_contract_module = graph.character_contract;
+    const vehicle_contract_module = graph.vehicle_contract;
+    const district_contract_module = graph.district_contract;
+    const district_feature_contract_module = graph.district_feature_contract;
+    const interaction_feature_contract_module = graph.interaction_feature_contract;
+    const npc_contract_module = graph.npc_contract;
+    const sandbox_host_contracts_module = graph.sandbox_host_contracts;
+    const sandbox_diagnostics_contract_module = graph.sandbox_diagnostics_contract;
+    const simulation_snapshot_module = graph.simulation_snapshot;
     const sandbox_simulation_module = graph.sandbox_simulation;
     const sandbox_replay_module = graph.sandbox_replay;
     const sandbox_authoring_module = graph.sandbox_authoring;
@@ -59,8 +68,12 @@ pub fn build(
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "crate_feature", .module = crate_feature_module },
+            .{ .name = "crate_contract", .module = crate_contract_module },
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "simulation_snapshot", .module = simulation_snapshot_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
+            .{ .name = "npc_contract", .module = npc_contract_module },
             .{ .name = "external_producers", .module = external_producers_module },
             .{ .name = "sandbox_save", .module = sandbox_save_module },
         },
@@ -71,7 +84,10 @@ pub fn build(
         .optimize = optimize,
         .imports = &.{
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
-            .{ .name = "crate_feature", .module = crate_feature_module },
+            .{ .name = "simulation_snapshot", .module = simulation_snapshot_module },
+            .{ .name = "crate_contract", .module = crate_contract_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
             .{ .name = "headless_authority", .module = headless_authority_module },
             .{ .name = "external_producers", .module = external_producers_module },
             .{ .name = "sandbox_save", .module = sandbox_save_module },
@@ -84,6 +100,16 @@ pub fn build(
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine_module },
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "simulation_snapshot", .module = simulation_snapshot_module },
+            .{ .name = "crate_contract", .module = crate_contract_module },
+            .{ .name = "character_contract", .module = character_contract_module },
+            .{ .name = "vehicle_contract", .module = vehicle_contract_module },
+            .{ .name = "district_contract", .module = district_contract_module },
+            .{ .name = "district_feature_contract", .module = district_feature_contract_module },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract_module },
+            .{ .name = "npc_contract", .module = npc_contract_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
             .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
             .{ .name = "developer_diagnostics", .module = developer_diagnostics_module },

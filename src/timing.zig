@@ -16,9 +16,8 @@ const developer_controls = @import("developer_controls");
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
 
-/// The fixed simulation tick rate (120 Hz = 8.333... ms per tick)
-/// This determines how often physics and gameplay logic update.
-/// Higher values = lower latency but more CPU usage.
+/// Graphical embedded-authority rate (60 Hz = 16.666... ms per tick).
+/// Presentation cadence is independent of this simulation contract.
 pub const TICK_RATE = fixed_step.tick_rate;
 
 /// Duration of one simulation tick in seconds
@@ -239,8 +238,8 @@ test "FrameTimer initialization" {
 }
 
 test "TICK_DURATION calculation" {
-    // 120 Hz should be approximately 8.333ms
-    try std.testing.expectApproxEqAbs(TICK_DURATION, 0.008333, 0.001);
+    try std.testing.expectEqual(@as(u32, 60), TICK_RATE);
+    try std.testing.expectApproxEqAbs(TICK_DURATION, 1.0 / 60.0, 0.000001);
 }
 
 test "long pause adds no simulation time and resume has no catch-up burst" {
@@ -253,13 +252,15 @@ test "long pause adds no simulation time and resume has no catch-up burst" {
     try std.testing.expectEqual(@as(u64, 0), timer.total_ticks);
     try std.testing.expectEqual(@as(f64, 0), timer.fixed_step.accumulatedSeconds());
 
-    // Resuming at 240 Hz grants only the new half-tick frame. Paused wall time
-    // is not replayed into the accumulator.
-    try timer.beginControlledFrameWithElapsedSeconds(
-        1.0 / 240.0,
-        .{ .running = .normal },
-    );
-    try std.testing.expect(!timer.shouldTick());
+    // Resuming at 240 Hz grants only new wall time. Four quarter-tick frames
+    // produce one 60 Hz authority tick; paused time is never replayed.
+    for (0..3) |_| {
+        try timer.beginControlledFrameWithElapsedSeconds(
+            1.0 / 240.0,
+            .{ .running = .normal },
+        );
+        try std.testing.expect(!timer.shouldTick());
+    }
     try timer.beginControlledFrameWithElapsedSeconds(
         1.0 / 240.0,
         .{ .running = .normal },
@@ -272,28 +273,55 @@ test "long pause adds no simulation time and resume has no catch-up burst" {
 
 test "half and double scales change cadence only" {
     const expected_fixed_delta = TICK_DURATION;
+    const presentation_hz = 120;
     var half_timer = FrameTimer.init();
-    for (0..120) |_| {
+    for (0..presentation_hz) |_| {
         try half_timer.beginControlledFrameWithElapsedSeconds(
-            1.0 / 120.0,
+            1.0 / @as(f64, @floatFromInt(presentation_hz)),
             .{ .running = .half },
         );
         while (half_timer.shouldTick()) half_timer.recordCompletedTick();
     }
-    try std.testing.expectEqual(@as(u64, 60), half_timer.total_ticks);
+    try std.testing.expectEqual(@as(u64, TICK_RATE / 2), half_timer.total_ticks);
 
     var double_timer = FrameTimer.init();
-    for (0..120) |_| {
+    for (0..presentation_hz) |_| {
         try double_timer.beginControlledFrameWithElapsedSeconds(
-            1.0 / 120.0,
+            1.0 / @as(f64, @floatFromInt(presentation_hz)),
             .{ .running = .double },
         );
         while (double_timer.shouldTick()) double_timer.recordCompletedTick();
     }
-    try std.testing.expectEqual(@as(u64, 240), double_timer.total_ticks);
+    try std.testing.expectEqual(@as(u64, TICK_RATE * 2), double_timer.total_ticks);
     // Host cadence policy has no API capable of mutating the authoritative
     // fixed tick duration.
     try std.testing.expectEqual(expected_fixed_delta, TICK_DURATION);
+}
+
+test "80 Hz presentation remains independent of 60 Hz authority cadence" {
+    var timer = FrameTimer.init();
+    var zero_tick_frames: u32 = 0;
+    var one_tick_frames: u32 = 0;
+
+    for (0..160) |_| {
+        try timer.beginControlledFrameWithElapsedSeconds(
+            1.0 / 80.0,
+            .{ .running = .normal },
+        );
+        var frame_ticks: u32 = 0;
+        while (timer.shouldTick()) {
+            timer.recordCompletedTick();
+            frame_ticks += 1;
+        }
+        if (frame_ticks == 0) zero_tick_frames += 1;
+        if (frame_ticks == 1) one_tick_frames += 1;
+        try std.testing.expect(frame_ticks <= 1);
+    }
+
+    try std.testing.expectEqual(@as(u64, 120), timer.total_ticks);
+    try std.testing.expectEqual(@as(u32, 40), zero_tick_frames);
+    try std.testing.expectEqual(@as(u32, 120), one_tick_frames);
+    try std.testing.expectEqual(@as(f32, 0), timer.alpha());
 }
 
 test "single step is counted once without manufacturing elapsed time" {

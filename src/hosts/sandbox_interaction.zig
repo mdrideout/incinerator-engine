@@ -5,9 +5,9 @@
 //! after immutable editor borrows have ended.
 
 const std = @import("std");
-const sandbox_host = @import("sandbox_simulation");
+const interaction = @import("interaction_feature_contract");
 
-pub const Request = sandbox_host.InteractionCommand;
+pub const Request = interaction.Command;
 pub const request_capacity: usize = 8;
 
 pub const RequestBuffer = struct {
@@ -53,7 +53,10 @@ pub const TransactionSequencer = struct {
 
 test "interaction request mailbox is bounded and visibly rejects overflow" {
     var buffer = RequestBuffer{};
-    const id = sandbox_host.PersistentId{ .namespace = 1, .local = 1 };
+    const id = @FieldType(interaction.Collect, "carrier_id"){
+        .namespace = 1,
+        .local = 1,
+    };
     for (0..request_capacity) |index| {
         try std.testing.expect(buffer.push(.{ .collect = .{
             .transaction_id = index + 1,

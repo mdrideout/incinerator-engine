@@ -1,14 +1,23 @@
 # Apple Silicon macOS Runtime Readiness Record
 
-**Date:** 2026-07-13
-**Status:** Post-cleanup Apple Silicon macOS baseline current
+**Evidence date:** 2026-07-14
+
+**Last reviewed:** 2026-07-14
+
+**Status:** Accepted through the M5 full-readiness refresh
 
 ## Scope
 
-This record covers the complete S8 visual/runtime gate and M3 cold headless
-authority gate. Apple Silicon macOS with Metal is the sole current platform
-target. Linux/SteamOS and Windows are future/deferred and impose no build,
-shader, headless, runtime, packaging, CI, or compatibility gates.
+This record preserves the detailed S8 visual/runtime and M3 cold-headless
+observations from the post-cleanup tree and records the complete M5 native
+refresh. MP0-MP5/M4 are accepted separately in
+[`m4-multiplayer-foundation.md`](m4-multiplayer-foundation.md); the current M5
+ownership and clock result is accepted in
+[`m5-client-authority-cohesion.md`](m5-client-authority-cohesion.md). Detailed
+scenario counts explicitly labeled historical below remain baseline evidence,
+not current clock claims. Apple Silicon macOS with Metal is the sole current
+platform target. Linux/SteamOS and Windows are future/deferred and impose no
+build, shader, headless, runtime, packaging, CI, or compatibility gates.
 
 All native commands below use Zig 0.16.0 and `ReleaseFast`. Historical S2-S4
 gates remain valid with `-Deditor=false`; the aggregate uses `-Deditor=true` so
@@ -30,24 +39,26 @@ gates continue to execute their own installed non-graphical products.
 
 ```sh
 zig build test-macos-readiness \
-  -Doptimize=ReleaseFast -Deditor=true
+  -Doptimize=ReleaseFast -Deditor=true -j1 --summary all
 ```
 
 The aggregate runs the following checks serially so concurrent graphical
 processes cannot turn WindowServer or Metal contention into a false result.
-The complete post-cleanup invocation passed 80/80 build/runtime steps.
+The M5 refresh passed 81/81 build/runtime steps. The earlier post-cleanup
+invocation passed 80/80 and remains historical evidence for that tree.
 
-### Installed S2 visual runtime
+### Historical pre-M5 installed S2 visual runtime
 
 ```sh
 zig build smoke-installed-s2-macos \
   -Doptimize=ReleaseFast -Deditor=false
 ```
 
-Observed result: Metal selected; 480 ready and zero unavailable frames at 80
-Hz; 720 fixed ticks; chassis/wheels rendered; vehicle movement, steering,
-dynamic-crate displacement, character suppression/restoration, and successful
-exit observed; normal teardown emitted `S2_VISUAL_SMOKE_SHUTDOWN status=clean`.
+Historical 2026-07-13 result: Metal selected; 480 ready and zero unavailable
+frames at 80 Hz; 720 fixed ticks; chassis/wheels rendered; vehicle movement,
+steering, dynamic-crate displacement, character suppression/restoration, and
+successful exit observed; normal teardown emitted
+`S2_VISUAL_SMOKE_SHUTDOWN status=clean`.
 The corresponding 1,440-frame 240 Hz run passed the same evidence with the same
 720 fixed ticks. The historical installed S1 smoke also remains independently
 available and green after the bootstrap-profile split.
@@ -185,8 +196,9 @@ GPU pumps `0/0`, unchanged completed-tick/stream/GPU state, one resident Metal
 scene, one ready retained-fault inspection frame, and a consumed SDL quit. It
 returned the original runtime error to the smoke harness, parsed the shared
 text/JSON evidence, rejected terminal simulation progress without replacing
-the fault, and emitted `S4_DIAGNOSTICS_SMOKE_SHUTDOWN status=clean`. The same
-gate passes with `-Deditor=true`, exercising the ImGui/Metal consumer.
+the fault through the shared authority's `AuthorityFaulted` closure, and
+emitted `S4_DIAGNOSTICS_SMOKE_SHUTDOWN status=clean`. The same gate passes with
+`-Deditor=true`, exercising the ImGui/Metal consumer.
 
 ### Installed S4-B same-cohort replay
 

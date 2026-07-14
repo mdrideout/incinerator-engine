@@ -42,6 +42,8 @@ const prohibited_product_fault_markers = [_][]const u8{
     "InjectedDeveloperDiagnosticFault",
     "diagnostics.injected_fault_probe",
     "initWithDiagnosticFaultProbe",
+    "InjectedAuthorityCycleFault",
+    "initWithAuthorityCycleFaultProbe",
     "InjectedRendererInitFailure",
     "InjectedAppInitFailure",
     "InjectedInitFailure",

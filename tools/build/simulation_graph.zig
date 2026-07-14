@@ -44,6 +44,7 @@ pub const Graph = struct {
     network_cohort_options: *std.Build.Module,
     jolt_c: *std.Build.Module,
     jolt_physics: *std.Build.Module,
+    crate_contract: *std.Build.Module,
     crates: *std.Build.Module,
     driver_contract: *std.Build.Module,
     district_contract: *std.Build.Module,
@@ -51,24 +52,38 @@ pub const Graph = struct {
     navigation_contract: *std.Build.Module,
     sandbox_navigation: *std.Build.Module,
     interaction_contract: *std.Build.Module,
+    character_contract: *std.Build.Module,
     character: *std.Build.Module,
+    vehicle_contract: *std.Build.Module,
     vehicle: *std.Build.Module,
+    district_worker_contract: *std.Build.Module,
     district_worker: *std.Build.Module,
     district_replay_loader: *std.Build.Module,
+    district_feature_contract: *std.Build.Module,
     district: *std.Build.Module,
+    npc_contract: *std.Build.Module,
+    npc_snapshot_validation: *std.Build.Module,
     npc: *std.Build.Module,
-    population: *std.Build.Module,
+    population_contract: *std.Build.Module,
+    interaction_feature_contract: *std.Build.Module,
     interaction: *std.Build.Module,
+    session_authority_diagnostics: *std.Build.Module,
     developer_controls: *std.Build.Module,
     developer_diagnostics: *std.Build.Module,
     sandbox_authoring: *std.Build.Module,
     sandbox_save: *std.Build.Module,
     save_slots: *std.Build.Module,
     sandbox_replay: *std.Build.Module,
+    sandbox_diagnostics_contract: *std.Build.Module,
+    simulation_diagnostics: *std.Build.Module,
+    sandbox_host_contracts: *std.Build.Module,
+    simulation_snapshot: *std.Build.Module,
     sandbox_simulation: *std.Build.Module,
     session_budgets: *std.Build.Module,
     session_identity: *std.Build.Module,
     session_protocol: *std.Build.Module,
+    gameplay_admission: *std.Build.Module,
+    snapshot_source: *std.Build.Module,
     session_transport_policy: *std.Build.Module,
     reconnect_policy: *std.Build.Module,
     client_clock: *std.Build.Module,
@@ -294,11 +309,20 @@ pub fn create(
         },
     });
 
+    const crate_contract = b.createModule(.{
+        .root_source_file = b.path("src/features/crates/contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "engine_contracts", .module = contracts }},
+    });
     const crates = b.createModule(.{
         .root_source_file = b.path("src/features/crates/root.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "incinerator_engine", .module = engine }},
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "crate_contract", .module = crate_contract },
+        },
     });
     const driver_contract = b.createModule(.{
         .root_source_file = b.path("src/features/driver_contract.zig"),
@@ -343,15 +367,31 @@ pub fn create(
             .{ .name = "district_contract", .module = district_contract },
         },
     });
+    const character_contract = b.createModule(.{
+        .root_source_file = b.path("src/features/character/contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts },
+            .{ .name = "driver_contract", .module = driver_contract },
+        },
+    });
     const character = b.createModule(.{
         .root_source_file = b.path("src/features/character/root.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "character_contract", .module = character_contract },
             .{ .name = "driver_contract", .module = driver_contract },
             .{ .name = "interaction_contract", .module = interaction_contract },
         },
+    });
+    const vehicle_contract = b.createModule(.{
+        .root_source_file = b.path("src/features/vehicle/contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "engine_contracts", .module = contracts }},
     });
     const vehicle = b.createModule(.{
         .root_source_file = b.path("src/features/vehicle/root.zig"),
@@ -359,8 +399,14 @@ pub fn create(
         .optimize = optimize,
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "vehicle_contract", .module = vehicle_contract },
             .{ .name = "driver_contract", .module = driver_contract },
         },
+    });
+    const district_worker_contract = b.createModule(.{
+        .root_source_file = b.path("src/district_worker_contract.zig"),
+        .target = target,
+        .optimize = optimize,
     });
     const district_worker = b.createModule(.{
         .root_source_file = b.path("src/district_worker.zig"),
@@ -368,6 +414,7 @@ pub fn create(
         .optimize = optimize,
         .imports = &.{
             .{ .name = "district_contract", .module = district_contract },
+            .{ .name = "district_worker_contract", .module = district_worker_contract },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
         },
     });
@@ -377,8 +424,18 @@ pub fn create(
         .optimize = optimize,
         .imports = &.{
             .{ .name = "district_contract", .module = district_contract },
+            .{ .name = "district_worker_contract", .module = district_worker_contract },
             .{ .name = "district_worker", .module = district_worker },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
+        },
+    });
+    const district_feature_contract = b.createModule(.{
+        .root_source_file = b.path("src/features/district/contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts },
+            .{ .name = "district_contract", .module = district_contract },
         },
     });
     const district = b.createModule(.{
@@ -388,8 +445,28 @@ pub fn create(
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine },
             .{ .name = "district_contract", .module = district_contract },
+            .{ .name = "district_feature_contract", .module = district_feature_contract },
             .{ .name = "interaction_contract", .module = interaction_contract },
             .{ .name = "navigation_contract", .module = navigation_contract },
+        },
+    });
+    const npc_contract = b.createModule(.{
+        .root_source_file = b.path("src/features/npc/contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts },
+            .{ .name = "navigation_contract", .module = navigation_contract },
+        },
+    });
+    const npc_snapshot_validation = b.createModule(.{
+        .root_source_file = b.path("src/features/npc/snapshot_validation.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts },
+            .{ .name = "navigation_contract", .module = navigation_contract },
+            .{ .name = "npc_contract", .module = npc_contract },
         },
     });
     const npc = b.createModule(.{
@@ -398,14 +475,25 @@ pub fn create(
         .optimize = optimize,
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "npc_contract", .module = npc_contract },
             .{ .name = "navigation_contract", .module = navigation_contract },
+            .{ .name = "npc_snapshot_validation", .module = npc_snapshot_validation },
         },
     });
-    const population = b.createModule(.{
-        .root_source_file = b.path("src/features/population/root.zig"),
+    const population_contract = b.createModule(.{
+        .root_source_file = b.path("src/features/population/contract.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "npc_feature", .module = npc }},
+        .imports = &.{.{ .name = "npc_contract", .module = npc_contract }},
+    });
+    const interaction_feature_contract = b.createModule(.{
+        .root_source_file = b.path("src/features/interaction/contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts },
+            .{ .name = "district_contract", .module = district_contract },
+        },
     });
     const interaction = b.createModule(.{
         .root_source_file = b.path("src/features/interaction/root.zig"),
@@ -413,6 +501,7 @@ pub fn create(
         .optimize = optimize,
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "district_contract", .module = district_contract },
             .{ .name = "interaction_contract", .module = interaction_contract },
         },
@@ -422,6 +511,12 @@ pub fn create(
         .target = target,
         .optimize = optimize,
     });
+    const session_authority_diagnostics = b.createModule(.{
+        .root_source_file = b.path("src/session/authority_diagnostics.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "incinerator_engine", .module = engine }},
+    });
     const developer_diagnostics = b.createModule(.{
         .root_source_file = b.path("src/hosts/developer_diagnostics.zig"),
         .target = target,
@@ -429,6 +524,7 @@ pub fn create(
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine },
             .{ .name = "developer_controls", .module = developer_controls },
+            .{ .name = "session_authority_diagnostics", .module = session_authority_diagnostics },
         },
     });
     const sandbox_authoring = b.createModule(.{
@@ -437,7 +533,7 @@ pub fn create(
         .optimize = optimize,
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine },
-            .{ .name = "crate_feature", .module = crates },
+            .{ .name = "crate_contract", .module = crate_contract },
         },
     });
     const sandbox_save = b.createModule(.{
@@ -450,21 +546,83 @@ pub fn create(
         .target = target,
         .optimize = optimize,
     });
+    const sandbox_diagnostics_contract = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_diagnostics_contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "crate_contract", .module = crate_contract },
+            .{ .name = "character_contract", .module = character_contract },
+            .{ .name = "vehicle_contract", .module = vehicle_contract },
+            .{ .name = "district_feature_contract", .module = district_feature_contract },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
+            .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "district_worker_contract", .module = district_worker_contract },
+        },
+    });
+    const simulation_diagnostics = b.createModule(.{
+        .root_source_file = b.path("src/hosts/simulation_diagnostics.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{
+            .name = "sandbox_diagnostics_contract",
+            .module = sandbox_diagnostics_contract,
+        }},
+    });
+    const sandbox_host_contracts = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_host_contracts.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts },
+            .{ .name = "crate_contract", .module = crate_contract },
+            .{ .name = "character_contract", .module = character_contract },
+            .{ .name = "vehicle_contract", .module = vehicle_contract },
+            .{ .name = "district_contract", .module = district_contract },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
+            .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract },
+        },
+    });
     const sandbox_replay = b.createModule(.{
         .root_source_file = b.path("src/hosts/sandbox_replay.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine },
-            .{ .name = "crate_feature", .module = crates },
-            .{ .name = "character_feature", .module = character },
-            .{ .name = "vehicle_feature", .module = vehicle },
-            .{ .name = "district_feature", .module = district },
-            .{ .name = "interaction_feature", .module = interaction },
-            .{ .name = "npc_feature", .module = npc },
+            .{ .name = "crate_contract", .module = crate_contract },
+            .{ .name = "character_contract", .module = character_contract },
+            .{ .name = "vehicle_contract", .module = vehicle_contract },
+            .{ .name = "district_feature_contract", .module = district_feature_contract },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
+            .{ .name = "npc_contract", .module = npc_contract },
             .{ .name = "district_contract", .module = district_contract },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts },
             .{ .name = "content", .module = content },
+            .{ .name = "simulation_cohort_options", .module = simulation_cohort_options },
+        },
+    });
+    const simulation_snapshot = b.createModule(.{
+        .root_source_file = b.path("src/hosts/simulation_snapshot.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts },
+            .{ .name = "crate_contract", .module = crate_contract },
+            .{ .name = "character_contract", .module = character_contract },
+            .{ .name = "vehicle_contract", .module = vehicle_contract },
+            .{ .name = "district_contract", .module = district_contract },
+            .{ .name = "district_feature_contract", .module = district_feature_contract },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
+            .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "npc_snapshot_validation", .module = npc_snapshot_validation },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
+            .{ .name = "sandbox_navigation", .module = sandbox_navigation },
+            .{ .name = "sandbox_replay", .module = sandbox_replay },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts },
             .{ .name = "simulation_cohort_options", .module = simulation_cohort_options },
         },
     });
@@ -474,19 +632,28 @@ pub fn create(
         .optimize = optimize,
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "crate_contract", .module = crate_contract },
+            .{ .name = "character_contract", .module = character_contract },
+            .{ .name = "vehicle_contract", .module = vehicle_contract },
             .{ .name = "crate_feature", .module = crates },
             .{ .name = "character_feature", .module = character },
             .{ .name = "vehicle_feature", .module = vehicle },
             .{ .name = "district_contract", .module = district_contract },
+            .{ .name = "district_feature_contract", .module = district_feature_contract },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
             .{ .name = "district_feature", .module = district },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "interaction_feature", .module = interaction },
+            .{ .name = "npc_contract", .module = npc_contract },
             .{ .name = "npc_feature", .module = npc },
-            .{ .name = "sandbox_navigation", .module = sandbox_navigation },
-            .{ .name = "district_worker", .module = district_worker },
+            .{ .name = "district_worker_contract", .module = district_worker_contract },
             .{ .name = "district_replay_loader", .module = district_replay_loader },
             .{ .name = "jolt_physics", .module = jolt_physics },
             .{ .name = "sandbox_replay", .module = sandbox_replay },
+            .{ .name = "simulation_snapshot", .module = simulation_snapshot },
+            .{ .name = "simulation_diagnostics", .module = simulation_diagnostics },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts },
         },
     });
     const session_budgets = b.createModule(.{
@@ -508,6 +675,20 @@ pub fn create(
             .{ .name = "session_identity", .module = session_identity },
             .{ .name = "network_cohort_options", .module = network_cohort_options },
         },
+    });
+    const gameplay_admission = b.createModule(.{
+        .root_source_file = b.path("src/session/gameplay_admission.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets },
+            .{ .name = "session_identity", .module = session_identity },
+        },
+    });
+    const snapshot_source = b.createModule(.{
+        .root_source_file = b.path("src/session/snapshot_source.zig"),
+        .target = target,
+        .optimize = optimize,
     });
     const session_transport_policy = b.createModule(.{
         .root_source_file = b.path("src/session/transport_policy.zig"),
@@ -595,13 +776,22 @@ pub fn create(
         .optimize = optimize,
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine },
-            .{ .name = "sandbox_simulation", .module = sandbox_simulation },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts },
+            .{ .name = "crate_contract", .module = crate_contract },
+            .{ .name = "character_contract", .module = character_contract },
+            .{ .name = "vehicle_contract", .module = vehicle_contract },
+            .{ .name = "district_feature_contract", .module = district_feature_contract },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
+            .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract },
             .{ .name = "session_budgets", .module = session_budgets },
             .{ .name = "session_identity", .module = session_identity },
             .{ .name = "session_protocol", .module = session_protocol },
+            .{ .name = "snapshot_source", .module = snapshot_source },
             .{ .name = "session_local_link", .module = session_local_link },
             .{ .name = "session_client", .module = session_client },
             .{ .name = "replicated_world", .module = replicated_world },
+            .{ .name = "session_authority_diagnostics", .module = session_authority_diagnostics },
         },
     });
     const session_authority = b.createModule(.{
@@ -611,12 +801,27 @@ pub fn create(
         .imports = &.{
             .{ .name = "incinerator_engine", .module = engine },
             .{ .name = "sandbox_simulation", .module = sandbox_simulation },
+            .{ .name = "simulation_snapshot", .module = simulation_snapshot },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts },
+            .{ .name = "crate_contract", .module = crate_contract },
+            .{ .name = "character_contract", .module = character_contract },
+            .{ .name = "vehicle_contract", .module = vehicle_contract },
+            .{ .name = "district_contract", .module = district_contract },
+            .{ .name = "district_feature_contract", .module = district_feature_contract },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
+            .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract },
             .{ .name = "session_budgets", .module = session_budgets },
             .{ .name = "session_identity", .module = session_identity },
             .{ .name = "session_protocol", .module = session_protocol },
+            .{ .name = "gameplay_admission", .module = gameplay_admission },
+            .{ .name = "snapshot_source", .module = snapshot_source },
             .{ .name = "session_transport_policy", .module = session_transport_policy },
+            .{ .name = "session_authority_diagnostics", .module = session_authority_diagnostics },
         },
     });
+    local_solo_session.addImport("session_authority", session_authority);
 
     return .{
         .contracts = contracts,
@@ -627,6 +832,7 @@ pub fn create(
         .network_cohort_options = network_cohort_options,
         .jolt_c = jolt_c,
         .jolt_physics = jolt_physics,
+        .crate_contract = crate_contract,
         .crates = crates,
         .driver_contract = driver_contract,
         .district_contract = district_contract,
@@ -634,24 +840,38 @@ pub fn create(
         .navigation_contract = navigation_contract,
         .sandbox_navigation = sandbox_navigation,
         .interaction_contract = interaction_contract,
+        .character_contract = character_contract,
         .character = character,
+        .vehicle_contract = vehicle_contract,
         .vehicle = vehicle,
+        .district_worker_contract = district_worker_contract,
         .district_worker = district_worker,
         .district_replay_loader = district_replay_loader,
+        .district_feature_contract = district_feature_contract,
         .district = district,
+        .npc_contract = npc_contract,
+        .npc_snapshot_validation = npc_snapshot_validation,
         .npc = npc,
-        .population = population,
+        .population_contract = population_contract,
+        .interaction_feature_contract = interaction_feature_contract,
         .interaction = interaction,
+        .session_authority_diagnostics = session_authority_diagnostics,
         .developer_controls = developer_controls,
         .developer_diagnostics = developer_diagnostics,
         .sandbox_authoring = sandbox_authoring,
         .sandbox_save = sandbox_save,
         .save_slots = save_slots,
         .sandbox_replay = sandbox_replay,
+        .sandbox_diagnostics_contract = sandbox_diagnostics_contract,
+        .simulation_diagnostics = simulation_diagnostics,
+        .sandbox_host_contracts = sandbox_host_contracts,
+        .simulation_snapshot = simulation_snapshot,
         .sandbox_simulation = sandbox_simulation,
         .session_budgets = session_budgets,
         .session_identity = session_identity,
         .session_protocol = session_protocol,
+        .gameplay_admission = gameplay_admission,
+        .snapshot_source = snapshot_source,
         .session_transport_policy = session_transport_policy,
         .reconnect_policy = reconnect_policy,
         .client_clock = client_clock,

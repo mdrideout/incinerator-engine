@@ -1,9 +1,15 @@
 # ADR-010: Developer Diagnostics, Replay, and Debug Visualization
 
-**Status:** Accepted, implemented, and validated through M3
+**Status:** Accepted, implemented, and validated through M5
 **Date:** 2026-07-13
-**Amended:** 2026-07-13 after M3 bounded-authority completion
+**Amended:** 2026-07-13 after M3 bounded-authority completion; 2026-07-14 after
+M5 client/authority cohesion
 **Decision Maker:** Matt
+
+**M5 amendment (2026-07-14):** the developer snapshot schema advances to
+V5 with optional copied authority-session diagnostics, and graphical developer
+state is composed by one opaque heap-stable owner. These additions are accepted
+by the M5 cohesion record.
 
 ## Context
 
@@ -63,6 +69,13 @@ developer snapshot; host-specific capabilities are optional, so headless
 reports presentation time/control, cooked streaming, and GPU state as absent.
 Stderr/text, JSON, tests, and ImGui consume that snapshot and journal rather
 than reaching into owners independently.
+
+M5 extends this contract with optional copied authority-session
+diagnostics in developer snapshot schema V5. Graphical UI, profiling,
+visualization requests, and optional physics-debug resources are composed by one
+opaque heap-stable developer owner. That owner receives copied evidence and
+typed capabilities; it does not receive a mutable authority pointer. This
+amendment is accepted with M5.
 
 Editor inspection is read-only. The only reverse path is a narrow host-control
 request value. Pause, single-step, and fixed enumerated time scales alter wall

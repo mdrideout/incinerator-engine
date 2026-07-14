@@ -156,6 +156,7 @@ pub fn build(b: *std.Build) void {
     const content_module = graph.content;
     const mod = graph.engine;
     const jolt_physics_module = graph.jolt_physics;
+    const crate_contract_module = graph.crate_contract;
     const crate_feature_module = graph.crates;
     const driver_contract_module = graph.driver_contract;
     const district_contract_module = graph.district_contract;
@@ -163,24 +164,35 @@ pub fn build(b: *std.Build) void {
     const navigation_contract_module = graph.navigation_contract;
     const sandbox_navigation_module = graph.sandbox_navigation;
     const interaction_contract_module = graph.interaction_contract;
+    const character_contract_module = graph.character_contract;
     const character_feature_module = graph.character;
+    const vehicle_contract_module = graph.vehicle_contract;
     const vehicle_feature_module = graph.vehicle;
+    const district_worker_contract_module = graph.district_worker_contract;
     const district_worker_module = graph.district_worker;
     const district_replay_loader_module = graph.district_replay_loader;
+    const district_feature_contract_module = graph.district_feature_contract;
     const district_feature_module = graph.district;
+    const npc_contract_module = graph.npc_contract;
     const npc_feature_module = graph.npc;
-    const population_feature_module = graph.population;
+    const population_contract_module = graph.population_contract;
+    const interaction_feature_contract_module = graph.interaction_feature_contract;
     const interaction_feature_module = graph.interaction;
+    const session_authority_diagnostics_module = graph.session_authority_diagnostics;
     const developer_controls_module = graph.developer_controls;
     const developer_diagnostics_module = graph.developer_diagnostics;
     const sandbox_authoring_module = graph.sandbox_authoring;
     const sandbox_save_module = graph.sandbox_save;
     const save_slots_module = graph.save_slots;
     const sandbox_replay_module = graph.sandbox_replay;
+    const sandbox_diagnostics_contract_module = graph.sandbox_diagnostics_contract;
+    const simulation_snapshot_module = graph.simulation_snapshot;
     const sandbox_simulation_module = graph.sandbox_simulation;
     const session_budgets_module = graph.session_budgets;
     const session_identity_module = graph.session_identity;
     const session_protocol_module = graph.session_protocol;
+    const gameplay_admission_module = graph.gameplay_admission;
+    const snapshot_source_module = graph.snapshot_source;
     const session_transport_policy_module = graph.session_transport_policy;
     const reconnect_policy_module = graph.reconnect_policy;
     const client_clock_module = graph.client_clock;
@@ -301,6 +313,45 @@ pub fn build(b: *std.Build) void {
     });
     addClientImport(exe, validation_exe, "content", content_module);
     addClientImport(exe, validation_exe, "engine_contracts", contracts_module);
+    const sandbox_host_contracts_module = graph.sandbox_host_contracts;
+    addClientImport(
+        exe,
+        validation_exe,
+        "sandbox_host_contracts",
+        sandbox_host_contracts_module,
+    );
+    const sandbox_invocation_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_invocation.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "content", .module = content_module },
+            .{ .name = "save_slots", .module = save_slots_module },
+        },
+    });
+    addClientImport(
+        exe,
+        validation_exe,
+        "sandbox_invocation",
+        sandbox_invocation_module,
+    );
+    const sandbox_persistence_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_persistence.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "sandbox_save", .module = sandbox_save_module },
+            .{ .name = "save_slots", .module = save_slots_module },
+            .{ .name = "snapshot_source", .module = graph.snapshot_source },
+        },
+    });
+    addClientImport(
+        exe,
+        validation_exe,
+        "sandbox_persistence",
+        sandbox_persistence_module,
+    );
 
     // ---------------------------------------------------------
     // SDL3 (castholm/SDL)
@@ -335,7 +386,10 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/hosts/district_presentation.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts_module },
+            .{ .name = "session_budgets", .module = graph.session_budgets },
+        },
     });
     addClientImport(
         exe,
@@ -349,6 +403,7 @@ pub fn build(b: *std.Build) void {
     // ---------------------------------------------------------
     // zgui wraps Dear ImGui for immediate-mode debug UI.
     // We use the SDL3 GPU backend to integrate with our existing renderer.
+    var editor_gui_module: ?*std.Build.Module = null;
     if (editor_enabled) {
         const zgui = b.lazyDependency("zgui", .{
             .target = target,
@@ -369,6 +424,7 @@ pub fn build(b: *std.Build) void {
             .backend = .no_backend,
         }) orelse return;
         const editor_gui = zgui_sdl3_gpu.build(b, zgui, sdl_dep, target, optimize);
+        editor_gui_module = editor_gui.module;
         addClientImport(exe, validation_exe, "zgui", editor_gui.module);
         linkClientLibrary(exe, validation_exe, editor_gui.library);
     }
@@ -609,7 +665,8 @@ pub fn build(b: *std.Build) void {
     );
     content_relocation_step.dependOn(&run_content_relocation.step);
 
-    addClientImport(exe, validation_exe, "population_feature", population_feature_module);
+    addClientImport(exe, validation_exe, "population_contract", population_contract_module);
+    addClientImport(exe, validation_exe, "session_budgets", session_budgets_module);
     const sandbox_controls_module = b.createModule(.{
         .root_source_file = b.path("src/sandbox_controls.zig"),
         .target = target,
@@ -627,6 +684,12 @@ pub fn build(b: *std.Build) void {
         .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
     });
     addClientImport(exe, validation_exe, "developer_controls", developer_controls_module);
+    addClientImport(
+        exe,
+        validation_exe,
+        "session_authority_diagnostics",
+        session_authority_diagnostics_module,
+    );
     addClientImport(exe, validation_exe, "developer_diagnostics", developer_diagnostics_module);
     addClientImport(exe, validation_exe, "developer_profile", developer_profile_module);
     addClientImport(
@@ -636,9 +699,6 @@ pub fn build(b: *std.Build) void {
         developer_visualization_module,
     );
     addClientImport(exe, validation_exe, "sandbox_authoring", sandbox_authoring_module);
-    addClientImport(exe, validation_exe, "sandbox_save", sandbox_save_module);
-    addClientImport(exe, validation_exe, "save_slots", save_slots_module);
-    addClientImport(exe, validation_exe, "sandbox_replay", sandbox_replay_module);
     const district_content_catalog_module = b.createModule(.{
         .root_source_file = b.path("src/hosts/district_content_catalog.zig"),
         .target = target,
@@ -655,6 +715,36 @@ pub fn build(b: *std.Build) void {
         validation_exe,
         "district_content_catalog",
         district_content_catalog_module,
+    );
+    const district_streaming_host_module = b.createModule(.{
+        .root_source_file = b.path("src/district_streaming_host_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "content", .module = content_module },
+            .{ .name = "district_contract", .module = district_contract_module },
+            .{ .name = "district_feature_contract", .module = district_feature_contract_module },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "district_content_catalog", .module = district_content_catalog_module },
+            .{ .name = "district_presentation", .module = district_presentation_module },
+            .{ .name = "developer_diagnostics", .module = developer_diagnostics_module },
+        },
+    });
+    district_streaming_host_module.linkLibrary(sdl_lib);
+    addClientImport(exe, validation_exe, "district_contract", district_contract_module);
+    addClientImport(
+        exe,
+        validation_exe,
+        "sandbox_district_recipe",
+        sandbox_district_recipe_module,
+    );
+    addClientImport(
+        exe,
+        validation_exe,
+        "district_feature_contract",
+        district_feature_contract_module,
     );
     const content_catalog_relocation_test = b.addExecutable(.{
         .name = "content_catalog_relocation_test",
@@ -690,14 +780,13 @@ pub fn build(b: *std.Build) void {
         &install_content_catalog_relocation_test.step,
     );
     content_relocation_step.dependOn(&run_content_catalog_relocation.step);
-    addClientImport(exe, validation_exe, "sandbox_simulation", sandbox_simulation_module);
     addClientImport(exe, validation_exe, "local_solo_session", local_solo_session_module);
     const sandbox_interaction_module = b.createModule(.{
         .root_source_file = b.path("src/hosts/sandbox_interaction.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract_module },
         },
     });
     addClientImport(exe, validation_exe, "sandbox_interaction", sandbox_interaction_module);
@@ -727,6 +816,29 @@ pub fn build(b: *std.Build) void {
         },
     });
     physics_debug_gpu_module.linkLibrary(sdl_lib);
+
+    const sandbox_developer_host_test_module = b.createModule(.{
+        .root_source_file = b.path("src/sandbox_developer_host_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "build_options", .module = options.createModule() },
+            .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "engine_contracts", .module = contracts_module },
+            .{ .name = "zmath", .module = zmath.module("root") },
+            .{ .name = "shader_assets", .module = shaders.module },
+            .{ .name = "developer_controls", .module = developer_controls_module },
+            .{ .name = "developer_diagnostics", .module = developer_diagnostics_module },
+            .{ .name = "developer_profile", .module = developer_profile_module },
+            .{ .name = "developer_visualization", .module = developer_visualization_module },
+            .{ .name = "session_authority_diagnostics", .module = session_authority_diagnostics_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+        },
+    });
+    if (editor_gui_module) |module| {
+        sandbox_developer_host_test_module.addImport("zgui", module);
+    }
+    sandbox_developer_host_test_module.linkLibrary(sdl_lib);
 
     const shader_contract_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -1083,8 +1195,12 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
-            .{ .name = "crate_feature", .module = crate_feature_module },
+            .{ .name = "crate_contract", .module = crate_contract_module },
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "simulation_snapshot", .module = simulation_snapshot_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
+            .{ .name = "npc_contract", .module = npc_contract_module },
             .{ .name = "external_producers", .module = external_producers_module },
             .{ .name = "sandbox_save", .module = sandbox_save_module },
         },
@@ -1095,7 +1211,10 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
-            .{ .name = "crate_feature", .module = crate_feature_module },
+            .{ .name = "simulation_snapshot", .module = simulation_snapshot_module },
+            .{ .name = "crate_contract", .module = crate_contract_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
             .{ .name = "headless_authority", .module = headless_authority_module },
             .{ .name = "external_producers", .module = external_producers_module },
             .{ .name = "sandbox_save", .module = sandbox_save_module },
@@ -1108,6 +1227,16 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "incinerator_engine", .module = mod },
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "simulation_snapshot", .module = simulation_snapshot_module },
+            .{ .name = "crate_contract", .module = crate_contract_module },
+            .{ .name = "character_contract", .module = character_contract_module },
+            .{ .name = "vehicle_contract", .module = vehicle_contract_module },
+            .{ .name = "district_contract", .module = district_contract_module },
+            .{ .name = "district_feature_contract", .module = district_feature_contract_module },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract_module },
+            .{ .name = "npc_contract", .module = npc_contract_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
             .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
             .{ .name = "developer_diagnostics", .module = developer_diagnostics_module },
@@ -1222,6 +1351,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "district_content_catalog", .module = district_content_catalog_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "interaction_feature", .module = interaction_feature_module },
         },
     });
@@ -1264,6 +1394,10 @@ pub fn build(b: *std.Build) void {
             .{ .name = "district_content_catalog", .module = district_content_catalog_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "simulation_snapshot", .module = simulation_snapshot_module },
+            .{ .name = "crate_contract", .module = crate_contract_module },
+            .{ .name = "npc_contract", .module = npc_contract_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "interaction_feature", .module = interaction_feature_module },
             .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
             .{ .name = "sandbox_save", .module = sandbox_save_module },
@@ -1297,6 +1431,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "character_contract", .module = character_contract_module },
+            .{ .name = "district_feature_contract", .module = district_feature_contract_module },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
         },
     });
     const s7_measure_exe = b.addExecutable(.{
@@ -1324,9 +1463,14 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "simulation_snapshot", .module = simulation_snapshot_module },
+            .{ .name = "district_feature_contract", .module = district_feature_contract_module },
+            .{ .name = "npc_contract", .module = npc_contract_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
             .{ .name = "sandbox_save", .module = sandbox_save_module },
-            .{ .name = "population_feature", .module = population_feature_module },
+            .{ .name = "population_contract", .module = population_contract_module },
             .{ .name = "district_contract", .module = district_contract_module },
             .{ .name = "jolt_physics", .module = jolt_physics_module },
             .{ .name = "content", .module = content_module },
@@ -2182,6 +2326,36 @@ pub fn build(b: *std.Build) void {
     );
     contracts_test_step.dependOn(&run_contracts_tests.step);
 
+    const sandbox_value_contracts_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_value_contracts_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "crate_contract", .module = crate_contract_module },
+            .{ .name = "character_contract", .module = character_contract_module },
+            .{ .name = "vehicle_contract", .module = vehicle_contract_module },
+            .{ .name = "district_feature_contract", .module = district_feature_contract_module },
+            .{ .name = "interaction_feature_contract", .module = interaction_feature_contract_module },
+            .{ .name = "npc_contract", .module = npc_contract_module },
+            .{ .name = "district_worker_contract", .module = district_worker_contract_module },
+            .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+        },
+    });
+    const sandbox_value_contracts_tests = b.addTest(.{
+        .root_module = sandbox_value_contracts_module,
+    });
+    const run_sandbox_value_contracts_tests = b.addRunArtifact(
+        sandbox_value_contracts_tests,
+    );
+    const sandbox_value_contracts_test_step = b.step(
+        "test-sandbox-value-contracts",
+        "Run canonical sandbox DTO identity and implementation-closure tests",
+    );
+    sandbox_value_contracts_test_step.dependOn(
+        &run_sandbox_value_contracts_tests.step,
+    );
+
     // A run step that will run the test executable.
     const run_mod_tests = b.addRunArtifact(mod_tests);
     const kernel_test_step = b.step("test-kernel", "Run the SDL-free public kernel tests");
@@ -2321,17 +2495,17 @@ pub fn build(b: *std.Build) void {
     );
     npc_feature_test_step.dependOn(&run_npc_feature_tests.step);
 
-    const population_feature_tests = b.addTest(.{
-        .root_module = population_feature_module,
+    const population_contract_tests = b.addTest(.{
+        .root_module = population_contract_module,
     });
-    const run_population_feature_tests = b.addRunArtifact(
-        population_feature_tests,
+    const run_population_contract_tests = b.addRunArtifact(
+        population_contract_tests,
     );
-    const population_feature_test_step = b.step(
-        "test-population-feature",
-        "Run fixed stateless NPC population producer tests",
+    const population_contract_test_step = b.step(
+        "test-population-contract",
+        "Run fixed stateless NPC population planning contract tests",
     );
-    population_feature_test_step.dependOn(&run_population_feature_tests.step);
+    population_contract_test_step.dependOn(&run_population_contract_tests.step);
 
     const district_gpu_registry_tests = b.addTest(.{
         .root_module = district_gpu_registry_module,
@@ -2363,6 +2537,20 @@ pub fn build(b: *std.Build) void {
     );
     district_presentation_test_step.dependOn(&run_district_presentation_tests.step);
 
+    const district_streaming_host_tests = b.addTest(.{
+        .root_module = district_streaming_host_module,
+    });
+    const run_district_streaming_host_tests = b.addRunArtifact(
+        district_streaming_host_tests,
+    );
+    const district_streaming_host_test_step = b.step(
+        "test-district-streaming-host",
+        "Run district streaming host ownership and lifecycle tests",
+    );
+    district_streaming_host_test_step.dependOn(
+        &run_district_streaming_host_tests.step,
+    );
+
     const sandbox_controls_tests = b.addTest(.{ .root_module = sandbox_controls_module });
     const run_sandbox_controls_tests = b.addRunArtifact(sandbox_controls_tests);
     const sandbox_controls_test_step = b.step(
@@ -2370,6 +2558,30 @@ pub fn build(b: *std.Build) void {
         "Run frame-to-tick action latch tests",
     );
     sandbox_controls_test_step.dependOn(&run_sandbox_controls_tests.step);
+
+    const sandbox_invocation_tests = b.addTest(.{
+        .root_module = sandbox_invocation_module,
+    });
+    const run_sandbox_invocation_tests = b.addRunArtifact(sandbox_invocation_tests);
+    const sandbox_invocation_test_step = b.step(
+        "test-sandbox-invocation",
+        "Run graphical sandbox invocation and installed-layout policy tests",
+    );
+    sandbox_invocation_test_step.dependOn(&run_sandbox_invocation_tests.step);
+
+    const sandbox_host_contracts_tests = b.addTest(.{
+        .root_module = sandbox_host_contracts_module,
+    });
+    const run_sandbox_host_contracts_tests = b.addRunArtifact(
+        sandbox_host_contracts_tests,
+    );
+    const sandbox_host_contracts_test_step = b.step(
+        "test-sandbox-host-contracts",
+        "Run the immutable graphical sandbox DTO boundary tests",
+    );
+    sandbox_host_contracts_test_step.dependOn(
+        &run_sandbox_host_contracts_tests.step,
+    );
 
     const developer_controls_tests = b.addTest(.{ .root_module = developer_controls_module });
     const run_developer_controls_tests = b.addRunArtifact(developer_controls_tests);
@@ -2411,6 +2623,20 @@ pub fn build(b: *std.Build) void {
         &run_developer_visualization_tests.step,
     );
 
+    const sandbox_developer_host_tests = b.addTest(.{
+        .root_module = sandbox_developer_host_test_module,
+    });
+    const run_sandbox_developer_host_tests = b.addRunArtifact(
+        sandbox_developer_host_tests,
+    );
+    const sandbox_developer_host_test_step = b.step(
+        "test-sandbox-developer-host",
+        "Run graphical developer-owner boundary and optional-resource tests",
+    );
+    sandbox_developer_host_test_step.dependOn(
+        &run_sandbox_developer_host_tests.step,
+    );
+
     const sandbox_authoring_tests = b.addTest(.{ .root_module = sandbox_authoring_module });
     const run_sandbox_authoring_tests = b.addRunArtifact(sandbox_authoring_tests);
     const sandbox_authoring_test_step = b.step(
@@ -2427,6 +2653,20 @@ pub fn build(b: *std.Build) void {
     );
     sandbox_save_test_step.dependOn(&run_sandbox_save_tests.step);
 
+    const sandbox_persistence_tests = b.addTest(.{
+        .root_module = sandbox_persistence_module,
+    });
+    const run_sandbox_persistence_tests = b.addRunArtifact(
+        sandbox_persistence_tests,
+    );
+    const sandbox_persistence_test_step = b.step(
+        "test-sandbox-persistence",
+        "Run sandbox snapshot and durable-commit coordination tests",
+    );
+    sandbox_persistence_test_step.dependOn(
+        &run_sandbox_persistence_tests.step,
+    );
+
     const save_slots_tests = b.addTest(.{ .root_module = save_slots_module });
     const run_save_slots_tests = b.addRunArtifact(save_slots_tests);
     const save_slots_test_step = b.step(
@@ -2434,6 +2674,20 @@ pub fn build(b: *std.Build) void {
         "Run macOS atomic save-slot and recovery tests",
     );
     save_slots_test_step.dependOn(&run_save_slots_tests.step);
+
+    const simulation_snapshot_tests = b.addTest(.{
+        .root_module = simulation_snapshot_module,
+    });
+    const run_simulation_snapshot_tests = b.addRunArtifact(
+        simulation_snapshot_tests,
+    );
+    const simulation_snapshot_test_step = b.step(
+        "test-simulation-snapshot",
+        "Run canonical simulation snapshot codec and preflight tests",
+    );
+    simulation_snapshot_test_step.dependOn(
+        &run_simulation_snapshot_tests.step,
+    );
 
     const sandbox_simulation_tests = b.addTest(.{ .root_module = sandbox_simulation_module });
     const run_sandbox_simulation_tests = b.addRunArtifact(sandbox_simulation_tests);
@@ -2448,6 +2702,10 @@ pub fn build(b: *std.Build) void {
     const run_session_identity_tests = b.addRunArtifact(session_identity_tests);
     const session_protocol_tests = b.addTest(.{ .root_module = session_protocol_module });
     const run_session_protocol_tests = b.addRunArtifact(session_protocol_tests);
+    const gameplay_admission_tests = b.addTest(.{ .root_module = gameplay_admission_module });
+    const run_gameplay_admission_tests = b.addRunArtifact(gameplay_admission_tests);
+    const snapshot_source_tests = b.addTest(.{ .root_module = snapshot_source_module });
+    const run_snapshot_source_tests = b.addRunArtifact(snapshot_source_tests);
     const session_transport_policy_tests = b.addTest(.{
         .root_module = session_transport_policy_module,
     });
@@ -2494,6 +2752,8 @@ pub fn build(b: *std.Build) void {
     session_contract_test_step.dependOn(&run_session_budgets_tests.step);
     session_contract_test_step.dependOn(&run_session_identity_tests.step);
     session_contract_test_step.dependOn(&run_session_protocol_tests.step);
+    session_contract_test_step.dependOn(&run_gameplay_admission_tests.step);
+    session_contract_test_step.dependOn(&run_snapshot_source_tests.step);
     session_contract_test_step.dependOn(&run_session_transport_policy_tests.step);
     session_contract_test_step.dependOn(&run_reconnect_policy_tests.step);
     session_contract_test_step.dependOn(&run_client_clock_tests.step);
@@ -2566,10 +2826,23 @@ pub fn build(b: *std.Build) void {
     const physics_test_step = b.step("test-physics", "Run isolated Jolt adapter tests");
     physics_test_step.dependOn(&run_physics_tests.step);
 
+    const verify_m5_architecture_command = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_m5_architecture.sh"),
+    });
+    const verify_m5_architecture_step = b.step(
+        "verify-m5-architecture",
+        "Enforce M5 client/authority, presentation, persistence, and closure boundaries",
+    );
+    verify_m5_architecture_step.dependOn(
+        &verify_m5_architecture_command.step,
+    );
+
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
+    test_step.dependOn(verify_m5_architecture_step);
     test_step.dependOn(&cohort_verification.run.step);
     test_step.dependOn(&cohort_verification.tests.step);
     test_step.dependOn(&run_content_tests.step);
@@ -2579,6 +2852,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&verify_cooked_catalog.step);
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_contracts_tests.step);
+    test_step.dependOn(&run_sandbox_value_contracts_tests.step);
     test_step.dependOn(&run_crate_feature_tests.step);
     test_step.dependOn(&run_character_feature_tests.step);
     test_step.dependOn(&run_driver_contract_tests.step);
@@ -2592,22 +2866,30 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_district_feature_tests.step);
     test_step.dependOn(&run_interaction_feature_tests.step);
     test_step.dependOn(&run_npc_feature_tests.step);
-    test_step.dependOn(&run_population_feature_tests.step);
+    test_step.dependOn(&run_population_contract_tests.step);
     test_step.dependOn(&run_district_gpu_registry_tests.step);
     test_step.dependOn(&run_district_scene_adapter_tests.step);
     test_step.dependOn(&run_district_presentation_tests.step);
+    test_step.dependOn(&run_district_streaming_host_tests.step);
     test_step.dependOn(&run_sandbox_controls_tests.step);
+    test_step.dependOn(&run_sandbox_invocation_tests.step);
+    test_step.dependOn(&run_sandbox_host_contracts_tests.step);
     test_step.dependOn(&run_developer_controls_tests.step);
     test_step.dependOn(&run_developer_diagnostics_tests.step);
     test_step.dependOn(&run_developer_profile_tests.step);
     test_step.dependOn(&run_developer_visualization_tests.step);
+    test_step.dependOn(&run_sandbox_developer_host_tests.step);
     test_step.dependOn(&run_sandbox_authoring_tests.step);
     test_step.dependOn(&run_sandbox_save_tests.step);
+    test_step.dependOn(&run_sandbox_persistence_tests.step);
     test_step.dependOn(&run_save_slots_tests.step);
+    test_step.dependOn(&run_simulation_snapshot_tests.step);
     test_step.dependOn(&run_sandbox_simulation_tests.step);
     test_step.dependOn(&run_session_budgets_tests.step);
     test_step.dependOn(&run_session_identity_tests.step);
     test_step.dependOn(&run_session_protocol_tests.step);
+    test_step.dependOn(&run_gameplay_admission_tests.step);
+    test_step.dependOn(&run_snapshot_source_tests.step);
     test_step.dependOn(&run_session_transport_policy_tests.step);
     test_step.dependOn(&run_reconnect_policy_tests.step);
     test_step.dependOn(&run_client_clock_tests.step);
@@ -2648,6 +2930,69 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_s8_measure_tests.step);
     test_step.dependOn(&m3_soak_exe.step);
     test_step.dependOn(&run_m3_soak_tests.step);
+
+    const test_m5_cohesion_step = b.step(
+        "test-m5-cohesion",
+        "Run focused embedded-session cohesion, clock, projection, and ownership contracts",
+    );
+    test_m5_cohesion_step.dependOn(&run_mod_tests.step);
+    test_m5_cohesion_step.dependOn(&run_exe_tests.step);
+    test_m5_cohesion_step.dependOn(&run_sandbox_invocation_tests.step);
+    test_m5_cohesion_step.dependOn(&run_sandbox_host_contracts_tests.step);
+    test_m5_cohesion_step.dependOn(&run_sandbox_value_contracts_tests.step);
+    test_m5_cohesion_step.dependOn(&run_sandbox_developer_host_tests.step);
+    test_m5_cohesion_step.dependOn(&run_district_streaming_host_tests.step);
+    test_m5_cohesion_step.dependOn(&run_sandbox_persistence_tests.step);
+    test_m5_cohesion_step.dependOn(&run_simulation_snapshot_tests.step);
+    test_m5_cohesion_step.dependOn(&run_sandbox_simulation_tests.step);
+    test_m5_cohesion_step.dependOn(&run_gameplay_admission_tests.step);
+    test_m5_cohesion_step.dependOn(&run_snapshot_source_tests.step);
+    test_m5_cohesion_step.dependOn(&run_session_local_link_tests.step);
+    test_m5_cohesion_step.dependOn(&run_replicated_world_tests.step);
+    test_m5_cohesion_step.dependOn(&run_session_client_tests.step);
+    test_m5_cohesion_step.dependOn(&run_local_solo_session_tests.step);
+    test_m5_cohesion_step.dependOn(&run_session_authority_tests.step);
+
+    const verify_source_package_command = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_source_package.sh"),
+    });
+    verify_source_package_command.setEnvironmentVariable(
+        "ZIG",
+        b.graph.zig_exe,
+    );
+    const verify_source_package_step = b.step(
+        "verify-source-package",
+        "Verify filtered source-package membership and executable source closure",
+    );
+    verify_source_package_step.dependOn(&verify_source_package_command.step);
+
+    const verify_m5_step = b.step(
+        "verify-m5",
+        "Run the complete native macOS M5 client/authority cohesion gate",
+    );
+    verify_m5_step.dependOn(test_m5_cohesion_step);
+    verify_m5_step.dependOn(verify_m5_architecture_step);
+    verify_m5_step.dependOn(verify_m4_step);
+    verify_m5_step.dependOn(check_validation_step);
+    verify_m5_step.dependOn(macos_readiness_step);
+    verify_m5_step.dependOn(verify_source_package_step);
+    const verify_m5_cold_command = b.addSystemCommand(&.{
+        b.graph.zig_exe,
+        "build",
+        "-Dproduct=headless",
+        "test",
+        "-j1",
+        "--summary",
+        "all",
+    });
+    verify_m5_cold_command.setCwd(b.path("."));
+    const verify_m5_cold_step = b.step(
+        "verify-m5-cold",
+        "Run the isolated cold-authority product graph and tests",
+    );
+    verify_m5_cold_step.dependOn(&verify_m5_cold_command.step);
+    verify_m5_step.dependOn(verify_m5_cold_step);
 
     // Just like flags, top level steps are also listed in the `--help` menu.
     //

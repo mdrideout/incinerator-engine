@@ -1,12 +1,12 @@
 # Incinerator Engine Overhaul Plan
 
-**Status:** Pre-multiplayer program and post-M3 greenfield cleanup complete;
-MP0-MP3 and MP4-A are implemented and accepted; MP4-B+ and broader MP1
-physical decomposition remain; secondary platforms are deferred
+**Status:** Pre-multiplayer program, post-M3 greenfield cleanup, MP0-MP5, the
+M4 multiplayer foundation, and M5 client/authority cohesion are complete;
+secondary platforms are deferred
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-07-13
+**Last reviewed:** 2026-07-14
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -16,6 +16,9 @@ physical decomposition remain; secondary platforms are deferred
 [`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md)
 
 **Multiplayer-first strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
+
+**Post-M5 authority hardening:**
+[`docs/design/post-m5-transactional-authority-cycle.md`](docs/design/post-m5-transactional-authority-cycle.md)
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
 
@@ -286,19 +289,22 @@ logical authority and operational lifecycle:
 
 - `src/root.zig` exposes backend-neutral contracts plus the type-erased
   `Runtime`/startup registry used by game features.
-- `src/main.zig` owns the same crate/character/vehicle/district/Jolt `Simulation` as headless plus only
-  visual input, camera, GPU resources, renderer, and debug UI.
-- `src/hosts/headless.zig` and `src/hosts/simulation.zig` prove the same sandbox
-  behavior with no SDL/editor/renderer edge.
+- `src/main.zig` composes visual input, camera, GPU resources, renderer, debug
+  UI, and one opaque embedded placement; it does not own or mutate the concrete
+  authority `Simulation` directly.
+- `src/hosts/headless.zig`, `src/session/authority.zig`, and
+  `src/hosts/simulation.zig` prove the same logical sandbox authority behavior
+  with no SDL/editor/renderer edge.
 - The prototype `GameWorld`, borrowed Flecs/Jolt path, direct ECS render query,
   Scene/Gizmo mutation tools, and their compatibility seams are removed.
 - `CrateFeature`, `CharacterFeature`, `VehicleFeature`, `DistrictFeature`,
   `InteractionFeature`, and `NpcFeature` independently own their typed
   commands, outcomes, persistence records, lifecycle, systems, and
   presentation extraction; the population planner owns no authority.
-- The composition owns `SnapshotV7` world metadata, cross-feature identity and
-  relationship policy, and one shared physics step; crate, character, vehicle,
-  district, interaction, and NPC records restore together without private
+- A private snapshot module owns `SnapshotV7` values, canonical encoding, cold
+  preflight, cross-feature identity/relationship validation, and exact world
+  fingerprints. The live authority owns transactional capture/restore and one
+  shared physics step; all feature records restore together without private
   coupling, and feature-owned tuning is authoritative.
 - The Jolt adapter now exposes a narrow CharacterVirtual capability with
   bottom-anchored capsules, world-qualified handles, slope/ground state, and
@@ -468,20 +474,27 @@ before dependency resolution.
 | S7 | Persistent interaction and cross-district world ownership are proven | Complete; transactional authority, save/replay, native Metal, 128-cycle measurement, and independent review pass |
 | S8 | A bounded navigation-driven population crosses streamed districts safely at representative scale | Complete and independently reviewed |
 | M3 | A server-shaped headless product is operationally ready for external producers | Complete and independently reviewed; pre-network capability gate only |
-| S9 / MP0-MP5 | Establish one multiplayer-first authority model for solo, listen, and dedicated placements, then prove two clients and the existing gameplay features | MP0-MP3 plus complete MP4-A vehicle replication/responsiveness; MP4-B-MP5 and broader feature/physical decomposition remain |
-| M4 | Multiplayer foundation is ready for future gameplay slices | Not started; depends on MP0-MP5 |
+| S9 / MP0-MP5 | Establish one multiplayer-first authority model for solo, listen, and dedicated placements, then prove two clients and the existing gameplay features | MP0-MP5 complete for the Apple Silicon macOS foundation scope; M5 subsequently closed the residual broad embedded-solo facade |
+| M4 | Multiplayer foundation is ready for future gameplay slices | Complete and accepted on Apple Silicon macOS |
+| M5 | Embedded solo becomes a cohesive placement of the same client/authority model before another gameplay slice | Complete and accepted on Apple Silicon macOS |
+| Post-M5 authority transaction | Bounded ingress and derivative outputs commit as one authority mutation cycle while adapters/storage retain separate lifecycles | Planned; explicitly not part of the current M5 completion claim |
 
 M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
 slices. M3 is a narrow pre-network readiness gate, not a speculative server
 framework. The earlier monolithic/conditional S9 has been decomposed into the
 MP0-MP5 program in `MULTIPLAYER_PLAN.md`; the topology, protocol, GNS transport,
 dedicated-first public placement, direct-IP-first proof, optional Steam
-compatibility, player target, and starting rates are accepted. MP0-MP3 now
-prove the first client/authority character boundary, real GNS placement,
-prediction, impairment, and accepted-ingress replay; feature replication and
-service integration remain. Shared diagnostics,
-storage, content, rendering, and server-shaped capabilities are extracted only
-as concrete slices prove their consumers.
+compatibility, player target, and starting rates are accepted. MP0-MP5 and M4
+now prove the client/authority boundary, real GNS placement, prediction,
+impairment, accepted-ingress replay, feature-owned replication, bounded district
+relevance/deltas, and open room admission. M5 closes the deliberately retained
+embedded-solo physical and semantic cohesion gap before a new gameplay slice.
+That M5 gate is complete and accepted.
+The separately recorded post-M5 authority transaction then hardens bounded
+ingress, derivative publication, delivery, and durable-decision boundaries; it
+does not move network I/O or blocking storage into the simulation tick.
+Shared diagnostics, storage, content, rendering, and server-shaped capabilities
+are extracted only as concrete slices prove their consumers.
 
 ---
 
@@ -1072,8 +1085,10 @@ by coordinate, and repeatedly streamed through stable logical keys.
   hysteresis; do not create a general VFS, CDN, asset database, or platform
   format abstraction.
 - [x] Extend the minimal S4 exact-cohort fingerprint, which S5 records in
-  durable saves, over the canonical multi-district catalog without invalidating
-  the single-bundle replay/save contract.
+  durable saves, over the canonical multi-district catalog while initially
+  retaining the single-bundle replay/save identity. The later greenfield
+  cleanup deliberately removed that transitional identity rather than carrying
+  compatibility forward.
 - [x] Report duplicate keys/coordinates, missing dependencies, cycles,
   incompatible cohorts, corrupt bundles, and cook failures structurally.
 - [x] Preserve source/cooked/resident separation and engine/game packaging
@@ -1233,8 +1248,10 @@ down cleanly. Apple Silicon macOS remains the only active platform.
 
 ## 23. S9 — Multiplayer-First Authority Program
 
-**Status:** MP0-MP3 and MP4-A are implemented and accepted. MP4-B-MP5 and broader MP1 physical
-decomposition remain, as recorded in [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md).
+**Status:** MP0-MP5, the M4 Apple Silicon macOS foundation, and the broader MP1
+embedded-solo physical/semantic cohesion work completed by M5 are implemented
+and accepted, as recorded in
+[`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md).
 
 The earlier conditional S9 correctly identified the need for two clients, one
 authoritative server, prediction/reconciliation, interest management,
@@ -1248,13 +1265,13 @@ historical roadmap:
 | Phase | Outcome | Status |
 |---|---|---|
 | MP0 | Record product assumptions, budgets, authority topology, identities, protocol, persistence, replication, transport, and deferrals | Complete initial architecture contract |
-| MP1 | Existing solo sandbox becomes a client connected to an embedded authority through a typed local link | Character seam implemented; legacy solo admin/save and physical `App`/`Simulation` decomposition remain |
+| MP1 | Existing solo sandbox becomes a client connected to an embedded authority through a typed local link | Character seam complete; whole-gameplay local/admin and physical cohesion subsequently completed and accepted in M5 |
 | MP2 | Two macOS clients join one authoritative localhost server with sequenced character input and snapshots | Character slice implemented and audited over real GNS |
 | MP2.1 | Monotonic reconnect and explicit terminal authority shutdown semantics are proven | Complete |
 | MP3 | Local prediction/reconciliation and bounded latency/loss/reorder behavior are proven | Complete for bounded character slice |
-| MP4 | Vehicle, interaction, district, and NPC replication plus district relevance are proven | MP4-A authoritative replication and bounded local responsiveness complete; B-E remain |
-| MP5 | Invite/party/room discovery connects players to listen or dedicated authority | Not started |
-| M4 | The multiplayer foundation is accepted for subsequent gameplay slices | Not started |
+| MP4 | Vehicle, interaction, district, and NPC replication plus district relevance are proven | Complete through MP4-A-E and architecture closeout |
+| MP5 | Invite/party/room discovery connects players to listen or dedicated authority | Open-engine room/admission scope complete; proprietary Steam/listen productization remains deferred |
+| M4 | The multiplayer foundation is accepted for subsequent gameplay slices | Complete on Apple Silicon macOS |
 
 ### Entry requirements
 
@@ -1296,26 +1313,94 @@ historical roadmap:
 
 ### M4 acceptance summary
 
-- [ ] Solo runs through the client/session/embedded-authority boundary.
-- [ ] Two clients use one authoritative server under a measured impairment
+- [x] Solo runs through the client/session/embedded-authority boundary; M4
+  explicitly retains the broader local administration facade for M5.
+- [x] Two clients use one authoritative server under a measured impairment
   envelope.
-- [ ] Join-in-progress and reconnect restore bounded relevant state.
-- [ ] Character, vehicle, interaction, district, and NPC authority remains
+- [x] Join-in-progress and reconnect restore bounded relevant state.
+- [x] Character, vehicle, interaction, district, and NPC authority remains
   consistent under stale/lost/reordered input.
-- [ ] Prediction is explicitly non-authoritative and converges to server state.
-- [ ] District relevance bounds per-client state and bandwidth.
-- [ ] Accepted-ingress replay identifies the first divergent authority category
+- [x] Prediction is explicitly non-authoritative and converges to server state.
+- [x] District relevance bounds per-client state and bandwidth.
+- [x] Accepted-ingress replay identifies the first divergent authority category
   within the exact cohort.
-- [ ] Client, listen, dedicated, validation, and package boundaries pass their
-  independently checked macOS gates.
+- [x] Embedded, graphical-client, dedicated, validation, and package boundaries
+  pass their independently checked macOS gates; listen remains an explicitly
+  deferred product placement over the same contract.
 
 ---
 
-## 24. Continuous Capability Extraction
+## 24. M5 — Client/Authority Cohesion Gate
+
+**Status:** Complete and accepted
+
+**Design:**
+[`docs/design/m5-client-authority-cohesion.md`](docs/design/m5-client-authority-cohesion.md)
+
+**Acceptance:**
+[`docs/validation/m5-client-authority-cohesion.md`](docs/validation/m5-client-authority-cohesion.md)
+
+### Outcome
+
+Before another gameplay slice, embedded solo becomes a cohesive placement of the
+same authority-session behavior as dedicated play. The graphical client,
+district streaming, developer tools, persistence, and authority runtime receive
+narrow owned capabilities rather than sharing the broad legacy `App` and
+`local_solo` forwarding surface.
+
+### Work
+
+- [x] Use one authority-session behavior for embedded and dedicated placement;
+  remove the separate character-only local dispatcher and direct local gameplay
+  bypasses.
+- [x] Run embedded authority at the accepted 60 Hz independently of render/input
+  cadence and retain the declared 20 Hz replication cadence.
+- [x] Route character, vehicle, and carry gameplay through equivalent local and
+  network semantic admission, ownership, sequencing, and outcome paths.
+- [x] Split graphical, district-streaming, developer, durable-persistence, and
+  embedded-authority ownership with explicit lifecycle/teardown.
+- [x] Narrow the private authority surface and move persistence, replay,
+  diagnostics, projection, and canonical snapshot implementation into cohesive
+  private boundaries where this materially clarifies lifecycle or ownership;
+  retain live world composition/restore/ticking together.
+- [x] Delete obsolete forwarding APIs rather than preserving greenfield
+  compatibility residue; do not create aliases for the removed facade.
+- [x] Add executable architecture, order, parity, failure-unwind, playable,
+  filtered source-package, and installed macOS gates while retaining the
+  complete M4 regression.
+
+### Acceptance criteria
+
+- [x] Graphical and developer code cannot access Flecs, Jolt authority, private
+  feature state, canonical save bytes, or save-slot commit directly.
+- [x] Local delivery may skip encoding/socket work but cannot skip semantic
+  admission; equivalent local/remote commands produce equivalent authority
+  outcomes and replication.
+- [x] Separate placement, authority-cycle, and nested runtime traces prove their
+  real order, completion-aware failure prefixes, immutable first fault, and
+  refusal to advance after that fault.
+- [x] Solo/editor/save/replay/streaming/diagnostics retain automated installed
+  scenario coverage, and the
+  complete two-client M4 foundation remains green.
+- [x] The filtered source package contains the M5 contracts, architecture gate,
+  and evidence documents and executes its headless, persistence, snapshot, and
+  session closure without checkout-only files.
+- [x] Architecture, correctness, build, native macOS, and documentation reviews
+  leave no unrecorded actionable P0/P1/P2 issue in M5 scope.
+
+M5 does not claim a single transactional eight-stage ingress-to-publication
+cycle. That follow-up is specified in
+[`Post-M5 Transactional Authority Cycle`](docs/design/post-m5-transactional-authority-cycle.md)
+and remains planned until its own implementation and exact final-tree evidence
+exist.
+
+---
+
+## 25. Continuous Capability Extraction
 
 These are not independent “finish the subsystem” milestones. Slices pull the minimum required work from them.
 
-### 24.1 Kernel evolution
+### 25.1 Kernel evolution
 
 - feature registration and composition;
 - schedule phases, deferred mutations, and access declarations;
@@ -1324,7 +1409,7 @@ These are not independent “finish the subsystem” milestones. Slices pull the
 - deterministic command/event queues;
 - world lifecycle and the explicitly selected process/world model.
 
-### 24.2 Rendering evolution
+### 25.2 Rendering evolution
 
 - render extraction and presentation snapshots;
 - geometry/material/instance separation;
@@ -1334,7 +1419,7 @@ These are not independent “finish the subsystem” milestones. Slices pull the
 - GPU upload queues and deferred destruction;
 - draw, visibility, upload, and GPU timing metrics.
 
-### 24.3 Asset evolution
+### 25.3 Asset evolution
 
 - typed generational handles;
 - explicit loading states and registries;
@@ -1343,7 +1428,7 @@ These are not independent “finish the subsystem” milestones. Slices pull the
 - worker decode and renderer-owned upload;
 - fallback assets, cancellation, and diagnostics.
 
-### 24.4 Persistence/network evolution
+### 25.4 Persistence/network evolution
 
 - versioned schemas and explicit compatibility policy; migrations only after a
   stability promise requires them;
@@ -1363,7 +1448,7 @@ Before moving code from a feature into shared engine infrastructure, record:
 
 ---
 
-## 25. Findings Register
+## 26. Findings Register
 
 | ID | Finding | Priority | Target | Status |
 |---|---|---:|---|---|
@@ -1439,9 +1524,9 @@ Before moving code from a feature into shared engine infrastructure, record:
 
 ---
 
-## 26. Verification Strategy
+## 27. Verification Strategy
 
-### 26.1 Required build checks
+### 27.1 Required build checks
 
 - clean Debug and ReleaseFast builds;
 - clean tests and formatting;
@@ -1451,7 +1536,7 @@ Before moving code from a feature into shared engine infrastructure, record:
 - editor/headless dependency exclusion checks plus the implemented M3 cold
   server-shaped product exclusion gate.
 
-### 26.2 Vertical slice contract
+### 27.2 Vertical slice contract
 
 Every slice must include, as applicable:
 
@@ -1463,7 +1548,7 @@ Every slice must include, as applicable:
 - performance measurements at the intended scale;
 - dependency-graph/architecture fitness checks.
 
-### 26.3 Architecture fitness checks
+### 27.3 Architecture fitness checks
 
 - Kernel imports no SDL, Jolt, ImGui, host, or game-feature implementation.
 - Server/headless builds link no renderer/editor libraries.
@@ -1473,7 +1558,7 @@ Every slice must include, as applicable:
 - Rendering cannot mutate authoritative simulation data.
 - Worker callbacks cannot directly mutate ECS/gameplay/editor state.
 
-### 26.4 Performance measurements
+### 27.4 Performance measurements
 
 Timed ReleaseFast characterizations cover S0 through S3-A. S3-B records the
 cooked/staged/GPU resource boundary in
@@ -1500,7 +1585,7 @@ Record evidence rather than relying only on target numbers:
 
 ---
 
-## 27. Immediate Next Actions
+## 28. Immediate Next Actions
 
 1. [x] Resolve D-001: single-player sandbox first; future authoritative online/MMO remains an aspiration.
 2. [x] Write the D-011/D-012 ADR describing feature registration, dependency rules, and commands/events/queries.
@@ -1587,10 +1672,22 @@ Record evidence rather than relying only on target numbers:
     accepted-ingress replay.
 35. [x] Complete MP4-A2's explicit local vehicle responsiveness decision and
     resolve the blocked disconnect-exit policy before MP4-B carry replication.
+36. [x] Complete MP4-B through MP4-E: authoritative carry interaction,
+    acknowledged district relevance, relevant NPC projection, and prioritized
+    bounded delta replication with overload recovery.
+37. [x] Complete the open-engine MP5 room/admission boundary and accept the M4
+    Apple Silicon macOS multiplayer foundation while preserving explicit
+    Steam/listen/public-service deferrals.
+38. [x] Complete and independently review M5 client/authority cohesion using
+    `docs/design/m5-client-authority-cohesion.md`; do not begin another gameplay
+    slice until the acceptance record is fully evidenced.
+39. [ ] After M5 acceptance, implement and review the bounded transactional
+    authority cycle in `docs/design/post-m5-transactional-authority-cycle.md`
+    before treating ingress-to-publication atomicity as an engine guarantee.
 
 ---
 
-## 28. Progress Log
+## 29. Progress Log
 
 | Date | Change | Evidence |
 |---|---|---|
@@ -1628,7 +1725,7 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-13 | Completed and independently reviewed S4-A structured diagnostics/live inspection | Fixed 256-entry runtime journal and one-shot freeze policy; immutable first fault; typed feature/worker/stream/GPU snapshots; optional host capabilities; compact text/JSON/headless/ImGui consumers; pause/step/scale controls; resident-district production fault-loop proof with frozen content/GPU progress and original-error return; 332/332 Debug, ReleaseFast, and editor-enabled tests; 31/31 extracted-package tests; 41/41 aggregate native macOS steps; no remaining actionable P0/P1/P2 finding |
 | 2026-07-13 | Completed and independently reviewed S4-B same-cohort flight recording/replay | Cold typed admission; exact simulation/world/content/CPU/Jolt cohort; bounded canonical little-endian envelope; feature-owned per-tick digests; consumed asynchronous district ingress; hostile-input preflight before world acquisition; standalone SDL/editor/GPU-free verifier; exact command and valid district-ingress divergence; 369/369 Debug, ReleaseFast, and editor-enabled tests; 47/47 extracted-package tests; 46/46 aggregate native macOS steps; no remaining actionable P0/P1/P2 finding |
 | 2026-07-13 | Completed and independently reviewed S4-C and closed the full S4 developer-diagnostics slice | Bounded renderer-neutral physics evidence and optional rigid-contact capture; fixed three-slot Metal overlay with six GPU/six transfer buffers and distinct copy/post-submit fence ownership; fixed phase/frame profiling; optional CPU/GPU diagnostics degradation; 420/420 Debug and ReleaseFast tests, 420/420 editor-enabled tests, 48/48 extracted-package tests, 37/37 installed native steps, and 47/47 aggregate ReleaseFast macOS readiness steps; 600 native draws/post-submit fences with zero primitive/backpressure drops; no remaining actionable P0/P1/P2 finding |
-| 2026-07-13 | Completed S6-A canonical catalog, deterministic dependency-aware cooking, and exact admission | Fixed-capacity explicit-LE catalog with typed graph failures and closure queries; distinct provenanced east fixture; real west -> east -> catalog build edges; byte-identical repeat cooks; installed `/tmp` admission of both exact bundles; domain-separated catalog cohort with legacy bundle fingerprint pinned; 20/20 cooker steps and 18/18 content tests |
+| 2026-07-13 | Completed S6-A canonical catalog, deterministic dependency-aware cooking, and exact admission | Fixed-capacity explicit-LE catalog with typed graph failures and closure queries; distinct provenanced east fixture; real west -> east -> catalog build edges; byte-identical repeat cooks; installed `/tmp` admission of both exact bundles; domain-separated catalog cohort with the legacy bundle fingerprint pinned at S6 close and intentionally removed by the later greenfield cleanup; 20/20 cooker steps and 18/18 content tests |
 | 2026-07-13 | Completed S6-B fixed two-slot logical authority and cold persistence/replay integration | One loader over two canonical slots; two real-Jolt districts/six bodies; independent neighbor-preserving cancel/failure/unload/reload; transactional 0/1/2 restore; Snapshot V5 and replay cohort 3; catalog-backed two-district replay and fresh durable restore; extracted source package 59/59 steps and 95/95 tests; S6-C visual/native review remains |
 | 2026-07-13 | Completed and independently reviewed S6-C and closed the full S6 multi-district slice | Exact west/east startup catalog contract; two fixed visual slots over one worker/registry; per-generation content/logical/GPU routing and recycling; truthful two-slot production diagnostics; three forward/reverse installed Metal overlap cycles at 240/80 Hz with exact two-scene/232-byte peak and complete drain; 493/493 tests across Debug/ReleaseFast/editor-off/on, 95/95 extracted-package tests; corrected rollback, diagnostics, cadence, and fail-fast findings; no remaining actionable P0/P1/P2 finding |
 | 2026-07-13 | Completed and independently reviewed S7 interaction ownership and closed the slice | Feature-owned district/held/dormant carryable authority; transactional collect/drop and rollback; Snapshot V6/replay cohort 4; held+dormant cold restart; shared input/editor semantic mailbox; installed Metal lifecycle at 240/80 Hz; 128 real-Jolt ownership cycles with held-owner cancellation and 11,033 commands; 519/519 tests in all Debug/ReleaseFast/editor modes; 65/65-step extracted package and 72/72-step native readiness; no remaining actionable P0/P1/P2 finding |
@@ -1643,4 +1740,10 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-13 | Implemented MP0 and the first MP1/MP2 authoritative character slice, then completed the MP2 audit | Central quantitative ceilings and impairment profiles; distinct session/account/participant/connection/replicated/sequence identities; generated exact build/content cohort; bounded codec/local link/client replicated world; solo character input through embedded session; pinned GNS 1.5.1 C ABI; cold authority and presentation-only graphical client; real two-client GNS proof for JIP, movement, acknowledgement, cohort rejection, disconnect/reconnect, zero callback drops; handshake/idle/oversize/malformed/duplicate-account coverage; visual-linkage boundary; residual MP1 physical cohesion and MP3/MP4 scope explicitly recorded |
 | 2026-07-13 | Completed MP2.1 and MP3 character responsiveness/fault acceptance | Monotonic capped reconnect with terminal authority-stop semantics; welcome-anchored clock; bounded local horizontal prediction/reconciliation and remote interpolation; shared semantic lane policy; deterministic latency/jitter/loss/duplicate/reorder/blackout/bandwidth harness; stale-input and quota policy; 2,048-entry accepted-ingress journal replayed into a fresh one-world authority with category-first divergence; clean/three nominal/three adverse/blackout matrix; independent real-GNS shutdown processes; 199/199 and 618/618 full Debug/ReleaseFast gates; 63/63 and 31/31 MP3 Debug/ReleaseFast gates; extracted-source 98/98/196 plus cold 32/32/52 evidence |
 | 2026-07-13 | Completed MP4-A1 authoritative vehicle replication | Reliable correlated enter/exit; unreliable sequenced ownership-checked driving input with neutral expiry; backend-neutral chassis/driver snapshots; graphical vehicle/input/camera presentation; real-GNS two-client contention plus reconnect-retained seat; deterministic clean/three nominal/three adverse/blackout matrix; mixed character/vehicle/action ingress replay into a fresh authority; 66/66 MP4 steps and 36/36 focused tests; 199/199 and 623/623 full Debug/ReleaseFast gates; extracted-source 98/98/196 plus cold 32/32/52 evidence; measurements trigger the focused MP4-A2 prediction decision |
-| 2026-07-13 | Completed MP4-A2 bounded local vehicle responsiveness | Separate input-driven client predictor with 12-tick/200 ms horizon; acknowledged-input replay and measured position/quaternion/velocity correction; zero hard corrections outside blackout; collision-stop/dynamic-impact evidence; live `P` A/B and `F8` reconnect controls in the installed Metal client; real-GNS prediction reset/reinitialize; five collision-safe exit placements plus teardown-only forced seat release; installed Metal/GNS launch and bounded render passed; 68/68 MP4 steps and 41/41 focused tests; 201/201 and 628/628 full Debug/ReleaseFast gates; extracted-source 98/98/196 plus cold 32/32/52 evidence; MP4-B carry interaction is next |
+| 2026-07-13 | Completed MP4-A2 bounded local vehicle responsiveness | Separate input-driven client predictor with 12-tick/200 ms horizon; acknowledged-input replay and measured position/quaternion/velocity correction; zero hard corrections outside blackout; collision-stop/dynamic-impact evidence; live `P` A/B and `F8` reconnect controls in the installed Metal client; real-GNS prediction reset/reinitialize; five collision-safe exit placements plus teardown-only forced seat release; installed Metal/GNS launch and bounded render passed; 68/68 MP4 steps and 41/41 focused tests; 201/201 and 628/628 full Debug/ReleaseFast gates; extracted-source 98/98/196 plus cold 32/32/52 evidence; MP4-B was the next checkpoint and was completed on 2026-07-14 |
+| 2026-07-14 | Completed MP4-B through MP4-D | Reliable authoritative carry with contention/cleanup, acknowledged district baselines and hysteretic relevance, 64-NPC relevant projection at a measured lower rate, JIP/reconnect, real-GNS two-client evidence, bounded semantic types, and deterministic impairment regressions |
+| 2026-07-14 | Completed MP4-E and closed MP4 architecture | Acknowledged full/delta state with explicit removals, bounded materialized history, byte/entity/event/baseline budgets, NPC-first degradation, full fallback/starvation recovery, semantic projection checks, and no unrecorded actionable P0/P1/P2 MP4 finding |
+| 2026-07-14 | Completed open-engine MP5 and accepted M4 | Bounded room/invite/readiness/placement lifecycle; identity-bound one-time admission; direct-IP dedicated executable proof; service-independent admitted authority; full MP4/GNS/cold-boundary/installed-Metal aggregate; Steamworks, listen/NAT productization, public services, and host migration remain explicit deferrals |
+| 2026-07-14 | Began M5 client/authority cohesion | Recorded the in-progress contract and pending evidence matrix to replace the broad embedded-solo facade, unify local/dedicated authority semantics and clock, separate graphical/streaming/developer/persistence owners, and retain complete playable M4 behavior without compatibility shims |
+| 2026-07-14 | Recorded the post-M5 transactional authority pressure point | Kept M5's real nested placement/authority/runtime traces distinct from a future atomic eight-stage cycle; planned bounded mailbox batching, prepared derivatives, atomic publication, delivery leases, and queued durable decisions without putting transport or blocking storage inside the fixed tick |
+| 2026-07-14 | Completed and independently reviewed M5 client/authority cohesion | One shared embedded/dedicated authority core; ordinary gameplay through semantic admission and correlated client results; replicated-only player presentation; opaque graphical support owners; private snapshot/diagnostic boundaries; CSPRNG/HMAC reconnect credentials; fault-latched authority mutation; 60 Hz authority and 20 Hz replication independent of presentation; focused, architecture, M4, full Debug/ReleaseFast, cold, source-package, and 81-step installed macOS gates; no unrecorded actionable P0/P1/P2 M5 issue, with atomic ingress/publication retained as the explicit post-M5 pressure point |

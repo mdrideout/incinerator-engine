@@ -26,10 +26,12 @@ client owns only replicated presentation, prediction, and interpolation.
 ## Review findings
 
 No unrecorded P0, P1, or P2 architectural issue remains inside MP4 scope.
-Remaining pressure points are intentionally assigned to later work:
+At MP4 closure, the following pressure points were intentionally assigned to
+later work:
 
-- room/invite identity and instance placement belong to MP5 and do not own
-  gameplay state;
+- room/invite identity and instance placement belonged to MP5 and do not own
+  gameplay state; the open-engine scope was subsequently accepted on
+  2026-07-14 in [`MP5 Acceptance`](mp5-acceptance.md);
 - an optional Steam adapter remains outside the open core;
 - listen productization, NAT/relay, host migration, public orchestration, and
   MMO world partitioning remain explicit deferrals;
@@ -38,3 +40,11 @@ Remaining pressure points are intentionally assigned to later work:
 
 MP4 is therefore closed as a multiplayer gameplay foundation, not presented
 as a production online service.
+
+## Subsequent status
+
+MP5 and the aggregate M4 Apple Silicon macOS foundation are now accepted. The
+broad embedded-solo administration facade deliberately excluded from this MP4
+scope is closed by the accepted
+[`M5 Client/Authority Cohesion`](../design/m5-client-authority-cohesion.md)
+gate and its [acceptance record](m5-client-authority-cohesion.md).

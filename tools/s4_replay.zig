@@ -5,8 +5,9 @@ const content = @import("content");
 const district_content_catalog = @import("district_content_catalog");
 const replay = @import("sandbox_replay");
 const sandbox = @import("sandbox_simulation");
+const sandbox_contracts = @import("sandbox_host_contracts");
 
-const fixture_coord = sandbox.ChunkCoord{ .x = 0, .z = 0 };
+const fixture_coord = sandbox_contracts.ChunkCoord{ .x = 0, .z = 0 };
 const worker_progress_limit: usize = 2_000;
 const vehicle_settle_ticks: usize = 240;
 const vehicle_drive_ticks: usize = 60;
@@ -33,14 +34,14 @@ const Transaction = struct {
 };
 
 const ScenarioState = struct {
-    crate_id: ?sandbox.PersistentId = null,
-    character_id: ?sandbox.PersistentId = null,
-    vehicle_id: ?sandbox.PersistentId = null,
-    carryable_id: ?sandbox.PersistentId = null,
-    npc_id: ?sandbox.PersistentId = null,
-    cancelled_ticket: ?sandbox.LoadTicket = null,
-    active_ticket: ?sandbox.LoadTicket = null,
-    east_ticket: ?sandbox.LoadTicket = null,
+    crate_id: ?sandbox_contracts.PersistentId = null,
+    character_id: ?sandbox_contracts.PersistentId = null,
+    vehicle_id: ?sandbox_contracts.PersistentId = null,
+    carryable_id: ?sandbox_contracts.PersistentId = null,
+    npc_id: ?sandbox_contracts.PersistentId = null,
+    cancelled_ticket: ?sandbox_contracts.LoadTicket = null,
+    active_ticket: ?sandbox_contracts.LoadTicket = null,
+    east_ticket: ?sandbox_contracts.LoadTicket = null,
     crate_impulse_applied: bool = false,
     crate_despawned: bool = false,
     character_action_applied: bool = false,
@@ -52,13 +53,13 @@ const ScenarioState = struct {
     cancellation_completed: bool = false,
     district_activated: bool = false,
     east_activated: bool = false,
-    interaction_source: ?sandbox.ChunkCoord = null,
-    interaction_destination: ?sandbox.ChunkCoord = null,
+    interaction_source: ?sandbox_contracts.ChunkCoord = null,
+    interaction_destination: ?sandbox_contracts.ChunkCoord = null,
     carryable_collected: bool = false,
     crossed_district_boundary: bool = false,
     carryable_dropped: bool = false,
     destination_unloaded: bool = false,
-    destination_reload_ticket: ?sandbox.LoadTicket = null,
+    destination_reload_ticket: ?sandbox_contracts.LoadTicket = null,
     destination_reactivated: bool = false,
     npc_spawned: bool = false,
     npc_owner_transfers: usize = 0,
@@ -294,7 +295,7 @@ fn requireAlteredDistrictIngressDivergence(
             ready.build.static_boxes[box_index].half_extents[0] += 0.25;
             ready.build.checksum = try ready.build.calculateChecksum();
             try ready.build.validate();
-            if (!sandbox.LoadTicket.eql(ready.ticket, original_completion.ready.ticket)) {
+            if (!sandbox_contracts.LoadTicket.eql(ready.ticket, original_completion.ready.ticket)) {
                 return error.AlteredDistrictIngressTicket;
             }
             if (std.meta.eql(ready.build, original_completion.ready.build)) {
@@ -419,9 +420,9 @@ fn requireAlteredNpcGoalDivergence(
             .spawn => |*spawn| switch (spawn.goal) {
                 .patrol_between => |*patrol| {
                     if (patrol.second.index != 2 or
-                        !sandbox.ChunkCoord.eql(
+                        !sandbox_contracts.ChunkCoord.eql(
                             patrol.second.coord,
-                            sandbox.navigation_east_coord,
+                            sandbox_contracts.navigation_east_coord,
                         ))
                     {
                         return error.UnexpectedNpcPatrolGoal;
@@ -498,7 +499,7 @@ fn loadFixtureCohort(init: std.process.Init, raw_root_path: []const u8) !replay.
         },
     };
     defer admission.deinit();
-    const build = try sandbox.proceduralDistrictBuild(fixture_coord);
+    const build = try sandbox_contracts.proceduralDistrictBuild(fixture_coord);
     try admission.validateLogicalRecord(
         fixture_coord,
         build.recipe_version,
@@ -617,10 +618,10 @@ fn runSmokeScenario(
 
     try simulation.submitNpc(.{ .spawn = .{
         .request_id = Request.npc_spawn,
-        .node = .{ .coord = sandbox.navigation_west_coord, .index = 0 },
+        .node = .{ .coord = sandbox_contracts.navigation_west_coord, .index = 0 },
         .goal = .{ .patrol_between = .{
-            .first = .{ .coord = sandbox.navigation_west_coord, .index = 0 },
-            .second = .{ .coord = sandbox.navigation_east_coord, .index = 2 },
+            .first = .{ .coord = sandbox_contracts.navigation_west_coord, .index = 0 },
+            .second = .{ .coord = sandbox_contracts.navigation_east_coord, .index = 2 },
         } },
     } });
     try tickAndDrain(simulation, state);
@@ -662,9 +663,9 @@ fn runSmokeScenario(
         return error.MissingCarryableSpawnOutcome;
     const source = state.interaction_source orelse
         return error.MissingCarryableSource;
-    const destination = if (sandbox.ChunkCoord.eql(source, fixture_coord))
-        sandbox.ChunkCoord{ .x = 1, .z = 0 }
-    else if (sandbox.ChunkCoord.eql(source, .{ .x = 1, .z = 0 }))
+    const destination = if (sandbox_contracts.ChunkCoord.eql(source, fixture_coord))
+        sandbox_contracts.ChunkCoord{ .x = 1, .z = 0 }
+    else if (sandbox_contracts.ChunkCoord.eql(source, .{ .x = 1, .z = 0 }))
         fixture_coord
     else
         return error.CarryableSpawnedOutsideActiveDistricts;
@@ -733,7 +734,7 @@ fn runSmokeScenario(
         return error.DroppedCarryableOwnershipMismatch;
     }
 
-    const destination_ticket = if (sandbox.ChunkCoord.eql(destination, fixture_coord))
+    const destination_ticket = if (sandbox_contracts.ChunkCoord.eql(destination, fixture_coord))
         state.active_ticket.?
     else
         state.east_ticket.?;
@@ -894,7 +895,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
             Request.district_reload_destination => {
                 if (state.destination_reload_ticket != null or
                     state.interaction_destination == null or
-                    !sandbox.ChunkCoord.eql(
+                    !sandbox_contracts.ChunkCoord.eql(
                         requested.ticket.coord,
                         state.interaction_destination.?,
                     ))
@@ -908,7 +909,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
         .cancellation_requested => |requested| {
             if (requested.request_id != Request.district_cancel or
                 state.cancelled_ticket == null or
-                !sandbox.LoadTicket.eql(requested.ticket, state.cancelled_ticket.?))
+                !sandbox_contracts.LoadTicket.eql(requested.ticket, state.cancelled_ticket.?))
             {
                 return error.UnexpectedDistrictOutcome;
             }
@@ -916,7 +917,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
         },
         .cancelled => |cancelled| {
             if (state.cancelled_ticket == null or
-                !sandbox.LoadTicket.eql(cancelled.ticket, state.cancelled_ticket.?))
+                !sandbox_contracts.LoadTicket.eql(cancelled.ticket, state.cancelled_ticket.?))
             {
                 return error.UnexpectedDistrictOutcome;
             }
@@ -925,8 +926,8 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
         .activated => |activated| switch (activated.request_id) {
             Request.district_load_active => {
                 if (state.active_ticket == null or
-                    !sandbox.LoadTicket.eql(activated.ticket, state.active_ticket.?) or
-                    !sandbox.ChunkCoord.eql(activated.coord, fixture_coord) or
+                    !sandbox_contracts.LoadTicket.eql(activated.ticket, state.active_ticket.?) or
+                    !sandbox_contracts.ChunkCoord.eql(activated.coord, fixture_coord) or
                     activated.static_box_count != 3)
                 {
                     return error.UnexpectedDistrictOutcome;
@@ -935,8 +936,8 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
             },
             Request.district_load_east => {
                 if (state.east_ticket == null or
-                    !sandbox.LoadTicket.eql(activated.ticket, state.east_ticket.?) or
-                    !sandbox.ChunkCoord.eql(activated.coord, .{ .x = 1, .z = 0 }) or
+                    !sandbox_contracts.LoadTicket.eql(activated.ticket, state.east_ticket.?) or
+                    !sandbox_contracts.ChunkCoord.eql(activated.coord, .{ .x = 1, .z = 0 }) or
                     activated.static_box_count != 3)
                 {
                     return error.UnexpectedDistrictOutcome;
@@ -946,11 +947,11 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
             Request.district_reload_destination => {
                 if (state.destination_reload_ticket == null or
                     state.interaction_destination == null or
-                    !sandbox.LoadTicket.eql(
+                    !sandbox_contracts.LoadTicket.eql(
                         activated.ticket,
                         state.destination_reload_ticket.?,
                     ) or
-                    !sandbox.ChunkCoord.eql(
+                    !sandbox_contracts.ChunkCoord.eql(
                         activated.coord,
                         state.interaction_destination.?,
                     ) or
@@ -969,7 +970,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
         .unloaded => |unloaded| {
             if (unloaded.request_id != Request.district_unload_destination or
                 state.interaction_destination == null or
-                !sandbox.ChunkCoord.eql(
+                !sandbox_contracts.ChunkCoord.eql(
                     unloaded.ticket.coord,
                     state.interaction_destination.?,
                 ))
@@ -999,7 +1000,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
                 state.interaction_source == null or
                 !std.meta.eql(collected.carrier_id, state.character_id.?) or
                 !std.meta.eql(collected.carryable_id, state.carryable_id.?) or
-                !sandbox.ChunkCoord.eql(
+                !sandbox_contracts.ChunkCoord.eql(
                     collected.previous_owner,
                     state.interaction_source.?,
                 ))
@@ -1015,7 +1016,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
                 state.interaction_destination == null or
                 !std.meta.eql(dropped.carrier_id, state.character_id.?) or
                 !std.meta.eql(dropped.carryable_id, state.carryable_id.?) or
-                !sandbox.ChunkCoord.eql(dropped.owner, state.interaction_destination.?))
+                !sandbox_contracts.ChunkCoord.eql(dropped.owner, state.interaction_destination.?))
             {
                 return error.UnexpectedInteractionOutcome;
             }
@@ -1028,7 +1029,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
         .spawned => |spawned| {
             if (spawned.request_id != Request.npc_spawn or
                 state.npc_id != null or
-                !sandbox.ChunkCoord.eql(spawned.owner, sandbox.navigation_west_coord))
+                !sandbox_contracts.ChunkCoord.eql(spawned.owner, sandbox_contracts.navigation_west_coord))
             {
                 return error.UnexpectedNpcOutcome;
             }
@@ -1045,32 +1046,32 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
         },
         .owner_transferred => |transferred| {
             try requireNpcIdentity(state, transferred.id);
-            const west_to_east = sandbox.ChunkCoord.eql(
+            const west_to_east = sandbox_contracts.ChunkCoord.eql(
                 transferred.previous,
-                sandbox.navigation_west_coord,
-            ) and sandbox.ChunkCoord.eql(
+                sandbox_contracts.navigation_west_coord,
+            ) and sandbox_contracts.ChunkCoord.eql(
                 transferred.current,
-                sandbox.navigation_east_coord,
+                sandbox_contracts.navigation_east_coord,
             );
-            const east_to_west = sandbox.ChunkCoord.eql(
+            const east_to_west = sandbox_contracts.ChunkCoord.eql(
                 transferred.previous,
-                sandbox.navigation_east_coord,
-            ) and sandbox.ChunkCoord.eql(
+                sandbox_contracts.navigation_east_coord,
+            ) and sandbox_contracts.ChunkCoord.eql(
                 transferred.current,
-                sandbox.navigation_west_coord,
+                sandbox_contracts.navigation_west_coord,
             );
             if (!west_to_east and !east_to_west) return error.UnexpectedNpcEvent;
             state.npc_owner_transfers += 1;
         },
         .goal_reached => |reached| {
             try requireNpcIdentity(state, reached.id);
-            const is_west = sandbox.ChunkCoord.eql(
+            const is_west = sandbox_contracts.ChunkCoord.eql(
                 reached.node.coord,
-                sandbox.navigation_west_coord,
+                sandbox_contracts.navigation_west_coord,
             ) and reached.node.index == 0;
-            const is_east = sandbox.ChunkCoord.eql(
+            const is_east = sandbox_contracts.ChunkCoord.eql(
                 reached.node.coord,
-                sandbox.navigation_east_coord,
+                sandbox_contracts.navigation_east_coord,
             ) and reached.node.index == 2;
             if (!is_west and !is_east) return error.UnexpectedNpcEvent;
             state.npc_goal_reached = true;
@@ -1078,7 +1079,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
     };
 }
 
-fn requireNpcIdentity(state: *const ScenarioState, id: sandbox.PersistentId) !void {
+fn requireNpcIdentity(state: *const ScenarioState, id: sandbox_contracts.PersistentId) !void {
     if (state.npc_id == null or !std.meta.eql(id, state.npc_id.?)) {
         return error.UnexpectedNpcEvent;
     }
@@ -1086,8 +1087,8 @@ fn requireNpcIdentity(state: *const ScenarioState, id: sandbox.PersistentId) !vo
 
 fn requireDriverTransition(
     state: *const ScenarioState,
-    vehicle_id: sandbox.PersistentId,
-    driver_id: sandbox.PersistentId,
+    vehicle_id: sandbox_contracts.PersistentId,
+    driver_id: sandbox_contracts.PersistentId,
 ) !void {
     if (state.vehicle_id == null or
         state.character_id == null or

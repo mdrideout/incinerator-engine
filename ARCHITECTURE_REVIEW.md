@@ -1,20 +1,26 @@
 # Incinerator Engine Architecture Review
 
-**Status:** Living assessment; MP0-MP3 and MP4-A are implemented and accepted;
-residual MP1 cohesion and MP4-B+ pressure points are recorded
+**Status:** Living assessment; MP0-MP5, the M4 Apple Silicon macOS multiplayer
+foundation, and M5 client/authority cohesion are implemented and accepted
 
-**Last reviewed:** 2026-07-13
+**Last reviewed:** 2026-07-14
 
-**Scope:** Current post-M3 architecture, its demonstrated strengths, its
-structural weaknesses, and the pressure introduced by a likely
-multiplayer-first product
+**Scope:** Current post-M5 architecture, its demonstrated strengths, its
+structural weaknesses, and the transactional authority pressure point planned
+before further product expansion
 
 **Related roadmap:** [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md)
 
 **Multiplayer strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
-**Latest implementation audit:**
-[`docs/validation/mp4a-acceptance.md`](docs/validation/mp4a-acceptance.md)
+**Latest accepted foundation:**
+[`docs/validation/m5-client-authority-cohesion.md`](docs/validation/m5-client-authority-cohesion.md)
+
+**Accepted cohesion contract:**
+[`docs/design/m5-client-authority-cohesion.md`](docs/design/m5-client-authority-cohesion.md)
+
+**Recorded post-M5 pressure point:**
+[`docs/design/post-m5-transactional-authority-cycle.md`](docs/design/post-m5-transactional-authority-cycle.md)
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 
@@ -51,13 +57,29 @@ point access more than archetype queries or declared data access.
 None of those findings invalidates the completed foundation. MP1-MP3 prove the
 graphical-client/authority boundary, direct GNS placement, bounded local
 prediction, deterministic network impairment, and accepted-ingress replay for
-the character slice. MP4-A1 adds real feature-owned vehicle requests,
-authoritative Jolt driving, dynamic seat ownership, lightweight client
-projection, reconnect, and mixed-ingress replay without generic ECS
-replication. MP4-A2 adds a separate bounded input-driven vehicle predictor,
-correction diagnostics, lifecycle resets, and installed graphical A/B testing
-without adding a client Flecs/Jolt world; broad file-only cleanup remains
-unjustified.
+the character slice. MP4-A through MP4-E extend that model through authoritative
+vehicles, carry interaction, district relevance, relevant NPC projection, and
+acknowledged prioritized delta replication without generic ECS replication or a
+client Flecs/Jolt world. MP5 adds bounded open room/admission semantics while
+keeping Steamworks and service state outside gameplay authority. M4 accepts that
+Apple Silicon macOS multiplayer foundation.
+
+M4 intentionally did not reclassify the broad embedded-solo facade as complete.
+M5 replaces its separate character dispatcher with one
+opaque embedded placement over the shared authority core, routes character,
+vehicle, and carry requests through session admission, renders those gameplay
+surfaces from replicated client state, and moves durable commit plus district
+streaming behind dedicated owners. It also removes the historical 120 Hz
+mismatch: graphical embedded authority advances at the accepted 60 Hz,
+independently paced from presentation, with 20 Hz replication. The complete
+owner boundary, regression matrix, documentation, and independent review are
+accepted in the M5 evidence record.
+
+The accepted M5 tree records real nested placement, authority, and runtime phase
+traces with an immutable first authority-cycle fault. It does not yet provide a
+single atomic ingress-to-publication transaction. Mailbox batching, prepared
+derivatives, atomic outbox publication, delivery leases, and a queued durable
+decision are an explicit post-M5 pressure point rather than a completion claim.
 
 ## Accepted Architectural Thesis
 
@@ -128,6 +150,23 @@ an optional non-vendored Steamworks adapter for Steam networking compatibility.
 - Debug, ReleaseFast, editor, native Metal, failure, lifecycle, packaging, and
   soak evidence exist for the current Apple Silicon macOS contract.
 
+### Multiplayer foundation
+
+- The remote graphical client owns only protocol/session state, disposable
+  prediction, replicated presentation, GNS transport, SDL input, and rendering;
+  it has no authoritative Simulation/Flecs/Jolt world.
+- The authority accepts bounded semantic character, vehicle, and carry requests
+  and projects backend-neutral character, vehicle, carryable, district, and NPC
+  state without automatic ECS replication.
+- Acknowledged full/delta history, relevance, explicit removals, and overload
+  degradation have declared per-client entity, byte, event, and memory budgets.
+- Open room/invite admission binds external identity to a participant while
+  keeping lobby/service state, Steamworks, and transport routes outside world
+  authority.
+- The aggregate M4 gate retains real two-client GNS, deterministic network
+  faults, prediction/reconciliation, reconnect, accepted-ingress replay, cold
+  authority, installed Metal, and architecture evidence.
+
 ## Findings Register
 
 Priorities describe the next multiplayer-first program, not regressions in the
@@ -135,22 +174,25 @@ already accepted S0-S8/M3 evidence.
 
 | ID | Finding | Priority | Trigger / target | Status |
 |---|---|---:|---|---|
-| A-F001 | The legacy solo `App` still owns graphical, streaming, authoring, diagnostics, save policy, validation, and embedded-session administration; it no longer owns `Simulation` directly and the remote client has a clean boundary | P1 | Continue physical decomposition when MP4 supplies real feature/session consumers | Mitigated by MP1; open physical cohesion |
-| A-F002 | `Simulation` is a broad internal authority facade combining composition, persistence, replay, extraction, diagnostics, and many feature re-exports | P1 | Split private responsibilities as MP4 materially changes each feature; retain one authority owner | Open |
+| A-F001 | The solo `App` remains the graphical composition root and retains presentation, input, authoring, and validation orchestration; embedded authority, district streaming, persistence, and developer state are separate opaque owners | P1 | Complete independent M5 review of cohesive graphical/developer/streaming/persistence/authority ownership | Resolved for M5; the graphical composition root is intentional and architecture-gated |
+| A-F002 | `Simulation` remains a broad private live-authority facade; canonical DTOs and the durable snapshot codec/preflight are extracted, while live composition, restore, replay capture, ticking, outcomes, diagnostics, and queries remain together where they share the world | P1 | Keep the authority surface narrow; split only responsibilities that gain an independent lifecycle or consumer | Mitigated and accepted for current scope; retain as a measured pressure point |
 | A-F003 | The Jolt adapter combines runtime/world, bodies, characters, vehicles, contacts, and debug extraction in one physical module | P2 | Before a multiplayer phase materially changes two or more physics concerns | Open |
-| A-F004 | Feature root files combine public protocol, private components, systems, persistence, diagnostics, and extensive tests | P2 | Split a feature internally when its replication extension is added | Open |
-| A-F005 | Schedule order inside each phase is registration order with no declared access or before/after constraint | P1 | MP1/MP2 authority ingress and replication boundaries | Open |
+| A-F004 | Feature implementation roots still combine private components, systems, persistence/restore, extraction, diagnostics, and extensive tests; canonical public value/protocol contracts are now extracted | P2 | Split only roots materially changed by M5 or the next gameplay slice; do not perform unrelated file-only churn | Partially mitigated; open measured pressure point |
+| A-F005 | M5 makes placement, authority mutation, and nested runtime phase order executable with completion-aware traces and a retained first fault, but ingress admission, derivative preparation/publication, adapter delivery, and durable decision are not one atomic authority cycle; intra-phase feature order remains registration order | P1 | Post-M5 transactional authority-cycle plan; retain intra-phase scheduling as a separate measured pressure point | Partially mitigated; follow-up recorded |
 | A-F006 | The visual product had no client/authority separation or local-session seam; character input reached `Simulation` directly | P0 | MP1 | Resolved for the character slice: typed local session plus separate MP2 products |
 | A-F007 | Client replicated-state plus bounded character and owned-vehicle prediction/reconciliation exist without a second Flecs/Jolt world; remote vehicles remain interpolated | P1 | MP3 / MP4-A2 | Resolved and contract-tested through MP4-A2 |
 | A-F008 | Persistent/runtime and session/account/participant/connection/replicated/input/snapshot identities must remain distinct | P0 | MP0/MP2 | Resolved and contract-tested |
 | A-F009 | The durable snapshot is suitable for restore but must not become a bandwidth-oriented network snapshot or protocol DTO | P0 | ADR-017 before protocol implementation | Guardrail recorded |
-| A-F010 | Accepted character input, vehicle input, enter, and exit now record participant, generational connection, sequence, target/admission tick, target entity, intent, and fingerprint and replay into a fresh authority; later interaction/district/NPC commands still need equivalent records | P1 | Expand per MP4 feature | Resolved through MP4-A1; later feature expansion open |
+| A-F010 | Accepted character, vehicle, enter/exit, and carry interaction ingress records participant, generational connection, sequence, target/admission tick, target entity, intent, and fingerprint and replays into a fresh authority; district/NPC autonomy is authority-owned rather than client ingress | P1 | Apply the same rule to every later client-originated feature request | Resolved for the complete M4 gameplay surface |
 | A-F011 | Feature iteration relies on private active arrays and point component access; city-scale query locality and parallel access are not demonstrated | P2 | Profile the first substantially larger replicated population before changing the model | Accepted pressure point |
 | A-F012 | The zflecs cohort permits one owned world per process, constraining an embedded authority plus any future full client ECS | P1 | Accepted topology starts with one authority world plus lightweight client state | Accepted constraint |
 | A-F013 | Engine/game dependency direction exists internally, but no separately built game package currently proves the intended open-engine/separate-game consumer boundary | P1 | First production game composition | Open |
-| A-F014 | Validation and operational rigor have advanced faster than player-visible game depth, risking further infrastructure without product pressure | P1 | Every new shared abstraction must be pulled by MP1-MP4 or a real gameplay slice | Active guardrail |
+| A-F014 | Validation and operational rigor have advanced faster than player-visible game depth, risking further infrastructure without product pressure | P1 | M5 may extract only ownership required by the accepted boundary; later infrastructure must be pulled by a real product/gameplay slice | Active guardrail |
 | A-F015 | The engine has no selected license, third-party notice set, stable public API promise, or external consumer guide | Release | Before public distribution, not before multiplayer architecture work | Deferred by owner |
 | A-F016 | Vehicle exit needs bounded collision-safe placement and disconnect teardown even when every candidate is blocked | P1 | Resolve before district collision/relevance makes blocked exits routine | Resolved in MP4-A2: five deterministic candidates, then typed teardown-only release and immediate hidden-character despawn |
+| A-F017 | At M5 entry, embedded solo owned a separate `Simulation` dispatcher and sent only character gameplay through the local protocol; M5 uses the shared authority behavior and routes character, vehicle, and carry gameplay through admission | P0 | M5 local/remote semantic parity and final regression | Resolved and accepted in M5 |
+| A-F018 | Embedded solo advanced authority from the historical 120 Hz presentation accumulator while the accepted session authority was 60 Hz; its three-tick snapshot divisor therefore yielded 40 Hz rather than 20 Hz | P0 | M5 independent 60 Hz authority clock plus product-level cadence tests | Resolved: embedded authority is 60 Hz, replication is 20 Hz, and 80/240 Hz cadence contracts cover independent presentation |
+| A-F019 | The M4 static check scanned one graphical client file for direct import names rather than proving the complete client-facing source/API closure | P1 | M5 transitive source-boundary and negative API checks | Resolved by the accepted M5 transitive architecture gate |
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,
@@ -196,7 +238,7 @@ lifetimes:
 
 | Artifact | Owner | Purpose | Lifetime |
 |---|---|---|---|
-| Durable save | Authority | Canonical complete logical recovery | Across process/session restart |
+| Durable save | Authority snapshot source + persistence owner | Canonical complete logical recovery; authority captures, persistence owner encodes/commits | Across process/session restart |
 | Replication snapshot | Authority per connection | Relevant approximate client state | Short-lived network baseline |
 | Client prediction history | Client | Responsive local correction | Bounded recent ticks |
 | Accepted-ingress replay | Authority evidence | Reproduce admitted semantic work | Exact diagnostic cohort |
@@ -227,30 +269,44 @@ not as an unbounded file-reorganization phase.
    dedicated-first placement, GNS, direct-IP-first routing, Steam compatibility,
    initial player scale, starting rates, impairment profiles, and per-client
    ceilings are recorded as initial contracts.
-2. **MP1 separates owners — character seam complete.** The graphical client, authoritative
-   session, and typed local link. Solo behavior must pass through the authority
-   admission boundary without requiring a network socket.
-3. **MP1 narrows physical composition — still open.** Split `App` into cohesive graphical,
-   district-stream, developer-session, and local-authority owners; split
-   `Simulation` persistence/replay/diagnostics into private modules behind a
-   narrow authority facade.
+2. **MP1 separates owners — historical character seam complete.** The
+   graphical client, authoritative session, and typed local link became
+   explicit; M5 owns the later whole-gameplay cohesion work.
+3. **M5 completes embedded cohesion — complete and accepted.** M5 uses one
+   embedded/dedicated authority behavior and
+   60 Hz clock, routes local character/vehicle/carry gameplay through semantic
+   admission, and introduces opaque streaming and persistence owners plus
+   narrower private authority contracts and an opaque heap-stable developer
+   owner. Aggregate regression and independent review are recorded in the
+   acceptance evidence.
 4. **MP2 proves the boundary — character slice complete and audited.** Two clients connect to one authority with
    versioned admission, session identities, sequenced input, initial state,
    snapshots, interpolation, leave, and reconnect.
 5. **MP3 adds responsiveness and fault evidence — complete for character.**
    Bounded prediction, reconciliation, impairment, quotas, network diagnostics,
    terminal lifecycle, and accepted-ingress replay are accepted.
-6. **MP4 decomposes features when touched — vehicle seam complete.** Vehicle
-   replication reused the existing typed feature surface without exposing its
-   internals. Continue with vehicle responsiveness, interaction, districts, and
-   NPCs while splitting only internals materially changed.
-7. **Reassess scale and ECS access.** Use measured replicated populations and
+6. **MP4 decomposes features when touched — complete.** Vehicle, interaction,
+   district, and NPC replication reuse explicit semantic feature surfaces
+   without exposing private components or backend handles.
+7. **MP5/M4 close the open multiplayer foundation — complete.** Open room
+   admission, real-GNS placement, bounded relevance/deltas, and architecture
+   evidence are accepted without proprietary service dependencies.
+8. **Harden the authority transaction — planned after M5.** Freeze bounded
+   ingress, separate admission from semantic work, prepare derivatives, publish
+   outputs atomically, lease delivery, and queue durable decisions as specified
+   in the
+   [`Post-M5 Transactional Authority Cycle`](docs/design/post-m5-transactional-authority-cycle.md).
+9. **Reassess scale and ECS access.** Use measured replicated populations and
    snapshot budgets before adding Flecs queries, access declarations, or
    parallel scheduling.
 
-## Architecture Definition of Done for the Multiplayer Foundation
+## Architecture Definition of Done Through M5
 
-- Solo, listen, and dedicated placement share one authority model.
+M4 satisfies the remote multiplayer foundation. M5 satisfies the embedded-
+specific criteria below; the linked acceptance record contains the evidence.
+
+- Embedded solo and dedicated placement share one authority model; listen-host
+  productization remains a future placement of that model.
 - The visual client cannot mutate `Simulation`, Flecs, Jolt, or durable storage
   directly.
 - The authority product can run without SDL, GPU, renderer, editor, visual
@@ -264,6 +320,9 @@ not as an unbounded file-reorganization phase.
   types.
 - All remote ingress has bounded sequencing, ownership, quota, and outcome
   policy.
+- The placement and authority traces prove their actual nested owner order,
+  completed prefixes, and retained first fault without claiming one atomic
+  eight-stage transaction.
 - Existing save, replay, diagnostics, package, and macOS readiness guarantees
   remain intact or are deliberately superseded by reviewed evidence.
 

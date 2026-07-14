@@ -28,6 +28,8 @@ const prohibited_markers = [_][]const u8{
     "InjectedDeveloperDiagnosticFault",
     "diagnostics.injected_fault_probe",
     "initWithDiagnosticFaultProbe",
+    "InjectedAuthorityCycleFault",
+    "initWithAuthorityCycleFaultProbe",
     "InjectedInitFailure",
     "InjectedVehicleCreateFailure",
     "injected_partial_write",

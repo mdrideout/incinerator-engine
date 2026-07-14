@@ -18,13 +18,14 @@ const Peer = struct {
     transport: gns.Connection = .invalid,
     connected_events: u32 = 0,
     terminal_events: u32 = 0,
+    last_vehicle_action_result: ?protocol.VehicleActionResult = null,
+    last_interaction_action_result: ?protocol.InteractionActionResult = null,
 };
 
 const Harness = struct {
-    allocator: std.mem.Allocator,
     network: gns.Network,
     listen_socket: gns.ListenSocket,
-    authority: *authority_module.Authority,
+    authority: *authority_module.DedicatedAuthority,
     peers: [2]Peer,
     server_connections: [budgets.max_participants]gns.Connection = @splat(.invalid),
     bad_transport: gns.Connection = .invalid,
@@ -38,12 +39,9 @@ const Harness = struct {
         errdefer network.deinit();
         const listen_socket = try network.listen(port, .loopback);
         errdefer network.closeListen(listen_socket);
-        const authority = try allocator.create(authority_module.Authority);
-        errdefer allocator.destroy(authority);
-        authority.* = try authority_module.Authority.init(allocator);
+        const authority = try authority_module.DedicatedAuthority.init(allocator);
         errdefer authority.deinit();
         return .{
-            .allocator = allocator,
             .network = network,
             .listen_socket = listen_socket,
             .authority = authority,
@@ -70,7 +68,6 @@ const Harness = struct {
         }
         self.network.closeListen(self.listen_socket);
         self.authority.deinit();
-        self.allocator.destroy(self.authority);
         self.network.deinit();
         self.* = undefined;
     }
@@ -256,6 +253,12 @@ const Harness = struct {
                     return error.ServerDeliveryClassMismatch;
                 }
                 try peer.client.receive(message);
+                while (peer.client.takeVehicleActionResult()) |result| {
+                    peer.last_vehicle_action_result = result;
+                }
+                while (peer.client.takeInteractionActionResult()) |result| {
+                    peer.last_interaction_action_result = result;
+                }
                 if (peer.client.takeBaselineAck()) |ack| {
                     try self.sendClient(peer.transport, ack);
                 }
@@ -523,31 +526,31 @@ fn twoPeersReady(harness: *const Harness) bool {
 }
 
 fn firstPeerHolding(harness: *const Harness) bool {
-    const result = harness.peers[0].client.last_interaction_action_result orelse return false;
+    const result = harness.peers[0].last_interaction_action_result orelse return false;
     return result.action == .collect and result.disposition == .collected and
         harness.peers[0].client.heldCarryable() != null;
 }
 
 fn secondPeerDeniedCarryable(harness: *const Harness) bool {
-    const result = harness.peers[1].client.last_interaction_action_result orelse return false;
+    const result = harness.peers[1].last_interaction_action_result orelse return false;
     return result.action == .collect and result.disposition == .unavailable and
         harness.peers[1].client.heldCarryable() == null;
 }
 
 fn firstPeerDropped(harness: *const Harness) bool {
-    const result = harness.peers[0].client.last_interaction_action_result orelse return false;
+    const result = harness.peers[0].last_interaction_action_result orelse return false;
     return result.action == .drop and result.disposition == .dropped and
         harness.peers[0].client.heldCarryable() == null;
 }
 
 fn firstPeerDriving(harness: *const Harness) bool {
     return harness.peers[0].client.ownedVehicle() != null and
-        harness.peers[0].client.last_vehicle_action_result != null and
-        harness.peers[0].client.last_vehicle_action_result.?.disposition == .entered;
+        harness.peers[0].last_vehicle_action_result != null and
+        harness.peers[0].last_vehicle_action_result.?.disposition == .entered;
 }
 
 fn secondPeerDeniedVehicle(harness: *const Harness) bool {
-    const result = harness.peers[1].client.last_vehicle_action_result orelse return false;
+    const result = harness.peers[1].last_vehicle_action_result orelse return false;
     return result.action == .enter and result.disposition == .unavailable;
 }
 
@@ -598,7 +601,7 @@ fn firstPeerRejoinedDriving(harness: *const Harness) bool {
 }
 
 fn firstPeerExited(harness: *const Harness) bool {
-    const result = harness.peers[0].client.last_vehicle_action_result orelse return false;
+    const result = harness.peers[0].last_vehicle_action_result orelse return false;
     return result.action == .exit and result.disposition == .exited and
         harness.peers[0].client.ownedVehicle() == null;
 }

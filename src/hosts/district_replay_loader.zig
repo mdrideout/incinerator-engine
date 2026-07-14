@@ -10,6 +10,7 @@
 const std = @import("std");
 const district_contract = @import("district_contract");
 const district_worker = @import("district_worker");
+const district_worker_contract = @import("district_worker_contract");
 const sandbox_recipe = @import("sandbox_district_recipe");
 
 pub const Mode = enum {
@@ -205,7 +206,7 @@ pub const Loader = struct {
     /// Preserve the existing worker-facing diagnostic contract without
     /// exposing whether the feature is backed by a live thread or recorded
     /// ingress. Replay values describe the logical loader state only.
-    pub fn diagnostics(self: *Loader) district_worker.Diagnostics {
+    pub fn diagnostics(self: *Loader) district_worker_contract.Diagnostics {
         return switch (self.backend) {
             .live => |*worker| worker.diagnostics(),
             .replay => |*state| .{

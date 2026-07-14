@@ -3,14 +3,19 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const simulation = @import("sandbox_simulation");
+const character_contract = @import("character_contract");
+const district_feature_contract = @import("district_feature_contract");
+const interaction_contract = @import("interaction_feature_contract");
+const sandbox_contracts = @import("sandbox_host_contracts");
+const sandbox_diagnostics = @import("sandbox_diagnostics_contract");
 
 const fixed_delta_seconds: f32 = 1.0 / 120.0;
-const west = simulation.navigation_west_coord;
-const east = simulation.navigation_east_coord;
+const west = sandbox_contracts.navigation_west_coord;
+const east = sandbox_contracts.navigation_east_coord;
 const west_x: f32 = 6;
 const east_x: f32 = 10;
 const route_z: f32 = 3;
-const district_assets = simulation.DistrictAssets{
+const district_assets = district_feature_contract.Assets{
     .scene = .{ .index = 17, .generation = 2 },
 };
 const worker_progress_limit: usize = 10_000;
@@ -225,11 +230,11 @@ pub fn main(init: std.process.Init) !void {
     var active_coord = east;
     for (1..config.cycles) |cycle_index| {
         cycle_start = now(init.io);
-        const destination = if (simulation.ChunkCoord.eql(active_coord, east))
+        const destination = if (sandbox_contracts.ChunkCoord.eql(active_coord, east))
             west
         else
             east;
-        const destination_x = if (simulation.ChunkCoord.eql(destination, west))
+        const destination_x = if (sandbox_contracts.ChunkCoord.eql(destination, west))
             west_x
         else
             east_x;
@@ -357,8 +362,8 @@ pub fn main(init: std.process.Init) !void {
 }
 
 const Identities = struct {
-    character: simulation.PersistentId,
-    carryable: simulation.PersistentId,
+    character: sandbox_contracts.PersistentId,
+    carryable: sandbox_contracts.PersistentId,
 };
 
 fn spawnActors(world: *simulation.Simulation, metrics: *Metrics) !Identities {
@@ -391,8 +396,8 @@ fn activateDistrict(
     world: *simulation.Simulation,
     metrics: *Metrics,
     request_id: u64,
-    coord: simulation.ChunkCoord,
-) !simulation.LoadTicket {
+    coord: sandbox_contracts.ChunkCoord,
+) !sandbox_contracts.LoadTicket {
     try submitDistrict(world, metrics, .{ .request_load = .{
         .request_id = request_id,
         .coord = coord,
@@ -415,7 +420,7 @@ fn activateDistrict(
             metrics.outcomes_observed += 1;
             switch (outcome) {
                 .activated => |value| {
-                    if (!simulation.LoadTicket.eql(ticket, value.ticket)) {
+                    if (!sandbox_contracts.LoadTicket.eql(ticket, value.ticket)) {
                         return error.UnexpectedDistrictTicket;
                     }
                     activated = true;
@@ -436,7 +441,7 @@ fn cancelDistrictLoad(
     metrics: *Metrics,
     request_id: u64,
     cancel_request_id: u64,
-    coord: simulation.ChunkCoord,
+    coord: sandbox_contracts.ChunkCoord,
 ) !void {
     try submitDistrict(world, metrics, .{ .request_load = .{
         .request_id = request_id,
@@ -465,13 +470,13 @@ fn cancelDistrictLoad(
             metrics.outcomes_observed += 1;
             switch (outcome) {
                 .cancellation_requested => |value| {
-                    if (!simulation.LoadTicket.eql(ticket, value.ticket)) {
+                    if (!sandbox_contracts.LoadTicket.eql(ticket, value.ticket)) {
                         return error.UnexpectedDistrictTicket;
                     }
                     cancellation_requested = true;
                 },
                 .cancelled => |value| {
-                    if (!simulation.LoadTicket.eql(ticket, value.ticket)) {
+                    if (!sandbox_contracts.LoadTicket.eql(ticket, value.ticket)) {
                         return error.UnexpectedDistrictTicket;
                     }
                     cancelled = true;
@@ -492,7 +497,7 @@ fn unloadDistrict(
     world: *simulation.Simulation,
     metrics: *Metrics,
     request_id: u64,
-    ticket: simulation.LoadTicket,
+    ticket: sandbox_contracts.LoadTicket,
 ) !void {
     try submitDistrict(world, metrics, .{ .unload = .{
         .request_id = request_id,
@@ -503,7 +508,7 @@ fn unloadDistrict(
         return error.DistrictUnloadOutcomeMissing;
     metrics.outcomes_observed += 1;
     switch (outcome) {
-        .unloaded => |value| if (!simulation.LoadTicket.eql(ticket, value.ticket)) {
+        .unloaded => |value| if (!sandbox_contracts.LoadTicket.eql(ticket, value.ticket)) {
             return error.UnexpectedDistrictTicket;
         },
         else => return error.UnexpectedDistrictOutcome,
@@ -515,9 +520,9 @@ fn collect(
     world: *simulation.Simulation,
     metrics: *Metrics,
     transaction_id: u64,
-    character_id: simulation.PersistentId,
-    carryable_id: simulation.PersistentId,
-    previous_owner: simulation.ChunkCoord,
+    character_id: sandbox_contracts.PersistentId,
+    carryable_id: sandbox_contracts.PersistentId,
+    previous_owner: sandbox_contracts.ChunkCoord,
 ) !void {
     try submitInteraction(world, metrics, .{ .collect = .{
         .transaction_id = transaction_id,
@@ -533,7 +538,7 @@ fn collect(
             if (value.transaction_id != transaction_id or
                 !std.meta.eql(value.carrier_id, character_id) or
                 !std.meta.eql(value.carryable_id, carryable_id) or
-                !simulation.ChunkCoord.eql(value.previous_owner, previous_owner))
+                !sandbox_contracts.ChunkCoord.eql(value.previous_owner, previous_owner))
             {
                 return error.CollectOutcomeMismatch;
             }
@@ -548,9 +553,9 @@ fn drop(
     world: *simulation.Simulation,
     metrics: *Metrics,
     transaction_id: u64,
-    character_id: simulation.PersistentId,
-    carryable_id: simulation.PersistentId,
-    owner: simulation.ChunkCoord,
+    character_id: sandbox_contracts.PersistentId,
+    carryable_id: sandbox_contracts.PersistentId,
+    owner: sandbox_contracts.ChunkCoord,
 ) !void {
     try submitInteraction(world, metrics, .{ .drop = .{
         .transaction_id = transaction_id,
@@ -566,7 +571,7 @@ fn drop(
             if (value.transaction_id != transaction_id or
                 !std.meta.eql(value.carrier_id, character_id) or
                 !std.meta.eql(value.carryable_id, carryable_id) or
-                !simulation.ChunkCoord.eql(value.owner, owner))
+                !sandbox_contracts.ChunkCoord.eql(value.owner, owner))
             {
                 return error.DropOutcomeMismatch;
             }
@@ -583,7 +588,7 @@ fn drop(
 fn moveCharacter(
     world: *simulation.Simulation,
     metrics: *Metrics,
-    character_id: simulation.PersistentId,
+    character_id: sandbox_contracts.PersistentId,
     target_x: f32,
 ) !void {
     for (0..256) |_| {
@@ -630,9 +635,9 @@ fn cleanup(
     world: *simulation.Simulation,
     metrics: *Metrics,
     request_id: u64,
-    character_id: simulation.PersistentId,
-    carryable_id: simulation.PersistentId,
-    district_ticket: simulation.LoadTicket,
+    character_id: sandbox_contracts.PersistentId,
+    carryable_id: sandbox_contracts.PersistentId,
+    district_ticket: sandbox_contracts.LoadTicket,
 ) !void {
     try submitCharacter(world, metrics, .{ .despawn = .{ .id = character_id } });
     try submitInteraction(world, metrics, .{ .despawn = .{ .id = carryable_id } });
@@ -660,8 +665,8 @@ fn cleanup(
 
 fn requireHeld(
     world: *simulation.Simulation,
-    character_id: simulation.PersistentId,
-    carryable_id: simulation.PersistentId,
+    character_id: sandbox_contracts.PersistentId,
+    carryable_id: sandbox_contracts.PersistentId,
 ) !void {
     const view = try world.carryable(carryable_id);
     if (view.body_present or !std.meta.eql(view.ownership, .{
@@ -685,7 +690,7 @@ fn requireCounts(
 fn submitCharacter(
     world: *simulation.Simulation,
     metrics: *Metrics,
-    command: simulation.CharacterCommand,
+    command: character_contract.Command,
 ) !void {
     try world.submitCharacter(command);
     metrics.commands_submitted += 1;
@@ -695,7 +700,7 @@ fn submitCharacter(
 fn submitInteraction(
     world: *simulation.Simulation,
     metrics: *Metrics,
-    command: simulation.InteractionCommand,
+    command: interaction_contract.Command,
 ) !void {
     try world.submitInteraction(command);
     metrics.commands_submitted += 1;
@@ -705,7 +710,7 @@ fn submitInteraction(
 fn submitDistrict(
     world: *simulation.Simulation,
     metrics: *Metrics,
-    command: simulation.DistrictCommand,
+    command: district_feature_contract.Command,
 ) !void {
     try world.submitDistrict(command);
     metrics.commands_submitted += 1;
@@ -730,7 +735,7 @@ fn drainAmbient(world: *simulation.Simulation, metrics: *Metrics) !void {
     metrics.observe(world);
 }
 
-fn commandOccupancy(value: simulation.Diagnostics) u64 {
+fn commandOccupancy(value: sandbox_diagnostics.Diagnostics) u64 {
     return queueOccupancy(&.{
         value.crates.commands,
         value.characters.commands,
@@ -740,7 +745,7 @@ fn commandOccupancy(value: simulation.Diagnostics) u64 {
     });
 }
 
-fn outcomeOccupancy(value: simulation.Diagnostics) u64 {
+fn outcomeOccupancy(value: sandbox_diagnostics.Diagnostics) u64 {
     return queueOccupancy(&.{
         value.crates.outcomes,
         value.characters.outcomes,
@@ -750,7 +755,7 @@ fn outcomeOccupancy(value: simulation.Diagnostics) u64 {
     });
 }
 
-fn eventOccupancy(value: simulation.Diagnostics) u64 {
+fn eventOccupancy(value: sandbox_diagnostics.Diagnostics) u64 {
     return queueOccupancy(&.{
         value.characters.events,
         value.vehicles.events,
@@ -759,14 +764,14 @@ fn eventOccupancy(value: simulation.Diagnostics) u64 {
 }
 
 fn queueOccupancy(values: []const @TypeOf(
-    @as(simulation.Diagnostics, undefined).crates.commands,
+    @as(sandbox_diagnostics.Diagnostics, undefined).crates.commands,
 )) u64 {
     var total: u64 = 0;
     for (values) |value| total += value.occupancy;
     return total;
 }
 
-fn queueRejections(value: simulation.Diagnostics) u64 {
+fn queueRejections(value: sandbox_diagnostics.Diagnostics) u64 {
     var total: u64 = 0;
     for ([_]@TypeOf(value.crates.commands){
         value.crates.commands,

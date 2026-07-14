@@ -53,11 +53,24 @@ not a claim of production Internet readiness: accounts, entitlement, public
 hosting, DDoS protection, secret rotation, matchmaking operations, moderation,
 and MMO partitioning remain later programs.
 
-One previously recorded architectural pressure point remains outside this
-network gate: `local_solo.zig` still presents a broad embedded-authority
-administration facade to the legacy graphical `App` for editor, persistence,
-streaming, replay, and diagnostics. Player input uses the session boundary and
-the remote graphical client cannot access authority state, but the physical
-`App`/authority decomposition items in MP1 remain open. New gameplay should
-not widen that facade; close those MP1 items before treating every graphical
-subsystem as a fully remote-capable client.
+At M4 acceptance, one previously recorded architectural pressure point remained
+outside this network gate: `local_solo.zig` presented a broad embedded-authority
+administration facade to the graphical `App` for editor, persistence,
+streaming, replay, and diagnostics. Player input used the session boundary and
+the remote graphical client could not access authority state, but the physical
+`App`/authority decomposition items remained open. This paragraph preserves the
+M4 acceptance boundary; it is not the current M5 implementation description.
+
+## Subsequent M5 work
+
+That retained pressure point is closed by the accepted
+[`M5 Client/Authority Cohesion`](../design/m5-client-authority-cohesion.md)
+gate and its [acceptance record](m5-client-authority-cohesion.md). M4 remains
+accepted as the multiplayer network foundation; M5 separately accepts the
+embedded-solo semantic, clock, persistence, and physical ownership boundary.
+
+M5 replaces the flat local facade and ordinary
+vehicle/carry bypasses with an opaque embedded placement over the shared
+authority core, role-scoped capabilities, replicated player-facing state, and
+explicit district-streaming/persistence owners. That implementation does not
+change this historical M4 result; it is accepted by the separate M5 record.

@@ -8,14 +8,15 @@
 const std = @import("std");
 const builtin = @import("builtin");
 const engine = @import("incinerator_engine");
-const crates = @import("crate_feature");
-const characters = @import("character_feature");
-const vehicles = @import("vehicle_feature");
-const districts = @import("district_feature");
-const interactions = @import("interaction_feature");
-const npcs = @import("npc_feature");
+const crates = @import("crate_contract");
+const characters = @import("character_contract");
+const vehicles = @import("vehicle_contract");
+const districts = @import("district_feature_contract");
+const interactions = @import("interaction_feature_contract");
+const npcs = @import("npc_contract");
 const district_contract = @import("district_contract");
 const sandbox_recipe = @import("sandbox_district_recipe");
+const sandbox_host_contracts = @import("sandbox_host_contracts");
 const simulation_cohort_options = @import("simulation_cohort_options");
 
 const replay = engine.contracts.replay;
@@ -141,7 +142,7 @@ pub const current_simulation_cohort = SimulationCohort{
     // Cohort 5 adds navigation-driven NPC authority between interaction and
     // the single shared physics step.
     .engine_schedule_cohort = 5,
-    .snapshot_schema = 7,
+    .snapshot_schema = sandbox_host_contracts.snapshot_schema,
     .zig_major = @intCast(builtin.zig_version.major),
     .zig_minor = @intCast(builtin.zig_version.minor),
     .zig_patch = @intCast(builtin.zig_version.patch),
@@ -2872,7 +2873,10 @@ test "current simulation cohort pins the exact Jolt worker and capacity configur
     try current_simulation_cohort.validate();
     try std.testing.expectEqual(@as(u16, 5), current_simulation_cohort.replay_schema);
     try std.testing.expectEqual(@as(u16, 5), current_simulation_cohort.engine_schedule_cohort);
-    try std.testing.expectEqual(@as(u16, 7), current_simulation_cohort.snapshot_schema);
+    try std.testing.expectEqual(
+        sandbox_host_contracts.snapshot_schema,
+        current_simulation_cohort.snapshot_schema,
+    );
     try std.testing.expectEqual(@as(i32, 1), current_simulation_cohort.jolt_worker_count);
     try std.testing.expectEqual(
         simulation_cohort_options.jolt_worker_count,

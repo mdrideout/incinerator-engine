@@ -6,7 +6,7 @@
 
 const std = @import("std");
 const zgui = @import("zgui");
-const sandbox_host = @import("sandbox_simulation");
+const sandbox_host = @import("sandbox_host_contracts");
 const sandbox_interaction = @import("sandbox_interaction");
 const tool_module = @import("../tool.zig");
 
@@ -154,7 +154,7 @@ pub fn draw(ctx: *const InteractionInput) void {
         }
         zgui.endDisabled();
         zgui.sameLine(.{});
-        zgui.text("Same authority command as F", .{});
+        zgui.text("Same admitted client action as F", .{});
 
         if (view.last_outcome) |outcome| drawOutcome(outcome);
     }

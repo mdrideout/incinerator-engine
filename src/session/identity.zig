@@ -40,8 +40,15 @@ pub const InputSequence = struct {
 pub const ActionSequence = struct {
     value: u32,
 
+    pub fn validate(self: ActionSequence) !void {
+        if (self.value == 0) return error.InvalidActionSequence;
+    }
+
+    /// Zero is the uninitialized sentinel retained by authority state, so the
+    /// generated sequence space wraps directly from the maximum value to one.
     pub fn next(self: ActionSequence) ActionSequence {
-        return .{ .value = self.value +% 1 };
+        const candidate = self.value +% 1;
+        return .{ .value = if (candidate == 0) 1 else candidate };
     }
 
     pub fn newerThan(self: ActionSequence, other: ActionSequence) bool {

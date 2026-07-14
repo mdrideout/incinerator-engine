@@ -1,7 +1,7 @@
 # MP2 Acceptance and Architecture Audit
 
-**Status:** Historical MP2 character acceptance; MP3 follow-ups subsequently
-completed in `docs/validation/mp3-acceptance.md`
+**Status:** Historical MP2 character acceptance; MP3-MP5 and M4 follow-ups were
+subsequently accepted, and M5 embedded cohesion is now accepted separately
 
 **Date:** 2026-07-13
 
@@ -69,11 +69,12 @@ implementation:
 3. terminal admission and locally closed handles could remain temporarily
    pollable; authority/transport ownership now ends explicitly.
 
-The following are known next-phase work, not hidden MP2 completion claims:
+The following table preserves the next-phase disposition recorded at MP2 close;
+it is not a current implementation-status table:
 
 | Pressure point | Disposition |
 |---|---|
-| Legacy solo `App` and `Simulation` remain physically broad | Continue MP1 decomposition when MP4 adds real feature request/projection seams |
+| Legacy solo `App` and `Simulation` were physically broad | Historical MP1 pressure point; accepted M5 uses an opaque shared-authority placement and extracted owners while retaining the live `Simulation` facade as a measured private pressure point |
 | No local prediction or reconciliation | MP3 |
 | No deterministic latency/loss/duplicate/reorder harness | MP3 |
 | Full fixed character snapshots; no delta baseline/relevance scheduler | MP4 |
@@ -83,6 +84,9 @@ The following are known next-phase work, not hidden MP2 completion claims:
 | Development `AccountId` is self-declared and unauthenticated | Server defaults to loopback; real identity/ticket admission is required before public exposure |
 | No Linux/Windows or hosting fleet | Deliberately deferred product/deployment decisions |
 
-MP3 is therefore the next networking phase. It should add prediction and an
-in-process deterministic impaired-link adapter before expanding the protocol
-to the rest of the sandbox.
+At MP2 close, MP3 was therefore the next networking phase: prediction and an
+in-process deterministic impaired-link adapter preceded expansion of the
+protocol to the rest of the sandbox. Those follow-ups are now accepted through
+M4; see [`m4-multiplayer-foundation.md`](m4-multiplayer-foundation.md). M5's
+current status lives in
+[`m5-client-authority-cohesion.md`](m5-client-authority-cohesion.md).

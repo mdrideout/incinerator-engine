@@ -21,7 +21,7 @@
 //! │ Phase 1: INPUT PUMP (Per-Frame / Uncapped)                  │
 //! │ - Drains OS events, latches actions to the Input Buffer     │
 //! ├─────────────────────────────────────────────────────────────┤
-//! │ Phase 2: SIMULATION TICK (Fixed 120Hz)                      │
+//! │ Phase 2: AUTHORITY TICK (Fixed 60 Hz)                       │
 //! │ - Physics, gameplay logic, consume buffered input           │
 //! ├─────────────────────────────────────────────────────────────┤
 //! │ Phase 3: PRESENTATION (Interpolated)                        │
@@ -39,78 +39,50 @@ const renderer = @import("renderer.zig");
 const mesh = @import("mesh.zig");
 const primitives = @import("primitives.zig");
 const sandbox_visual_resources = @import("sandbox_visual_resources.zig");
-const district_gpu_registry = @import("district_gpu_registry.zig");
-const district_scene_adapter = @import("district_scene_adapter.zig");
-const district_presentation = @import("district_presentation");
+const district_contract = @import("district_contract");
+const district_feature_contract = @import("district_feature_contract");
+const district_streaming_host = @import("hosts/district_streaming_host.zig");
 const district_content_catalog = @import("district_content_catalog");
 const content = @import("content");
 const sandbox_controls = @import("sandbox_controls.zig");
 const developer_controls = @import("developer_controls");
 const developer_diagnostics = @import("developer_diagnostics");
 const developer_profile = @import("developer_profile");
-const developer_visualization = @import("developer_visualization");
+const authority_diagnostics = @import("session_authority_diagnostics");
+const sandbox_developer_host = @import("hosts/sandbox_developer_host.zig");
+const sandbox_invocation = @import("sandbox_invocation");
 const sandbox_authoring = @import("sandbox_authoring");
 const sandbox_interaction = @import("sandbox_interaction");
-const sandbox_replay = @import("sandbox_replay");
-const sandbox_save = @import("sandbox_save");
-const save_slots = @import("save_slots");
-const physics_debug_gpu = @import("physics_debug_gpu.zig");
+const sandbox_persistence = @import("sandbox_persistence");
 const camera = @import("camera.zig");
 const sdl = @import("sdl.zig");
 const shader_assets = @import("shader_assets");
-const editor = if (build_options.editor_enabled)
-    @import("editor/editor.zig")
-else
-    @import("editor/disabled.zig");
 const editor_contract = @import("editor/tool.zig");
 const sandbox_host = @import("local_solo_session");
-const population = @import("population_feature");
-const DeveloperSnapshot = developer_diagnostics.Snapshot(sandbox_host.Diagnostics);
-const DeveloperExport = developer_diagnostics.Export(sandbox_host.Diagnostics);
-const NpcDiagnostics = @FieldType(sandbox_host.Diagnostics, "npc");
+const sandbox_contracts = @import("sandbox_host_contracts");
+const session_budgets = @import("session_budgets");
+const population = @import("population_contract");
+const DeveloperSnapshot = sandbox_developer_host.Snapshot;
+const NpcDiagnostics = @FieldType(sandbox_contracts.Diagnostics, "npc");
 const CharacterControllerDiagnostics = @FieldType(
-    sandbox_host.Diagnostics,
+    sandbox_contracts.Diagnostics,
     "character_controllers",
 );
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
 
-fn profileNowNs() u64 {
-    return c.SDL_GetTicksNS();
-}
+const VisualSmokeConfig = sandbox_invocation.VisualSmokeConfig;
+const ProgramMode = sandbox_invocation.ProgramMode;
+const BootstrapProfile = sandbox_invocation.BootstrapProfile;
+const ScriptedScenario = sandbox_invocation.ScriptedScenario;
+const smokeExpectation = sandbox_invocation.smokeExpectation;
+const parseProgramMode = sandbox_invocation.parseProgramMode;
+const parseProductMode = sandbox_invocation.parseProductMode;
+const parseContentRootOverride = sandbox_invocation.parseContentRootOverride;
+const parseSaveRootOverride = sandbox_invocation.parseSaveRootOverride;
+const SaveRootPath = sandbox_invocation.SaveRootPath;
 
-fn profilePhase(phase: engine.Phase) developer_profile.Phase {
-    return switch (phase) {
-        .commands => .runtime_commands,
-        .pre_physics => .runtime_pre_physics,
-        .physics => .physics,
-        .post_physics => .runtime_post_physics,
-    };
-}
-
-/// Return only an explicit overlay authorization request. Merely observing the
-/// controller's retained `enabled=true` state must not clear a GPU failure
-/// latch on every editor frame.
-fn requestedVisualizationEnable(
-    requests: []const developer_visualization.Request,
-) ?bool {
-    var requested: ?bool = null;
-    for (requests) |request| switch (request) {
-        .set_enabled => |enabled| requested = enabled,
-        else => {},
-    };
-    return requested;
-}
-
-fn saveDeferralDetail(err: anyerror) ?[]const u8 {
-    return switch (err) {
-        error.CommandsPending => "simulation commands pending",
-        error.DistrictTransitionPending => "district transition pending",
-        else => null,
-    };
-}
-
-fn authoringRejectionDetail(reason: sandbox_host.RejectionReason) []const u8 {
+fn authoringRejectionDetail(reason: sandbox_contracts.RejectionReason) []const u8 {
     return switch (reason) {
         .capacity_reached => "crate authority capacity reached",
         .crate_not_found => "crate no longer exists",
@@ -123,87 +95,15 @@ fn authoringRejectionDetail(reason: sandbox_host.RejectionReason) []const u8 {
 /// interactive host. Scripted smoke modes retain their stricter fail-fast
 /// contract, while normal play must remain usable after a rejected action.
 fn interactiveVehicleRejectionExpected(
-    rejected: sandbox_host.VehicleCommandRejected,
+    result: sandbox_host.VehicleActionResult,
 ) bool {
-    return switch (rejected.command) {
-        .enter => rejected.reason == .too_far or
-            rejected.reason == .driver_carrying,
-        .exit => rejected.reason == .exit_blocked,
-        .spawn, .drive, .abandon, .despawn => false,
+    return switch (result.action) {
+        .enter => result.disposition == .too_far or
+            result.disposition == .unavailable or
+            result.disposition == .invalid_state,
+        .exit => result.disposition == .exit_blocked,
     };
 }
-
-const RuntimeProfileBridge = struct {
-    recorder: *developer_profile.DefaultRecorder,
-    frame_index: u64,
-    open: [std.meta.tags(engine.Phase).len]?developer_profile.SpanToken =
-        @splat(null),
-
-    fn observer(self: *RuntimeProfileBridge) engine.PhaseObserver {
-        return .{
-            .context = self,
-            .begin_fn = begin,
-            .end_fn = end,
-        };
-    }
-
-    fn begin(raw: *anyopaque, phase: engine.Phase, tick: engine.TickContext) void {
-        const self: *RuntimeProfileBridge = @ptrCast(@alignCast(raw));
-        const index: usize = @intFromEnum(phase);
-        if (self.open[index]) |stale| {
-            _ = self.recorder.spans.finish(stale, profileNowNs(), .failure);
-        }
-        self.open[index] = self.recorder.spans.begin(
-            profilePhase(phase),
-            self.frame_index,
-            tick.tick_index,
-            profileNowNs(),
-        );
-    }
-
-    fn end(
-        raw: *anyopaque,
-        phase: engine.Phase,
-        _: engine.TickContext,
-        outcome: engine.PhaseOutcome,
-    ) void {
-        const self: *RuntimeProfileBridge = @ptrCast(@alignCast(raw));
-        const index: usize = @intFromEnum(phase);
-        const token = self.open[index] orelse return;
-        self.open[index] = null;
-        _ = self.recorder.spans.finish(
-            token,
-            profileNowNs(),
-            switch (outcome) {
-                .succeeded => .success,
-                .failed => .failure,
-            },
-        );
-    }
-};
-
-const HostProfileScope = struct {
-    recorder: *developer_profile.DefaultRecorder,
-    token: ?developer_profile.SpanToken,
-
-    fn finish(self: *HostProfileScope, outcome: developer_profile.Outcome) void {
-        const token = self.token orelse return;
-        self.token = null;
-        _ = self.recorder.spans.finish(token, profileNowNs(), outcome);
-    }
-};
-
-const HostFrameProfile = struct {
-    recorder: *developer_profile.DefaultRecorder,
-    token: ?developer_profile.FrameToken,
-    counts: developer_profile.Counts = .{},
-
-    fn finish(self: *HostFrameProfile, outcome: developer_profile.Outcome) void {
-        const token = self.token orelse return;
-        self.token = null;
-        _ = self.recorder.frames.finish(token, profileNowNs(), outcome, self.counts);
-    }
-};
 
 // ============================================================================
 // Configuration
@@ -213,220 +113,39 @@ const WINDOW_TITLE = "Incinerator Engine";
 const INITIAL_WINDOW_WIDTH = 1280;
 const INITIAL_WINDOW_HEIGHT = 720;
 
-/// How often to print debug stats (in frames)
-const DEBUG_PRINT_INTERVAL = 120; // Every ~1 second at 120 FPS
-const diagnostic_host_control_applied: engine.diagnostic_contracts.Code = 0x000b_0001;
-const diagnostic_host_control_rejected: engine.diagnostic_contracts.Code = 0x000b_0002;
 const diagnostic_interactive_vehicle_rejected: engine.diagnostic_contracts.Code = 0x000b_0003;
-const physics_debug_line_capacity: usize = 32_768;
-const physics_debug_triangle_capacity: usize = 16_384;
 
-/// Best-effort CPU evidence storage. This owner is deliberately optional:
-/// failing to reserve debug geometry may remove diagnostics, but must never
-/// prevent the visual host or simulation authority from constructing.
-const PhysicsDebugCpuStorage = struct {
-    allocator: std.mem.Allocator,
-    lines: []engine.physics_debug.Line,
-    triangles: []engine.physics_debug.Triangle,
-    storage: engine.physics_debug.Storage,
+const authority_ticks_per_second: u64 = timing.TICK_RATE;
+const s1_jump_tick: u64 = authority_ticks_per_second / 2;
+const s2_enter_tick: u64 = authority_ticks_per_second * 2;
+const s2_steer_tick: u64 = authority_ticks_per_second * 5 + 1;
+const s2_brake_tick: u64 = s2_steer_tick - authority_ticks_per_second / 6;
+const s2_exit_tick: u64 = s2_steer_tick + authority_ticks_per_second / 2;
+const s2_required_ticks: u64 = authority_ticks_per_second * 6;
 
-    fn init() ?PhysicsDebugCpuStorage {
-        return initWithAllocator(std.heap.page_allocator);
-    }
+const district_west_coord = sandbox_contracts.navigation_west_coord;
+const district_east_coord = sandbox_contracts.navigation_east_coord;
+const district_west_slot_index = district_streaming_host.west_slot_index;
+const district_east_slot_index = district_streaming_host.east_slot_index;
 
-    fn initWithAllocator(allocator: std.mem.Allocator) ?PhysicsDebugCpuStorage {
-        const lines = allocator.alloc(
-            engine.physics_debug.Line,
-            physics_debug_line_capacity,
-        ) catch |err| {
-            std.debug.print(
-                "Physics debug CPU line storage unavailable: {s}\n",
-                .{@errorName(err)},
-            );
-            return null;
-        };
-        const triangles = allocator.alloc(
-            engine.physics_debug.Triangle,
-            physics_debug_triangle_capacity,
-        ) catch |err| {
-            allocator.free(lines);
-            std.debug.print(
-                "Physics debug CPU triangle storage unavailable: {s}\n",
-                .{@errorName(err)},
-            );
-            return null;
-        };
-        return .{
-            .allocator = allocator,
-            .lines = lines,
-            .triangles = triangles,
-            .storage = engine.physics_debug.Storage.init(lines, triangles),
-        };
-    }
-
-    fn deinit(self: *PhysicsDebugCpuStorage) void {
-        self.allocator.free(self.triangles);
-        self.allocator.free(self.lines);
-        self.* = undefined;
-    }
-};
-
-const VisualSmokeConfig = struct {
-    frames: u64 = 480,
-    virtual_render_hz: u32 = 240,
-};
-
-const ProgramMode = union(enum) {
-    normal,
-    verify_install,
-    visual_smoke: VisualSmokeConfig,
-    s1_visual_smoke: VisualSmokeConfig,
-    s2_visual_smoke: VisualSmokeConfig,
-    s3_streaming_smoke: VisualSmokeConfig,
-    s6_streaming_smoke: VisualSmokeConfig,
-    s7_interaction_smoke: VisualSmokeConfig,
-    s8_population_smoke: VisualSmokeConfig,
-    s4_diagnostics_smoke,
-    s4_physics_debug_smoke: VisualSmokeConfig,
-    s5_authoring_smoke,
-    window_lifecycle_smoke,
-    init_failure_smoke,
-};
-
-const ProductMode = enum { normal, verify_install };
-
-const BootstrapProfile = enum { sandbox, s0_smoke, s1_smoke, s2_smoke, s3_smoke };
-
-const ScriptedScenario = enum {
-    none,
-    s1_character,
-    s2_vehicle,
-    s3_streaming,
-    s4_physics_debug,
-    s7_interaction,
-};
-
-const s2_enter_tick: u64 = 240;
-const s2_brake_tick: u64 = 581;
-const s2_steer_tick: u64 = 601;
-const s2_exit_tick: u64 = 661;
-const s2_required_ticks: u64 = 720;
-
-const sandbox_save_slot_id = "sandbox";
-const district_stream_slot_count = sandbox_host.district_presentation_policies.len;
-const district_west_coord = sandbox_host.navigation_west_coord;
-const district_east_coord = sandbox_host.navigation_east_coord;
-const district_stream_coords = [district_stream_slot_count]sandbox_host.ChunkCoord{
-    sandbox_host.district_presentation_policies[0].coord,
-    sandbox_host.district_presentation_policies[1].coord,
-};
-const district_west_slot_index: usize = 0;
-const district_east_slot_index: usize = 1;
-const district_proximity_configs = [district_stream_slot_count]district_presentation.ProximityConfig{
-    .{
-        .center_xz = sandbox_host.district_presentation_policies[0].center_xz,
-        .half_extent_xz = sandbox_host.district_presentation_policies[0].half_extent_xz,
-        .load_margin = sandbox_host.district_presentation_policies[0].load_margin,
-        .unload_margin = sandbox_host.district_presentation_policies[0].unload_margin,
-    },
-    .{
-        .center_xz = sandbox_host.district_presentation_policies[1].center_xz,
-        .half_extent_xz = sandbox_host.district_presentation_policies[1].half_extent_xz,
-        .load_margin = sandbox_host.district_presentation_policies[1].load_margin,
-        .unload_margin = sandbox_host.district_presentation_policies[1].unload_margin,
-    },
-};
-const DistrictPresentation = district_presentation.Coordinator(
-    district_gpu_registry.DistrictGpuRegistry,
-    sandbox_host.LoadTicket,
-);
-
-const DistrictStreamBound = struct {
-    scene: engine.rendering.SceneHandle,
-    ticket: sandbox_host.LoadTicket,
-    load_request_id: u64,
-    content_generation: u64,
-};
-
-const DistrictStreamReading = struct {
-    scene: engine.rendering.SceneHandle,
-    generation: u64,
-};
-
-const DistrictStreamSubmitted = struct {
-    scene: engine.rendering.SceneHandle,
-    request_id: u64,
-    content_generation: u64,
-};
-
-const DistrictStreamCancelling = struct {
-    bound: DistrictStreamBound,
-    request_id: u64,
-};
-
-const DistrictStreamUnloading = struct {
-    bound: DistrictStreamBound,
-    request_id: u64,
-};
-
-const DistrictStreamDraining = struct {
-    scene: engine.rendering.SceneHandle,
-    content_generation: ?u64,
-};
-
-const DistrictContentJob = struct {
-    value: DistrictStreamReading,
-    cancelling: bool,
-};
-
-const DistrictAdmission = struct {
-    scene: engine.rendering.SceneHandle,
-    request_id: u64,
-    content_generation: u64,
-    cancel: bool,
-};
-
-const DistrictStreamState = union(enum) {
-    idle,
-    reading: DistrictStreamReading,
-    cancelling_content: DistrictStreamReading,
-    content_ready: DistrictStreamReading,
-    request_submitted: DistrictStreamSubmitted,
-    request_submitted_cancel: DistrictStreamSubmitted,
-    loading: DistrictStreamBound,
-    cancelling_logical: DistrictStreamCancelling,
-    active: DistrictStreamBound,
-    unloading: DistrictStreamUnloading,
-    draining: DistrictStreamDraining,
-};
-
-const DistrictStreamSlot = struct {
-    coord: sandbox_host.ChunkCoord,
-    presentation: DistrictPresentation,
-    state: DistrictStreamState = .idle,
-    proximity: district_presentation.ProximityHysteresis,
-    pending_scene: ?content.bundle.OwnedBundle = null,
-    correlation: u64 = 0,
-};
-
-const sandbox_block = sandbox_host.StaticBox{
+const sandbox_block = sandbox_contracts.StaticBox{
     .position = .{ 0, 1, -5 },
     .half_extents = .{ 2, 1, 0.5 },
 };
 
 const FramePresentation = struct {
     crate_count: usize,
-    first_id: ?sandbox_host.PersistentId,
+    first_id: ?sandbox_contracts.PersistentId,
     first_position: ?[3]f32,
     first_rotation: ?[4]f32,
     character_count: usize,
-    character_id: ?sandbox_host.PersistentId,
+    character_id: ?sandbox_host.ReplicatedEntityId,
     character_position: ?[3]f32,
     vehicle_count: usize,
-    vehicle_id: ?sandbox_host.PersistentId,
+    vehicle_id: ?sandbox_host.ReplicatedEntityId,
     district_count: usize,
     carryable_count: usize,
-    carryable_id: ?sandbox_host.PersistentId,
+    carryable_id: ?sandbox_host.ReplicatedEntityId,
     npc_count: usize,
 };
 
@@ -463,6 +182,9 @@ const S2SmokeProgress = struct {
     exited: bool = false,
     vehicle_position_before_drive: ?[3]f32 = null,
     crate_position_before_drive: ?[3]f32 = null,
+    drive_input_sequence: ?u32 = null,
+    steering_input_sequence: ?u32 = null,
+    brake_input_sequence: ?u32 = null,
 };
 
 const WindowLifecycleSummary = struct {
@@ -536,7 +258,7 @@ const S6StreamingSmokeSummary = struct {
     peak_in_flight_upload_bytes: u64 = 0,
     peak_resident_gpu_bytes: u64 = 0,
 
-    fn observe(self: *S6StreamingSmokeSummary, stats: district_gpu_registry.Stats) void {
+    fn observe(self: *S6StreamingSmokeSummary, stats: developer_diagnostics.GpuUsage) void {
         self.peak_live_scenes = @max(self.peak_live_scenes, stats.live_scenes);
         self.peak_resident_scenes = @max(
             self.peak_resident_scenes,
@@ -593,20 +315,48 @@ const S7InteractionSmokeSummary = struct {
     final_bodies: u32 = 0,
 };
 
+const s7_replica_convergence_timeout_ticks: u64 = timing.TICK_RATE;
+/// The client relevance owner transfers only after crossing one meter into
+/// the east district. Drop beyond that seam so the strict same-frame draw
+/// assertion observes the east relevance baseline, not the old west view.
+const s7_east_relevance_drop_x: f32 = 9.0;
+
+fn s7ReplicaConverged(
+    current_tick: u64,
+    wait_started_tick: *?u64,
+    ready: bool,
+) !bool {
+    if (ready) {
+        wait_started_tick.* = null;
+        return true;
+    }
+    const started = wait_started_tick.* orelse start: {
+        wait_started_tick.* = current_tick;
+        break :start current_tick;
+    };
+    if (current_tick -| started > s7_replica_convergence_timeout_ticks) {
+        return error.S7ReplicaConvergenceTimeout;
+    }
+    return false;
+}
+
 const s8_population_count: usize = population.max_population_commands;
 const s8_spawn_first_request_id: u64 = 8_000;
 const s8_despawn_first_request_id: u64 = 9_000;
-const s8_west_seam = sandbox_host.NavigationNodeRef{
+const s8_replica_convergence_timeout_ticks: u64 =
+    @as(u64, session_budgets.ticks_per_npc_snapshot) +
+    @as(u64, session_budgets.ticks_per_snapshot);
+const s8_west_seam = sandbox_contracts.NavigationNodeRef{
     .coord = district_west_coord,
     .index = 2,
 };
-const s8_east_end = sandbox_host.NavigationNodeRef{
+const s8_east_end = sandbox_contracts.NavigationNodeRef{
     .coord = district_east_coord,
     .index = 2,
 };
 
 comptime {
-    if (s8_population_count != sandbox_host.npc_capacity) {
+    if (s8_population_count != sandbox_contracts.npc_capacity) {
         @compileError("the S8 population proof must exercise the complete NPC budget");
     }
 }
@@ -656,7 +406,7 @@ const S8PopulationSmokeSummary = struct {
     final_native_controllers: u32 = 0,
     final_draws: u8 = 0,
 
-    fn observeGpu(self: *S8PopulationSmokeSummary, stats: district_gpu_registry.Stats) void {
+    fn observeGpu(self: *S8PopulationSmokeSummary, stats: developer_diagnostics.GpuUsage) void {
         self.peak_live_scenes = @max(self.peak_live_scenes, stats.live_scenes);
         self.peak_resident_scenes = @max(
             self.peak_resident_scenes,
@@ -763,6 +513,25 @@ const S8PopulationSmokeSummary = struct {
     }
 };
 
+fn s8ReplicaConverged(
+    current_tick: u64,
+    wait_started_tick: *?u64,
+    ready: bool,
+) !bool {
+    if (ready) {
+        wait_started_tick.* = null;
+        return true;
+    }
+    const started = wait_started_tick.* orelse start: {
+        wait_started_tick.* = current_tick;
+        break :start current_tick;
+    };
+    if (current_tick -| started > s8_replica_convergence_timeout_ticks) {
+        return error.S8ReplicaConvergenceTimeout;
+    }
+    return false;
+}
+
 fn s8RequestIndex(request_id: u64, first_request_id: u64) !usize {
     if (request_id < first_request_id) return error.UnexpectedS8NpcOutcome;
     const offset = request_id - first_request_id;
@@ -775,7 +544,7 @@ fn s8RequestIndex(request_id: u64, first_request_id: u64) !usize {
 /// remain useful report values, while these per-identity sets prevent one NPC's
 /// duplicate output from masking another NPC's missing output.
 const S8PopulationEvidence = struct {
-    identities: [s8_population_count]?sandbox_host.PersistentId = @splat(null),
+    identities: [s8_population_count]?sandbox_contracts.PersistentId = @splat(null),
     spawned: [s8_population_count]bool = @splat(false),
     waiting: [s8_population_count]bool = @splat(false),
     waiting_resumed: [s8_population_count]bool = @splat(false),
@@ -838,7 +607,7 @@ const S8PopulationEvidence = struct {
 
     fn indexForIdentity(
         self: *const S8PopulationEvidence,
-        id: sandbox_host.PersistentId,
+        id: sandbox_contracts.PersistentId,
     ) ?usize {
         for (self.identities, 0..) |candidate, index| {
             if (candidate != null and std.meta.eql(candidate.?, id)) return index;
@@ -850,7 +619,7 @@ const S8PopulationEvidence = struct {
         self: *S8PopulationEvidence,
         stage: S8SmokeStage,
         summary: *S8PopulationSmokeSummary,
-        outcome: sandbox_host.NpcOutcome,
+        outcome: sandbox_contracts.NpcOutcome,
     ) !void {
         switch (outcome) {
             .spawned => |value| {
@@ -898,7 +667,7 @@ const S8PopulationEvidence = struct {
         self: *S8PopulationEvidence,
         stage: S8SmokeStage,
         summary: *S8PopulationSmokeSummary,
-        event: sandbox_host.NpcEvent,
+        event: sandbox_contracts.NpcEvent,
     ) !void {
         switch (event) {
             .state_changed => |changed| {
@@ -1078,16 +847,9 @@ const s4_smoke_pause_frames: u64 = 600;
 const s4_smoke_pause_frame_seconds: f64 = 1.0 / 30.0;
 const s4_smoke_stream_attempt_limit: u32 = 480;
 
-fn districtRecycleComplete(
-    registry: anytype,
-    scene: engine.rendering.SceneHandle,
-) !bool {
-    return registry.recycleComplete(scene);
-}
-
 fn updateS3SmokePeaks(
     summary: *S3StreamingSmokeSummary,
-    stats: district_gpu_registry.Stats,
+    stats: developer_diagnostics.GpuUsage,
 ) void {
     summary.peak_live_scenes = @max(summary.peak_live_scenes, stats.live_scenes);
     summary.peak_active_batches = @max(
@@ -1303,27 +1065,6 @@ fn suspendGameplayForWindowState(
     return true;
 }
 
-const SmokeExpectation = struct {
-    ticks: u64,
-    min_alpha: f32,
-    max_alpha: f32,
-};
-
-fn smokeExpectation(config: VisualSmokeConfig) !SmokeExpectation {
-    var accumulator = timing.FixedStepAccumulator.init();
-    var result = SmokeExpectation{ .ticks = 0, .min_alpha = 1, .max_alpha = 0 };
-    for (0..config.frames) |_| {
-        _ = try accumulator.addElapsedSeconds(
-            1.0 / @as(f64, @floatFromInt(config.virtual_render_hz)),
-        );
-        while (accumulator.consumeTick()) result.ticks += 1;
-        const alpha = accumulator.alpha();
-        result.min_alpha = @min(result.min_alpha, alpha);
-        result.max_alpha = @max(result.max_alpha, alpha);
-    }
-    return result;
-}
-
 fn vectorChanged(comptime count: usize, first: [count]f32, current: [count]f32) bool {
     for (first, current) |a, b| {
         if (@abs(a - b) > 0.00001) return true;
@@ -1338,326 +1079,6 @@ fn distanceSquared(first: [3]f32, current: [3]f32) f32 {
         result += delta * delta;
     }
     return result;
-}
-
-fn parseProgramMode(args: anytype) !ProgramMode {
-    var verify_install = false;
-    var visual_smoke = false;
-    var s1_visual_smoke = false;
-    var s2_visual_smoke = false;
-    var s3_streaming_smoke = false;
-    var s6_streaming_smoke = false;
-    var s7_interaction_smoke = false;
-    var s8_population_smoke = false;
-    var s4_diagnostics_smoke = false;
-    var s4_physics_debug_smoke = false;
-    var s5_authoring_smoke = false;
-    var window_lifecycle_smoke = false;
-    var init_failure_smoke = false;
-    var frames: ?u64 = null;
-    var virtual_render_hz: ?u32 = null;
-    var content_root_seen = false;
-    var save_root_seen = false;
-
-    for (args[1..args.len]) |raw_arg| {
-        const arg: []const u8 = raw_arg;
-        if (std.mem.eql(u8, arg, "--verify-install")) {
-            if (verify_install) return error.DuplicateArgument;
-            verify_install = true;
-        } else if (std.mem.eql(u8, arg, "--visual-smoke")) {
-            if (visual_smoke) return error.DuplicateArgument;
-            visual_smoke = true;
-        } else if (std.mem.eql(u8, arg, "--s1-visual-smoke")) {
-            if (s1_visual_smoke) return error.DuplicateArgument;
-            s1_visual_smoke = true;
-        } else if (std.mem.eql(u8, arg, "--s2-visual-smoke")) {
-            if (s2_visual_smoke) return error.DuplicateArgument;
-            s2_visual_smoke = true;
-        } else if (std.mem.eql(u8, arg, "--s3-streaming-smoke")) {
-            if (s3_streaming_smoke) return error.DuplicateArgument;
-            s3_streaming_smoke = true;
-        } else if (std.mem.eql(u8, arg, "--s6-streaming-smoke")) {
-            if (s6_streaming_smoke) return error.DuplicateArgument;
-            s6_streaming_smoke = true;
-        } else if (std.mem.eql(u8, arg, "--s7-interaction-smoke")) {
-            if (s7_interaction_smoke) return error.DuplicateArgument;
-            s7_interaction_smoke = true;
-        } else if (std.mem.eql(u8, arg, "--s8-population-smoke")) {
-            if (s8_population_smoke) return error.DuplicateArgument;
-            s8_population_smoke = true;
-        } else if (std.mem.eql(u8, arg, "--s4-diagnostics-smoke")) {
-            if (s4_diagnostics_smoke) return error.DuplicateArgument;
-            s4_diagnostics_smoke = true;
-        } else if (std.mem.eql(u8, arg, "--s4-physics-debug-smoke")) {
-            if (s4_physics_debug_smoke) return error.DuplicateArgument;
-            s4_physics_debug_smoke = true;
-        } else if (std.mem.eql(u8, arg, "--s5-authoring-smoke")) {
-            if (s5_authoring_smoke) return error.DuplicateArgument;
-            s5_authoring_smoke = true;
-        } else if (std.mem.eql(u8, arg, "--window-lifecycle-smoke")) {
-            if (window_lifecycle_smoke) return error.DuplicateArgument;
-            window_lifecycle_smoke = true;
-        } else if (std.mem.eql(u8, arg, "--init-failure-smoke")) {
-            if (init_failure_smoke) return error.DuplicateArgument;
-            init_failure_smoke = true;
-        } else if (std.mem.startsWith(u8, arg, "--frames=")) {
-            if (frames != null) return error.DuplicateArgument;
-            const value = arg["--frames=".len..];
-            frames = std.fmt.parseUnsigned(u64, value, 10) catch
-                return error.InvalidFrameCount;
-            if (frames.? == 0) return error.InvalidFrameCount;
-        } else if (std.mem.startsWith(u8, arg, "--virtual-render-hz=")) {
-            if (virtual_render_hz != null) return error.DuplicateArgument;
-            const value = arg["--virtual-render-hz=".len..];
-            virtual_render_hz = std.fmt.parseUnsigned(u32, value, 10) catch
-                return error.InvalidVirtualRenderRate;
-            if (virtual_render_hz.? == 0 or virtual_render_hz.? > 10_000) {
-                return error.InvalidVirtualRenderRate;
-            }
-        } else if (std.mem.startsWith(u8, arg, "--content-root=")) {
-            if (content_root_seen) return error.DuplicateArgument;
-            _ = try content.ContentRootPath.parse(arg["--content-root=".len..]);
-            content_root_seen = true;
-        } else if (std.mem.startsWith(u8, arg, "--save-root=")) {
-            if (save_root_seen) return error.DuplicateArgument;
-            _ = try save_slots.RootPath.parse(arg["--save-root=".len..]);
-            save_root_seen = true;
-        } else {
-            return error.UnknownArgument;
-        }
-    }
-
-    if (verify_install) {
-        if (visual_smoke or s1_visual_smoke or s2_visual_smoke or
-            s3_streaming_smoke or s6_streaming_smoke or s7_interaction_smoke or
-            s8_population_smoke or
-            window_lifecycle_smoke or init_failure_smoke or
-            s4_diagnostics_smoke or s4_physics_debug_smoke or
-            s5_authoring_smoke or save_root_seen or
-            frames != null or virtual_render_hz != null)
-        {
-            return error.ConflictingProgramModes;
-        }
-        return .verify_install;
-    }
-    const explicit_mode_count = @as(u8, @intFromBool(visual_smoke)) +
-        @as(u8, @intFromBool(s1_visual_smoke)) +
-        @as(u8, @intFromBool(s2_visual_smoke)) +
-        @as(u8, @intFromBool(s3_streaming_smoke)) +
-        @as(u8, @intFromBool(s6_streaming_smoke)) +
-        @as(u8, @intFromBool(s7_interaction_smoke)) +
-        @as(u8, @intFromBool(s8_population_smoke)) +
-        @as(u8, @intFromBool(s4_diagnostics_smoke)) +
-        @as(u8, @intFromBool(s4_physics_debug_smoke)) +
-        @as(u8, @intFromBool(s5_authoring_smoke)) +
-        @as(u8, @intFromBool(window_lifecycle_smoke)) +
-        @as(u8, @intFromBool(init_failure_smoke));
-    if (explicit_mode_count > 1) return error.ConflictingProgramModes;
-    if (content_root_seen and explicit_mode_count != 0) return error.ConflictingProgramModes;
-    if (save_root_seen and explicit_mode_count != 0 and !s5_authoring_smoke) {
-        return error.ConflictingProgramModes;
-    }
-    if (!visual_smoke and !s1_visual_smoke and !s2_visual_smoke and
-        !s3_streaming_smoke and !s6_streaming_smoke and !s7_interaction_smoke and
-        !s8_population_smoke and
-        !s4_physics_debug_smoke and
-        (frames != null or virtual_render_hz != null))
-    {
-        return error.VisualSmokeOptionWithoutMode;
-    }
-    if (window_lifecycle_smoke) return .window_lifecycle_smoke;
-    if (init_failure_smoke) return .init_failure_smoke;
-    if (s4_diagnostics_smoke) return .s4_diagnostics_smoke;
-    if (s5_authoring_smoke) {
-        if (!save_root_seen) return error.SaveRootRequired;
-        if (frames != null or virtual_render_hz != null) {
-            return error.VisualSmokeOptionWithoutMode;
-        }
-        return .s5_authoring_smoke;
-    }
-    if (s4_physics_debug_smoke) {
-        const config = VisualSmokeConfig{
-            .frames = frames orelse 600,
-            .virtual_render_hz = virtual_render_hz orelse 80,
-        };
-        const scaled = std.math.mul(u64, config.frames, 4) catch
-            return error.InvalidFrameCount;
-        _ = std.math.add(u64, scaled, 120) catch return error.InvalidFrameCount;
-        return .{ .s4_physics_debug_smoke = config };
-    }
-    if (!visual_smoke and !s1_visual_smoke and !s2_visual_smoke and
-        !s3_streaming_smoke and !s6_streaming_smoke and !s7_interaction_smoke and
-        !s8_population_smoke)
-    {
-        return .normal;
-    }
-
-    const config = VisualSmokeConfig{
-        .frames = frames orelse if (s2_visual_smoke)
-            1_440
-        else if (s8_population_smoke)
-            3_600
-        else if (s3_streaming_smoke or s6_streaming_smoke or s7_interaction_smoke)
-            1_200
-        else
-            480,
-        .virtual_render_hz = virtual_render_hz orelse 240,
-    };
-    const scaled = std.math.mul(u64, config.frames, 4) catch
-        return error.InvalidFrameCount;
-    _ = std.math.add(u64, scaled, 120) catch return error.InvalidFrameCount;
-    return if (s8_population_smoke)
-        .{ .s8_population_smoke = config }
-    else if (s7_interaction_smoke)
-        .{ .s7_interaction_smoke = config }
-    else if (s6_streaming_smoke)
-        .{ .s6_streaming_smoke = config }
-    else if (s3_streaming_smoke)
-        .{ .s3_streaming_smoke = config }
-    else if (s2_visual_smoke)
-        .{ .s2_visual_smoke = config }
-    else if (s1_visual_smoke)
-        .{ .s1_visual_smoke = config }
-    else
-        .{ .visual_smoke = config };
-}
-
-fn parseProductMode(args: anytype) !ProductMode {
-    var verify_install = false;
-    var content_root_seen = false;
-    var save_root_seen = false;
-    for (args[1..args.len]) |raw_arg| {
-        const arg: []const u8 = raw_arg;
-        if (std.mem.eql(u8, arg, "--verify-install")) {
-            if (verify_install) return error.DuplicateArgument;
-            verify_install = true;
-        } else if (std.mem.startsWith(u8, arg, "--content-root=")) {
-            if (content_root_seen) return error.DuplicateArgument;
-            _ = try content.ContentRootPath.parse(arg["--content-root=".len..]);
-            content_root_seen = true;
-        } else if (std.mem.startsWith(u8, arg, "--save-root=")) {
-            if (save_root_seen) return error.DuplicateArgument;
-            _ = try save_slots.RootPath.parse(arg["--save-root=".len..]);
-            save_root_seen = true;
-        } else {
-            return error.UnknownArgument;
-        }
-    }
-    if (verify_install and save_root_seen) return error.ConflictingProgramModes;
-    return if (verify_install) .verify_install else .normal;
-}
-
-fn parseContentRootOverride(args: anytype) !?content.ContentRootPath {
-    var result: ?content.ContentRootPath = null;
-    for (args[1..args.len]) |raw_arg| {
-        const arg: []const u8 = raw_arg;
-        if (!std.mem.startsWith(u8, arg, "--content-root=")) continue;
-        if (result != null) return error.DuplicateArgument;
-        result = try content.ContentRootPath.parse(arg["--content-root=".len..]);
-    }
-    return result;
-}
-
-fn parseSaveRootOverride(args: anytype) !?save_slots.RootPath {
-    var result: ?save_slots.RootPath = null;
-    for (args[1..args.len]) |raw_arg| {
-        const arg: []const u8 = raw_arg;
-        if (!std.mem.startsWith(u8, arg, "--save-root=")) continue;
-        if (result != null) return error.DuplicateArgument;
-        result = try save_slots.RootPath.parse(arg["--save-root=".len..]);
-    }
-    return result;
-}
-
-fn resolveContentRoot(
-    io: std.Io,
-    allocator: std.mem.Allocator,
-    configured: ?content.ContentRootPath,
-) !content.ContentRootPath {
-    if (configured) |root| return root;
-    var executable_dir_buffer: [std.fs.max_path_bytes]u8 = undefined;
-    const executable_dir_len = try std.process.executableDirPath(io, &executable_dir_buffer);
-    const resolved = try std.fs.path.resolve(
-        allocator,
-        &.{
-            executable_dir_buffer[0..executable_dir_len],
-            defaultContentRootRelative(build_options.validation_mode),
-        },
-    );
-    defer allocator.free(resolved);
-    return content.ContentRootPath.parse(resolved);
-}
-
-fn defaultContentRootRelative(comptime validation_mode: bool) []const u8 {
-    return if (validation_mode)
-        "../../share/incinerator/content"
-    else
-        "../share/incinerator/content";
-}
-
-fn validateCookedLogicalDistrict(
-    view: content.bundle.BundleView,
-    coord: sandbox_host.ChunkCoord,
-) !void {
-    const expected = try sandbox_host.proceduralDistrictBuild(coord);
-    if (view.static_boxes.len != expected.boxes().len) {
-        return error.CookedDistrictLogicalShapeMismatch;
-    }
-    for (view.static_boxes, expected.boxes()) |cooked, logical| {
-        if (!std.meta.eql(cooked.position, logical.pose.position) or
-            !std.meta.eql(cooked.rotation, logical.pose.rotation) or
-            !std.meta.eql(cooked.half_extents, logical.half_extents))
-        {
-            return error.CookedDistrictLogicalShapeMismatch;
-        }
-    }
-}
-
-fn isRetryableDistrictStageError(err: anyerror) bool {
-    return err == error.DistrictStagingBudgetExceeded or
-        err == error.DistrictResidentBudgetExceeded;
-}
-
-fn submitLogicalBeforeStage(
-    context: anytype,
-    comptime submit_logical: anytype,
-    comptime stage_visual: anytype,
-) !bool {
-    try submit_logical(context);
-    return try stage_visual(context);
-}
-
-fn takeMonotonicId(next: *u64) !u64 {
-    if (next.* == 0 or next.* == std.math.maxInt(u64)) {
-        return error.DistrictSequenceExhausted;
-    }
-    const result = next.*;
-    next.* += 1;
-    return result;
-}
-
-fn validateDistrictStreamCatalogEntries(entries: anytype) !void {
-    if (entries.len != district_stream_slot_count) {
-        return error.DistrictCatalogSlotMismatch;
-    }
-    var west_present = false;
-    var east_present = false;
-    for (entries) |entry| {
-        if (entry.coord.x == district_west_coord.x and
-            entry.coord.z == district_west_coord.z)
-        {
-            if (west_present) return error.DistrictCatalogSlotMismatch;
-            west_present = true;
-        } else if (entry.coord.x == district_east_coord.x and
-            entry.coord.z == district_east_coord.z)
-        {
-            if (east_present) return error.DistrictCatalogSlotMismatch;
-            east_present = true;
-        } else {
-            return error.DistrictCatalogSlotMismatch;
-        }
-    }
-    if (!west_present or !east_present) return error.DistrictCatalogSlotMismatch;
 }
 
 fn verifyInstalledContent(
@@ -1677,7 +1098,7 @@ fn verifyInstalledContent(
         },
     };
     defer admitted.deinit();
-    try validateDistrictStreamCatalogEntries(admitted.view().entries);
+    try district_streaming_host.validateCatalogEntries(admitted.view().entries);
 }
 
 // ============================================================================
@@ -1697,16 +1118,16 @@ const App = struct {
     io: std.Io,
     window: *c.SDL_Window,
     gpu_renderer: renderer.Renderer,
-    developer_editor: editor.Editor,
+    developer: *sandbox_developer_host.Owner,
     frame_timer: timing.FrameTimer,
     input_buffer: input.InputBuffer,
 
-    simulation: sandbox_host.Session,
-    initial_crate_id: ?sandbox_host.PersistentId,
-    initial_character_id: ?sandbox_host.PersistentId,
-    initial_vehicle_id: ?sandbox_host.PersistentId,
-    initial_carryable_id: ?sandbox_host.PersistentId,
-    controlled_vehicle_id: ?sandbox_host.PersistentId,
+    simulation: *sandbox_host.Placement,
+    initial_crate_id: ?sandbox_contracts.PersistentId,
+    initial_character_id: ?sandbox_contracts.PersistentId,
+    initial_vehicle_id: ?sandbox_contracts.PersistentId,
+    initial_carryable_id: ?sandbox_contracts.PersistentId,
+    controlled_vehicle_id: ?sandbox_host.ReplicatedEntityId,
     action_latch: sandbox_controls.ActionLatch,
     authoring_transactions: *sandbox_authoring.TransactionSequencer,
     // This controller owns the visual composition's authoring request buffer.
@@ -1719,42 +1140,22 @@ const App = struct {
     interaction_spawn_submitted: bool,
     interaction_transactions: sandbox_interaction.TransactionSequencer,
     interaction_requests: sandbox_interaction.RequestBuffer,
-    interaction_last_outcome: ?sandbox_host.InteractionOutcome,
+    interaction_last_outcome: ?sandbox_contracts.InteractionOutcome,
+    interaction_last_player_result: ?sandbox_host.InteractionActionResult,
     interaction_submission_failures: u64,
-    developer_controller: developer_controls.Controller,
-    developer_control_requests: developer_controls.RequestBuffer,
-    developer_diagnostic_requests: developer_diagnostics.RequestBuffer,
-    developer_profiler: developer_profile.DefaultRecorder,
-    developer_visualization_controller: developer_visualization.Controller,
-    developer_visualization_requests: developer_visualization.RequestBuffer,
-    active_frame_profile: ?*HostFrameProfile,
-    physics_debug_cpu: ?PhysicsDebugCpuStorage,
-    physics_debug_batch_summary: ?developer_visualization.BatchSummary,
-    physics_debug_overlay: ?physics_debug_gpu.Overlay,
     validation: ValidationAppState,
     game_camera: camera.Camera,
     // Presentation resources remain owned by the visual host.
     ground_mesh: mesh.Mesh,
     block_mesh: mesh.Mesh,
     visuals: sandbox_visual_resources.SandboxVisualResources,
-    district_registry: *district_gpu_registry.DistrictGpuRegistry,
-    district_stream_slots: [district_stream_slot_count]DistrictStreamSlot,
-    district_catalog: ?district_content_catalog.AdmittedCatalog,
-    district_content_worker: ?*content.SceneWorker,
-    district_content_owner: ?u8,
-    district_next_content_generation: u64,
-    district_next_request_id: u64,
-    district_next_stream_correlation: u64,
+    district_streaming: *district_streaming_host.Owner,
     district_focus_override: ?[2]f32,
 
-    // Durable storage remains an explicit visual-host capability. The editor
-    // receives only immutable status and a bounded `save` request.
-    save_store: ?save_slots.SaveSlots,
-    save_metadata: ?sandbox_save.Metadata,
-    save_feedback: editor_contract.SaveFeedback,
-
-    // Debug counters
-    debug_frame_counter: u32,
+    // The persistence host owns canonical capture and durable commit policy.
+    // The editor receives only an immutable feedback projection and a bounded
+    // request surface.
+    persistence: *sandbox_persistence.Owner,
 
     pub fn init(
         io: std.Io,
@@ -1768,7 +1169,7 @@ const App = struct {
         io: std.Io,
         comptime profile: BootstrapProfile,
         content_root: ?content.ContentRootPath,
-        save_root: save_slots.RootPath,
+        save_root: SaveRootPath,
     ) !App {
         return initWithOptions(io, profile, content_root, null, false, false, save_root);
     }
@@ -1777,7 +1178,7 @@ const App = struct {
         io: std.Io,
         comptime profile: BootstrapProfile,
         content_root: ?content.ContentRootPath,
-        save_root: ?save_slots.RootPath,
+        save_root: ?SaveRootPath,
     ) !App {
         return initWithOptions(io, profile, content_root, null, false, true, save_root);
     }
@@ -1806,7 +1207,7 @@ const App = struct {
         comptime failure_point: ?AppInitFailurePoint,
         comptime omit_physics_debug_pipelines: bool,
         comptime diagnostic_fault_probe: bool,
-        save_root: ?save_slots.RootPath,
+        save_root: ?SaveRootPath,
     ) !App {
         // Initialize SDL3 with video subsystem
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
@@ -1858,23 +1259,12 @@ const App = struct {
             try injectAppInitFailure(failure_point, .after_renderer);
         }
 
-        var physics_debug_cpu = PhysicsDebugCpuStorage.init();
-        errdefer if (physics_debug_cpu) |*owner| owner.deinit();
-        var physics_debug_overlay: ?physics_debug_gpu.Overlay = if (physics_debug_cpu != null)
-            physics_debug_gpu.Overlay.init(&gpu_renderer, .{
-                .line_capacity = @intCast(physics_debug_line_capacity),
-                .triangle_capacity = @intCast(physics_debug_triangle_capacity),
-                .initially_enabled = false,
-            }) catch |err| blk: {
-                std.debug.print(
-                    "Physics debug GPU overlay unavailable: {s}\n",
-                    .{@errorName(err)},
-                );
-                break :blk null;
-            }
-        else
-            null;
-        errdefer if (physics_debug_overlay) |*overlay| overlay.deinit();
+        const developer = try sandbox_developer_host.Owner.init(
+            std.heap.page_allocator,
+            window,
+            &gpu_renderer,
+        );
+        errdefer developer.deinit();
 
         // Create ground plane mesh
         var ground_mesh = try primitives.createGroundPlane(gpu_renderer.getDevice());
@@ -1883,41 +1273,13 @@ const App = struct {
         var block_mesh = try primitives.createCube(gpu_renderer.getDevice());
         errdefer block_mesh.deinit();
 
-        const district_registry = try std.heap.page_allocator.create(
-            district_gpu_registry.DistrictGpuRegistry,
-        );
-        errdefer std.heap.page_allocator.destroy(district_registry);
-        district_registry.* = try district_gpu_registry.DistrictGpuRegistry.init(
-            std.heap.page_allocator,
-            .{ .device = gpu_renderer.getDevice() },
-            .{},
-            .{},
-        );
-        errdefer district_registry.deinit();
-        const district_stream_slots = [district_stream_slot_count]DistrictStreamSlot{
-            .{
-                .coord = district_west_coord,
-                .presentation = DistrictPresentation.init(district_registry),
-                .proximity = try district_presentation.ProximityHysteresis.init(
-                    district_proximity_configs[0],
-                ),
-            },
-            .{
-                .coord = district_east_coord,
-                .presentation = DistrictPresentation.init(district_registry),
-                .proximity = try district_presentation.ProximityHysteresis.init(
-                    district_proximity_configs[1],
-                ),
-            },
-        };
-
-        const character_config = sandbox_host.CharacterConfig{
+        const character_config = sandbox_contracts.CharacterConfig{
             .assets = .{
                 .mesh = sandbox_visual_resources.character_mesh_handle,
                 .material = sandbox_visual_resources.character_material_handle,
             },
         };
-        const vehicle_config = sandbox_host.VehicleConfig{
+        const vehicle_config = sandbox_contracts.VehicleConfig{
             .assets = .{
                 .chassis_mesh = sandbox_visual_resources.vehicle_chassis_mesh_handle,
                 .chassis_material = sandbox_visual_resources.vehicle_chassis_material_handle,
@@ -1936,7 +1298,7 @@ const App = struct {
         }
 
         // The visual solo product owns an embedded authority session.
-        const simulation_config = sandbox_host.Config{
+        const simulation_config = sandbox_contracts.Config{
             .namespace = 1,
             .fixed_delta_seconds = @floatCast(timing.TICK_DURATION),
             .assets = .{
@@ -1956,16 +1318,18 @@ const App = struct {
                 .s0_smoke, .s2_smoke, .s3_smoke => null,
             },
         };
-        var simulation = if (diagnostic_fault_probe)
-            try sandbox_host.Session.initWithDiagnosticFaultProbe(
+        const embedded = if (diagnostic_fault_probe)
+            try sandbox_host.Placement.initCompositionWithDiagnosticFaultProbe(
                 std.heap.page_allocator,
                 simulation_config,
             )
         else
-            try sandbox_host.Session.init(
+            try sandbox_host.Placement.initComposition(
                 std.heap.page_allocator,
                 simulation_config,
             );
+        const simulation = embedded.placement;
+        const persistence_source = embedded.snapshot_source;
         errdefer simulation.deinit();
         if (failure_point != null) {
             try injectAppInitFailure(failure_point, .after_simulation);
@@ -1977,62 +1341,41 @@ const App = struct {
         errdefer std.heap.page_allocator.destroy(authoring_transactions);
         authoring_transactions.* = .{};
 
-        var save_store: ?save_slots.SaveSlots = null;
-        errdefer if (save_store) |*store| store.deinit(io);
-        var save_metadata: ?sandbox_save.Metadata = null;
         const streams_districts = profile == .sandbox or profile == .s3_smoke;
         const needs_catalog = streams_districts or save_root != null;
-        var admitted_catalog: ?district_content_catalog.AdmittedCatalog = null;
-        errdefer if (admitted_catalog) |*catalog_owner| catalog_owner.deinit();
-        if (needs_catalog) {
-            const content_root_path = content_root orelse
-                return error.ContentRootRequired;
-            admitted_catalog = switch (try district_content_catalog.admit(
+        const district_streaming = try district_streaming_host.Owner.init(
+            io,
+            std.heap.page_allocator,
+            gpu_renderer.getDevice(),
+            .{
+                .stream_content = streams_districts,
+                .admit_catalog = needs_catalog,
+                .content_root = content_root,
+            },
+        );
+        errdefer district_streaming.abortInit();
+        const persistence = if (save_root) |root_path| owner: {
+            const authority_cohort = simulation.inspection().persistenceCohort();
+            break :owner try sandbox_persistence.Owner.open(
                 io,
                 std.heap.page_allocator,
-                content_root_path,
-            )) {
-                .admitted => |value| value,
-                .failed => |failure| {
-                    std.debug.print("District catalog admission failed: {any}\n", .{failure});
-                    return error.DistrictCatalogAdmissionFailed;
+                root_path,
+                .{
+                    .payload_schema = authority_cohort.payload_schema,
+                    .simulation_build_digest = authority_cohort.simulation_build_digest,
+                    .world_config_digest = authority_cohort.world_config_digest,
+                    .content_digest = try district_streaming.contentDigest(),
                 },
-            };
-            try validateDistrictStreamCatalogEntries(
-                admitted_catalog.?.view().entries,
+                persistence_source,
             );
-        }
-        if (save_root) |root_path| {
-            const content_cohort = admitted_catalog.?.contentCohort();
-            save_store = try save_slots.SaveSlots.open(io, root_path);
-            switch (save_store.?.recover(
-                io,
-                try save_slots.SlotId.parse(sandbox_save_slot_id),
-            )) {
-                .clean, .discarded_stale_candidate => {},
-                .failed => |failure| {
-                    std.debug.print("Save candidate recovery failed: {any}\n", .{failure});
-                    return error.SaveRecoveryFailed;
-                },
-            }
-            save_metadata = .{
-                .payload_schema = sandbox_host.snapshot_schema,
-                .simulation_build_digest = try sandbox_host.currentSimulationBuildFingerprint(),
-                .world_config_digest = try sandbox_host.worldConfigFingerprint(simulation_config),
-                .content_digest = try content_cohort.fingerprint(),
-            };
-        }
+        } else try sandbox_persistence.Owner.withoutStorage(
+            std.heap.page_allocator,
+            persistence_source,
+        );
+        errdefer persistence.deinit(io);
 
-        var district_content_worker: ?*content.SceneWorker = null;
-        if (streams_districts) {
-            const worker = try std.heap.page_allocator.create(content.SceneWorker);
-            errdefer std.heap.page_allocator.destroy(worker);
-            worker.* = content.SceneWorker.init(io, std.heap.page_allocator);
-            errdefer worker.deinit();
-            district_content_worker = worker;
-        }
         if (profile != .s3_smoke) {
-            try simulation.submit(.{ .spawn = .{
+            try simulation.crates().submit(.{ .spawn = .{
                 .request_id = 1,
                 .pose = .{ .position = switch (profile) {
                     .s2_smoke => .{ 0, 0.5, -9 },
@@ -2043,7 +1386,7 @@ const App = struct {
             } });
         }
         if (profile != .s0_smoke and profile != .s3_smoke) {
-            try simulation.submitCharacter(.{ .spawn = .{
+            try simulation.characters().submit(.{ .spawn = .{
                 .request_id = 1,
                 .position = switch (profile) {
                     .s2_smoke => .{ 0, 0, 2 },
@@ -2053,7 +1396,7 @@ const App = struct {
             } });
         }
         if (profile == .sandbox or profile == .s2_smoke) {
-            try simulation.submitVehicle(.{ .spawn = .{
+            try simulation.vehicles().submit(.{ .spawn = .{
                 .request_id = 1,
                 .chassis = .{ .pose = .{ .position = switch (profile) {
                     .sandbox => .{ 0, 2, 2 },
@@ -2062,14 +1405,6 @@ const App = struct {
                 } } },
             } });
         }
-
-        // Initialize editor (ImGui debug UI)
-        // This sets up ImGui with our SDL3 GPU device
-        const developer_editor = editor.Editor.init(
-            window,
-            gpu_renderer.getDevice(),
-            gpu_renderer.getSwapchainFormat(),
-        );
 
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Incinerator Engine initialized ({s} composition)\n", .{@tagName(profile)});
@@ -2093,7 +1428,7 @@ const App = struct {
             .io = io,
             .window = window,
             .gpu_renderer = gpu_renderer,
-            .developer_editor = developer_editor,
+            .developer = developer,
             .frame_timer = timing.FrameTimer.init(),
             .input_buffer = input.InputBuffer.init(main_window_id),
             .simulation = simulation,
@@ -2114,91 +1449,45 @@ const App = struct {
             .interaction_transactions = .{},
             .interaction_requests = .{},
             .interaction_last_outcome = null,
+            .interaction_last_player_result = null,
             .interaction_submission_failures = 0,
-            .developer_controller = .{},
-            .developer_control_requests = .{},
-            .developer_diagnostic_requests = .{},
-            .developer_profiler = .{},
-            .developer_visualization_controller = .{},
-            .developer_visualization_requests = .{},
-            .active_frame_profile = null,
-            .physics_debug_cpu = physics_debug_cpu,
-            .physics_debug_batch_summary = null,
-            .physics_debug_overlay = physics_debug_overlay,
             .validation = if (build_options.validation_mode or builtin.is_test)
                 .{ .profile = profile }
             else {},
             .ground_mesh = ground_mesh,
             .block_mesh = block_mesh,
             .visuals = visuals,
-            .district_registry = district_registry,
-            .district_stream_slots = district_stream_slots,
-            .district_catalog = admitted_catalog,
-            .district_content_worker = district_content_worker,
-            .district_content_owner = null,
-            .district_next_content_generation = 1,
-            .district_next_request_id = 1,
-            .district_next_stream_correlation = 1,
+            .district_streaming = district_streaming,
             .district_focus_override = null,
-            .save_store = save_store,
-            .save_metadata = save_metadata,
-            .save_feedback = if (save_store != null) .{
-                .status = .idle,
-                .slot_label = sandbox_save_slot_id,
-                .detail = "ready",
-            } else .{
-                .status = .unavailable,
-                .slot_label = sandbox_save_slot_id,
-                .detail = "start with --save-root=<absolute-existing-directory>",
-            },
+            .persistence = persistence,
             .game_camera = .{
                 .position = .{ 0, 3, 10, 1 },
                 .yaw = 0,
                 .pitch = -0.25,
             },
-            .debug_frame_counter = 0,
         };
     }
 
     pub fn deinit(self: *App) void {
-        const completed_ticks = self.simulation.tickIndex();
+        const completed_ticks = self.simulation.inspection().tickIndex();
 
         // Errors may unwind after external buffers were encoded into a frame
         // but before normal submission. Retire and drain that work before any
         // editor, overlay, mesh, texture, or streamed-GPU owner is released.
         self.gpu_renderer.drainForExternalTeardown();
 
-        // Clean up editor first (needs GPU device to still be valid)
-        self.developer_editor.deinit();
-        if (self.physics_debug_overlay) |*overlay| overlay.deinit();
-        self.physics_debug_overlay = null;
-        if (self.district_content_worker) |worker| {
-            worker.deinit();
-            std.heap.page_allocator.destroy(worker);
-            self.district_content_worker = null;
-        }
-        for (0..district_stream_slot_count) |slot_index| {
-            self.clearPendingDistrictScene(slot_index);
-        }
+        // The developer owner releases ImGui and optional debug GPU resources
+        // while the renderer device is still valid.
+        self.developer.deinit();
+        self.district_streaming.prepareAuthorityTeardown();
+        self.persistence.deinit(self.io);
         self.simulation.deinit();
-        if (self.save_store) |*store| store.deinit(self.io);
-        self.save_store = null;
         std.heap.page_allocator.destroy(self.authoring_transactions);
-        for (&self.district_stream_slots) |*slot| {
-            slot.presentation.releaseAfterSimulationTeardown() catch |err| {
-                std.debug.panic("district presentation teardown failed: {s}", .{@errorName(err)});
-            };
-        }
-        self.district_registry.deinit();
-        std.heap.page_allocator.destroy(self.district_registry);
-        if (self.district_catalog) |*catalog_owner| catalog_owner.deinit();
-        self.district_catalog = null;
+        self.district_streaming.deinitAfterAuthority();
         self.ground_mesh.deinit();
         self.block_mesh.deinit();
         self.visuals.deinit();
         self.gpu_renderer.deinit();
-        if (self.physics_debug_cpu) |*owner| owner.deinit();
-        self.physics_debug_cpu = null;
         c.SDL_DestroyWindow(self.window);
         c.SDL_Quit();
 
@@ -2214,37 +1503,12 @@ const App = struct {
         phase: developer_profile.Phase,
         frame_index: ?u64,
         tick_index: ?u64,
-    ) HostProfileScope {
-        return .{
-            .recorder = &self.developer_profiler,
-            .token = if (self.developer_visualization_controller.profiling_enabled)
-                self.developer_profiler.spans.begin(
-                    phase,
-                    frame_index,
-                    tick_index,
-                    profileNowNs(),
-                )
-            else
-                null,
-        };
-    }
-
-    fn beginFrameProfile(self: *App, frame_index: u64) HostFrameProfile {
-        return .{
-            .recorder = &self.developer_profiler,
-            .token = if (self.developer_visualization_controller.profiling_enabled)
-                self.developer_profiler.frames.begin(
-                    frame_index,
-                    self.simulation.tickIndex(),
-                    profileNowNs(),
-                )
-            else
-                null,
-        };
+    ) sandbox_developer_host.ProfileScope {
+        return self.developer.beginHostProfile(phase, frame_index, tick_index);
     }
 
     fn mergeProfileCounts(self: *App, counts: developer_profile.Counts) void {
-        if (self.active_frame_profile) |frame| frame.counts.merge(counts);
+        self.developer.mergeProfileCounts(counts);
     }
 
     /// Run the interactive product loop. This surface has no scenario,
@@ -2258,13 +1522,13 @@ const App = struct {
             var input_profile = self.beginHostProfile(
                 .input,
                 self.frame_timer.total_frames +| 1,
-                self.simulation.tickIndex(),
+                self.simulation.inspection().tickIndex(),
             );
             defer input_profile.finish(.failure);
             self.input_buffer.beginFrame();
-            running = self.input_buffer.pumpEvents(self.developer_editor.eventSink());
+            running = self.input_buffer.pumpEvents(self.developer.eventSink());
             if (running and retained_runtime_error == null and
-                !self.developer_controller.paused)
+                !self.developer.paused())
             {
                 try self.captureFrameActions();
             }
@@ -2272,46 +1536,55 @@ const App = struct {
             if (!running) break;
             if (self.waitForWindowSuspension()) continue;
 
-            var frame_profile = self.beginFrameProfile(self.frame_timer.total_frames +| 1);
-            self.active_frame_profile = &frame_profile;
-            defer {
-                self.active_frame_profile = null;
-                frame_profile.finish(.failure);
-            }
+            self.developer.beginFrameProfile(
+                self.frame_timer.total_frames +| 1,
+                self.simulation.inspection().tickIndex(),
+            );
+            defer self.developer.finishFrameProfile(.failure);
             if (retained_runtime_error != null) {
                 self.frame_timer.beginControlledFrame(.paused);
                 _ = try self.renderFaultInspectionFrame();
-                frame_profile.finish(.success);
+                self.developer.finishFrameProfile(.success);
                 continue;
             }
 
             self.frame_timer.beginControlledFrame(
-                self.developer_controller.clockPolicy(),
+                self.developer.clockPolicy(),
             );
             var content_profile = self.beginHostProfile(
                 .content_pump,
                 self.frame_timer.total_frames,
-                self.simulation.tickIndex(),
+                self.simulation.inspection().tickIndex(),
             );
             defer content_profile.finish(.failure);
-            try self.pumpDistrictContent();
+            try self.district_streaming.pumpContent(self.districtAuthorityPort(), self.frame_timer.total_frames);
             content_profile.finish(.success);
 
-            if (self.developer_controller.takeSingleStep()) {
+            if (self.developer.takeSingleStep()) {
                 self.simulateTick(false, .none) catch |err| {
-                    if (self.simulation.firstFault() == null) return err;
+                    if (!self.developer.hasRetainedFault(self.developerAuthorityPort())) return err;
                     retained_runtime_error = err;
-                    self.enterFaultInspection();
+                    self.applyDeveloperEffects(self.developer.enterFaultInspection(
+                        self.developerAuthorityPort(),
+                        self.developerStreamingPort(),
+                        &self.frame_timer,
+                        self.includeDeveloperDistrictStreams(),
+                    ));
                     _ = try self.renderFaultInspectionFrame();
                     continue :game_loop;
                 };
                 self.frame_timer.recordSingleStep();
-            } else if (!self.developer_controller.paused) {
+            } else if (!self.developer.paused()) {
                 while (self.frame_timer.shouldTick()) {
                     self.simulateTick(false, .none) catch |err| {
-                        if (self.simulation.firstFault() == null) return err;
+                        if (!self.developer.hasRetainedFault(self.developerAuthorityPort())) return err;
                         retained_runtime_error = err;
-                        self.enterFaultInspection();
+                        self.applyDeveloperEffects(self.developer.enterFaultInspection(
+                            self.developerAuthorityPort(),
+                            self.developerStreamingPort(),
+                            &self.frame_timer,
+                            self.includeDeveloperDistrictStreams(),
+                        ));
                         _ = try self.renderFaultInspectionFrame();
                         continue :game_loop;
                     };
@@ -2320,12 +1593,11 @@ const App = struct {
             }
 
             _ = try self.render(self.frame_timer.alpha());
-            frame_profile.finish(.success);
-            self.debug_frame_counter += 1;
-            if (self.debug_frame_counter >= DEBUG_PRINT_INTERVAL) {
-                self.debug_frame_counter = 0;
-                self.printDebugStats();
-            }
+            self.developer.finishFrameProfile(.success);
+            self.developer.maybePrintFrameStats(
+                &self.frame_timer,
+                self.simulation.inspection().tickIndex(),
+            );
         }
 
         if (retained_runtime_error) |err| return err;
@@ -2353,7 +1625,7 @@ const App = struct {
             var input_profile = self.beginHostProfile(
                 .input,
                 self.frame_timer.total_frames +| 1,
-                self.simulation.tickIndex(),
+                self.simulation.inspection().tickIndex(),
             );
             defer input_profile.finish(.failure);
             // ================================================================
@@ -2362,12 +1634,12 @@ const App = struct {
             // Clear per-frame input state and poll all SDL events.
             // This runs every frame to ensure responsive input.
             self.input_buffer.beginFrame();
-            running = self.input_buffer.pumpEvents(self.developer_editor.eventSink());
+            running = self.input_buffer.pumpEvents(self.developer.eventSink());
             if (running and
                 self.validation.profile == .sandbox and
                 scenario == .none and
                 retained_runtime_error == null and
-                !self.developer_controller.paused)
+                !self.developer.paused())
             {
                 try self.captureFrameActions();
             }
@@ -2375,21 +1647,18 @@ const App = struct {
             if (!running) break;
             if (self.waitForWindowSuspension()) continue;
 
-            var frame_profile = self.beginFrameProfile(self.frame_timer.total_frames +| 1);
-            self.active_frame_profile = &frame_profile;
-            defer {
-                self.active_frame_profile = null;
-                frame_profile.finish(.failure);
-            }
+            self.developer.beginFrameProfile(
+                self.frame_timer.total_frames +| 1,
+                self.simulation.inspection().tickIndex(),
+            );
+            defer self.developer.finishFrameProfile(.failure);
             if (retained_runtime_error != null) {
                 if (self.validation.s4_fault_loop_probe) |probe| {
-                    const stream_now = self.developerDistrictStreamsSnapshot();
-                    const gpu_now = developerGpuUsage(
-                        (try self.district_registry.diagnostics()).current,
-                    );
+                    const stream_now = self.district_streaming.developerStreams();
+                    const gpu_now = (try self.district_streaming.gpuDiagnostics()).current;
                     if (probe.content_pump_calls != probe.content_pump_calls_at_fault or
                         probe.gpu_pump_calls != probe.gpu_pump_calls_at_fault or
-                        self.simulation.tickIndex() != probe.tick_at_fault or
+                        self.simulation.inspection().tickIndex() != probe.tick_at_fault or
                         self.frame_timer.total_ticks != probe.completed_ticks_at_fault or
                         !std.meta.eql(probe.stream_at_fault.?, stream_now) or
                         !std.meta.eql(probe.gpu_at_fault.?, gpu_now))
@@ -2399,7 +1668,7 @@ const App = struct {
                 }
                 self.frame_timer.beginControlledFrame(.paused);
                 const inspection_ready = try self.renderFaultInspectionFrame();
-                frame_profile.finish(.success);
+                self.developer.finishFrameProfile(.success);
                 if (inspection_ready) summary.ready_frames += 1;
                 summary.attempted_frames += 1;
                 if (self.validation.s4_fault_loop_probe) |probe| {
@@ -2423,53 +1692,63 @@ const App = struct {
             if (self.validation.s4_fault_loop_probe != null) {
                 try self.frame_timer.beginControlledFrameWithElapsedSeconds(
                     timing.TICK_DURATION,
-                    self.developer_controller.clockPolicy(),
+                    self.developer.clockPolicy(),
                 );
             } else if (smoke) |config| {
                 try self.frame_timer.beginControlledFrameWithElapsedSeconds(
                     1.0 / @as(f64, @floatFromInt(config.virtual_render_hz)),
-                    self.developer_controller.clockPolicy(),
+                    self.developer.clockPolicy(),
                 );
             } else {
                 self.frame_timer.beginControlledFrame(
-                    self.developer_controller.clockPolicy(),
+                    self.developer.clockPolicy(),
                 );
             }
             if (self.validation.s4_fault_loop_probe) |probe| probe.content_pump_calls += 1;
             var content_profile = self.beginHostProfile(
                 .content_pump,
                 self.frame_timer.total_frames,
-                self.simulation.tickIndex(),
+                self.simulation.inspection().tickIndex(),
             );
             defer content_profile.finish(.failure);
-            try self.pumpDistrictContent();
+            try self.district_streaming.pumpContent(self.districtAuthorityPort(), self.frame_timer.total_frames);
             content_profile.finish(.success);
 
             // ================================================================
-            // PHASE 2: SIMULATION TICK (Fixed 120Hz)
+            // PHASE 2: AUTHORITY TICK (Fixed 60 Hz)
             // ================================================================
             // Run simulation at fixed timestep. Multiple ticks may run per frame
             // if we're behind, or zero ticks if we're ahead.
-            if (self.developer_controller.takeSingleStep()) {
+            if (self.developer.takeSingleStep()) {
                 self.simulateTick(true, scenario) catch |err| {
-                    if (self.simulation.firstFault() == null) return err;
+                    if (!self.developer.hasRetainedFault(self.developerAuthorityPort())) return err;
                     if (smoke != null) return err;
                     retained_runtime_error = err;
                     try self.captureS4FaultLoopProbe(err);
-                    self.enterFaultInspection();
+                    self.applyDeveloperEffects(self.developer.enterFaultInspection(
+                        self.developerAuthorityPort(),
+                        self.developerStreamingPort(),
+                        &self.frame_timer,
+                        self.includeDeveloperDistrictStreams(),
+                    ));
                     _ = try self.renderFaultInspectionFrame();
                     summary.attempted_frames += 1;
                     continue :game_loop;
                 };
                 self.frame_timer.recordSingleStep();
-            } else if (!self.developer_controller.paused) {
+            } else if (!self.developer.paused()) {
                 while (self.frame_timer.shouldTick()) {
                     self.simulateTick(true, scenario) catch |err| {
-                        if (self.simulation.firstFault() == null) return err;
+                        if (!self.developer.hasRetainedFault(self.developerAuthorityPort())) return err;
                         if (smoke != null) return err;
                         retained_runtime_error = err;
                         try self.captureS4FaultLoopProbe(err);
-                        self.enterFaultInspection();
+                        self.applyDeveloperEffects(self.developer.enterFaultInspection(
+                            self.developerAuthorityPort(),
+                            self.developerStreamingPort(),
+                            &self.frame_timer,
+                            self.includeDeveloperDistrictStreams(),
+                        ));
                         _ = try self.renderFaultInspectionFrame();
                         summary.attempted_frames += 1;
                         continue :game_loop;
@@ -2485,7 +1764,7 @@ const App = struct {
             // interpolate between previous and current state for smoothness.
             const alpha = self.frame_timer.alpha();
             const render_result = try self.render(alpha);
-            frame_profile.finish(.success);
+            self.developer.finishFrameProfile(.success);
             const render_ready = switch (render_result) {
                 .ready => true,
                 .unavailable => false,
@@ -2527,88 +1806,116 @@ const App = struct {
                     switch (scenario) {
                         .none, .s3_streaming, .s7_interaction => {},
                         .s1_character => if (self.initial_character_id != null) {
-                            if (presentation.character_count != 1) {
+                            if (presentation.character_count > 1) {
                                 return error.S1VisualSmokeCharacterPresentationMissing;
                             }
-                            const presented_id = presentation.character_id orelse
-                                return error.S1VisualSmokeCharacterPresentationMissing;
-                            const spawned_id = self.initial_character_id orelse
-                                return error.S1VisualSmokeCharacterSpawnMissing;
-                            if (!std.meta.eql(presented_id, spawned_id)) {
-                                return error.S1VisualSmokePresentedWrongCharacter;
-                            }
-                            const position = presentation.character_position orelse
-                                return error.S1VisualSmokeCharacterPresentationMissing;
-                            summary.character_presented_frames += 1;
-                            if (first_character_position) |first| {
-                                summary.character_position_changed =
-                                    summary.character_position_changed or
-                                    vectorChanged(3, first, position);
-                                summary.character_jump_observed =
-                                    summary.character_jump_observed or
-                                    position[1] > first[1] + 0.1;
-                            } else {
-                                first_character_position = position;
+                            if (presentation.character_count == 1) {
+                                const presented_id = presentation.character_id orelse
+                                    return error.S1VisualSmokeCharacterPresentationMissing;
+                                const spawned_id = self.initial_character_id orelse
+                                    return error.S1VisualSmokeCharacterSpawnMissing;
+                                const expected_id = self.simulation.inspection().replicatedId(
+                                    spawned_id,
+                                ) orelse return error.S1VisualSmokeCharacterSpawnMissing;
+                                if (!std.meta.eql(presented_id, expected_id)) {
+                                    return error.S1VisualSmokePresentedWrongCharacter;
+                                }
+                                const position = presentation.character_position orelse
+                                    return error.S1VisualSmokeCharacterPresentationMissing;
+                                summary.character_presented_frames += 1;
+                                if (first_character_position) |first| {
+                                    summary.character_position_changed =
+                                        summary.character_position_changed or
+                                        vectorChanged(3, first, position);
+                                    summary.character_jump_observed =
+                                        summary.character_jump_observed or
+                                        position[1] > first[1] + 0.1;
+                                } else {
+                                    first_character_position = position;
+                                }
                             }
                         },
                         .s2_vehicle => {
                             if (self.initial_vehicle_id) |spawned_id| {
-                                if (presentation.vehicle_count != 1) {
+                                if (presentation.vehicle_count > 1) {
                                     return error.S2VisualSmokeVehiclePresentationMissing;
                                 }
-                                const presented_id = presentation.vehicle_id orelse
-                                    return error.S2VisualSmokeVehiclePresentationMissing;
-                                if (!std.meta.eql(presented_id, spawned_id)) {
-                                    return error.S2VisualSmokePresentedWrongVehicle;
+                                if (presentation.vehicle_count == 1) {
+                                    const presented_id = presentation.vehicle_id orelse
+                                        return error.S2VisualSmokeVehiclePresentationMissing;
+                                    const expected_id = self.simulation.inspection().replicatedId(
+                                        spawned_id,
+                                    ) orelse return error.S2VisualSmokeVehicleSpawnMissing;
+                                    if (!std.meta.eql(presented_id, expected_id)) {
+                                        return error.S2VisualSmokePresentedWrongVehicle;
+                                    }
+                                    summary.vehicle_presented_frames += 1;
                                 }
-                                summary.vehicle_presented_frames += 1;
                             }
                             if (self.initial_character_id) |spawned_id| {
                                 if (self.validation.s2_smoke.entered and !self.validation.s2_smoke.exited) {
-                                    if (presentation.character_count != 0) {
+                                    if (presentation.character_count == 0) {
+                                        summary.character_hidden_while_driving = true;
+                                    } else if (presentation.character_count > 1) {
                                         return error.S2VisualSmokeDrivingCharacterVisible;
                                     }
-                                    summary.character_hidden_while_driving = true;
                                 } else {
-                                    if (presentation.character_count != 1) {
+                                    if (presentation.character_count > 1) {
                                         return error.S2VisualSmokeCharacterPresentationMissing;
                                     }
-                                    const presented_id = presentation.character_id orelse
-                                        return error.S2VisualSmokeCharacterPresentationMissing;
-                                    if (!std.meta.eql(presented_id, spawned_id)) {
-                                        return error.S2VisualSmokePresentedWrongCharacter;
-                                    }
-                                    summary.character_presented_frames += 1;
-                                    if (self.validation.s2_smoke.exited) {
-                                        summary.character_visible_after_exit = true;
+                                    if (presentation.character_count == 1) {
+                                        const presented_id = presentation.character_id orelse
+                                            return error.S2VisualSmokeCharacterPresentationMissing;
+                                        const expected_id = self.simulation.inspection().replicatedId(
+                                            spawned_id,
+                                        ) orelse return error.S2VisualSmokeCharacterSpawnMissing;
+                                        if (!std.meta.eql(presented_id, expected_id)) {
+                                            return error.S2VisualSmokePresentedWrongCharacter;
+                                        }
+                                        summary.character_presented_frames += 1;
+                                        if (self.validation.s2_smoke.exited) {
+                                            summary.character_visible_after_exit = true;
+                                        }
                                     }
                                 }
                             }
                         },
                         .s4_physics_debug => {
                             if (self.initial_character_id) |spawned_id| {
-                                if (presentation.character_count != 1 or
-                                    !std.meta.eql(
-                                        presentation.character_id orelse
-                                            return error.S4PhysicsDebugCharacterPresentationMissing,
-                                        spawned_id,
-                                    ))
-                                {
+                                if (presentation.character_count > 1) {
                                     return error.S4PhysicsDebugCharacterPresentationMissing;
                                 }
-                                summary.character_presented_frames += 1;
+                                if (presentation.character_count == 1) {
+                                    const expected_id = self.simulation.inspection().replicatedId(
+                                        spawned_id,
+                                    ) orelse return error.S4PhysicsDebugCharacterPresentationMissing;
+                                    if (!std.meta.eql(
+                                        presentation.character_id orelse
+                                            return error.S4PhysicsDebugCharacterPresentationMissing,
+                                        expected_id,
+                                    )) {
+                                        return error.S4PhysicsDebugCharacterPresentationMissing;
+                                    }
+                                    summary.character_presented_frames += 1;
+                                }
                             }
                             if (self.initial_vehicle_id) |spawned_id| {
-                                if (presentation.vehicle_count != 1 or
-                                    !std.meta.eql(
-                                        presentation.vehicle_id orelse
-                                            return error.S4PhysicsDebugVehiclePresentationMissing,
-                                        spawned_id,
-                                    ))
-                                {
+                                if (presentation.vehicle_count > 1) {
                                     return error.S4PhysicsDebugVehiclePresentationMissing;
                                 }
-                                summary.vehicle_presented_frames += 1;
+                                if (presentation.vehicle_count == 1) {
+                                    const expected_id = self.simulation.inspection().replicatedId(
+                                        spawned_id,
+                                    ) orelse return error.S4PhysicsDebugVehiclePresentationMissing;
+                                    if (!std.meta.eql(
+                                        presentation.vehicle_id orelse
+                                            return error.S4PhysicsDebugVehiclePresentationMissing,
+                                        expected_id,
+                                    )) {
+                                        return error.S4PhysicsDebugVehiclePresentationMissing;
+                                    }
+                                    summary.vehicle_presented_frames += 1;
+                                }
                             }
                         },
                     }
@@ -2638,11 +1945,10 @@ const App = struct {
             // ================================================================
             // DEBUG OUTPUT
             // ================================================================
-            self.debug_frame_counter += 1;
-            if (self.debug_frame_counter >= DEBUG_PRINT_INTERVAL) {
-                self.debug_frame_counter = 0;
-                self.printDebugStats();
-            }
+            self.developer.maybePrintFrameStats(
+                &self.frame_timer,
+                self.simulation.inspection().tickIndex(),
+            );
         }
 
         if (retained_runtime_error) |err| return err;
@@ -2659,11 +1965,11 @@ const App = struct {
             if (!summary.position_changed) return error.VisualSmokePositionDidNotChange;
             if (!summary.rotation_changed) return error.VisualSmokeRotationDidNotChange;
             switch (scenario) {
-                .none => if (self.simulation.crateCount() != 1 or
-                    self.simulation.characterCount() != 0 or
-                    self.simulation.vehicleCount() != 0 or
-                    self.simulation.entityCount() != 1 or
-                    self.simulation.bodyCount() != 2)
+                .none => if (self.simulation.crates().count() != 1 or
+                    self.simulation.characters().count() != 0 or
+                    self.simulation.vehicles().count() != 0 or
+                    self.simulation.inspection().entityCount() != 1 or
+                    self.simulation.inspection().bodyCount() != 2)
                 {
                     return error.VisualSmokeLifecycleInvariant;
                 },
@@ -2677,50 +1983,58 @@ const App = struct {
                     {
                         return error.S1VisualSmokeCharacterDidNotMove;
                     }
-                    if (self.simulation.crateCount() != 1 or
-                        self.simulation.characterCount() != 1 or
-                        self.simulation.vehicleCount() != 0 or
-                        self.simulation.entityCount() != 2 or
-                        self.simulation.bodyCount() != 3)
+                    if (self.simulation.crates().count() != 1 or
+                        self.simulation.characters().count() != 1 or
+                        self.simulation.vehicles().count() != 0 or
+                        self.simulation.inspection().entityCount() != 2 or
+                        self.simulation.inspection().bodyCount() != 3)
                     {
                         return error.S1VisualSmokeLifecycleInvariant;
                     }
-                    const character = try self.simulation.character(self.initial_character_id.?);
+                    const character = try self.simulation.characters().view(self.initial_character_id.?);
                     if (character.position[2] < -4.2 or character.position[2] > -3.5) {
                         return error.S1VisualSmokeBlockCollisionFailed;
                     }
                 },
                 .s2_vehicle => {
-                    if (self.simulation.tickIndex() < s2_required_ticks) {
+                    if (self.simulation.inspection().tickIndex() < s2_required_ticks) {
                         return error.S2VisualSmokeInsufficientTicks;
                     }
                     if (self.initial_character_id == null or self.initial_vehicle_id == null) {
                         return error.S2VisualSmokeSpawnMissing;
                     }
-                    if (summary.vehicle_presented_frames == 0 or
-                        !summary.character_hidden_while_driving or
-                        !summary.character_visible_after_exit or
-                        !self.validation.s2_smoke.entered or
-                        !self.validation.s2_smoke.drive_applied or
-                        !self.validation.s2_smoke.steering_applied or
-                        !self.validation.s2_smoke.brake_applied or
-                        !self.validation.s2_smoke.steering_observed or
-                        !self.validation.s2_smoke.vehicle_moved or
-                        !self.validation.s2_smoke.crate_displaced or
-                        !self.validation.s2_smoke.exited)
-                    {
-                        return error.S2VisualSmokeLifecycleEvidenceMissing;
-                    }
+                    if (summary.vehicle_presented_frames == 0)
+                        return error.S2VisualSmokeVehicleNeverPresented;
+                    if (!summary.character_hidden_while_driving)
+                        return error.S2VisualSmokeCharacterNeverHidden;
+                    if (!summary.character_visible_after_exit)
+                        return error.S2VisualSmokeCharacterNeverRestored;
+                    if (!self.validation.s2_smoke.entered)
+                        return error.S2VisualSmokeEnterMissing;
+                    if (!self.validation.s2_smoke.drive_applied)
+                        return error.S2VisualSmokeDriveAckMissing;
+                    if (!self.validation.s2_smoke.steering_applied)
+                        return error.S2VisualSmokeSteeringAckMissing;
+                    if (!self.validation.s2_smoke.brake_applied)
+                        return error.S2VisualSmokeBrakeAckMissing;
+                    if (!self.validation.s2_smoke.steering_observed)
+                        return error.S2VisualSmokeSteeringMissing;
+                    if (!self.validation.s2_smoke.vehicle_moved)
+                        return error.S2VisualSmokeVehicleDidNotMove;
+                    if (!self.validation.s2_smoke.crate_displaced)
+                        return error.S2VisualSmokeCrateNotDisplaced;
+                    if (!self.validation.s2_smoke.exited)
+                        return error.S2VisualSmokeExitMissing;
                     if (self.controlled_vehicle_id != null or
-                        self.simulation.crateCount() != 1 or
-                        self.simulation.characterCount() != 1 or
-                        self.simulation.vehicleCount() != 1 or
-                        self.simulation.entityCount() != 3 or
-                        self.simulation.bodyCount() != 3)
+                        self.simulation.crates().count() != 1 or
+                        self.simulation.characters().count() != 1 or
+                        self.simulation.vehicles().count() != 1 or
+                        self.simulation.inspection().entityCount() != 3 or
+                        self.simulation.inspection().bodyCount() != 3)
                     {
                         return error.S2VisualSmokeLifecycleInvariant;
                     }
-                    const vehicle = try self.simulation.vehicle(self.initial_vehicle_id.?);
+                    const vehicle = try self.simulation.vehicles().view(self.initial_vehicle_id.?);
                     if (vehicle.driver_id != null) {
                         return error.S2VisualSmokeDriverStillActive;
                     }
@@ -2729,7 +2043,7 @@ const App = struct {
                 .s4_physics_debug => try self.validateS4PhysicsDebugSmoke(summary),
             }
             const expected = try smokeExpectation(config);
-            if (self.simulation.tickIndex() != expected.ticks) {
+            if (self.simulation.inspection().tickIndex() != expected.ticks) {
                 return error.VisualSmokeTickCountMismatch;
             }
             if (@abs(summary.min_alpha - expected.min_alpha) > 0.00001 or
@@ -2748,18 +2062,17 @@ const App = struct {
         {
             return error.S4PhysicsDebugPresentationEvidenceMissing;
         }
-        if (self.simulation.crateCount() != 1 or
-            self.simulation.characterCount() != 1 or
-            self.simulation.vehicleCount() != 1 or
-            self.simulation.districtCount() != 1 or
-            self.simulation.entityCount() != 4 or
-            self.simulation.bodyCount() <= 3)
+        if (self.simulation.crates().count() != 1 or
+            self.simulation.characters().count() != 1 or
+            self.simulation.vehicles().count() != 1 or
+            self.simulation.districts().count() != 1 or
+            self.simulation.inspection().entityCount() != 4 or
+            self.simulation.inspection().bodyCount() <= 3)
         {
             return error.S4PhysicsDebugLifecycleInvariant;
         }
-        switch (self.district_stream_slots[district_west_slot_index].state) {
-            .active => {},
-            else => return error.S4PhysicsDebugDistrictNotActive,
+        if ((try self.district_streaming.slot(district_west_slot_index)).phase != .active) {
+            return error.S4PhysicsDebugDistrictNotActive;
         }
         if (!self.validation.s4_physics_debug_evidence.allCategoriesObserved() or
             self.validation.s4_physics_debug_evidence.batches == 0 or
@@ -2768,14 +2081,13 @@ const App = struct {
             return error.S4PhysicsDebugCategoryEvidenceMissing;
         }
 
-        const overlay = if (self.physics_debug_overlay) |*value| value else return error.S4PhysicsDebugGpuUnavailable;
-        _ = overlay.poll();
-        const gpu = overlay.stats();
+        const gpu = self.developer.physicsDebugStats() orelse
+            return error.S4PhysicsDebugGpuUnavailable;
         if (gpu.mode != .enabled or
-            gpu.resources.slot_count != physics_debug_gpu.default_slot_count or
-            gpu.resources.gpu_buffer_count != physics_debug_gpu.default_slot_count * 2 or
-            gpu.resources.transfer_buffer_count != physics_debug_gpu.default_slot_count * 2 or
-            gpu.resources.max_owned_fences != physics_debug_gpu.default_slot_count or
+            gpu.resources.slot_count != sandbox_developer_host.physics_debug_default_slot_count or
+            gpu.resources.gpu_buffer_count != sandbox_developer_host.physics_debug_default_slot_count * 2 or
+            gpu.resources.transfer_buffer_count != sandbox_developer_host.physics_debug_default_slot_count * 2 or
+            gpu.resources.max_owned_fences != sandbox_developer_host.physics_debug_default_slot_count or
             gpu.resources.peak_owned_fences > gpu.resources.max_owned_fences or
             gpu.resources.live_owned_fences > gpu.resources.max_owned_fences or
             gpu.resources.retired_slots != 0 or
@@ -2786,7 +2098,7 @@ const App = struct {
             gpu.frame_fences_accepted != gpu.draw_calls or
             gpu.latest_uploaded_generation == 0 or
             gpu.latest_completed_tick == 0 or
-            gpu.latest_completed_tick > self.simulation.tickIndex() or
+            gpu.latest_completed_tick > self.simulation.inspection().tickIndex() or
             gpu.failed_uploads != 0 or
             gpu.frame_fence_failures != 0 or
             gpu.slot_retirements != 0)
@@ -2795,7 +2107,7 @@ const App = struct {
         }
 
         var phase_observed = [_]bool{false} ** std.meta.tags(developer_profile.Phase).len;
-        const spans = self.developer_profiler.spans.view();
+        const spans = self.developer.profileSpans();
         for (spans.first) |span| phase_observed[@intFromEnum(span.phase)] = true;
         for (spans.second) |span| phase_observed[@intFromEnum(span.phase)] = true;
         for (phase_observed) |observed| {
@@ -2803,7 +2115,7 @@ const App = struct {
         }
 
         var frame_counts_observed = false;
-        const frames = self.developer_profiler.frames.view();
+        const frames = self.developer.profileFrames();
         for (frames.first) |frame| {
             frame_counts_observed = frame_counts_observed or
                 (frame.counts.draw_calls != 0 and
@@ -2832,12 +2144,10 @@ const App = struct {
         }
         probe.content_pump_calls_at_fault = probe.content_pump_calls;
         probe.gpu_pump_calls_at_fault = probe.gpu_pump_calls;
-        probe.tick_at_fault = self.simulation.tickIndex();
+        probe.tick_at_fault = self.simulation.inspection().tickIndex();
         probe.completed_ticks_at_fault = self.frame_timer.total_ticks;
-        probe.stream_at_fault = self.developerDistrictStreamsSnapshot();
-        probe.gpu_at_fault = developerGpuUsage(
-            (try self.district_registry.diagnostics()).current,
-        );
+        probe.stream_at_fault = self.district_streaming.developerStreams();
+        probe.gpu_at_fault = (try self.district_streaming.gpuDiagnostics()).current;
     }
 
     /// Exercise the production window-suspension path against a real SDL/Metal
@@ -2868,7 +2178,7 @@ const App = struct {
 
         while (running) {
             self.input_buffer.beginFrame();
-            running = self.input_buffer.pumpEvents(self.developer_editor.eventSink());
+            running = self.input_buffer.pumpEvents(self.developer.eventSink());
             if (!running) break;
 
             const now_ns = c.SDL_GetTicksNS();
@@ -2998,22 +2308,22 @@ const App = struct {
 
         while (summary.attempted_frames < config.frames) {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer_editor.eventSink())) {
+            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
                 return error.S3StreamingSmokeInterrupted;
             }
             if (self.waitForWindowSuspension()) continue;
             try self.frame_timer.beginFrameWithElapsedSeconds(
                 1.0 / @as(f64, @floatFromInt(config.virtual_render_hz)),
             );
-            try self.pumpDistrictContent();
+            try self.district_streaming.pumpContent(self.districtAuthorityPort(), self.frame_timer.total_frames);
 
-            var stats = try self.district_registry.stats();
+            var stats = try self.district_streaming.gpuUsage();
             updateS3SmokePeaks(&summary, stats);
-            const west_state = self.district_stream_slots[district_west_slot_index].state;
+            const west = try self.district_streaming.slot(district_west_slot_index);
             switch (stage) {
-                .cancel_first_load => switch (west_state) {
-                    .request_submitted => |submitted| {
-                        last_scene = submitted.scene;
+                .cancel_first_load => switch (west.phase) {
+                    .request_submitted => {
+                        last_scene = west.scene;
                         self.district_focus_override = s3_smoke_far;
                         stage_started_frame = summary.attempted_frames;
                         stage = .wait_cancel_drain;
@@ -3022,8 +2332,8 @@ const App = struct {
                 },
                 .wait_cancel_drain => {
                     self.district_focus_override = s3_smoke_far;
-                    if (std.meta.activeTag(west_state) == .idle and
-                        std.meta.eql(stats, district_gpu_registry.Stats{}))
+                    if (west.phase == .idle and
+                        std.meta.eql(stats, developer_diagnostics.GpuUsage{}))
                     {
                         try self.requireStaleDistrictScene(last_scene orelse
                             return error.S3StreamingSmokeSceneMissing);
@@ -3038,14 +2348,14 @@ const App = struct {
                 },
                 .load_to_resident => {
                     self.district_focus_override = s3_smoke_near;
-                    switch (west_state) {
-                        .active => |active| if (try self.district_registry.residency(
-                            active.scene,
+                    switch (west.phase) {
+                        .active => if (try self.district_streaming.sceneResidency(
+                            west.scene.?,
                         ) == .resident) {
-                            try self.validateS3Resident(active);
+                            try self.validateS3Resident(west);
                             try self.validateS3ResidentDeveloperSnapshot();
                             summary.diagnostic_resident_snapshot = true;
-                            last_scene = active.scene;
+                            last_scene = west.scene;
                             summary.resident_cycles += 1;
                             summary.peak_load_to_resident_frames = @max(
                                 summary.peak_load_to_resident_frames,
@@ -3060,8 +2370,8 @@ const App = struct {
                 },
                 .wait_unload_drain => {
                     self.district_focus_override = s3_smoke_far;
-                    if (std.meta.activeTag(west_state) == .idle and
-                        std.meta.eql(stats, district_gpu_registry.Stats{}))
+                    if (west.phase == .idle and
+                        std.meta.eql(stats, developer_diagnostics.GpuUsage{}))
                     {
                         try self.requireStaleDistrictScene(last_scene orelse
                             return error.S3StreamingSmokeSceneMissing);
@@ -3080,7 +2390,7 @@ const App = struct {
                 },
             }
 
-            const ticks_before = self.simulation.tickIndex();
+            const ticks_before = self.simulation.inspection().tickIndex();
             while (self.frame_timer.shouldTick()) {
                 try self.simulateTick(true, .s3_streaming);
                 self.frame_timer.recordCompletedTick();
@@ -3088,34 +2398,41 @@ const App = struct {
                 // frame. Arm the intended first-load cancellation at the
                 // completed-tick boundary before a second tick can activate
                 // the logical worker completion.
-                if (stage == .cancel_first_load) switch (self.district_stream_slots[district_west_slot_index].state) {
-                    .loading => |loading| {
-                        last_scene = loading.scene;
+                if (stage == .cancel_first_load) switch ((try self.district_streaming.slot(
+                    district_west_slot_index,
+                )).phase) {
+                    .loading => {
+                        last_scene = (try self.district_streaming.slot(
+                            district_west_slot_index,
+                        )).scene;
                         self.district_focus_override = s3_smoke_far;
-                        self.district_stream_slots[district_west_slot_index]
-                            .proximity.inside = false;
-                        try self.requestDistrictDeparture(district_west_slot_index);
+                        try self.district_streaming.forceDeparture(
+                            self.districtAuthorityPort(),
+                            self.frame_timer.total_frames,
+                            district_west_slot_index,
+                        );
                         stage_started_frame = summary.attempted_frames;
                         stage = .wait_cancel_drain;
                     },
                     else => {},
                 };
             }
-            const ticks_this_frame = self.simulation.tickIndex() - ticks_before;
+            const ticks_this_frame = self.simulation.inspection().tickIndex() - ticks_before;
             if (ticks_this_frame == 0) summary.zero_tick_frames += 1;
             if (ticks_this_frame > 1) summary.multi_tick_frames += 1;
 
-            stats = try self.district_registry.stats();
+            stats = try self.district_streaming.gpuUsage();
             updateS3SmokePeaks(&summary, stats);
             switch (try self.render(self.frame_timer.alpha())) {
                 .ready => {},
                 .unavailable => return error.S3StreamingSmokeUnavailableFrame,
             }
             summary.attempted_frames += 1;
-            stats = try self.district_registry.stats();
+            stats = try self.district_streaming.gpuUsage();
             updateS3SmokePeaks(&summary, stats);
-            switch (self.district_stream_slots[district_west_slot_index].state) {
-                .active => |active| switch (try self.district_registry.residency(active.scene)) {
+            const west_after_render = try self.district_streaming.slot(district_west_slot_index);
+            switch (west_after_render.phase) {
+                .active => switch (try self.district_streaming.sceneResidency(west_after_render.scene.?)) {
                     .resident => summary.resident_frames += 1,
                     .reserved, .staged, .submitted => summary.fallback_frames += 1,
                     .free, .retiring => return error.S3StreamingSmokeResidencyMismatch,
@@ -3125,7 +2442,7 @@ const App = struct {
             c.SDL_DelayPrecise(@as(u64, std.time.ns_per_s) / config.virtual_render_hz);
         }
 
-        summary.ticks = self.simulation.tickIndex();
+        summary.ticks = self.simulation.inspection().tickIndex();
         if (summary.cancelled_loads != 1 or
             summary.resident_cycles != s3_smoke_resident_cycles or
             summary.unload_cycles != s3_smoke_resident_cycles or
@@ -3147,17 +2464,11 @@ const App = struct {
         try self.validateS3Drained();
         try self.validateS3DrainedDeveloperSnapshot();
         summary.diagnostic_drained_snapshot = true;
-        const worker = self.district_content_worker orelse
-            return error.DistrictContentWorkerMissing;
-        const last_generation = self.district_next_content_generation - 1;
-        if (last_generation != 0) {
-            switch (worker.poll(last_generation)) {
-                .idle => {},
-                else => return error.S3StreamingSmokeWorkerNotIdle,
-            }
+        if (!self.district_streaming.workerIdle()) {
+            return error.S3StreamingSmokeWorkerNotIdle;
         }
         const diagnostic_evidence = try validateDistrictStreamDiagnostics(
-            self.simulation.diagnosticJournal(),
+            self.simulation.developer().journal(),
         );
         summary.diagnostic_correlations = diagnostic_evidence.correlations;
         summary.diagnostic_entries = diagnostic_evidence.entries;
@@ -3165,44 +2476,34 @@ const App = struct {
     }
 
     fn districtSlotResident(self: *App, slot_index: usize) !bool {
-        const active = switch (self.district_stream_slots[slot_index].state) {
-            .active => |value| value,
-            else => return false,
-        };
-        return (try self.district_registry.residency(active.scene)) == .resident;
+        return self.district_streaming.slotResident(slot_index);
     }
 
     fn districtSlotIdle(self: *const App, slot_index: usize) bool {
-        const slot = self.district_stream_slots[slot_index];
-        return std.meta.activeTag(slot.state) == .idle and
-            slot.presentation.stateTag() == .idle and
-            slot.pending_scene == null;
+        return self.district_streaming.slotIdle(slot_index);
     }
 
     fn validateS6SingleResident(self: *App, slot_index: usize) !void {
-        const slot = self.district_stream_slots[slot_index];
-        const active = switch (slot.state) {
-            .active => |value| value,
-            else => return error.S6StreamingSmokeDistrictNotActive,
-        };
+        const active = try self.district_streaming.slot(slot_index);
+        if (active.phase != .active) return error.S6StreamingSmokeDistrictNotActive;
         if (!try self.districtSlotResident(slot_index) or
-            self.simulation.districtCount() != 1 or
-            self.simulation.districtBodyCount() != 3 or
-            self.simulation.entityCount() != 1 or
-            self.simulation.bodyCount() != 4 or
+            self.simulation.districts().count() != 1 or
+            self.simulation.districts().bodyCount() != 3 or
+            self.simulation.inspection().entityCount() != 1 or
+            self.simulation.inspection().bodyCount() != 4 or
             !std.meta.eql(
-                self.simulation.activeDistrictTicketFor(slot.coord) orelse
+                self.simulation.districts().activeTicket(active.coord) orelse
                     return error.S6StreamingSmokeTicketMissing,
-                active.ticket,
+                active.ticket.?,
             ))
         {
             return error.S6StreamingSmokeSingleDistrictInvariant;
         }
-        const draws = try self.simulation.districtPresentation();
-        if (draws.len != 1 or !std.meta.eql(draws[0].ticket, active.ticket)) {
+        const draws = try self.simulation.districts().presentation();
+        if (draws.len != 1 or !std.meta.eql(draws[0].ticket, active.ticket.?)) {
             return error.S6StreamingSmokeSinglePresentationInvariant;
         }
-        const stats = try self.district_registry.stats();
+        const stats = try self.district_streaming.gpuUsage();
         if (stats.live_scenes != 1 or stats.resident_scenes != 1 or
             stats.resident_gpu_bytes != 116)
         {
@@ -3213,14 +2514,14 @@ const App = struct {
     fn validateS6Overlap(self: *App) !void {
         if (!try self.districtSlotResident(district_west_slot_index) or
             !try self.districtSlotResident(district_east_slot_index) or
-            self.simulation.districtCount() != 2 or
-            self.simulation.districtBodyCount() != 6 or
-            self.simulation.entityCount() != 2 or
-            self.simulation.bodyCount() != 7)
+            self.simulation.districts().count() != 2 or
+            self.simulation.districts().bodyCount() != 6 or
+            self.simulation.inspection().entityCount() != 2 or
+            self.simulation.inspection().bodyCount() != 7)
         {
             return error.S6StreamingSmokeOverlapLogicalInvariant;
         }
-        const draws = try self.simulation.districtPresentation();
+        const draws = try self.simulation.districts().presentation();
         if (draws.len != 2 or
             draws[0].build.coord.x != district_west_coord.x or
             draws[0].build.coord.z != district_west_coord.z or
@@ -3230,16 +2531,15 @@ const App = struct {
             return error.S6StreamingSmokeOverlapPresentationInvariant;
         }
         for (draws) |draw| {
-            const slot_index = self.districtSlotIndexForCoord(draw.build.coord) orelse
+            const slot_index = self.district_streaming.slotIndexForCoord(draw.build.coord) orelse
                 return error.S6StreamingSmokeOverlapPresentationInvariant;
-            const active = switch (self.district_stream_slots[slot_index].state) {
-                .active => |value| value,
-                else => return error.S6StreamingSmokeDistrictNotActive,
-            };
-            if (!std.meta.eql(active.ticket, draw.ticket)) {
+            const active = try self.district_streaming.slot(slot_index);
+            if (active.phase != .active) return error.S6StreamingSmokeDistrictNotActive;
+            if (!std.meta.eql(active.ticket.?, draw.ticket)) {
                 return error.S6StreamingSmokeOverlapPresentationInvariant;
             }
-            const resident = try self.district_stream_slots[slot_index].presentation.resolve(
+            const resident = try self.district_streaming.resolve(
+                draw.build.coord,
                 draw.ticket,
                 draw.assets.scene,
             );
@@ -3249,7 +2549,7 @@ const App = struct {
                 return error.S6StreamingSmokeAuthoredSceneInvariant;
             }
         }
-        const stats = try self.district_registry.stats();
+        const stats = try self.district_streaming.gpuUsage();
         if (stats.live_scenes != 2 or stats.resident_scenes != 2 or
             stats.resident_gpu_bytes != 232)
         {
@@ -3278,20 +2578,17 @@ const App = struct {
         }
 
         for (streams.slots, 0..) |stream, slot_index| {
-            const slot = self.district_stream_slots[slot_index];
-            const active = switch (slot.state) {
-                .active => |value| value,
-                else => return error.S6StreamingSmokeDistrictNotActive,
-            };
-            if (stream.coord.x != slot.coord.x or stream.coord.z != slot.coord.z or
+            const active = try self.district_streaming.slot(slot_index);
+            if (active.phase != .active) return error.S6StreamingSmokeDistrictNotActive;
+            if (stream.coord.x != active.coord.x or stream.coord.z != active.coord.z or
                 stream.state != .active or !stream.desired_inside or
                 stream.generations.content != active.content_generation or
-                stream.generations.logical != active.ticket.generation or
-                stream.correlation_id != slot.correlation or
+                stream.generations.logical != active.ticket.?.generation or
+                stream.correlation_id != active.correlation_id or
                 !std.meta.eql(
                     stream.scene orelse
                         return error.S6StreamingSmokeDiagnosticSceneMissing,
-                    active.scene,
+                    active.scene.?,
                 ) or
                 stream.pending_decoded_scene)
             {
@@ -3339,8 +2636,8 @@ const App = struct {
             return error.S6StreamingSmokeDrainedDiagnosticAggregateMismatch;
         }
         for (streams.slots, 0..) |stream, slot_index| {
-            const slot = self.district_stream_slots[slot_index];
-            if (stream.coord.x != slot.coord.x or stream.coord.z != slot.coord.z or
+            const slot_view = try self.district_streaming.slot(slot_index);
+            if (stream.coord.x != slot_view.coord.x or stream.coord.z != slot_view.coord.z or
                 stream.state != .idle or stream.desired_inside or
                 stream.generations.content != null or
                 stream.generations.logical != null or
@@ -3372,29 +2669,29 @@ const App = struct {
 
         while (summary.attempted_frames < config.frames) {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer_editor.eventSink())) {
+            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
                 return error.S6StreamingSmokeInterrupted;
             }
             if (self.waitForWindowSuspension()) continue;
             try self.frame_timer.beginFrameWithElapsedSeconds(
                 1.0 / @as(f64, @floatFromInt(config.virtual_render_hz)),
             );
-            try self.pumpDistrictContent();
-            const ticks_before = self.simulation.tickIndex();
+            try self.district_streaming.pumpContent(self.districtAuthorityPort(), self.frame_timer.total_frames);
+            const ticks_before = self.simulation.inspection().tickIndex();
             while (self.frame_timer.shouldTick()) {
                 try self.simulateTick(true, .s3_streaming);
                 self.frame_timer.recordCompletedTick();
             }
-            const ticks_this_frame = self.simulation.tickIndex() - ticks_before;
+            const ticks_this_frame = self.simulation.inspection().tickIndex() - ticks_before;
             if (ticks_this_frame == 0) summary.zero_tick_frames += 1;
             if (ticks_this_frame > 1) summary.multi_tick_frames += 1;
-            summary.observe(try self.district_registry.stats());
+            summary.observe(try self.district_streaming.gpuUsage());
             switch (try self.render(self.frame_timer.alpha())) {
                 .ready => {},
                 .unavailable => return error.S6StreamingSmokeUnavailableFrame,
             }
             summary.attempted_frames += 1;
-            summary.observe(try self.district_registry.stats());
+            summary.observe(try self.district_streaming.gpuUsage());
 
             switch (stage) {
                 .west_resident => if (try self.districtSlotResident(
@@ -3445,8 +2742,8 @@ const App = struct {
                 .final_drain => if (self.districtSlotIdle(district_west_slot_index) and
                     self.districtSlotIdle(district_east_slot_index) and
                     std.meta.eql(
-                        try self.district_registry.stats(),
-                        district_gpu_registry.Stats{},
+                        try self.district_streaming.gpuUsage(),
+                        developer_diagnostics.GpuUsage{},
                     ))
                 {
                     break;
@@ -3455,26 +2752,24 @@ const App = struct {
             c.SDL_DelayPrecise(@as(u64, std.time.ns_per_s) / config.virtual_render_hz);
         }
 
-        summary.ticks = self.simulation.tickIndex();
+        summary.ticks = self.simulation.inspection().tickIndex();
         if (stage != .final_drain or
             !self.districtSlotIdle(district_west_slot_index) or
             !self.districtSlotIdle(district_east_slot_index) or
-            self.district_content_owner != null or
-            self.simulation.districtCount() != 0 or
-            self.simulation.districtBodyCount() != 0 or
-            self.simulation.entityCount() != 0 or
-            self.simulation.bodyCount() != 1 or
+            self.district_streaming.contentOwnerActive() or
+            self.simulation.districts().count() != 0 or
+            self.simulation.districts().bodyCount() != 0 or
+            self.simulation.inspection().entityCount() != 0 or
+            self.simulation.inspection().bodyCount() != 1 or
             !std.meta.eql(
-                try self.district_registry.stats(),
-                district_gpu_registry.Stats{},
+                try self.district_streaming.gpuUsage(),
+                developer_diagnostics.GpuUsage{},
             ))
         {
             return error.S6StreamingSmokeDidNotDrain;
         }
         try self.validateS6DrainedDeveloperSnapshot();
-        const worker = self.district_content_worker orelse
-            return error.DistrictContentWorkerMissing;
-        if (worker.diagnostics().state != .idle or
+        if (!self.district_streaming.workerIdle() or
             summary.overlap_cycles != s6_required_overlap_cycles or
             summary.forward_overlaps != s6_required_overlap_cycles or
             summary.reverse_overlaps != s6_required_overlap_cycles or
@@ -3506,23 +2801,23 @@ const App = struct {
         evidence: *S8PopulationEvidence,
         stage: S8SmokeStage,
     ) !void {
-        while (self.simulation.pollNpcOutcome()) |outcome| {
+        while (self.simulation.npcs().pollOutcome()) |outcome| {
             try evidence.observeOutcome(stage, summary, outcome);
         }
-        while (self.simulation.pollNpcEvent()) |event| {
+        while (self.simulation.npcs().pollEvent()) |event| {
             try evidence.observeEvent(stage, summary, event);
         }
     }
 
     fn requireS8NpcViews(
         self: *App,
-        ids: *const [s8_population_count]?sandbox_host.PersistentId,
-        owner: sandbox_host.ChunkCoord,
-        state: sandbox_host.NpcState,
+        ids: *const [s8_population_count]?sandbox_contracts.PersistentId,
+        owner: sandbox_contracts.ChunkCoord,
+        state: sandbox_contracts.NpcState,
         controller_present: bool,
     ) !void {
         for (ids) |optional_id| {
-            const view = try self.simulation.npc(optional_id orelse
+            const view = try self.simulation.npcs().view(optional_id orelse
                 return error.S8PopulationIdentityMissing);
             if (!std.meta.eql(view.owner, owner) or view.state != state or
                 view.controller_present != controller_present)
@@ -3532,7 +2827,35 @@ const App = struct {
         }
     }
 
-    fn s8SimulationQueuesEmpty(diagnostics: sandbox_host.Diagnostics) bool {
+    fn requireS8ProjectedNpcIdentities(
+        self: *App,
+        ids: *const [s8_population_count]?sandbox_contracts.PersistentId,
+    ) !void {
+        const draws = self.simulation.presentation().npcs(0);
+        if (draws.len != s8_population_count) {
+            return error.S8PopulationProjectionCountMismatch;
+        }
+        var seen: [s8_population_count]bool = @splat(false);
+        for (draws) |draw| {
+            var matched = false;
+            for (ids, 0..) |optional_id, index| {
+                const id = optional_id orelse return error.S8PopulationIdentityMissing;
+                const expected = self.simulation.inspection().replicatedId(id) orelse
+                    return error.S8PopulationIdentityMissing;
+                if (!std.meta.eql(draw.entity, expected)) continue;
+                if (seen[index]) return error.S8PopulationProjectionIdentityMismatch;
+                seen[index] = true;
+                matched = true;
+                break;
+            }
+            if (!matched) return error.S8PopulationProjectionIdentityMismatch;
+        }
+        for (seen) |value| {
+            if (!value) return error.S8PopulationProjectionIdentityMismatch;
+        }
+    }
+
+    fn s8SimulationQueuesEmpty(diagnostics: sandbox_contracts.Diagnostics) bool {
         return diagnostics.crates.commands.occupancy == 0 and
             diagnostics.crates.outcomes.occupancy == 0 and
             diagnostics.characters.commands.occupancy == 0 and
@@ -3562,31 +2885,32 @@ const App = struct {
         var summary = S8PopulationSmokeSummary{};
         var stage: S8SmokeStage = .overlap_resident;
         var evidence = S8PopulationEvidence{};
+        var replica_wait_started_tick: ?u64 = null;
         self.district_focus_override = s6_overlap;
 
         smoke_loop: while (summary.attempted_frames < config.frames) {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer_editor.eventSink())) {
+            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
                 return error.S8PopulationSmokeInterrupted;
             }
             if (self.waitForWindowSuspension()) continue;
             try self.frame_timer.beginFrameWithElapsedSeconds(
                 1.0 / @as(f64, @floatFromInt(config.virtual_render_hz)),
             );
-            try self.pumpDistrictContent();
-            summary.observeGpu(try self.district_registry.stats());
+            try self.district_streaming.pumpContent(self.districtAuthorityPort(), self.frame_timer.total_frames);
+            summary.observeGpu(try self.district_streaming.gpuUsage());
 
-            const ticks_before = self.simulation.tickIndex();
+            const ticks_before = self.simulation.inspection().tickIndex();
             while (self.frame_timer.shouldTick()) {
                 try self.simulateTick(true, .s3_streaming);
                 try self.processS8NpcOutputs(&summary, &evidence, stage);
                 self.frame_timer.recordCompletedTick();
             }
-            const ticks_this_frame = self.simulation.tickIndex() - ticks_before;
+            const ticks_this_frame = self.simulation.inspection().tickIndex() - ticks_before;
             if (ticks_this_frame == 0) summary.zero_tick_frames += 1;
             if (ticks_this_frame > 1) summary.multi_tick_frames += 1;
 
-            const simulation_diagnostics = self.simulation.diagnostics();
+            const simulation_diagnostics = self.simulation.developer().diagnostics();
             const diagnostics = simulation_diagnostics.npc;
             try summary.observeNpc(
                 diagnostics,
@@ -3597,7 +2921,7 @@ const App = struct {
                 .unavailable => return error.S8PopulationSmokeUnavailableFrame,
             };
             summary.attempted_frames += 1;
-            summary.observeGpu(try self.district_registry.stats());
+            summary.observeGpu(try self.district_streaming.gpuUsage());
             if (presentation.npc_count != 0 and
                 presentation.npc_count != s8_population_count)
             {
@@ -3626,27 +2950,33 @@ const App = struct {
                             .second = s8_east_end,
                         } },
                     });
-                    for (batch.slice()) |command| try self.simulation.submitNpc(command);
+                    for (batch.slice()) |command| try self.simulation.npcs().submit(command);
                     summary.planned = @intCast(batch.slice().len);
                     stage = .population_spawned;
                 },
                 .population_spawned => if (evidence.spawnedComplete()) {
-                    if (self.simulation.npcCount() != s8_population_count or
+                    if (self.simulation.npcs().count() != s8_population_count or
                         summary.spawned != s8_population_count or
                         diagnostics.active_count != s8_population_count or
-                        diagnostics.controller_count != s8_population_count or
-                        presentation.npc_count != s8_population_count)
+                        diagnostics.controller_count != s8_population_count)
                     {
                         return error.S8PopulationSpawnMismatch;
                     }
-                    try self.requireS8NpcViews(
-                        &evidence.identities,
-                        district_west_coord,
-                        .active,
-                        true,
-                    );
-                    self.district_focus_override = s6_west_only;
-                    stage = .destination_waiting;
+                    if (try s8ReplicaConverged(
+                        self.simulation.inspection().tickIndex(),
+                        &replica_wait_started_tick,
+                        presentation.npc_count == s8_population_count,
+                    )) {
+                        try self.requireS8ProjectedNpcIdentities(&evidence.identities);
+                        try self.requireS8NpcViews(
+                            &evidence.identities,
+                            district_west_coord,
+                            .active,
+                            true,
+                        );
+                        self.district_focus_override = s6_west_only;
+                        stage = .destination_waiting;
+                    }
                 },
                 .destination_waiting => if (self.districtSlotIdle(
                     district_east_slot_index,
@@ -3665,6 +2995,7 @@ const App = struct {
                         .waiting_at_boundary,
                         true,
                     );
+                    try self.requireS8ProjectedNpcIdentities(&evidence.identities);
                     self.district_focus_override = s6_overlap;
                     stage = .destination_reloaded;
                 },
@@ -3676,6 +3007,7 @@ const App = struct {
                     {
                         return error.S8PopulationWaitingResumeMismatch;
                     }
+                    try self.requireS8ProjectedNpcIdentities(&evidence.identities);
                     stage = .crossed_east;
                 },
                 .crossed_east => if (evidence.transferComplete() and
@@ -3685,19 +3017,24 @@ const App = struct {
                     if (summary.transfer_events != s8_population_count or
                         diagnostics.transfers != s8_population_count or
                         diagnostics.active_count != s8_population_count or
-                        diagnostics.controller_count != s8_population_count or
-                        presentation.npc_count != s8_population_count)
+                        diagnostics.controller_count != s8_population_count)
                     {
                         return error.S8PopulationTransferMismatch;
                     }
-                    try self.requireS8NpcViews(
-                        &evidence.identities,
-                        district_east_coord,
-                        .active,
-                        true,
-                    );
-                    self.district_focus_override = s6_west_only;
-                    stage = .owner_dormant;
+                    if (try s8ReplicaConverged(
+                        self.simulation.inspection().tickIndex(),
+                        &replica_wait_started_tick,
+                        presentation.npc_count == 0,
+                    )) {
+                        try self.requireS8NpcViews(
+                            &evidence.identities,
+                            district_east_coord,
+                            .active,
+                            true,
+                        );
+                        self.district_focus_override = s6_west_only;
+                        stage = .owner_dormant;
+                    }
                 },
                 .owner_dormant => if (self.districtSlotIdle(
                     district_east_slot_index,
@@ -3728,7 +3065,7 @@ const App = struct {
                         diagnostics.active_count != s8_population_count or
                         diagnostics.controller_count != s8_population_count or
                         diagnostics.controllers_resumed != s8_population_count or
-                        presentation.npc_count != s8_population_count)
+                        presentation.npc_count != 0)
                     {
                         return error.S8PopulationControllerResumeMismatch;
                     }
@@ -3739,7 +3076,7 @@ const App = struct {
                         true,
                     );
                     for (evidence.identities, 0..) |optional_id, index| {
-                        try self.simulation.submitNpc(.{ .despawn = .{
+                        try self.simulation.npcs().submit(.{ .despawn = .{
                             .request_id = s8_despawn_first_request_id + index,
                             .id = optional_id orelse
                                 return error.S8PopulationIdentityMissing,
@@ -3748,7 +3085,7 @@ const App = struct {
                     stage = .population_despawned;
                 },
                 .population_despawned => if (evidence.despawnedComplete()) {
-                    if (self.simulation.npcCount() != 0 or
+                    if (self.simulation.npcs().count() != 0 or
                         summary.despawned != s8_population_count or
                         diagnostics.active_count != 0 or
                         diagnostics.waiting_count != 0 or
@@ -3764,8 +3101,8 @@ const App = struct {
                 .final_drain => if (self.districtSlotIdle(district_west_slot_index) and
                     self.districtSlotIdle(district_east_slot_index) and
                     std.meta.eql(
-                        try self.district_registry.stats(),
-                        district_gpu_registry.Stats{},
+                        try self.district_streaming.gpuUsage(),
+                        developer_diagnostics.GpuUsage{},
                     ))
                 {
                     if (presentation.npc_count != 0 or
@@ -3783,28 +3120,26 @@ const App = struct {
         // retained high-water sample into the smoke summary so the proof is
         // cadence-independent rather than relying on catching an ephemeral
         // staged state between host pumps.
-        summary.observeGpu((try self.district_registry.diagnostics()).high_water);
+        summary.observeGpu((try self.district_streaming.gpuDiagnostics()).high_water);
         try evidence.requireComplete();
-        summary.ticks = self.simulation.tickIndex();
-        const final_diagnostics = self.simulation.diagnostics();
+        summary.ticks = self.simulation.inspection().tickIndex();
+        const final_diagnostics = self.simulation.developer().diagnostics();
         summary.final_entities = final_diagnostics.entity_count;
         summary.final_bodies = final_diagnostics.body_count;
         summary.final_native_controllers =
             final_diagnostics.character_controllers.native_used;
-        summary.final_draws = @intCast((try self.simulation.npcPresentation(0)).len);
-        const worker = self.district_content_worker orelse
-            return error.DistrictContentWorkerMissing;
-        if (stage != .final_drain or self.district_content_owner != null or
-            worker.diagnostics().state != .idle or
+        summary.final_draws = @intCast(self.simulation.presentation().npcs(0).len);
+        if (stage != .final_drain or self.district_streaming.contentOwnerActive() or
+            !self.district_streaming.workerIdle() or
             !self.districtSlotIdle(district_west_slot_index) or
             !self.districtSlotIdle(district_east_slot_index) or
-            self.simulation.npcCount() != 0 or
-            self.simulation.districtCount() != 0 or
-            self.simulation.districtBodyCount() != 0 or
+            self.simulation.npcs().count() != 0 or
+            self.simulation.districts().count() != 0 or
+            self.simulation.districts().bodyCount() != 0 or
             !s8SimulationQueuesEmpty(final_diagnostics) or
             !std.meta.eql(
-                try self.district_registry.stats(),
-                district_gpu_registry.Stats{},
+                try self.district_streaming.gpuUsage(),
+                developer_diagnostics.GpuUsage{},
             ))
         {
             return error.S8PopulationSmokeDidNotDrain;
@@ -3827,12 +3162,12 @@ const App = struct {
         entities: usize,
         bodies: usize,
     ) !void {
-        if (self.simulation.districtCount() != districts or
-            self.simulation.districtBodyCount() != district_bodies or
-            self.simulation.characterCount() != characters or
-            self.simulation.interactionCount() != carryables or
-            self.simulation.entityCount() != entities or
-            self.simulation.bodyCount() != bodies)
+        if (self.simulation.districts().count() != districts or
+            self.simulation.districts().bodyCount() != district_bodies or
+            self.simulation.characters().count() != characters or
+            self.simulation.interactions().count() != carryables or
+            self.simulation.inspection().entityCount() != entities or
+            self.simulation.inspection().bodyCount() != bodies)
         {
             return error.S7InteractionSmokeCompositionMismatch;
         }
@@ -3849,23 +3184,24 @@ const App = struct {
         if (self.validation.profile != .s3_smoke) return error.InvalidS7SmokeProfile;
         var summary = S7InteractionSmokeSummary{};
         var stage: S7SmokeStage = .west_resident;
+        var replica_wait_started_tick: ?u64 = null;
 
         while (summary.attempted_frames < config.frames) {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer_editor.eventSink())) {
+            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
                 return error.S7InteractionSmokeInterrupted;
             }
             if (self.waitForWindowSuspension()) continue;
             try self.frame_timer.beginFrameWithElapsedSeconds(
                 1.0 / @as(f64, @floatFromInt(config.virtual_render_hz)),
             );
-            try self.pumpDistrictContent();
-            const ticks_before = self.simulation.tickIndex();
+            try self.district_streaming.pumpContent(self.districtAuthorityPort(), self.frame_timer.total_frames);
+            const ticks_before = self.simulation.inspection().tickIndex();
             while (self.frame_timer.shouldTick()) {
                 try self.simulateTick(true, .s7_interaction);
                 self.frame_timer.recordCompletedTick();
             }
-            const ticks_this_frame = self.simulation.tickIndex() - ticks_before;
+            const ticks_this_frame = self.simulation.inspection().tickIndex() - ticks_before;
             if (ticks_this_frame == 0) summary.zero_tick_frames += 1;
             if (ticks_this_frame > 1) summary.multi_tick_frames += 1;
 
@@ -3881,13 +3217,16 @@ const App = struct {
             if (presentation.carryable_count == 1) {
                 const id = presentation.carryable_id orelse
                     return error.S7InteractionSmokeCarryableDrawMissingIdentity;
-                if (!std.meta.eql(id, self.initial_carryable_id orelse
-                    return error.S7InteractionSmokeUnexpectedCarryableDraw))
-                {
+                const persistent_id = self.initial_carryable_id orelse
+                    return error.S7InteractionSmokeUnexpectedCarryableDraw;
+                const expected = self.simulation.inspection().replicatedId(
+                    persistent_id,
+                ) orelse return error.S7InteractionSmokeUnexpectedCarryableDraw;
+                if (!std.meta.eql(id, expected)) {
                     return error.S7InteractionSmokeUnexpectedCarryableDraw;
                 }
                 summary.carryable_draw_frames += 1;
-                const view = try self.simulation.carryable(id);
+                const view = try self.simulation.interactions().view(persistent_id);
                 switch (view.ownership) {
                     .district_owned => {},
                     .inventory_held => summary.held_draw_frames += 1,
@@ -3905,7 +3244,7 @@ const App = struct {
                     stage = .carryable_spawned;
                 },
                 .carryable_spawned => if (self.initial_carryable_id) |id| {
-                    const view = try self.simulation.carryable(id);
+                    const view = try self.simulation.interactions().view(id);
                     switch (view.ownership) {
                         .district_owned => |owner| {
                             if (!std.meta.eql(owner, district_west_coord) or
@@ -3917,7 +3256,7 @@ const App = struct {
                                 return error.S7InteractionSmokeSpawnInvariant;
                             }
                             try self.requireS7Counts(1, 3, 1, 1, 3, 5);
-                            const diagnostics = self.simulation.diagnostics().interaction;
+                            const diagnostics = self.simulation.developer().diagnostics().interaction;
                             if (diagnostics.active_count != 1 or
                                 diagnostics.district_owned_count != 1 or
                                 diagnostics.held_count != 0 or
@@ -3935,20 +3274,20 @@ const App = struct {
                 .collected => {
                     const id = self.initial_carryable_id orelse
                         return error.S7InteractionSmokeCarryableMissing;
-                    const view = try self.simulation.carryable(id);
+                    const view = try self.simulation.interactions().view(id);
                     switch (view.ownership) {
                         .district_owned => {},
                         .inventory_held => |holder| {
                             if (!std.meta.eql(holder, self.initial_character_id orelse
                                 return error.S7InteractionSmokeCarrierMissing) or
                                 view.body_present or presentation.carryable_count != 1 or
-                                std.meta.activeTag(self.interaction_last_outcome orelse
-                                    return error.S7InteractionSmokeCollectOutcomeMissing) != .collected)
+                                (self.interaction_last_player_result orelse
+                                    return error.S7InteractionSmokeCollectOutcomeMissing).disposition != .collected)
                             {
                                 return error.S7InteractionSmokeCollectInvariant;
                             }
                             try self.requireS7Counts(1, 3, 1, 1, 3, 4);
-                            const diagnostics = self.simulation.diagnostics().interaction;
+                            const diagnostics = self.simulation.developer().diagnostics().interaction;
                             if (diagnostics.held_count != 1 or
                                 diagnostics.dynamic_body_count != 0 or
                                 diagnostics.dormant_count != 0)
@@ -3965,7 +3304,7 @@ const App = struct {
                 .crossed_east => {
                     const id = self.initial_carryable_id orelse
                         return error.S7InteractionSmokeCarryableMissing;
-                    const view = try self.simulation.carryable(id);
+                    const view = try self.simulation.interactions().view(id);
                     switch (view.ownership) {
                         .district_owned => return error.S7InteractionSmokeOwnershipRegressed,
                         .inventory_held => {},
@@ -3973,12 +3312,14 @@ const App = struct {
                     if (self.districtSlotIdle(district_west_slot_index)) {
                         summary.source_unloaded_while_held = true;
                     }
-                    const character = try self.simulation.character(
+                    const character = try self.simulation.characters().view(
                         self.initial_character_id orelse
                             return error.S7InteractionSmokeCarrierMissing,
                     );
-                    if (character.position[0] >= 8.25) self.validation.s7_scripted_move = .{ 0, 0 };
-                    if (character.position[0] >= 8.25 and
+                    if (character.position[0] >= s7_east_relevance_drop_x) {
+                        self.validation.s7_scripted_move = .{ 0, 0 };
+                    }
+                    if (character.position[0] >= s7_east_relevance_drop_x and
                         self.districtSlotIdle(district_west_slot_index) and
                         try self.districtSlotResident(district_east_slot_index))
                     {
@@ -3991,14 +3332,14 @@ const App = struct {
                 .dropped => {
                     const id = self.initial_carryable_id orelse
                         return error.S7InteractionSmokeCarryableMissing;
-                    const view = try self.simulation.carryable(id);
+                    const view = try self.simulation.interactions().view(id);
                     switch (view.ownership) {
                         .inventory_held => {},
                         .district_owned => |owner| {
                             if (!std.meta.eql(owner, district_east_coord) or
                                 !view.body_present or presentation.carryable_count != 1 or
-                                std.meta.activeTag(self.interaction_last_outcome orelse
-                                    return error.S7InteractionSmokeDropOutcomeMissing) != .dropped)
+                                (self.interaction_last_player_result orelse
+                                    return error.S7InteractionSmokeDropOutcomeMissing).disposition != .dropped)
                             {
                                 return error.S7InteractionSmokeDropInvariant;
                             }
@@ -4014,18 +3355,23 @@ const App = struct {
                 {
                     const id = self.initial_carryable_id orelse
                         return error.S7InteractionSmokeCarryableMissing;
-                    const view = try self.simulation.carryable(id);
-                    if (view.body_present or presentation.carryable_count != 0) {
+                    const view = try self.simulation.interactions().view(id);
+                    if (view.body_present) {
                         return error.S7InteractionSmokeDormantDrawInvariant;
                     }
                     try self.requireS7Counts(0, 0, 1, 1, 2, 1);
-                    const diagnostics = self.simulation.diagnostics().interaction;
+                    const diagnostics = self.simulation.developer().diagnostics().interaction;
                     if (diagnostics.dormant_count != 1 or
                         diagnostics.dynamic_body_count != 0 or
                         diagnostics.bodies_suspended == 0)
                     {
                         return error.S7InteractionSmokeDormantDiagnosticsMismatch;
                     }
+                    if (!try s7ReplicaConverged(
+                        self.simulation.inspection().tickIndex(),
+                        &replica_wait_started_tick,
+                        presentation.carryable_count == 0,
+                    )) continue;
                     summary.dormant_after_unload = true;
                     self.district_focus_override = s6_east_only;
                     stage = .east_reloaded;
@@ -4035,39 +3381,51 @@ const App = struct {
                 {
                     const id = self.initial_carryable_id orelse
                         return error.S7InteractionSmokeCarryableMissing;
-                    const view = try self.simulation.carryable(id);
-                    if (!view.body_present or presentation.carryable_count != 1) {
+                    const view = try self.simulation.interactions().view(id);
+                    if (!view.body_present) {
                         return error.S7InteractionSmokeReloadDrawInvariant;
                     }
                     try self.requireS7Counts(1, 3, 1, 1, 3, 5);
-                    const diagnostics = self.simulation.diagnostics().interaction;
+                    const diagnostics = self.simulation.developer().diagnostics().interaction;
                     if (diagnostics.dormant_count != 0 or
                         diagnostics.dynamic_body_count != 1 or
                         diagnostics.bodies_resumed == 0)
                     {
                         return error.S7InteractionSmokeReloadDiagnosticsMismatch;
                     }
+                    if (!try s7ReplicaConverged(
+                        self.simulation.inspection().tickIndex(),
+                        &replica_wait_started_tick,
+                        presentation.carryable_count == 1,
+                    )) continue;
                     summary.resumed_after_reload = true;
-                    try self.simulation.submitInteraction(.{ .despawn = .{ .id = id } });
+                    try self.simulation.interactions().submit(.{ .despawn = .{ .id = id } });
                     stage = .carryable_despawned;
                 },
                 .carryable_despawned => if (self.initial_carryable_id == null) {
-                    if (presentation.carryable_count != 0) {
-                        return error.S7InteractionSmokeCarryableCleanupDrawMismatch;
-                    }
+                    if (!try s7ReplicaConverged(
+                        self.simulation.inspection().tickIndex(),
+                        &replica_wait_started_tick,
+                        presentation.carryable_count == 0,
+                    )) continue;
                     try self.requireS7Counts(1, 3, 1, 0, 2, 4);
                     // Stop the per-tick producer before queuing despawn. Both
                     // commands otherwise target the same next tick, and FIFO
                     // would correctly reject the trailing action after the
                     // character identity has been destroyed.
                     self.validation.s7_character_actions_enabled = false;
-                    try self.simulation.submitCharacter(.{ .despawn = .{
+                    try self.simulation.characters().submit(.{ .despawn = .{
                         .id = self.initial_character_id orelse
                             return error.S7InteractionSmokeCarrierMissing,
                     } });
                     stage = .character_despawned;
                 },
                 .character_despawned => if (self.initial_character_id == null) {
+                    if (!try s7ReplicaConverged(
+                        self.simulation.inspection().tickIndex(),
+                        &replica_wait_started_tick,
+                        presentation.character_count == 0,
+                    )) continue;
                     try self.requireS7Counts(1, 3, 0, 0, 1, 4);
                     self.district_focus_override = s6_fully_outside;
                     stage = .final_drain;
@@ -4075,8 +3433,8 @@ const App = struct {
                 .final_drain => if (self.districtSlotIdle(district_west_slot_index) and
                     self.districtSlotIdle(district_east_slot_index) and
                     std.meta.eql(
-                        try self.district_registry.stats(),
-                        district_gpu_registry.Stats{},
+                        try self.district_streaming.gpuUsage(),
+                        developer_diagnostics.GpuUsage{},
                     ))
                 {
                     if (presentation.carryable_count != 0 or
@@ -4092,14 +3450,12 @@ const App = struct {
             c.SDL_DelayPrecise(@as(u64, std.time.ns_per_s) / config.virtual_render_hz);
         }
 
-        summary.ticks = self.simulation.tickIndex();
-        const final_diagnostics = self.simulation.diagnostics();
+        summary.ticks = self.simulation.inspection().tickIndex();
+        const final_diagnostics = self.simulation.developer().diagnostics();
         summary.final_entities = final_diagnostics.entity_count;
         summary.final_bodies = final_diagnostics.body_count;
-        const worker = self.district_content_worker orelse
-            return error.DistrictContentWorkerMissing;
-        if (stage != .final_drain or self.district_content_owner != null or
-            worker.diagnostics().state != .idle or
+        if (stage != .final_drain or self.district_streaming.contentOwnerActive() or
+            !self.district_streaming.workerIdle() or
             !summary.collected or !summary.crossed_east or !summary.dropped_east or
             !summary.source_unloaded_while_held or !summary.dormant_after_unload or
             !summary.resumed_after_reload or summary.carryable_draw_frames == 0 or
@@ -4117,19 +3473,23 @@ const App = struct {
         return summary;
     }
 
-    fn validateS3Resident(self: *App, active: DistrictStreamBound) !void {
-        if (self.simulation.districtCount() != 1 or
-            self.simulation.districtBodyCount() != 3 or
-            self.simulation.entityCount() != 1 or
-            self.simulation.bodyCount() != 4)
+    fn validateS3Resident(
+        self: *App,
+        active: district_streaming_host.SlotView,
+    ) !void {
+        if (self.simulation.districts().count() != 1 or
+            self.simulation.districts().bodyCount() != 3 or
+            self.simulation.inspection().entityCount() != 1 or
+            self.simulation.inspection().bodyCount() != 4)
         {
             return error.S3StreamingSmokeLogicalInvariant;
         }
-        const draws = try self.simulation.districtPresentation();
+        const draws = try self.simulation.districts().presentation();
         if (draws.len != 1) return error.S3StreamingSmokePresentationInvariant;
-        const resident = try self.district_stream_slots[district_west_slot_index].presentation.resolve(
+        const resident = try self.district_streaming.resolve(
+            active.coord,
             draws[0].ticket,
-            active.scene,
+            active.scene.?,
         );
         if (resident.meshes().len != 1 or
             resident.materials().len != 1 or
@@ -4137,7 +3497,7 @@ const App = struct {
         {
             return error.S3StreamingSmokeAuthoredSceneInvariant;
         }
-        const stats = try self.district_registry.stats();
+        const stats = try self.district_streaming.gpuUsage();
         if (stats.resident_scenes != 1 or stats.resident_gpu_bytes != 116) {
             return error.S3StreamingSmokeGpuInvariant;
         }
@@ -4172,21 +3532,15 @@ const App = struct {
     }
 
     fn validateS3Drained(self: *App) !void {
-        const west = self.district_stream_slots[district_west_slot_index];
-        const east = self.district_stream_slots[district_east_slot_index];
-        if (std.meta.activeTag(west.state) != .idle or
-            west.presentation.stateTag() != .idle or
-            west.pending_scene != null or
-            std.meta.activeTag(east.state) != .idle or
-            east.presentation.stateTag() != .idle or
-            east.pending_scene != null or
-            self.simulation.districtCount() != 0 or
-            self.simulation.districtBodyCount() != 0 or
-            self.simulation.entityCount() != 0 or
-            self.simulation.bodyCount() != 1 or
+        if (!self.district_streaming.slotIdle(district_west_slot_index) or
+            !self.district_streaming.slotIdle(district_east_slot_index) or
+            self.simulation.districts().count() != 0 or
+            self.simulation.districts().bodyCount() != 0 or
+            self.simulation.inspection().entityCount() != 0 or
+            self.simulation.inspection().bodyCount() != 1 or
             !std.meta.eql(
-                try self.district_registry.stats(),
-                district_gpu_registry.Stats{},
+                try self.district_streaming.gpuUsage(),
+                developer_diagnostics.GpuUsage{},
             ))
         {
             return error.S3StreamingSmokeDrainInvariant;
@@ -4219,11 +3573,9 @@ const App = struct {
         self: *App,
         scene: engine.rendering.SceneHandle,
     ) !void {
-        _ = self.district_registry.residency(scene) catch |err| {
-            if (err == error.StaleSceneHandle) return;
-            return err;
-        };
-        return error.S3StreamingSmokeSceneStillLive;
+        if (!try self.district_streaming.sceneIsStale(scene)) {
+            return error.S3StreamingSmokeSceneStillLive;
+        }
     }
 
     fn applyS5SmokeRequests(
@@ -4243,7 +3595,7 @@ const App = struct {
     fn renderS5SmokeFrame(self: *App, alpha: f32) !FramePresentation {
         for (0..120) |_| {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer_editor.eventSink())) {
+            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
                 return error.S5AuthoringSmokeInterrupted;
             }
             switch (try self.render(alpha)) {
@@ -4260,9 +3612,9 @@ const App = struct {
         event.key.windowID = c.SDL_GetWindowID(self.window);
         event.key.scancode = c.SDL_SCANCODE_F1;
         event.key.repeat = false;
-        const route = self.developer_editor.processEvent(&event);
+        const route = self.developer.processEditorEvent(&event);
         if (!route.keyboard_reserved or
-            self.developer_editor.isVisible() != expected_visible)
+            self.developer.editorVisible() != expected_visible)
         {
             return error.S5AuthoringEditorToggleFailed;
         }
@@ -4270,19 +3622,19 @@ const App = struct {
 
     fn runS5AuthoringSmoke(self: *App) !S5AuthoringSmokeSummary {
         if (!build_options.editor_enabled) return error.S5AuthoringEditorRequired;
-        if (self.validation.profile != .s1_smoke or self.save_store == null or
-            self.save_metadata == null)
+        if (self.validation.profile != .s1_smoke or
+            self.persistence.lifecycle() != .ready)
         {
             return error.InvalidS5AuthoringSmokeComposition;
         }
-        if (!self.developer_editor.isVisible()) {
+        if (!self.developer.editorVisible()) {
             return error.S5AuthoringEditorNotVisible;
         }
 
         var summary = S5AuthoringSmokeSummary{};
         try self.simulateTick(true, .none);
         const id = self.initial_crate_id orelse return error.S5AuthoringCrateMissing;
-        const initial = try self.simulation.crate(id);
+        const initial = try self.simulation.crates().view(id);
         const initial_frame = try self.renderS5SmokeFrame(0.5);
         if (initial_frame.crate_count != 1 or
             !std.meta.eql(initial_frame.first_id.?, id))
@@ -4307,7 +3659,7 @@ const App = struct {
             return error.S5AuthoringEditNotPending;
         }
         try self.simulateTick(true, .none);
-        const edited = try self.simulation.crate(id);
+        const edited = try self.simulation.crates().view(id);
         const edit_session = self.authoring_controller.snapshot();
         if (!std.meta.eql(edited.state.pose, target_pose) or
             !std.meta.eql(edited.state.velocity, engine.physics.Velocity{}) or
@@ -4328,14 +3680,14 @@ const App = struct {
         // Ordinary physics may change the state but never the optimistic
         // authoring revision used by the next history operation.
         try self.simulateTick(true, .none);
-        const naturally_advanced = try self.simulation.crate(id);
+        const naturally_advanced = try self.simulation.crates().view(id);
         if (naturally_advanced.authoring_revision != 1) {
             return error.S5AuthoringNaturalPhysicsAdvancedRevision;
         }
 
         try self.applyS5SmokeRequests(&.{.undo});
         try self.simulateTick(true, .none);
-        const undone = try self.simulation.crate(id);
+        const undone = try self.simulation.crates().view(id);
         const undo_session = self.authoring_controller.snapshot();
         if (undone.authoring_revision != 2 or
             std.meta.eql(undone.state.pose, target_pose) or
@@ -4347,7 +3699,7 @@ const App = struct {
 
         try self.applyS5SmokeRequests(&.{.redo});
         try self.simulateTick(true, .none);
-        const redone = try self.simulation.crate(id);
+        const redone = try self.simulation.crates().view(id);
         const redo_session = self.authoring_controller.snapshot();
         if (!std.meta.eql(redone.state.pose, target_pose) or
             redone.authoring_revision != 3 or redo_session.undo_count != 1 or
@@ -4359,15 +3711,13 @@ const App = struct {
         _ = try self.renderS5SmokeFrame(0.75);
         summary.rendered_frames += 1;
 
-        const before_hidden = try self.simulation.save(std.heap.page_allocator);
-        defer std.heap.page_allocator.free(before_hidden);
+        const before_hidden = try self.observePersistenceSnapshot();
         const history_before_hidden = self.authoring_controller.snapshot();
         try self.toggleEditorForS5Smoke(false);
         _ = try self.renderS5SmokeFrame(0.25);
         summary.hidden_frames += 1;
-        const after_hidden = try self.simulation.save(std.heap.page_allocator);
-        defer std.heap.page_allocator.free(after_hidden);
-        if (!std.mem.eql(u8, before_hidden, after_hidden) or
+        const after_hidden = try self.observePersistenceSnapshot();
+        if (!std.meta.eql(before_hidden, after_hidden) or
             !std.meta.eql(history_before_hidden, self.authoring_controller.snapshot()))
         {
             return error.S5AuthoringHiddenEditorMutatedAuthority;
@@ -4377,14 +3727,19 @@ const App = struct {
         summary.rendered_frames += 1;
 
         try self.applyS5SmokeRequests(&.{.save});
-        summary.save_status = self.save_feedback.status;
-        summary.save_sequence = self.save_feedback.sequence;
-        switch (self.save_feedback.status) {
+        const save_feedback = self.editorSaveFeedback();
+        summary.save_status = save_feedback.status;
+        summary.save_sequence = save_feedback.sequence;
+        switch (save_feedback.status) {
             .committed, .committed_sync_warning => {},
             else => return error.S5AuthoringSaveNotCommitted,
         }
         if (summary.save_sequence == 0 or
-            !std.mem.eql(u8, self.save_feedback.slot_label, sandbox_save_slot_id))
+            !std.mem.eql(
+                u8,
+                save_feedback.slot_label,
+                sandbox_persistence.slot_label,
+            ))
         {
             return error.S5AuthoringSaveFeedbackMissing;
         }
@@ -4392,7 +3747,7 @@ const App = struct {
         // Selection/history are session-only; they are not written into the
         // canonical authority payload or allowed to alter the saved revision.
         if (self.authoring_controller.snapshot().selected == null or
-            !std.meta.eql((try self.simulation.crate(id)).state.pose, target_pose) or
+            !std.meta.eql((try self.simulation.crates().view(id)).state.pose, target_pose) or
             initial.authoring_revision != 0)
         {
             return error.S5AuthoringFinalStateMismatch;
@@ -4407,12 +3762,11 @@ const App = struct {
         // later tick. The S3 composition keeps real content/stream/GPU owners
         // present while avoiding unrelated sandbox feature bootstrap work.
         try self.simulateTick(true, .none);
-        const tick_before_pause = self.simulation.tickIndex();
-        const before_pause = try self.simulation.save(std.heap.page_allocator);
-        defer std.heap.page_allocator.free(before_pause);
+        const tick_before_pause = self.simulation.inspection().tickIndex();
+        const before_pause = try self.observePersistenceSnapshot();
 
         self.applyDeveloperControlRequests(&.{.{ .set_paused = true }});
-        if (!self.developer_controller.snapshot().paused) {
+        if (!self.developer.controlSnapshot().paused) {
             return error.S4DiagnosticsPauseRejected;
         }
         for (0..s4_smoke_pause_frames) |_| {
@@ -4425,25 +3779,24 @@ const App = struct {
                 return error.S4DiagnosticsPausedTimeContribution;
             }
         }
-        if (self.simulation.tickIndex() != tick_before_pause) {
+        if (self.simulation.inspection().tickIndex() != tick_before_pause) {
             return error.S4DiagnosticsPauseAdvancedSimulation;
         }
-        const after_pause = try self.simulation.save(std.heap.page_allocator);
-        defer std.heap.page_allocator.free(after_pause);
-        if (!std.mem.eql(u8, before_pause, after_pause)) {
+        const after_pause = try self.observePersistenceSnapshot();
+        if (!std.meta.eql(before_pause, after_pause)) {
             return error.S4DiagnosticsPauseMutatedSave;
         }
 
         self.applyDeveloperControlRequests(&.{.single_step});
-        if (!self.developer_controller.takeSingleStep()) {
+        if (!self.developer.takeSingleStep()) {
             return error.S4DiagnosticsStepNotQueued;
         }
         try self.simulateTick(true, .none);
         self.frame_timer.recordSingleStep();
-        const tick_after_step = self.simulation.tickIndex();
+        const tick_after_step = self.simulation.inspection().tickIndex();
         if (tick_after_step != tick_before_pause + 1 or
             self.frame_timer.ticks_this_frame != 1 or
-            self.developer_controller.takeSingleStep())
+            self.developer.takeSingleStep())
         {
             return error.S4DiagnosticsStepCountMismatch;
         }
@@ -4451,21 +3804,21 @@ const App = struct {
         // Arm an exact host-control trigger, include the matching record, then
         // prove rejection, disarm/resume, retained counters, and monotonic
         // sequence identity across an explicit clear.
-        const before_freeze = self.simulation.diagnosticJournal().stats();
+        const before_freeze = self.simulation.developer().journal().stats();
         self.applyDeveloperDiagnosticRequests(&.{.{ .arm_freeze = .{
             .severity = .info,
             .category = .host,
-            .code = diagnostic_host_control_applied,
+            .code = sandbox_developer_host.diagnostic_codes.host_control_applied,
         } }});
         self.applyDeveloperControlRequests(&.{.{ .set_time_scale = .half }});
-        const frozen = self.simulation.diagnosticJournal().stats();
+        const frozen = self.simulation.developer().journal().stats();
         if (!frozen.frozen or frozen.trigger_armed or
             frozen.count != before_freeze.count + 1)
         {
             return error.S4DiagnosticsFreezeMismatch;
         }
         self.applyDeveloperControlRequests(&.{.{ .set_time_scale = .normal }});
-        const rejected = self.simulation.diagnosticJournal().stats();
+        const rejected = self.simulation.developer().journal().stats();
         if (!rejected.frozen or rejected.count != frozen.count or
             rejected.rejected_while_frozen != frozen.rejected_while_frozen + 1)
         {
@@ -4473,22 +3826,22 @@ const App = struct {
         }
 
         self.applyDeveloperDiagnosticRequests(&.{ .disarm_freeze, .resume_capture });
-        const resumed = self.simulation.diagnosticJournal().stats();
+        const resumed = self.simulation.developer().journal().stats();
         if (resumed.frozen or resumed.trigger_armed or resumed.count != rejected.count or
             resumed.rejected_while_frozen != rejected.rejected_while_frozen)
         {
             return error.S4DiagnosticsResumeMismatch;
         }
         self.applyDeveloperControlRequests(&.{.{ .set_time_scale = .double }});
-        const admitted = self.simulation.diagnosticJournal().stats();
+        const admitted = self.simulation.developer().journal().stats();
         if (admitted.count != resumed.count + 1) {
             return error.S4DiagnosticsResumeAdmissionMissing;
         }
-        const admitted_view = self.simulation.diagnosticJournal().borrowedChronological();
+        const admitted_view = self.simulation.developer().journal().borrowedChronological();
         const last_sequence = admitted_view.at(admitted_view.len() - 1).?.sequence;
 
         self.applyDeveloperDiagnosticRequests(&.{.clear});
-        const cleared = self.simulation.diagnosticJournal().stats();
+        const cleared = self.simulation.developer().journal().stats();
         if (cleared.count != 0 or cleared.frozen or
             cleared.overwritten != admitted.overwritten or
             cleared.rejected_while_frozen != admitted.rejected_while_frozen)
@@ -4496,19 +3849,19 @@ const App = struct {
             return error.S4DiagnosticsClearMismatch;
         }
         self.applyDeveloperControlRequests(&.{.{ .set_time_scale = .normal }});
-        const after_clear_view = self.simulation.diagnosticJournal().borrowedChronological();
+        const after_clear_view = self.simulation.developer().journal().borrowedChronological();
         if (after_clear_view.len() != 1 or
             after_clear_view.at(0).?.sequence != last_sequence + 1)
         {
             return error.S4DiagnosticsClearResetSequence;
         }
         self.applyDeveloperDiagnosticRequests(&.{.clear});
-        if (self.simulation.diagnosticJournal().stats().count != 0) {
+        if (self.simulation.developer().journal().stats().count != 0) {
             return error.S4DiagnosticsSecondClearMismatch;
         }
 
         self.applyDeveloperControlRequests(&.{.{ .set_paused = false }});
-        if (self.developer_controller.paused) {
+        if (self.developer.paused()) {
             return error.S4DiagnosticsResumeRejected;
         }
         try self.prepareS4ResidentDistrict();
@@ -4518,12 +3871,12 @@ const App = struct {
         // fault by overcommitting that queue. This app instance alone composes
         // a dormant fixed-error system for the retained-fault path. Normal
         // sandbox/headless/replay/save compositions do not register it.
-        try self.simulation.armDiagnosticFaultProbe();
+        try self.simulation.developer().armFaultProbe();
         // Drive the failing tick through the validation host's graphical
         // scheduling/catch/retain/inspection/quit path. A consumed opportunity
         // is completed only after the authoritative tick returns successfully.
         const completed_ticks_before_fault = self.frame_timer.total_ticks;
-        const committed_tick_before_fault = self.simulation.tickIndex();
+        const committed_tick_before_fault = self.simulation.inspection().tickIndex();
         const expected_fault_tick = committed_tick_before_fault + 1;
         var fault_loop_probe = S4FaultLoopProbe{
             .expected_error = error.InjectedDeveloperDiagnosticFault,
@@ -4576,7 +3929,7 @@ const App = struct {
             return error.S4DiagnosticsProductionFaultLoopEvidenceMissing;
         }
 
-        const fault = self.simulation.firstFault() orelse
+        const fault = self.simulation.developer().firstFault() orelse
             return error.S4DiagnosticsFaultMissing;
         if (fault.phase != .commands or fault.tick_index != expected_fault_tick or
             fault.error_code != @intFromError(error.InjectedDeveloperDiagnosticFault) or
@@ -4586,7 +3939,7 @@ const App = struct {
         {
             return error.S4DiagnosticsFaultEvidenceMismatch;
         }
-        const fault_journal = self.simulation.diagnosticJournal();
+        const fault_journal = self.simulation.developer().journal();
         if (!fault_journal.stats().frozen) return error.S4DiagnosticsFaultDidNotFreeze;
         var found_fault_entry = false;
         const fault_entries = fault_journal.borrowedChronological();
@@ -4646,13 +3999,18 @@ const App = struct {
         }
         std.debug.print("S4_DIAGNOSTICS_JSON {s}\n", .{json});
 
-        var terminal_rejected = false;
-        self.simulation.tick() catch |err| {
-            if (err != error.RuntimeFaulted) return err;
-            terminal_rejected = true;
+        // The first failing lifecycle call propagates the original runtime
+        // error so the host can retain it. Once the shared authority latches
+        // that failure, its public lifecycle boundary is closed: later
+        // operational calls report AuthorityFaulted without reaching the
+        // already-faulted simulation.
+        var authority_closed = false;
+        self.simulation.lifecycle().tick() catch |err| {
+            if (err != error.AuthorityFaulted) return err;
+            authority_closed = true;
         };
-        if (!terminal_rejected or
-            !std.meta.eql(fault, self.simulation.firstFault().?))
+        if (!authority_closed or
+            !std.meta.eql(fault, self.simulation.developer().firstFault().?))
         {
             return error.S4DiagnosticsFaultWasReplaced;
         }
@@ -4677,7 +4035,7 @@ const App = struct {
         self.district_focus_override = s3_smoke_near;
         for (0..s4_smoke_stream_attempt_limit) |_| {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer_editor.eventSink())) {
+            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
                 return error.S4DiagnosticsSmokeInterrupted;
             }
             if (self.waitForWindowSuspension()) continue;
@@ -4685,7 +4043,7 @@ const App = struct {
                 1.0 / 60.0,
                 .{ .running = .normal },
             );
-            try self.pumpDistrictContent();
+            try self.district_streaming.pumpContent(self.districtAuthorityPort(), self.frame_timer.total_frames);
             while (self.frame_timer.shouldTick()) {
                 try self.simulateTick(true, .s3_streaming);
                 self.frame_timer.recordCompletedTick();
@@ -4694,11 +4052,12 @@ const App = struct {
                 .ready => {},
                 .unavailable => continue,
             }
-            switch (self.district_stream_slots[district_west_slot_index].state) {
-                .active => |active| if (try self.district_registry.residency(
-                    active.scene,
+            const west = try self.district_streaming.slot(district_west_slot_index);
+            switch (west.phase) {
+                .active => if (try self.district_streaming.sceneResidency(
+                    west.scene.?,
                 ) == .resident) {
-                    try self.validateS3Resident(active);
+                    try self.validateS3Resident(west);
                     try self.validateS3ResidentDeveloperSnapshot();
                     return;
                 },
@@ -4710,270 +4069,170 @@ const App = struct {
     }
 
     fn developerSnapshot(self: *App) !DeveloperSnapshot {
-        const controller = self.developer_controller.snapshot();
-        const journal_stats = self.simulation.diagnosticJournal().stats();
-        const gpu_diagnostics = try self.district_registry.diagnostics();
+        return self.developer.snapshot(
+            self.developerAuthorityPort(),
+            self.developerStreamingPort(),
+            &self.frame_timer,
+            self.includeDeveloperDistrictStreams(),
+        );
+    }
+
+    fn includeDeveloperDistrictStreams(self: *const App) bool {
+        return if (build_options.validation_mode or builtin.is_test)
+            self.validation.profile == .sandbox or self.validation.profile == .s3_smoke
+        else
+            true;
+    }
+
+    fn applyDeveloperEffects(
+        self: *App,
+        effects: sandbox_developer_host.Effects,
+    ) void {
+        if (effects.reset_gameplay_actions) self.action_latch.clear();
+    }
+
+    fn developerAuthorityPort(self: *App) sandbox_developer_host.AuthorityPort {
         return .{
-            .frame_index = self.frame_timer.total_frames,
-            .simulation = self.simulation.diagnostics(),
-            .content_worker = if (self.district_content_worker) |worker| blk: {
-                const worker_diagnostics = worker.diagnostics();
-                break :blk .{
-                    .stage = switch (worker_diagnostics.state) {
-                        .idle => .idle,
-                        .queued => .queued,
-                        .working => .working,
-                        .cancelling => .cancelling,
-                        .completion_ready => .completion_ready,
-                    },
-                    .generation = worker_diagnostics.generation orelse 0,
-                    .thread_started = worker_diagnostics.started,
-                    .cancellation_requested = worker_diagnostics.cancellation_requested,
-                    .completion_kind = if (worker_diagnostics.completion_kind) |kind|
-                        switch (kind) {
-                            .ready => .ready,
-                            .cancelled => .cancelled,
-                            .failed => .failed,
-                        }
-                    else
-                        null,
-                };
-            } else null,
-            .district_streams = if (if (build_options.validation_mode or builtin.is_test)
-                self.validation.profile == .sandbox or self.validation.profile == .s3_smoke
-            else
-                true)
-                self.developerDistrictStreamsSnapshot()
-            else
-                null,
-            .gpu = .{
-                .current = developerGpuUsage(gpu_diagnostics.current),
-                .high_water = developerGpuUsage(gpu_diagnostics.high_water),
-                .limits = .{
-                    .scene_capacity = gpu_diagnostics.limits.scene_capacity,
-                    .batch_capacity = gpu_diagnostics.limits.batch_capacity,
-                    .scenes_per_batch = gpu_diagnostics.limits.scenes_per_batch,
-                    .max_staged_cpu_bytes = gpu_diagnostics.limits.max_staged_cpu_bytes,
-                    .max_in_flight_upload_bytes = gpu_diagnostics.limits.max_in_flight_upload_bytes,
-                    .max_resident_gpu_bytes = gpu_diagnostics.limits.max_resident_gpu_bytes,
-                    .max_submit_bytes_per_pump = gpu_diagnostics.limits.max_submit_bytes_per_pump,
-                },
-            },
-            .host_time = .{
-                .paused = controller.paused,
-                .time_scale = controller.time_scale,
-                .single_step_pending = controller.single_step_pending,
-                .raw_frame_seconds = self.frame_timer.getDeltaTime(),
-                .simulation_frame_seconds = self.frame_timer.getSimulationDeltaTime(),
-                .ticks_this_frame = self.frame_timer.ticks_this_frame,
-                .control_requests_rejected = self.developer_control_requests.rejected,
-                .diagnostic_requests_rejected = self.developer_diagnostic_requests.rejected,
-            },
-            .journal = .{
-                .count = @intCast(journal_stats.count),
-                .capacity = @intCast(journal_stats.capacity),
-                .overwritten = journal_stats.overwritten,
-                .rejected_while_frozen = journal_stats.rejected_while_frozen,
-                .rejected_sequence_exhausted = journal_stats.rejected_sequence_exhausted,
-                .sequence_exhausted = journal_stats.sequence_exhausted,
-                .frozen = journal_stats.frozen,
-                .trigger_armed = journal_stats.trigger_armed,
-            },
+            .context = self,
+            .simulation_diagnostics_fn = developerSimulationDiagnostics,
+            .session_diagnostics_fn = developerSessionDiagnostics,
+            .journal_fn = developerJournal,
+            .record_fn = developerRecord,
+            .arm_freeze_fn = developerArmFreeze,
+            .disarm_freeze_fn = developerDisarmFreeze,
+            .resume_capture_fn = developerResumeCapture,
+            .clear_fn = developerClear,
+            .extract_physics_debug_fn = developerExtractPhysicsDebug,
         };
     }
 
-    fn developerDistrictStreamsSnapshot(self: *const App) developer_diagnostics.DistrictStreams {
-        var result: [district_stream_slot_count]developer_diagnostics.DistrictStreamSlot = undefined;
-        for (self.district_stream_slots, 0..) |slot, index| {
-            result[index] = .{
-                .coord = .{ .x = slot.coord.x, .z = slot.coord.z },
-                .state = switch (std.meta.activeTag(slot.state)) {
-                    .idle => .idle,
-                    .reading => .reading,
-                    .cancelling_content => .cancelling_content,
-                    .content_ready => .content_ready,
-                    .request_submitted => .request_submitted,
-                    .request_submitted_cancel => .request_submitted_cancel,
-                    .loading => .loading,
-                    .cancelling_logical => .cancelling_logical,
-                    .active => .active,
-                    .unloading => .unloading,
-                    .draining => .draining,
-                },
-                .desired_inside = slot.proximity.inside,
-                .correlation_id = if (slot.correlation == 0) null else slot.correlation,
-                .pending_decoded_scene = slot.pending_scene != null,
-            };
-            switch (slot.state) {
-                .idle => {},
-                .reading, .cancelling_content, .content_ready => |reading| {
-                    result[index].generations.content = reading.generation;
-                    result[index].scene = reading.scene;
-                },
-                .request_submitted, .request_submitted_cancel => |submitted| {
-                    result[index].generations.content = submitted.content_generation;
-                    result[index].scene = submitted.scene;
-                },
-                .loading, .active => |bound| {
-                    result[index].generations.content = bound.content_generation;
-                    result[index].generations.logical = bound.ticket.generation;
-                    result[index].scene = bound.scene;
-                },
-                .cancelling_logical => |cancelling| {
-                    result[index].generations.content =
-                        cancelling.bound.content_generation;
-                    result[index].generations.logical = cancelling.bound.ticket.generation;
-                    result[index].scene = cancelling.bound.scene;
-                },
-                .unloading => |unloading| {
-                    result[index].generations.content = unloading.bound.content_generation;
-                    result[index].generations.logical = unloading.bound.ticket.generation;
-                    result[index].scene = unloading.bound.scene;
-                },
-                .draining => |draining| {
-                    result[index].generations.content = draining.content_generation;
-                    result[index].scene = draining.scene;
-                },
-            }
-        }
-        return developer_diagnostics.DistrictStreams.init(result);
+    fn developerSimulationDiagnostics(
+        context: *anyopaque,
+    ) sandbox_contracts.Diagnostics {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.developer().diagnostics();
+    }
+
+    fn developerSessionDiagnostics(
+        context: *anyopaque,
+    ) authority_diagnostics.Diagnostics {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.inspection().clientDiagnostics().authority;
+    }
+
+    fn developerJournal(
+        context: *anyopaque,
+    ) *const engine.runtime.DiagnosticJournal {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.developer().journal();
+    }
+
+    fn developerRecord(
+        context: *anyopaque,
+        entry: engine.runtime.DiagnosticEntry,
+    ) engine.runtime.DiagnosticAppendResult {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.developer().record(entry);
+    }
+
+    fn developerArmFreeze(
+        context: *anyopaque,
+        condition: engine.runtime.DiagnosticFreezeMatch,
+    ) void {
+        const self: *App = @ptrCast(@alignCast(context));
+        self.simulation.developer().armFreeze(condition);
+    }
+
+    fn developerDisarmFreeze(context: *anyopaque) bool {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.developer().disarmFreeze();
+    }
+
+    fn developerResumeCapture(context: *anyopaque) bool {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.developer().resumeCapture();
+    }
+
+    fn developerClear(context: *anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(context));
+        self.simulation.developer().clear();
+    }
+
+    fn developerExtractPhysicsDebug(
+        context: *anyopaque,
+        config: engine.physics_debug.Config,
+        storage: *engine.physics_debug.Storage,
+    ) !engine.physics_debug.Batch {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.developer().extractPhysicsDebug(config, storage);
+    }
+
+    fn developerStreamingPort(
+        self: *App,
+    ) sandbox_developer_host.StreamingDiagnosticsPort {
+        return .{
+            .context = self,
+            .worker_fn = developerStreamingWorker,
+            .streams_fn = developerStreamingStreams,
+            .gpu_fn = developerStreamingGpu,
+        };
+    }
+
+    fn developerStreamingWorker(
+        context: *anyopaque,
+    ) ?developer_diagnostics.ContentWorker {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.district_streaming.workerDiagnostics();
+    }
+
+    fn developerStreamingStreams(
+        context: *anyopaque,
+    ) developer_diagnostics.DistrictStreams {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.district_streaming.developerStreams();
+    }
+
+    fn developerStreamingGpu(
+        context: *anyopaque,
+    ) !developer_diagnostics.Gpu {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.district_streaming.gpuDiagnostics();
     }
 
     fn applyDeveloperControlRequests(
         self: *App,
         requests: []const developer_controls.Request,
     ) void {
-        for (requests) |request| {
-            if (self.simulation.firstFault() != null) switch (request) {
-                .set_paused => |paused| if (!paused) {
-                    self.recordRejectedDeveloperControl(error.RuntimeFaulted);
-                    continue;
-                },
-                .single_step => {
-                    self.recordRejectedDeveloperControl(error.RuntimeFaulted);
-                    continue;
-                },
-                .set_time_scale => {},
-            };
-            const result = self.developer_controller.apply(request) catch |err| {
-                self.recordRejectedDeveloperControl(err);
-                continue;
-            };
-            if (result.entered_pause) self.action_latch.clear();
-            _ = self.simulation.recordDiagnostic(.{
-                .severity = .info,
-                .category = .host,
-                .code = diagnostic_host_control_applied,
-                .frame_index = self.frame_timer.total_frames,
-                .thread_role = .host,
-                .thread_id = engine.diagnostics.currentThreadId(),
-                .correlation_id = @intFromEnum(std.meta.activeTag(request)),
-            });
-        }
-    }
-
-    fn recordRejectedDeveloperControl(self: *App, err: anyerror) void {
-        _ = self.simulation.recordDiagnostic(.{
-            .severity = .warning,
-            .category = .host,
-            .code = diagnostic_host_control_rejected,
-            .frame_index = self.frame_timer.total_frames,
-            .thread_role = .host,
-            .thread_id = engine.diagnostics.currentThreadId(),
-            .correlation_id = @intFromError(err),
-        });
-    }
-
-    fn enterFaultInspection(self: *App) void {
-        self.developer_controller.single_step_pending = false;
-        self.developer_controller.paused = true;
-        self.action_latch.clear();
-        const snapshot = self.developerSnapshot() catch |err| {
-            self.printFaultInspectionFallback(err);
-            return;
-        };
-        const text_value = developer_diagnostics.formatTextAlloc(
-            std.heap.page_allocator,
-            snapshot,
-        ) catch |err| {
-            self.printFaultInspectionFallback(err);
-            return;
-        };
-        defer std.heap.page_allocator.free(text_value);
-        std.debug.print("RUNTIME_FAULT_INSPECTION {s}\n", .{text_value});
-    }
-
-    fn printFaultInspectionFallback(self: *App, reporting_error: anyerror) void {
-        if (self.simulation.firstFault()) |fault| {
-            std.debug.print(
-                "RUNTIME_FAULT_INSPECTION_FALLBACK phase={s} tick={d} " ++
-                    "system={s}{s} error={s}{s} code={d} sequence={d} reporting_error={s}\n",
-                .{
-                    @tagName(fault.phase),
-                    fault.tick_index,
-                    fault.system_name.slice(),
-                    if (fault.system_name.truncated) "[truncated]" else "",
-                    fault.error_name.slice(),
-                    if (fault.error_name.truncated) "[truncated]" else "",
-                    fault.error_code,
-                    fault.journal_sequence,
-                    @errorName(reporting_error),
-                },
-            );
-        } else {
-            std.debug.print(
-                "RUNTIME_FAULT_INSPECTION_FALLBACK retained_fault=missing reporting_error={s}\n",
-                .{@errorName(reporting_error)},
-            );
-        }
+        self.applyDeveloperEffects(self.developer.applyControlRequests(
+            self.developerAuthorityPort(),
+            self.frame_timer.total_frames,
+            requests,
+        ));
     }
 
     fn applyDeveloperDiagnosticRequests(
         self: *App,
         requests: []const developer_diagnostics.Request,
     ) void {
-        for (requests) |request| switch (request) {
-            .arm_freeze => |condition| {
-                self.simulation.armDiagnosticFreeze(condition);
-            },
-            .disarm_freeze => _ = self.simulation.disarmDiagnosticFreeze(),
-            .resume_capture => _ = self.simulation.resumeDiagnosticCapture(),
-            .clear => self.simulation.clearDiagnostics(),
-            .export_json => self.exportDeveloperDiagnostics() catch |err| {
-                _ = self.simulation.recordDiagnostic(.{
-                    .severity = .warning,
-                    .category = .host,
-                    .code = diagnostic_host_control_rejected,
-                    .frame_index = self.frame_timer.total_frames,
-                    .thread_role = .host,
-                    .thread_id = engine.diagnostics.currentThreadId(),
-                    .correlation_id = @intFromError(err),
-                });
-            },
-        };
-    }
-
-    fn exportDeveloperDiagnostics(self: *App) !void {
-        const json = try self.developerDiagnosticsJsonAlloc(std.heap.page_allocator);
-        defer std.heap.page_allocator.free(json);
-        std.debug.print("S4_DIAGNOSTICS_JSON {s}\n", .{json});
+        self.developer.applyDiagnosticRequests(
+            self.developerAuthorityPort(),
+            self.developerStreamingPort(),
+            &self.frame_timer,
+            self.includeDeveloperDistrictStreams(),
+            requests,
+        );
     }
 
     fn developerDiagnosticsJsonAlloc(
         self: *App,
         allocator: std.mem.Allocator,
     ) ![]u8 {
-        var entry_storage: [engine.runtime.DiagnosticJournal.capacity]engine.diagnostic_contracts.Entry = undefined;
-        const entries = self.simulation
-            .diagnosticJournal()
-            .copyChronological(&entry_storage);
-        const export_value = DeveloperExport{
-            .snapshot = try self.developerSnapshot(),
-            .entries = entries,
-        };
-        return developer_diagnostics.formatJsonAlloc(
+        return self.developer.diagnosticsJsonAlloc(
             allocator,
-            export_value,
+            self.developerAuthorityPort(),
+            self.developerStreamingPort(),
+            &self.frame_timer,
+            self.includeDeveloperDistrictStreams(),
         );
     }
 
@@ -4999,785 +4258,94 @@ const App = struct {
         });
     }
 
-    /// Record one visual-host orchestration transition against the exact fixed
-    /// slot that owns it. Correlations never bleed across adjacent districts.
-    fn recordDistrictStreamTransition(
-        self: *App,
-        slot_index: usize,
-        severity: engine.diagnostic_contracts.Severity,
-        category: engine.diagnostic_contracts.Category,
-        code: engine.diagnostic_contracts.Code,
-        persistent_id: ?engine.PersistentId,
-    ) void {
-        const correlation = self.district_stream_slots[slot_index].correlation;
-        if (correlation == 0) return;
-        _ = self.simulation.recordDiagnostic(.{
-            .severity = severity,
-            .category = category,
-            .code = code,
-            .tick_index = self.simulation.tickIndex(),
-            .frame_index = self.frame_timer.total_frames,
-            .thread_role = .host,
-            .thread_id = engine.diagnostics.currentThreadId(),
-            .persistent_id = persistent_id,
-            .correlation_id = correlation,
-        });
-    }
-
-    fn districtSlotIndexForCoord(self: *const App, coord: sandbox_host.ChunkCoord) ?usize {
-        for (self.district_stream_slots, 0..) |slot, index| {
-            if (slot.coord.x == coord.x and slot.coord.z == coord.z) return index;
-        }
-        return null;
-    }
-
-    fn districtSceneHandle(state: DistrictStreamState) ?engine.rendering.SceneHandle {
-        return switch (state) {
-            .idle => null,
-            .reading, .cancelling_content, .content_ready => |value| value.scene,
-            .request_submitted, .request_submitted_cancel => |value| value.scene,
-            .loading, .active => |value| value.scene,
-            .cancelling_logical => |value| value.bound.scene,
-            .unloading => |value| value.bound.scene,
-            .draining => |value| value.scene,
+    fn districtAuthorityPort(self: *App) district_streaming_host.AuthorityPort {
+        return .{
+            .context = self,
+            .submit_fn = districtSubmit,
+            .poll_outcome_fn = districtPollOutcome,
+            .poll_event_fn = districtPollEvent,
+            .state_fn = districtState,
+            .active_ticket_fn = districtActiveTicket,
+            .presentation_fn = districtPresentation,
+            .tick_index_fn = districtTickIndex,
+            .record_fn = districtRecord,
         };
     }
 
-    fn districtResidency(
-        self: *App,
-        scene: engine.rendering.SceneHandle,
-    ) !?district_gpu_registry.Residency {
-        return self.district_registry.residency(scene) catch |err| {
-            if (err == error.StaleSceneHandle) return null;
-            return err;
-        };
+    fn districtSubmit(context: *anyopaque, command: district_feature_contract.Command) !void {
+        const self: *App = @ptrCast(@alignCast(context));
+        try self.simulation.districts().submit(command);
     }
 
-    fn districtSlotIndexForLoadRequest(self: *const App, request_id: u64) ?usize {
-        for (self.district_stream_slots, 0..) |slot, index| switch (slot.state) {
-            .request_submitted, .request_submitted_cancel => |submitted| {
-                if (submitted.request_id == request_id) return index;
-            },
-            else => {},
-        };
-        return null;
+    fn districtPollOutcome(context: *anyopaque) ?district_feature_contract.Outcome {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.districts().pollOutcome();
     }
 
-    fn districtSlotIndexForTicket(self: *const App, ticket: sandbox_host.LoadTicket) ?usize {
-        for (self.district_stream_slots, 0..) |slot, index| {
-            const owned_ticket: ?sandbox_host.LoadTicket = switch (slot.state) {
-                .loading, .active => |bound| bound.ticket,
-                .cancelling_logical => |value| value.bound.ticket,
-                .unloading => |value| value.bound.ticket,
-                else => null,
-            };
-            if (owned_ticket) |candidate| {
-                if (std.meta.eql(candidate, ticket)) return index;
-            }
-        }
-        return null;
+    fn districtPollEvent(context: *anyopaque) ?district_feature_contract.Event {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.districts().pollEvent();
     }
 
-    fn districtLogicalTransitionInFlight(self: *const App) bool {
-        for (self.district_stream_slots) |slot| switch (slot.state) {
-            .request_submitted,
-            .request_submitted_cancel,
-            .loading,
-            .cancelling_logical,
-            .unloading,
-            => return true,
-            else => {},
-        };
-        return false;
+    fn districtState(
+        context: *anyopaque,
+        coord: district_contract.ChunkCoord,
+    ) ?district_feature_contract.StateTag {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.districts().state(coord);
     }
 
-    fn districtFocusPosition(self: *App) !?[2]f32 {
+    fn districtActiveTicket(
+        context: *anyopaque,
+        coord: district_contract.ChunkCoord,
+    ) ?district_contract.LoadTicket {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.districts().activeTicket(coord);
+    }
+
+    fn districtPresentation(
+        context: *anyopaque,
+    ) ![]const district_feature_contract.DistrictDraw {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.districts().presentation();
+    }
+
+    fn districtTickIndex(context: *anyopaque) u64 {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.inspection().tickIndex();
+    }
+
+    fn districtRecord(
+        context: *anyopaque,
+        entry: engine.runtime.DiagnosticEntry,
+    ) engine.runtime.DiagnosticAppendResult {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.developer().record(entry);
+    }
+
+    /// Client prediction is useful for hiding content latency, but it is never
+    /// the source of truth for logical district ownership.
+    fn districtPrefetchPosition(self: *App) !?[2]f32 {
         if (build_options.validation_mode or builtin.is_test) {
             if (self.validation.profile == .s3_smoke) return self.district_focus_override;
             if (self.validation.profile != .sandbox) return null;
         }
-        if (self.controlled_vehicle_id) |vehicle_id| {
-            const position = (try self.simulation.vehicle(vehicle_id)).state.chassis.pose.position;
-            return .{ position[0], position[2] };
-        }
-        const character_id = self.initial_character_id orelse return null;
-        const position = (try self.simulation.character(character_id)).position;
+        const position = self.simulation.player().focusPosition() orelse return null;
         return .{ position[0], position[2] };
     }
 
-    /// Evaluate both host-owned hysteresis regions exactly once per fixed tick,
-    /// then admit at most one new operation in canonical catalog order.
-    fn updateDistrictProximity(self: *App, position_xz: [2]f32) !void {
-        for (&self.district_stream_slots, 0..) |*slot, slot_index| {
-            if (try slot.proximity.observe(position_xz) == .exit) {
-                try self.requestDistrictDeparture(slot_index);
-            }
+    /// Read the privileged copied authority value used to admit logical
+    /// residency. This deliberately bypasses the predicted client projection
+    /// without exposing character or vehicle feature views to the host.
+    fn districtAuthorityFocusPosition(self: *App) !?[2]f32 {
+        if (build_options.validation_mode or builtin.is_test) {
+            if (self.validation.profile == .s3_smoke) return self.district_focus_override;
+            if (self.validation.profile != .sandbox) return null;
         }
-        try self.reconcileDistrictDesire();
-    }
-
-    fn reconcileDistrictDesire(self: *App) !void {
-        for (&self.district_stream_slots, 0..) |*slot, slot_index| {
-            const draining = switch (slot.state) {
-                .draining => |value| value,
-                else => continue,
-            };
-            if (!try districtRecycleComplete(self.district_registry, draining.scene)) continue;
-            self.recordDistrictStreamTransition(
-                slot_index,
-                .info,
-                .rendering,
-                engine.diagnostic_contracts.codes.district_stream_gpu_drained,
-                null,
-            );
-            slot.state = .idle;
-            slot.correlation = 0;
-        }
-
-        const catalog_owner = if (self.district_catalog) |*value| value else return;
-        for (catalog_owner.view().entries) |entry| {
-            const coord = sandbox_host.ChunkCoord{ .x = entry.coord.x, .z = entry.coord.z };
-            const slot_index = self.districtSlotIndexForCoord(coord) orelse
-                return error.DistrictCatalogSlotMismatch;
-            const slot = &self.district_stream_slots[slot_index];
-            if (!slot.proximity.inside) continue;
-            switch (slot.state) {
-                .content_ready => {
-                    if (self.districtLogicalTransitionInFlight()) continue;
-                    try self.submitPreparedDistrict(slot_index);
-                    return;
-                },
-                .idle => {
-                    if (self.district_content_owner != null) continue;
-                    try self.beginDistrictContentRequest(slot_index);
-                    return;
-                },
-                else => {},
-            }
-        }
-    }
-
-    fn rejectReservedDistrict(
-        self: *App,
-        slot_index: usize,
-        scene: engine.rendering.SceneHandle,
-        content_generation: ?u64,
-    ) !void {
-        const slot = &self.district_stream_slots[slot_index];
-        try slot.presentation.loadRejected(scene);
-        self.recordDistrictStreamTransition(
-            slot_index,
-            .warning,
-            .rendering,
-            engine.diagnostic_contracts.codes.district_stream_gpu_release_requested,
-            null,
-        );
-        slot.state = .{ .draining = .{
-            .scene = scene,
-            .content_generation = content_generation,
-        } };
-    }
-
-    fn beginDistrictContentRequest(self: *App, slot_index: usize) !void {
-        const slot = &self.district_stream_slots[slot_index];
-        if (std.meta.activeTag(slot.state) != .idle) {
-            return error.DistrictContentRequestWhileBusy;
-        }
-        if (self.district_content_owner != null) return error.DistrictContentWorkerBusy;
-        if (self.simulation.districtStateFor(slot.coord) != null) {
-            return error.DistrictLogicalStateMismatch;
-        }
-        const worker = self.district_content_worker orelse
-            return error.DistrictContentWorkerMissing;
-        const catalog_owner = if (self.district_catalog) |*value| value else return error.DistrictCatalogMissing;
-        const scene = slot.presentation.beginRequest() catch |err| {
-            if (err == error.DistrictSceneRegistryFull) return;
-            return err;
-        };
-        slot.correlation = takeMonotonicId(
-            &self.district_next_stream_correlation,
-        ) catch |err| {
-            try self.rejectReservedDistrict(slot_index, scene, null);
-            return err;
-        };
-        self.recordDistrictStreamTransition(
-            slot_index,
-            .debug,
-            .rendering,
-            engine.diagnostic_contracts.codes.district_stream_gpu_reserved,
-            null,
-        );
-        const generation = takeMonotonicId(&self.district_next_content_generation) catch |err| {
-            try self.rejectReservedDistrict(slot_index, scene, null);
-            return err;
-        };
-        const request = catalog_owner.sceneRequest(slot.coord, generation) catch |err| {
-            try self.rejectReservedDistrict(slot_index, scene, generation);
-            return err;
-        };
-        const disposition = worker.request(request) catch |err| {
-            self.recordDistrictStreamTransition(
-                slot_index,
-                .err,
-                .content,
-                engine.diagnostic_contracts.codes.district_stream_content_failed,
-                null,
-            );
-            try self.rejectReservedDistrict(slot_index, scene, generation);
-            return err;
-        };
-        switch (disposition) {
-            .accepted => {
-                slot.state = .{ .reading = .{
-                    .scene = scene,
-                    .generation = generation,
-                } };
-                self.district_content_owner = @intCast(slot_index);
-                self.recordDistrictStreamTransition(
-                    slot_index,
-                    .info,
-                    .content,
-                    engine.diagnostic_contracts.codes.district_stream_content_requested,
-                    null,
-                );
-            },
-            .busy, .stale, .invalid => {
-                self.recordDistrictStreamTransition(
-                    slot_index,
-                    .err,
-                    .content,
-                    engine.diagnostic_contracts.codes.district_stream_content_failed,
-                    null,
-                );
-                try self.rejectReservedDistrict(slot_index, scene, generation);
-                return error.DistrictContentWorkerAdmissionFailed;
-            },
-        }
-    }
-
-    fn requestDistrictDeparture(self: *App, slot_index: usize) !void {
-        const slot = &self.district_stream_slots[slot_index];
-        switch (slot.state) {
-            .idle,
-            .draining,
-            .cancelling_content,
-            .request_submitted_cancel,
-            .cancelling_logical,
-            .unloading,
-            => {},
-            .reading => |reading| {
-                if (self.district_content_owner != @as(u8, @intCast(slot_index))) {
-                    return error.DistrictContentOwnerMismatch;
-                }
-                const worker = self.district_content_worker orelse
-                    return error.DistrictContentWorkerMissing;
-                switch (worker.cancel(reading.generation)) {
-                    .requested => {
-                        slot.state = .{ .cancelling_content = reading };
-                        self.recordDistrictStreamTransition(
-                            slot_index,
-                            .info,
-                            .content,
-                            engine.diagnostic_contracts.codes.district_stream_content_cancel_requested,
-                            null,
-                        );
-                    },
-                    .idle, .stale, .invalid => return error.DistrictContentWorkerStateMismatch,
-                }
-            },
-            .content_ready => |ready| {
-                self.clearPendingDistrictScene(slot_index);
-                try self.rejectReservedDistrict(
-                    slot_index,
-                    ready.scene,
-                    ready.generation,
-                );
-            },
-            .request_submitted => |submitted| {
-                self.clearPendingDistrictScene(slot_index);
-                slot.state = .{ .request_submitted_cancel = submitted };
-            },
-            .loading => |loading| {
-                self.clearPendingDistrictScene(slot_index);
-                const request_id = try takeMonotonicId(&self.district_next_request_id);
-                try self.simulation.submitDistrict(.{ .cancel_load = .{
-                    .request_id = request_id,
-                    .ticket = loading.ticket,
-                } });
-                slot.state = .{ .cancelling_logical = .{
-                    .bound = loading,
-                    .request_id = request_id,
-                } };
-                self.recordDistrictStreamTransition(
-                    slot_index,
-                    .info,
-                    .streaming,
-                    engine.diagnostic_contracts.codes.district_stream_logical_cancel_submitted,
-                    null,
-                );
-            },
-            .active => |active| {
-                self.clearPendingDistrictScene(slot_index);
-                const request_id = try takeMonotonicId(&self.district_next_request_id);
-                try self.simulation.submitDistrict(.{ .unload = .{
-                    .request_id = request_id,
-                    .ticket = active.ticket,
-                } });
-                slot.state = .{ .unloading = .{
-                    .bound = active,
-                    .request_id = request_id,
-                } };
-                self.recordDistrictStreamTransition(
-                    slot_index,
-                    .info,
-                    .streaming,
-                    engine.diagnostic_contracts.codes.district_stream_logical_unload_submitted,
-                    null,
-                );
-            },
-        }
-    }
-
-    fn pumpDistrictContent(self: *App) !void {
-        for (0..district_stream_slot_count) |slot_index| {
-            try self.retryPendingDistrictScene(slot_index);
-        }
-        const slot_index: usize = self.district_content_owner orelse return;
-        const slot = &self.district_stream_slots[slot_index];
-        const job: DistrictContentJob = switch (slot.state) {
-            .reading => |value| .{ .value = value, .cancelling = false },
-            .cancelling_content => |value| .{ .value = value, .cancelling = true },
-            else => return error.DistrictContentOwnerMismatch,
-        };
-        const worker = self.district_content_worker orelse
-            return error.DistrictContentWorkerMissing;
-        switch (worker.poll(job.value.generation)) {
-            .pending => {},
-            .idle, .stale => return error.DistrictContentWorkerStateMismatch,
-            .completion => |completion| {
-                self.district_content_owner = null;
-                switch (completion) {
-                    .cancelled => |generation| {
-                        if (!job.cancelling or generation != job.value.generation) {
-                            return error.DistrictContentLoadCancelled;
-                        }
-                        self.recordDistrictStreamTransition(
-                            slot_index,
-                            .info,
-                            .content,
-                            engine.diagnostic_contracts.codes.district_stream_content_cancelled,
-                            null,
-                        );
-                        try self.rejectReservedDistrict(
-                            slot_index,
-                            job.value.scene,
-                            job.value.generation,
-                        );
-                    },
-                    .failed => |failed| {
-                        self.recordDistrictStreamTransition(
-                            slot_index,
-                            .err,
-                            .content,
-                            engine.diagnostic_contracts.codes.district_stream_content_failed,
-                            null,
-                        );
-                        try self.rejectReservedDistrict(
-                            slot_index,
-                            job.value.scene,
-                            job.value.generation,
-                        );
-                        std.debug.print(
-                            "Cooked district load failed for ({d},{d}): {any}\n",
-                            .{ slot.coord.x, slot.coord.z, failed.failure },
-                        );
-                        return error.DistrictContentLoadFailed;
-                    },
-                    .ready => |ready_value| {
-                        if (ready_value.generation != job.value.generation) {
-                            var stale_scene = ready_value.scene;
-                            stale_scene.deinit();
-                            return error.DistrictContentGenerationMismatch;
-                        }
-                        var scene = ready_value.scene;
-                        errdefer scene.deinit();
-                        self.recordDistrictStreamTransition(
-                            slot_index,
-                            .info,
-                            .content,
-                            engine.diagnostic_contracts.codes.district_stream_content_ready,
-                            null,
-                        );
-                        if (job.cancelling or !slot.proximity.inside) {
-                            scene.deinit();
-                            try self.rejectReservedDistrict(
-                                slot_index,
-                                job.value.scene,
-                                job.value.generation,
-                            );
-                            return;
-                        }
-                        try validateCookedLogicalDistrict(scene.view(), slot.coord);
-                        slot.pending_scene = scene;
-                        slot.state = .{ .content_ready = job.value };
-                    },
-                }
-            },
-        }
-    }
-
-    fn submitPreparedDistrict(self: *App, slot_index: usize) !void {
-        const slot = &self.district_stream_slots[slot_index];
-        const ready = switch (slot.state) {
-            .content_ready => |value| value,
-            else => return error.DistrictPreparedSceneStateMismatch,
-        };
-        const pending = if (slot.pending_scene) |*scene| scene else return error.DistrictPreparedSceneMissing;
-        if (self.simulation.districtStateFor(slot.coord) != null) {
-            return error.DistrictLogicalStateMismatch;
-        }
-        const request_id = try takeMonotonicId(&self.district_next_request_id);
-        var upload_plan = try district_scene_adapter.build(pending.view());
-        try self.simulation.submitDistrict(.{ .request_load = .{
-            .request_id = request_id,
-            .coord = slot.coord,
-            .assets = .{ .scene = ready.scene },
-        } });
-        slot.state = .{ .request_submitted = .{
-            .scene = ready.scene,
-            .request_id = request_id,
-            .content_generation = ready.generation,
-        } };
-        self.recordDistrictStreamTransition(
-            slot_index,
-            .info,
-            .streaming,
-            engine.diagnostic_contracts.codes.district_stream_logical_submitted,
-            null,
-        );
-        if (!try self.stageDistrictUpload(slot_index, ready.scene, &upload_plan)) return;
-        pending.deinit();
-        slot.pending_scene = null;
-    }
-
-    fn stageDistrictUpload(
-        self: *App,
-        slot_index: usize,
-        scene_handle: engine.rendering.SceneHandle,
-        upload_plan: *district_scene_adapter.UploadPlan,
-    ) !bool {
-        self.district_registry.stage(scene_handle, upload_plan.sceneUpload()) catch |err| {
-            if (isRetryableDistrictStageError(err)) return false;
-            return err;
-        };
-        const staged_stats = try self.district_registry.stats();
-        self.recordDistrictStreamTransition(
-            slot_index,
-            .info,
-            .rendering,
-            engine.diagnostic_contracts.codes.district_stream_gpu_staged,
-            null,
-        );
-        std.debug.print(
-            "Cooked district ({d},{d}) staged: primitives={d} textures={d} cpu_bytes={d}\n",
-            .{
-                self.district_stream_slots[slot_index].coord.x,
-                self.district_stream_slots[slot_index].coord.z,
-                upload_plan.mesh_count,
-                upload_plan.texture_count,
-                staged_stats.staged_cpu_bytes,
-            },
-        );
-        return true;
-    }
-
-    fn retryPendingDistrictScene(self: *App, slot_index: usize) !void {
-        const slot = &self.district_stream_slots[slot_index];
-        const pending = if (slot.pending_scene) |*scene| scene else return;
-        const scene_handle = switch (slot.state) {
-            .request_submitted => |value| value.scene,
-            .loading, .active => |value| value.scene,
-            .content_ready => return,
-            else => return error.DistrictPendingSceneStateMismatch,
-        };
-        var upload_plan = try district_scene_adapter.build(pending.view());
-        if (!try self.stageDistrictUpload(slot_index, scene_handle, &upload_plan)) return;
-        pending.deinit();
-        slot.pending_scene = null;
-    }
-
-    fn clearPendingDistrictScene(self: *App, slot_index: usize) void {
-        const slot = &self.district_stream_slots[slot_index];
-        if (slot.pending_scene) |*scene| scene.deinit();
-        slot.pending_scene = null;
-    }
-
-    fn processDistrictOutcomes(self: *App) !void {
-        while (self.simulation.pollDistrictOutcome()) |outcome| {
-            switch (outcome) {
-                .load_requested => |requested| {
-                    const slot_index = self.districtSlotIndexForLoadRequest(
-                        requested.request_id,
-                    ) orelse return error.UnexpectedDistrictOutcome;
-                    const slot = &self.district_stream_slots[slot_index];
-                    if (requested.ticket.coord.x != slot.coord.x or
-                        requested.ticket.coord.z != slot.coord.z)
-                    {
-                        return error.UnexpectedDistrictOutcome;
-                    }
-                    const admission: DistrictAdmission = switch (slot.state) {
-                        .request_submitted => |submitted| .{
-                            .scene = submitted.scene,
-                            .request_id = submitted.request_id,
-                            .content_generation = submitted.content_generation,
-                            .cancel = false,
-                        },
-                        .request_submitted_cancel => |submitted| .{
-                            .scene = submitted.scene,
-                            .request_id = submitted.request_id,
-                            .content_generation = submitted.content_generation,
-                            .cancel = true,
-                        },
-                        else => return error.UnexpectedDistrictOutcome,
-                    };
-                    try slot.presentation.loadAdmitted(admission.scene, requested.ticket);
-                    self.recordDistrictStreamTransition(
-                        slot_index,
-                        .info,
-                        .streaming,
-                        engine.diagnostic_contracts.codes.district_stream_logical_admitted,
-                        null,
-                    );
-                    const bound = DistrictStreamBound{
-                        .scene = admission.scene,
-                        .ticket = requested.ticket,
-                        .load_request_id = admission.request_id,
-                        .content_generation = admission.content_generation,
-                    };
-                    if (admission.cancel) {
-                        const cancel_request_id = try takeMonotonicId(
-                            &self.district_next_request_id,
-                        );
-                        try self.simulation.submitDistrict(.{ .cancel_load = .{
-                            .request_id = cancel_request_id,
-                            .ticket = requested.ticket,
-                        } });
-                        slot.state = .{ .cancelling_logical = .{
-                            .bound = bound,
-                            .request_id = cancel_request_id,
-                        } };
-                        self.recordDistrictStreamTransition(
-                            slot_index,
-                            .info,
-                            .streaming,
-                            engine.diagnostic_contracts.codes.district_stream_logical_cancel_submitted,
-                            null,
-                        );
-                    } else {
-                        slot.state = .{ .loading = bound };
-                    }
-                },
-                .activated => |activated| {
-                    const slot_index = self.districtSlotIndexForTicket(activated.ticket) orelse
-                        return error.UnexpectedDistrictOutcome;
-                    const slot = &self.district_stream_slots[slot_index];
-                    const loading = switch (slot.state) {
-                        .loading => |value| value,
-                        else => return error.UnexpectedDistrictOutcome,
-                    };
-                    if (loading.load_request_id != activated.request_id or
-                        activated.coord.x != slot.coord.x or activated.coord.z != slot.coord.z)
-                    {
-                        return error.UnexpectedDistrictOutcome;
-                    }
-                    try slot.presentation.logicalActivated(activated.ticket);
-                    slot.state = .{ .active = loading };
-                    const active_ticket = self.simulation.activeDistrictTicketFor(slot.coord) orelse
-                        return error.DistrictLogicalStateMismatch;
-                    if (!std.meta.eql(active_ticket, activated.ticket)) {
-                        return error.DistrictLogicalStateMismatch;
-                    }
-                    self.recordDistrictStreamTransition(
-                        slot_index,
-                        .info,
-                        .streaming,
-                        engine.diagnostic_contracts.codes.district_stream_logical_activated,
-                        activated.id,
-                    );
-                },
-                .rejected => |rejected| switch (rejected.command) {
-                    .request_load => {
-                        const slot_index = self.districtSlotIndexForLoadRequest(
-                            rejected.request_id,
-                        ) orelse return error.UnexpectedDistrictOutcome;
-                        const slot = &self.district_stream_slots[slot_index];
-                        const submitted = switch (slot.state) {
-                            .request_submitted, .request_submitted_cancel => |value| value,
-                            else => return error.UnexpectedDistrictOutcome,
-                        };
-                        self.clearPendingDistrictScene(slot_index);
-                        self.recordDistrictStreamTransition(
-                            slot_index,
-                            .err,
-                            .streaming,
-                            engine.diagnostic_contracts.codes.district_stream_logical_failed,
-                            null,
-                        );
-                        try self.rejectReservedDistrict(
-                            slot_index,
-                            submitted.scene,
-                            submitted.content_generation,
-                        );
-                        return error.DistrictLoadRejected;
-                    },
-                    .cancel_load => {
-                        const ticket = rejected.ticket orelse
-                            return error.UnexpectedDistrictOutcome;
-                        const slot_index = self.districtSlotIndexForTicket(ticket) orelse
-                            return error.UnexpectedDistrictOutcome;
-                        const cancelling = switch (self.district_stream_slots[slot_index].state) {
-                            .cancelling_logical => |value| value,
-                            else => return error.UnexpectedDistrictOutcome,
-                        };
-                        if (cancelling.request_id != rejected.request_id) {
-                            return error.UnexpectedDistrictOutcome;
-                        }
-                        return error.DistrictCancelRejected;
-                    },
-                    .unload => {
-                        const ticket = rejected.ticket orelse
-                            return error.UnexpectedDistrictOutcome;
-                        const slot_index = self.districtSlotIndexForTicket(ticket) orelse
-                            return error.UnexpectedDistrictOutcome;
-                        const unloading = switch (self.district_stream_slots[slot_index].state) {
-                            .unloading => |value| value,
-                            else => return error.UnexpectedDistrictOutcome,
-                        };
-                        if (unloading.request_id != rejected.request_id) {
-                            return error.UnexpectedDistrictOutcome;
-                        }
-                        return error.DistrictUnloadRejected;
-                    },
-                },
-                .cancelled => |cancelled| {
-                    const slot_index = self.districtSlotIndexForTicket(cancelled.ticket) orelse
-                        return error.UnexpectedDistrictOutcome;
-                    const slot = &self.district_stream_slots[slot_index];
-                    const cancelling = switch (slot.state) {
-                        .cancelling_logical => |value| value,
-                        else => return error.UnexpectedDistrictOutcome,
-                    };
-                    self.clearPendingDistrictScene(slot_index);
-                    try slot.presentation.loadTerminated(cancelled.ticket);
-                    self.recordDistrictStreamTransition(
-                        slot_index,
-                        .info,
-                        .streaming,
-                        engine.diagnostic_contracts.codes.district_stream_logical_cancelled,
-                        null,
-                    );
-                    self.recordDistrictStreamTransition(
-                        slot_index,
-                        .warning,
-                        .rendering,
-                        engine.diagnostic_contracts.codes.district_stream_gpu_release_requested,
-                        null,
-                    );
-                    slot.state = .{ .draining = .{
-                        .scene = cancelling.bound.scene,
-                        .content_generation = cancelling.bound.content_generation,
-                    } };
-                },
-                .load_failed => |failed| {
-                    const slot_index = self.districtSlotIndexForTicket(failed.ticket) orelse
-                        return error.UnexpectedDistrictOutcome;
-                    const slot = &self.district_stream_slots[slot_index];
-                    const loading = switch (slot.state) {
-                        .loading => |value| value,
-                        .cancelling_logical => |value| value.bound,
-                        else => return error.UnexpectedDistrictOutcome,
-                    };
-                    if (loading.load_request_id != failed.request_id) {
-                        return error.UnexpectedDistrictOutcome;
-                    }
-                    self.clearPendingDistrictScene(slot_index);
-                    try slot.presentation.loadTerminated(failed.ticket);
-                    self.recordDistrictStreamTransition(
-                        slot_index,
-                        .err,
-                        .streaming,
-                        engine.diagnostic_contracts.codes.district_stream_logical_failed,
-                        null,
-                    );
-                    self.recordDistrictStreamTransition(
-                        slot_index,
-                        .warning,
-                        .rendering,
-                        engine.diagnostic_contracts.codes.district_stream_gpu_release_requested,
-                        null,
-                    );
-                    slot.state = .{ .draining = .{
-                        .scene = loading.scene,
-                        .content_generation = loading.content_generation,
-                    } };
-                    return error.DistrictLogicalLoadFailed;
-                },
-                .unloaded => |unloaded| {
-                    const slot_index = self.districtSlotIndexForTicket(unloaded.ticket) orelse
-                        return error.UnexpectedDistrictOutcome;
-                    const slot = &self.district_stream_slots[slot_index];
-                    const unloading = switch (slot.state) {
-                        .unloading => |value| value,
-                        else => return error.UnexpectedDistrictOutcome,
-                    };
-                    if (unloading.request_id != unloaded.request_id) {
-                        return error.UnexpectedDistrictOutcome;
-                    }
-                    self.clearPendingDistrictScene(slot_index);
-                    try slot.presentation.logicalUnloaded(unloaded.ticket);
-                    self.recordDistrictStreamTransition(
-                        slot_index,
-                        .info,
-                        .streaming,
-                        engine.diagnostic_contracts.codes.district_stream_logical_unloaded,
-                        unloaded.id,
-                    );
-                    self.recordDistrictStreamTransition(
-                        slot_index,
-                        .warning,
-                        .rendering,
-                        engine.diagnostic_contracts.codes.district_stream_gpu_release_requested,
-                        null,
-                    );
-                    const draws = try self.simulation.districtPresentation();
-                    for (draws) |draw| {
-                        if (std.meta.eql(draw.ticket, unloaded.ticket)) {
-                            return error.DistrictPresentationStillExtracted;
-                        }
-                    }
-                    try slot.presentation.presentationAbsent(0);
-                    if (self.simulation.districtStateFor(slot.coord) != null) {
-                        return error.DistrictLogicalStateMismatch;
-                    }
-                    slot.state = .{ .draining = .{
-                        .scene = unloading.bound.scene,
-                        .content_generation = unloading.bound.content_generation,
-                    } };
-                },
-                .cancellation_requested => |requested| {
-                    const slot_index = self.districtSlotIndexForTicket(requested.ticket) orelse
-                        return error.UnexpectedDistrictOutcome;
-                    const cancelling = switch (self.district_stream_slots[slot_index].state) {
-                        .cancelling_logical => |value| value,
-                        else => return error.UnexpectedDistrictOutcome,
-                    };
-                    if (cancelling.request_id != requested.request_id) {
-                        return error.UnexpectedDistrictOutcome;
-                    }
-                },
-            }
-        }
-        while (self.simulation.pollDistrictEvent()) |_| {}
+        const position = try self.simulation
+            .residency()
+            .authoritativeFocusPosition() orelse return null;
+        return .{ position[0], position[2] };
     }
 
     /// Submit one device-independent action sample before each fixed tick.
@@ -5792,7 +4360,8 @@ const App = struct {
                 .s1_character => sandbox_controls.TickSample{
                     .move = .{ 0, 1 },
                     .look_delta = .{ 0, 0 },
-                    .jump_pressed = self.simulation.tickIndex() == 60,
+                    .jump_pressed = self.simulation.inspection().tickIndex() ==
+                        s1_jump_tick,
                     .interact_pressed = false,
                     .brake = false,
                     .hand_brake = false,
@@ -5837,29 +4406,25 @@ const App = struct {
         if (validation_composition) {
             switch (scenario) {
                 .none => try self.submitInteractiveActions(actions),
-                .s1_character => if (self.initial_character_id) |id| {
-                    try self.submitCharacterActions(id, actions);
+                .s1_character => if (self.initial_character_id != null) {
+                    try self.submitCharacterActions(actions);
                 },
                 .s2_vehicle => try self.submitInteractiveActions(self.s2ScriptedActions()),
                 .s3_streaming, .s4_physics_debug => {},
-                .s7_interaction => if (self.validation.s7_character_actions_enabled) if (self.initial_character_id) |id| {
-                    try self.submitCharacterActions(id, actions);
+                .s7_interaction => if (self.validation.s7_character_actions_enabled) if (self.initial_character_id != null) {
+                    try self.submitCharacterActions(actions);
                 },
             }
         } else {
             try self.submitInteractiveActions(actions);
         }
-        var runtime_profile = RuntimeProfileBridge{
-            .recorder = &self.developer_profiler,
-            .frame_index = self.frame_timer.total_frames,
-        };
-        try self.simulation.tickObserved(
-            if (self.developer_visualization_controller.profiling_enabled)
-                runtime_profile.observer()
-            else
-                null,
+        var runtime_profile = self.developer.runtimeProfile(
+            self.frame_timer.total_frames,
         );
-        while (self.simulation.pollOutcome()) |outcome| {
+        try self.simulation.lifecycle().tickObserved(
+            runtime_profile.observer(),
+        );
+        while (self.simulation.crates().pollOutcome()) |outcome| {
             switch (outcome) {
                 .spawned => |spawned| {
                     if (spawned.request_id != 1 or self.initial_crate_id != null) {
@@ -5897,7 +4462,7 @@ const App = struct {
                 .impulse_applied => return error.UnexpectedBootstrapOutcome,
             }
         }
-        while (self.simulation.pollCharacterOutcome()) |outcome| {
+        while (self.simulation.characters().pollOutcome()) |outcome| {
             switch (outcome) {
                 .spawned => |spawned| {
                     if (spawned.request_id != 1 or self.initial_character_id != null) {
@@ -5915,14 +4480,26 @@ const App = struct {
                 .rejected => return error.UnexpectedCharacterBootstrapOutcome,
             }
         }
-        while (self.simulation.pollCharacterEvent()) |_| {}
+        while (self.simulation.characters().pollEvent()) |_| {}
         try self.processVehicleOutcomes(validation_composition, scenario);
-        while (self.simulation.pollVehicleEvent()) |_| {}
-        try self.processDistrictOutcomes();
+        while (self.simulation.vehicles().pollEvent()) |_| {}
+        try self.district_streaming.processOutcomes(self.districtAuthorityPort(), self.frame_timer.total_frames);
         try self.processInteractionOutcomes(validation_composition, scenario);
+        try self.processPlayerActionResults(validation_composition, scenario);
         try self.maybeBootstrapCarryable(validation_composition, scenario);
-        if (try self.districtFocusPosition()) |position_xz| {
-            try self.updateDistrictProximity(position_xz);
+        if (try self.districtPrefetchPosition()) |position_xz| {
+            try self.district_streaming.updatePrefetch(
+                self.districtAuthorityPort(),
+                self.frame_timer.total_frames,
+                position_xz,
+            );
+        }
+        if (try self.districtAuthorityFocusPosition()) |position_xz| {
+            try self.district_streaming.updateAuthorityResidency(
+                self.districtAuthorityPort(),
+                self.frame_timer.total_frames,
+                position_xz,
+            );
         }
         if (validation_composition and scenario == .s2_vehicle) try self.observeS2State();
         self.extractPhysicsDebug();
@@ -5930,9 +4507,9 @@ const App = struct {
 
     fn authoringCrateView(
         self: *App,
-        id: sandbox_host.PersistentId,
+        id: sandbox_contracts.PersistentId,
     ) !?editor_contract.AuthoringCrateView {
-        const view = self.simulation.crate(id) catch |err| switch (err) {
+        const view = self.simulation.crates().view(id) catch |err| switch (err) {
             error.CrateNotFound, error.NotACrate => return null,
             else => return err,
         };
@@ -5962,7 +4539,7 @@ const App = struct {
             .available_crate = available,
             .selected_crate = selected,
             .feedback = self.authoring_feedback,
-            .save = self.save_feedback,
+            .save = self.editorSaveFeedback(),
             .request_rejections = self.authoring_requests.rejected,
         };
     }
@@ -5975,15 +4552,15 @@ const App = struct {
             .request_rejections = self.interaction_requests.rejected,
         };
         // Fault inspection intentionally avoids feature/backend extraction.
-        if (self.simulation.firstFault() != null) return result;
+        if (self.simulation.developer().firstFault() != null) return result;
         if (self.initial_character_id) |id| {
-            result.carrier = self.simulation.character(id) catch |err| switch (err) {
+            result.carrier = self.simulation.characters().view(id) catch |err| switch (err) {
                 error.CharacterNotFound, error.NotACharacter => null,
                 else => return err,
             };
         }
         if (self.initial_carryable_id) |id| {
-            result.carryable = self.simulation.carryable(id) catch |err| switch (err) {
+            result.carryable = self.simulation.interactions().view(id) catch |err| switch (err) {
                 error.InteractionCarryableNotFound,
                 error.InteractionCarryableNotOwned,
                 => null,
@@ -5997,10 +4574,26 @@ const App = struct {
         self: *App,
         requests: []const sandbox_interaction.Request,
     ) !void {
+        const Values = struct {
+            transaction_id: u64,
+            carrier_id: sandbox_contracts.PersistentId,
+            carryable_id: sandbox_contracts.PersistentId,
+            action: sandbox_host.InteractionActionKind,
+        };
         for (requests) |request| {
-            const transaction_id = switch (request) {
-                .collect => |value| value.transaction_id,
-                .drop => |value| value.transaction_id,
+            const values: Values = switch (request) {
+                .collect => |value| .{
+                    .transaction_id = value.transaction_id,
+                    .carrier_id = value.carrier_id,
+                    .carryable_id = value.carryable_id,
+                    .action = sandbox_host.InteractionActionKind.collect,
+                },
+                .drop => |value| .{
+                    .transaction_id = value.transaction_id,
+                    .carrier_id = value.carrier_id,
+                    .carryable_id = value.carryable_id,
+                    .action = sandbox_host.InteractionActionKind.drop,
+                },
                 .spawn, .despawn => {
                     self.interaction_submission_failures +|= 1;
                     continue;
@@ -6010,12 +4603,26 @@ const App = struct {
                 self.interaction_submission_failures +|= 1;
                 continue;
             };
-            if (transaction_id != expected) {
+            if (values.transaction_id != expected or
+                !std.meta.eql(values.carrier_id, self.initial_character_id orelse {
+                    self.interaction_submission_failures +|= 1;
+                    continue;
+                }))
+            {
                 self.interaction_submission_failures +|= 1;
                 continue;
             }
+            const carryable = self.simulation.inspection().replicatedId(
+                values.carryable_id,
+            ) orelse {
+                self.interaction_submission_failures +|= 1;
+                continue;
+            };
             _ = try self.interaction_transactions.take();
-            self.simulation.submitInteraction(request) catch |err| {
+            self.simulation.player().requestInteraction(
+                values.action,
+                carryable,
+            ) catch |err| {
                 self.interaction_submission_failures +|= 1;
                 return err;
             };
@@ -6031,7 +4638,7 @@ const App = struct {
         self: *App,
         pending: sandbox_authoring.PendingSummary,
         observed: sandbox_authoring.ObserveResult,
-        rejection_reason: ?sandbox_host.RejectionReason,
+        rejection_reason: ?sandbox_contracts.RejectionReason,
     ) void {
         _ = self.advanceAuthoringFeedback();
         self.authoring_feedback = .{
@@ -6060,7 +4667,7 @@ const App = struct {
     fn recordAuthoringRequestRejection(
         self: *App,
         operation: ?sandbox_authoring.OperationKind,
-        id: ?sandbox_host.PersistentId,
+        id: ?sandbox_contracts.PersistentId,
         err: anyerror,
     ) void {
         _ = self.advanceAuthoringFeedback();
@@ -6075,10 +4682,10 @@ const App = struct {
 
     fn submitAuthoringCommand(
         self: *App,
-        command: sandbox_host.Command,
+        command: sandbox_contracts.Command,
         operation: sandbox_authoring.OperationKind,
     ) !void {
-        self.simulation.submit(command) catch |err| {
+        self.simulation.crates().submit(command) catch |err| {
             const relocation = command.relocate;
             _ = self.authoring_controller.submissionFailed(relocation.transaction_id);
             _ = self.advanceAuthoringFeedback();
@@ -6105,7 +4712,7 @@ const App = struct {
             },
             .clear_selection => self.authoring_controller.clearSelection(),
             .relocate => |relocation| {
-                const view = self.simulation.crate(relocation.id) catch |err| switch (err) {
+                const view = self.simulation.crates().view(relocation.id) catch |err| switch (err) {
                     error.CrateNotFound, error.NotACrate => {
                         self.authoring_controller.invalidateIdentity(relocation.id);
                         self.recordAuthoringRequestRejection(.edit, relocation.id, err);
@@ -6136,183 +4743,74 @@ const App = struct {
                 };
                 try self.submitAuthoringCommand(command, .redo);
             },
-            .save => try self.commitAuthoringSave(),
+            .save => try self.requestPersistenceCommit(),
         };
     }
 
-    fn advanceSaveFeedback(self: *App) u64 {
-        self.save_feedback.sequence +|= 1;
-        return self.save_feedback.sequence;
+    fn editorSaveFeedback(self: *const App) editor_contract.SaveFeedback {
+        const feedback = self.persistence.feedback();
+        return .{
+            .sequence = feedback.sequence,
+            .status = switch (feedback.status) {
+                .unavailable => .unavailable,
+                .idle => .idle,
+                .committed => .committed,
+                .committed_sync_warning => .committed_sync_warning,
+                .not_committed => .not_committed,
+            },
+            .slot_label = feedback.slot,
+            .detail = feedback.detail,
+        };
     }
 
-    fn setSaveFeedback(
+    fn observePersistenceSnapshot(
         self: *App,
-        status: editor_contract.SaveFeedbackStatus,
-        detail: []const u8,
-    ) void {
-        _ = self.advanceSaveFeedback();
-        self.save_feedback = .{
-            .sequence = self.save_feedback.sequence,
-            .status = status,
-            .slot_label = sandbox_save_slot_id,
-            .detail = detail,
+    ) !sandbox_persistence.SnapshotObservation {
+        return switch (try self.persistence.apply(
+            self.io,
+            .observe_snapshot,
+        )) {
+            .observed => |observation| observation,
+            .commit => unreachable,
         };
     }
 
-    fn commitAuthoringSave(self: *App) !void {
-        const store = if (self.save_store) |*value| value else {
-            self.setSaveFeedback(.unavailable, "start with --save-root=<absolute-existing-directory>");
-            return;
-        };
-        const metadata = self.save_metadata orelse return error.SaveMetadataMissing;
-        if (self.authoring_controller.snapshot().pending != null) {
-            self.setSaveFeedback(.not_committed, "authoring transaction pending");
-            return;
-        }
-        const payload = self.simulation.save(std.heap.page_allocator) catch |err| {
-            if (saveDeferralDetail(err)) |detail| {
-                self.setSaveFeedback(.not_committed, detail);
-                return;
-            }
-            return err;
-        };
-        defer std.heap.page_allocator.free(payload);
-        const envelope = try sandbox_save.encode(
-            std.heap.page_allocator,
-            metadata,
-            payload,
-        );
-        defer std.heap.page_allocator.free(envelope);
-        const result = store.commit(
+    fn requestPersistenceCommit(self: *App) !void {
+        _ = switch (try self.persistence.apply(
             self.io,
-            try save_slots.SlotId.parse(sandbox_save_slot_id),
-            envelope,
-            .{ .max_file_bytes = sandbox_save.max_envelope_bytes },
-        );
-        switch (result) {
-            .committed => self.setSaveFeedback(.committed, "atomic replace and sync complete"),
-            .committed_sync_warning => self.setSaveFeedback(
-                .committed_sync_warning,
-                "atomic replace committed; directory sync uncertain",
-            ),
-            .not_committed => self.setSaveFeedback(
-                .not_committed,
-                "previous committed slot retained",
-            ),
-        }
+            .{ .commit = .{
+                .authoring_transaction_pending = self.authoring_controller.snapshot().pending != null,
+            } },
+        )) {
+            .commit => |result| result,
+            .observed => unreachable,
+        };
     }
 
     fn extractPhysicsDebug(self: *App) void {
-        const config = self.developer_visualization_controller.config;
-        if (!config.enabled) return;
-        const cpu = if (self.physics_debug_cpu) |*owner| owner else {
-            self.physics_debug_batch_summary = null;
-            return;
-        };
-
-        var profile_scope = self.beginHostProfile(
-            .debug_extraction,
+        const batch = self.developer.extractPhysicsDebug(
+            self.developerAuthorityPort(),
             self.frame_timer.total_frames,
-            self.simulation.tickIndex(),
-        );
-        const batch = self.simulation.extractPhysicsDebug(.{
-            .shapes = config.shapes,
-            .bounds = config.bounds,
-            .contacts = config.contacts,
-            .centers_of_mass = config.centers_of_mass,
-            .velocities = config.velocities,
-        }, &cpu.storage) catch {
-            profile_scope.finish(.failure);
-            self.developer_visualization_controller.config.enabled = false;
-            if (self.physics_debug_overlay) |*overlay| _ = overlay.setEnabled(false);
-            return;
-        };
-        self.physics_debug_batch_summary = developer_visualization.BatchSummary.fromBatch(batch);
+            self.simulation.inspection().tickIndex(),
+        ) orelse return;
         if (build_options.validation_mode or builtin.is_test) {
             self.validation.s4_physics_debug_evidence.observe(batch);
         }
-        profile_scope.finish(.success);
-    }
-
-    fn uploadPhysicsDebug(self: *App) void {
-        const config = self.developer_visualization_controller.config;
-        if (!config.enabled) return;
-        const cpu = if (self.physics_debug_cpu) |*owner| owner else return;
-        const batch = cpu.storage.batch() orelse return;
-        const overlay = if (self.physics_debug_overlay) |*value| value else return;
-        const before = overlay.stats();
-        if (before.latest_attempted_generation == batch.generation) return;
-
-        var profile_scope = self.beginHostProfile(
-            .debug_upload,
-            self.frame_timer.total_frames,
-            batch.completed_tick,
-        );
-        const result = overlay.upload(batch);
-        if (result.status == .copy_submitted) {
-            self.mergeProfileCounts(.{
-                .debug_primitives = @as(u64, result.plan.admitted_lines) +
-                    result.plan.admitted_triangles,
-                .debug_upload_bytes = result.plan.totalBytes(),
-            });
-        }
-        profile_scope.finish(if (result.status.isFailure()) .failure else .success);
     }
 
     fn drawPhysicsDebug(self: *App, view_projection: zm.Mat) void {
-        if (!self.developer_visualization_controller.config.enabled) return;
-        const cpu = if (self.physics_debug_cpu) |*owner| owner else return;
-        _ = cpu.storage.batch() orelse return;
-        const overlay = if (self.physics_debug_overlay) |*value| value else return;
-
-        // The asynchronous retained GPU generation may lag the newest CPU
-        // batch. Keep this host span frame-scoped rather than attributing its
-        // work to a simulation tick it may not actually visualize.
-        var profile_scope = self.beginHostProfile(
-            .debug_draw,
+        self.developer.drawPhysicsDebug(
+            &self.gpu_renderer,
+            view_projection,
             self.frame_timer.total_frames,
-            null,
         );
-        const before = overlay.stats();
-        const result = overlay.drawLatest(&self.gpu_renderer, view_projection);
-        const after = overlay.stats();
-        self.mergeProfileCounts(.{
-            .draw_calls = (after.line_draw_calls -| before.line_draw_calls) +
-                (after.triangle_draw_calls -| before.triangle_draw_calls),
-        });
-        profile_scope.finish(switch (result.status) {
-            .drawn, .empty => .success,
-            else => .failure,
-        });
     }
 
-    /// Submit one renderer frame while transferring an optional debug-slot
-    /// read fence to the bounded overlay owner.
+    /// Submit one renderer frame, then let the developer owner acquire the
+    /// optional same-queue fence needed by its retained debug geometry.
     fn submitCurrentFrame(self: *App) !void {
-        const needs_debug_fence = if (self.physics_debug_overlay) |*overlay|
-            overlay.needsFrameFence()
-        else
-            false;
-        if (!needs_debug_fence) return self.gpu_renderer.submitFrame();
-
-        // First submit the real frame through the ordinary fallible path. A
-        // renderer/device failure remains a renderer failure and propagates.
         try self.gpu_renderer.submitFrame();
-
-        // Then enqueue an empty same-queue command whose fence covers that
-        // already-successful frame. Losing only this optional fence retires
-        // debug evidence without hiding frame-submission failure.
-        const fence = self.gpu_renderer.acquirePostSubmissionFence() catch {
-            if (self.physics_debug_overlay) |*overlay| {
-                overlay.noteFrameFenceFailed();
-            }
-            return;
-        };
-        if (self.physics_debug_overlay) |*overlay| {
-            _ = overlay.noteFrameSubmitted(fence);
-        } else {
-            c.SDL_ReleaseGPUFence(self.gpu_renderer.getDevice(), fence);
-        }
+        self.developer.afterSuccessfulFrameSubmission(&self.gpu_renderer);
     }
 
     fn submitInteractiveActions(
@@ -6324,64 +4822,45 @@ const App = struct {
             return;
         }
         if (actions.interact_pressed) {
-            const character_id = self.initial_character_id orelse return;
-            const vehicle_id = self.initial_vehicle_id orelse return;
-            if (self.controlled_vehicle_id) |controlled_id| {
-                try self.simulation.submitVehicle(.{ .exit = .{
-                    .vehicle_id = controlled_id,
-                    .driver_id = character_id,
-                } });
-            } else {
-                try self.simulation.submitVehicle(.{ .enter = .{
-                    .vehicle_id = vehicle_id,
-                    .driver_id = character_id,
-                } });
-            }
+            if (self.simulation.player().focusPosition() == null) return;
+            try self.simulation.player().requestVehicleToggle();
             // Authority transitions consume the tick without applying the same
             // frame sample to either locomotion target.
             return;
         }
 
-        if (self.controlled_vehicle_id) |vehicle_id| {
-            const character_id = self.initial_character_id orelse
-                return error.ControlledVehicleMissingCharacter;
-            try self.simulation.submitVehicle(.{ .drive = .{
-                .vehicle_id = vehicle_id,
-                .driver_id = character_id,
-                .input = .{
-                    .throttle = actions.move[1],
-                    .steering = actions.move[0],
-                    .brake = if (actions.brake) 1 else 0,
-                    .hand_brake = if (actions.hand_brake) 1 else 0,
-                },
-            } });
-        } else if (self.initial_character_id) |character_id| {
-            try self.submitCharacterActions(character_id, actions);
+        if (self.controlled_vehicle_id != null) {
+            const control = sandbox_host.VehicleInput{
+                .throttle = actions.move[1],
+                .steering = actions.move[0],
+                .brake = if (actions.brake) 1 else 0,
+                .hand_brake = if (actions.hand_brake) 1 else 0,
+            };
+            const sequence = try self.simulation.player().submitVehicleControl(control);
+            if (comptime build_options.validation_mode or builtin.is_test) {
+                if (self.validation.s2_smoke.drive_input_sequence == null) {
+                    self.validation.s2_smoke.drive_input_sequence = sequence;
+                }
+                if (@abs(control.steering) > 0.1 and
+                    self.validation.s2_smoke.steering_input_sequence == null)
+                {
+                    self.validation.s2_smoke.steering_input_sequence = sequence;
+                }
+                if (control.brake > 0.5 and
+                    self.validation.s2_smoke.brake_input_sequence == null)
+                {
+                    self.validation.s2_smoke.brake_input_sequence = sequence;
+                }
+            }
+        } else if (self.simulation.player().focusPosition() != null) {
+            try self.submitCharacterActions(actions);
         }
     }
 
     fn submitInteractionToggle(self: *App) !void {
         if (self.controlled_vehicle_id != null) return;
-        const carrier_id = self.initial_character_id orelse return;
-        const carryable_id = self.initial_carryable_id orelse return;
-        const view = try self.simulation.carryable(carryable_id);
-        const transaction_id = try self.interaction_transactions.take();
-        const command: sandbox_host.InteractionCommand = switch (view.ownership) {
-            .district_owned => .{ .collect = .{
-                .transaction_id = transaction_id,
-                .carrier_id = carrier_id,
-                .carryable_id = carryable_id,
-            } },
-            .inventory_held => |holder| if (std.meta.eql(holder, carrier_id))
-                .{ .drop = .{
-                    .transaction_id = transaction_id,
-                    .carrier_id = carrier_id,
-                    .carryable_id = carryable_id,
-                } }
-            else
-                return error.InteractionCarryableHeldByAnotherCarrier,
-        };
-        self.simulation.submitInteraction(command) catch |err| {
+        if (self.simulation.player().focusPosition() == null) return;
+        self.simulation.player().requestInteractionToggle() catch |err| {
             self.interaction_submission_failures +|= 1;
             return err;
         };
@@ -6403,8 +4882,8 @@ const App = struct {
                 else => return,
             }
         }
-        if (self.simulation.activeDistrictTicketFor(district_west_coord) == null) return;
-        try self.simulation.submitInteraction(.{ .spawn = .{
+        if (self.simulation.districts().activeTicket(district_west_coord) == null) return;
+        try self.simulation.interactions().submit(.{ .spawn = .{
             .request_id = 1,
             .pose = .{ .position = if (validation_composition and
                 scenario == .s7_interaction)
@@ -6420,7 +4899,7 @@ const App = struct {
         comptime validation_composition: bool,
         scenario: ScriptedScenario,
     ) !void {
-        while (self.simulation.pollInteractionOutcome()) |outcome| {
+        while (self.simulation.interactions().pollOutcome()) |outcome| {
             switch (outcome) {
                 .spawned => |spawned| {
                     if (spawned.request_id != 1 or self.initial_carryable_id != null) {
@@ -6436,41 +4915,24 @@ const App = struct {
                     }
                     self.initial_carryable_id = null;
                 },
-                .collected => |collected| {
-                    if (!std.meta.eql(collected.carrier_id, self.initial_character_id orelse
-                        return error.UnexpectedInteractionAuthorityOutcome) or
-                        !std.meta.eql(collected.carryable_id, self.initial_carryable_id orelse
-                            return error.UnexpectedInteractionAuthorityOutcome))
-                    {
-                        return error.UnexpectedInteractionAuthorityOutcome;
-                    }
-                },
-                .dropped => |dropped| {
-                    if (!std.meta.eql(dropped.carrier_id, self.initial_character_id orelse
-                        return error.UnexpectedInteractionAuthorityOutcome) or
-                        !std.meta.eql(dropped.carryable_id, self.initial_carryable_id orelse
-                            return error.UnexpectedInteractionAuthorityOutcome))
-                    {
-                        return error.UnexpectedInteractionAuthorityOutcome;
-                    }
-                },
                 .rejected => if (validation_composition and
                     scenario == .s7_interaction)
                 {
                     return error.S7InteractionCommandRejected;
                 },
             }
-            // Centralized polling observes every producer outcome. The editor
-            // receives the retained value without draining another lane.
-            self.interaction_last_outcome = outcome;
         }
+        // Raw feature observations are retained solely for developer tooling;
+        // product state changes consume the correlated PlayerRole result.
+        self.interaction_last_outcome =
+            self.simulation.developer().lastInteractionObservation();
     }
 
     fn bootstrapS7Interaction(self: *App) !void {
-        if (self.validation.profile != .s3_smoke or self.simulation.entityCount() != 0) {
+        if (self.validation.profile != .s3_smoke or self.simulation.inspection().entityCount() != 0) {
             return error.InvalidS7InteractionSmokeComposition;
         }
-        try self.simulation.submitCharacter(.{ .spawn = .{
+        try self.simulation.characters().submit(.{ .spawn = .{
             .request_id = 1,
             .position = .{ 0, 0, 0 },
         } });
@@ -6480,15 +4942,9 @@ const App = struct {
 
     fn submitCharacterActions(
         self: *App,
-        character_id: sandbox_host.PersistentId,
         actions: sandbox_controls.TickSample,
     ) !void {
-        if (!std.meta.eql(character_id, self.initial_character_id orelse
-            return error.LocalPlayerCharacterMissing))
-        {
-            return error.LocalPlayerCharacterMismatch;
-        }
-        try self.simulation.submitPlayerInput(.{
+        try self.simulation.player().submitMovement(.{
             .move = actions.move,
             .facing_yaw = self.game_camera.yaw,
             .jump_pressed = actions.jump_pressed,
@@ -6496,7 +4952,7 @@ const App = struct {
     }
 
     fn s2ScriptedActions(self: *const App) sandbox_controls.TickSample {
-        const tick = self.simulation.tickIndex();
+        const tick = self.simulation.inspection().tickIndex();
         var actions = sandbox_controls.TickSample{
             .move = .{ 0, 0 },
             .look_delta = .{ 0, 0 },
@@ -6520,7 +4976,7 @@ const App = struct {
         comptime validation_composition: bool,
         scenario: ScriptedScenario,
     ) !void {
-        while (self.simulation.pollVehicleOutcome()) |outcome| {
+        while (self.simulation.vehicles().pollOutcome()) |outcome| {
             switch (outcome) {
                 .spawned => |spawned| {
                     if (spawned.request_id != 1 or self.initial_vehicle_id != null) {
@@ -6528,98 +4984,100 @@ const App = struct {
                     }
                     self.initial_vehicle_id = spawned.id;
                 },
-                .entered => |entered| {
-                    if (self.controlled_vehicle_id != null or
-                        !std.meta.eql(entered.vehicle_id, self.initial_vehicle_id orelse
-                            return error.UnexpectedVehicleAuthorityOutcome) or
-                        !std.meta.eql(entered.driver_id, self.initial_character_id orelse
-                            return error.UnexpectedVehicleAuthorityOutcome))
-                    {
-                        return error.UnexpectedVehicleAuthorityOutcome;
-                    }
-                    self.controlled_vehicle_id = entered.vehicle_id;
-                    if (validation_composition and scenario == .s2_vehicle) {
-                        self.validation.s2_smoke.entered = true;
-                        self.validation.s2_smoke.vehicle_position_before_drive =
-                            (try self.simulation.vehicle(entered.vehicle_id)).state.chassis.pose.position;
-                        const crate_id = self.initial_crate_id orelse
-                            return error.S2VisualSmokeCrateSpawnMissing;
-                        self.validation.s2_smoke.crate_position_before_drive =
-                            (try self.simulation.crate(crate_id)).state.pose.position;
-                    }
-                },
-                .drive_applied => |applied| {
-                    if (!std.meta.eql(applied.vehicle_id, self.controlled_vehicle_id orelse
-                        return error.UnexpectedVehicleDriveOutcome) or
-                        !std.meta.eql(applied.driver_id, self.initial_character_id orelse
-                            return error.UnexpectedVehicleDriveOutcome))
-                    {
-                        return error.UnexpectedVehicleDriveOutcome;
-                    }
-                    if (validation_composition and scenario == .s2_vehicle) {
-                        self.validation.s2_smoke.drive_applied = true;
-                        self.validation.s2_smoke.steering_applied = self.validation.s2_smoke.steering_applied or
-                            @abs(applied.input.steering) > 0.1;
-                        self.validation.s2_smoke.brake_applied = self.validation.s2_smoke.brake_applied or
-                            applied.input.brake > 0.5;
-                    }
-                },
-                .exited => |exited| {
-                    if (!std.meta.eql(exited.vehicle_id, self.controlled_vehicle_id orelse
-                        return error.UnexpectedVehicleAuthorityOutcome) or
-                        !std.meta.eql(exited.driver_id, self.initial_character_id orelse
-                            return error.UnexpectedVehicleAuthorityOutcome))
-                    {
-                        return error.UnexpectedVehicleAuthorityOutcome;
-                    }
-                    self.controlled_vehicle_id = null;
-                    if (validation_composition and scenario == .s2_vehicle) {
-                        self.validation.s2_smoke.exited = true;
-                    }
-                },
-                .abandoned => return error.UnexpectedVehicleAbandonOutcome,
-                .rejected => |rejected| if (validation_composition) switch (scenario) {
-                    .s1_character, .s2_vehicle, .s3_streaming, .s4_physics_debug, .s7_interaction => return error.ScriptedVehicleCommandRejected,
-                    .none => if (interactiveVehicleRejectionExpected(rejected)) {
-                        // Interactive domain rejections are healthy outcomes,
-                        // not host failures. Preserve them in the bounded
-                        // diagnostic journal so the editor/JSON consumer can
-                        // explain why the attempted transition did not occur.
-                        _ = self.simulation.recordDiagnostic(.{
-                            .severity = .info,
-                            .category = .command,
-                            .code = diagnostic_interactive_vehicle_rejected,
-                            .tick_index = self.simulation.tickIndex(),
-                            .frame_index = self.frame_timer.total_frames,
-                            .thread_role = .host,
-                            .thread_id = engine.diagnostics.currentThreadId(),
-                            .persistent_id = rejected.vehicle_id,
-                            .correlation_id = @as(u64, @intFromEnum(rejected.reason)) + 1,
-                        });
-                    } else return error.UnexpectedVehicleCommandRejection,
-                } else if (interactiveVehicleRejectionExpected(rejected)) {
-                    _ = self.simulation.recordDiagnostic(.{
-                        .severity = .info,
-                        .category = .command,
-                        .code = diagnostic_interactive_vehicle_rejected,
-                        .tick_index = self.simulation.tickIndex(),
-                        .frame_index = self.frame_timer.total_frames,
-                        .thread_role = .host,
-                        .thread_id = engine.diagnostics.currentThreadId(),
-                        .persistent_id = rejected.vehicle_id,
-                        .correlation_id = @as(u64, @intFromEnum(rejected.reason)) + 1,
-                    });
+                .rejected => if (validation_composition) switch (scenario) {
+                    .none, .s1_character, .s2_vehicle, .s3_streaming, .s4_physics_debug, .s7_interaction => return error.ScriptedVehicleCommandRejected,
                 } else return error.UnexpectedVehicleCommandRejection,
                 .despawned => return error.UnexpectedVehicleBootstrapOutcome,
             }
         }
     }
 
+    fn processPlayerActionResults(
+        self: *App,
+        comptime validation_composition: bool,
+        scenario: ScriptedScenario,
+    ) !void {
+        while (self.simulation.player().pollVehicleActionResult()) |result| {
+            switch (result.disposition) {
+                .entered => {
+                    if (result.action != .enter or self.controlled_vehicle_id != null) {
+                        return error.UnexpectedVehicleClientResult;
+                    }
+                    self.controlled_vehicle_id = result.vehicle;
+                    if (validation_composition and scenario == .s2_vehicle) {
+                        self.validation.s2_smoke.entered = true;
+                        self.validation.s2_smoke.vehicle_position_before_drive =
+                            (try self.simulation.vehicles().view(self.initial_vehicle_id.?)).state.chassis.pose.position;
+                        const crate_id = self.initial_crate_id orelse
+                            return error.S2VisualSmokeCrateSpawnMissing;
+                        self.validation.s2_smoke.crate_position_before_drive =
+                            (try self.simulation.crates().view(crate_id)).state.pose.position;
+                    }
+                },
+                .exited => {
+                    if (result.action != .exit or
+                        !std.meta.eql(result.vehicle, self.controlled_vehicle_id orelse
+                            return error.UnexpectedVehicleClientResult))
+                    {
+                        return error.UnexpectedVehicleClientResult;
+                    }
+                    self.controlled_vehicle_id = null;
+                    if (validation_composition and scenario == .s2_vehicle) {
+                        self.validation.s2_smoke.exited = true;
+                    }
+                },
+                else => if (validation_composition and scenario != .none) {
+                    return error.ScriptedVehicleCommandRejected;
+                } else if (interactiveVehicleRejectionExpected(result)) {
+                    _ = self.simulation.developer().record(.{
+                        .severity = .info,
+                        .category = .command,
+                        .code = diagnostic_interactive_vehicle_rejected,
+                        .tick_index = self.simulation.inspection().tickIndex(),
+                        .frame_index = self.frame_timer.total_frames,
+                        .thread_role = .host,
+                        .thread_id = engine.diagnostics.currentThreadId(),
+                        .persistent_id = null,
+                        .correlation_id = @as(u64, @intFromEnum(result.disposition)) + 1,
+                    });
+                } else return error.UnexpectedVehicleClientRejection,
+            }
+        }
+
+        while (self.simulation.player().pollInteractionActionResult()) |result| {
+            self.interaction_last_player_result = result;
+            switch (result.disposition) {
+                .collected => if (result.action != .collect) {
+                    return error.UnexpectedInteractionClientResult;
+                },
+                .dropped => if (result.action != .drop) {
+                    return error.UnexpectedInteractionClientResult;
+                },
+                else => {
+                    self.interaction_submission_failures +|= 1;
+                    if (validation_composition and scenario == .s7_interaction) {
+                        return error.S7InteractionCommandRejected;
+                    }
+                },
+            }
+        }
+    }
+
     fn observeS2State(self: *App) !void {
         if (!self.validation.s2_smoke.entered or self.validation.s2_smoke.exited) return;
+        const acknowledged = self.simulation.player().lastAcknowledgedInput();
+        if (self.validation.s2_smoke.drive_input_sequence) |sequence| {
+            self.validation.s2_smoke.drive_applied = acknowledged >= sequence;
+        }
+        if (self.validation.s2_smoke.steering_input_sequence) |sequence| {
+            self.validation.s2_smoke.steering_applied = acknowledged >= sequence;
+        }
+        if (self.validation.s2_smoke.brake_input_sequence) |sequence| {
+            self.validation.s2_smoke.brake_applied = acknowledged >= sequence;
+        }
         const vehicle_id = self.initial_vehicle_id orelse
             return error.S2VisualSmokeVehicleSpawnMissing;
-        const vehicle = try self.simulation.vehicle(vehicle_id);
+        const vehicle = try self.simulation.vehicles().view(vehicle_id);
         if (self.validation.s2_smoke.vehicle_position_before_drive) |before| {
             self.validation.s2_smoke.vehicle_moved = self.validation.s2_smoke.vehicle_moved or
                 distanceSquared(before, vehicle.state.chassis.pose.position) > 1;
@@ -6630,7 +5088,7 @@ const App = struct {
         if (self.validation.s2_smoke.crate_position_before_drive) |before| {
             const crate_id = self.initial_crate_id orelse
                 return error.S2VisualSmokeCrateSpawnMissing;
-            const position = (try self.simulation.crate(crate_id)).state.pose.position;
+            const position = (try self.simulation.crates().view(crate_id)).state.pose.position;
             self.validation.s2_smoke.crate_displaced = self.validation.s2_smoke.crate_displaced or
                 distanceSquared(before, position) > 0.04;
         }
@@ -6644,52 +5102,17 @@ const App = struct {
         var stream_gpu_profile = self.beginHostProfile(
             .stream_gpu_pump,
             self.frame_timer.total_frames,
-            self.simulation.tickIndex(),
+            self.simulation.inspection().tickIndex(),
         );
         defer stream_gpu_profile.finish(.failure);
         if (build_options.validation_mode or builtin.is_test) {
             if (self.validation.s4_fault_loop_probe) |probe| probe.gpu_pump_calls += 1;
         }
-        var residency_before: [district_stream_slot_count]?district_gpu_registry.Residency =
-            @splat(null);
-        for (self.district_stream_slots, 0..) |slot, slot_index| {
-            if (districtSceneHandle(slot.state)) |scene| {
-                residency_before[slot_index] = try self.districtResidency(scene);
-            }
-        }
-        const district_gpu_progress = try self.district_registry.pump();
-        for (self.district_stream_slots, 0..) |slot, slot_index| {
-            const scene = districtSceneHandle(slot.state) orelse continue;
-            const after = try self.districtResidency(scene) orelse continue;
-            if (after == .submitted and residency_before[slot_index] != .submitted) {
-                self.recordDistrictStreamTransition(
-                    slot_index,
-                    .info,
-                    .rendering,
-                    engine.diagnostic_contracts.codes.district_stream_gpu_submitted,
-                    null,
-                );
-            }
-            if (after == .resident and residency_before[slot_index] != .resident) {
-                self.recordDistrictStreamTransition(
-                    slot_index,
-                    .info,
-                    .rendering,
-                    engine.diagnostic_contracts.codes.district_stream_gpu_resident,
-                    null,
-                );
-            }
-        }
-        if (district_gpu_progress.published_scenes > 0) {
-            std.debug.print(
-                "Cooked district GPU resident: scenes={d} bytes={d}\n",
-                .{
-                    district_gpu_progress.published_scenes,
-                    (try self.district_registry.stats()).resident_gpu_bytes,
-                },
-            );
-        }
-        const district_gpu_stats = try self.district_registry.stats();
+        const district_gpu_progress = try self.district_streaming.pumpGpu(
+            self.districtAuthorityPort(),
+            self.frame_timer.total_frames,
+        );
+        const district_gpu_stats = district_gpu_progress.usage;
         self.mergeProfileCounts(.{
             .streaming_submissions = district_gpu_progress.submitted_scenes,
             .streaming_publishes = district_gpu_progress.published_scenes,
@@ -6700,18 +5123,7 @@ const App = struct {
                 district_gpu_stats.resident_gpu_bytes,
         });
         stream_gpu_profile.finish(.success);
-        if (self.physics_debug_overlay) |*overlay| {
-            _ = overlay.poll();
-            const debug_resources = overlay.stats().resources;
-            self.mergeProfileCounts(.{
-                .live_resources = @as(u64, debug_resources.gpu_buffer_count) +
-                    debug_resources.transfer_buffer_count +
-                    debug_resources.live_owned_fences,
-                .live_resource_bytes = debug_resources.gpu_bytes +|
-                    debug_resources.transfer_bytes,
-            });
-        }
-        self.uploadPhysicsDebug();
+        self.developer.preparePhysicsDebugFrame(self.frame_timer.total_frames);
 
         // Begin the frame (clears screen)
         switch (try self.gpu_renderer.beginFrame(renderer.Colors.CORNFLOWER_BLUE)) {
@@ -6733,39 +5145,39 @@ const App = struct {
         var scene_extraction_profile = self.beginHostProfile(
             .scene_extraction,
             self.frame_timer.total_frames,
-            self.simulation.tickIndex(),
+            self.simulation.inspection().tickIndex(),
         );
         defer scene_extraction_profile.finish(.failure);
-        const character_draws = try self.simulation.characterPresentation(alpha);
-        const vehicle_draws = try self.simulation.vehiclePresentation(alpha);
-        const district_draws = try self.simulation.districtPresentation();
-        const crate_draws = try self.simulation.presentation(alpha);
-        const carryable_draws = try self.simulation.interactionPresentation();
-        const npc_draws = try self.simulation.npcPresentation(alpha);
+        const character_draws = self.simulation.presentation().characters(alpha);
+        const vehicle_draws = self.simulation.presentation().vehicles(alpha);
+        const district_draws = try self.simulation.districts().presentation();
+        const crate_draws = try self.simulation.crates().presentation(alpha);
+        const carryable_draws = self.simulation.presentation().carryables(alpha);
+        const npc_draws = self.simulation.presentation().npcs(alpha);
         if (self.controlled_vehicle_id) |controlled_id| {
-            var vehicle_found = false;
             for (vehicle_draws) |draw| {
-                if (std.meta.eql(draw.persistent_id, controlled_id)) {
+                if (std.meta.eql(draw.entity, controlled_id)) {
                     self.game_camera.followTarget(.{
                         draw.chassis_pose.position[0],
                         draw.chassis_pose.position[1] + 1,
                         draw.chassis_pose.position[2],
                     }, 8.0);
-                    vehicle_found = true;
                     break;
                 }
             }
-            if (!vehicle_found) return error.ControlledVehiclePresentationMissing;
-        } else if (self.initial_character_id) |player_id| {
-            var player_found = false;
+            // A reliable action result can precede the corresponding
+            // replication lane on a reordered transport. Keep the previous
+            // camera target until the controlled vehicle becomes visible.
+        } else {
             for (character_draws) |draw| {
-                if (std.meta.eql(draw.persistent_id, player_id)) {
+                if (draw.local_player) {
                     self.game_camera.followTarget(draw.camera_target, 6.0);
-                    player_found = true;
                     break;
                 }
             }
-            if (!player_found) return error.PlayerPresentationMissing;
+            // Initial admission/admin outcomes may precede the first client
+            // projection. Keep the previous target until presentation catches
+            // up; validation scenarios require eventual evidence separately.
         }
 
         // Get view-projection matrix from camera
@@ -6775,7 +5187,7 @@ const App = struct {
         var scene_draw_profile = self.beginHostProfile(
             .scene_draw,
             self.frame_timer.total_frames,
-            self.simulation.tickIndex(),
+            self.simulation.inspection().tickIndex(),
         );
         defer scene_draw_profile.finish(.failure);
         var scene_draw_calls: u64 = 0;
@@ -6808,9 +5220,8 @@ const App = struct {
         }
 
         for (district_draws) |draw| {
-            const slot_index = self.districtSlotIndexForCoord(draw.build.coord) orelse
-                return error.DistrictPresentationSlotMissing;
-            const scene = try self.district_stream_slots[slot_index].presentation.resolve(
+            const scene = try self.district_streaming.resolve(
+                draw.build.coord,
                 draw.ticket,
                 draw.assets.scene,
             );
@@ -7032,7 +5443,7 @@ const App = struct {
         var editor_profile = self.beginHostProfile(
             .editor,
             self.frame_timer.total_frames,
-            self.simulation.tickIndex(),
+            self.simulation.inspection().tickIndex(),
         );
         defer editor_profile.finish(.failure);
         try self.drawDeveloperOverlay();
@@ -7042,7 +5453,7 @@ const App = struct {
         var submission_profile = self.beginHostProfile(
             .submission,
             self.frame_timer.total_frames,
-            self.simulation.tickIndex(),
+            self.simulation.inspection().tickIndex(),
         );
         defer submission_profile.finish(.failure);
         try self.submitCurrentFrame();
@@ -7054,7 +5465,7 @@ const App = struct {
             .first_rotation = if (crate_draws.len > 0) crate_draws[0].pose.rotation else null,
             .character_count = character_draws.len,
             .character_id = if (character_draws.len > 0)
-                character_draws[0].persistent_id
+                character_draws[0].entity
             else
                 null,
             .character_position = if (character_draws.len > 0)
@@ -7063,13 +5474,13 @@ const App = struct {
                 null,
             .vehicle_count = vehicle_draws.len,
             .vehicle_id = if (vehicle_draws.len > 0)
-                vehicle_draws[0].persistent_id
+                vehicle_draws[0].entity
             else
                 null,
             .district_count = district_draws.len,
             .carryable_count = carryable_draws.len,
             .carryable_id = if (carryable_draws.len > 0)
-                carryable_draws[0].persistent_id
+                carryable_draws[0].entity
             else
                 null,
             .npc_count = npc_draws.len,
@@ -7077,36 +5488,22 @@ const App = struct {
     }
 
     fn drawDeveloperOverlay(self: *App) !void {
-        self.developer_control_requests.clear();
-        self.developer_diagnostic_requests.clear();
-        self.developer_visualization_requests.clear();
         self.authoring_requests.clear();
         self.interaction_requests.clear();
-        const developer_snapshot = try self.developerSnapshot();
-        const visualization_snapshot = self.developerVisualizationSnapshot();
+        defer {
+            self.authoring_requests.clear();
+            self.interaction_requests.clear();
+        }
         const authoring_view = try self.crateAuthoringView();
         const interaction_view = try self.interactionEditorView();
-        const diagnostic_entries = self.simulation
-            .diagnosticJournal()
-            .borrowedChronological();
-        self.developer_editor.draw(
+        self.applyDeveloperEffects(try self.developer.drawEditor(
             &self.gpu_renderer,
+            self.developerAuthorityPort(),
+            self.developerStreamingPort(),
             .{
                 .camera = &self.game_camera,
                 .frame_timer = &self.frame_timer,
-                .developer = .{
-                    .snapshot = &developer_snapshot,
-                    .journal = diagnostic_entries,
-                    .control_requests = &self.developer_control_requests,
-                    .diagnostic_requests = &self.developer_diagnostic_requests,
-                },
-                .visualization = .{
-                    .snapshot = &visualization_snapshot,
-                    .profile_spans = self.developer_profiler.spans.view(),
-                    .profile_frames = self.developer_profiler.frames.view(),
-                    .profile_stats = self.developer_profiler.stats(),
-                    .visualization_requests = &self.developer_visualization_requests,
-                },
+                .include_district_streams = self.includeDeveloperDistrictStreams(),
                 .authoring = .{
                     .view = &authoring_view,
                     .requests = &self.authoring_requests,
@@ -7116,97 +5513,9 @@ const App = struct {
                     .requests = &self.interaction_requests,
                 },
             },
-        );
-        self.applyDeveloperControlRequests(self.developer_control_requests.slice());
-        self.applyDeveloperDiagnosticRequests(self.developer_diagnostic_requests.slice());
-        self.applyDeveloperVisualizationRequests(
-            self.developer_visualization_requests.slice(),
-        );
+        ));
         try self.applyAuthoringRequests(self.authoring_requests.slice());
         try self.applyInteractionRequests(self.interaction_requests.slice());
-        self.developer_control_requests.clear();
-        self.developer_diagnostic_requests.clear();
-        self.developer_visualization_requests.clear();
-        self.authoring_requests.clear();
-        self.interaction_requests.clear();
-    }
-
-    fn developerVisualizationSnapshot(self: *const App) developer_visualization.Snapshot {
-        return .{
-            .config = self.developer_visualization_controller.config,
-            .profiling_enabled = self.developer_visualization_controller.profiling_enabled,
-            .rejected_requests = self.developer_visualization_requests.rejected,
-            .cpu_available = self.physics_debug_cpu != null,
-            .batch = self.physics_debug_batch_summary,
-            .gpu = if (self.physics_debug_overlay) |*overlay| blk: {
-                const stats = overlay.stats();
-                const resources = stats.resources;
-                const uploaded = stats.latest_uploaded_generation != 0;
-                break :blk developer_visualization.GpuSummary{
-                    .available = true,
-                    .enabled = stats.mode == .enabled,
-                    .uploaded_generation = stats.latest_uploaded_generation,
-                    .line_vertices = if (uploaded) stats.retained_line_vertices else 0,
-                    .triangle_vertices = if (uploaded) stats.retained_triangle_vertices else 0,
-                    .upload_bytes = if (uploaded) stats.retained_upload_bytes else 0,
-                    .uploads = stats.successful_uploads,
-                    .draws = stats.draw_calls,
-                    .dropped_batches = stats.failed_uploads +| stats.skipped_uploads,
-                    .failures = stats.failed_uploads,
-                    .backpressure_drops = stats.backpressure_drops,
-                    .slot_count = resources.slot_count,
-                    .free_slots = resources.free_slots,
-                    .busy_slots = resources.busy_slots,
-                    .copy_pending_slots = resources.copy_pending_slots,
-                    .retired_slots = resources.retired_slots,
-                    .live_fences = resources.live_owned_fences,
-                    .peak_fences = resources.peak_owned_fences,
-                    .max_fences = resources.max_owned_fences,
-                    .frame_fence_failures = stats.frame_fence_failures,
-                    .slot_retirements = stats.slot_retirements,
-                };
-            } else developer_visualization.GpuSummary{
-                .available = false,
-                .enabled = false,
-                .uploaded_generation = 0,
-                .line_vertices = 0,
-                .triangle_vertices = 0,
-                .upload_bytes = 0,
-                .uploads = 0,
-                .draws = 0,
-                .dropped_batches = 0,
-                .failures = 0,
-                .backpressure_drops = 0,
-                .slot_count = 0,
-                .free_slots = 0,
-                .busy_slots = 0,
-                .copy_pending_slots = 0,
-                .retired_slots = 0,
-                .live_fences = 0,
-                .peak_fences = 0,
-                .max_fences = 0,
-                .frame_fence_failures = 0,
-                .slot_retirements = 0,
-            },
-        };
-    }
-
-    fn applyDeveloperVisualizationRequests(
-        self: *App,
-        requests: []const developer_visualization.Request,
-    ) void {
-        var clear_profile_history = false;
-        const overlay_enable_request = requestedVisualizationEnable(requests);
-        for (requests) |request| {
-            clear_profile_history = self.developer_visualization_controller.apply(request) or
-                clear_profile_history;
-        }
-        if (overlay_enable_request) |enabled| {
-            if (self.physics_debug_overlay) |*overlay| {
-                _ = overlay.setEnabled(enabled);
-            }
-        }
-        if (clear_profile_history) self.developer_profiler.clearRetained();
     }
 
     /// Minimal frame used after a retained Runtime system fault. It deliberately
@@ -7224,33 +5533,7 @@ const App = struct {
         try self.submitCurrentFrame();
         return true;
     }
-
-    /// Print debug statistics
-    fn printDebugStats(self: *App) void {
-        std.debug.print("FPS: {d:.1} | Frame time: {d:.2}ms | Sim ticks: {d} | Ticks/frame: {d}\n", .{
-            self.frame_timer.getFps(),
-            self.frame_timer.getDeltaTime() * 1000.0,
-            self.simulation.tickIndex(),
-            self.frame_timer.ticks_this_frame,
-        });
-    }
 };
-
-fn developerGpuUsage(stats: district_gpu_registry.Stats) developer_diagnostics.GpuUsage {
-    return .{
-        .staged_cpu_bytes = stats.staged_cpu_bytes,
-        .staged_upload_bytes = stats.staged_upload_bytes,
-        .in_flight_upload_bytes = stats.in_flight_upload_bytes,
-        .resident_gpu_bytes = stats.resident_gpu_bytes,
-        .live_scenes = stats.live_scenes,
-        .reserved_scenes = stats.reserved_scenes,
-        .staged_scenes = stats.staged_scenes,
-        .submitted_scenes = stats.submitted_scenes,
-        .retiring_scenes = stats.retiring_scenes,
-        .resident_scenes = stats.resident_scenes,
-        .active_batches = stats.active_batches,
-    };
-}
 
 // ============================================================================
 // Entry Point
@@ -7298,12 +5581,12 @@ fn runInitFailureSmoke(io: std.Io) !RunSummary {
         );
         defer without_debug_pipelines.deinit();
         if (without_debug_pipelines.gpu_renderer.physicsDebugPipelinesAvailable() or
-            without_debug_pipelines.physics_debug_overlay != null)
+            without_debug_pipelines.developer.physicsDebugAvailable())
         {
             return error.OptionalPhysicsDebugPipelineIsolationFailed;
         }
-        try without_debug_pipelines.simulation.tick();
-        if (without_debug_pipelines.simulation.tickIndex() != 1) {
+        try without_debug_pipelines.simulation.lifecycle().tick();
+        if (without_debug_pipelines.simulation.inspection().tickIndex() != 1) {
             return error.OptionalPhysicsDebugPipelineAuthorityDidNotAdvance;
         }
         std.debug.print(
@@ -7331,7 +5614,7 @@ pub fn main(init: std.process.Init) !void {
 fn productMain(init: std.process.Init, args: anytype) !void {
     const mode = try parseProductMode(args);
     const configured_content_root = try parseContentRootOverride(args);
-    const resolved_content_root = try resolveContentRoot(
+    const resolved_content_root = try sandbox_invocation.resolveContentRoot(
         init.io,
         init.arena.allocator(),
         configured_content_root orelse if (init.environ_map.get(
@@ -7340,6 +5623,7 @@ fn productMain(init: std.process.Init, args: anytype) !void {
             try content.ContentRootPath.parse(environment_root)
         else
             null,
+        .product,
     );
     if (mode == .verify_install) {
         try verifyInstalledContent(
@@ -7377,7 +5661,7 @@ fn initValidationApp(
     io: std.Io,
     mode: ProgramMode,
     content_root: ?content.ContentRootPath,
-    save_root: ?save_slots.RootPath,
+    save_root: ?SaveRootPath,
 ) !App {
     return switch (mode) {
         .normal, .s4_physics_debug_smoke => initValidationAppWithProfile(
@@ -7434,7 +5718,7 @@ fn initValidationAppWithProfile(
     io: std.Io,
     comptime profile: BootstrapProfile,
     content_root: ?content.ContentRootPath,
-    save_root: ?save_slots.RootPath,
+    save_root: ?SaveRootPath,
 ) !App {
     if (save_root) |root| {
         return App.initWithSaveRoot(io, profile, content_root, root);
@@ -7479,10 +5763,11 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         .s4_diagnostics_smoke,
         .s4_physics_debug_smoke,
         .s5_authoring_smoke,
-        => try resolveContentRoot(
+        => try sandbox_invocation.resolveContentRoot(
             init.io,
             init.arena.allocator(),
             configured_content_root,
+            .validation,
         ),
         else => null,
     };
@@ -7604,7 +5889,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                     summary.crate_presented_frames,
                     summary.position_changed,
                     summary.rotation_changed,
-                    app.simulation.tickIndex(),
+                    app.simulation.inspection().tickIndex(),
                     summary.min_alpha,
                     summary.max_alpha,
                     config.virtual_render_hz,
@@ -7628,7 +5913,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                     summary.character_presented_frames,
                     summary.character_position_changed,
                     summary.character_jump_observed,
-                    app.simulation.tickIndex(),
+                    app.simulation.inspection().tickIndex(),
                     summary.min_alpha,
                     summary.max_alpha,
                     config.virtual_render_hz,
@@ -7657,7 +5942,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                     summary.character_hidden_while_driving,
                     summary.character_visible_after_exit,
                     app.validation.s2_smoke.exited,
-                    app.simulation.tickIndex(),
+                    app.simulation.inspection().tickIndex(),
                     summary.min_alpha,
                     summary.max_alpha,
                     config.virtual_render_hz,
@@ -7775,7 +6060,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         },
         .s8_population_smoke => |config| {
             const summary = try app.runS8PopulationSmoke(config);
-            const npc = app.simulation.diagnostics().npc;
+            const npc = app.simulation.developer().diagnostics().npc;
             std.debug.print(
                 "S8_POPULATION_SMOKE_RESULT frames={d} ticks={d} " ++
                     "zero_tick_frames={d} multi_tick_frames={d} " ++
@@ -7859,15 +6144,16 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
             s4_diagnostics_summary = summary;
         },
         .s4_physics_debug_smoke => |config| {
-            app.developer_visualization_controller.config.enabled = true;
-            if (app.physics_debug_overlay) |*overlay| {
-                _ = overlay.setEnabled(true);
-            } else {
+            app.developer.applyVisualizationRequests(
+                &.{.{ .set_enabled = true }},
+            );
+            if (!app.developer.physicsDebugAvailable()) {
                 return error.S4PhysicsDebugGpuUnavailable;
             }
             const summary = try app.runValidation(config, .s4_physics_debug);
-            const gpu = app.physics_debug_overlay.?.stats();
-            const profile_stats = app.developer_profiler.stats();
+            const gpu = app.developer.physicsDebugStats() orelse
+                return error.S4PhysicsDebugGpuUnavailable;
+            const profile_stats = app.developer.profileStats();
             std.debug.print(
                 "S4_PHYSICS_DEBUG_SMOKE_RESULT ready_frames={d} ticks={d} " ++
                     "batches={d} peak_lines={d} peak_triangles={d} dropped={d} " ++
@@ -7879,7 +6165,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                     "profile_overwrites={d} virtual_render_hz={d} gpu_driver={s}\n",
                 .{
                     summary.ready_frames,
-                    app.simulation.tickIndex(),
+                    app.simulation.inspection().tickIndex(),
                     app.validation.s4_physics_debug_evidence.batches,
                     app.validation.s4_physics_debug_evidence.peak_lines,
                     app.validation.s4_physics_debug_evidence.peak_triangles,
@@ -7959,17 +6245,6 @@ test "app structure exists" {
     _ = App;
 }
 
-test "installed product compositions derive content from their own layout" {
-    try std.testing.expectEqualStrings(
-        "../share/incinerator/content",
-        defaultContentRootRelative(false),
-    );
-    try std.testing.expectEqualStrings(
-        "../../share/incinerator/content",
-        defaultContentRootRelative(true),
-    );
-}
-
 test "window suspension discards pending and held gameplay actions" {
     var input_buffer = input.InputBuffer.init(1);
     input_buffer.window_minimized = true;
@@ -7996,260 +6271,11 @@ test "window suspension discards pending and held gameplay actions" {
     try std.testing.expect(!after_restore.hand_brake);
 }
 
-test "program mode parsing keeps visual smoke explicit and bounded" {
-    const normal_args = [_][]const u8{"incinerator"};
-    const normal = try parseProgramMode(&normal_args);
-    try std.testing.expect(normal == .normal);
-    const configured_root_args = [_][]const u8{
-        "incinerator",
-        "--content-root=/tmp/incinerator-content",
-    };
-    try std.testing.expect((try parseProgramMode(&configured_root_args)) == .normal);
-    const configured_root = (try parseContentRootOverride(&configured_root_args)).?;
-    try std.testing.expectEqualStrings("/tmp/incinerator-content", configured_root.bytes());
-    const configured_save_args = [_][]const u8{
-        "incinerator",
-        "--save-root=/tmp/incinerator-saves",
-    };
-    try std.testing.expect((try parseProgramMode(&configured_save_args)) == .normal);
-    const configured_save = (try parseSaveRootOverride(&configured_save_args)).?;
-    try std.testing.expectEqualStrings("/tmp/incinerator-saves", configured_save.bytes());
-    const smoke_args = [_][]const u8{
-        "incinerator",
-        "--visual-smoke",
-        "--frames=160",
-        "--virtual-render-hz=80",
-    };
-    const smoke = try parseProgramMode(&smoke_args);
-    try std.testing.expectEqual(@as(u64, 160), smoke.visual_smoke.frames);
-    try std.testing.expectEqual(@as(u32, 80), smoke.visual_smoke.virtual_render_hz);
-    const s1_smoke = try parseProgramMode(&[_][]const u8{
-        "incinerator",
-        "--s1-visual-smoke",
-        "--frames=240",
-        "--virtual-render-hz=120",
-    });
-    try std.testing.expectEqual(@as(u64, 240), s1_smoke.s1_visual_smoke.frames);
-    const s2_smoke = try parseProgramMode(&[_][]const u8{
-        "incinerator",
-        "--s2-visual-smoke",
-    });
-    try std.testing.expectEqual(@as(u64, 1_440), s2_smoke.s2_visual_smoke.frames);
-    try std.testing.expectEqual(@as(u32, 240), s2_smoke.s2_visual_smoke.virtual_render_hz);
-    const s2_expected = try smokeExpectation(s2_smoke.s2_visual_smoke);
-    try std.testing.expectEqual(s2_required_ticks, s2_expected.ticks);
-    const s3_smoke = try parseProgramMode(&[_][]const u8{
-        "incinerator",
-        "--s3-streaming-smoke",
-        "--virtual-render-hz=80",
-    });
-    try std.testing.expectEqual(@as(u64, 1_200), s3_smoke.s3_streaming_smoke.frames);
-    try std.testing.expectEqual(@as(u32, 80), s3_smoke.s3_streaming_smoke.virtual_render_hz);
-    const s6_smoke = try parseProgramMode(&[_][]const u8{
-        "incinerator",
-        "--s6-streaming-smoke",
-        "--frames=120",
-        "--virtual-render-hz=240",
-    });
-    try std.testing.expectEqual(@as(u64, 120), s6_smoke.s6_streaming_smoke.frames);
-    try std.testing.expectEqual(@as(u32, 240), s6_smoke.s6_streaming_smoke.virtual_render_hz);
-    const s7_smoke = try parseProgramMode(&[_][]const u8{
-        "incinerator",
-        "--s7-interaction-smoke",
-        "--virtual-render-hz=80",
-    });
-    try std.testing.expectEqual(@as(u64, 1_200), s7_smoke.s7_interaction_smoke.frames);
-    try std.testing.expectEqual(@as(u32, 80), s7_smoke.s7_interaction_smoke.virtual_render_hz);
-    const s8_smoke = try parseProgramMode(&[_][]const u8{
-        "incinerator",
-        "--s8-population-smoke",
-    });
-    try std.testing.expectEqual(@as(u64, 3_600), s8_smoke.s8_population_smoke.frames);
-    try std.testing.expectEqual(@as(u32, 240), s8_smoke.s8_population_smoke.virtual_render_hz);
-    const window_smoke = try parseProgramMode(&[_][]const u8{
-        "incinerator",
-        "--window-lifecycle-smoke",
-    });
-    try std.testing.expect(window_smoke == .window_lifecycle_smoke);
-    const init_failure_smoke = try parseProgramMode(&[_][]const u8{
-        "incinerator",
-        "--init-failure-smoke",
-    });
-    try std.testing.expect(init_failure_smoke == .init_failure_smoke);
-    const s4_diagnostics_smoke = try parseProgramMode(&[_][]const u8{
-        "incinerator",
-        "--s4-diagnostics-smoke",
-    });
-    try std.testing.expect(s4_diagnostics_smoke == .s4_diagnostics_smoke);
-    const s4_physics_debug_smoke = try parseProgramMode(&[_][]const u8{
-        "incinerator",
-        "--s4-physics-debug-smoke",
-    });
-    try std.testing.expectEqual(
-        @as(u64, 600),
-        s4_physics_debug_smoke.s4_physics_debug_smoke.frames,
-    );
-    try std.testing.expectEqual(
-        @as(u32, 80),
-        s4_physics_debug_smoke.s4_physics_debug_smoke.virtual_render_hz,
-    );
-    const s5_authoring_smoke = try parseProgramMode(&[_][]const u8{
-        "incinerator",
-        "--s5-authoring-smoke",
-        "--save-root=/tmp/incinerator-s5",
-    });
-    try std.testing.expect(s5_authoring_smoke == .s5_authoring_smoke);
-    const above = try smokeExpectation(.{ .frames = 480, .virtual_render_hz = 240 });
-    try std.testing.expectEqual(@as(u64, 240), above.ticks);
-    try std.testing.expectEqual(@as(f32, 0), above.min_alpha);
-    try std.testing.expectEqual(@as(f32, 0.5), above.max_alpha);
-    const below = try smokeExpectation(.{ .frames = 160, .virtual_render_hz = 80 });
-    try std.testing.expectEqual(@as(u64, 240), below.ticks);
-    try std.testing.expectEqual(@as(f32, 0), below.min_alpha);
-    try std.testing.expectEqual(@as(f32, 0.5), below.max_alpha);
-    try std.testing.expectError(
-        error.VisualSmokeOptionWithoutMode,
-        parseProgramMode(&[_][]const u8{ "incinerator", "--frames=1" }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{ "incinerator", "--verify-install", "--visual-smoke" }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--visual-smoke",
-            "--s1-visual-smoke",
-        }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--s1-visual-smoke",
-            "--s2-visual-smoke",
-        }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--s3-streaming-smoke",
-            "--s6-streaming-smoke",
-        }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--s6-streaming-smoke",
-            "--s7-interaction-smoke",
-        }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--s7-interaction-smoke",
-            "--s8-population-smoke",
-        }),
-    );
-    try std.testing.expectError(
-        error.DuplicateArgument,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--s8-population-smoke",
-            "--s8-population-smoke",
-        }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--window-lifecycle-smoke",
-            "--init-failure-smoke",
-        }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--s4-diagnostics-smoke",
-            "--window-lifecycle-smoke",
-        }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--s4-diagnostics-smoke",
-            "--s4-physics-debug-smoke",
-        }),
-    );
-    try std.testing.expectError(
-        error.VisualSmokeOptionWithoutMode,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--s4-diagnostics-smoke",
-            "--frames=8",
-        }),
-    );
-    try std.testing.expectError(
-        error.VisualSmokeOptionWithoutMode,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--window-lifecycle-smoke",
-            "--frames=8",
-        }),
-    );
-    try std.testing.expectError(
-        error.InvalidVirtualRenderRate,
-        parseProgramMode(&[_][]const u8{ "incinerator", "--visual-smoke", "--virtual-render-hz=0" }),
-    );
-    try std.testing.expectError(
-        error.InvalidContentRoot,
-        parseProgramMode(&[_][]const u8{ "incinerator", "--content-root=relative" }),
-    );
-    try std.testing.expectError(
-        error.InvalidSaveRoot,
-        parseProgramMode(&[_][]const u8{ "incinerator", "--save-root=relative" }),
-    );
-    try std.testing.expectError(
-        error.SaveRootRequired,
-        parseProgramMode(&[_][]const u8{ "incinerator", "--s5-authoring-smoke" }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--s2-visual-smoke",
-            "--content-root=/tmp/incinerator-content",
-        }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--s4-physics-debug-smoke",
-            "--content-root=/tmp/incinerator-content",
-        }),
-    );
-    try std.testing.expectError(
-        error.ConflictingProgramModes,
-        parseProgramMode(&[_][]const u8{
-            "incinerator",
-            "--visual-smoke",
-            "--save-root=/tmp/incinerator-saves",
-        }),
-    );
-}
-
 test "S8 population smoke summary requires exact bounded lifecycle evidence" {
     var summary = S8PopulationSmokeSummary{
         .attempted_frames = 100,
-        .ticks = 50,
-        .zero_tick_frames = 50,
+        .ticks = 25,
+        .zero_tick_frames = 75,
         .planned = s8_population_count,
         .spawned = s8_population_count,
         .despawned = s8_population_count,
@@ -8314,8 +6340,9 @@ test "S8 population smoke summary requires exact bounded lifecycle evidence" {
     summary.peak_npc_draws += 1;
     summary.zero_tick_frames = 0;
     summary.multi_tick_frames = 1;
+    summary.ticks = 150;
     try summary.validate(
-        .{ .frames = 100, .virtual_render_hz = 80 },
+        .{ .frames = 100, .virtual_render_hz = 40 },
         diagnostics,
         controllers,
     );
@@ -8326,14 +6353,14 @@ test "S8 population smoke summary requires exact bounded lifecycle evidence" {
     try std.testing.expectError(
         error.S8PopulationSmokeEvidenceMissing,
         summary.validate(
-            .{ .frames = 100, .virtual_render_hz = 80 },
+            .{ .frames = 100, .virtual_render_hz = 40 },
             diagnostics,
             leaked,
         ),
     );
 }
 
-fn s8TestIdentity(index: usize) sandbox_host.PersistentId {
+fn s8TestIdentity(index: usize) sandbox_contracts.PersistentId {
     return .{ .namespace = 88, .local = @intCast(index + 1) };
 }
 
@@ -8433,7 +6460,7 @@ test "S8 per-identity evidence rejects duplicate missing and swapped outputs" {
         .owner = district_west_coord,
     } });
 
-    const first_waiting = sandbox_host.NpcEvent{ .state_changed = .{
+    const first_waiting = sandbox_contracts.NpcEvent{ .state_changed = .{
         .id = first,
         .previous = .active,
         .current = .waiting_at_boundary,
@@ -8443,7 +6470,7 @@ test "S8 per-identity evidence rejects duplicate missing and swapped outputs" {
         error.UnexpectedS8NpcEvent,
         evidence.observeEvent(.destination_waiting, &summary, first_waiting),
     );
-    const second_waiting = sandbox_host.NpcEvent{ .state_changed = .{
+    const second_waiting = sandbox_contracts.NpcEvent{ .state_changed = .{
         .id = second,
         .previous = .active,
         .current = .waiting_at_boundary,
@@ -8496,19 +6523,6 @@ test "S8 per-identity evidence rejects duplicate missing and swapped outputs" {
     try std.testing.expectEqual(@as(u16, 2), summary.waiting_events);
 }
 
-test "expected save quiescence errors map to truthful non-commit feedback" {
-    try std.testing.expectEqualStrings(
-        "simulation commands pending",
-        saveDeferralDetail(error.CommandsPending).?,
-    );
-    try std.testing.expectEqualStrings(
-        "district transition pending",
-        saveDeferralDetail(error.DistrictTransitionPending).?,
-    );
-    try std.testing.expect(saveDeferralDetail(error.OutOfMemory) == null);
-    try std.testing.expect(saveDeferralDetail(error.DistrictComponentInvariantBroken) == null);
-}
-
 test "authoring rejection reasons retain authority-level meaning" {
     try std.testing.expectEqualStrings(
         "crate authority capacity reached",
@@ -8528,200 +6542,40 @@ test "authoring rejection reasons retain authority-level meaning" {
     );
 }
 
-test "district GPU budget backpressure is retryable without blocking logical activation" {
-    try std.testing.expect(isRetryableDistrictStageError(error.DistrictStagingBudgetExceeded));
-    try std.testing.expect(isRetryableDistrictStageError(error.DistrictResidentBudgetExceeded));
-    try std.testing.expect(!isRetryableDistrictStageError(error.OutOfMemory));
-    try std.testing.expect(!isRetryableDistrictStageError(error.InvalidSceneMaterial));
-
-    const FakeAdmission = struct {
-        events: [2]u8 = undefined,
-        count: usize = 0,
-        logical_submitted: bool = false,
-
-        fn submitLogical(self: *@This()) !void {
-            self.events[self.count] = 1;
-            self.count += 1;
-            self.logical_submitted = true;
-        }
-
-        fn stageBackpressured(self: *@This()) !bool {
-            if (!self.logical_submitted) return error.StageRanBeforeLogicalSubmit;
-            self.events[self.count] = 2;
-            self.count += 1;
-            return false;
-        }
-    };
-    var admission = FakeAdmission{};
-    try std.testing.expect(!try submitLogicalBeforeStage(
-        &admission,
-        FakeAdmission.submitLogical,
-        FakeAdmission.stageBackpressured,
-    ));
-    try std.testing.expect(admission.logical_submitted);
-    try std.testing.expectEqualSlices(u8, &.{ 1, 2 }, admission.events[0..admission.count]);
-}
-
-test "district host sequence IDs are monotonic and fail closed at exhaustion" {
-    var next: u64 = 1;
-    try std.testing.expectEqual(@as(u64, 1), try takeMonotonicId(&next));
-    try std.testing.expectEqual(@as(u64, 2), try takeMonotonicId(&next));
-    try std.testing.expectEqual(@as(u64, 3), next);
-
-    var invalid: u64 = 0;
-    try std.testing.expectError(error.DistrictSequenceExhausted, takeMonotonicId(&invalid));
-    try std.testing.expectEqual(@as(u64, 0), invalid);
-
-    var exhausted: u64 = std.math.maxInt(u64);
-    try std.testing.expectError(error.DistrictSequenceExhausted, takeMonotonicId(&exhausted));
-    try std.testing.expectEqual(std.math.maxInt(u64), exhausted);
-}
-
-test "visual host requires exactly the fixed west and east catalog coordinates" {
-    const Entry = struct { coord: sandbox_host.ChunkCoord };
-    try validateDistrictStreamCatalogEntries(&[_]Entry{
-        .{ .coord = district_west_coord },
-        .{ .coord = district_east_coord },
-    });
-    try validateDistrictStreamCatalogEntries(&[_]Entry{
-        .{ .coord = district_east_coord },
-        .{ .coord = district_west_coord },
-    });
-    try std.testing.expectError(
-        error.DistrictCatalogSlotMismatch,
-        validateDistrictStreamCatalogEntries(&[_]Entry{
-            .{ .coord = district_west_coord },
-        }),
-    );
-    try std.testing.expectError(
-        error.DistrictCatalogSlotMismatch,
-        validateDistrictStreamCatalogEntries(&[_]Entry{
-            .{ .coord = district_west_coord },
-            .{ .coord = district_west_coord },
-        }),
-    );
-    try std.testing.expectError(
-        error.DistrictCatalogSlotMismatch,
-        validateDistrictStreamCatalogEntries(&[_]Entry{
-            .{ .coord = district_west_coord },
-            .{ .coord = district_east_coord },
-            .{ .coord = .{ .x = 2, .z = 0 } },
-        }),
-    );
-}
-
-test "district drain completion is exact per scene generation" {
-    const FakeRegistry = struct {
-        handles: [2]engine.rendering.SceneHandle,
-        complete: [2]bool = .{ false, false },
-        calls: [2]u8 = .{ 0, 0 },
-
-        fn recycleComplete(
-            self: *@This(),
-            scene: engine.rendering.SceneHandle,
-        ) !bool {
-            for (self.handles, 0..) |handle, index| {
-                if (!std.meta.eql(handle, scene)) continue;
-                self.calls[index] += 1;
-                return self.complete[index];
-            }
-            return error.StaleSceneHandle;
-        }
-    };
-    const west = engine.rendering.SceneHandle{ .index = 0, .generation = 7 };
-    const east = engine.rendering.SceneHandle{ .index = 1, .generation = 3 };
-    var registry = FakeRegistry{ .handles = .{ west, east } };
-
-    registry.complete[0] = true;
-    try std.testing.expect(try districtRecycleComplete(&registry, west));
-    try std.testing.expect(!try districtRecycleComplete(&registry, east));
-    try std.testing.expectEqual([2]u8{ 1, 1 }, registry.calls);
-
-    registry.complete[1] = true;
-    try std.testing.expect(try districtRecycleComplete(&registry, east));
-    try std.testing.expectError(
-        error.StaleSceneHandle,
-        districtRecycleComplete(&registry, .{ .index = 0, .generation = 8 }),
-    );
-}
-
-test "optional physics debug CPU storage failure remains non-fatal" {
-    var fail_first = std.testing.FailingAllocator.init(
-        std.testing.allocator,
-        .{ .fail_index = 0 },
-    );
-    try std.testing.expect(
-        PhysicsDebugCpuStorage.initWithAllocator(fail_first.allocator()) == null,
-    );
-
-    // The first reservation succeeds and the second fails. The helper must
-    // release the partial owner and still report ordinary unavailability.
-    var fail_second = std.testing.FailingAllocator.init(
-        std.testing.allocator,
-        .{ .fail_index = 1 },
-    );
-    try std.testing.expect(
-        PhysicsDebugCpuStorage.initWithAllocator(fail_second.allocator()) == null,
-    );
-}
-
-test "only an explicit visualization enable request retries the GPU overlay" {
-    try std.testing.expectEqual(
-        @as(?bool, null),
-        requestedVisualizationEnable(&.{}),
-    );
-    try std.testing.expectEqual(
-        @as(?bool, null),
-        requestedVisualizationEnable(&.{.{ .set_category = .{
-            .category = .shape,
-            .enabled = false,
-        } }}),
-    );
-    try std.testing.expectEqual(
-        @as(?bool, false),
-        requestedVisualizationEnable(&.{
-            .{ .set_enabled = true },
-            .{ .set_profiling_enabled = false },
-            .{ .set_enabled = false },
-        }),
-    );
-}
-
 test "interactive vehicle rejections keep normal play healthy while carrying" {
-    const vehicle_id = engine.PersistentId{ .namespace = 9, .local = 1 };
-    const driver_id = engine.PersistentId{ .namespace = 9, .local = 2 };
+    const vehicle = sandbox_host.ReplicatedEntityId{ .index = 9, .generation = 1 };
     try std.testing.expect(interactiveVehicleRejectionExpected(.{
-        .command = .enter,
-        .reason = .driver_carrying,
-        .vehicle_id = vehicle_id,
-        .driver_id = driver_id,
+        .sequence = 1,
+        .vehicle = vehicle,
+        .action = .enter,
+        .disposition = .invalid_state,
     }));
     try std.testing.expect(interactiveVehicleRejectionExpected(.{
-        .command = .enter,
-        .reason = .too_far,
-        .vehicle_id = vehicle_id,
-        .driver_id = driver_id,
+        .sequence = 2,
+        .vehicle = vehicle,
+        .action = .enter,
+        .disposition = .too_far,
     }));
     try std.testing.expect(interactiveVehicleRejectionExpected(.{
-        .command = .exit,
-        .reason = .exit_blocked,
-        .vehicle_id = vehicle_id,
-        .driver_id = driver_id,
+        .sequence = 3,
+        .vehicle = vehicle,
+        .action = .exit,
+        .disposition = .exit_blocked,
     }));
 
     // Authority failures remain fatal to the host; only the typed interactive
     // domain outcomes above are converted into structured diagnostics.
     try std.testing.expect(!interactiveVehicleRejectionExpected(.{
-        .command = .enter,
-        .reason = .not_owned,
-        .vehicle_id = vehicle_id,
-        .driver_id = driver_id,
+        .sequence = 4,
+        .vehicle = vehicle,
+        .action = .enter,
+        .disposition = .vehicle_not_found,
     }));
     try std.testing.expect(!interactiveVehicleRejectionExpected(.{
-        .command = .drive,
-        .reason = .wrong_driver,
-        .vehicle_id = vehicle_id,
-        .driver_id = driver_id,
+        .sequence = 5,
+        .vehicle = vehicle,
+        .action = .exit,
+        .disposition = .invalid_state,
     }));
 }
 
@@ -8732,9 +6586,7 @@ test "all engine module tests are discovered" {
     std.testing.refAllDecls(@import("sandbox_controls.zig"));
     std.testing.refAllDecls(@import("sandbox_visual_resources.zig"));
     std.testing.refAllDecls(@import("editor/tool.zig"));
-    std.testing.refAllDecls(@import("district_gpu_registry.zig"));
-    std.testing.refAllDecls(@import("district_scene_adapter.zig"));
-    std.testing.refAllDecls(@import("district_presentation"));
+    std.testing.refAllDecls(district_streaming_host);
     std.testing.refAllDecls(@import("input.zig"));
     std.testing.refAllDecls(@import("mesh.zig"));
     std.testing.refAllDecls(@import("renderer.zig"));

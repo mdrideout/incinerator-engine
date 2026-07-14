@@ -75,7 +75,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !Result {
-    var authority = try authority_module.Authority.init(std.heap.page_allocator);
+    const authority = try authority_module.DedicatedAuthority.init(std.heap.page_allocator);
     var authority_live = true;
     defer if (authority_live) authority.deinit();
     var client = try session_client.Client.init(.{ .value = config.seed + 20_000 });
@@ -204,9 +204,10 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
     if (client.pending_vehicle_action != null or client.ownedVehicle() != null) {
         return error.VehicleTrialDidNotExit;
     }
-    const action_result = client.last_vehicle_action_result orelse
-        return error.VehicleTrialMissingActionResult;
-    if (action_result.action != .exit or action_result.disposition != .exited) {
+    var action_result: ?protocol.VehicleActionResult = null;
+    while (client.takeVehicleActionResult()) |result| action_result = result;
+    const final_action_result = action_result orelse return error.VehicleTrialMissingActionResult;
+    if (final_action_result.action != .exit or final_action_result.disposition != .exited) {
         return error.VehicleTrialExitRejected;
     }
     _ = last_authority_snapshot orelse return error.VehicleTrialMissingSnapshot;
@@ -300,7 +301,7 @@ fn verifyAcceptedIngressReplay(
     expected: protocol.Snapshot,
 ) !void {
     if (records.len == 0) return error.AcceptedIngressJournalWasEmpty;
-    var replay = try authority_module.Authority.init(std.heap.page_allocator);
+    const replay = try authority_module.DedicatedAuthority.init(std.heap.page_allocator);
     defer replay.deinit();
     const connection = authority_module.TransportConnection{ .value = 1 };
     _ = try replay.openConnection(connection);

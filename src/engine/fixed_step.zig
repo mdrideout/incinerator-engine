@@ -2,19 +2,21 @@
 
 const std = @import("std");
 
-/// Fixed simulation rate shared by visual and headless hosts.
-pub const tick_rate: u32 = 120;
+/// Authority rate used by the graphical embedded-session clock. This matches
+/// the accepted multiplayer session rate; presentation remains independent.
+/// The historical M3 cold-headless scheduler owns a separate clock contract.
+pub const tick_rate: u32 = 60;
 pub const tick_duration_seconds: f64 = 1.0 / @as(f64, @floatFromInt(tick_rate));
 
 /// One presentation frame contributes at most 250 ms of simulation time. At
-/// 120 Hz this permits at most 30 ticks before excess wall time is discarded.
+/// 60 Hz this permits at most 15 ticks before excess wall time is discarded.
 pub const max_frame_seconds: f64 = 0.25;
 pub const max_frame_nanoseconds: u64 = 250_000_000;
 pub const max_ticks_per_frame: u32 = tick_rate / 4;
 
 /// Pure fixed-step accumulation policy. Time is stored in fractional simulation
 /// ticks, making rational cadences such as 240 Hz and 80 Hz exact relative to
-/// the 120 Hz simulation rate without depending on a platform timer.
+/// the 60 Hz authority rate without depending on a platform timer.
 pub const FixedStepAccumulator = struct {
     tick_phase: f64 = 0.0,
 
@@ -70,7 +72,7 @@ pub const FixedStepAccumulator = struct {
     }
 };
 
-test "240 Hz presentation produces 240 ticks across 480 frames" {
+test "240 Hz presentation produces 120 authority ticks across 480 frames" {
     var fixed_step = FixedStepAccumulator.init();
     var total_ticks: u32 = 0;
     var zero_tick_frames: u32 = 0;
@@ -90,17 +92,17 @@ test "240 Hz presentation produces 240 ticks across 480 frames" {
         }
     }
 
-    try std.testing.expectEqual(@as(u32, 240), total_ticks);
-    try std.testing.expectEqual(@as(u32, 240), zero_tick_frames);
+    try std.testing.expectEqual(@as(u32, 120), total_ticks);
+    try std.testing.expectEqual(@as(u32, 360), zero_tick_frames);
     try std.testing.expect(saw_intermediate_alpha);
     try std.testing.expectEqual(@as(f32, 0.0), fixed_step.alpha());
 }
 
-test "80 Hz presentation produces one- and two-tick frames" {
+test "80 Hz presentation produces zero- and one-tick frames" {
     var fixed_step = FixedStepAccumulator.init();
     var total_ticks: u32 = 0;
+    var zero_tick_frames: u32 = 0;
     var one_tick_frames: u32 = 0;
-    var two_tick_frames: u32 = 0;
     var saw_intermediate_alpha = false;
 
     for (0..160) |_| {
@@ -110,22 +112,22 @@ test "80 Hz presentation produces one- and two-tick frames" {
             frame_ticks += 1;
             total_ticks += 1;
         }
+        if (frame_ticks == 0) zero_tick_frames += 1;
         if (frame_ticks == 1) one_tick_frames += 1;
-        if (frame_ticks == 2) two_tick_frames += 1;
         const interpolation = fixed_step.alpha();
         if (interpolation > 0.0 and interpolation < 1.0) {
             saw_intermediate_alpha = true;
         }
     }
 
-    try std.testing.expectEqual(@as(u32, 240), total_ticks);
-    try std.testing.expectEqual(@as(u32, 80), one_tick_frames);
-    try std.testing.expectEqual(@as(u32, 80), two_tick_frames);
+    try std.testing.expectEqual(@as(u32, 120), total_ticks);
+    try std.testing.expectEqual(@as(u32, 40), zero_tick_frames);
+    try std.testing.expectEqual(@as(u32, 120), one_tick_frames);
     try std.testing.expect(saw_intermediate_alpha);
     try std.testing.expectEqual(@as(f32, 0.0), fixed_step.alpha());
 }
 
-test "long frame is clamped to 30 fixed ticks" {
+test "long frame is clamped to 15 fixed ticks" {
     var fixed_step = FixedStepAccumulator.init();
     const accepted_seconds = fixed_step.addElapsedNanoseconds(2 * std.time.ns_per_s);
     var ticks: u32 = 0;

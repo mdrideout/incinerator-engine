@@ -11,11 +11,11 @@ installed coordinate lookup, exact content cohorts, adjacent residency
 overlap, and restart/replay without turning that slice into a general VFS,
 asset database, or open-ended streaming framework.
 
-The current content root, workers, district feature, presentation coordinator,
-and host are deliberately singleton. The GPU scene registry already owns four
-scene slots and two upload batches, so adding a second registry or renderer
-abstraction is unnecessary. The current replay cohort describes one bundle,
-and several hosts duplicate its admission logic.
+At S6 entry, the content root, workers, district feature, presentation
+coordinator, and host were deliberately singleton. The GPU scene registry
+already owned four scene slots and two upload batches, so adding a second
+registry or renderer abstraction was unnecessary. The entry replay cohort
+described one bundle, and several hosts duplicated its admission logic.
 
 ## Decision
 

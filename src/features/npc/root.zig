@@ -7,341 +7,43 @@
 
 const std = @import("std");
 const engine = @import("incinerator_engine");
+const feature_contract = @import("npc_contract");
+const snapshot_validation = @import("npc_snapshot_validation");
 const navigation = @import("navigation_contract");
-
-pub const NodeRef = navigation.NodeRef;
-pub const ChunkCoord = navigation.ChunkCoord;
 
 const logical_state_domain = "incinerator.npc.logical";
 const logical_state_schema: u16 = 2;
 
-pub const max_npcs: usize = 64;
-pub const max_pending_commands: usize = 128;
-pub const max_outcomes: usize = 128;
-pub const max_events: usize = 256;
-pub const max_route_nodes: usize = 16;
-
-pub const Budget = struct {
-    npcs: u32 = max_npcs,
-    controllers: u32 = max_npcs,
-    draws: u32 = max_npcs,
-    commands: u32 = max_pending_commands,
-    outcomes: u32 = max_outcomes,
-    events: u32 = max_events,
-};
-
-pub const declared_budget = Budget{};
-
-pub const Assets = struct {
-    mesh: engine.rendering.MeshHandle = .invalid,
-    material: engine.rendering.MaterialHandle = .invalid,
-};
-
-pub const Config = struct {
-    radius: f32 = 0.35,
-    half_height: f32 = 0.45,
-    move_speed: f32 = 2.5,
-    gravity: f32 = -20,
-    terminal_fall_speed: f32 = 55,
-    max_slope_radians: f32 = std.math.degreesToRadians(50),
-    mass: f32 = 65,
-    max_strength: f32 = 100,
-    stick_to_floor_distance: f32 = 0.5,
-    step_up_height: f32 = 0.4,
-    arrival_distance: f32 = 0.08,
-    assets: Assets = .{},
-
-    pub fn validate(self: Config) !void {
-        try (engine.physics.CharacterDesc{
-            .position = .{ 0, 0, 0 },
-            .radius = self.radius,
-            .half_height = self.half_height,
-            .max_slope_radians = self.max_slope_radians,
-            .mass = self.mass,
-            .max_strength = self.max_strength,
-        }).validate();
-        if (!std.math.isFinite(self.move_speed) or self.move_speed <= 0 or
-            !std.math.isFinite(self.gravity) or self.gravity >= 0 or
-            !std.math.isFinite(self.terminal_fall_speed) or
-            self.terminal_fall_speed <= 0 or
-            !std.math.isFinite(self.stick_to_floor_distance) or
-            self.stick_to_floor_distance < 0 or
-            !std.math.isFinite(self.step_up_height) or self.step_up_height < 0 or
-            !std.math.isFinite(self.arrival_distance) or
-            self.arrival_distance <= 0 or self.arrival_distance > 0.25)
-        {
-            return error.InvalidNpcConfiguration;
-        }
-        if (!vectorMagnitudeFits(.{ self.move_speed, self.terminal_fall_speed, 0 })) {
-            return error.NpcSpeedOutOfRange;
-        }
-    }
-};
-
-pub const NpcConfigV1 = struct {
-    radius: f32,
-    half_height: f32,
-    move_speed: f32,
-    gravity: f32,
-    terminal_fall_speed: f32,
-    max_slope_radians: f32,
-    mass: f32,
-    max_strength: f32,
-    stick_to_floor_distance: f32,
-    step_up_height: f32,
-    arrival_distance: f32,
-
-    pub fn fromConfig(config: Config) NpcConfigV1 {
-        return .{
-            .radius = config.radius,
-            .half_height = config.half_height,
-            .move_speed = config.move_speed,
-            .gravity = config.gravity,
-            .terminal_fall_speed = config.terminal_fall_speed,
-            .max_slope_radians = config.max_slope_radians,
-            .mass = config.mass,
-            .max_strength = config.max_strength,
-            .stick_to_floor_distance = config.stick_to_floor_distance,
-            .step_up_height = config.step_up_height,
-            .arrival_distance = config.arrival_distance,
-        };
-    }
-
-    pub fn toConfig(self: NpcConfigV1, assets: Assets) !Config {
-        const result = Config{
-            .radius = self.radius,
-            .half_height = self.half_height,
-            .move_speed = self.move_speed,
-            .gravity = self.gravity,
-            .terminal_fall_speed = self.terminal_fall_speed,
-            .max_slope_radians = self.max_slope_radians,
-            .mass = self.mass,
-            .max_strength = self.max_strength,
-            .stick_to_floor_distance = self.stick_to_floor_distance,
-            .step_up_height = self.step_up_height,
-            .arrival_distance = self.arrival_distance,
-            .assets = assets,
-        };
-        try result.validate();
-        return result;
-    }
-
-    pub fn validate(self: NpcConfigV1) !void {
-        _ = try self.toConfig(.{});
-    }
-};
-
-pub const PatrolBetween = struct {
-    first: navigation.NodeRef,
-    second: navigation.NodeRef,
-};
-
-pub const Goal = union(enum) {
-    hold,
-    navigate_to: navigation.NodeRef,
-    patrol_between: PatrolBetween,
-};
-
-pub const State = enum(u8) {
-    active,
-    waiting_at_boundary,
-    dormant,
-};
-
-pub const PatrolLeg = enum(u8) {
-    none,
-    toward_first,
-    toward_second,
-};
-
-pub const RoutePlan = struct {
-    nodes: [max_route_nodes]navigation.NodeRef = [_]navigation.NodeRef{.{}} ** max_route_nodes,
-    len: u8 = 0,
-
-    pub fn slice(self: *const RoutePlan) []const navigation.NodeRef {
-        return self.nodes[0..@min(@as(usize, self.len), max_route_nodes)];
-    }
-
-    fn next(self: *const RoutePlan, index: u8) ?navigation.NodeRef {
-        const next_index = @as(usize, index) + 1;
-        if (next_index >= self.len or next_index >= max_route_nodes) return null;
-        return self.nodes[next_index];
-    }
-};
-
-pub const RouteCursor = struct {
-    plan: RoutePlan = .{},
-    patrol_forward: RoutePlan = .{},
-    patrol_reverse: RoutePlan = .{},
-    index: u8 = 0,
-    patrol_leg: PatrolLeg = .none,
-    segment_start: [3]f32 = .{ 0, 0, 0 },
-    /// Transient restore marker; never serialized.
-    needs_rebuild: bool = false,
-
-    pub fn next(self: *const RouteCursor) ?navigation.NodeRef {
-        return self.plan.next(self.index);
-    }
-};
-
-/// Compact, canonical persistence cursor. Runtime route scratch and inactive
-/// controller state are deliberately excluded from snapshots. `current` and
-/// `next` retain the one admitted semantic edge across a save; the remainder
-/// is rebuilt at a semantic transition after its content is active again.
-pub const NpcRouteCursorV1 = struct {
-    current: navigation.NodeRef,
-    next: ?navigation.NodeRef = null,
-    route_index: u8 = 0,
-    patrol_leg: PatrolLeg = .none,
-};
-
-pub const SpawnNpc = struct {
-    request_id: u64,
-    node: navigation.NodeRef,
-    goal: Goal = .hold,
-};
-
-pub const SetGoal = struct {
-    request_id: u64,
-    id: engine.PersistentId,
-    goal: Goal,
-};
-
-pub const DespawnNpc = struct {
-    request_id: u64,
-    id: engine.PersistentId,
-};
-
-pub const Command = union(enum) {
-    spawn: SpawnNpc,
-    set_goal: SetGoal,
-    despawn: DespawnNpc,
-};
-
-pub const CommandKind = enum(u8) { spawn, set_goal, despawn };
-
-pub const RejectionReason = enum(u8) {
-    capacity_reached,
-    controller_capacity_reached,
-    npc_not_found,
-    not_owned,
-    start_district_inactive,
-    invalid_start_node,
-    goal_district_inactive,
-    invalid_goal,
-    unreachable_goal,
-};
-
-pub const CommandRejected = struct {
-    command: CommandKind,
-    reason: RejectionReason,
-    request_id: u64,
-    id: ?engine.PersistentId = null,
-};
-
-pub const Spawned = struct {
-    request_id: u64,
-    id: engine.PersistentId,
-    owner: navigation.ChunkCoord,
-};
-
-pub const GoalSet = struct {
-    request_id: u64,
-    id: engine.PersistentId,
-    goal: Goal,
-};
-
-pub const Despawned = struct {
-    request_id: u64,
-    id: engine.PersistentId,
-};
-
-pub const Outcome = union(enum) {
-    spawned: Spawned,
-    goal_set: GoalSet,
-    despawned: Despawned,
-    rejected: CommandRejected,
-};
-
-pub const StateChanged = struct {
-    id: engine.PersistentId,
-    previous: State,
-    current: State,
-};
-
-pub const OwnerTransferred = struct {
-    id: engine.PersistentId,
-    previous: navigation.ChunkCoord,
-    current: navigation.ChunkCoord,
-};
-
-pub const GoalReached = struct {
-    id: engine.PersistentId,
-    node: navigation.NodeRef,
-};
-
-pub const Event = union(enum) {
-    state_changed: StateChanged,
-    owner_transferred: OwnerTransferred,
-    goal_reached: GoalReached,
-};
-
-pub const EventDropCounts = struct {
-    state_changed: u64 = 0,
-    owner_transferred: u64 = 0,
-    goal_reached: u64 = 0,
-
-    pub fn total(self: EventDropCounts) u64 {
-        return self.state_changed +| self.owner_transferred +| self.goal_reached;
-    }
-};
-
-pub const NpcView = struct {
-    id: engine.PersistentId,
-    owner: navigation.ChunkCoord,
-    goal: Goal,
-    route: RouteCursor,
-    state: State,
-    position: [3]f32,
-    velocity: [3]f32,
-    facing_yaw: f32,
-    controller_present: bool,
-};
-
-pub const NpcDraw = struct {
-    persistent_id: engine.PersistentId,
-    pose: engine.physics.Pose,
-    owner: navigation.ChunkCoord,
-    state: State,
-    radius: f32,
-    half_height: f32,
-    mesh: engine.rendering.MeshHandle,
-    material: engine.rendering.MaterialHandle,
-};
-
-pub const Diagnostics = struct {
-    active_count: u32,
-    waiting_count: u32,
-    dormant_count: u32,
-    controller_count: u32,
-    transfers: u64,
-    controllers_suspended: u64,
-    controllers_resumed: u64,
-    commands: engine.contracts.diagnostics.QueueStats,
-    outcomes: engine.contracts.diagnostics.QueueStats,
-    events: engine.contracts.diagnostics.QueueStats,
-    event_drops: EventDropCounts,
-};
-
-pub const NpcV1 = struct {
-    id: engine.PersistentId,
-    owner: navigation.ChunkCoord,
-    goal: Goal,
-    route: NpcRouteCursorV1,
-    position: [3]f32,
-    velocity: [3]f32,
-    facing_yaw: f32,
-};
+const NodeRef = feature_contract.NodeRef;
+const ChunkCoord = feature_contract.ChunkCoord;
+const max_npcs = feature_contract.max_npcs;
+const max_pending_commands = feature_contract.max_pending_commands;
+const max_outcomes = feature_contract.max_outcomes;
+const max_events = feature_contract.max_events;
+const max_route_nodes = feature_contract.max_route_nodes;
+const declared_budget = feature_contract.declared_budget;
+const Config = feature_contract.Config;
+const NpcConfigV1 = feature_contract.NpcConfigV1;
+const Goal = feature_contract.Goal;
+const State = feature_contract.State;
+const PatrolLeg = feature_contract.PatrolLeg;
+const RoutePlan = feature_contract.RoutePlan;
+const RouteCursor = feature_contract.RouteCursor;
+const NpcRouteCursorV1 = feature_contract.NpcRouteCursorV1;
+const SpawnNpc = feature_contract.SpawnNpc;
+const SetGoal = feature_contract.SetGoal;
+const DespawnNpc = feature_contract.DespawnNpc;
+const Command = feature_contract.Command;
+const CommandKind = feature_contract.CommandKind;
+const RejectionReason = feature_contract.RejectionReason;
+const Outcome = feature_contract.Outcome;
+const Event = feature_contract.Event;
+const EventDropCounts = feature_contract.EventDropCounts;
+const NpcView = feature_contract.NpcView;
+const NpcDraw = feature_contract.NpcDraw;
+const Diagnostics = feature_contract.Diagnostics;
+const NpcV1 = feature_contract.NpcV1;
+const validateCommand = feature_contract.validateCommand;
 
 const FixedQueue = engine.BoundedQueue;
 
@@ -573,7 +275,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 };
             }
             std.mem.sort(NpcV1, records, {}, lessThanRecord);
-            try validateRecordsWithNavigation(self.navigation_access, records);
+            try snapshot_validation.validateRecords(self.navigation_access, records);
             return records;
         }
 
@@ -585,7 +287,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             {
                 return error.RestoreRequiresEmptyFeature;
             }
-            try validateRecordsWithNavigation(self.navigation_access, records);
+            try snapshot_validation.validateRecords(self.navigation_access, records);
             errdefer self.rollbackAll();
             for (records) |record| try self.restoreOne(record);
         }
@@ -1578,245 +1280,6 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
     };
 }
 
-pub fn validateCommand(command: Command) !void {
-    switch (command) {
-        .spawn => |spawn| {
-            if (spawn.request_id == 0) return error.InvalidNpcRequestId;
-            try validateNodeRef(spawn.node);
-            try validateGoal(spawn.goal);
-        },
-        .set_goal => |set_goal| {
-            if (set_goal.request_id == 0) return error.InvalidNpcRequestId;
-            try set_goal.id.validate();
-            try validateGoal(set_goal.goal);
-        },
-        .despawn => |despawn| {
-            if (despawn.request_id == 0) return error.InvalidNpcRequestId;
-            try despawn.id.validate();
-        },
-    }
-}
-
-fn validateGoal(goal: Goal) !void {
-    switch (goal) {
-        .hold => {},
-        .navigate_to => |target| try validateNodeRef(target),
-        .patrol_between => |patrol| {
-            try validateNodeRef(patrol.first);
-            try validateNodeRef(patrol.second);
-            if (navigation.NodeRef.eql(patrol.first, patrol.second)) {
-                return error.InvalidNpcPatrol;
-            }
-        },
-    }
-}
-
-fn validateNodeRef(reference: navigation.NodeRef) !void {
-    _ = reference;
-}
-
-/// Cold snapshot preflight. The access may be a catalog-backed validator or
-/// the live district port; no Runtime entity or physics controller is needed.
-pub fn validateRecordsWithNavigation(
-    navigation_access: anytype,
-    records: []const NpcV1,
-) !void {
-    const Access = @TypeOf(navigation_access.*);
-    navigation.assertImplementation(Access);
-    if (records.len > max_npcs) return error.TooManyNpcs;
-    for (records, 0..) |record, record_index| {
-        try record.id.validate();
-        for (records[0..record_index]) |earlier| {
-            if (std.meta.eql(earlier.id, record.id)) return error.DuplicateNpcPersistentId;
-        }
-        try validateGoal(record.goal);
-        try validateFiniteVector(record.position);
-        try validateFiniteVector(record.velocity);
-        try (engine.physics.Velocity{ .linear = record.velocity }).validate();
-        if (!std.math.isFinite(record.facing_yaw) or
-            record.facing_yaw != normalizeYaw(record.facing_yaw) or
-            isNegativeZero(record.facing_yaw))
-        {
-            return error.NonCanonicalNpcFacing;
-        }
-        for (record.position) |component| {
-            if (isNegativeZero(component)) return error.NonCanonicalNpcPosition;
-        }
-        for (record.velocity) |component| {
-            if (isNegativeZero(component)) return error.NonCanonicalNpcVelocity;
-        }
-        const owner = try navigation.ownerForPosition(record.position);
-        if (!navigation.ChunkCoord.eql(owner, record.owner)) {
-            return error.NpcOwnerPositionMismatch;
-        }
-        if (record.route.route_index != 0) return error.NonCanonicalNpcRouteIndex;
-        try validateNodeRef(record.route.current);
-        if (record.route.next) |next| {
-            try validateNodeRef(next);
-            if (navigation.NodeRef.eql(record.route.current, next)) {
-                return error.NpcRouteCursorSelfEdge;
-            }
-            switch (navigation_access.validateTraversal(record.route.current, next)) {
-                .valid => {},
-                .invalid_source, .invalid_target => return error.NpcPersistedRouteInvalid,
-                .not_connected => return error.NpcPersistedRouteMismatch,
-            }
-        }
-        if (ownerRouteNodeValue(record.owner, routeFromRecord(record.route, record.position)) == null) {
-            return error.NpcPersistedOwnerRouteMismatch;
-        }
-
-        try requireValidContentNode(navigation_access, record.route.current);
-        if (record.route.next) |next| try requireValidContentNode(navigation_access, next);
-        switch (record.goal) {
-            .hold => {
-                if (record.route.next != null or record.route.patrol_leg != .none) {
-                    return error.NpcHoldCursorMismatch;
-                }
-            },
-            .navigate_to => |target| {
-                try requireValidContentNode(navigation_access, target);
-                if (record.route.patrol_leg != .none) return error.NpcNavigateCursorMismatch;
-                if ((record.route.next == null) !=
-                    navigation.NodeRef.eql(record.route.current, target))
-                {
-                    return error.NpcNavigateCursorMismatch;
-                }
-                try verifyActiveRoutePrefix(
-                    navigation_access,
-                    record.route.current,
-                    target,
-                    record.route.next,
-                );
-            },
-            .patrol_between => |patrol| {
-                try requireValidContentNode(navigation_access, patrol.first);
-                try requireValidContentNode(navigation_access, patrol.second);
-                const target = switch (record.route.patrol_leg) {
-                    .toward_first => patrol.first,
-                    .toward_second => patrol.second,
-                    .none => return error.NpcPatrolCursorMismatch,
-                };
-                if ((record.route.next == null) !=
-                    navigation.NodeRef.eql(record.route.current, target))
-                {
-                    return error.NpcPatrolCursorMismatch;
-                }
-                try verifyActiveRoutePrefix(
-                    navigation_access,
-                    record.route.current,
-                    target,
-                    record.route.next,
-                );
-            },
-        }
-    }
-}
-
-fn requireValidContentNode(access: anytype, reference: navigation.NodeRef) !void {
-    switch (access.resolveNode(reference)) {
-        .ready, .district_inactive => {},
-        .invalid_reference => return error.NpcPersistedRouteInvalid,
-    }
-}
-
-fn verifyActiveRoutePrefix(
-    access: anytype,
-    start: navigation.NodeRef,
-    target: navigation.NodeRef,
-    expected_next: ?navigation.NodeRef,
-) !void {
-    const route = switch (try buildRouteForValidation(access, start, target)) {
-        .ready => |plan| plan,
-        .inactive => return,
-        .invalid_content => return error.NpcPersistedRouteInvalid,
-        .no_path => return error.NpcPersistedGoalUnreachable,
-    };
-    if (!optionalNodeRefEql(expected_next, route.next(0))) {
-        return error.NpcPersistedRouteMismatch;
-    }
-}
-
-fn buildRouteForValidation(
-    access: anytype,
-    start: navigation.NodeRef,
-    target: navigation.NodeRef,
-) !RouteBuild {
-    switch (access.resolveNode(start)) {
-        .ready => {},
-        .district_inactive => return .inactive,
-        .invalid_reference => return .invalid_content,
-    }
-    switch (access.resolveNode(target)) {
-        .ready => {},
-        .district_inactive => return .inactive,
-        .invalid_reference => return .invalid_content,
-    }
-    if (navigation.NodeRef.eql(start, target)) return .{ .ready = planWithOne(start) };
-    var refs: [max_route_nodes]navigation.NodeRef = undefined;
-    var previous: [max_route_nodes]i8 = @splat(-1);
-    var queue: [max_route_nodes]u8 = undefined;
-    refs[0] = start;
-    queue[0] = 0;
-    var count: usize = 1;
-    var head: usize = 0;
-    var tail: usize = 1;
-    var target_index: ?usize = null;
-    while (head < tail and target_index == null) : (head += 1) {
-        const source_index: usize = queue[head];
-        const source_ref = refs[source_index];
-        const source = switch (access.resolveNode(source_ref)) {
-            .ready => |resolved| resolved,
-            .district_inactive => return .inactive,
-            .invalid_reference => return .invalid_content,
-        };
-        for (0..source.node.edge_count) |ordinal_usize| {
-            const ordinal: u8 = @intCast(ordinal_usize);
-            const resolved_edge = switch (access.resolveEdge(source_ref, ordinal)) {
-                .ready => |resolved| resolved,
-                .district_inactive => return .inactive,
-                .invalid_reference, .invalid_ordinal => return error.NpcNavigationPortInvariantBroken,
-            };
-            if (!navigation.LoadTicket.eql(source.ticket, resolved_edge.ticket)) {
-                return error.NpcNavigationTicketInvariantBroken;
-            }
-            const candidate = resolved_edge.edge.target;
-            switch (access.resolveNode(candidate)) {
-                .ready => {},
-                .district_inactive => continue,
-                .invalid_reference => return error.NpcNavigationPortInvariantBroken,
-            }
-            var found = false;
-            for (refs[0..count]) |existing| {
-                if (navigation.NodeRef.eql(existing, candidate)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (found) continue;
-            if (count == max_route_nodes) return .no_path;
-            refs[count] = candidate;
-            previous[count] = @intCast(source_index);
-            queue[tail] = @intCast(count);
-            tail += 1;
-            if (navigation.NodeRef.eql(candidate, target)) target_index = count;
-            count += 1;
-        }
-    }
-    const found = target_index orelse return .no_path;
-    var reversed: [max_route_nodes]navigation.NodeRef = undefined;
-    var length: usize = 0;
-    var cursor: i8 = @intCast(found);
-    while (cursor >= 0) {
-        reversed[length] = refs[@intCast(cursor)];
-        length += 1;
-        cursor = previous[@intCast(cursor)];
-    }
-    var plan = RoutePlan{ .len = @intCast(length) };
-    for (0..length) |index| plan.nodes[index] = reversed[length - 1 - index];
-    return .{ .ready = plan };
-}
-
 fn planWithOne(reference: navigation.NodeRef) RoutePlan {
     var result = RoutePlan{ .len = 1 };
     result.nodes[0] = reference;
@@ -1922,14 +1385,6 @@ fn canonicalVector(value: [3]f32) [3]f32 {
         canonicalFloat(value[1]),
         canonicalFloat(value[2]),
     };
-}
-
-fn isNegativeZero(value: f32) bool {
-    return value == 0 and @as(u32, @bitCast(value)) != 0;
-}
-
-fn validateFiniteVector(value: [3]f32) !void {
-    for (value) |component| if (!std.math.isFinite(component)) return error.NonFiniteNpcVector;
 }
 
 fn clampVelocity(value: [3]f32) [3]f32 {
@@ -2593,7 +2048,7 @@ test "NPC configuration budgets and compact persistence are bounded" {
     var access = FakeNavigation{};
     var records: [max_npcs]NpcV1 = undefined;
     for (&records, 0..) |*record, index| record.* = validNpcRecord(index + 1);
-    try validateRecordsWithNavigation(&access, &records);
+    try snapshot_validation.validateRecords(&access, &records);
     const json = try std.json.Stringify.valueAlloc(std.testing.allocator, records, .{});
     defer std.testing.allocator.free(json);
     try std.testing.expect(json.len < 128 * 1024);
@@ -2602,41 +2057,41 @@ test "NPC configuration budgets and compact persistence are bounded" {
 test "cold NPC preflight rejects hostile owner cursor and content records" {
     var access = FakeNavigation{ .west_active = false, .east_active = false };
     const valid = validNpcRecord(1);
-    try validateRecordsWithNavigation(&access, &.{valid});
+    try snapshot_validation.validateRecords(&access, &.{valid});
 
     var hostile = valid;
     hostile.owner = east_coord;
     try std.testing.expectError(
         error.NpcOwnerPositionMismatch,
-        validateRecordsWithNavigation(&access, &.{hostile}),
+        snapshot_validation.validateRecords(&access, &.{hostile}),
     );
     hostile = valid;
     hostile.route.next = westNode(2);
     try std.testing.expectError(
         error.NpcPersistedRouteMismatch,
-        validateRecordsWithNavigation(&access, &.{hostile}),
+        snapshot_validation.validateRecords(&access, &.{hostile}),
     );
     hostile = valid;
     hostile.route.next = .{ .coord = east_coord, .index = 7 };
     try std.testing.expectError(
         error.NpcPersistedRouteInvalid,
-        validateRecordsWithNavigation(&access, &.{hostile}),
+        snapshot_validation.validateRecords(&access, &.{hostile}),
     );
     hostile = valid;
     hostile.route.route_index = 1;
     try std.testing.expectError(
         error.NonCanonicalNpcRouteIndex,
-        validateRecordsWithNavigation(&access, &.{hostile}),
+        snapshot_validation.validateRecords(&access, &.{hostile}),
     );
     hostile = valid;
     hostile.facing_yaw = -0.0;
     try std.testing.expectError(
         error.NonCanonicalNpcFacing,
-        validateRecordsWithNavigation(&access, &.{hostile}),
+        snapshot_validation.validateRecords(&access, &.{hostile}),
     );
     try std.testing.expectError(
         error.DuplicateNpcPersistentId,
-        validateRecordsWithNavigation(&access, &.{ valid, valid }),
+        snapshot_validation.validateRecords(&access, &.{ valid, valid }),
     );
 }
 

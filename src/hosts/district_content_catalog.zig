@@ -133,7 +133,8 @@ pub fn admit(
         .loaded => |value| value,
         .failed => |failure| return .{ .failed = .{ .catalog_load = failure } },
     };
-    errdefer catalog.deinit();
+    var catalog_owned = true;
+    defer if (catalog_owned) catalog.deinit();
 
     const catalog_view = catalog.view();
     if (catalog_view.entries.len != 2) {
@@ -208,6 +209,7 @@ pub fn admit(
         identity.source_digest,
         identity.integrity_digest,
     );
+    catalog_owned = false;
     return .{ .admitted = .{
         .root_path = root_path,
         .catalog = catalog,

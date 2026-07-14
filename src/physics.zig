@@ -79,22 +79,7 @@ pub const VehicleId = struct {
     serial: u64,
 };
 
-/// Runtime policy for renderer-neutral physics evidence. When rigid-contact
-/// capture is available, its listener and scratch stay installed for the
-/// lifetime of the Physics world. Toggling these fields only controls which
-/// categories are copied into the caller-owned batch after a completed step.
-pub const DebugConfig = struct {
-    shapes: bool = true,
-    bounds: bool = true,
-    contacts: bool = true,
-    centers_of_mass: bool = true,
-    velocities: bool = true,
-
-    pub fn enabled(self: DebugConfig) bool {
-        return self.shapes or self.bounds or self.contacts or
-            self.centers_of_mass or self.velocities;
-    }
-};
+const DebugConfig = physics_debug.Config;
 
 /// Availability of the optional rigid-body contact evidence producer.
 ///

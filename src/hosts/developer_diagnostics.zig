@@ -7,11 +7,12 @@
 const std = @import("std");
 const engine = @import("incinerator_engine");
 const developer_controls = @import("developer_controls");
+const authority_diagnostics = @import("session_authority_diagnostics");
 
-/// V4 carries feature-owned NPC population/lifecycle/queue diagnostics plus
-/// the composed world's shared native CharacterVirtual ownership evidence. The
-/// generic envelope remains independent of those concrete feature types.
-pub const schema_version: u16 = 4;
+/// V5 adds completion-aware authoritative-session diagnostics so failures
+/// after simulation execution remain visible to the same text, JSON, and UI
+/// consumers as runtime-system faults.
+pub const schema_version: u16 = 5;
 pub const district_stream_slot_count: usize = 2;
 
 pub const ContentWorkerStage = enum {
@@ -210,6 +211,9 @@ pub fn Snapshot(comptime SimulationDiagnostics: type) type {
         schema: u16 = schema_version,
         frame_index: ?u64,
         simulation: SimulationDiagnostics,
+        /// Null for a raw simulation-only host. Session compositions publish
+        /// the canonical copied authority-cycle diagnostics here.
+        authority_session: ?authority_diagnostics.Diagnostics,
         content_worker: ?ContentWorker,
         district_streams: ?DistrictStreams,
         gpu: ?Gpu,
@@ -328,6 +332,89 @@ fn formatNpcDiagnosticsAlloc(allocator: std.mem.Allocator, simulation: anytype) 
     );
 }
 
+fn formatCompletedAuthorityStagesAlloc(
+    allocator: std.mem.Allocator,
+    trace: authority_diagnostics.CycleTrace,
+) ![]u8 {
+    return switch (trace.count) {
+        0 => allocator.dupe(u8, "none"),
+        1 => std.fmt.allocPrint(allocator, "{s}", .{@tagName(trace.stages[0])}),
+        2 => std.fmt.allocPrint(
+            allocator,
+            "{s},{s}",
+            .{ @tagName(trace.stages[0]), @tagName(trace.stages[1]) },
+        ),
+        3 => std.fmt.allocPrint(
+            allocator,
+            "{s},{s},{s}",
+            .{
+                @tagName(trace.stages[0]),
+                @tagName(trace.stages[1]),
+                @tagName(trace.stages[2]),
+            },
+        ),
+        4 => std.fmt.allocPrint(
+            allocator,
+            "{s},{s},{s},{s}",
+            .{
+                @tagName(trace.stages[0]),
+                @tagName(trace.stages[1]),
+                @tagName(trace.stages[2]),
+                @tagName(trace.stages[3]),
+            },
+        ),
+        else => error.InvalidAuthorityCycleTrace,
+    };
+}
+
+fn formatAuthoritySessionAlloc(
+    allocator: std.mem.Allocator,
+    diagnostics: ?authority_diagnostics.Diagnostics,
+) ![]u8 {
+    const session = diagnostics orelse
+        return allocator.dupe(u8, "authority_session=absent");
+    const trace = session.last_cycle;
+    const stages = try formatCompletedAuthorityStagesAlloc(allocator, trace);
+    defer allocator.free(stages);
+    const failed_stage = if (trace.failed_stage) |stage| @tagName(stage) else "none";
+    if (session.first_cycle_fault) |fault| {
+        return std.fmt.allocPrint(
+            allocator,
+            "authority_tick={d} authority_cycle=target:{d} completed:{d}->{d} " ++
+                "stages:{d}/4[{s}] failed:{s} authority_fault={s}/{s} " ++
+                "fault_target={d} fault_completed={d} fault_code={d}",
+            .{
+                session.tick,
+                trace.target_tick,
+                trace.completed_tick_before,
+                trace.completed_tick_after,
+                trace.count,
+                stages,
+                failed_stage,
+                @tagName(fault.stage),
+                fault.error_name.slice(),
+                fault.target_tick,
+                fault.completed_tick,
+                fault.error_code,
+            },
+        );
+    }
+    return std.fmt.allocPrint(
+        allocator,
+        "authority_tick={d} authority_cycle=target:{d} completed:{d}->{d} " ++
+            "stages:{d}/4[{s}] failed:{s} authority_fault=none",
+        .{
+            session.tick,
+            trace.target_tick,
+            trace.completed_tick_before,
+            trace.completed_tick_after,
+            trace.count,
+            stages,
+            failed_stage,
+        },
+    );
+}
+
 /// Text is intentionally compact enough for stderr and CI logs. Detailed
 /// tools consume the typed value rather than reparsing this rendering.
 pub fn formatTextAlloc(
@@ -357,6 +444,17 @@ pub fn formatTextAlloc(
     defer allocator.free(district_streams_text);
     const npc_text = try formatNpcDiagnosticsAlloc(allocator, snapshot.simulation);
     defer allocator.free(npc_text);
+    const authority_text = try formatAuthoritySessionAlloc(
+        allocator,
+        snapshot.authority_session,
+    );
+    defer allocator.free(authority_text);
+    const subsystem_text = try std.fmt.allocPrint(
+        allocator,
+        "{s} {s} {s}",
+        .{ district_streams_text, npc_text, authority_text },
+    );
+    defer allocator.free(subsystem_text);
     if (snapshot.simulation.first_fault) |fault| {
         return std.fmt.allocPrint(
             allocator,
@@ -368,7 +466,7 @@ pub fn formatTextAlloc(
                 "journal={d}/{d} " ++
                 "overwritten={d} rejected_frozen={d} rejected_exhausted={d} " ++
                 "sequence_exhausted={} frozen={} trigger_armed={} paused={s} scale={s} " ++
-                "ui_control_rejected={?d} ui_diagnostic_rejected={?d} {s} {s}",
+                "ui_control_rejected={?d} ui_diagnostic_rejected={?d} {s}",
             .{
                 snapshot.schema,
                 snapshot.frame_index,
@@ -400,8 +498,7 @@ pub fn formatTextAlloc(
                 scale_text,
                 control_requests_rejected,
                 diagnostic_requests_rejected,
-                district_streams_text,
-                npc_text,
+                subsystem_text,
             },
         );
     }
@@ -413,7 +510,7 @@ pub fn formatTextAlloc(
             "journal={d}/{d} overwritten={d} " ++
             "rejected_frozen={d} rejected_exhausted={d} sequence_exhausted={} " ++
             "frozen={} trigger_armed={} paused={s} scale={s} " ++
-            "ui_control_rejected={?d} ui_diagnostic_rejected={?d} {s} {s}",
+            "ui_control_rejected={?d} ui_diagnostic_rejected={?d} {s}",
         .{
             snapshot.schema,
             snapshot.frame_index,
@@ -437,8 +534,7 @@ pub fn formatTextAlloc(
             scale_text,
             control_requests_rejected,
             diagnostic_requests_rejected,
-            district_streams_text,
-            npc_text,
+            subsystem_text,
         },
     );
 }
@@ -491,8 +587,8 @@ const TestSimulationDiagnostics = struct {
 };
 
 test "one typed snapshot feeds compact text and structured JSON" {
-    const SnapshotV4 = Snapshot(TestSimulationDiagnostics);
-    const value = SnapshotV4{
+    const SnapshotV5 = Snapshot(TestSimulationDiagnostics);
+    const value = SnapshotV5{
         .frame_index = 9,
         .simulation = .{
             .tick_index = 17,
@@ -537,6 +633,7 @@ test "one typed snapshot feeds compact text and structured JSON" {
                 },
             },
         },
+        .authority_session = null,
         .content_worker = null,
         .district_streams = DistrictStreams.init(.{
             .{
@@ -580,7 +677,7 @@ test "one typed snapshot feeds compact text and structured JSON" {
 
     const text_value = try formatTextAlloc(std.testing.allocator, value);
     defer std.testing.allocator.free(text_value);
-    try std.testing.expect(std.mem.indexOf(u8, text_value, "diagnostics_v4") != null);
+    try std.testing.expect(std.mem.indexOf(u8, text_value, "diagnostics_v5") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "tick=17") != null);
     try std.testing.expect(std.mem.indexOf(u8, text_value, "entities=3") != null);
     try std.testing.expect(std.mem.indexOf(
@@ -697,6 +794,94 @@ test "one typed snapshot feeds compact text and structured JSON" {
     );
 }
 
+test "authority-only cycle fault is truthful in text and JSON" {
+    var session = std.mem.zeroes(authority_diagnostics.Diagnostics);
+    session.tick = 7;
+    session.last_cycle = .{
+        .target_tick = 8,
+        .completed_tick_before = 7,
+        .completed_tick_after = 8,
+        .stages = .{
+            .pre_simulation,
+            .simulation,
+            .outcome_drain,
+            .pre_simulation,
+        },
+        .count = 2,
+        .failed_stage = .outcome_drain,
+    };
+    session.first_cycle_fault = .{
+        .stage = .outcome_drain,
+        .target_tick = 8,
+        .completed_tick = 8,
+        .error_code = @intFromError(error.AuthorityOutcomeDrainFailed),
+        .error_name = engine.runtime.FaultText.copy("AuthorityOutcomeDrainFailed"),
+    };
+    const value = Snapshot(TestSimulationDiagnostics){
+        .frame_index = 12,
+        .simulation = .{
+            .tick_index = 8,
+            .fixed_delta_seconds = 1.0 / 60.0,
+            .first_fault = null,
+            .entity_count = 1,
+            .body_count = 1,
+            .active_body_count = 1,
+        },
+        .authority_session = session,
+        .content_worker = null,
+        .district_streams = null,
+        .gpu = null,
+        .host_time = null,
+        .journal = .{
+            .count = 0,
+            .capacity = 256,
+            .overwritten = 0,
+            .rejected_while_frozen = 0,
+            .rejected_sequence_exhausted = 0,
+            .sequence_exhausted = false,
+            .frozen = false,
+            .trigger_armed = false,
+        },
+    };
+
+    const text_value = try formatTextAlloc(std.testing.allocator, value);
+    defer std.testing.allocator.free(text_value);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        text_value,
+        "stages:2/4[pre_simulation,simulation] failed:outcome_drain",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        text_value,
+        "authority_fault=outcome_drain/AuthorityOutcomeDrainFailed",
+    ) != null);
+
+    const export_value = Export(TestSimulationDiagnostics){
+        .snapshot = value,
+        .entries = &.{},
+    };
+    const json = try formatJsonAlloc(std.testing.allocator, export_value);
+    defer std.testing.allocator.free(json);
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        std.testing.allocator,
+        json,
+        .{},
+    );
+    defer parsed.deinit();
+    const authority = parsed.value.object.get("snapshot").?.object
+        .get("authority_session").?.object;
+    try std.testing.expectEqual(
+        @as(i64, 2),
+        authority.get("last_cycle").?.object.get("count").?.integer,
+    );
+    try std.testing.expectEqualStrings(
+        "outcome_drain",
+        authority.get("first_cycle_fault").?.object.get("stage").?.string,
+    );
+}
+
 test "compact text retains actionable first-fault context and visible truncation" {
     var value = Snapshot(TestSimulationDiagnostics){
         .frame_index = null,
@@ -715,6 +900,7 @@ test "compact text retains actionable first-fault context and visible truncation
             .body_count = 3,
             .active_body_count = 1,
         },
+        .authority_session = null,
         .content_worker = null,
         .district_streams = null,
         .gpu = null,

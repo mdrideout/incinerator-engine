@@ -1,10 +1,10 @@
-//! Fixed, non-authoritative NPC population command producer.
+//! Canonical fixed, non-authoritative NPC population command contract.
 //!
 //! Planning owns no identity, entity, outcome, snapshot, allocator, or mutable
 //! runtime state. Each emitted spawn remains an independent NPC transaction.
 
 const std = @import("std");
-const npc = @import("npc_feature");
+const npc = @import("npc_contract");
 
 pub const max_population_commands: usize = 64;
 

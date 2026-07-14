@@ -8,6 +8,7 @@
 
 const std = @import("std");
 const engine_contracts = @import("engine_contracts");
+const budgets = @import("session_budgets");
 
 const SceneHandle = engine_contracts.rendering.SceneHandle;
 
@@ -777,11 +778,15 @@ fn runProximityTickScript(
         .unload_margin = 6,
     });
 
-    // One unit is 1/240 second. A fixed 120 Hz tick consumes two units;
+    // One unit is 1/240 second. The accepted 60 Hz authority tick consumes
+    // four units;
     // rendering at 240 Hz contributes one unit per frame and 80 Hz contributes
     // three. The script itself is sampled only at fixed-tick boundaries.
     const frame_units = 240 / render_hz;
-    const tick_units = 2;
+    comptime if (240 % budgets.authority_tick_hz != 0) {
+        @compileError("test timebase must divide the authority tick rate exactly");
+    };
+    const tick_units = 240 / budgets.authority_tick_hz;
     var accumulated_units: u32 = 0;
     var tick_index: usize = 0;
     while (tick_index < positions.len) {

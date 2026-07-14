@@ -72,7 +72,7 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !Result {
-    var authority = try authority_module.Authority.init(std.heap.page_allocator);
+    const authority = try authority_module.DedicatedAuthority.init(std.heap.page_allocator);
     var authority_live = true;
     defer if (authority_live) authority.deinit();
     var client = try session_client.Client.init(.{ .value = config.seed + 1_000 });
@@ -223,7 +223,7 @@ fn verifyAcceptedIngressReplay(
 ) !void {
     if (records.len == 0) return error.AcceptedIngressJournalWasEmpty;
 
-    var replay = try authority_module.Authority.init(std.heap.page_allocator);
+    const replay = try authority_module.DedicatedAuthority.init(std.heap.page_allocator);
     defer replay.deinit();
     const connection = authority_module.TransportConnection{ .value = 1 };
     _ = try replay.openConnection(connection);
