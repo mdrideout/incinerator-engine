@@ -192,6 +192,16 @@ pub fn build(b: *std.Build) void {
     const session_client_module = graph.session_client;
     const local_solo_session_module = graph.local_solo_session;
     const session_authority_module = graph.session_authority;
+    const session_room_module = b.createModule(.{
+        .root_source_file = b.path("src/session/room.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_identity", .module = session_identity_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+        },
+    });
     const gns_direct_module = b.createModule(.{
         .root_source_file = b.path("src/adapters/transport/gns_direct.zig"),
         .target = target,
@@ -942,6 +952,100 @@ pub fn build(b: *std.Build) void {
     );
     verify_mp4_step.dependOn(&run_mp4_acceptance.step);
     verify_mp4_step.dependOn(verify_mp3_step);
+
+    const mp4b_acceptance_module = b.createModule(.{
+        .root_source_file = b.path("tools/mp4b_acceptance.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_client", .module = session_client_module },
+            .{ .name = "session_authority", .module = session_authority_module },
+            .{ .name = "impaired_link", .module = impaired_link_module },
+        },
+    });
+    const mp4b_acceptance_exe = b.addExecutable(.{
+        .name = "incinerator_mp4b_acceptance",
+        .root_module = mp4b_acceptance_module,
+    });
+    const run_mp4b_acceptance = b.addRunArtifact(mp4b_acceptance_exe);
+    const verify_mp4b_step = b.step(
+        "verify-mp4b",
+        "Run carry interaction faults, teardown cleanup, and real-GNS contention",
+    );
+    verify_mp4b_step.dependOn(&run_mp4b_acceptance.step);
+    verify_mp4b_step.dependOn(verify_mp4_step);
+    const verify_mp4c_step = b.step(
+        "verify-mp4c",
+        "Run acknowledged district-baseline, hysteresis, JIP, reconnect, and relevance proofs",
+    );
+    verify_mp4c_step.dependOn(verify_mp4b_step);
+    verify_mp4c_step.dependOn(&run_mp2_loopback.step);
+    const verify_mp4d_step = b.step(
+        "verify-mp4d",
+        "Run 64-NPC relevant projection, lower-rate interpolation, JIP, reconnect, and fault proofs",
+    );
+    verify_mp4d_step.dependOn(verify_mp4c_step);
+    verify_mp4d_step.dependOn(&run_mp3_acceptance.step);
+    const mp4e_acceptance_module = b.createModule(.{
+        .root_source_file = b.path("tools/mp4e_acceptance.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_client", .module = session_client_module },
+            .{ .name = "session_authority", .module = session_authority_module },
+        },
+    });
+    const mp4e_acceptance_exe = b.addExecutable(.{
+        .name = "incinerator_mp4e_acceptance",
+        .root_module = mp4e_acceptance_module,
+    });
+    const run_mp4e_acceptance = b.addRunArtifact(mp4e_acceptance_exe);
+    const verify_mp4e_step = b.step(
+        "verify-mp4e",
+        "Run acknowledged-delta, bandwidth-priority, fallback, and overload proofs",
+    );
+    verify_mp4e_step.dependOn(&run_mp4e_acceptance.step);
+    verify_mp4e_step.dependOn(verify_mp4d_step);
+    const verify_mp4_architecture = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_mp4_architecture.sh"),
+    });
+    const verify_mp4_complete_step = b.step(
+        "verify-mp4-complete",
+        "Run the complete MP4 feature replication and architecture closeout gate",
+    );
+    verify_mp4_complete_step.dependOn(verify_mp4e_step);
+    verify_mp4_complete_step.dependOn(&verify_mp4_architecture.step);
+    const mp5_acceptance_module = b.createModule(.{
+        .root_source_file = b.path("tools/mp5_acceptance.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_room", .module = session_room_module },
+            .{ .name = "session_client", .module = session_client_module },
+            .{ .name = "session_authority", .module = session_authority_module },
+        },
+    });
+    const mp5_acceptance_exe = b.addExecutable(.{
+        .name = "incinerator_mp5_acceptance",
+        .root_module = mp5_acceptance_module,
+    });
+    const run_mp5_acceptance = b.addRunArtifact(mp5_acceptance_exe);
+    const run_mp5_acceptance_step = b.step(
+        "run-mp5-acceptance",
+        "Run the focused open room/invite acceptance proof",
+    );
+    run_mp5_acceptance_step.dependOn(&run_mp5_acceptance.step);
+    const verify_mp5_step = b.step(
+        "verify-mp5",
+        "Run open room, invite, identity-bound admission, placement, and service-outage proofs",
+    );
+    verify_mp5_step.dependOn(&run_mp5_acceptance.step);
+    verify_mp5_step.dependOn(verify_mp4_complete_step);
 
     // The headless host is intentionally not installed by the default build.
     // Its allowlisted module graph has no SDL, editor, asset, or shader edge.
@@ -2017,6 +2121,22 @@ pub fn build(b: *std.Build) void {
         macos_readiness_step.dependOn(&native_only.step);
     }
 
+    const verify_m4_architecture = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_m4_architecture.sh"),
+    });
+    const verify_m4_step = b.step(
+        "verify-m4",
+        "Run the macOS multiplayer foundation, graphical, placement, and architecture gate",
+    );
+    verify_m4_step.dependOn(verify_mp5_step);
+    verify_m4_step.dependOn(check_mp2_step);
+    verify_m4_step.dependOn(verify_mp2_server_boundary_step);
+    verify_m4_step.dependOn(verify_headless_boundary_step);
+    verify_m4_step.dependOn(verify_validation_boundary_step);
+    verify_m4_step.dependOn(installed_s8_smoke_step);
+    verify_m4_step.dependOn(&verify_m4_architecture.step);
+
     // This creates a top level step. Top level steps have a name and can be
     // invoked by name when running `zig build` (e.g. `zig build run`).
     // This will evaluate the `run` step rather than the default step.
@@ -2354,6 +2474,8 @@ pub fn build(b: *std.Build) void {
     const run_local_solo_session_tests = b.addRunArtifact(local_solo_session_tests);
     const session_authority_tests = b.addTest(.{ .root_module = session_authority_module });
     const run_session_authority_tests = b.addRunArtifact(session_authority_tests);
+    const session_room_tests = b.addTest(.{ .root_module = session_room_module });
+    const run_session_room_tests = b.addRunArtifact(session_room_tests);
     const gns_direct_test_module = b.createModule(.{
         .root_source_file = b.path("src/adapters/transport/gns_direct.zig"),
         .target = target,
@@ -2383,6 +2505,7 @@ pub fn build(b: *std.Build) void {
     session_contract_test_step.dependOn(&run_session_client_tests.step);
     session_contract_test_step.dependOn(&run_local_solo_session_tests.step);
     session_contract_test_step.dependOn(&run_session_authority_tests.step);
+    session_contract_test_step.dependOn(&run_session_room_tests.step);
     verify_mp3_step.dependOn(session_contract_test_step);
     const gns_test_step = b.step(
         "test-gns",
@@ -2496,6 +2619,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_session_client_tests.step);
     test_step.dependOn(&run_local_solo_session_tests.step);
     test_step.dependOn(&run_session_authority_tests.step);
+    test_step.dependOn(&run_session_room_tests.step);
     test_step.dependOn(&run_gns_direct_tests.step);
     test_step.dependOn(&run_sandbox_interaction_tests.step);
     test_step.dependOn(&run_sandbox_replay_tests.step);

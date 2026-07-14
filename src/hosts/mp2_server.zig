@@ -270,7 +270,8 @@ pub fn main(init: std.process.Init) !void {
             std.debug.print(
                 "MP2_SERVER tick={d} connections={d} participants={d} reconnecting={d} " ++
                     "outbox_high={d} accepted={d} rejected={d} malformed={d} snapshots={d} " ++
-                    "vehicle_actions={d}/{d} forced_cleanup={d} " ++
+                    "vehicle_actions={d}/{d} interaction_actions={d}/{d} " ++
+                    "cleanup={d}/{d} baselines={d}/{d} transfers={d} npcs={d} npc_updates={d} " ++
                     "ping_max_ms={d} out_Bps={d:.0} in_Bps={d:.0} pending={d}/{d} " ++
                     "dropped_events={d}\n",
                 .{
@@ -285,13 +286,36 @@ pub fn main(init: std.process.Init) !void {
                     diagnostics.snapshots_emitted,
                     diagnostics.vehicle_actions_accepted,
                     diagnostics.vehicle_actions_rejected,
+                    diagnostics.interaction_actions_accepted,
+                    diagnostics.interaction_actions_rejected,
                     diagnostics.forced_vehicle_cleanup,
+                    diagnostics.forced_interaction_cleanup,
+                    diagnostics.baselines_emitted,
+                    diagnostics.baselines_acknowledged,
+                    diagnostics.relevance_transfers,
+                    diagnostics.active_npcs,
+                    diagnostics.npc_state_updates,
                     transport.maximum_ping_ms,
                     transport.outgoing_bytes_per_second,
                     transport.incoming_bytes_per_second,
                     transport.pending_unreliable_bytes,
                     transport.pending_reliable_bytes,
                     server.network.droppedEvents(),
+                },
+            );
+            std.debug.print(
+                "MP_REPLICATION delta/full={d}/{d} snapshot_bytes={d} " ++
+                    "budget_deferred={d} npc_deprioritized={d} baseline_memory={d} " ++
+                    "relevant_max={d} events_max={d}\n",
+                .{
+                    diagnostics.delta_snapshots_emitted,
+                    diagnostics.full_snapshots_emitted,
+                    diagnostics.snapshot_bytes_emitted,
+                    diagnostics.snapshots_budget_deferred,
+                    diagnostics.npc_updates_deprioritized,
+                    diagnostics.baseline_memory_bytes,
+                    diagnostics.max_relevant_entities,
+                    diagnostics.max_reliable_events_per_connection_tick,
                 },
             );
             last_reported_tick = completed_ticks;
@@ -303,12 +327,13 @@ pub fn main(init: std.process.Init) !void {
     const diagnostics = server.authority.diagnostics();
     try server.stop(init.io);
     std.debug.print(
-        "MP2_SERVER_STOP tick={d} participants={d} snapshots={d} forced_cleanup={d}\n",
+        "MP2_SERVER_STOP tick={d} participants={d} snapshots={d} cleanup={d}/{d}\n",
         .{
             diagnostics.tick,
             diagnostics.active_participants,
             diagnostics.snapshots_emitted,
             diagnostics.forced_vehicle_cleanup,
+            diagnostics.forced_interaction_cleanup,
         },
     );
 }

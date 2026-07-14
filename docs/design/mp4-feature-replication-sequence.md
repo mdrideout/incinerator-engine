@@ -1,9 +1,8 @@
 # MP4 Feature Replication Sequence
 
-**Status:** MP4-A authoritative replication and bounded local responsiveness
-are implemented and accepted; MP4-B through MP4-E remain
+**Status:** Complete; MP4-A through MP4-E are implemented and accepted
 
-**Last reviewed:** 2026-07-13
+**Last reviewed:** 2026-07-14
 
 MP4 is a sequence of pressure-driven vertical slices. Every slice reuses the
 MP3 authority, deterministic impairment, diagnostics, and replay contracts.
@@ -59,6 +58,10 @@ Evidence: [`../validation/mp4a2-acceptance.md`](../validation/mp4a2-acceptance.m
 
 ## MP4-B — Carry interaction
 
+**Status:** complete. Design:
+[`mp4b-authoritative-carry-interaction.md`](mp4b-authoritative-carry-interaction.md).
+Evidence: [`../validation/mp4b-acceptance.md`](../validation/mp4b-acceptance.md).
+
 **Entry:** MP4-A ownership and reconnect semantics remain green.
 
 - Add reliable collect/drop requests with correlated outcomes and an
@@ -75,6 +78,10 @@ ownership is never duplicated; reconnect/JIP reconstructs the confirmed
 holder; queues and payload remain bounded.
 
 ## MP4-C — District relevance and join baseline
+
+**Status:** complete. Design:
+[`mp4c-district-relevance-and-baselines.md`](mp4c-district-relevance-and-baselines.md).
+Evidence: [`../validation/mp4c-acceptance.md`](../validation/mp4c-acceptance.md).
 
 **Entry:** character, vehicle, and carryable lifecycle dependencies are
 explicit.
@@ -94,6 +101,10 @@ initial state is bounded and acknowledged; missing dependencies fail closed.
 
 ## MP4-D — Relevant NPC projection
 
+**Status:** complete. Design:
+[`mp4d-relevant-npc-projection.md`](mp4d-relevant-npc-projection.md).
+Evidence: [`../validation/mp4d-acceptance.md`](../validation/mp4d-acceptance.md).
+
 **Entry:** district relevance has measured entity and byte budgets.
 
 - Project relevant NPC identity, lifecycle, pose/velocity, and the minimum
@@ -109,6 +120,10 @@ clients cannot submit AI decisions; JIP/reconnect reproduces relevant NPCs
 without exposing private components.
 
 ## MP4-E — Prioritization, deltas, and overload behavior
+
+**Status:** complete. Design:
+[`mp4e-prioritized-delta-replication.md`](mp4e-prioritized-delta-replication.md).
+Evidence: [`../validation/mp4e-acceptance.md`](../validation/mp4e-acceptance.md).
 
 **Entry:** real character, vehicle, carryable, district, and NPC traffic exists.
 
@@ -130,3 +145,5 @@ Each subphase ends with deterministic nominal/adverse/blackout evidence plus
 real-GNS coverage where transport lifecycle matters. MP4 as a whole additionally
 requires save/restart, reconnect, join-in-progress, district transfer, bounded
 baseline memory, and an architecture review before MP5 lobby/room work.
+
+Closeout: [`../validation/mp4-architecture-closeout.md`](../validation/mp4-architecture-closeout.md).

@@ -155,7 +155,7 @@ pub const Link = struct {
     client_send_index: u64 = 0,
     server_send_index: u64 = 0,
     client_queue: ClientQueue = .{},
-    server_queue: ServerQueue = .{},
+    server_queue: *ServerQueue,
     client_diagnostics: DirectionDiagnostics = .{},
     server_diagnostics: DirectionDiagnostics = .{},
     upstream_budget_initialized: bool = false,
@@ -167,7 +167,14 @@ pub const Link = struct {
 
     pub fn init(config: Config) !Link {
         try config.validate();
-        return .{ .config = config };
+        const server_queue = try std.heap.page_allocator.create(ServerQueue);
+        server_queue.* = .{};
+        return .{ .config = config, .server_queue = server_queue };
+    }
+
+    pub fn deinit(self: *Link) void {
+        std.heap.page_allocator.destroy(self.server_queue);
+        self.* = undefined;
     }
 
     pub fn advanceTo(self: *Link, tick: u64) !void {
@@ -198,7 +205,7 @@ pub const Link = struct {
         const class = transport.serverClass(message);
         try self.schedule(
             protocol.ServerMessage,
-            &self.server_queue,
+            self.server_queue,
             &self.server_diagnostics,
             message,
             size,
@@ -223,7 +230,7 @@ pub const Link = struct {
     pub fn receiveForClient(self: *Link) ?protocol.ServerMessage {
         return self.receive(
             protocol.ServerMessage,
-            &self.server_queue,
+            self.server_queue,
             &self.server_diagnostics,
             self.config.downstream_bytes_per_tick,
             &self.downstream_budget_initialized,
@@ -413,7 +420,9 @@ test "fault decisions and diagnostics repeat for the same seed" {
         .reorder_per_10k = 1_000,
     };
     var first = try Link.init(config);
+    defer first.deinit();
     var second = try Link.init(config);
+    defer second.deinit();
     for (1..50) |sequence| {
         try first.sendFromClient(testInput(@intCast(sequence)));
         try second.sendFromClient(testInput(@intCast(sequence)));
@@ -438,6 +447,7 @@ test "blackout drops unreliable traffic and delays reliable control" {
         .reorder_per_10k = 0,
         .blackout = .{ .first_tick = 2, .end_tick = 5 },
     });
+    defer link.deinit();
     try link.advanceTo(2);
     try link.sendFromClient(testInput(1));
     try link.sendFromClient(.{ .hello = .{ .account = .{ .value = 1 } } });
@@ -461,6 +471,7 @@ test "directional bandwidth pressure defers into a fixed queue" {
         .reorder_per_10k = 0,
         .upstream_bytes_per_tick = 1,
     });
+    defer link.deinit();
     try link.sendFromClient(testInput(1));
     try link.sendFromClient(testInput(2));
     try std.testing.expect(link.receiveForAuthority() == null);

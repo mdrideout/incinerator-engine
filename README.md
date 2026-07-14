@@ -122,14 +122,30 @@ zig build verify-mp3 --summary all
 # correction/collision/lifecycle evidence, faults, replay, and GNS regressions.
 zig build verify-mp4 --summary all
 
-# Manual three-terminal MP2 test. Build/install once, then launch one authority
+# Add authoritative carry interaction, disconnect cleanup, acknowledged
+# district baselines, relevance hysteresis, JIP/reconnect, and GNS contention.
+zig build verify-mp4b --summary all
+zig build verify-mp4c --summary all
+zig build verify-mp4d --summary all
+zig build verify-mp4e --summary all
+zig build verify-mp4-complete --summary all
+
+# Run the focused open room/invite proof, or the full MP5 gate. Steamworks is
+# not required; direct GNS IP remains the executable route.
+zig build run-mp5-acceptance --summary all
+zig build verify-mp5 --summary all
+
+# Run the complete Apple Silicon macOS multiplayer-foundation gate.
+zig build verify-m4 -j1 --summary all
+
+# Manual three-terminal multiplayer test. Build/install once, then launch one authority
 # and two graphical clients with distinct development accounts.
 zig build install-mp2
 ./zig-out/bin/incinerator_mp2_server --port 27020
 ./zig-out/bin/incinerator_mp2_client --connect 127.0.0.1:27020 --account 1
 ./zig-out/bin/incinerator_mp2_client --connect 127.0.0.1:27020 --account 2
 
-# Client controls: WASD move, Space jump, E enter/exit, Escape quit. While
+# Client controls: WASD move, Space jump, E enter/exit, F collect/drop, Escape quit. While
 # driving, W/S are throttle/reverse, A/D steer, Space brakes, and Left Shift is
 # the hand brake. P toggles vehicle prediction for live A/B comparison. F8
 # manufactures a transport loss and reconnect while playing. Recoverable

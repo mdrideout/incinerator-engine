@@ -77,6 +77,7 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
     defer if (authority_live) authority.deinit();
     var client = try session_client.Client.init(.{ .value = config.seed + 1_000 });
     var link = try impaired.Link.init(config);
+    defer link.deinit();
     const connection = authority_module.TransportConnection{ .value = 1 };
     _ = try authority.openConnection(connection);
     try link.sendFromClient(try client.begin());
@@ -85,6 +86,7 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
     var initial_position: ?[3]f32 = null;
     var maximum_snapshot_age_ticks: u64 = 0;
     var saw_terminal_output = false;
+    var steady_snapshot_received = false;
 
     for (0..total_ticks) |tick| {
         try link.advanceTo(tick);
@@ -96,14 +98,19 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
             if (outbound.close_after_send) saw_terminal_output = true;
             try link.sendFromAuthority(outbound.message);
         }
-        while (link.receiveForClient()) |message| try client.receive(message);
+        while (link.receiveForClient()) |message| {
+            try client.receive(message);
+            if (message == .snapshot) steady_snapshot_received = true;
+            if (client.takeBaselineAck()) |ack| try link.sendFromClient(ack);
+            if (client.takeSnapshotAck()) |ack| try link.sendFromClient(ack);
+        }
 
         if (client.state == .joined) {
             if (ownedCharacter(&client)) |character| {
                 if (initial_position == null) initial_position = character.position;
             }
             const move: [2]f32 = if (produced_inputs < movement_input_ticks)
-                .{ 1, 0 }
+                .{ 0, 1 }
             else
                 .{ 0, 0 };
             try link.sendFromClient(try client.input(
@@ -114,7 +121,7 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
             ));
             produced_inputs += 1;
         }
-        if (client.world.initialized) {
+        if (client.world.initialized and steady_snapshot_received) {
             maximum_snapshot_age_ticks = @max(
                 maximum_snapshot_age_ticks,
                 authority.diagnostics().tick -| client.world.server_tick,
@@ -133,7 +140,22 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
     const authority_diagnostics = authority.diagnostics();
     const link_diagnostics = link.diagnostics();
 
-    if (movement < 20) return error.TrialMovementTooSmall;
+    if (authority_diagnostics.active_npcs != budgets.product_npcs or
+        client.world.npc_count != budgets.product_npcs / 2 or
+        authority_diagnostics.npc_state_updates >
+            (total_ticks / budgets.ticks_per_npc_snapshot + 4) *
+                (budgets.product_npcs / 2))
+    {
+        return error.NpcProjectionRateOrMembershipMismatch;
+    }
+
+    if (movement < 20) {
+        std.debug.print("MP3_MOVEMENT_DIAGNOSTIC profile={s} movement={d:.3}\n", .{
+            name,
+            movement,
+        });
+        return error.TrialMovementTooSmall;
+    }
     if (convergence > budgets.prediction_thresholds.soft_position_error_m) {
         return error.TrialDidNotConverge;
     }
@@ -231,6 +253,18 @@ fn verifyAcceptedIngressReplay(
                         final_state = character;
                     }
                 }
+            },
+            .relevance_baseline => |baseline| {
+                for (baseline.snapshot.slice()) |character| {
+                    if (std.meta.eql(character.owner, welcome.participant)) {
+                        final_state = character;
+                    }
+                }
+                try replay.ingest(connection, .{ .baseline_ack = .{
+                    .session = welcome.session,
+                    .participant = welcome.participant,
+                    .baseline_id = baseline.baseline_id,
+                } });
             },
             else => {},
         };

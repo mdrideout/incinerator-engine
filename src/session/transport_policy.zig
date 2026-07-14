@@ -15,17 +15,26 @@ pub const Class = struct {
 
 pub fn clientClass(message: protocol.ClientMessage) Class {
     return switch (message) {
-        .hello, .disconnect => .{ .delivery = .reliable, .lane = .control },
-        .input, .vehicle_input => .{ .delivery = .unreliable, .lane = .input },
-        .vehicle_action => .{ .delivery = .reliable, .lane = .gameplay },
+        .hello, .baseline_ack, .disconnect => .{ .delivery = .reliable, .lane = .control },
+        .input, .vehicle_input, .snapshot_ack => .{
+            .delivery = .unreliable,
+            .lane = .input,
+        },
+        .vehicle_action, .interaction_action => .{
+            .delivery = .reliable,
+            .lane = .gameplay,
+        },
     };
 }
 
 pub fn serverClass(message: protocol.ServerMessage) Class {
     return switch (message) {
         .snapshot => .{ .delivery = .unreliable, .lane = .snapshot },
-        .vehicle_action_result => .{ .delivery = .reliable, .lane = .gameplay },
-        .welcome, .rejected, .disconnected => .{
+        .vehicle_action_result, .interaction_action_result => .{
+            .delivery = .reliable,
+            .lane = .gameplay,
+        },
+        .welcome, .relevance_baseline, .rejected, .disconnected => .{
             .delivery = .reliable,
             .lane = .control,
         },

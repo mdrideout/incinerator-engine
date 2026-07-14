@@ -1,4 +1,4 @@
-//! Server-authoritative MP2 session for the character vertical slice.
+//! Server-authoritative session for the multiplayer sandbox vertical slices.
 //!
 //! Transport ownership is outside this module. It accepts copied, decoded
 //! semantic messages associated with an opaque transport connection and emits
@@ -38,12 +38,15 @@ const ConnectionSlot = struct {
     rejected_messages: u64 = 0,
     input_quota_tick: u64 = 0,
     input_messages_this_tick: u16 = 0,
+    event_quota_tick: u64 = 0,
+    reliable_events_this_tick: u16 = 0,
 };
 
 const ParticipantSlot = struct {
     active: bool = false,
     generation: u16 = 0,
     account: identity.AccountId = .{ .value = 0 },
+    external_identity: protocol.ExternalIdentity = .{},
     connection_index: ?u8 = null,
     reconnect: identity.ReconnectToken = .invalid,
     reconnect_deadline_tick: u64 = 0,
@@ -55,6 +58,14 @@ const ParticipantSlot = struct {
     driving_vehicle_index: ?u8 = null,
     last_vehicle_action: identity.ActionSequence = .{ .value = 0 },
     pending_vehicle_action: ?protocol.VehicleAction = null,
+    holding_carryable_index: ?u8 = null,
+    last_interaction_action: identity.ActionSequence = .{ .value = 0 },
+    pending_interaction_action: ?protocol.InteractionAction = null,
+    interaction_cleanup_pending: bool = false,
+    relevance_coord: sandbox.ChunkCoord = sandbox.navigation_west_coord,
+    baseline_id: u32 = 0,
+    baseline_acknowledged: u32 = 0,
+    baseline_sent: bool = false,
     exit_pending: bool = false,
     spawn_pending: bool = false,
     despawn_pending: bool = false,
@@ -73,11 +84,65 @@ const VehicleSlot = struct {
     replicated: identity.ReplicatedEntityId = .invalid,
 };
 
+const CarryableSlot = struct {
+    active: bool = false,
+    spawn_pending: bool = false,
+    generation: u16 = 0,
+    persistent: ?sandbox.PersistentId = null,
+    replicated: identity.ReplicatedEntityId = .invalid,
+};
+
+const NpcSlot = struct {
+    active: bool = false,
+    spawn_pending: bool = false,
+    generation: u16 = 0,
+    persistent: ?sandbox.PersistentId = null,
+    replicated: identity.ReplicatedEntityId = .invalid,
+};
+
+pub const Options = struct {
+    downstream_bytes_per_second: usize = budgets.average_client_down_bytes_per_second,
+    full_snapshot_interval_ticks: u64 = budgets.full_snapshot_interval_ticks,
+    room_admission: ?RoomAdmission = null,
+};
+
+pub const RoomAdmission = struct {
+    room_id: u64,
+    authority_id: u64,
+    room_generation: u32,
+    secret: protocol.AdmissionSecret,
+};
+
+const SnapshotRecord = struct {
+    valid: bool = false,
+    snapshot: protocol.Snapshot = protocol.Snapshot.empty(),
+};
+
+const ReplicationState = struct {
+    history: [budgets.snapshot_history_capacity]SnapshotRecord = @splat(.{}),
+    history_next: u8 = 0,
+    next_sequence: identity.SnapshotSequence = .{ .value = 1 },
+    acknowledged_sequence: identity.SnapshotSequence = .{ .value = 0 },
+    baseline_sequence: identity.SnapshotSequence = .{ .value = 0 },
+    last_ack_tick: u64 = 0,
+    last_full_tick: u64 = 0,
+    last_sent_tick: u64 = 0,
+    byte_credit: usize = 0,
+    byte_remainder: usize = 0,
+};
+
+const UsedAdmissionNonce = struct {
+    nonce: u64 = 0,
+    expires_at_unix_seconds: u64 = 0,
+};
+
 pub const Diagnostics = struct {
     tick: u64,
     active_connections: u16,
     active_participants: u16,
     active_vehicles: u16,
+    active_carryables: u16,
+    active_npcs: u16,
     connected_participants: u16,
     reconnecting_participants: u16,
     outbox_occupancy: u16,
@@ -94,6 +159,27 @@ pub const Diagnostics = struct {
     vehicle_actions_rejected: u64,
     stale_vehicle_actions: u64,
     forced_vehicle_cleanup: u64,
+    interaction_actions_accepted: u64,
+    interaction_actions_rejected: u64,
+    stale_interaction_actions: u64,
+    forced_interaction_cleanup: u64,
+    baselines_emitted: u64,
+    baselines_acknowledged: u64,
+    stale_baseline_acks: u64,
+    relevance_transfers: u64,
+    npc_state_updates: u64,
+    delta_snapshots_emitted: u64,
+    full_snapshots_emitted: u64,
+    snapshot_acks: u64,
+    stale_snapshot_acks: u64,
+    snapshot_bytes_emitted: u64,
+    npc_updates_deprioritized: u64,
+    snapshots_budget_deferred: u64,
+    starvation_sends: u64,
+    full_snapshot_fallbacks: u64,
+    baseline_memory_bytes: usize,
+    max_relevant_entities: u16,
+    max_reliable_events_per_connection_tick: u16,
     ingress_entries: u16,
     ingress_high_water: u16,
     ingress_overwrites: u64,
@@ -113,6 +199,7 @@ pub const AcceptedIngress = struct {
     facing_yaw: f32,
     jump_pressed: bool,
     vehicle: identity.ReplicatedEntityId,
+    carryable: identity.ReplicatedEntityId = .invalid,
     vehicle_control: [4]f32,
 
     pub const Kind = enum(u8) {
@@ -120,6 +207,8 @@ pub const AcceptedIngress = struct {
         vehicle = 2,
         vehicle_enter = 3,
         vehicle_exit = 4,
+        interaction_collect = 5,
+        interaction_drop = 6,
     };
 };
 
@@ -158,12 +247,18 @@ const IngressJournal = struct {
 };
 
 pub const Authority = struct {
+    allocator: std.mem.Allocator,
     simulation: sandbox.Simulation,
     session: identity.SessionId,
     connections: [budgets.max_participants]ConnectionSlot = @splat(.{}),
     participants: [budgets.max_participants]ParticipantSlot = @splat(.{}),
     vehicles: [budgets.max_vehicles]VehicleSlot = @splat(.{}),
-    outbox: Outbox = .{},
+    carryables: [budgets.max_carryables]CarryableSlot = @splat(.{}),
+    npcs: [budgets.max_npcs]NpcSlot = @splat(.{}),
+    replication: *[budgets.max_participants]ReplicationState,
+    options: Options,
+    admission_time_unix_seconds: u64 = 0,
+    outbox: *Outbox,
     outbox_high_water: u16 = 0,
     accepted_messages: u64 = 0,
     rejected_messages: u64 = 0,
@@ -177,11 +272,62 @@ pub const Authority = struct {
     vehicle_actions_rejected: u64 = 0,
     stale_vehicle_actions: u64 = 0,
     forced_vehicle_cleanup: u64 = 0,
+    interaction_actions_accepted: u64 = 0,
+    interaction_actions_rejected: u64 = 0,
+    stale_interaction_actions: u64 = 0,
+    forced_interaction_cleanup: u64 = 0,
+    baselines_emitted: u64 = 0,
+    baselines_acknowledged: u64 = 0,
+    stale_baseline_acks: u64 = 0,
+    relevance_transfers: u64 = 0,
+    npc_state_updates: u64 = 0,
+    delta_snapshots_emitted: u64 = 0,
+    full_snapshots_emitted: u64 = 0,
+    snapshot_acks: u64 = 0,
+    stale_snapshot_acks: u64 = 0,
+    snapshot_bytes_emitted: u64 = 0,
+    npc_updates_deprioritized: u64 = 0,
+    snapshots_budget_deferred: u64 = 0,
+    starvation_sends: u64 = 0,
+    full_snapshot_fallbacks: u64 = 0,
+    max_relevant_entities: u16 = 0,
+    max_reliable_events_per_connection_tick: u16 = 0,
+    used_admission_nonces: [budgets.admission_nonce_history_capacity]UsedAdmissionNonce =
+        @splat(.{}),
+    active_districts: [2]bool = @splat(false),
     ingress: IngressJournal = .{},
     force_snapshot: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) !Authority {
+        return initWithOptions(allocator, .{});
+    }
+
+    pub fn initWithOptions(allocator: std.mem.Allocator, options: Options) !Authority {
+        if (options.downstream_bytes_per_second == 0 or
+            options.full_snapshot_interval_ticks == 0)
+        {
+            return error.InvalidReplicationOptions;
+        }
+        if (options.room_admission) |room| {
+            if (room.room_id == 0 or room.authority_id == 0 or
+                room.room_generation == 0)
+            {
+                return error.InvalidRoomAdmissionOptions;
+            }
+        }
+        if (@sizeOf(protocol.Snapshot) * budgets.snapshot_history_capacity >
+            budgets.max_baseline_bytes_per_client)
+        {
+            return error.BaselineMemoryBudgetExceeded;
+        }
+        const outbox = try allocator.create(Outbox);
+        errdefer allocator.destroy(outbox);
+        outbox.* = .{};
+        const replication = try allocator.create([budgets.max_participants]ReplicationState);
+        errdefer allocator.destroy(replication);
+        replication.* = @splat(.{});
         var authority = Authority{
+            .allocator = allocator,
             .simulation = try sandbox.Simulation.init(allocator, .{
                 .namespace = 0x4d50_3201,
                 .fixed_delta_seconds = 1.0 /
@@ -194,6 +340,9 @@ pub const Authority = struct {
                 },
             }),
             .session = .{ .value = 0x4d50_3200_0000_0001 },
+            .outbox = outbox,
+            .replication = replication,
+            .options = options,
         };
         errdefer authority.simulation.deinit();
         authority.vehicles[0] = .{
@@ -208,11 +357,35 @@ pub const Authority = struct {
             .request_id = vehicleSpawnRequestId(0, 1),
             .chassis = .{ .pose = .{ .position = .{ -1.5, 2, -4 } } },
         } });
+        authority.carryables[0] = .{
+            .generation = 1,
+            .replicated = .{
+                .index = @intCast(budgets.max_participants + budgets.max_vehicles + 1),
+                .generation = 1,
+            },
+        };
+        for (&authority.npcs, 0..) |*npc, index| {
+            npc.generation = 1;
+            npc.replicated = .{
+                .index = @intCast(
+                    budgets.max_participants + budgets.max_vehicles +
+                        budgets.max_carryables + index + 1,
+                ),
+                .generation = 1,
+            };
+        }
+        try authority.simulation.submitDistrict(.{ .request_load = .{
+            .request_id = districtBootstrapRequestId(0),
+            .coord = sandbox.navigation_west_coord,
+            .assets = .{},
+        } });
         return authority;
     }
 
     pub fn deinit(self: *Authority) void {
         self.simulation.deinit();
+        self.allocator.destroy(self.replication);
+        self.allocator.destroy(self.outbox);
         self.* = undefined;
     }
 
@@ -235,6 +408,8 @@ pub const Authority = struct {
             slot.rejected_messages = 0;
             slot.input_quota_tick = slot.opened_tick;
             slot.input_messages_this_tick = 0;
+            slot.event_quota_tick = slot.opened_tick;
+            slot.reliable_events_this_tick = 0;
             return .{ .index = @intCast(index + 1), .generation = slot.generation };
         }
         return error.ConnectionCapacityReached;
@@ -266,6 +441,30 @@ pub const Authority = struct {
         transport: TransportConnection,
         message: protocol.ClientMessage,
     ) !void {
+        try self.ingestWithAdmissionTime(transport, message, null);
+    }
+
+    pub fn ingestAtUnixTime(
+        self: *Authority,
+        transport: TransportConnection,
+        message: protocol.ClientMessage,
+        now_unix_seconds: u64,
+    ) !void {
+        try self.ingestWithAdmissionTime(transport, message, now_unix_seconds);
+    }
+
+    fn ingestWithAdmissionTime(
+        self: *Authority,
+        transport: TransportConnection,
+        message: protocol.ClientMessage,
+        now_unix_seconds: ?u64,
+    ) !void {
+        if (now_unix_seconds) |now| try self.updateAdmissionTime(now);
+        if (message == .hello and self.options.room_admission != null and
+            !message.hello.reconnect.isValid() and now_unix_seconds == null)
+        {
+            return error.RoomAdmissionRequiresTimestampedIngress;
+        }
         const connection_index = self.findConnection(transport) orelse
             return error.UnknownTransportConnection;
         const connection = &self.connections[connection_index];
@@ -277,17 +476,27 @@ pub const Authority = struct {
             .input => |input| try self.ingestInput(connection_index, input),
             .vehicle_input => |input| try self.ingestVehicleInput(connection_index, input),
             .vehicle_action => |action| try self.ingestVehicleAction(connection_index, action),
+            .interaction_action => |action| try self.ingestInteractionAction(
+                connection_index,
+                action,
+            ),
+            .baseline_ack => |ack| try self.ingestBaselineAck(connection_index, ack),
+            .snapshot_ack => |ack| try self.ingestSnapshotAck(connection_index, ack),
             .disconnect => |reason| try self.ingestDisconnect(connection_index, reason),
         }
     }
 
     pub fn tick(self: *Authority) !void {
+        self.replenishReplicationBudgets();
         try self.expireConnections(self.simulation.tickIndex());
         try self.expireReconnects();
         try self.applyHeldInputs(self.simulation.tickIndex());
         try self.simulation.tick();
         try self.processCharacterOutcomes();
         try self.processVehicleOutcomes();
+        try self.processDistrictOutcomes();
+        try self.processInteractionOutcomes();
+        try self.processNpcOutcomes();
         const tick_index = self.simulation.tickIndex();
         if (self.force_snapshot or tick_index % budgets.ticks_per_snapshot == 0) {
             try self.publishSnapshots();
@@ -327,10 +536,21 @@ pub const Authority = struct {
         try self.rejectTransport(transport, .oversized, true);
     }
 
+    /// Updated by the room/service ingress owner before ticket admission. It
+    /// is intentionally separate from deterministic simulation time.
+    pub fn updateAdmissionTime(self: *Authority, now_unix_seconds: u64) !void {
+        if (now_unix_seconds < self.admission_time_unix_seconds) {
+            return error.AdmissionClockMovedBackward;
+        }
+        self.admission_time_unix_seconds = now_unix_seconds;
+    }
+
     pub fn diagnostics(self: *const Authority) Diagnostics {
         var active_connections: u16 = 0;
         var active_participants: u16 = 0;
         var active_vehicles: u16 = 0;
+        var active_carryables: u16 = 0;
+        var active_npcs: u16 = 0;
         var connected_participants: u16 = 0;
         var reconnecting_participants: u16 = 0;
         for (self.connections) |connection| active_connections += @intFromBool(connection.active);
@@ -345,11 +565,15 @@ pub const Authority = struct {
             );
         }
         for (self.vehicles) |vehicle| active_vehicles += @intFromBool(vehicle.active);
+        for (self.carryables) |carryable| active_carryables += @intFromBool(carryable.active);
+        for (self.npcs) |npc| active_npcs += @intFromBool(npc.active);
         return .{
             .tick = self.simulation.tickIndex(),
             .active_connections = active_connections,
             .active_participants = active_participants,
             .active_vehicles = active_vehicles,
+            .active_carryables = active_carryables,
+            .active_npcs = active_npcs,
             .connected_participants = connected_participants,
             .reconnecting_participants = reconnecting_participants,
             .outbox_occupancy = @intCast(self.outbox.len),
@@ -366,6 +590,28 @@ pub const Authority = struct {
             .vehicle_actions_rejected = self.vehicle_actions_rejected,
             .stale_vehicle_actions = self.stale_vehicle_actions,
             .forced_vehicle_cleanup = self.forced_vehicle_cleanup,
+            .interaction_actions_accepted = self.interaction_actions_accepted,
+            .interaction_actions_rejected = self.interaction_actions_rejected,
+            .stale_interaction_actions = self.stale_interaction_actions,
+            .forced_interaction_cleanup = self.forced_interaction_cleanup,
+            .baselines_emitted = self.baselines_emitted,
+            .baselines_acknowledged = self.baselines_acknowledged,
+            .stale_baseline_acks = self.stale_baseline_acks,
+            .relevance_transfers = self.relevance_transfers,
+            .npc_state_updates = self.npc_state_updates,
+            .delta_snapshots_emitted = self.delta_snapshots_emitted,
+            .full_snapshots_emitted = self.full_snapshots_emitted,
+            .snapshot_acks = self.snapshot_acks,
+            .stale_snapshot_acks = self.stale_snapshot_acks,
+            .snapshot_bytes_emitted = self.snapshot_bytes_emitted,
+            .npc_updates_deprioritized = self.npc_updates_deprioritized,
+            .snapshots_budget_deferred = self.snapshots_budget_deferred,
+            .starvation_sends = self.starvation_sends,
+            .full_snapshot_fallbacks = self.full_snapshot_fallbacks,
+            .baseline_memory_bytes = @sizeOf(protocol.Snapshot) *
+                budgets.snapshot_history_capacity * @as(usize, active_participants),
+            .max_relevant_entities = self.max_relevant_entities,
+            .max_reliable_events_per_connection_tick = self.max_reliable_events_per_connection_tick,
             .ingress_entries = self.ingress.count,
             .ingress_high_water = self.ingress.high_water,
             .ingress_overwrites = self.ingress.overwrites,
@@ -390,14 +636,36 @@ pub const Authority = struct {
             try self.rejectConnection(connection_index, .content_mismatch, true);
             return;
         }
-        hello.account.validate() catch {
+        protocol.validateClient(.{ .hello = hello }) catch {
             try self.rejectConnection(connection_index, .unauthorized, true);
             return;
         };
+        const external_identity = normalizedExternalIdentity(hello);
 
         if (hello.reconnect.isValid()) {
             if (try self.tryReconnect(connection_index, hello)) return;
             try self.rejectConnection(connection_index, .reconnect_expired, true);
+            return;
+        }
+
+        if (self.options.room_admission) |room| {
+            const authorization = hello.join_authorization;
+            if (authorization.room_id != room.room_id or
+                authorization.authority_id != room.authority_id or
+                authorization.room_generation != room.room_generation or
+                authorization.expires_at_unix_seconds < self.admission_time_unix_seconds or
+                !protocol.verifyJoinAuthorization(
+                    room.secret,
+                    hello.account,
+                    external_identity,
+                    authorization,
+                ) or self.admissionNonceUsed(authorization.nonce))
+            {
+                try self.rejectConnection(connection_index, .unauthorized, true);
+                return;
+            }
+        } else if (hello.join_authorization.isPresent()) {
+            try self.rejectConnection(connection_index, .unauthorized, true);
             return;
         }
 
@@ -412,7 +680,11 @@ pub const Authority = struct {
             return;
         };
         const participant = &self.participants[participant_index];
+        if (hello.join_authorization.isPresent()) {
+            try self.rememberAdmissionNonce(hello.join_authorization);
+        }
         participant.account = hello.account;
+        participant.external_identity = external_identity;
         participant.connection_index = @intCast(connection_index);
         participant.reconnect = reconnectToken(
             self.session,
@@ -423,6 +695,11 @@ pub const Authority = struct {
             .index = @intCast(participant_index + 1),
             .generation = participant.generation,
         };
+        participant.relevance_coord = sandbox.navigation_west_coord;
+        participant.baseline_id = 1;
+        participant.baseline_acknowledged = 0;
+        participant.baseline_sent = false;
+        self.resetReplicationBaseline(participant_index);
         participant.spawn_pending = true;
         self.connections[connection_index].participant_index = @intCast(participant_index);
         const lane = participant_index % 4;
@@ -446,16 +723,23 @@ pub const Authority = struct {
         hello: protocol.Hello,
     ) !bool {
         const tick_index = self.simulation.tickIndex();
+        const external_identity = normalizedExternalIdentity(hello);
         for (&self.participants, 0..) |*participant, participant_index| {
             if (!participant.active or participant.connection_index != null or
                 participant.despawn_pending or
                 !std.meta.eql(participant.account, hello.account) or
+                !std.meta.eql(participant.external_identity, external_identity) or
                 !std.meta.eql(participant.reconnect, hello.reconnect) or
                 tick_index > participant.reconnect_deadline_tick)
             {
                 continue;
             }
             participant.connection_index = @intCast(connection_index);
+            participant.baseline_id +%= 1;
+            if (participant.baseline_id == 0) participant.baseline_id = 1;
+            participant.baseline_acknowledged = 0;
+            participant.baseline_sent = false;
+            self.resetReplicationBaseline(participant_index);
             self.connections[connection_index].participant_index = @intCast(participant_index);
             try self.queueWelcome(connection_index, participant_index);
             self.reconnects +|= 1;
@@ -669,7 +953,9 @@ pub const Authority = struct {
         };
         switch (action.kind) {
             .enter => {
-                if (participant.driving_vehicle_index != null) {
+                if (participant.driving_vehicle_index != null or
+                    participant.holding_carryable_index != null)
+                {
                     try self.queueVehicleActionResult(participant_index, action, .invalid_state);
                     self.vehicle_actions_rejected +|= 1;
                     return;
@@ -715,6 +1001,195 @@ pub const Authority = struct {
         participant.pending_vehicle_action = action;
         participant.held_input = null;
         self.accepted_messages +|= 1;
+    }
+
+    fn ingestInteractionAction(
+        self: *Authority,
+        connection_index: usize,
+        action: protocol.InteractionAction,
+    ) !void {
+        const participant_index = self.connections[connection_index].participant_index orelse {
+            try self.rejectConnection(connection_index, .unauthorized, false);
+            return;
+        };
+        const participant = &self.participants[participant_index];
+        if (!std.meta.eql(action.session, self.session) or
+            !std.meta.eql(action.participant, participantId(
+                participant_index,
+                participant.generation,
+            )))
+        {
+            try self.rejectConnection(connection_index, .stale_connection, false);
+            return;
+        }
+        if (!action.sequence.newerThan(participant.last_interaction_action)) {
+            self.stale_interaction_actions +|= 1;
+            return;
+        }
+        participant.last_interaction_action = action.sequence;
+        const carryable_index = self.findCarryable(action.carryable) orelse {
+            try self.queueInteractionActionResult(
+                participant_index,
+                action,
+                .carryable_not_found,
+            );
+            self.interaction_actions_rejected +|= 1;
+            return;
+        };
+        if (participant.pending_interaction_action != null or
+            participant.pending_vehicle_action != null or
+            participant.despawn_pending)
+        {
+            try self.queueInteractionActionResult(participant_index, action, .invalid_state);
+            self.interaction_actions_rejected +|= 1;
+            return;
+        }
+        const character = participant.character orelse {
+            try self.queueInteractionActionResult(participant_index, action, .invalid_state);
+            self.interaction_actions_rejected +|= 1;
+            return;
+        };
+        const carryable = self.carryables[carryable_index];
+        const persistent = carryable.persistent orelse {
+            try self.queueInteractionActionResult(participant_index, action, .unavailable);
+            self.interaction_actions_rejected +|= 1;
+            return;
+        };
+        switch (action.kind) {
+            .collect => try self.simulation.submitInteraction(.{ .collect = .{
+                .transaction_id = interactionTransactionId(
+                    participant_index,
+                    participant.generation,
+                    action.sequence,
+                ),
+                .carrier_id = character,
+                .carryable_id = persistent,
+            } }),
+            .drop => try self.simulation.submitInteraction(.{ .drop = .{
+                .transaction_id = interactionTransactionId(
+                    participant_index,
+                    participant.generation,
+                    action.sequence,
+                ),
+                .carrier_id = character,
+                .carryable_id = persistent,
+            } }),
+        }
+        self.ingress.append(.{
+            .admitted_tick = self.simulation.tickIndex(),
+            .account = participant.account,
+            .participant = participantId(participant_index, participant.generation),
+            .connection = .{
+                .index = @intCast(connection_index + 1),
+                .generation = self.connections[connection_index].generation,
+            },
+            .sequence = .{ .value = 0 },
+            .action_sequence = action.sequence,
+            .target_tick = self.simulation.tickIndex() + 1,
+            .kind = if (action.kind == .collect)
+                .interaction_collect
+            else
+                .interaction_drop,
+            .move = .{ 0, 0 },
+            .facing_yaw = 0,
+            .jump_pressed = false,
+            .vehicle = .invalid,
+            .carryable = action.carryable,
+            .vehicle_control = .{ 0, 0, 0, 0 },
+        });
+        participant.pending_interaction_action = action;
+        participant.held_input = null;
+        self.accepted_messages +|= 1;
+    }
+
+    fn ingestBaselineAck(
+        self: *Authority,
+        connection_index: usize,
+        ack: protocol.BaselineAck,
+    ) !void {
+        const participant_index = self.connections[connection_index].participant_index orelse {
+            try self.rejectConnection(connection_index, .unauthorized, false);
+            return;
+        };
+        const participant = &self.participants[participant_index];
+        if (!std.meta.eql(ack.session, self.session) or
+            !std.meta.eql(ack.participant, participantId(
+                participant_index,
+                participant.generation,
+            )))
+        {
+            try self.rejectConnection(connection_index, .stale_connection, false);
+            return;
+        }
+        if (!participant.baseline_sent or ack.baseline_id != participant.baseline_id) {
+            self.stale_baseline_acks +|= 1;
+            return;
+        }
+        if (participant.baseline_acknowledged != ack.baseline_id) {
+            participant.baseline_acknowledged = ack.baseline_id;
+            const replication = &self.replication[participant_index];
+            if (replication.baseline_sequence.value != 0) {
+                replication.acknowledged_sequence = replication.baseline_sequence;
+                replication.last_ack_tick = self.simulation.tickIndex();
+            }
+            self.baselines_acknowledged +|= 1;
+            self.force_snapshot = true;
+        }
+        self.accepted_messages +|= 1;
+    }
+
+    fn ingestSnapshotAck(
+        self: *Authority,
+        connection_index: usize,
+        ack: protocol.SnapshotAck,
+    ) !void {
+        const participant_index = self.connections[connection_index].participant_index orelse {
+            try self.rejectConnection(connection_index, .unauthorized, false);
+            return;
+        };
+        const participant = &self.participants[participant_index];
+        if (!std.meta.eql(ack.session, self.session) or
+            !std.meta.eql(ack.participant, participantId(
+                participant_index,
+                participant.generation,
+            )))
+        {
+            try self.rejectConnection(connection_index, .stale_connection, false);
+            return;
+        }
+        if (ack.baseline_id != participant.baseline_id or
+            self.findReplicationSnapshot(participant_index, ack.sequence) == null)
+        {
+            self.stale_snapshot_acks +|= 1;
+            return;
+        }
+        const replication = &self.replication[participant_index];
+        if (replication.acknowledged_sequence.value == 0 or
+            ack.sequence.newerThan(replication.acknowledged_sequence))
+        {
+            replication.acknowledged_sequence = ack.sequence;
+            replication.last_ack_tick = self.simulation.tickIndex();
+            self.snapshot_acks +|= 1;
+        } else {
+            self.stale_snapshot_acks +|= 1;
+        }
+        self.accepted_messages +|= 1;
+    }
+
+    fn replenishReplicationBudgets(self: *Authority) void {
+        const per_second = self.options.downstream_bytes_per_second;
+        const whole = per_second / budgets.authority_tick_hz;
+        const remainder = per_second % budgets.authority_tick_hz;
+        const burst = per_second;
+        for (self.replication) |*replication| {
+            replication.byte_remainder += remainder;
+            const carry = replication.byte_remainder / budgets.authority_tick_hz;
+            replication.byte_remainder %= budgets.authority_tick_hz;
+            replication.byte_credit = @min(
+                burst,
+                replication.byte_credit +| whole +| carry,
+            );
+        }
     }
 
     fn applyHeldInputs(self: *Authority, tick_index: u64) !void {
@@ -824,10 +1299,33 @@ pub const Authority = struct {
         if (!participant.active or participant.despawn_pending) return;
         participant.despawn_pending = true;
         participant.held_input = null;
+        try self.continueParticipantDespawn(participant_index);
+    }
+
+    fn continueParticipantDespawn(self: *Authority, participant_index: usize) !void {
+        const participant = &self.participants[participant_index];
+        if (!participant.active or !participant.despawn_pending) return;
         // A queued feature transaction cannot be cancelled after admission.
         // Let its typed outcome settle first, then continue ordered cleanup.
-        if (participant.pending_vehicle_action != null) return;
+        if (participant.pending_vehicle_action != null or
+            participant.pending_interaction_action != null or
+            participant.interaction_cleanup_pending or participant.exit_pending) return;
         if (participant.character) |character| {
+            if (participant.holding_carryable_index) |carryable_index| {
+                const carryable = self.carryables[carryable_index];
+                const persistent = carryable.persistent orelse
+                    return error.InteractionAuthorityInvariantBroken;
+                try self.simulation.submitInteraction(.{ .drop = .{
+                    .transaction_id = interactionCleanupTransactionId(
+                        participant_index,
+                        participant.generation,
+                    ),
+                    .carrier_id = character,
+                    .carryable_id = persistent,
+                } });
+                participant.interaction_cleanup_pending = true;
+                return;
+            }
             if (participant.driving_vehicle_index) |vehicle_index| {
                 const vehicle = self.vehicles[vehicle_index];
                 const persistent = vehicle.persistent orelse
@@ -871,6 +1369,12 @@ pub const Authority = struct {
                         participant.active = false;
                         participant.connection_index = null;
                         participant.character = null;
+                        participant.driving_vehicle_index = null;
+                        participant.holding_carryable_index = null;
+                        participant.pending_vehicle_action = null;
+                        participant.pending_interaction_action = null;
+                        participant.exit_pending = false;
+                        participant.interaction_cleanup_pending = false;
                         participant.spawn_pending = false;
                         participant.despawn_pending = false;
                         self.force_snapshot = true;
@@ -1009,58 +1513,504 @@ pub const Authority = struct {
         while (self.simulation.pollVehicleEvent() != null) {}
     }
 
+    fn processDistrictOutcomes(self: *Authority) !void {
+        while (self.simulation.pollDistrictOutcome()) |outcome| switch (outcome) {
+            .load_requested => |requested| {
+                if (decodeDistrictBootstrapRequestId(requested.request_id) == null) {
+                    return error.UnexpectedDistrictLoadOutcome;
+                }
+            },
+            .activated => |activated| {
+                const district_index = decodeDistrictBootstrapRequestId(
+                    activated.request_id,
+                ) orelse return error.UnexpectedDistrictActivation;
+                const expected = districtBootstrapCoord(district_index);
+                if (!std.meta.eql(activated.coord, expected)) {
+                    return error.UnexpectedDistrictActivation;
+                }
+                if (self.active_districts[district_index]) {
+                    return error.DuplicateDistrictActivation;
+                }
+                self.active_districts[district_index] = true;
+                if (district_index == 1) {
+                    for (&self.npcs, 0..) |*npc, index| {
+                        npc.spawn_pending = true;
+                        const coord = if (index % 2 == 0)
+                            sandbox.navigation_west_coord
+                        else
+                            sandbox.navigation_east_coord;
+                        try self.simulation.submitNpc(.{ .spawn = .{
+                            .request_id = npcSpawnRequestId(index, npc.generation),
+                            .node = .{ .coord = coord, .index = @intCast(index % 3) },
+                            .goal = .hold,
+                        } });
+                    }
+                    continue;
+                }
+                try self.simulation.submitDistrict(.{ .request_load = .{
+                    .request_id = districtBootstrapRequestId(1),
+                    .coord = sandbox.navigation_east_coord,
+                    .assets = .{},
+                } });
+                const carryable = &self.carryables[0];
+                if (carryable.active or carryable.spawn_pending) {
+                    return error.DuplicateCarryableDistrictActivation;
+                }
+                carryable.spawn_pending = true;
+                try self.simulation.submitInteraction(.{ .spawn = .{
+                    .request_id = carryableSpawnRequestId(0, carryable.generation),
+                    .pose = .{ .position = .{ -2, 1, -1.5 } },
+                } });
+            },
+            .cancellation_requested,
+            .cancelled,
+            .load_failed,
+            .unloaded,
+            .rejected,
+            => return error.CarryableDistrictBootstrapFailed,
+        };
+        while (self.simulation.pollDistrictEvent() != null) {}
+    }
+
+    fn processInteractionOutcomes(self: *Authority) !void {
+        while (self.simulation.pollInteractionOutcome()) |outcome| switch (outcome) {
+            .spawned => |spawned| {
+                const decoded = decodeCarryableSpawnRequestId(spawned.request_id) orelse
+                    return error.UnexpectedCarryableSpawnOutcome;
+                const carryable = &self.carryables[decoded.index];
+                if (carryable.generation != decoded.generation or !carryable.spawn_pending) {
+                    return error.StaleCarryableSpawnOutcome;
+                }
+                carryable.spawn_pending = false;
+                carryable.active = true;
+                carryable.persistent = spawned.id;
+                self.force_snapshot = true;
+            },
+            .collected => |collected| {
+                const participant_index = self.findParticipantByCharacter(
+                    collected.carrier_id,
+                ) orelse return error.UnknownInteractionCarrier;
+                const carryable_index = self.findCarryableByPersistent(
+                    collected.carryable_id,
+                ) orelse return error.UnknownInteractionCarryable;
+                const participant = &self.participants[participant_index];
+                const action = participant.pending_interaction_action orelse
+                    return error.UnexpectedInteractionCollectOutcome;
+                if (action.kind != .collect or
+                    collected.transaction_id != interactionTransactionId(
+                        participant_index,
+                        participant.generation,
+                        action.sequence,
+                    ) or
+                    !std.meta.eql(action.carryable, self.carryables[carryable_index].replicated) or
+                    participant.holding_carryable_index != null)
+                {
+                    return error.InteractionActionOutcomeMismatch;
+                }
+                participant.holding_carryable_index = @intCast(carryable_index);
+                participant.pending_interaction_action = null;
+                participant.held_input = null;
+                try self.queueInteractionActionResult(participant_index, action, .collected);
+                self.interaction_actions_accepted +|= 1;
+                self.force_snapshot = true;
+                try self.continueParticipantDespawn(participant_index);
+            },
+            .dropped => |dropped| {
+                const participant_index = self.findParticipantByCharacter(
+                    dropped.carrier_id,
+                ) orelse return error.UnknownInteractionCarrier;
+                const carryable_index = self.findCarryableByPersistent(
+                    dropped.carryable_id,
+                ) orelse return error.UnknownInteractionCarryable;
+                const participant = &self.participants[participant_index];
+                if (participant.interaction_cleanup_pending) {
+                    if (dropped.transaction_id != interactionCleanupTransactionId(
+                        participant_index,
+                        participant.generation,
+                    ) or participant.holding_carryable_index == null or
+                        participant.holding_carryable_index.? != carryable_index)
+                    {
+                        return error.InteractionCleanupOutcomeMismatch;
+                    }
+                    participant.interaction_cleanup_pending = false;
+                    participant.holding_carryable_index = null;
+                    participant.held_input = null;
+                    self.forced_interaction_cleanup +|= 1;
+                    self.force_snapshot = true;
+                    try self.continueParticipantDespawn(participant_index);
+                    continue;
+                }
+                const action = participant.pending_interaction_action orelse
+                    return error.UnexpectedInteractionDropOutcome;
+                if (action.kind != .drop or
+                    dropped.transaction_id != interactionTransactionId(
+                        participant_index,
+                        participant.generation,
+                        action.sequence,
+                    ) or
+                    !std.meta.eql(action.carryable, self.carryables[carryable_index].replicated) or
+                    participant.holding_carryable_index == null or
+                    participant.holding_carryable_index.? != carryable_index)
+                {
+                    return error.InteractionActionOutcomeMismatch;
+                }
+                participant.holding_carryable_index = null;
+                participant.pending_interaction_action = null;
+                participant.held_input = null;
+                try self.queueInteractionActionResult(participant_index, action, .dropped);
+                self.interaction_actions_accepted +|= 1;
+                self.force_snapshot = true;
+                try self.continueParticipantDespawn(participant_index);
+            },
+            .despawned => return error.UnexpectedCarryableDespawnOutcome,
+            .rejected => |rejected| {
+                const carrier = rejected.carrier_id orelse
+                    return error.UnexpectedInteractionRejection;
+                const participant_index = self.findParticipantByCharacter(carrier) orelse
+                    return error.UnknownInteractionCarrier;
+                const participant = &self.participants[participant_index];
+                if (participant.interaction_cleanup_pending) {
+                    if (rejected.transaction_id == null or
+                        rejected.transaction_id.? != interactionCleanupTransactionId(
+                            participant_index,
+                            participant.generation,
+                        ))
+                    {
+                        return error.InteractionCleanupOutcomeMismatch;
+                    }
+                    return error.InteractionCleanupDropRejected;
+                }
+                const action = participant.pending_interaction_action orelse
+                    return error.UnexpectedInteractionRejection;
+                if (rejected.transaction_id == null or
+                    rejected.transaction_id.? != interactionTransactionId(
+                        participant_index,
+                        participant.generation,
+                        action.sequence,
+                    ))
+                {
+                    return error.InteractionActionOutcomeMismatch;
+                }
+                try self.queueInteractionActionResult(
+                    participant_index,
+                    action,
+                    interactionRejectionDisposition(rejected.reason),
+                );
+                participant.pending_interaction_action = null;
+                participant.held_input = null;
+                self.interaction_actions_rejected +|= 1;
+                try self.continueParticipantDespawn(participant_index);
+            },
+        };
+    }
+
+    fn processNpcOutcomes(self: *Authority) !void {
+        while (self.simulation.pollNpcOutcome()) |outcome| switch (outcome) {
+            .spawned => |spawned| {
+                const decoded = decodeNpcSpawnRequestId(spawned.request_id) orelse
+                    return error.UnexpectedNpcSpawnOutcome;
+                const npc = &self.npcs[decoded.index];
+                if (npc.generation != decoded.generation or !npc.spawn_pending) {
+                    return error.StaleNpcSpawnOutcome;
+                }
+                npc.spawn_pending = false;
+                npc.active = true;
+                npc.persistent = spawned.id;
+                self.force_snapshot = true;
+            },
+            .goal_set, .despawned => return error.UnexpectedNpcMutationOutcome,
+            .rejected => return error.NpcBootstrapRejected,
+        };
+        while (self.simulation.pollNpcEvent() != null) {}
+    }
+
     fn publishSnapshots(self: *Authority) !void {
-        var template = protocol.Snapshot.empty();
-        template.sequence.value = @truncate(self.simulation.tickIndex() /
-            budgets.ticks_per_snapshot + 1);
-        template.server_tick = self.simulation.tickIndex();
-        for (self.participants, 0..) |participant, participant_index| {
+        for (0..self.participants.len) |participant_index| {
+            const participant = &self.participants[participant_index];
+            const connection_index = participant.connection_index orelse continue;
+            if (!participant.active or participant.character == null or
+                participant.despawn_pending or !self.connections[connection_index].active)
+            {
+                continue;
+            }
+            try self.updateParticipantRelevance(participant_index);
+            const full_projection = try self.buildRelevantSnapshot(participant_index);
+            const relevant_entities: u16 = full_projection.character_count +
+                full_projection.vehicle_count + full_projection.carryable_count +
+                full_projection.npc_count;
+            self.max_relevant_entities = @max(self.max_relevant_entities, relevant_entities);
+            if (relevant_entities > budgets.max_relevant_entities_per_client) {
+                return error.RelevantEntityBudgetExceeded;
+            }
+            if (!participant.baseline_sent) {
+                var baseline = protocol.RelevanceBaseline{
+                    .baseline_id = participant.baseline_id,
+                    .district_count = 1,
+                    .districts = undefined,
+                    .snapshot = full_projection,
+                };
+                baseline.districts[0] = districtCoord(participant.relevance_coord);
+                try self.queue(.{
+                    .connection = self.connections[connection_index].transport,
+                    .message = .{ .relevance_baseline = baseline },
+                    .delivery = .reliable,
+                    .lane = .control,
+                });
+                participant.baseline_sent = true;
+                const replication = &self.replication[participant_index];
+                replication.baseline_sequence = full_projection.sequence;
+                replication.last_full_tick = self.simulation.tickIndex();
+                replication.last_sent_tick = self.simulation.tickIndex();
+                self.rememberReplicationSnapshot(participant_index, full_projection);
+                const byte_count = try snapshotWireBytes(.{ .relevance_baseline = baseline });
+                self.snapshot_bytes_emitted +|= byte_count;
+                self.full_snapshots_emitted +|= 1;
+                self.npc_state_updates +|= full_projection.npc_count;
+                self.baselines_emitted +|= 1;
+                continue;
+            }
+            if (participant.baseline_acknowledged != participant.baseline_id) continue;
+
+            const tick_index = self.simulation.tickIndex();
+            const replication = &self.replication[participant_index];
+            const acknowledged = self.findReplicationSnapshot(
+                participant_index,
+                replication.acknowledged_sequence,
+            );
+            const must_send_full = acknowledged == null or
+                tick_index -| replication.last_full_tick >=
+                    self.options.full_snapshot_interval_ticks or
+                tick_index -| replication.last_ack_tick > budgets.max_delta_base_age_ticks;
+            var wire_snapshot = if (must_send_full)
+                full_projection
+            else
+                try protocol.makeDelta(
+                    acknowledged.?,
+                    full_projection,
+                    tick_index % budgets.ticks_per_npc_snapshot == 0,
+                );
+            var materialized = if (wire_snapshot.kind == .delta)
+                try protocol.materializeDelta(acknowledged.?, wire_snapshot)
+            else
+                full_projection;
+            var byte_count = try snapshotWireBytes(.{ .snapshot = wire_snapshot });
+            if (byte_count > replication.byte_credit and wire_snapshot.kind == .delta and
+                wire_snapshot.npc_update)
+            {
+                wire_snapshot = try protocol.makeDelta(acknowledged.?, full_projection, false);
+                materialized = try protocol.materializeDelta(acknowledged.?, wire_snapshot);
+                byte_count = try snapshotWireBytes(.{ .snapshot = wire_snapshot });
+                self.npc_updates_deprioritized +|= 1;
+            }
+            if (byte_count > replication.byte_credit and
+                tick_index -| replication.last_sent_tick < budgets.max_snapshot_starvation_ticks)
+            {
+                self.snapshots_budget_deferred +|= 1;
+                continue;
+            }
+            if (byte_count > replication.byte_credit) self.starvation_sends +|= 1;
+            try self.queue(.{
+                .connection = self.connections[connection_index].transport,
+                .message = .{ .snapshot = wire_snapshot },
+                .delivery = .unreliable,
+                .lane = .snapshot,
+            });
+            replication.byte_credit -|= byte_count;
+            replication.last_sent_tick = tick_index;
+            if (wire_snapshot.kind == .full) {
+                replication.last_full_tick = tick_index;
+                self.full_snapshots_emitted +|= 1;
+                self.full_snapshot_fallbacks +|= 1;
+            } else {
+                self.delta_snapshots_emitted +|= 1;
+            }
+            self.rememberReplicationSnapshot(participant_index, materialized);
+            self.snapshot_bytes_emitted +|= byte_count;
+            if (wire_snapshot.npc_update) self.npc_state_updates +|= wire_snapshot.npc_count;
+            self.snapshots_emitted +|= 1;
+        }
+    }
+
+    fn updateParticipantRelevance(self: *Authority, participant_index: usize) !void {
+        const participant = &self.participants[participant_index];
+        const character = participant.character orelse return;
+        const position = if (participant.driving_vehicle_index) |vehicle_index| blk: {
+            const persistent = self.vehicles[vehicle_index].persistent orelse
+                return error.VehicleAuthorityInvariantBroken;
+            break :blk (try self.simulation.vehicle(persistent)).state.chassis.pose.position;
+        } else (try self.simulation.character(character)).position;
+        const candidate = try sandbox.chunkCoordForWorldPosition(position);
+        if (std.meta.eql(candidate, participant.relevance_coord) or
+            !self.isDistrictActive(candidate) or
+            !insideDistrictHysteresis(position, candidate)) return;
+        participant.relevance_coord = candidate;
+        participant.baseline_id +%= 1;
+        if (participant.baseline_id == 0) participant.baseline_id = 1;
+        participant.baseline_acknowledged = 0;
+        participant.baseline_sent = false;
+        self.resetReplicationBaseline(participant_index);
+        self.relevance_transfers +|= 1;
+    }
+
+    fn buildRelevantSnapshot(
+        self: *Authority,
+        participant_index: usize,
+    ) !protocol.Snapshot {
+        const target = self.participants[participant_index];
+        const replication = &self.replication[participant_index];
+        var snapshot = protocol.Snapshot.empty();
+        snapshot.baseline_id = target.baseline_id;
+        snapshot.sequence = replication.next_sequence;
+        replication.next_sequence = replication.next_sequence.next();
+        if (replication.next_sequence.value == 0) replication.next_sequence.value = 1;
+        snapshot.server_tick = self.simulation.tickIndex();
+        snapshot.acknowledged_input = target.last_input;
+        for (self.participants, 0..) |participant, index| {
             if (!participant.active or participant.character == null or
                 participant.despawn_pending) continue;
-            if (template.character_count == budgets.max_participants) break;
             const view = try self.simulation.character(participant.character.?);
-            template.characters[template.character_count] = .{
+            const relevant = index == participant_index or std.meta.eql(
+                try sandbox.chunkCoordForWorldPosition(view.position),
+                target.relevance_coord,
+            );
+            if (!relevant) continue;
+            snapshot.characters[snapshot.character_count] = .{
                 .entity = participant.replicated,
-                .owner = participantId(participant_index, participant.generation),
+                .owner = participantId(index, participant.generation),
                 .position = view.position,
                 .velocity = view.velocity,
                 .facing_yaw = view.facing_yaw,
             };
-            template.character_count += 1;
+            snapshot.character_count += 1;
         }
         for (self.vehicles) |vehicle| {
             if (!vehicle.active or vehicle.persistent == null) continue;
-            if (template.vehicle_count == budgets.max_vehicles) break;
             const view = try self.simulation.vehicle(vehicle.persistent.?);
-            template.vehicles[template.vehicle_count] = .{
+            const driver_index = if (view.driver_id) |driver|
+                self.findParticipantByCharacter(driver)
+            else
+                null;
+            const relevant = (driver_index != null and driver_index.? == participant_index) or
+                std.meta.eql(
+                    try sandbox.chunkCoordForWorldPosition(view.state.chassis.pose.position),
+                    target.relevance_coord,
+                );
+            if (!relevant) continue;
+            snapshot.vehicles[snapshot.vehicle_count] = .{
                 .entity = vehicle.replicated,
                 .position = view.state.chassis.pose.position,
                 .rotation = view.state.chassis.pose.rotation,
                 .linear_velocity = view.state.chassis.velocity.linear,
                 .angular_velocity = view.state.chassis.velocity.angular,
-                .driver = if (view.driver_id) |driver|
-                    if (self.findParticipantByCharacter(driver)) |index|
-                        participantId(index, self.participants[index].generation)
-                    else
-                        null
+                .driver = if (driver_index) |index|
+                    participantId(index, self.participants[index].generation)
                 else
                     null,
             };
-            template.vehicle_count += 1;
+            snapshot.vehicle_count += 1;
         }
-        for (self.participants, 0..) |participant, participant_index| {
-            const connection_index = participant.connection_index orelse continue;
-            if (!participant.active or !self.connections[connection_index].active) continue;
-            var snapshot = template;
-            snapshot.acknowledged_input = self.participants[participant_index].last_input;
-            try self.queue(.{
-                .connection = self.connections[connection_index].transport,
-                .message = .{ .snapshot = snapshot },
-                .delivery = .unreliable,
-                .lane = .snapshot,
-            });
-            self.snapshots_emitted +|= 1;
+        const carryable_draws = try self.simulation.interactionPresentation();
+        for (carryable_draws) |draw| {
+            const carryable_index = self.findCarryableByPersistent(draw.persistent_id) orelse
+                return error.UnknownInteractionPresentation;
+            const view = try self.simulation.carryable(draw.persistent_id);
+            const holder_index = switch (draw.ownership) {
+                .district_owned => null,
+                .inventory_held => |carrier| self.findParticipantByCharacter(carrier) orelse
+                    return error.UnknownInteractionCarrier,
+            };
+            const relevant = (holder_index != null and holder_index.? == participant_index) or
+                std.meta.eql(
+                    try sandbox.chunkCoordForWorldPosition(draw.pose.position),
+                    target.relevance_coord,
+                );
+            if (!relevant) continue;
+            const holder = if (holder_index) |index|
+                participantId(index, self.participants[index].generation)
+            else
+                null;
+            snapshot.carryables[snapshot.carryable_count] = .{
+                .entity = self.carryables[carryable_index].replicated,
+                .position = draw.pose.position,
+                .rotation = draw.pose.rotation,
+                .linear_velocity = if (holder == null) view.state.velocity.linear else .{ 0, 0, 0 },
+                .angular_velocity = if (holder == null) view.state.velocity.angular else .{ 0, 0, 0 },
+                .half_extents = draw.half_extents,
+                .holder = holder,
+            };
+            snapshot.carryable_count += 1;
         }
+        snapshot.npc_update = true;
+        const draws = try self.simulation.npcPresentation(0);
+        for (draws) |draw| {
+            if (!std.meta.eql(draw.owner, target.relevance_coord)) continue;
+            const npc_index = self.findNpcByPersistent(draw.persistent_id) orelse
+                return error.UnknownNpcPresentation;
+            const view = try self.simulation.npc(draw.persistent_id);
+            snapshot.npcs[snapshot.npc_count] = .{
+                .entity = self.npcs[npc_index].replicated,
+                .position = view.position,
+                .velocity = view.velocity,
+                .facing_yaw = view.facing_yaw,
+                .state = switch (view.state) {
+                    .active => .active,
+                    .waiting_at_boundary => .waiting_at_boundary,
+                    .dormant => continue,
+                },
+            };
+            snapshot.npc_count += 1;
+        }
+        return snapshot;
+    }
+
+    fn rememberReplicationSnapshot(
+        self: *Authority,
+        participant_index: usize,
+        snapshot: protocol.Snapshot,
+    ) void {
+        std.debug.assert(snapshot.kind == .full);
+        const replication = &self.replication[participant_index];
+        replication.history[replication.history_next] = .{
+            .valid = true,
+            .snapshot = snapshot,
+        };
+        replication.history_next = @intCast(
+            (@as(usize, replication.history_next) + 1) % replication.history.len,
+        );
+    }
+
+    fn findReplicationSnapshot(
+        self: *const Authority,
+        participant_index: usize,
+        sequence: identity.SnapshotSequence,
+    ) ?protocol.Snapshot {
+        if (sequence.value == 0) return null;
+        const baseline_id = self.participants[participant_index].baseline_id;
+        for (self.replication[participant_index].history) |record| {
+            if (record.valid and std.meta.eql(record.snapshot.sequence, sequence) and
+                record.snapshot.baseline_id == baseline_id)
+            {
+                return record.snapshot;
+            }
+        }
+        return null;
+    }
+
+    fn resetReplicationBaseline(self: *Authority, participant_index: usize) void {
+        const replication = &self.replication[participant_index];
+        replication.history = @splat(.{});
+        replication.history_next = 0;
+        replication.acknowledged_sequence = .{ .value = 0 };
+        replication.baseline_sequence = .{ .value = 0 };
+        replication.last_ack_tick = self.simulation.tickIndex();
+        replication.last_full_tick = 0;
+        replication.last_sent_tick = 0;
+    }
+
+    fn isDistrictActive(self: *const Authority, coord: sandbox.ChunkCoord) bool {
+        if (std.meta.eql(coord, sandbox.navigation_west_coord)) return self.active_districts[0];
+        if (std.meta.eql(coord, sandbox.navigation_east_coord)) return self.active_districts[1];
+        return false;
     }
 
     fn allocateParticipant(self: *Authority) ?usize {
@@ -1069,6 +2019,8 @@ pub const Authority = struct {
             participant.generation +%= 1;
             if (participant.generation == 0) participant.generation = 1;
             participant.active = true;
+            participant.account = .{ .value = 0 };
+            participant.external_identity = .{};
             participant.connection_index = null;
             participant.reconnect_deadline_tick = 0;
             participant.character = null;
@@ -1079,6 +2031,17 @@ pub const Authority = struct {
             participant.driving_vehicle_index = null;
             participant.last_vehicle_action = .{ .value = 0 };
             participant.pending_vehicle_action = null;
+            participant.holding_carryable_index = null;
+            participant.last_interaction_action = .{ .value = 0 };
+            participant.pending_interaction_action = null;
+            participant.interaction_cleanup_pending = false;
+            participant.relevance_coord = sandbox.navigation_west_coord;
+            participant.baseline_id = 0;
+            participant.baseline_acknowledged = 0;
+            participant.baseline_sent = false;
+            self.replication[index] = .{
+                .byte_credit = self.options.downstream_bytes_per_second,
+            };
             participant.exit_pending = false;
             participant.spawn_pending = false;
             participant.despawn_pending = false;
@@ -1153,6 +2116,28 @@ pub const Authority = struct {
         });
     }
 
+    fn queueInteractionActionResult(
+        self: *Authority,
+        participant_index: usize,
+        action: protocol.InteractionAction,
+        disposition: protocol.InteractionActionDisposition,
+    ) !void {
+        const connection_index = self.participants[participant_index].connection_index orelse
+            return;
+        if (!self.connections[connection_index].active) return;
+        try self.queue(.{
+            .connection = self.connections[connection_index].transport,
+            .message = .{ .interaction_action_result = .{
+                .sequence = action.sequence,
+                .carryable = action.carryable,
+                .action = action.kind,
+                .disposition = disposition,
+            } },
+            .delivery = .reliable,
+            .lane = .gameplay,
+        });
+    }
+
     fn rejectTransport(
         self: *Authority,
         transport: TransportConnection,
@@ -1183,6 +2168,24 @@ pub const Authority = struct {
     }
 
     fn queue(self: *Authority, outbound: Outbound) !void {
+        if (outbound.delivery == .reliable) {
+            const connection_index = self.findConnection(outbound.connection) orelse
+                return error.UnknownOutboundConnection;
+            const connection = &self.connections[connection_index];
+            const current_tick = self.simulation.tickIndex();
+            if (connection.event_quota_tick != current_tick) {
+                connection.event_quota_tick = current_tick;
+                connection.reliable_events_this_tick = 0;
+            }
+            if (connection.reliable_events_this_tick >= budgets.max_reliable_events_per_tick) {
+                return error.ReliableEventBudgetExceeded;
+            }
+            connection.reliable_events_this_tick += 1;
+            self.max_reliable_events_per_connection_tick = @max(
+                self.max_reliable_events_per_connection_tick,
+                connection.reliable_events_this_tick,
+            );
+        }
         try self.outbox.push(outbound);
         self.outbox_high_water = @max(self.outbox_high_water, @as(u16, @intCast(self.outbox.len)));
     }
@@ -1216,6 +2219,39 @@ pub const Authority = struct {
         return null;
     }
 
+    fn findCarryable(
+        self: *const Authority,
+        replicated: identity.ReplicatedEntityId,
+    ) ?usize {
+        for (self.carryables, 0..) |carryable, index| {
+            if ((carryable.active or carryable.spawn_pending) and
+                std.meta.eql(carryable.replicated, replicated)) return index;
+        }
+        return null;
+    }
+
+    fn findCarryableByPersistent(
+        self: *const Authority,
+        persistent: sandbox.PersistentId,
+    ) ?usize {
+        for (self.carryables, 0..) |carryable, index| {
+            if (carryable.active and carryable.persistent != null and
+                std.meta.eql(carryable.persistent.?, persistent)) return index;
+        }
+        return null;
+    }
+
+    fn findNpcByPersistent(
+        self: *const Authority,
+        persistent: sandbox.PersistentId,
+    ) ?usize {
+        for (self.npcs, 0..) |npc, index| {
+            if (npc.active and npc.persistent != null and
+                std.meta.eql(npc.persistent.?, persistent)) return index;
+        }
+        return null;
+    }
+
     fn findParticipantByCharacter(
         self: *const Authority,
         character: sandbox.PersistentId,
@@ -1226,10 +2262,61 @@ pub const Authority = struct {
         }
         return null;
     }
+
+    fn admissionNonceUsed(self: *const Authority, nonce: u64) bool {
+        const now_unix_seconds = self.admission_time_unix_seconds;
+        for (self.used_admission_nonces) |used| {
+            if (used.nonce == nonce and
+                used.expires_at_unix_seconds >= now_unix_seconds) return true;
+        }
+        return false;
+    }
+
+    fn rememberAdmissionNonce(
+        self: *Authority,
+        authorization: protocol.JoinAuthorization,
+    ) !void {
+        const now_unix_seconds = self.admission_time_unix_seconds;
+        for (&self.used_admission_nonces) |*used| {
+            if (used.nonce == 0 or used.expires_at_unix_seconds < now_unix_seconds) {
+                used.* = .{
+                    .nonce = authorization.nonce,
+                    .expires_at_unix_seconds = authorization.expires_at_unix_seconds,
+                };
+                return;
+            }
+        }
+        return error.AdmissionNonceHistoryCapacityReached;
+    }
 };
+
+fn snapshotWireBytes(message: protocol.ServerMessage) !usize {
+    var storage: [budgets.max_wire_message_bytes]u8 = undefined;
+    return (try protocol.encodeServer(message, &storage)).len;
+}
+
+fn normalizedExternalIdentity(hello: protocol.Hello) protocol.ExternalIdentity {
+    var external = hello.external_identity;
+    if (external.provider == .development and external.subject == 0) {
+        external.subject = hello.account.value;
+    }
+    return external;
+}
 
 fn participantId(index: usize, generation: u16) identity.ParticipantId {
     return .{ .index = @intCast(index + 1), .generation = generation };
+}
+
+fn districtCoord(value: sandbox.ChunkCoord) protocol.DistrictCoord {
+    return .{ .x = value.x, .z = value.z };
+}
+
+fn insideDistrictHysteresis(position: [3]f32, coord: sandbox.ChunkCoord) bool {
+    const center_x = @as(f32, @floatFromInt(coord.x)) * sandbox.district_chunk_span;
+    const center_z = @as(f32, @floatFromInt(coord.z)) * sandbox.district_chunk_span;
+    const inner_half_span = sandbox.district_chunk_half_span - 1.0;
+    return @abs(position[0] - center_x) <= inner_half_span and
+        @abs(position[2] - center_z) <= inner_half_span;
 }
 
 fn fingerprintIngress(seed: u64, record: AcceptedIngress) u64 {
@@ -1251,6 +2338,8 @@ fn fingerprintIngress(seed: u64, record: AcceptedIngress) u64 {
         @as(u64, @intFromEnum(record.kind)),
         @as(u64, record.vehicle.index),
         @as(u64, record.vehicle.generation),
+        @as(u64, record.carryable.index),
+        @as(u64, record.carryable.generation),
         @as(u64, @as(u32, @bitCast(record.vehicle_control[0]))),
         @as(u64, @as(u32, @bitCast(record.vehicle_control[1]))),
         @as(u64, @as(u32, @bitCast(record.vehicle_control[2]))),
@@ -1306,6 +2395,74 @@ fn decodeVehicleSpawnRequestId(value: u64) ?struct { index: usize, generation: u
     };
 }
 
+fn districtBootstrapRequestId(index: usize) u64 {
+    return 0x4d50_3600_0000_0000 | @as(u64, @intCast(index + 1));
+}
+
+fn decodeDistrictBootstrapRequestId(value: u64) ?usize {
+    if (value & 0xffff_ffff_ffff_ff00 != 0x4d50_3600_0000_0000) return null;
+    const raw: u8 = @truncate(value);
+    if (raw == 0 or raw > 2) return null;
+    return raw - 1;
+}
+
+fn districtBootstrapCoord(index: usize) sandbox.ChunkCoord {
+    return switch (index) {
+        0 => sandbox.navigation_west_coord,
+        1 => sandbox.navigation_east_coord,
+        else => unreachable,
+    };
+}
+
+fn carryableSpawnRequestId(index: usize, generation: u16) u64 {
+    return 0x4d50_3500_0000_0000 |
+        (@as(u64, generation) << 16) |
+        @as(u64, @intCast(index + 1));
+}
+
+fn decodeCarryableSpawnRequestId(value: u64) ?struct { index: usize, generation: u16 } {
+    if (value & 0xffff_ffff_0000_0000 != 0x4d50_3500_0000_0000) return null;
+    const raw_index: u16 = @truncate(value);
+    if (raw_index == 0 or raw_index > budgets.max_carryables) return null;
+    return .{
+        .index = raw_index - 1,
+        .generation = @truncate(value >> 16),
+    };
+}
+
+fn npcSpawnRequestId(index: usize, generation: u16) u64 {
+    return 0x4d50_3700_0000_0000 |
+        (@as(u64, generation) << 16) |
+        @as(u64, @intCast(index + 1));
+}
+
+fn decodeNpcSpawnRequestId(value: u64) ?struct { index: usize, generation: u16 } {
+    if (value & 0xffff_ffff_0000_0000 != 0x4d50_3700_0000_0000) return null;
+    const raw_index: u16 = @truncate(value);
+    if (raw_index == 0 or raw_index > budgets.max_npcs) return null;
+    return .{
+        .index = raw_index - 1,
+        .generation = @truncate(value >> 16),
+    };
+}
+
+fn interactionTransactionId(
+    participant_index: usize,
+    generation: u16,
+    sequence: identity.ActionSequence,
+) u64 {
+    return 0xd000_0000_0000_0000 |
+        (@as(u64, @intCast(participant_index + 1)) << 56) |
+        (@as(u64, generation) << 40) |
+        @as(u64, sequence.value);
+}
+
+fn interactionCleanupTransactionId(participant_index: usize, generation: u16) u64 {
+    return 0xc000_0000_0000_0000 |
+        (@as(u64, @intCast(participant_index + 1)) << 56) |
+        (@as(u64, generation) << 40);
+}
+
 fn vehicleRejectionDisposition(
     reason: @FieldType(sandbox.VehicleCommandRejected, "reason"),
 ) protocol.VehicleActionDisposition {
@@ -1324,6 +2481,48 @@ fn vehicleRejectionDisposition(
     };
 }
 
+fn interactionRejectionDisposition(
+    reason: anytype,
+) protocol.InteractionActionDisposition {
+    return switch (reason) {
+        .carryable_not_found, .not_owned => .carryable_not_found,
+        .carryable_already_held, .carryable_held, .carrier_not_empty => .unavailable,
+        .too_far => .too_far,
+        .destination_district_inactive, .owner_district_inactive => .destination_unavailable,
+        .capacity_reached,
+        .carrier_not_found,
+        .carrier_not_on_foot,
+        .carrier_not_holding,
+        .wrong_holder,
+        => .invalid_state,
+    };
+}
+
+fn testTakeAndAcknowledgeBaseline(
+    authority: *Authority,
+    transport: TransportConnection,
+) !protocol.Snapshot {
+    var baseline: ?protocol.RelevanceBaseline = null;
+    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
+        .relevance_baseline => |value| baseline = value,
+        else => {},
+    };
+    const value = baseline orelse return error.MissingInitialBaseline;
+    const connection_index = authority.findConnection(transport) orelse
+        return error.MissingTestConnection;
+    const participant_index = authority.connections[connection_index].participant_index orelse
+        return error.MissingTestParticipant;
+    try authority.ingest(transport, .{ .baseline_ack = .{
+        .session = authority.session,
+        .participant = participantId(
+            participant_index,
+            authority.participants[participant_index].generation,
+        ),
+        .baseline_id = value.baseline_id,
+    } });
+    return value.snapshot;
+}
+
 test "authority admits two participants and emits join-in-progress snapshots" {
     var authority = try Authority.init(std.testing.allocator);
     defer authority.deinit();
@@ -1334,7 +2533,10 @@ test "authority admits two participants and emits join-in-progress snapshots" {
     } });
     const welcome_one = authority.pollOutbound().?.message.welcome;
     try authority.tick();
-    const first_snapshot = authority.pollOutbound().?.message.snapshot;
+    const first_snapshot = try testTakeAndAcknowledgeBaseline(
+        &authority,
+        .{ .value = 101 },
+    );
     try std.testing.expectEqual(@as(u8, 1), first_snapshot.character_count);
     try std.testing.expectEqual(@as(u8, 1), first_snapshot.vehicle_count);
 
@@ -1347,6 +2549,7 @@ test "authority admits two participants and emits join-in-progress snapshots" {
     var saw_two = false;
     while (authority.pollOutbound()) |outbound| switch (outbound.message) {
         .snapshot => |snapshot| saw_two = saw_two or snapshot.character_count == 2,
+        .relevance_baseline => |baseline| saw_two = saw_two or baseline.snapshot.character_count == 2,
         else => {},
     };
     try std.testing.expect(saw_two);
@@ -1401,12 +2604,7 @@ test "authority owns vehicle enter drive exit and dynamic seat projection" {
     } });
     const welcome = authority.pollOutbound().?.message.welcome;
     try authority.tick();
-    var initial_snapshot: ?protocol.Snapshot = null;
-    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
-        .snapshot => |snapshot| initial_snapshot = snapshot,
-        else => {},
-    };
-    const initial = initial_snapshot orelse return error.MissingInitialSnapshot;
+    const initial = try testTakeAndAcknowledgeBaseline(&authority, transport);
     try std.testing.expectEqual(@as(u8, 1), initial.vehicle_count);
     const vehicle = initial.vehicles[0].entity;
 
@@ -1480,11 +2678,8 @@ test "graceful leave orders cleanup behind an admitted vehicle transition" {
     try authority.ingest(transport, .{ .hello = .{ .account = .{ .value = 1 } } });
     const welcome = authority.pollOutbound().?.message.welcome;
     try authority.tick();
-    var vehicle = identity.ReplicatedEntityId.invalid;
-    while (authority.pollOutbound()) |outbound| switch (outbound.message) {
-        .snapshot => |snapshot| vehicle = snapshot.vehicles[0].entity,
-        else => {},
-    };
+    const initial = try testTakeAndAcknowledgeBaseline(&authority, transport);
+    const vehicle = initial.vehicles[0].entity;
     for (0..180) |_| {
         try authority.tick();
         while (authority.pollOutbound() != null) {}

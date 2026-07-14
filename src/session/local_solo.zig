@@ -110,7 +110,12 @@ const State = struct {
                 } });
                 self.last_input = input.sequence;
             },
-            .vehicle_input, .vehicle_action => return error.LocalSessionUnexpectedNetworkVehicleCommand,
+            .vehicle_input,
+            .vehicle_action,
+            .interaction_action,
+            .baseline_ack,
+            .snapshot_ack,
+            => return error.LocalSessionUnexpectedNetworkGameplayCommand,
             .disconnect => |reason| {
                 try self.link.sendFromAuthority(.{ .disconnected = reason });
             },

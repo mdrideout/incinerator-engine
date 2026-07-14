@@ -21,9 +21,10 @@ const Peer = struct {
 };
 
 const Harness = struct {
+    allocator: std.mem.Allocator,
     network: gns.Network,
     listen_socket: gns.ListenSocket,
-    authority: authority_module.Authority,
+    authority: *authority_module.Authority,
     peers: [2]Peer,
     server_connections: [budgets.max_participants]gns.Connection = @splat(.invalid),
     bad_transport: gns.Connection = .invalid,
@@ -37,9 +38,12 @@ const Harness = struct {
         errdefer network.deinit();
         const listen_socket = try network.listen(port, .loopback);
         errdefer network.closeListen(listen_socket);
-        var authority = try authority_module.Authority.init(allocator);
+        const authority = try allocator.create(authority_module.Authority);
+        errdefer allocator.destroy(authority);
+        authority.* = try authority_module.Authority.init(allocator);
         errdefer authority.deinit();
         return .{
+            .allocator = allocator,
             .network = network,
             .listen_socket = listen_socket,
             .authority = authority,
@@ -66,6 +70,7 @@ const Harness = struct {
         }
         self.network.closeListen(self.listen_socket);
         self.authority.deinit();
+        self.allocator.destroy(self.authority);
         self.network.deinit();
         self.* = undefined;
     }
@@ -131,6 +136,16 @@ const Harness = struct {
     ) !void {
         const peer = &self.peers[peer_index];
         try self.sendClient(peer.transport, try peer.client.vehicleAction(kind, vehicle));
+    }
+
+    fn sendInteractionAction(
+        self: *Harness,
+        peer_index: usize,
+        kind: protocol.InteractionActionKind,
+        carryable: @FieldType(protocol.CarryableState, "entity"),
+    ) !void {
+        const peer = &self.peers[peer_index];
+        try self.sendClient(peer.transport, try peer.client.interactionAction(kind, carryable));
     }
 
     fn step(self: *Harness, io: std.Io) !void {
@@ -241,6 +256,12 @@ const Harness = struct {
                     return error.ServerDeliveryClassMismatch;
                 }
                 try peer.client.receive(message);
+                if (peer.client.takeBaselineAck()) |ack| {
+                    try self.sendClient(peer.transport, ack);
+                }
+                if (peer.client.takeSnapshotAck()) |ack| {
+                    try self.sendClient(peer.transport, ack);
+                }
             }
         }
         if (!self.bad_transport.isValid()) return;
@@ -339,30 +360,44 @@ pub fn main(init: std.process.Init) !void {
     const port = try parsePort(args);
     var endpoint_storage: [64]u8 = undefined;
     const endpoint = try std.fmt.bufPrintZ(&endpoint_storage, "127.0.0.1:{d}", .{port});
-    var harness = try Harness.init(init.gpa, port);
+    const harness = try init.gpa.create(Harness);
+    defer init.gpa.destroy(harness);
+    harness.* = try Harness.init(init.gpa, port);
     defer harness.deinit();
 
     try harness.connectPeer(0, endpoint);
-    try pumpUntil(&harness, init.io, firstPeerReady, max_pump_steps);
+    try pumpUntil(harness, init.io, firstPeerReady, max_pump_steps);
     const first_join_participant = harness.peers[0].client.participant;
 
     try harness.connectPeer(1, endpoint);
-    try pumpUntil(&harness, init.io, twoPeersReady, max_pump_steps);
+    try pumpUntil(harness, init.io, twoPeersReady, max_pump_steps);
     for (0..180) |_| try harness.step(init.io);
+    try pumpUntil(harness, init.io, npcProjectionReady, max_pump_steps);
+
+    const carryable = firstCarryable(&harness.peers[0]) orelse
+        return error.CarryableMissing;
+    try harness.sendInteractionAction(0, .collect, carryable.entity);
+    try pumpUntil(harness, init.io, firstPeerHolding, max_pump_steps);
+    try harness.sendInteractionAction(1, .collect, carryable.entity);
+    try pumpUntil(harness, init.io, secondPeerDeniedCarryable, max_pump_steps);
+    try harness.sendInteractionAction(0, .drop, carryable.entity);
+    try pumpUntil(harness, init.io, firstPeerDropped, max_pump_steps);
 
     const vehicle = firstVehicle(&harness.peers[0]) orelse return error.VehicleMissing;
     try harness.sendVehicleAction(0, .enter, vehicle.entity);
-    try pumpUntil(&harness, init.io, firstPeerDriving, max_pump_steps);
+    try pumpUntil(harness, init.io, firstPeerDriving, max_pump_steps);
     if (harness.peers[1].client.ownedVehicle() != null) return error.VehicleOwnershipDuplicated;
 
     try harness.sendVehicleAction(1, .enter, vehicle.entity);
-    try pumpUntil(&harness, init.io, secondPeerDeniedVehicle, max_pump_steps);
+    try pumpUntil(harness, init.io, secondPeerDeniedVehicle, max_pump_steps);
     const initial_vehicle_position = firstVehicle(&harness.peers[0]).?.position;
     for (0..180) |_| {
         try harness.sendVehicleInput(0, 1);
+        try harness.sendInput(1, .{ 1, 0 });
         try harness.step(init.io);
     }
-    try pumpUntil(&harness, init.io, vehicleMoved, max_pump_steps);
+    try pumpUntil(harness, init.io, vehicleMoved, max_pump_steps);
+    try pumpUntil(harness, init.io, secondPeerEastRelevant, max_pump_steps);
     const driven_vehicle_position = firstVehicle(&harness.peers[0]).?.position;
     if (harness.peers[0].client.localVehiclePresentation() == null) {
         return error.VehiclePredictionNotInitialized;
@@ -374,12 +409,12 @@ pub fn main(init: std.process.Init) !void {
     {
         return error.VehiclePredictionNotResetForReconnect;
     }
-    try pumpUntil(&harness, init.io, firstPeerDisconnected, max_pump_steps);
+    try pumpUntil(harness, init.io, firstPeerDisconnected, max_pump_steps);
     if (harness.authority.diagnostics().reconnecting_participants != 1) {
         return error.ReconnectGraceNotEntered;
     }
     try harness.connectPeer(0, endpoint);
-    try pumpUntil(&harness, init.io, firstPeerRejoinedDriving, max_pump_steps);
+    try pumpUntil(harness, init.io, firstPeerRejoinedDriving, max_pump_steps);
     if (!std.meta.eql(first_join_participant, harness.peers[0].client.participant)) {
         return error.ParticipantIdentityChangedAcrossReconnect;
     }
@@ -388,7 +423,7 @@ pub fn main(init: std.process.Init) !void {
     }
 
     try harness.sendVehicleAction(0, .exit, vehicle.entity);
-    try pumpUntil(&harness, init.io, firstPeerExited, max_pump_steps);
+    try pumpUntil(harness, init.io, firstPeerExited, max_pump_steps);
     if (harness.peers[0].client.localVehiclePresentation() != null) {
         return error.VehiclePredictionRetainedAfterExit;
     }
@@ -399,7 +434,7 @@ pub fn main(init: std.process.Init) !void {
         try harness.sendInput(0, .{ 1, 0 });
         try harness.step(init.io);
     }
-    try pumpUntil(&harness, init.io, movedAndAcknowledged, max_pump_steps);
+    try pumpUntil(harness, init.io, movedAndAcknowledged, max_pump_steps);
     const moved_position = characterPosition(&harness.peers[0]) orelse
         return error.LocalCharacterMissing;
     if (moved_position[0] <= initial_position[0] + 0.25) {
@@ -407,12 +442,18 @@ pub fn main(init: std.process.Init) !void {
     }
 
     try harness.connectBadCohort(endpoint);
-    try pumpUntil(&harness, init.io, badCohortRejected, max_pump_steps);
+    try pumpUntil(harness, init.io, badCohortRejected, max_pump_steps);
 
     const diagnostics = harness.authority.diagnostics();
+    if (diagnostics.baselines_acknowledged < 3 or diagnostics.relevance_transfers == 0 or
+        diagnostics.active_npcs != budgets.product_npcs or diagnostics.npc_state_updates == 0)
+    {
+        return error.RelevanceLifecycleNotExercised;
+    }
     std.debug.print(
         "MP4_LOOPBACK_PASS tick={d} participants={d} reconnects={d} " ++
-            "snapshots={d} actions={d}/{d} vehicle_moved_z={d:.3} " ++
+            "snapshots={d} vehicle_actions={d}/{d} interaction_actions={d}/{d} " ++
+            "baselines={d}/{d} transfers={d} npcs={d} npc_updates={d} vehicle_moved_z={d:.3} " ++
             "character_moved_x={d:.3} dropped_events={d}\n",
         .{
             diagnostics.tick,
@@ -421,6 +462,13 @@ pub fn main(init: std.process.Init) !void {
             diagnostics.snapshots_emitted,
             diagnostics.vehicle_actions_accepted,
             diagnostics.vehicle_actions_rejected,
+            diagnostics.interaction_actions_accepted,
+            diagnostics.interaction_actions_rejected,
+            diagnostics.baselines_emitted,
+            diagnostics.baselines_acknowledged,
+            diagnostics.relevance_transfers,
+            diagnostics.active_npcs,
+            diagnostics.npc_state_updates,
             driven_vehicle_position[2] - initial_vehicle_position[2],
             moved_position[0] - initial_position[0],
             harness.network.droppedEvents(),
@@ -438,6 +486,23 @@ fn pumpUntil(
         try harness.step(io);
         if (predicate(harness)) return;
     }
+    std.debug.print(
+        "MP2_TIMEOUT tick={d} reconnects={d} p0={s} baseline={d} entities={d}/{d}/{d} owned_vehicle={} p1={s} entities={d}/{d}/{d}\n",
+        .{
+            harness.authority.diagnostics().tick,
+            harness.authority.diagnostics().reconnects,
+            @tagName(harness.peers[0].client.state),
+            harness.peers[0].client.active_baseline_id,
+            harness.peers[0].client.world.character_count,
+            harness.peers[0].client.world.vehicle_count,
+            harness.peers[0].client.world.carryable_count,
+            harness.peers[0].client.ownedVehicle() != null,
+            @tagName(harness.peers[1].client.state),
+            harness.peers[1].client.world.character_count,
+            harness.peers[1].client.world.vehicle_count,
+            harness.peers[1].client.world.carryable_count,
+        },
+    );
     return error.MP2AcceptanceTimeout;
 }
 
@@ -452,7 +517,27 @@ fn twoPeersReady(harness: *const Harness) bool {
         harness.peers[0].client.world.character_count == 2 and
         harness.peers[1].client.world.character_count == 2 and
         harness.peers[0].client.world.vehicle_count == 1 and
-        harness.peers[1].client.world.vehicle_count == 1;
+        harness.peers[1].client.world.vehicle_count == 1 and
+        harness.peers[0].client.world.carryable_count == 1 and
+        harness.peers[1].client.world.carryable_count == 1;
+}
+
+fn firstPeerHolding(harness: *const Harness) bool {
+    const result = harness.peers[0].client.last_interaction_action_result orelse return false;
+    return result.action == .collect and result.disposition == .collected and
+        harness.peers[0].client.heldCarryable() != null;
+}
+
+fn secondPeerDeniedCarryable(harness: *const Harness) bool {
+    const result = harness.peers[1].client.last_interaction_action_result orelse return false;
+    return result.action == .collect and result.disposition == .unavailable and
+        harness.peers[1].client.heldCarryable() == null;
+}
+
+fn firstPeerDropped(harness: *const Harness) bool {
+    const result = harness.peers[0].client.last_interaction_action_result orelse return false;
+    return result.action == .drop and result.disposition == .dropped and
+        harness.peers[0].client.heldCarryable() == null;
 }
 
 fn firstPeerDriving(harness: *const Harness) bool {
@@ -469,6 +554,23 @@ fn secondPeerDeniedVehicle(harness: *const Harness) bool {
 fn vehicleMoved(harness: *const Harness) bool {
     const vehicle = firstVehicle(&harness.peers[0]) orelse return false;
     return vehicle.position[2] < -1;
+}
+
+fn secondPeerEastRelevant(harness: *const Harness) bool {
+    const client = &harness.peers[1].client;
+    return client.relevant_district_count == 1 and
+        client.relevant_districts[0].x == 1 and
+        client.relevant_districts[0].z == 0 and
+        client.world.character_count == 1 and
+        client.world.vehicle_count == 0 and
+        client.world.carryable_count == 0 and
+        client.world.npc_count == budgets.product_npcs / 2;
+}
+
+fn npcProjectionReady(harness: *const Harness) bool {
+    return harness.authority.diagnostics().active_npcs == budgets.product_npcs and
+        harness.peers[0].client.world.npc_count == budgets.product_npcs / 2 and
+        harness.peers[1].client.world.npc_count == budgets.product_npcs / 2;
 }
 
 fn movedAndAcknowledged(harness: *const Harness) bool {
@@ -488,8 +590,11 @@ fn firstPeerDisconnected(harness: *const Harness) bool {
 }
 
 fn firstPeerRejoinedDriving(harness: *const Harness) bool {
-    return twoPeersReady(harness) and harness.authority.diagnostics().reconnects == 1 and
-        harness.peers[0].client.ownedVehicle() != null;
+    return harness.peers[0].client.state == .joined and
+        harness.peers[1].client.state == .joined and
+        harness.authority.diagnostics().reconnects == 1 and
+        harness.peers[0].client.ownedVehicle() != null and
+        harness.peers[0].client.localVehiclePresentation() != null;
 }
 
 fn firstPeerExited(harness: *const Harness) bool {
@@ -510,6 +615,11 @@ fn characterPosition(peer: *const Peer) ?[3]f32 {
 fn firstVehicle(peer: *const Peer) ?protocol.VehicleState {
     const vehicles = peer.client.world.vehicleSlice();
     return if (vehicles.len == 0) null else vehicles[0].current;
+}
+
+fn firstCarryable(peer: *const Peer) ?protocol.CarryableState {
+    const carryables = peer.client.world.carryableSlice();
+    return if (carryables.len == 0) null else carryables[0].current;
 }
 
 fn toGnsDelivery(value: transport_policy.Delivery) gns.Delivery {

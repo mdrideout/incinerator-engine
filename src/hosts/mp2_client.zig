@@ -1,5 +1,5 @@
-//! Minimal graphical multiplayer client. It renders replicated character and
-//! vehicle state;
+//! Minimal graphical multiplayer client. It renders replicated character,
+//! vehicle, and carryable state;
 //! no Simulation, Flecs world, Jolt body, save authority, or feature internals
 //! are linked into this product.
 
@@ -35,6 +35,7 @@ const App = struct {
     ground: mesh.Mesh,
     character: mesh.Mesh,
     vehicle: mesh.Mesh,
+    carryable: mesh.Mesh,
     camera: camera.Camera,
     network: gns.Network,
     connection: gns.Connection,
@@ -45,6 +46,7 @@ const App = struct {
     running: bool = true,
     hello_sent: bool = false,
     vehicle_action_requested: bool = false,
+    interaction_action_requested: bool = false,
     vehicle_prediction_enabled: bool = true,
     reconnect_requested: bool = false,
     frame: u64 = 0,
@@ -62,7 +64,7 @@ const App = struct {
         var title_buffer: [128]u8 = undefined;
         const title = try std.fmt.bufPrintZ(
             &title_buffer,
-            "Incinerator MP4-A2 Client {d}",
+            "Incinerator MP4-B Client {d}",
             .{invocation.account},
         );
         const window = c.SDL_CreateWindow(
@@ -80,6 +82,8 @@ const App = struct {
         errdefer character.deinit();
         var vehicle = try primitives.createCube(gpu.getDevice());
         errdefer vehicle.deinit();
+        var carryable = try primitives.createCube(gpu.getDevice());
+        errdefer carryable.deinit();
         var network = try gns.Network.init();
         errdefer network.deinit();
         var endpoint_buffer: [256]u8 = @splat(0);
@@ -92,6 +96,7 @@ const App = struct {
             .ground = ground,
             .character = character,
             .vehicle = vehicle,
+            .carryable = carryable,
             .camera = .{ .pitch = -0.25 },
             .network = network,
             .connection = connection,
@@ -107,6 +112,7 @@ const App = struct {
             self.network.close(self.connection, 1000, "client shutdown", .immediate);
         }
         self.network.deinit();
+        self.carryable.deinit();
         self.vehicle.deinit();
         self.character.deinit();
         self.ground.deinit();
@@ -126,6 +132,7 @@ const App = struct {
             self.forceReconnect(now_ns);
             try self.reconnectIfDue(now_ns);
             try self.sendVehicleActionIfRequested();
+            try self.sendInteractionActionIfRequested();
             if (self.client.state == .joined and self.clock.anchored) {
                 const due_tick = self.clock.inputTick(now_ns);
                 var catch_up: u8 = 0;
@@ -153,6 +160,9 @@ const App = struct {
                 if (index < self.keys.len) self.keys[index] = true;
                 if (event.key.scancode == c.SDL_SCANCODE_E and !was_down) {
                     self.vehicle_action_requested = true;
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_F and !was_down) {
+                    self.interaction_action_requested = true;
                 }
                 if (event.key.scancode == c.SDL_SCANCODE_P and !was_down) {
                     self.vehicle_prediction_enabled = !self.vehicle_prediction_enabled;
@@ -217,6 +227,8 @@ const App = struct {
                 return error.ServerDeliveryClassMismatch;
             }
             try self.client.receive(message);
+            if (self.client.takeBaselineAck()) |ack| try self.sendClientMessage(ack);
+            if (self.client.takeSnapshotAck()) |ack| try self.sendClientMessage(ack);
             switch (message) {
                 .welcome => |welcome| {
                     self.clock.synchronize(welcome.authority_tick, now_ns);
@@ -234,6 +246,21 @@ const App = struct {
                     }
                     self.last_snapshot_ns = now_ns;
                 },
+                .relevance_baseline => |baseline| {
+                    self.clock.observe(baseline.snapshot.server_tick);
+                    self.last_snapshot_ns = now_ns;
+                    std.debug.print(
+                        "MP4_BASELINE id={d} districts={d} entities={d}\n",
+                        .{
+                            baseline.baseline_id,
+                            baseline.district_count,
+                            baseline.snapshot.character_count +
+                                baseline.snapshot.vehicle_count +
+                                baseline.snapshot.carryable_count +
+                                baseline.snapshot.npc_count,
+                        },
+                    );
+                },
                 .vehicle_action_result => |result| {
                     std.debug.print(
                         "MP4_VEHICLE_ACTION action={s} result={s} vehicle={d}:{d}\n",
@@ -242,6 +269,17 @@ const App = struct {
                             @tagName(result.disposition),
                             result.vehicle.index,
                             result.vehicle.generation,
+                        },
+                    );
+                },
+                .interaction_action_result => |result| {
+                    std.debug.print(
+                        "MP4_INTERACTION_ACTION action={s} result={s} carryable={d}:{d}\n",
+                        .{
+                            @tagName(result.action),
+                            @tagName(result.disposition),
+                            result.carryable.index,
+                            result.carryable.generation,
                         },
                     );
                 },
@@ -344,6 +382,24 @@ const App = struct {
         ));
     }
 
+    fn sendInteractionActionIfRequested(self: *App) !void {
+        if (!self.interaction_action_requested) return;
+        self.interaction_action_requested = false;
+        if (self.client.state != .joined or
+            self.client.pending_interaction_action != null) return;
+        if (self.client.heldCarryable()) |held| {
+            try self.sendClientMessage(try self.client.interactionAction(.drop, held.entity));
+            return;
+        }
+        if (self.client.ownedVehicle() != null) return;
+        const carryables = self.client.world.carryableSlice();
+        if (carryables.len == 0) return;
+        try self.sendClientMessage(try self.client.interactionAction(
+            .collect,
+            carryables[0].current.entity,
+        ));
+    }
+
     fn sendClientMessage(self: *App, message: protocol.ClientMessage) !void {
         const bytes = try protocol.encodeClient(message, &self.encode_storage);
         const class = transport_policy.clientClass(message);
@@ -402,6 +458,23 @@ const App = struct {
                 view_projection,
             );
         }
+        for (self.client.world.npcSlice()) |entry| {
+            const state = self.presentedNpc(entry, now_ns);
+            const half_yaw = state.facing_yaw * 0.5;
+            const rotation = zm.quatToMat(zm.f32x4(0, @sin(half_yaw), 0, @cos(half_yaw)));
+            const translation = zm.translation(
+                state.position[0],
+                state.position[1],
+                state.position[2],
+            );
+            self.gpu.drawMeshWithMaterial(
+                &self.character,
+                null,
+                if (state.state == .active) .{ 0.65, 0.25, 0.95, 1 } else .{ 0.45, 0.45, 0.55, 1 },
+                zm.mul(rotation, translation),
+                view_projection,
+            );
+        }
         for (self.client.world.vehicleSlice()) |entry| {
             const state = self.presentedVehicle(entry, now_ns);
             const scale = zm.scaling(1.8, 0.5, 4.0);
@@ -424,6 +497,32 @@ const App = struct {
                 view_projection,
             );
         }
+        for (self.client.world.carryableSlice()) |entry| {
+            const state = self.presentedCarryable(entry, now_ns);
+            const scale = zm.scaling(
+                state.half_extents[0] * 2,
+                state.half_extents[1] * 2,
+                state.half_extents[2] * 2,
+            );
+            const rotation = zm.quatToMat(zm.f32x4(
+                state.rotation[0],
+                state.rotation[1],
+                state.rotation[2],
+                state.rotation[3],
+            ));
+            const translation = zm.translation(
+                state.position[0],
+                state.position[1],
+                state.position[2],
+            );
+            self.gpu.drawMeshWithMaterial(
+                &self.carryable,
+                null,
+                if (state.holder != null) .{ 0.15, 0.90, 0.95, 1 } else .{ 0.95, 0.85, 0.15, 1 },
+                zm.mul(zm.mul(scale, rotation), translation),
+                view_projection,
+            );
+        }
         self.gpu.endRenderPass();
         try self.gpu.submitFrame();
     }
@@ -433,13 +532,18 @@ const App = struct {
         const stats = self.network.stats(self.connection);
         const title = std.fmt.bufPrintZ(
             &title_storage,
-            "Incinerator MP4-A2 | {s} | entities {d} | ping {d} ms | age {d}t | mode {s} | pred {s} | correction {d}/{d} max {d:.2}m/{d:.1}deg",
+            "Incinerator Multiplayer | {s} | entities {d} | ping {d} ms | age {d}t | net d/f/m {d}/{d}/{d} | mode {s} | carry {s} | pred {s} | correction {d}/{d} max {d:.2}m/{d:.1}deg",
             .{
                 @tagName(self.client.state),
-                self.client.world.character_count + self.client.world.vehicle_count,
+                self.client.world.character_count + self.client.world.vehicle_count +
+                    self.client.world.carryable_count + self.client.world.npc_count,
                 if (stats) |value| value.ping_ms else -1,
                 self.last_input_tick -| self.client.world.server_tick,
+                self.client.delta_snapshots_applied,
+                self.client.full_snapshots_applied,
+                self.client.delta_base_misses,
                 if (self.client.ownedVehicle() != null) "vehicle" else "on-foot",
+                if (self.client.heldCarryable() != null) "holding" else "empty",
                 if (self.vehicle_prediction_enabled) "on" else "off",
                 self.client.vehicle_prediction.soft_corrections,
                 self.client.vehicle_prediction.hard_corrections,
@@ -491,6 +595,32 @@ const App = struct {
         return replicated_world.World.interpolateVehicle(entry, alpha);
     }
 
+    fn presentedCarryable(
+        self: *const App,
+        entry: replicated_world.CarryableEntry,
+        now_ns: u64,
+    ) protocol.CarryableState {
+        const elapsed = now_ns -| self.last_snapshot_ns;
+        const alpha = if (self.snapshot_interval_ns == 0)
+            @as(f32, 1)
+        else
+            @as(f32, @floatFromInt(elapsed)) /
+                @as(f32, @floatFromInt(self.snapshot_interval_ns));
+        return replicated_world.World.interpolateCarryable(entry, alpha);
+    }
+
+    fn presentedNpc(
+        self: *const App,
+        entry: replicated_world.NpcEntry,
+        now_ns: u64,
+    ) protocol.NpcState {
+        const elapsed = now_ns -| self.last_snapshot_ns;
+        const interval = std.time.ns_per_s / budgets.npc_snapshot_hz;
+        const alpha = @as(f32, @floatFromInt(elapsed)) /
+            @as(f32, @floatFromInt(interval));
+        return replicated_world.World.interpolateNpc(entry, alpha);
+    }
+
     fn ownedVehiclePresentation(self: *const App, now_ns: u64) ?protocol.VehicleState {
         for (self.client.world.vehicleSlice()) |entry| {
             if (entry.current.driver) |driver| {
@@ -518,7 +648,7 @@ pub fn main(init: std.process.Init) !void {
     var app = try App.init(init, invocation);
     defer app.deinit();
     std.debug.print(
-        "MP4_CLIENT_CONNECT endpoint={s} account={d} controls=WASD/SPACE/LSHIFT/E enter-exit/P prediction/F8 reconnect/ESC\n",
+        "MP4_CLIENT_CONNECT endpoint={s} account={d} controls=WASD/SPACE/LSHIFT/E enter-exit/F collect-drop/P prediction/F8 reconnect/ESC\n",
         .{ invocation.endpoint, invocation.account },
     );
     try app.run(invocation.max_frames);

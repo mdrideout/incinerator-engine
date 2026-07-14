@@ -11,6 +11,20 @@ pub const max_participants: usize = 16;
 pub const product_participants: usize = 8;
 pub const max_vehicles: usize = 4;
 pub const product_vehicles: usize = 1;
+pub const max_carryables: usize = 4;
+pub const product_carryables: usize = 1;
+pub const max_relevant_districts_per_client: usize = 4;
+pub const product_relevant_districts_per_client: usize = 1;
+pub const max_npcs: usize = 64;
+pub const product_npcs: usize = 64;
+pub const npc_snapshot_hz: u32 = 10;
+pub const ticks_per_npc_snapshot: u32 = authority_tick_hz / npc_snapshot_hz;
+pub const snapshot_history_capacity: usize = 8;
+pub const full_snapshot_interval_ticks: u64 = authority_tick_hz;
+pub const max_delta_base_age_ticks: u64 = authority_tick_hz * 2;
+pub const max_snapshot_starvation_ticks: u64 = authority_tick_hz / 5;
+pub const max_reliable_events_per_tick: u16 = 16;
+pub const admission_nonce_history_capacity: usize = 256;
 
 pub const max_wire_message_bytes: usize = 64 * 1024;
 pub const max_snapshot_bytes: usize = 32 * 1024;
@@ -89,6 +103,12 @@ comptime {
     }
     if (product_vehicles > max_vehicles) {
         @compileError("product vehicle target exceeds validation ceiling");
+    }
+    if (product_carryables > max_carryables) {
+        @compileError("product carryable target exceeds validation ceiling");
+    }
+    if (product_npcs > max_npcs or authority_tick_hz % npc_snapshot_hz != 0) {
+        @compileError("NPC capacity/rate contract is invalid");
     }
     if (max_snapshot_bytes > max_wire_message_bytes) {
         @compileError("snapshot ceiling exceeds wire message ceiling");

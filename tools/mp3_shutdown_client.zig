@@ -67,6 +67,26 @@ pub fn main(init: std.process.Init) !void {
                     fromGnsLane(received.lane),
                 )) return error.ServerDeliveryClassMismatch;
                 try client.receive(message);
+                if (client.takeBaselineAck()) |ack| {
+                    const bytes = try protocol.encodeClient(ack, &encode_storage);
+                    const class = transport_policy.clientClass(ack);
+                    try network.send(
+                        connection,
+                        bytes,
+                        toGnsDelivery(class.delivery),
+                        toGnsLane(class.lane),
+                    );
+                }
+                if (client.takeSnapshotAck()) |ack| {
+                    const bytes = try protocol.encodeClient(ack, &encode_storage);
+                    const class = transport_policy.clientClass(ack);
+                    try network.send(
+                        connection,
+                        bytes,
+                        toGnsDelivery(class.delivery),
+                        toGnsLane(class.lane),
+                    );
+                }
                 if (message == .welcome) joined = true;
                 if (client.state == .rejected) return error.ShutdownProbeRejected;
                 if (client.state == .stopped) {

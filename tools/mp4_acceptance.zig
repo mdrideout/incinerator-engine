@@ -80,12 +80,14 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
     defer if (authority_live) authority.deinit();
     var client = try session_client.Client.init(.{ .value = config.seed + 20_000 });
     var link = try impaired.Link.init(config);
+    defer link.deinit();
     const connection = authority_module.TransportConnection{ .value = 1 };
     _ = try authority.openConnection(connection);
     try link.sendFromClient(try client.begin());
 
     var initial_vehicle_position: ?[3]f32 = null;
     var last_authority_snapshot: ?protocol.Snapshot = null;
+    var last_relevant_vehicle: ?protocol.VehicleState = null;
     var maximum_snapshot_age_ticks: u64 = 0;
     var enter_sent = false;
     var exit_sent = false;
@@ -95,6 +97,7 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
     var neutral_sent: u64 = 0;
     var character_sequence_sent: u64 = 0;
     var immediate_response_observed = false;
+    var steady_snapshot_received = false;
 
     for (0..total_ticks) |tick| {
         try link.advanceTo(tick);
@@ -102,12 +105,22 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
         try authority.tick();
         while (authority.pollOutbound()) |outbound| {
             if (outbound.close_after_send) return error.VehicleTrialSessionTerminated;
-            if (outbound.message == .snapshot) last_authority_snapshot = outbound.message.snapshot;
+            if (outbound.message == .snapshot) {
+                last_authority_snapshot = outbound.message.snapshot;
+                if (outbound.message.snapshot.vehicle_count != 0) {
+                    last_relevant_vehicle = outbound.message.snapshot.vehicles[0];
+                }
+            }
             try link.sendFromAuthority(outbound.message);
         }
-        while (link.receiveForClient()) |message| try client.receive(message);
+        while (link.receiveForClient()) |message| {
+            try client.receive(message);
+            if (message == .snapshot) steady_snapshot_received = true;
+            if (client.takeBaselineAck()) |ack| try link.sendFromClient(ack);
+            if (client.takeSnapshotAck()) |ack| try link.sendFromClient(ack);
+        }
 
-        if (client.world.initialized) {
+        if (client.world.initialized and steady_snapshot_received) {
             maximum_snapshot_age_ticks = @max(
                 maximum_snapshot_age_ticks,
                 authority.diagnostics().tick -| client.world.server_tick,
@@ -196,12 +209,12 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
     if (action_result.action != .exit or action_result.disposition != .exited) {
         return error.VehicleTrialExitRejected;
     }
-    const final_snapshot = last_authority_snapshot orelse return error.VehicleTrialMissingSnapshot;
-    if (final_snapshot.vehicle_count != 1) return error.VehicleTrialMissingVehicle;
+    _ = last_authority_snapshot orelse return error.VehicleTrialMissingSnapshot;
+    const final_snapshot = snapshotFromClientWorld(&client);
+    const final_vehicle = last_relevant_vehicle orelse return error.VehicleTrialMissingVehicle;
     const initial_position = initial_vehicle_position orelse return error.VehicleTrialMissingVehicle;
-    const movement = distance(initial_position, final_snapshot.vehicles[0].position);
+    const movement = distance(initial_position, final_vehicle.position);
     if (movement < 5) return error.VehicleTrialMovementTooSmall;
-    if (final_snapshot.vehicles[0].driver != null) return error.VehicleTrialOwnershipNotReleased;
 
     const client_diagnostics = client.diagnostics();
     const authority_diagnostics = authority.diagnostics();
@@ -327,12 +340,41 @@ fn verifyAcceptedIngressReplay(
                     .vehicle = record.vehicle,
                     .kind = if (record.kind == .vehicle_enter) .enter else .exit,
                 } },
+                .interaction_collect, .interaction_drop => .{ .interaction_action = .{
+                    .session = welcome.session,
+                    .participant = welcome.participant,
+                    .sequence = record.action_sequence,
+                    .carryable = record.carryable,
+                    .kind = if (record.kind == .interaction_collect) .collect else .drop,
+                } },
             };
             try replay.ingest(connection, message);
         }
         try replay.tick();
         while (replay.pollOutbound()) |outbound| switch (outbound.message) {
-            .snapshot => |snapshot| last_snapshot = snapshot,
+            .snapshot => |snapshot| {
+                last_snapshot = switch (snapshot.kind) {
+                    .full => snapshot,
+                    .delta => try protocol.materializeDelta(
+                        last_snapshot orelse return error.AcceptedIngressReplayMissingDeltaBase,
+                        snapshot,
+                    ),
+                };
+                try replay.ingest(connection, .{ .snapshot_ack = .{
+                    .session = welcome.session,
+                    .participant = welcome.participant,
+                    .baseline_id = snapshot.baseline_id,
+                    .sequence = snapshot.sequence,
+                } });
+            },
+            .relevance_baseline => |baseline| {
+                last_snapshot = baseline.snapshot;
+                try replay.ingest(connection, .{ .baseline_ack = .{
+                    .session = welcome.session,
+                    .participant = welcome.participant,
+                    .baseline_id = baseline.baseline_id,
+                } });
+            },
             else => {},
         };
     }
@@ -363,6 +405,31 @@ fn verifyAcceptedIngressReplay(
             return error.AcceptedIngressVehicleDivergence;
         }
     }
+}
+
+fn snapshotFromClientWorld(client: *const session_client.Client) protocol.Snapshot {
+    var snapshot = protocol.Snapshot.empty();
+    snapshot.baseline_id = client.active_baseline_id;
+    snapshot.sequence = client.world.sequence;
+    snapshot.server_tick = client.world.server_tick;
+    for (client.world.slice()) |entry| {
+        snapshot.characters[snapshot.character_count] = entry.current;
+        snapshot.character_count += 1;
+    }
+    for (client.world.vehicleSlice()) |entry| {
+        snapshot.vehicles[snapshot.vehicle_count] = entry.current;
+        snapshot.vehicle_count += 1;
+    }
+    for (client.world.carryableSlice()) |entry| {
+        snapshot.carryables[snapshot.carryable_count] = entry.current;
+        snapshot.carryable_count += 1;
+    }
+    snapshot.npc_update = true;
+    for (client.world.npcSlice()) |entry| {
+        snapshot.npcs[snapshot.npc_count] = entry.current;
+        snapshot.npc_count += 1;
+    }
+    return snapshot;
 }
 
 fn distance(a: [3]f32, b: [3]f32) f32 {

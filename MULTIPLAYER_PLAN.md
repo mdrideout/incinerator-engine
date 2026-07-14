@@ -396,14 +396,14 @@ reordering.
 
 ### MP4 — Feature Replication and District Interest
 
-**Status:** MP4-A authoritative vehicle replication and bounded local
-responsiveness are complete. MP4-B through MP4-E remain.
+**Status:** Complete. MP4-A through MP4-E and the architecture closeout gate
+are accepted.
 
 **Detailed sequence:**
 [`docs/design/mp4-feature-replication-sequence.md`](docs/design/mp4-feature-replication-sequence.md)
 
 **Latest acceptance evidence:**
-[`docs/validation/mp4a2-acceptance.md`](docs/validation/mp4a2-acceptance.md)
+[`docs/validation/mp4-architecture-closeout.md`](docs/validation/mp4-architecture-closeout.md)
 
 **Outcome:** Vehicle, interaction, district, and NPC semantics work through the
 same server authority with explicit per-feature replication and bounded
@@ -415,74 +415,89 @@ district relevance.
 - [x] Implement bounded owned-vehicle prediction/reconciliation with a 200 ms
   horizon, measured correction limits, lifecycle resets, live graphical A/B,
   and no second Flecs/Jolt world.
-- [ ] Replicate carry/drop requests, outcomes, and ownership transitions.
-- [ ] Use district ownership/residency as the first relevance partition.
-- [ ] Replicate relevant NPC state at a measured rate without exposing NPC
+- [x] Replicate carry/drop requests, outcomes, and ownership transitions.
+- [x] Use district ownership/residency as the first relevance partition.
+- [x] Replicate relevant NPC state at a measured rate without exposing NPC
   internals or making clients authoritative for AI.
 - [x] Define reliable vehicle lifecycle versus replaceable vehicle-state/input
   message classes; repeat the decision per later feature.
-- [ ] Bound per-client entities, bytes, snapshots, events, and baseline memory.
-- [ ] Exercise save/restart, join-in-progress, reconnect, district transfer, and
+- [x] Bound per-client entities, bytes, snapshots, events, and baseline memory.
+- [x] Exercise save/restart, join-in-progress, reconnect, district transfer, and
   unload while clients are present.
 
 #### MP4 acceptance
 
 - [x] Character and vehicle seat ownership remain consistent under impairment,
   stale input, contention, reconnect, exit, and replay.
-- [ ] Interaction, district, and NPC ownership/relevance remain consistent
+- [x] Interaction, district, and NPC ownership/relevance remain consistent
   under impairment and stale client input.
-- [ ] Irrelevant districts/entities do not consume unbounded per-client state.
-- [ ] Join/reconnect restores relevant state without sending durable-save bytes
+- [x] Irrelevant districts/entities do not consume unbounded per-client state.
+- [x] Join/reconnect restores relevant state without sending durable-save bytes
   or backend handles.
 - [x] The vehicle slice projects explicit backend-neutral state through the
   session and remains headless-testable.
-- [ ] Interaction, district, and NPC features own equivalent narrow projections.
+- [x] NPC completes the existing narrow interaction/district projections.
 
 ### MP5 — Invite, Party, and Room Experience
+
+**Status:** Open-engine room/admission scope complete. The separately supplied
+Steamworks adapter and listen/P2P productization remain explicit product
+integrations, not open-core blockers. Design:
+[`docs/design/mp5-open-room-and-admission-boundary.md`](docs/design/mp5-open-room-and-admission-boundary.md).
 
 **Outcome:** Players can create or join an invite-based room and connect to an
 optional private listen or canonical public dedicated authority without making
 Steam, a lobby, or a room service the world authority.
 
-- [ ] Implement the optional Steamworks flat-API identity/lobby/routing adapter
-  selected by ADR-018 without making it an open-engine requirement.
-- [ ] Implement create, invite, join, leave, ready, connect, and failure UX.
-- [ ] Bind admitted platform identity to a session participant without using it
+- [x] Define the optional Steamworks flat-API identity/lobby/routing seam
+  selected by ADR-018 without making it an open-engine requirement; keep the
+  proprietary adapter in the separately distributed game integration.
+- [x] Implement bounded create, invite, join, leave, ready, connect, and
+  actionable failure state for a UI consumer.
+- [x] Bind admitted platform identity to a session participant without using it
   as an ECS or replicated entity ID.
-- [ ] Support a listen host through the same authority/session boundary and
-  document host advantage and trust limitations.
-- [ ] Connect to a dedicated instance through the same game protocol.
-- [ ] Define host shutdown and durable-commit behavior; keep host migration
+- [x] Preserve listen placement through the same authority/session boundary and
+  document host advantage and trust limitations; productization remains
+  deferred.
+- [x] Connect to a dedicated instance through the same game protocol.
+- [x] Define drain/close and durable-commit ownership; keep host migration
   deferred unless explicitly selected.
-- [ ] Keep proprietary service dependencies out of the cold authority and
+- [x] Keep proprietary service dependencies out of the cold authority and
   open-engine core unless a reviewed integration requires otherwise.
 
 #### MP5 acceptance
 
-- [ ] An invited player reaches the correct admitted authority or receives an
+- [x] An invited player reaches the correct admitted authority or receives an
   actionable failure without partial session state.
-- [ ] Lobby departure and network disconnect have explicit, tested, nonidentical
+- [x] Lobby departure and network disconnect have explicit, tested, nonidentical
   semantics.
-- [ ] The host and dedicated paths share gameplay protocol and authority code.
-- [ ] Service outage does not corrupt a healthy authority save.
+- [x] Placement paths share one gameplay protocol, join contract, and authority
+  code; dedicated direct IP is the executable proof.
+- [x] Service outage does not mutate or stop a healthy admitted authority.
 
 ### M4 — Multiplayer Foundation Gate
+
+**Status:** Complete for the Apple Silicon macOS foundation scope. Evidence:
+[`docs/validation/m4-multiplayer-foundation.md`](docs/validation/m4-multiplayer-foundation.md).
+The previously recorded broad legacy embedded-authority administration facade
+remains in MP1 and is not reclassified as complete by this network gate.
 
 **Outcome:** New gameplay slices can be multiplayer-aware by default without
 depending on unfinished online-service infrastructure.
 
-- [ ] Solo runs through embedded authority and the client/session boundary.
-- [ ] Two clients use one authoritative server under the accepted impairment
+- [x] Solo runs through embedded authority and the client/session boundary.
+- [x] Two clients use one authoritative server under the accepted impairment
   envelope.
-- [ ] Character, vehicle, interaction, district, and NPC state have explicit
+- [x] Character, vehicle, interaction, district, and NPC state have explicit
   server/client semantics.
-- [ ] Join-in-progress and reconnect are bounded and tested.
-- [ ] Durable save, replication snapshots, prediction history, and replay
+- [x] Join-in-progress and reconnect are bounded and tested.
+- [x] Durable save, replication snapshots, prediction history, and replay
   evidence remain separate.
-- [ ] District relevance bounds per-client replicated state.
-- [ ] Client, listen, dedicated, validation, and extracted package boundaries
-  are independently checked.
-- [ ] Architecture, correctness/security, protocol, performance, and docs-drift
+- [x] District relevance bounds per-client replicated state.
+- [x] Embedded, graphical-client, dedicated, validation, and extracted package
+  boundaries are independently checked; listen remains an explicitly deferred
+  product placement over the same contract.
+- [x] Architecture, correctness/security, protocol, performance, and docs-drift
   reviews report no unrecorded actionable P0/P1/P2 finding.
 
 ## Transport and Service Decision
