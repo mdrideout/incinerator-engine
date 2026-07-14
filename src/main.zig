@@ -63,7 +63,7 @@ const editor = if (build_options.editor_enabled)
 else
     @import("editor/disabled.zig");
 const editor_contract = @import("editor/tool.zig");
-const sandbox_host = @import("sandbox_simulation");
+const sandbox_host = @import("local_solo_session");
 const population = @import("population_feature");
 const DeveloperSnapshot = developer_diagnostics.Snapshot(sandbox_host.Diagnostics);
 const DeveloperExport = developer_diagnostics.Export(sandbox_host.Diagnostics);
@@ -1701,7 +1701,7 @@ const App = struct {
     frame_timer: timing.FrameTimer,
     input_buffer: input.InputBuffer,
 
-    simulation: sandbox_host.Simulation,
+    simulation: sandbox_host.Session,
     initial_crate_id: ?sandbox_host.PersistentId,
     initial_character_id: ?sandbox_host.PersistentId,
     initial_vehicle_id: ?sandbox_host.PersistentId,
@@ -1935,7 +1935,7 @@ const App = struct {
             try injectAppInitFailure(failure_point, .after_visual_resources);
         }
 
-        // The visual and headless hosts use the same owned sandbox composition.
+        // The visual solo product owns an embedded authority session.
         const simulation_config = sandbox_host.Config{
             .namespace = 1,
             .fixed_delta_seconds = @floatCast(timing.TICK_DURATION),
@@ -1957,12 +1957,12 @@ const App = struct {
             },
         };
         var simulation = if (diagnostic_fault_probe)
-            try sandbox_host.Simulation.initWithDiagnosticFaultProbe(
+            try sandbox_host.Session.initWithDiagnosticFaultProbe(
                 std.heap.page_allocator,
                 simulation_config,
             )
         else
-            try sandbox_host.Simulation.init(
+            try sandbox_host.Session.init(
                 std.heap.page_allocator,
                 simulation_config,
             );
@@ -6483,12 +6483,16 @@ const App = struct {
         character_id: sandbox_host.PersistentId,
         actions: sandbox_controls.TickSample,
     ) !void {
-        try self.simulation.submitCharacter(.{ .actions = .{
-            .id = character_id,
+        if (!std.meta.eql(character_id, self.initial_character_id orelse
+            return error.LocalPlayerCharacterMissing))
+        {
+            return error.LocalPlayerCharacterMismatch;
+        }
+        try self.simulation.submitPlayerInput(.{
             .move = actions.move,
             .facing_yaw = self.game_camera.yaw,
             .jump_pressed = actions.jump_pressed,
-        } });
+        });
     }
 
     fn s2ScriptedActions(self: *const App) sandbox_controls.TickSample {

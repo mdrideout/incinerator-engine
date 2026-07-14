@@ -14,6 +14,7 @@ pub const cohort = struct {
     pub const joltc_zig_revision = "c7ff571d475ae4ef26e327e6ffcd81f158e93d97";
     pub const joltc_revision = "52d8c98df523f449eb3e01b1060a0fde052970d1";
     pub const jolt_revision = "23dadd0e603f1b321142d4c74df07fce85064989";
+    pub const gns_revision = "fa489fd2cb0fc86ef2503e330935d3eb03a6a064";
     pub const jolt_no_exceptions = true;
     pub const jolt_object_layer_bits: u8 = 32;
     pub const jolt_cross_platform_deterministic = false;
@@ -40,6 +41,7 @@ pub const Graph = struct {
     headless_content_manifest: *std.Build.Module,
     engine: *std.Build.Module,
     simulation_cohort_options: *std.Build.Module,
+    network_cohort_options: *std.Build.Module,
     jolt_c: *std.Build.Module,
     jolt_physics: *std.Build.Module,
     crates: *std.Build.Module,
@@ -64,6 +66,19 @@ pub const Graph = struct {
     save_slots: *std.Build.Module,
     sandbox_replay: *std.Build.Module,
     sandbox_simulation: *std.Build.Module,
+    session_budgets: *std.Build.Module,
+    session_identity: *std.Build.Module,
+    session_protocol: *std.Build.Module,
+    session_transport_policy: *std.Build.Module,
+    reconnect_policy: *std.Build.Module,
+    client_clock: *std.Build.Module,
+    session_prediction: *std.Build.Module,
+    impaired_link: *std.Build.Module,
+    session_local_link: *std.Build.Module,
+    replicated_world: *std.Build.Module,
+    session_client: *std.Build.Module,
+    local_solo_session: *std.Build.Module,
+    session_authority: *std.Build.Module,
 };
 
 pub const CohortVerification = struct {
@@ -89,6 +104,7 @@ pub fn addCohortVerification(b: *std.Build) CohortVerification {
         cohort.joltc_zig_revision,
         cohort.joltc_revision,
         cohort.jolt_revision,
+        cohort.gns_revision,
     });
     const verify_step = b.step(
         "verify-dependency-cohort",
@@ -196,6 +212,15 @@ pub fn create(
         cohort.flecs_hi_id_record_id,
     );
     const simulation_cohort_options = cohort_options.createModule();
+    const network_options = b.addOptions();
+    network_options.addOption(u16, "protocol_revision", 2);
+    network_options.addOption(u64, "build_cohort", networkBuildCohort());
+    network_options.addOption(
+        u64,
+        "content_cohort",
+        std.hash.Wyhash.hash(0x494e_434e, "mp2-character-sandbox-content-v1"),
+    );
+    const network_cohort_options = network_options.createModule();
 
     const flecs_debug_mode: FlecsDebugMode = if (optimize == .Debug) .sanitize else .none;
     const flecs_float_precision: FlecsPrecision = switch (cohort.flecs_float_bits) {
@@ -463,6 +488,122 @@ pub fn create(
             .{ .name = "sandbox_replay", .module = sandbox_replay },
         },
     });
+    const session_budgets = b.createModule(.{
+        .root_source_file = b.path("src/session/budgets.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const session_identity = b.createModule(.{
+        .root_source_file = b.path("src/session/identity.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const session_protocol = b.createModule(.{
+        .root_source_file = b.path("src/session/protocol.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets },
+            .{ .name = "session_identity", .module = session_identity },
+            .{ .name = "network_cohort_options", .module = network_cohort_options },
+        },
+    });
+    const session_transport_policy = b.createModule(.{
+        .root_source_file = b.path("src/session/transport_policy.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "session_protocol", .module = session_protocol }},
+    });
+    const reconnect_policy = b.createModule(.{
+        .root_source_file = b.path("src/session/reconnect_policy.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const client_clock = b.createModule(.{
+        .root_source_file = b.path("src/session/client_clock.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "session_budgets", .module = session_budgets }},
+    });
+    const session_prediction = b.createModule(.{
+        .root_source_file = b.path("src/session/prediction.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets },
+            .{ .name = "session_identity", .module = session_identity },
+            .{ .name = "session_protocol", .module = session_protocol },
+        },
+    });
+    const impaired_link = b.createModule(.{
+        .root_source_file = b.path("src/session/impaired_link.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets },
+            .{ .name = "session_protocol", .module = session_protocol },
+            .{ .name = "session_transport_policy", .module = session_transport_policy },
+        },
+    });
+    const session_local_link = b.createModule(.{
+        .root_source_file = b.path("src/session/local_link.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "session_budgets", .module = session_budgets },
+            .{ .name = "session_protocol", .module = session_protocol },
+        },
+    });
+    const replicated_world = b.createModule(.{
+        .root_source_file = b.path("src/session/replicated_world.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets },
+            .{ .name = "session_identity", .module = session_identity },
+            .{ .name = "session_protocol", .module = session_protocol },
+        },
+    });
+    const session_client = b.createModule(.{
+        .root_source_file = b.path("src/session/client.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_identity", .module = session_identity },
+            .{ .name = "session_protocol", .module = session_protocol },
+            .{ .name = "replicated_world", .module = replicated_world },
+            .{ .name = "session_prediction", .module = session_prediction },
+        },
+    });
+    const local_solo_session = b.createModule(.{
+        .root_source_file = b.path("src/session/local_solo.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation },
+            .{ .name = "session_budgets", .module = session_budgets },
+            .{ .name = "session_identity", .module = session_identity },
+            .{ .name = "session_protocol", .module = session_protocol },
+            .{ .name = "session_local_link", .module = session_local_link },
+            .{ .name = "session_client", .module = session_client },
+            .{ .name = "replicated_world", .module = replicated_world },
+        },
+    });
+    const session_authority = b.createModule(.{
+        .root_source_file = b.path("src/session/authority.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation },
+            .{ .name = "session_budgets", .module = session_budgets },
+            .{ .name = "session_identity", .module = session_identity },
+            .{ .name = "session_protocol", .module = session_protocol },
+            .{ .name = "session_transport_policy", .module = session_transport_policy },
+        },
+    });
 
     return .{
         .contracts = contracts,
@@ -470,6 +611,7 @@ pub fn create(
         .headless_content_manifest = headless_content_manifest,
         .engine = engine,
         .simulation_cohort_options = simulation_cohort_options,
+        .network_cohort_options = network_cohort_options,
         .jolt_c = jolt_c,
         .jolt_physics = jolt_physics,
         .crates = crates,
@@ -494,5 +636,34 @@ pub fn create(
         .save_slots = save_slots,
         .sandbox_replay = sandbox_replay,
         .sandbox_simulation = sandbox_simulation,
+        .session_budgets = session_budgets,
+        .session_identity = session_identity,
+        .session_protocol = session_protocol,
+        .session_transport_policy = session_transport_policy,
+        .reconnect_policy = reconnect_policy,
+        .client_clock = client_clock,
+        .session_prediction = session_prediction,
+        .impaired_link = impaired_link,
+        .session_local_link = session_local_link,
+        .replicated_world = replicated_world,
+        .session_client = session_client,
+        .local_solo_session = local_solo_session,
+        .session_authority = session_authority,
     };
+}
+
+fn networkBuildCohort() u64 {
+    var fingerprint: u64 = 0x4d50_3200_0000_0001;
+    inline for (.{
+        "zig-0.16.0",
+        cohort.zflecs_revision,
+        cohort.joltc_zig_revision,
+        cohort.joltc_revision,
+        cohort.jolt_revision,
+        cohort.gns_revision,
+        "authority-60hz",
+        "snapshot-20hz",
+        "protocol-v2",
+    }) |part| fingerprint = std.hash.Wyhash.hash(fingerprint, part);
+    return fingerprint;
 }

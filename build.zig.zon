@@ -64,11 +64,18 @@
             .url = "git+https://github.com/zig-gamedev/zflecs.git#9c2771cf0cae508db622821bb7deac6e9370a9de",
             .hash = "zflecs-0.2.0-dev-1PN3yvUPQQBUdlukoUPPTpW5NLhkagNIEtOq0C0S3bmf",
         },
+        .game_networking_sockets = .{
+            .url = "git+https://github.com/ValveSoftware/GameNetworkingSockets.git#fa489fd2cb0fc86ef2503e330935d3eb03a6a064",
+            .hash = "N-V-__8AAIlpawEKwOBHzDIkvQ_qUsy0bIuDqgmCWVJqPoF6",
+            .lazy = true,
+        },
     },
     .paths = .{
         ".zigversion",
         ".github",
+        "ARCHITECTURE_REVIEW.md",
         "CLEANUP_PLAN.md",
+        "MULTIPLAYER_PLAN.md",
         "README.md",
         "OVERHAUL_PLAN.md",
         "PLAN_001.md",

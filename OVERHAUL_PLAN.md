@@ -1,7 +1,8 @@
 # Incinerator Engine Overhaul Plan
 
-**Status:** Pre-multiplayer program and post-M3 greenfield cleanup complete; S9
-and secondary platforms deferred
+**Status:** Pre-multiplayer program and post-M3 greenfield cleanup complete;
+MP0-MP3 are implemented and accepted for the bounded character slice; MP4+
+and broader MP1 physical decomposition remain; secondary platforms are deferred
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
@@ -10,6 +11,11 @@ and secondary platforms deferred
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
+
+**Living architecture review:**
+[`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md)
+
+**Multiplayer-first strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
 
@@ -32,12 +38,24 @@ Status conventions:
 - `[x]` Complete and verified
 - **Blocked**: waiting on a decision or external dependency
 - **Deferred**: intentionally outside the current slice
+- **Proposed**: documented for review but not yet an accepted implementation
+  contract
 
 ---
 
 ## 1. Objective
 
-Create a game-specific engine capable of supporting a GTA-style 3D sandbox while preserving a credible path to characters, vehicles, streamed districts, persistent tools, and—if selected—authoritative multiplayer.
+Create a game-specific engine capable of supporting a GTA-style 3D sandbox
+whose likely primary experience is authoritative multiplayer while retaining
+offline solo play. The accepted next architecture treats solo, listen-hosted,
+and dedicated modes as different placements of one authority/session model.
+Dedicated authority is canonical for public multiplayer, the open-source
+GameNetworkingSockets flat C API/direct-IP path is the first remote transport,
+and Steam compatibility remains an optional integration boundary. The accepted
+direction is recorded in [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md),
+[ADR-016](docs/adr/016-authority-session-topology.md),
+[ADR-017](docs/adr/017-network-identity-protocol-and-replication.md), and
+[ADR-018](docs/adr/018-gamenetworkingsockets-and-steam-compatible-routing.md).
 
 The overhaul must produce these separable products:
 
@@ -360,7 +378,7 @@ logical authority and operational lifecycle:
 
 | ID | Decision | Status | Required before |
 |---|---|---|---|
-| D-001 | Product scope: single-player sandbox now; future authoritative online/MMO aspiration | Accepted in ADR-007 | Network/state architecture |
+| D-001 | Initial product scope: prove the sandbox and server-shaped authority locally before networking | Accepted in ADR-007 and delivered through M3; multiplayer-first successor is accepted under D-018 through D-020 | Network/state architecture |
 | D-002 | Initial hosts: sandbox and headless; optional in-process editor; server later | Accepted in ADR-007 | Slice 0 |
 | D-003 | Exact Zig 0.16.0 toolchain and coordinated wrapper cohort | Implemented | Every build/CI change |
 | D-004 | Engine-owned JoltC 5.5 build package plus narrow engine adapter; expand capabilities per slice | Implemented for rigid bodies, CharacterVirtual, and the integrated S2 real-Jolt four-wheel capability | Future physics slices |
@@ -377,6 +395,9 @@ logical authority and operational lifecycle:
 | D-015 | Durable save-slot storage and greenfield schema compatibility policy | Accepted for S5; unsupported cohorts may be rejected until a stability promise exists | S5 |
 | D-016 | One simulation world per process and macOS-local server-shaped readiness; deployment platforms remain a future decision | Accepted for M3; replacing/forking zflecs remains an explicit alternative if a later product requires multi-world processes | M3/S9 |
 | D-017 | Post-M3 greenfield consolidation: current cohorts only, separate product/validation compositions, sandbox-owned content policy, owned editor, minimal macOS dependency graph | Completed under `CLEANUP_PLAN.md`; no compatibility, secondary-platform, or multiplayer scope | Next gameplay phase |
+| D-018 | Authority is a role: solo uses embedded local authority, optional private listen mode co-locates client and authority, and canonical public dedicated mode runs the same authority headlessly | Accepted in [ADR-016](docs/adr/016-authority-session-topology.md) | MP1 client/authority separation |
+| D-019 | Network identity/protocol/replication are explicit and feature-owned; durable saves, replication snapshots, prediction history, and accepted-ingress replay remain distinct | Accepted in [ADR-017](docs/adr/017-network-identity-protocol-and-replication.md) | MP2 protocol implementation |
+| D-020 | Use open-source GameNetworkingSockets through its flat C API, prove direct IP first, keep dedicated authority canonical, and preserve optional non-vendored Steamworks P2P/SDR compatibility | Accepted in [ADR-018](docs/adr/018-gamenetworkingsockets-and-steam-compatible-routing.md) | MP2 transport implementation |
 
 ### Decision notes
 
@@ -388,6 +409,12 @@ Even if the first product is single-player, preserve two inexpensive future-faci
 - separation between authoritative simulation and presentation snapshots.
 
 If genuine MMO remains the target, authoritative simulation, replication, interest management, persistence, and operational tooling become early product work rather than a late networking feature.
+
+The post-M3 product assessment now considers multiplayer the likely primary
+experience. `MULTIPLAYER_PLAN.md` therefore establishes the
+client/authority/session boundary before another major gameplay slice. This
+does not retroactively change what D-001 delivered; it is an accepted successor
+direction under D-018/D-020.
 
 #### D-004: Physics binding
 
@@ -441,13 +468,20 @@ before dependency resolution.
 | S7 | Persistent interaction and cross-district world ownership are proven | Complete; transactional authority, save/replay, native Metal, 128-cycle measurement, and independent review pass |
 | S8 | A bounded navigation-driven population crosses streamed districts safely at representative scale | Complete and independently reviewed |
 | M3 | A server-shaped headless product is operationally ready for external producers | Complete and independently reviewed; pre-network capability gate only |
-| S9 | Two clients use one authoritative server, if selected | Deferred until the completed pre-multiplayer program is reviewed |
+| S9 / MP0-MP5 | Establish one multiplayer-first authority model for solo, listen, and dedicated placements, then prove two clients and the existing gameplay features | MP0-MP3 complete for the character slice; MP4-MP5 and broader feature/physical decomposition remain |
+| M4 | Multiplayer foundation is ready for future gameplay slices | Not started; depends on MP0-MP5 |
 
 M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
 slices. M3 is a narrow pre-network readiness gate, not a speculative server
-framework. S9 is the conditional authoritative multiplayer slice. Shared
-diagnostics, storage, content, rendering, and server-shaped capabilities are
-extracted only as concrete slices prove their consumers.
+framework. The earlier monolithic/conditional S9 has been decomposed into the
+MP0-MP5 program in `MULTIPLAYER_PLAN.md`; the topology, protocol, GNS transport,
+dedicated-first public placement, direct-IP-first proof, optional Steam
+compatibility, player target, and starting rates are accepted. MP0-MP3 now
+prove the first client/authority character boundary, real GNS placement,
+prediction, impairment, and accepted-ingress replay; feature replication and
+service integration remain. Shared diagnostics,
+storage, content, rendering, and server-shaped capabilities are extracted only
+as concrete slices prove their consumers.
 
 ---
 
@@ -1197,59 +1231,84 @@ down cleanly. Apple Silicon macOS remains the only active platform.
 
 ---
 
-## 23. S9 — Authoritative Multiplayer Slice (Conditional)
+## 23. S9 — Multiplayer-First Authority Program
 
-**Status:** Deferred until the completed S3-C through M3 pre-multiplayer program
-is reviewed and multiplayer implementation is explicitly started. Entry
-requires M3 plus S4 diagnostics/replay, S5 durable storage, S6 fingerprints,
-S7 proven authority/ownership semantics, and S8 population/scale evidence.
+**Status:** MP0-MP3 are implemented and accepted for the bounded character
+slice. MP4-MP5 and broader MP1 physical
+decomposition remain, as recorded in [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md).
 
-### Outcome
+The earlier conditional S9 correctly identified the need for two clients, one
+authoritative server, prediction/reconciliation, interest management,
+join/reconnect, fault injection, and exact cohort rejection. The product
+direction now makes that boundary an early prerequisite for substantial new
+gameplay rather than one late vertical slice.
 
-Two clients connect to one headless authoritative server and observe consistent
-character, crate, vehicle, district, interaction, and population state under
-simulated latency, loss, reordering, reconnect, and cohort mismatch.
+The detailed program is deliberately maintained outside this already large
+historical roadmap:
 
-### Feature-owned scope
+| Phase | Outcome | Status |
+|---|---|---|
+| MP0 | Record product assumptions, budgets, authority topology, identities, protocol, persistence, replication, transport, and deferrals | Complete initial architecture contract |
+| MP1 | Existing solo sandbox becomes a client connected to an embedded authority through a typed local link | Character seam implemented; legacy solo admin/save and physical `App`/`Simulation` decomposition remain |
+| MP2 | Two macOS clients join one authoritative localhost server with sequenced character input and snapshots | Character slice implemented and audited over real GNS |
+| MP2.1 | Monotonic reconnect and explicit terminal authority shutdown semantics are proven | Complete |
+| MP3 | Local prediction/reconciliation and bounded latency/loss/reorder behavior are proven | Complete for bounded character slice |
+| MP4 | Vehicle, interaction, district, and NPC replication plus district relevance are proven | Not started |
+| MP5 | Invite/party/room discovery connects players to listen or dedicated authority | Not started |
+| M4 | The multiplayer foundation is accepted for subsequent gameplay slices | Not started |
 
-- network identity, authority, ownership, and replication components;
-- versioned input and state messages plus exact build/content/protocol cohorts;
-- connection, join, leave, reconnect, and ownership events;
-- server input application and snapshot systems;
-- client prediction, reconciliation, and interpolation as selected;
-- interest management aligned with streamed district ownership;
-- network diagnostics, authoritative-ingress capture, and fault tests.
+### Entry requirements
 
-### Work pulled by the slice
+- [x] M3 cold authority, bounded external ingress, durable lifecycle, and soak
+  are complete.
+- [x] S4 diagnostics/replay, S5 durable storage, S6 content fingerprints, S7
+  ownership, and S8 population/scale evidence are complete.
+- [x] The current architecture assessment and weakness register are recorded in
+  [`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md).
+- [x] The staged multiplayer-first strategy is recorded in
+  [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md).
+- [x] Authority-topology, protocol/replication, GNS transport, dedicated-first,
+  direct-IP-first, and optional Steam compatibility decisions are accepted in
+  ADR-016 through ADR-018.
+- [x] Initial 2-8 player target/16-participant validation ceiling,
+  join-in-progress/reconnect, no-host-migration policy, and 60 Hz authority/
+  20 Hz replication starting rates are confirmed.
+- [x] Quantitative impairment, bandwidth, relevant-entity, queue, baseline,
+  decode, snapshot-age, and correction budgets are confirmed.
 
-- [ ] Define authoritative state and trust boundaries from the M3 inventory.
-- [ ] Version command and snapshot serialization and reject build, content, or
-  protocol cohort mismatches before world admission.
-- [ ] Add server tick, input sequencing, acknowledgements, and reconciliation.
-- [ ] Keep network snapshot interpolation distinct from local presentation
-  interpolation; client prediction remains assistance rather than authority.
-- [ ] Add interest management using S6/S8 district and population ownership.
-- [ ] Deterministically queue/order contact results before replication without
-  claiming cross-platform lockstep physics.
-- [ ] Capture accepted authoritative server ingress through S4 and reproduce
-  logical server failures headlessly where the same-cohort contract permits.
-- [ ] Test join-in-progress, reconnect, loss, duplication, reordering, stale
-  ownership, queue saturation, and version mismatch.
-- [ ] Keep accounts, distributed persistence, anti-cheat, Linux deployment,
-  and MMO operations in separately approved future programs.
+### Program-level guardrails
 
-### Acceptance criteria
+- Solo, listen, and dedicated placement must share one authority model; local
+  delivery may avoid packet encoding but may not bypass semantic admission.
+- The graphical client never becomes canonical authority for simulation,
+  physics, NPCs, ownership, or durable saves.
+- Durable saves, replication snapshots, prediction history, and replay
+  evidence remain separate schemas/lifetimes.
+- Feature-owned replication exposes semantic values, not raw Flecs components,
+  Jolt state, runtime handles, or backend objects.
+- The first implementation remains Apple Silicon macOS only and does not add
+  secondary-platform constraints.
+- The open engine and direct-GNS cold authority build without Steamworks;
+  Steamworks remains a non-vendored optional game/platform integration.
+- Accounts, distributed persistence, host migration, anti-cheat platforms,
+  sharding, and MMO operations remain separately approved future programs.
+- No generic RPC bus, automatic ECS replication, service locator, peer
+  lockstep, or speculative transport/backend framework is introduced.
 
-- [ ] Two clients use one authoritative headless server under injected latency,
-  loss, duplication, and reordering.
-- [ ] Join-in-progress and reconnect reconstruct valid GPU-independent world
-  state within the admitted content/protocol cohort.
-- [ ] Character, vehicle, interaction, district, and NPC ownership transitions
-  remain consistent under latency/loss and stale inputs are rejected.
-- [ ] Mismatched build/content/protocol cohorts fail before partial admission.
-- [ ] An accepted-ingress capture identifies the first divergent authoritative
-  tick in the same-build headless replay contract.
-- [ ] Server binaries link no renderer or editor dependencies.
+### M4 acceptance summary
+
+- [ ] Solo runs through the client/session/embedded-authority boundary.
+- [ ] Two clients use one authoritative server under a measured impairment
+  envelope.
+- [ ] Join-in-progress and reconnect restore bounded relevant state.
+- [ ] Character, vehicle, interaction, district, and NPC authority remains
+  consistent under stale/lost/reordered input.
+- [ ] Prediction is explicitly non-authoritative and converges to server state.
+- [ ] District relevance bounds per-client state and bandwidth.
+- [ ] Accepted-ingress replay identifies the first divergent authority category
+  within the exact cohort.
+- [ ] Client, listen, dedicated, validation, and package boundaries pass their
+  independently checked macOS gates.
 
 ---
 
@@ -1498,8 +1557,31 @@ Record evidence rather than relying only on target numbers:
 25. [x] Implement and independently review S8 bounded NPC lifecycle,
     navigation, cross-district ownership, and representative scale/soak.
 26. [x] Close and independently review M3 bounded external-producer queues,
-    cold headless dependency isolation, durable lifecycle, and soak. Keep S9
-    multiplayer and all secondary platforms deferred.
+    cold headless dependency isolation, durable lifecycle, and soak. At M3
+    closure, keep S9 multiplayer and all secondary platforms deferred.
+27. [x] Reassess the post-M3 architecture for modern feature ownership,
+    physical cohesion, schedule/ECS pressure, client/authority separation, and
+    a likely multiplayer-first product; record the living findings in
+    `ARCHITECTURE_REVIEW.md`.
+28. [x] Decompose the former conditional S9 into the MP0-MP5/M4 strategy in
+    `MULTIPLAYER_PLAN.md` and draft ADR-016/ADR-017 without treating
+    open product assumptions as accepted decisions.
+29. [x] Accept the authority, protocol, dedicated-first, GNS/direct-IP-first,
+    Steam-compatibility, player-target, join/reconnect, host-migration, and
+    starting-rate decisions in ADR-016 through ADR-018.
+30. [x] Record the remaining quantitative impairment, bandwidth, entity,
+    queue, baseline, decode, snapshot-age, and correction budgets.
+31. [x] Implement the first MP1 character client/authority separation and typed
+    local solo-session boundary while preserving the complete Debug and
+    product/validation evidence; retain broader admin/save and physical
+    decomposition as explicit follow-up rather than hiding it behind a facade.
+32. [x] Implement and audit the MP2 direct-IP character slice: pinned GNS, cold
+    authority, presentation-only graphical client, two-client join-in-progress,
+    authoritative input/snapshots, admission failures, timeout, reconnect,
+    diagnostics, and final-binary boundary.
+33. [x] Implement MP3 bounded character prediction/reconciliation and the
+    deterministic impaired-link acceptance matrix before adding more networked
+    gameplay features.
 
 ---
 
@@ -1551,3 +1633,7 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-13 | Completed and independently reviewed S8-C and closed the full S8 population/scale slice | Exact 64-identity installed Metal lifecycle at 240/80 Hz; direct Physics-global controller evidence; three-pair 16,384-tick ReleaseFast scale measurement with 0.491250 ms worst p99, 124,296-byte allocation delta, and 2,457,600-byte RSS delta; 4,096-tick replay; saturated FIFO recovery; 558/558 tests in all editor/optimization modes; 169/169 extracted-source tests; review findings corrected with no remaining actionable P0/P1/P2 finding |
 | 2026-07-13 | Completed and independently reviewed M3 and closed the entire pre-multiplayer program | Cold Apple Silicon macOS product with exact three-file install and only `libSystem` dynamic linkage; one-world owner loop; exact config/content/save admission; two bounded generational producers; healthy saturation and retained fault evidence; real signal, lag, storage, corruption, restart, and committed-observability lifecycle matrix; three 32,768-tick ReleaseFast trials plus a 131,072-tick long run; 152/152 full Debug/ReleaseFast steps with 589/589 tests, 96/96 extracted-source steps with 193/193 tests, 26/26 cold-product steps with 51/51 tests, and 74/74 native macOS readiness steps; no remaining actionable P0/P1/P2 finding; S9 and secondary platforms remain deferred |
 | 2026-07-13 | Completed and independently reviewed the post-M3 greenfield cleanup | Removed obsolete cohorts, aliases, demo art, deferred-platform paths, dead APIs, and unused dependency capabilities; separated normal client and validation compositions at compile time; made editor state instance-owned; moved installed content policy into the sandbox; shared bounded queue/cohort mechanics without a generic bus; exact Zig/native-target and binary/package boundaries enforced; final 169/169, 589/589 editor-free aggregates, 172/172 editor-enabled aggregate, 80/80 native readiness, 98/98 and 196/196 extracted source gate, and 32/32 and 52/52 extracted cold gate pass; no remaining actionable P0/P1/P2 finding |
+| 2026-07-13 | Drafted the post-M3 architecture assessment and multiplayer-first strategy | Living weakness/pressure register; solo/listen/dedicated authority-role proposal; separate durable/replication/prediction/replay lifetimes; MP0-MP5/M4 delivery program; proposed ADR-016/ADR-017; no networking implementation or product decision implied |
+| 2026-07-13 | Accepted the multiplayer authority, protocol, transport, and initial deployment direction | ADR-016/ADR-017 accepted; ADR-018 selects open-source GameNetworkingSockets through the flat C API, direct IP for the first dedicated two-client proof, dedicated authority as canonical for public rooms, optional later private listen/Steam P2P, optional non-vendored Steamworks compatibility, 2-8 player target with 16-participant validation ceiling, join-in-progress/reconnect, no host migration, and 60 Hz authority/20 Hz replication starting rates; quantitative MP0 budgets and implementation remain |
+| 2026-07-13 | Implemented MP0 and the first MP1/MP2 authoritative character slice, then completed the MP2 audit | Central quantitative ceilings and impairment profiles; distinct session/account/participant/connection/replicated/sequence identities; generated exact build/content cohort; bounded codec/local link/client replicated world; solo character input through embedded session; pinned GNS 1.5.1 C ABI; cold authority and presentation-only graphical client; real two-client GNS proof for JIP, movement, acknowledgement, cohort rejection, disconnect/reconnect, zero callback drops; handshake/idle/oversize/malformed/duplicate-account coverage; visual-linkage boundary; residual MP1 physical cohesion and MP3/MP4 scope explicitly recorded |
+| 2026-07-13 | Completed MP2.1 and MP3 character responsiveness/fault acceptance | Monotonic capped reconnect with terminal authority-stop semantics; welcome-anchored clock; bounded local horizontal prediction/reconciliation and remote interpolation; shared semantic lane policy; deterministic latency/jitter/loss/duplicate/reorder/blackout/bandwidth harness; stale-input and quota policy; 2,048-entry accepted-ingress journal replayed into a fresh one-world authority with category-first divergence; clean/three nominal/three adverse/blackout matrix; independent real-GNS shutdown processes; 199/199 and 618/618 full Debug/ReleaseFast gates; 63/63 and 31/31 MP3 Debug/ReleaseFast gates; extracted-source 98/98/196 plus cold 32/32/52 evidence |

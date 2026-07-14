@@ -14,6 +14,7 @@ pub fn main(init: std.process.Init) !void {
     const wrapper_revision = args.next() orelse return error.MissingWrapperRevision;
     const joltc_revision = args.next() orelse return error.MissingJoltcRevision;
     const jolt_revision = args.next() orelse return error.MissingJoltRevision;
+    const gns_revision = args.next() orelse return error.MissingGnsRevision;
     if (args.next() != null) return error.UnexpectedArgument;
 
     const root_manifest = try read(init, root_manifest_path);
@@ -27,6 +28,7 @@ pub fn main(init: std.process.Init) !void {
     try requireRevision(wrapper_readme_path, wrapper_readme, wrapper_revision);
     try requireRevision(wrapper_manifest_path, wrapper_manifest, joltc_revision);
     try requireRevision(wrapper_manifest_path, wrapper_manifest, jolt_revision);
+    try requireRevision(root_manifest_path, root_manifest, gns_revision);
     std.debug.print("dependency/replay cohort pins verified\n", .{});
 }
 

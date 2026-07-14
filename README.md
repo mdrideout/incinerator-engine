@@ -1,8 +1,24 @@
 # Incinerator Engine
 
-Incinerator is a game-specific 3D engine being rebuilt for a single-player sandbox, with a deliberate path toward a future authoritative online game. It uses Zig, SDL3, Jolt Physics, Flecs, and ImGui.
+Incinerator is a game-specific 3D engine with a completed single-player sandbox
+foundation and an accepted multiplayer-first authoritative-session direction.
+The intended experience supports solo play as a local form of the same
+authority model used by optional private listen/invite and canonical public
+dedicated sessions. The selected first network transport is the open-source
+GameNetworkingSockets flat C API over direct IP; Steam networking remains an
+optional non-vendored integration. It uses Zig, SDL3, Jolt Physics, Flecs, and
+ImGui.
 
-The engine is intended to become open source and the game will be licensed separately. No engine license has been selected yet, so this repository currently grants no license. The overhaul is greenfield: prototype APIs and file formats may change without compatibility shims. See [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md) for the completed feature roadmap and [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md) for the completed post-M3 consolidation record.
+The engine is intended to become open source and the game will be licensed
+separately. No engine license has been selected yet, so this repository
+currently grants no license. The overhaul is greenfield: prototype APIs and
+file formats may change without compatibility shims. See
+[`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md) for the main roadmap,
+[`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md) for the living architectural
+assessment, [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md) for the staged
+multiplayer program and current MP0-MP2 status, and
+[`CLEANUP_PLAN.md`](CLEANUP_PLAN.md) for the completed
+post-M3 consolidation record.
 
 ## Toolchain Cohort
 
@@ -15,6 +31,7 @@ These versions are one tested compatibility cohort and should be upgraded togeth
 | Jolt Physics | `5.5.0` | Engine-owned JoltC build package with exact Jolt, JoltC, and Zig wrapper commits |
 | Flecs | Exact development commit | `zflecs` wrapper pinned with an explicit ABI/feature cohort and one C-source owner |
 | ImGui | Exact development commit | Optional `zgui` editor; its SDL3 backend is compiled by the engine against the selected SDL 3.4.12 headers |
+| GameNetworkingSockets | `1.5.1` exact commit | Open-source direct-IP transport behind an engine-owned C ABI shim; Steamworks remains optional and absent |
 
 The complete dependency identities live in `build.zig.zon` and [`third_party/joltc-zig/README.md`](third_party/joltc-zig/README.md). Dependency features that affect linkage, ABI, or compiled capabilities are selected explicitly; they are not inherited silently from wrapper defaults. The shared simulation build graph generates the replay cohort from those pins and physics limits, and an automatic verifier rejects manifest drift. Flecs is compiled as private ECS storage with only the OS API implementation addon, excluding its HTTP, REST, script, metrics, module, and pipeline surfaces. Jolt's cross-platform deterministic build mode is deliberately disabled. The future network model is an authoritative server, not client lockstep; enabling that mode would need a measured requirement and performance evaluation.
 
@@ -70,6 +87,18 @@ work must introduce its own reviewed toolchain cohort. See
 Generated shaders, reflection JSON, and embedding modules remain in the Zig
 cache; builds do not write generated artifacts into the source tree.
 
+#### 3. Multiplayer Transport Build Tools
+
+The MP2 direct-IP products build pinned GameNetworkingSockets from source.
+On Apple Silicon macOS install its build-time dependencies with:
+
+```bash
+brew install cmake ninja protobuf openssl@3
+```
+
+The open engine does not require Steamworks, a Steam login, a cloud provider,
+or a lobby service.
+
 ### Building
 
 ```bash
@@ -78,6 +107,29 @@ zig build
 
 # Build and run
 zig build run
+
+# Compile the cold MP2 authority and presentation-only graphical client, then
+# run the real-GNS two-client acceptance proof and binary boundary audit.
+zig build check-mp2
+zig build verify-mp2 --summary all
+
+# Run MP2.1/MP3 lifecycle, prediction, deterministic latency/jitter/loss/
+# duplicate/reorder/blackout, accepted-ingress replay, real-GNS regression,
+# and independent authority-stop process acceptance.
+zig build verify-mp3 --summary all
+
+# Manual three-terminal MP2 test. Build/install once, then launch one authority
+# and two graphical clients with distinct development accounts.
+zig build install-mp2
+./zig-out/bin/incinerator_mp2_server --port 27020
+./zig-out/bin/incinerator_mp2_client --connect 127.0.0.1:27020 --account 1
+./zig-out/bin/incinerator_mp2_client --connect 127.0.0.1:27020 --account 2
+
+# Client controls: WASD move, Space jump, Escape quit. Recoverable transport
+# loss uses monotonic capped retry; rejection and authority shutdown terminate
+# cleanly without reconnecting.
+# The authority binds loopback by default. `--allow-remote` is only for trusted
+# LAN/development testing because MP2 AccountId values are not authenticated.
 
 # Compile or explicitly install the separate visual-validation host. Normal
 # `zig build` does not install validation; validation lives in libexec.

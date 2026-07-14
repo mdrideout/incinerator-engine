@@ -1,5 +1,6 @@
 const std = @import("std");
 const headless_product = @import("tools/build/headless_product.zig");
+const gamenetworking_sockets = @import("tools/build/gamenetworking_sockets.zig");
 const macos = @import("tools/build/macos.zig");
 const simulation_graph = @import("tools/build/simulation_graph.zig");
 const zgui_sdl3_gpu = @import("tools/build/zgui_sdl3_gpu.zig");
@@ -149,6 +150,7 @@ pub fn build(b: *std.Build) void {
     // in this directory.
 
     const graph = simulation_graph.create(b, target, optimize);
+    const gns = gamenetworking_sockets.create(b, optimize) orelse return;
     const cohort_verification = simulation_graph.addCohortVerification(b);
     const contracts_module = graph.contracts;
     const content_module = graph.content;
@@ -176,6 +178,27 @@ pub fn build(b: *std.Build) void {
     const save_slots_module = graph.save_slots;
     const sandbox_replay_module = graph.sandbox_replay;
     const sandbox_simulation_module = graph.sandbox_simulation;
+    const session_budgets_module = graph.session_budgets;
+    const session_identity_module = graph.session_identity;
+    const session_protocol_module = graph.session_protocol;
+    const session_transport_policy_module = graph.session_transport_policy;
+    const reconnect_policy_module = graph.reconnect_policy;
+    const client_clock_module = graph.client_clock;
+    const session_prediction_module = graph.session_prediction;
+    const impaired_link_module = graph.impaired_link;
+    const session_local_link_module = graph.session_local_link;
+    const replicated_world_module = graph.replicated_world;
+    const session_client_module = graph.session_client;
+    const local_solo_session_module = graph.local_solo_session;
+    const session_authority_module = graph.session_authority;
+    const gns_direct_module = b.createModule(.{
+        .root_source_file = b.path("src/adapters/transport/gns_direct.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "session_budgets", .module = session_budgets_module }},
+    });
+    gns_direct_module.addIncludePath(b.path("src/adapters/transport"));
+    gns_direct_module.addIncludePath(gns.include);
 
     const content_host_module = b.createModule(.{
         .root_source_file = b.path("src/content/root.zig"),
@@ -657,6 +680,7 @@ pub fn build(b: *std.Build) void {
     );
     content_relocation_step.dependOn(&run_content_catalog_relocation.step);
     addClientImport(exe, validation_exe, "sandbox_simulation", sandbox_simulation_module);
+    addClientImport(exe, validation_exe, "local_solo_session", local_solo_session_module);
     const sandbox_interaction_module = b.createModule(.{
         .root_source_file = b.path("src/hosts/sandbox_interaction.zig"),
         .target = target,
@@ -717,6 +741,182 @@ pub fn build(b: *std.Build) void {
         "Run persistent bounded SDL GPU physics-overlay tests",
     );
     physics_debug_gpu_test_step.dependOn(&run_physics_debug_gpu_tests.step);
+
+    const mp2_server_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/mp2_server.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_transport_policy", .module = session_transport_policy_module },
+            .{ .name = "session_authority", .module = session_authority_module },
+            .{ .name = "gns_direct", .module = gns_direct_module },
+        },
+    });
+    const mp2_server_exe = b.addExecutable(.{
+        .name = "incinerator_mp2_server",
+        .root_module = mp2_server_module,
+    });
+    gns.link(mp2_server_exe);
+
+    const mp2_presentation_module = b.createModule(.{
+        .root_source_file = b.path("src/mp2_presentation.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zmath", .module = zmath.module("root") },
+            .{ .name = "shader_assets", .module = shaders.module },
+        },
+    });
+    mp2_presentation_module.linkLibrary(sdl_lib);
+
+    const mp2_client_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/mp2_client.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "zmath", .module = zmath.module("root") },
+            .{ .name = "shader_assets", .module = shaders.module },
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_client", .module = session_client_module },
+            .{ .name = "replicated_world", .module = replicated_world_module },
+            .{ .name = "session_transport_policy", .module = session_transport_policy_module },
+            .{ .name = "reconnect_policy", .module = reconnect_policy_module },
+            .{ .name = "client_clock", .module = client_clock_module },
+            .{ .name = "gns_direct", .module = gns_direct_module },
+            .{ .name = "mp2_presentation", .module = mp2_presentation_module },
+        },
+    });
+    mp2_client_module.linkLibrary(sdl_lib);
+    const mp2_client_exe = b.addExecutable(.{
+        .name = "incinerator_mp2_client",
+        .root_module = mp2_client_module,
+    });
+    mp2_client_exe.step.dependOn(shaders.step);
+    gns.link(mp2_client_exe);
+
+    const check_mp2_step = b.step(
+        "check-mp2",
+        "Compile the MP2 direct-IP authority and graphical client",
+    );
+    check_mp2_step.dependOn(&mp2_server_exe.step);
+    check_mp2_step.dependOn(&mp2_client_exe.step);
+
+    const install_mp2_server = b.addInstallArtifact(mp2_server_exe, .{});
+    const install_mp2_client = b.addInstallArtifact(mp2_client_exe, .{});
+    const install_mp2_step = b.step(
+        "install-mp2",
+        "Install the MP2 server and graphical client",
+    );
+    install_mp2_step.dependOn(&install_mp2_server.step);
+    install_mp2_step.dependOn(&install_mp2_client.step);
+
+    const run_mp2_server = b.addRunArtifact(mp2_server_exe);
+    if (b.args) |args| run_mp2_server.addArgs(args);
+    const run_mp2_server_step = b.step(
+        "run-mp2-server",
+        "Run the MP2 dedicated direct-IP authority",
+    );
+    run_mp2_server_step.dependOn(&run_mp2_server.step);
+
+    const run_mp2_client = b.addRunArtifact(mp2_client_exe);
+    if (b.args) |args| run_mp2_client.addArgs(args);
+    const run_mp2_client_step = b.step(
+        "run-mp2-client",
+        "Run one MP2 graphical direct-IP client",
+    );
+    run_mp2_client_step.dependOn(&run_mp2_client.step);
+
+    const mp2_server_tests = b.addTest(.{ .root_module = mp2_server_module });
+    const run_mp2_server_tests = b.addRunArtifact(mp2_server_tests);
+    const mp2_client_tests = b.addTest(.{ .root_module = mp2_client_module });
+    const run_mp2_client_tests = b.addRunArtifact(mp2_client_tests);
+    const mp2_host_test_step = b.step(
+        "test-mp2-hosts",
+        "Run MP2 server/client composition tests",
+    );
+    mp2_host_test_step.dependOn(&run_mp2_server_tests.step);
+    mp2_host_test_step.dependOn(&run_mp2_client_tests.step);
+
+    const mp2_loopback_module = b.createModule(.{
+        .root_source_file = b.path("tools/mp2_loopback.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_client", .module = session_client_module },
+            .{ .name = "session_authority", .module = session_authority_module },
+            .{ .name = "session_transport_policy", .module = session_transport_policy_module },
+            .{ .name = "gns_direct", .module = gns_direct_module },
+        },
+    });
+    const mp2_loopback_exe = b.addExecutable(.{
+        .name = "incinerator_mp2_loopback",
+        .root_module = mp2_loopback_module,
+    });
+    gns.link(mp2_loopback_exe);
+    const run_mp2_loopback = b.addRunArtifact(mp2_loopback_exe);
+    if (b.args) |args| run_mp2_loopback.addArgs(args);
+    const verify_mp2_step = b.step(
+        "verify-mp2",
+        "Run the real-GNS two-client MP2 acceptance proof",
+    );
+    verify_mp2_step.dependOn(&run_mp2_server_tests.step);
+    verify_mp2_step.dependOn(&run_mp2_client_tests.step);
+    verify_mp2_step.dependOn(&run_mp2_loopback.step);
+
+    const mp3_acceptance_module = b.createModule(.{
+        .root_source_file = b.path("tools/mp3_acceptance.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_client", .module = session_client_module },
+            .{ .name = "session_authority", .module = session_authority_module },
+            .{ .name = "impaired_link", .module = impaired_link_module },
+        },
+    });
+    const mp3_acceptance_exe = b.addExecutable(.{
+        .name = "incinerator_mp3_acceptance",
+        .root_module = mp3_acceptance_module,
+    });
+    const run_mp3_acceptance = b.addRunArtifact(mp3_acceptance_exe);
+    const mp3_shutdown_client_module = b.createModule(.{
+        .root_source_file = b.path("tools/mp3_shutdown_client.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_client", .module = session_client_module },
+            .{ .name = "session_transport_policy", .module = session_transport_policy_module },
+            .{ .name = "gns_direct", .module = gns_direct_module },
+        },
+    });
+    const mp3_shutdown_client_exe = b.addExecutable(.{
+        .name = "incinerator_mp3_shutdown_client",
+        .root_module = mp3_shutdown_client_module,
+    });
+    gns.link(mp3_shutdown_client_exe);
+    const verify_mp3_process = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_mp3_process.sh"),
+    });
+    verify_mp3_process.addFileArg(mp2_server_exe.getEmittedBin());
+    verify_mp3_process.addFileArg(mp3_shutdown_client_exe.getEmittedBin());
+    const verify_mp3_step = b.step(
+        "verify-mp3",
+        "Run deterministic prediction/fault acceptance and the real-GNS regression",
+    );
+    verify_mp3_step.dependOn(&run_mp3_acceptance.step);
+    verify_mp3_step.dependOn(&verify_mp3_process.step);
+    verify_mp3_step.dependOn(&run_mp2_loopback.step);
+    verify_mp3_step.dependOn(&run_mp2_server_tests.step);
+    verify_mp3_step.dependOn(&run_mp2_client_tests.step);
 
     // The headless host is intentionally not installed by the default build.
     // Its allowlisted module graph has no SDL, editor, asset, or shader edge.
@@ -849,6 +1049,14 @@ pub fn build(b: *std.Build) void {
         "Reject visual dependencies from the final headless binary",
     );
     verify_headless_linkage_step.dependOn(&verify_headless_linkage.step);
+    const verify_mp2_server_linkage = b.addRunArtifact(headless_linkage_exe);
+    verify_mp2_server_linkage.addFileArg(mp2_server_exe.getEmittedBin());
+    const verify_mp2_server_boundary_step = b.step(
+        "verify-mp2-server-boundary",
+        "Reject visual/editor dependencies from the final MP2 authority binary",
+    );
+    verify_mp2_server_boundary_step.dependOn(&verify_mp2_server_linkage.step);
+    verify_mp2_step.dependOn(&verify_mp2_server_linkage.step);
 
     const headless_boundary_tests = b.addTest(.{
         .root_module = b.createModule(.{
@@ -2089,6 +2297,70 @@ pub fn build(b: *std.Build) void {
         "Run the concrete sandbox/Jolt composition tests",
     );
     sandbox_simulation_test_step.dependOn(&run_sandbox_simulation_tests.step);
+    const session_budgets_tests = b.addTest(.{ .root_module = session_budgets_module });
+    const run_session_budgets_tests = b.addRunArtifact(session_budgets_tests);
+    const session_identity_tests = b.addTest(.{ .root_module = session_identity_module });
+    const run_session_identity_tests = b.addRunArtifact(session_identity_tests);
+    const session_protocol_tests = b.addTest(.{ .root_module = session_protocol_module });
+    const run_session_protocol_tests = b.addRunArtifact(session_protocol_tests);
+    const session_transport_policy_tests = b.addTest(.{
+        .root_module = session_transport_policy_module,
+    });
+    const run_session_transport_policy_tests = b.addRunArtifact(
+        session_transport_policy_tests,
+    );
+    const reconnect_policy_tests = b.addTest(.{ .root_module = reconnect_policy_module });
+    const run_reconnect_policy_tests = b.addRunArtifact(reconnect_policy_tests);
+    const client_clock_tests = b.addTest(.{ .root_module = client_clock_module });
+    const run_client_clock_tests = b.addRunArtifact(client_clock_tests);
+    const session_prediction_tests = b.addTest(.{ .root_module = session_prediction_module });
+    const run_session_prediction_tests = b.addRunArtifact(session_prediction_tests);
+    const impaired_link_tests = b.addTest(.{ .root_module = impaired_link_module });
+    const run_impaired_link_tests = b.addRunArtifact(impaired_link_tests);
+    const session_local_link_tests = b.addTest(.{ .root_module = session_local_link_module });
+    const run_session_local_link_tests = b.addRunArtifact(session_local_link_tests);
+    const replicated_world_tests = b.addTest(.{ .root_module = replicated_world_module });
+    const run_replicated_world_tests = b.addRunArtifact(replicated_world_tests);
+    const session_client_tests = b.addTest(.{ .root_module = session_client_module });
+    const run_session_client_tests = b.addRunArtifact(session_client_tests);
+    const local_solo_session_tests = b.addTest(.{ .root_module = local_solo_session_module });
+    const run_local_solo_session_tests = b.addRunArtifact(local_solo_session_tests);
+    const session_authority_tests = b.addTest(.{ .root_module = session_authority_module });
+    const run_session_authority_tests = b.addRunArtifact(session_authority_tests);
+    const gns_direct_test_module = b.createModule(.{
+        .root_source_file = b.path("src/adapters/transport/gns_direct.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "session_budgets", .module = session_budgets_module }},
+    });
+    gns_direct_test_module.addIncludePath(b.path("src/adapters/transport"));
+    gns_direct_test_module.addIncludePath(gns.include);
+    const gns_direct_tests = b.addTest(.{ .root_module = gns_direct_test_module });
+    gns.link(gns_direct_tests);
+    const run_gns_direct_tests = b.addRunArtifact(gns_direct_tests);
+    const session_contract_test_step = b.step(
+        "test-session-contracts",
+        "Run MP0 identity, protocol, budget, and local-link tests",
+    );
+    session_contract_test_step.dependOn(&run_session_budgets_tests.step);
+    session_contract_test_step.dependOn(&run_session_identity_tests.step);
+    session_contract_test_step.dependOn(&run_session_protocol_tests.step);
+    session_contract_test_step.dependOn(&run_session_transport_policy_tests.step);
+    session_contract_test_step.dependOn(&run_reconnect_policy_tests.step);
+    session_contract_test_step.dependOn(&run_client_clock_tests.step);
+    session_contract_test_step.dependOn(&run_session_prediction_tests.step);
+    session_contract_test_step.dependOn(&run_impaired_link_tests.step);
+    session_contract_test_step.dependOn(&run_session_local_link_tests.step);
+    session_contract_test_step.dependOn(&run_replicated_world_tests.step);
+    session_contract_test_step.dependOn(&run_session_client_tests.step);
+    session_contract_test_step.dependOn(&run_local_solo_session_tests.step);
+    session_contract_test_step.dependOn(&run_session_authority_tests.step);
+    verify_mp3_step.dependOn(session_contract_test_step);
+    const gns_test_step = b.step(
+        "test-gns",
+        "Build the pinned GNS integration and run its narrow adapter tests",
+    );
+    gns_test_step.dependOn(&run_gns_direct_tests.step);
 
     const sandbox_interaction_tests = b.addTest(.{
         .root_module = sandbox_interaction_module,
@@ -2182,6 +2454,20 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_sandbox_save_tests.step);
     test_step.dependOn(&run_save_slots_tests.step);
     test_step.dependOn(&run_sandbox_simulation_tests.step);
+    test_step.dependOn(&run_session_budgets_tests.step);
+    test_step.dependOn(&run_session_identity_tests.step);
+    test_step.dependOn(&run_session_protocol_tests.step);
+    test_step.dependOn(&run_session_transport_policy_tests.step);
+    test_step.dependOn(&run_reconnect_policy_tests.step);
+    test_step.dependOn(&run_client_clock_tests.step);
+    test_step.dependOn(&run_session_prediction_tests.step);
+    test_step.dependOn(&run_impaired_link_tests.step);
+    test_step.dependOn(&run_session_local_link_tests.step);
+    test_step.dependOn(&run_replicated_world_tests.step);
+    test_step.dependOn(&run_session_client_tests.step);
+    test_step.dependOn(&run_local_solo_session_tests.step);
+    test_step.dependOn(&run_session_authority_tests.step);
+    test_step.dependOn(&run_gns_direct_tests.step);
     test_step.dependOn(&run_sandbox_interaction_tests.step);
     test_step.dependOn(&run_sandbox_replay_tests.step);
     test_step.dependOn(&run_district_content_catalog_tests.step);

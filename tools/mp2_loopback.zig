@@ -1,0 +1,449 @@
+//! Deterministic MP2 acceptance proof over real loopback GameNetworkingSockets.
+//! One process owns a cold authority composition and two independent protocol
+//! clients; no local-link shortcut is involved.
+
+const std = @import("std");
+const budgets = @import("session_budgets");
+const protocol = @import("session_protocol");
+const session_client = @import("session_client");
+const authority_module = @import("session_authority");
+const transport_policy = @import("session_transport_policy");
+const gns = @import("gns_direct");
+
+const default_port: u16 = 29_721;
+const max_pump_steps: usize = 4_000;
+
+const Peer = struct {
+    client: session_client.Client,
+    transport: gns.Connection = .invalid,
+    connected_events: u32 = 0,
+    terminal_events: u32 = 0,
+};
+
+const Harness = struct {
+    network: gns.Network,
+    listen_socket: gns.ListenSocket,
+    authority: authority_module.Authority,
+    peers: [2]Peer,
+    server_connections: [budgets.max_participants]gns.Connection = @splat(.invalid),
+    bad_transport: gns.Connection = .invalid,
+    bad_hello_sent: bool = false,
+    bad_rejection: ?protocol.RejectionReason = null,
+    receive_storage: [budgets.max_wire_message_bytes]u8 = undefined,
+    encode_storage: [budgets.max_wire_message_bytes]u8 = undefined,
+
+    fn init(allocator: std.mem.Allocator, port: u16) !Harness {
+        var network = try gns.Network.init();
+        errdefer network.deinit();
+        const listen_socket = try network.listen(port, .loopback);
+        errdefer network.closeListen(listen_socket);
+        var authority = try authority_module.Authority.init(allocator);
+        errdefer authority.deinit();
+        return .{
+            .network = network,
+            .listen_socket = listen_socket,
+            .authority = authority,
+            .peers = .{
+                .{ .client = try session_client.Client.init(.{ .value = 10_001 }) },
+                .{ .client = try session_client.Client.init(.{ .value = 10_002 }) },
+            },
+        };
+    }
+
+    fn deinit(self: *Harness) void {
+        for (self.peers) |peer| {
+            if (peer.transport.isValid()) {
+                self.network.close(peer.transport, 1000, "acceptance complete", .immediate);
+            }
+        }
+        if (self.bad_transport.isValid()) {
+            self.network.close(self.bad_transport, 1000, "acceptance complete", .immediate);
+        }
+        for (self.server_connections) |connection| {
+            if (connection.isValid()) {
+                self.network.close(connection, 1000, "acceptance complete", .immediate);
+            }
+        }
+        self.network.closeListen(self.listen_socket);
+        self.authority.deinit();
+        self.network.deinit();
+        self.* = undefined;
+    }
+
+    fn connectPeer(self: *Harness, peer_index: usize, endpoint: [:0]const u8) !void {
+        const peer = &self.peers[peer_index];
+        if (peer.transport.isValid() or peer.client.state != .disconnected) {
+            return error.PeerNotReadyToConnect;
+        }
+        peer.transport = try self.network.connect(endpoint);
+    }
+
+    fn connectBadCohort(self: *Harness, endpoint: [:0]const u8) !void {
+        if (self.bad_transport.isValid()) return error.BadProbeAlreadyConnected;
+        self.bad_transport = try self.network.connect(endpoint);
+        self.bad_hello_sent = false;
+        self.bad_rejection = null;
+    }
+
+    fn closePeerForReconnect(self: *Harness, peer_index: usize) !void {
+        const peer = &self.peers[peer_index];
+        if (!peer.transport.isValid() or peer.client.state != .joined) {
+            return error.PeerNotJoined;
+        }
+        const transport = peer.transport;
+        self.network.close(transport, 1001, "loopback reconnect proof", .immediate);
+        // A locally initiated close is known synchronously; stop polling the
+        // dead handle while the remote terminal callback enters reconnect grace.
+        peer.transport = .invalid;
+        peer.client.transportDisconnected();
+    }
+
+    fn sendInput(self: *Harness, peer_index: usize, move: [2]f32) !void {
+        const peer = &self.peers[peer_index];
+        const message = try peer.client.input(
+            self.authority.diagnostics().tick + 1,
+            move,
+            0,
+            false,
+        );
+        try self.sendClient(peer.transport, message);
+    }
+
+    fn step(self: *Harness, io: std.Io) !void {
+        self.network.runCallbacks();
+        while (self.network.pollEvent()) |event| try self.handleEvent(event);
+        try self.receiveAuthorityIngress();
+        try self.receivePeerEgress();
+        try self.authority.tick();
+        try self.flushAuthorityOutput();
+        if (self.network.droppedEvents() != 0) return error.TransportEventOverflow;
+        try std.Io.sleep(io, .fromMilliseconds(1), .awake);
+    }
+
+    fn handleEvent(self: *Harness, event: gns.Event) !void {
+        switch (event.new_state) {
+            .connecting => {
+                if (event.listen_socket.value == self.listen_socket.value) {
+                    try self.network.accept(event.connection);
+                }
+            },
+            .connected => {
+                if (self.findPeer(event.connection)) |peer_index| {
+                    const peer = &self.peers[peer_index];
+                    try self.network.configureConnected(event.connection);
+                    try self.sendClient(event.connection, try peer.client.begin());
+                    peer.connected_events +|= 1;
+                } else if (event.connection.value == self.bad_transport.value) {
+                    try self.network.configureConnected(event.connection);
+                    try self.sendClient(event.connection, .{ .hello = .{
+                        .build = protocol.build_cohort + 1,
+                        .account = .{ .value = 99_999 },
+                    } });
+                    self.bad_hello_sent = true;
+                } else if (event.listen_socket.value == self.listen_socket.value and
+                    self.findServer(event.connection) == null)
+                {
+                    const slot = self.freeServerSlot() orelse return error.ServerConnectionCapacity;
+                    _ = try self.authority.openConnection(.{ .value = event.connection.value });
+                    self.server_connections[slot] = event.connection;
+                }
+            },
+            .closed_by_peer, .problem_detected_locally => {
+                if (self.findServer(event.connection)) |server_index| {
+                    self.authority.transportClosed(.{ .value = event.connection.value });
+                    self.server_connections[server_index] = .invalid;
+                }
+                if (self.findPeer(event.connection)) |peer_index| {
+                    const peer = &self.peers[peer_index];
+                    peer.transport = .invalid;
+                    peer.client.transportDisconnected();
+                    peer.terminal_events +|= 1;
+                }
+                if (event.connection.value == self.bad_transport.value) {
+                    self.bad_transport = .invalid;
+                }
+                self.network.close(
+                    event.connection,
+                    event.end_reason,
+                    "loopback terminal",
+                    .immediate,
+                );
+            },
+            .none, .finding_route => {},
+        }
+    }
+
+    fn receiveAuthorityIngress(self: *Harness) !void {
+        for (self.server_connections) |connection| {
+            if (!connection.isValid()) continue;
+            var count: usize = 0;
+            while (count < budgets.inbound_message_capacity) : (count += 1) {
+                const received = try self.network.receive(connection, &self.receive_storage) orelse
+                    break;
+                const message = protocol.decodeClient(received.bytes) catch {
+                    try self.authority.ingestBytes(
+                        .{ .value = connection.value },
+                        received.bytes,
+                    );
+                    continue;
+                };
+                if (!transport_policy.matches(
+                    transport_policy.clientClass(message),
+                    fromGnsDelivery(received.delivery),
+                    fromGnsLane(received.lane),
+                )) {
+                    return error.ClientDeliveryClassMismatch;
+                }
+                try self.authority.ingest(.{ .value = connection.value }, message);
+            }
+        }
+    }
+
+    fn receivePeerEgress(self: *Harness) !void {
+        for (&self.peers) |*peer| {
+            if (!peer.transport.isValid()) continue;
+            var count: usize = 0;
+            while (count < budgets.inbound_message_capacity) : (count += 1) {
+                const received = try self.network.receive(
+                    peer.transport,
+                    &self.receive_storage,
+                ) orelse break;
+                const message = try protocol.decodeServer(received.bytes);
+                if (!transport_policy.matches(
+                    transport_policy.serverClass(message),
+                    fromGnsDelivery(received.delivery),
+                    fromGnsLane(received.lane),
+                )) {
+                    return error.ServerDeliveryClassMismatch;
+                }
+                try peer.client.receive(message);
+            }
+        }
+        if (!self.bad_transport.isValid()) return;
+        var count: usize = 0;
+        while (count < budgets.inbound_message_capacity) : (count += 1) {
+            const received = try self.network.receive(
+                self.bad_transport,
+                &self.receive_storage,
+            ) orelse break;
+            const message = try protocol.decodeServer(received.bytes);
+            if (!transport_policy.matches(
+                transport_policy.serverClass(message),
+                fromGnsDelivery(received.delivery),
+                fromGnsLane(received.lane),
+            )) {
+                return error.ServerDeliveryClassMismatch;
+            }
+            switch (message) {
+                .rejected => |rejection| self.bad_rejection = rejection.reason,
+                else => return error.BadCohortWasNotRejected,
+            }
+        }
+    }
+
+    fn flushAuthorityOutput(self: *Harness) !void {
+        while (self.authority.pollOutbound()) |outbound| {
+            const connection = gns.Connection{ .value = outbound.connection.value };
+            if (self.findServer(connection) == null) continue;
+            const bytes = try protocol.encodeServer(outbound.message, &self.encode_storage);
+            self.network.send(
+                connection,
+                bytes,
+                switch (outbound.delivery) {
+                    .unreliable => .unreliable,
+                    .reliable => .reliable,
+                },
+                switch (outbound.lane) {
+                    .input => .input,
+                    .snapshot => .snapshot,
+                    .gameplay => .gameplay,
+                    .control => .control,
+                },
+            ) catch |err| {
+                if (outbound.delivery == .reliable) return err;
+                continue;
+            };
+            if (outbound.close_after_send) {
+                self.network.close(connection, 1000, "session rejection", .linger);
+                self.authority.transportClosed(.{ .value = connection.value });
+                if (self.findServer(connection)) |server_index| {
+                    self.server_connections[server_index] = .invalid;
+                }
+            }
+        }
+    }
+
+    fn sendClient(
+        self: *Harness,
+        connection: gns.Connection,
+        message: protocol.ClientMessage,
+    ) !void {
+        const bytes = try protocol.encodeClient(message, &self.encode_storage);
+        const class = transport_policy.clientClass(message);
+        try self.network.send(
+            connection,
+            bytes,
+            toGnsDelivery(class.delivery),
+            toGnsLane(class.lane),
+        );
+    }
+
+    fn findPeer(self: *const Harness, connection: gns.Connection) ?usize {
+        for (self.peers, 0..) |peer, index| {
+            if (peer.transport.isValid() and peer.transport.value == connection.value) return index;
+        }
+        return null;
+    }
+
+    fn findServer(self: *const Harness, connection: gns.Connection) ?usize {
+        for (self.server_connections, 0..) |candidate, index| {
+            if (candidate.isValid() and candidate.value == connection.value) return index;
+        }
+        return null;
+    }
+
+    fn freeServerSlot(self: *const Harness) ?usize {
+        for (self.server_connections, 0..) |candidate, index| {
+            if (!candidate.isValid()) return index;
+        }
+        return null;
+    }
+};
+
+pub fn main(init: std.process.Init) !void {
+    const args = try init.minimal.args.toSlice(init.arena.allocator());
+    const port = try parsePort(args);
+    var endpoint_storage: [64]u8 = undefined;
+    const endpoint = try std.fmt.bufPrintZ(&endpoint_storage, "127.0.0.1:{d}", .{port});
+    var harness = try Harness.init(init.gpa, port);
+    defer harness.deinit();
+
+    try harness.connectPeer(0, endpoint);
+    try pumpUntil(&harness, init.io, firstPeerReady, max_pump_steps);
+    const first_join_participant = harness.peers[0].client.participant;
+
+    try harness.connectPeer(1, endpoint);
+    try pumpUntil(&harness, init.io, twoPeersReady, max_pump_steps);
+    const initial_position = characterPosition(&harness.peers[0]) orelse
+        return error.LocalCharacterMissing;
+
+    for (0..120) |_| {
+        try harness.sendInput(0, .{ 1, 0 });
+        try harness.step(init.io);
+    }
+    try pumpUntil(&harness, init.io, movedAndAcknowledged, max_pump_steps);
+    const moved_position = characterPosition(&harness.peers[0]) orelse
+        return error.LocalCharacterMissing;
+    if (moved_position[0] <= initial_position[0] + 0.25) {
+        return error.AuthoritativeMovementNotObserved;
+    }
+
+    try harness.connectBadCohort(endpoint);
+    try pumpUntil(&harness, init.io, badCohortRejected, max_pump_steps);
+
+    try harness.closePeerForReconnect(0);
+    try pumpUntil(&harness, init.io, firstPeerDisconnected, max_pump_steps);
+    if (harness.authority.diagnostics().reconnecting_participants != 1) {
+        return error.ReconnectGraceNotEntered;
+    }
+    try harness.connectPeer(0, endpoint);
+    try pumpUntil(&harness, init.io, firstPeerRejoined, max_pump_steps);
+    if (!std.meta.eql(first_join_participant, harness.peers[0].client.participant)) {
+        return error.ParticipantIdentityChangedAcrossReconnect;
+    }
+
+    const diagnostics = harness.authority.diagnostics();
+    std.debug.print(
+        "MP2_LOOPBACK_PASS tick={d} participants={d} reconnects={d} " ++
+            "snapshots={d} rejected={d} moved_x={d:.3} dropped_events={d}\n",
+        .{
+            diagnostics.tick,
+            diagnostics.active_participants,
+            diagnostics.reconnects,
+            diagnostics.snapshots_emitted,
+            diagnostics.rejected_messages,
+            moved_position[0] - initial_position[0],
+            harness.network.droppedEvents(),
+        },
+    );
+}
+
+fn pumpUntil(
+    harness: *Harness,
+    io: std.Io,
+    predicate: *const fn (*const Harness) bool,
+    limit: usize,
+) !void {
+    for (0..limit) |_| {
+        try harness.step(io);
+        if (predicate(harness)) return;
+    }
+    return error.MP2AcceptanceTimeout;
+}
+
+fn firstPeerReady(harness: *const Harness) bool {
+    return harness.peers[0].client.state == .joined and
+        harness.peers[0].client.world.count == 1;
+}
+
+fn twoPeersReady(harness: *const Harness) bool {
+    return harness.peers[0].client.state == .joined and
+        harness.peers[1].client.state == .joined and
+        harness.peers[0].client.world.count == 2 and
+        harness.peers[1].client.world.count == 2;
+}
+
+fn movedAndAcknowledged(harness: *const Harness) bool {
+    const client = &harness.peers[0].client;
+    const position = characterPosition(&harness.peers[0]) orelse return false;
+    return client.last_acknowledged_input.value != 0 and position[0] > -2.75;
+}
+
+fn badCohortRejected(harness: *const Harness) bool {
+    return harness.bad_hello_sent and harness.bad_rejection == .build_mismatch;
+}
+
+fn firstPeerDisconnected(harness: *const Harness) bool {
+    return harness.peers[0].client.state == .disconnected and
+        !harness.peers[0].transport.isValid() and
+        harness.authority.diagnostics().reconnecting_participants == 1;
+}
+
+fn firstPeerRejoined(harness: *const Harness) bool {
+    return twoPeersReady(harness) and harness.authority.diagnostics().reconnects == 1;
+}
+
+fn characterPosition(peer: *const Peer) ?[3]f32 {
+    for (peer.client.world.slice()) |entry| {
+        if (std.meta.eql(entry.current.owner, peer.client.participant)) {
+            return entry.current.position;
+        }
+    }
+    return null;
+}
+
+fn toGnsDelivery(value: transport_policy.Delivery) gns.Delivery {
+    return if (value == .reliable) .reliable else .unreliable;
+}
+
+fn fromGnsDelivery(value: gns.Delivery) transport_policy.Delivery {
+    return if (value == .reliable) .reliable else .unreliable;
+}
+
+fn toGnsLane(value: transport_policy.Lane) gns.Lane {
+    return @enumFromInt(@intFromEnum(value));
+}
+
+fn fromGnsLane(value: gns.Lane) transport_policy.Lane {
+    return @enumFromInt(@intFromEnum(value));
+}
+
+fn parsePort(args: []const []const u8) !u16 {
+    if (args.len == 1) return default_port;
+    if (args.len != 3 or !std.mem.eql(u8, args[1], "--port")) {
+        return error.InvalidArguments;
+    }
+    const port = try std.fmt.parseInt(u16, args[2], 10);
+    if (port == 0) return error.InvalidPort;
+    return port;
+}
