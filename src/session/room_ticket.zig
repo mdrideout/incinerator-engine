@@ -270,7 +270,13 @@ test "signed invite artifact round trips without the admission secret" {
     var storage: [maximum_bytes]u8 = undefined;
     const bytes = try encode(expected, &storage);
     const actual = try decode(bytes);
-    try std.testing.expect(std.meta.eql(expected, actual));
+    try std.testing.expectEqualDeep(expected.intent, actual.intent);
+    try std.testing.expectEqual(expected.member_count, actual.member_count);
+    try std.testing.expectEqualSlices(
+        identity.AccountId,
+        expected.memberSlice(),
+        actual.memberSlice(),
+    );
     try std.testing.expect(bytes.len < maximum_bytes);
     try std.testing.expect(!std.mem.containsAtLeast(u8, bytes, 1, &([_]u8{9} ** 32)));
 }

@@ -13,6 +13,7 @@ const validation_markers = [_][]const u8{
     "--s6-streaming-smoke",
     "--s7-interaction-smoke",
     "--s8-population-smoke",
+    "--s11-combat-smoke",
     "--window-lifecycle-smoke",
     "--init-failure-smoke",
 };
@@ -36,6 +37,10 @@ const prohibited_product_scenario_markers = [_][]const u8{
     "S6StreamingSmokeEvidenceMissing",
     "S7InteractionSmokeEvidenceMissing",
     "S8PopulationSmokeEvidenceMissing",
+    "S11CombatSmokeEvidenceMissing",
+    "S11_VISIBILITY_RESULT",
+    "incinerator-visibility-first-failure",
+    "incinerator-interaction-first-failure",
 };
 
 const prohibited_product_fault_markers = [_][]const u8{

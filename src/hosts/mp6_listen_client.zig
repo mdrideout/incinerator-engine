@@ -9,10 +9,15 @@ const budgets = @import("session_budgets");
 const listen_room = @import("mp6_listen_room");
 const client_scene = @import("client_scene");
 const presentation = @import("mp2_presentation");
+const gameplay_scenarios = @import("sandbox_gameplay_scenarios");
 const c = presentation.c;
 
 const default_ticket_path = "/tmp/incinerator-mp6-listen/account-2.room";
 const max_ticks_per_frame: u8 = 8;
+const s11_peer_completion_timeout_ticks: u64 = 600;
+const s11_scenario = gameplay_scenarios.get(
+    .hostile_npc_approach_contact_death_respawn,
+);
 
 const Invocation = struct {
     config: listen_room.Config = .{},
@@ -20,6 +25,7 @@ const Invocation = struct {
     max_frames: ?u64 = null,
     smoke_actions: bool = false,
     s10_attacker: bool = false,
+    s11_observer: bool = false,
 };
 
 const App = struct {
@@ -48,6 +54,15 @@ const App = struct {
     s10_pass_printed: bool = false,
     s10_completion_tick: ?u64 = null,
     s10_attacker: bool = false,
+    s11_observer: bool = false,
+    s11_dead_npc_index: u32 = 0,
+    s11_dead_npc_generation: u16 = 0,
+    s11_death_tick: u64 = 0,
+    s11_death_observed: bool = false,
+    s11_replacement_observed: bool = false,
+    s11_completion_tick: ?u64 = null,
+    s11_last_respawn_request_tick: u64 = 0,
+    s11_scenario_start_tick: ?u64 = null,
 
     fn init(process_init: std.process.Init, invocation: Invocation) !App {
         const now = try unixSeconds(process_init.io);
@@ -73,6 +88,7 @@ const App = struct {
             .room = room,
             .smoke_actions = invocation.smoke_actions,
             .s10_attacker = invocation.s10_attacker,
+            .s11_observer = invocation.s11_observer,
         };
     }
 
@@ -98,18 +114,25 @@ const App = struct {
             while (remaining > 0) : (remaining -= 1) {
                 self.scheduleSmokeActions();
                 self.scheduleS10Actions();
+                self.scheduleS11Actions();
                 try self.submitInput();
                 try self.submitActions();
                 try self.room.step(try unixSeconds(self.io));
+                while (self.room.takeCombatFeedback()) |feedback| {
+                    self.scene.noteCombatFeedback(&self.room.client, feedback);
+                }
                 self.completed_ticks += 1;
             }
             const snapshot_tick = self.room.client.world.server_tick;
             if (snapshot_tick != 0 and snapshot_tick != self.last_snapshot_tick) {
-                self.scene.observeSnapshot(now_ns);
+                self.scene.observeAppliedWorld(&self.room.client, now_ns);
                 self.last_snapshot_tick = snapshot_tick;
             }
             self.observeSmokeProgress();
+            self.observeS11Lifecycle();
             self.finishS10Smoke();
+            self.finishS11Observer();
+            try self.validateS11Deadline();
             try self.scene.render(&self.room.client, now_ns);
             self.frame += 1;
             self.announceGuestJoin();
@@ -161,6 +184,24 @@ const App = struct {
                 const index: usize = @intCast(event.key.scancode);
                 if (index < self.keys.len) self.keys[index] = false;
             },
+            c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
+                if (event.button.button == c.SDL_BUTTON_RIGHT) {
+                    self.scene.setLookActive(true);
+                }
+            },
+            c.SDL_EVENT_MOUSE_BUTTON_UP => {
+                if (event.button.button == c.SDL_BUTTON_RIGHT) {
+                    self.scene.setLookActive(false);
+                }
+            },
+            c.SDL_EVENT_MOUSE_MOTION => self.scene.applyLookMotion(
+                event.motion.xrel,
+                event.motion.yrel,
+            ),
+            c.SDL_EVENT_WINDOW_FOCUS_LOST => {
+                self.keys = @splat(false);
+                self.scene.cancelLook();
+            },
             else => {},
         };
     }
@@ -181,7 +222,11 @@ const App = struct {
                 @floatFromInt(@intFromBool(self.key(c.SDL_SCANCODE_LSHIFT))),
             );
         } else {
-            const move = if (self.s10_attacker and self.guest_join_announced)
+            const seek_s11_replacement = self.s11_observer and self.s11_death_observed and
+                self.completed_ticks >= self.s11_death_tick +| 360;
+            const move = if (seek_s11_replacement)
+                [2]f32{ 0, 1 }
+            else if (self.s10_attacker and self.guest_join_announced)
                 [2]f32{ 0, 0 }
             else if (self.smoke_actions and
                 self.completed_ticks >= 75 and self.completed_ticks < 90)
@@ -193,7 +238,9 @@ const App = struct {
                 };
             try self.room.sendHostInput(
                 move,
-                if (self.s10_attacker and self.guest_join_announced)
+                if (seek_s11_replacement)
+                    std.math.pi / 2.0
+                else if (self.s10_attacker and self.guest_join_announced)
                     std.math.pi / 2.0
                 else
                     self.scene.camera.yaw,
@@ -217,9 +264,8 @@ const App = struct {
         }
         if (self.respawn_action_requested) {
             self.respawn_action_requested = false;
-            self.room.requestHostRespawn() catch |err| switch (err) {
-                error.AvatarLifecycleUnavailable => {},
-                else => return err,
+            self.room.requestHostRespawn() catch |err| {
+                if (!recoverableRespawnRequestError(err)) return err;
             };
         }
     }
@@ -262,6 +308,24 @@ const App = struct {
                 self.s10_milestones |= milestone[1];
             }
         }
+    }
+
+    fn scheduleS11Actions(self: *App) void {
+        if (!self.s11_observer or self.room.client.state != .joined or
+            self.room.client.avatar_life_state != .dead)
+        {
+            return;
+        }
+        const tick = self.room.client.world.server_tick;
+        if (self.s11_scenario_start_tick == null) self.s11_scenario_start_tick = tick;
+        if (self.room.client.pending_respawn_action != null or
+            tick < self.room.client.respawn_ready_tick or
+            tick < self.s11_last_respawn_request_tick +| 30)
+        {
+            return;
+        }
+        self.respawn_action_requested = true;
+        self.s11_last_respawn_request_tick = tick;
     }
 
     fn finishS10Smoke(self: *App) void {
@@ -310,6 +374,73 @@ const App = struct {
         }
     }
 
+    fn observeS11Lifecycle(self: *App) void {
+        if (!self.s11_observer or self.room.client.state != .joined) return;
+        if (!self.s11_death_observed) {
+            for (self.room.client.world.npcSlice()) |entry| {
+                if (entry.current.life_state != .dead) continue;
+                self.s11_death_observed = true;
+                self.s11_dead_npc_index = entry.current.entity.index;
+                self.s11_dead_npc_generation = entry.current.entity.generation;
+                self.s11_death_tick = self.completed_ticks;
+                std.debug.print(
+                    "S11_LISTEN_OBSERVER_DEATH entity={d} generation={d}\n",
+                    .{ self.s11_dead_npc_index, self.s11_dead_npc_generation },
+                );
+                break;
+            }
+        }
+        if (!self.s11_death_observed or self.s11_replacement_observed) return;
+        for (self.room.client.world.npcSlice()) |entry| {
+            if (entry.current.entity.index != self.s11_dead_npc_index or
+                entry.current.entity.generation == self.s11_dead_npc_generation or
+                entry.current.life_state != .alive)
+            {
+                continue;
+            }
+            self.s11_replacement_observed = true;
+            self.s11_completion_tick = self.completed_ticks;
+            std.debug.print(
+                "S11_LISTEN_OBSERVER_REPLACEMENT entity={d} previous_generation={d} current_generation={d}\n",
+                .{
+                    entry.current.entity.index,
+                    self.s11_dead_npc_generation,
+                    entry.current.entity.generation,
+                },
+            );
+            break;
+        }
+    }
+
+    fn finishS11Observer(self: *App) void {
+        const completion = self.s11_completion_tick orelse return;
+        if (self.completed_ticks < completion +| 60) return;
+        const view = self.room.roomView();
+        for (view.memberSlice()) |member| {
+            if (!member.local and member.connection == .connected) return;
+        }
+        std.debug.print(
+            "S11_LISTEN_OBSERVER_PASS npc_death=true replacement=true\n",
+            .{},
+        );
+        self.running = false;
+        self.s11_completion_tick = null;
+    }
+
+    fn validateS11Deadline(self: *const App) !void {
+        if (!self.s11_observer) return;
+        if (self.s11_completion_tick) |completion| {
+            if (self.completed_ticks > completion +| s11_peer_completion_timeout_ticks) {
+                return error.S11AttackerCompletionHandshakeTimedOut;
+            }
+            return;
+        }
+        const start = self.s11_scenario_start_tick orelse return;
+        if (self.completed_ticks > start +| s11_scenario.deadline_ticks) {
+            return error.S11SharedScenarioDeadlineExceeded;
+        }
+    }
+
     fn finishSmokeActions(self: *const App) !void {
         if (!self.smoke_actions) return;
         if (self.completed_ticks < 90 or
@@ -349,16 +480,35 @@ const App = struct {
             if (!member.local) guest_state = @tagName(member.connection);
         }
         const failure = if (view.failure) |value| @tagName(value) else "none";
-        var storage: [256]u8 = undefined;
+        const combat_hud = self.scene.combatHud();
+        const health = if (combat_hud) |hud| hud.health else 0;
+        const maximum_health = if (combat_hud) |hud| hud.maximum_health else 0;
+        const life = if (combat_hud) |hud| @tagName(hud.life_state) else "unknown";
+        const melee_cooldown = if (combat_hud) |hud| hud.melee_remaining_ticks else 0;
+        const respawn_cooldown = if (combat_hud) |hud| hud.respawn_remaining_ticks else 0;
+        const respawn_disposition = if (combat_hud) |hud|
+            if (hud.latest_respawn_disposition) |disposition|
+                @tagName(disposition)
+            else
+                "none"
+        else
+            "none";
+        var storage: [384]u8 = undefined;
         const title = std.fmt.bufPrintZ(
             &storage,
-            "Private Room | {s} | members {d} | guest {s} | failure {s} | session {s} | entities {d} | mode {s} | carry {s}",
+            "Private Room | {s} | members {d} | guest {s} | failure {s} | session {s} | HP {d}/{d} {s} respawn {d}t/{s} melee {d}t | entities {d} | mode {s} | carry {s}",
             .{
                 @tagName(view.state),
                 view.member_count,
                 guest_state,
                 failure,
                 @tagName(self.room.client.state),
+                health,
+                maximum_health,
+                life,
+                respawn_cooldown,
+                respawn_disposition,
+                melee_cooldown,
                 self.room.client.world.character_count +
                     self.room.client.world.vehicle_count +
                     self.room.client.world.carryable_count +
@@ -382,7 +532,7 @@ pub fn main(init: std.process.Init) !void {
     var app = try App.init(init, invocation);
     defer app.deinit();
     std.debug.print(
-        "MP6_LISTEN_READY endpoint={s}:{d} host={d} guest={d} ticket={s} controls=WASD/SPACE/LSHIFT/E enter-exit/F collect-drop/Q melee/R respawn/P prediction/C-L-ESC close\n",
+        "MP6_LISTEN_READY endpoint={s}:{d} host={d} guest={d} ticket={s} controls=WASD/SPACE/LSHIFT/right-drag look/E enter-exit/F collect-drop/Q melee/R respawn/P prediction/C-L-ESC close\n",
         .{
             invocation.config.advertise_host,
             invocation.config.port,
@@ -390,6 +540,10 @@ pub fn main(init: std.process.Init) !void {
             invocation.config.guest_account.value,
             invocation.ticket_path,
         },
+    );
+    if (invocation.s11_observer) std.debug.print(
+        "S11_SCENARIO_ADAPTER topology=listen role=observer scenario={s} seed={x} deadline_ticks={d}\n",
+        .{ s11_scenario.name, s11_scenario.seed, s11_scenario.deadline_ticks },
     );
     try app.run(invocation.max_frames);
 }
@@ -416,6 +570,8 @@ fn parseInvocation(args: []const []const u8) !Invocation {
             result.smoke_actions = true;
         } else if (std.mem.eql(u8, args[index], "--s10-attacker")) {
             result.s10_attacker = true;
+        } else if (std.mem.eql(u8, args[index], "--s11-observer")) {
+            result.s11_observer = true;
         } else if (std.mem.eql(u8, args[index], "--advertise")) {
             index += 1;
             if (index >= args.len or args[index].len == 0) return error.MissingAdvertiseHost;
@@ -428,6 +584,10 @@ fn parseInvocation(args: []const []const u8) !Invocation {
 fn axis(positive: bool, negative: bool) f32 {
     return @as(f32, @floatFromInt(@intFromBool(positive))) -
         @as(f32, @floatFromInt(@intFromBool(negative)));
+}
+
+fn recoverableRespawnRequestError(err: anyerror) bool {
+    return err == error.AvatarLifecycleUnavailable or err == error.AvatarAlive;
 }
 
 fn localCharacterPosition(client: anytype) ?[3]f32 {
@@ -464,4 +624,10 @@ test "listen invocation remains localhost-only by default" {
     try std.testing.expectEqualStrings("127.0.0.1", invocation.config.advertise_host);
     try std.testing.expect(!invocation.config.allow_remote);
     try std.testing.expectEqualStrings(default_ticket_path, invocation.ticket_path);
+}
+
+test "listen respawn control treats an already-living avatar as an idle press" {
+    try std.testing.expect(recoverableRespawnRequestError(error.AvatarLifecycleUnavailable));
+    try std.testing.expect(recoverableRespawnRequestError(error.AvatarAlive));
+    try std.testing.expect(!recoverableRespawnRequestError(error.RespawnActionPending));
 }

@@ -1,13 +1,22 @@
 # Incinerator Engine Overhaul Plan
 
-**Status:** Pre-multiplayer program, post-M3 greenfield cleanup, MP0-MP6, the
+**Status:** Gameplay interaction validation and observability is complete and
+accepted after the pre-multiplayer program, post-M3 greenfield cleanup, MP0-MP6, the
 M4 multiplayer foundation, M5 client/authority cohesion, M6 transactional
-authority, and S10 damage/death/respawn are complete and accepted; secondary
-platforms are deferred
+authority, S10 damage/death/respawn, and S11 NPC encounter/combat response are
+complete and accepted; the temporal gameplay validation and
+causal-observability gaps exposed by post-S11 manual acceptance are closed;
+IC0-IC4 local human-test incident capture is accepted for the macOS solo
+developer product; schema-2 IC5-A through IC5-F, the IC5-G long
+gameplay/replay, real window lifecycle, and capture-cost gates, and the IC5-H
+bounded-object/evidence correction are implemented and validated; controlled
+destructive/failure hardening and the physical macOS/human visual checkpoint
+remain open;
+secondary platforms are deferred
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-07-14
+**Last reviewed:** 2026-07-17
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -22,6 +31,11 @@ platforms are deferred
 [`M6 accepted`](docs/validation/m6-transactional-authority-cycle.md)
 → [`MP6 accepted`](docs/validation/mp6-playable-multiplayer-room-flow.md)
 → [`S10 accepted`](docs/validation/s10-damage-death-respawn.md)
+→ [`S11 accepted`](docs/validation/s11-npc-encounter-combat-response.md)
+→ [`post-S11 automated closeout passed; manual acceptance exposed validation gaps`](docs/validation/post-s11-runtime-corrective-audit.md)
+→ [`IV0-IV5 interaction validation and observability accepted`](docs/validation/gameplay-interaction-validation-and-observability.md)
+→ [`IC0-IC4 incident capture accepted; IC5 reopened`](docs/validation/human-test-incident-capture.md)
+→ [`IC5-A-IC5-H corrective work implemented; destructive/human closeout remains`](docs/design/incident-evidence-reliability-and-boundary-corrections.md)
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
 
@@ -283,9 +297,10 @@ Do not create every directory up front. Slice 0 should establish only the minimu
 
 ## 6. Current Baseline
 
-The repository now contains a small feature-authoring kernel, a complete S8
-single-player sandbox composition shared by visual and headless hosts, and the
-cold M3 operational authority product. The visual host composes cooked
+The repository now contains a small feature-authoring kernel, a complete S11
+authoritative sandbox composition shared across solo, listen, dedicated, and
+headless placements, and the cold M3 operational authority product. The visual
+host composes cooked
 two-district GPU residency, interaction, navigation/population, diagnostics,
 replay, profiling, and durable authoring; the cold product composes only
 logical authority and operational lifecycle:
@@ -301,10 +316,12 @@ logical authority and operational lifecycle:
 - The prototype `GameWorld`, borrowed Flecs/Jolt path, direct ECS render query,
   Scene/Gizmo mutation tools, and their compatibility seams are removed.
 - `CrateFeature`, `CharacterFeature`, `VehicleFeature`, `DistrictFeature`,
-  `InteractionFeature`, and `NpcFeature` independently own their typed
-  commands, outcomes, persistence records, lifecycle, systems, and
-  presentation extraction; the population planner owns no authority.
-- A private snapshot module owns `SnapshotV7` values, canonical encoding, cold
+  `InteractionFeature`, `NpcFeature`, `VitalsFeature`, and
+  `NpcEncounterFeature` independently own their typed commands, outcomes,
+  persistence records, lifecycle, systems, or presentation extraction. The
+  population planner, durable NPC replacement policy, and normal-product
+  encounter lifecycle owner retain narrower composition-owned responsibilities.
+- A private snapshot module owns `SnapshotV11` values, canonical encoding, cold
   preflight, cross-feature identity/relationship validation, and exact world
   fingerprints. The live authority owns transactional capture/restore and one
   shared physics step; all feature records restore together without private
@@ -333,9 +350,19 @@ logical authority and operational lifecycle:
 - S4 provides bounded structured diagnostics, immutable first-fault retention,
   same-cohort replay with category-first divergence, renderer-neutral physics
   evidence, and fixed profiling/Metal overlay ownership.
-- S5 through S8 provide typed durable authoring, exact two-district catalogs,
-  cross-district carry ownership, cooked-route NPC authority, Snapshot V7,
-  current replay cohort 5, and a measured 64-NPC/65-controller scale contract.
+- S5 through S8 established typed durable authoring, exact two-district
+  catalogs, cross-district carry ownership, cooked-route NPC authority,
+  Snapshot V7/replay cohort 5, and a measured 64-NPC/65-controller scale
+  contract. S10/S11 and the post-S11 streamed-route correction advance the
+  current durable state to Snapshot V11. Incident replay schema 10 additionally
+  records authority-owned vitals and NPC-replacement orchestration so lethal
+  encounter/repopulation cycles remain inside the exact replay boundary. The
+  `world-config-v5` domain remains unchanged.
+- Automatic listen/dedicated bootstrap uses six NPCs, one per authored route
+  node. The 64-NPC value remains the synthetic scale and saturation ceiling;
+  the normal embedded product separately seeds one playable hostile through a
+  narrow host-managed owner that correlates its authority-owned death and
+  replacement lifecycle.
 - M3 provides a genuinely cold three-file headless product, exact bounded
   startup admission, one-world process ownership, two generational synthetic
   producers, signal/lag/storage/fault lifecycle gates, and routine/long
@@ -394,7 +421,7 @@ logical authority and operational lifecycle:
 | D-005 | Main thread owns ECS mutation/GPU submission; callbacks publish bounded data | Accepted in ADR-008 | Async assets/contact events |
 | D-006 | Allocator and memory-budget strategy | Implemented through M3: bounded logical/content workers and visual ownership, fixed feature/router queues, tracked allocator peaks/final-live bytes, absolute process RSS, snapshot/envelope ceilings, and per-slice measured budgets; future slices must add their own cohorts | Future slices |
 | D-007 | Physics owns dynamic-body simulation transforms; presentation reads interpolated snapshots | Implemented for S0 in amended ADR-005 | Slice 0 scheduling/interpolation |
-| D-008 | Stable entity ID and serialization model | Implemented through composition-owned `SnapshotV7`, canonical crate/character/vehicle/district/interaction/NPC state, authoritative tuning, validated relationships, and two-district logical reconstruction; live multi-world atomic replacement is outside the accepted one-world-per-process M3 model | Save/restore |
+| D-008 | Stable entity ID and serialization model | Implemented through composition-owned `SnapshotV11`, canonical crate/character/vehicle/district/interaction/NPC/encounter/replacement state, authoritative tuning, explicit persisted-route modes, validated relationships, and two-district logical reconstruction; live multi-world atomic replacement is outside the accepted one-world-per-process M3 model | Save/restore |
 | D-009 | Apple Silicon macOS/Metal is the only current platform; Linux/SteamOS and Windows are future/deferred with no current gates | Implemented in amended ADR-007; active secondary-platform paths are removed and create no abstraction requirement | Explicit secondary-platform product decision |
 | D-010 | Measured entity, body, controller, contact-evidence, draw, queue, memory, streaming, persistence, and fixed-tick budgets | Implemented through M3 with S8 representative population scale plus routine/long one-world authority soaks and automatic ceilings | Future slices extend their own measured budgets |
 | D-011 | Thin-kernel + feature-module architecture | Accepted by this plan | Slice 0 |
@@ -407,6 +434,8 @@ logical authority and operational lifecycle:
 | D-018 | Authority is a role: solo uses embedded local authority, optional private listen mode co-locates client and authority, and canonical public dedicated mode runs the same authority headlessly | Accepted in [ADR-016](docs/adr/016-authority-session-topology.md) | MP1 client/authority separation |
 | D-019 | Network identity/protocol/replication are explicit and feature-owned; durable saves, replication snapshots, prediction history, and accepted-ingress replay remain distinct | Accepted in [ADR-017](docs/adr/017-network-identity-protocol-and-replication.md) | MP2 protocol implementation |
 | D-020 | Use open-source GameNetworkingSockets through its flat C API, prove direct IP first, keep dedicated authority canonical, and preserve optional non-vendored Steamworks P2P/SDR compatibility | Accepted in [ADR-018](docs/adr/018-gamenetworkingsockets-and-steam-compatible-routing.md) | MP2 transport implementation |
+| D-021 | Validate gameplay as one causal temporal journey through typed scenarios, bounded interaction traces, continuous invariants, readable product feedback, semantic Metal visibility, and shared topology/fault execution | Accepted in [ADR-020](docs/adr/020-gameplay-interaction-validation-and-observability.md); IV0-IV5 complete | Additional gameplay slices |
+| D-022 | Persist human-test evidence as bounded per-run incident bundles with anomaly bookmarks, grep-friendly streams, trailing real-swapchain screenshots, concise LLM handoff, and replay attachments | Accepted in [ADR-021](docs/adr/021-local-human-test-incident-bundles.md); schema-2 IC5-A through IC5-F, the normal/resize/minimize/rapid-flag/replay plus capture-cost IC5-G gates, and IC5-H bounded vehicle/carry evidence are implemented and validated for macOS solo under the [corrective plan](docs/design/incident-evidence-reliability-and-boundary-corrections.md) | Controlled IC5-G destructive/failure hardening and physical/human checkpoint |
 
 ### Decision notes
 
@@ -483,6 +512,8 @@ before dependency resolution.
 | M6 | Bounded ingress and prepared derivatives use one fail-stop atomic-publication cycle while delivery/storage retain separate lifecycles | Complete, independently reviewed, and accepted on Apple Silicon macOS |
 | MP6 | Graphical create/join/ready/connect/reconnect/close works through solo, constrained listen/LAN, and dedicated direct-IP placements | Complete, independently reviewed, and accepted on Apple Silicon macOS |
 | S10 | Players and NPCs use authoritative vitals, death cleanup, and generational avatar respawn | Complete, independently reviewed, and accepted on Apple Silicon macOS |
+| S11 | A hostile NPC perceives, selects, chases, attacks, disengages, dies, and is safely replaced with visible authoritative feedback | Complete, independently reviewed, and accepted on Apple Silicon macOS |
+| Post-S11 correction | Repair playable movement/facing/blockers/wheels, close discovered route/delivery/headless/product-bootstrap/lifecycle seams, and repeat the macOS evidence matrix | Initial automated matrix complete; human trace follow-up repaired death visibility, carry/drop placement, rejection diagnostics, and causal trace retention; final aggregate and rendered revalidation in progress |
 
 M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
 slices. M3 is a narrow pre-network readiness gate, not a speculative server
@@ -502,6 +533,21 @@ a constrained localhost/LAN listen placement plus dedicated ticketed parity
 without Steam/NAT/public-service scope. S10 now closes the next product slice:
 authoritative melee, shared player/NPC vitals, death, typed ownership cleanup,
 dead reconnect, and generational safe avatar respawn.
+S11 now applies those accepted boundaries to
+authority-owned NPC perception, hostility, deterministic target selection,
+pursuit, telegraphed melee, damage reaction, death, and safe population
+replacement while retaining explicit firearm, lag-compensation, public-service,
+and MMO deferrals. Its accepted contract and evidence are recorded in
+[`S11 Playable NPC Encounter And Combat Response`](docs/design/s11-npc-encounter-combat-response.md)
+and the
+[`S11 Acceptance Record`](docs/validation/s11-npc-encounter-combat-response.md).
+The post-S11 correction then closes playable movement/facing/blocker/wheel,
+streamed-route, reliable-delivery, persistent-headless, presentation, and
+ordinary product-bootstrap/lifecycle gaps. Automatic listen/dedicated bootstrap
+now uses six authored NPC nodes, while 64 remains the synthetic scale ceiling
+and its co-location pressure stays explicit in A-F037. Final corrective
+acceptance is pending the evidence matrix in the
+[`Post-S11 Runtime Corrective Audit`](docs/validation/post-s11-runtime-corrective-audit.md).
 Shared diagnostics, storage, content, rendering, and server-shaped capabilities
 are extracted only as concrete slices prove their consumers.
 
@@ -1403,7 +1449,9 @@ cycle. M6 now closes that boundary as recorded in
 The accepted sequence after M6 is
 [`MP6 Playable Multiplayer Room Flow`](docs/design/mp6-playable-multiplayer-room-flow.md),
 then
-[`S10 Damage, Death, And Respawn`](docs/design/s10-damage-death-respawn.md).
+[`S10 Damage, Death, And Respawn`](docs/design/s10-damage-death-respawn.md),
+then the accepted
+[`S11 Playable NPC Encounter And Combat Response`](docs/validation/s11-npc-encounter-combat-response.md).
 
 ---
 
@@ -1701,6 +1749,37 @@ Record evidence rather than relying only on target numbers:
 41. [x] After MP6 acceptance, implement and independently review the S10
     authoritative damage/death/respawn slice in
     `docs/design/s10-damage-death-respawn.md`.
+42. [x] Implement S11 phase by phase from
+    `docs/design/s11-npc-encounter-combat-response.md`: first freeze its
+    ownership, ordering, capacity, persistence, and attack-commitment contract;
+    then prove perception/pursuit, NPC melee through vitals, death/replacement,
+    presentation/debugging, replay/reconnect/faults/scale, and installed
+    solo/listen/dedicated graphical acceptance before independent review.
+43. [ ] Close the post-S11 runtime corrective pass: unify semantic facing,
+    restore authoritative wheel presentation, make blocker visibility and
+    collision share one recipe, validate spawn/navigation clearance, repair
+    graphical multiplayer input and projection-lane timing, preserve streamed
+    route intent across inactive content, decouple logical reliable publication
+    from wire drain, complete persistent-headless replacement transactionally,
+    correlate restored persistent-headless NPC combat damage/death exactly,
+    retain accepted combat presentation, add a normal-product encounter seed,
+    correlate the normal product's authority-owned local character
+    death/despawn/respawn lifecycle,
+    restore the cold headless graph's exact S11 contract imports,
+    record the six-NPC automatic product cohort versus the 64-NPC synthetic
+    ceiling, and then repeat the independent audit plus full macOS evidence
+    matrix. Implementation is complete; check this item only after the final
+    evidence table is populated.
+44. [ ] Close IC5-G after implementing IC5-A through IC5-H from
+    `docs/design/incident-evidence-reliability-and-boundary-corrections.md`:
+    schema-2 evidence truth, trailing visual capture, cross-boundary causal
+    state, replay/inspector/skill reliability, district prefetch, and NPC
+    relevance repairs, bounded vehicle/carry continuity and capability evidence,
+    and the long human-style
+    normal/resize/minimize/rapid-flag/replay journey plus paired capture-cost
+    measurement are implemented and measured. Complete the remaining
+    destructive/failure matrix, then obtain the physical macOS shortcut,
+    district continuity, NPC/vehicle continuity, and evidence-usability checkpoint.
 
 ---
 
@@ -1765,6 +1844,12 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-14 | Recorded the post-M5 transactional authority pressure point | Kept M5's real nested placement/authority/runtime traces distinct from a future atomic eight-stage cycle; planned bounded mailbox batching, prepared derivatives, atomic publication, delivery leases, and queued durable decisions without putting transport or blocking storage inside the fixed tick |
 | 2026-07-14 | Completed and independently reviewed M5 client/authority cohesion | One shared embedded/dedicated authority core; ordinary gameplay through semantic admission and correlated client results; replicated-only player presentation; opaque graphical support owners; private snapshot/diagnostic boundaries; CSPRNG/HMAC reconnect credentials; fault-latched authority mutation; 60 Hz authority and 20 Hz replication independent of presentation; focused, architecture, M4, full Debug/ReleaseFast, cold, source-package, and 81-step installed macOS gates; no unrecorded actionable P0/P1/P2 M5 issue, with atomic ingress/publication retained as the explicit post-M5 pressure point |
 | 2026-07-14 | Researched and accepted the next planning sequence without claiming implementation | M6 now defines fail-stop atomic publication, class-reserved ingress, adapter leases, application receipts, and durable dispositions; MP6 defines a generation-safe graphical room coordinator plus constrained localhost/LAN listen and dedicated direct-IP play; S10 defines feature-owned vitals, authoritative melee, exactly-once death cleanup, and generational avatar respawn; all prior M0-M5/S0-S9/MP0-MP5 completion claims remain closed |
-| 2026-07-14 | Completed and independently reviewed M6 transactional authority cycle | Class-reserved stable-prefix ingress; eight explicit fail-stop stages; preflighted admission with participant/nonce/credential rollback evidence; double-buffered participant/replication publication metadata; generational outbound leases; per-lane application delivery IDs and receipts; 32-record reconnect replay after welcome confirmation; stage-seven durable dispositions with storage outside the tick; focused, source-package, cold, M4/M5, and installed Metal aggregate gates passed with no unrecorded actionable P0/P1/P2 M6 finding |
+| 2026-07-14 | Completed and independently reviewed M6 transactional authority cycle | Class-reserved stable-prefix ingress; eight explicit fail-stop stages; preflighted admission with participant/nonce/credential rollback evidence; double-buffered participant/replication publication metadata; generational outbound leases; per-lane application delivery IDs and receipts; then-current 32-record reconnect replay after welcome confirmation; stage-seven durable dispositions with storage outside the tick; focused, source-package, cold, M4/M5, and installed Metal aggregate gates passed with no unrecorded actionable P0/P1/P2 M6 finding |
 | 2026-07-14 | Completed and independently reviewed MP6 playable multiplayer room flow | Generation-safe sanitized room coordinator; bounded account-bound signed tickets; constrained listen composition with host typed local link and guest real GNS; ticketed dedicated parity; shared client-owned Metal presentation; selectable deterministic lifecycle impairment; two graphical clients walking, driving, carrying, reconnecting, and closing without migration; 153/153 extracted-source steps with 316/316 tests plus 32/32 cold steps with 52/52 tests; no remaining actionable P0/P1/P2 MP6 finding |
 | 2026-07-14 | Completed and independently reviewed S10 authoritative damage/death/respawn | Backend-neutral bounded integer vitals for players/NPCs; deterministic overkill clamp and exactly-once death; protocol revision 10 health/life/incarnation projection; authority-derived Jolt-queried melee; typed vehicle/carry/character teardown; stable participant with disposable generational avatar; dead reconnect; three-second explicit collision/threat-aware respawn; reliable M6 gameplay results/life events; canonical dead-vitals restart; two-client graphical listen and dedicated proofs; complete inherited MP6/M6/M5/M4/package/cold/macOS regression; no remaining actionable P0/P1/P2 S10 finding |
+| 2026-07-14 | Researched and planned S11 playable NPC encounter/combat response | Explicit authoritative NPC encounter owner; hard-coded event-driven state machine; sight/damage stimuli; deterministic target ranking; current cooked-route pursuit; telegraphed NPC melee through vitals; reaction/death/safe replacement; client-owned health/cooldown/hit/death presentation; selected-NPC debugging; replay/reconnect/fault/64-NPC scale and graphical solo/listen/dedicated acceptance; firearms, lag compensation, generic AI, Recast, Smart Objects, learned agents, public services, and MMO infrastructure remain deferred |
+| 2026-07-14 | Initially completed and independently reviewed S11 playable NPC encounter/combat response | Feature-owned deterministic hostility, perception, pursuit/search/return, telegraphed NPC melee through vitals, reaction/death, durable delayed safe replacement with a new generation, protocol/snapshot/replay cohorts, client feedback, developer inspection and spatial overlays, graphical solo/listen/dedicated acceptance, inherited fault/reconnect/JIP proofs, and paired 64-NPC/16-participant ReleaseFast measurement. This initial closeout was superseded by the 2026-07-15 playable-runtime corrective audit and its explicit retained P2 findings. |
+| 2026-07-15 | Completed the post-S11 playable-runtime corrective implementation and automated closeout; its then-pending manual pass became the IV input | Normalized character intent before protocol admission; unified facing and wheel presentation; shared blocker/spawn/navigation policy; repaired graphical look and independent projection clocks; transactional headless replacement through vitals registration plus exact restored NPC-combat damage/death consumption; explicit persisted-route modes with deferred pursuit restore; derived 172-publication/two-cycle 344-record reliable retention separated from the 16-message wire ceiling with slow-consumer retirement; one normal-product hostile seed plus exact NPC-caused local character death/despawn/respawn correlation; repaired cold-headless S11 contract imports; six-NPC automatic product bootstrap versus a 64-NPC synthetic ceiling; renderer-neutral combat feedback. Focused 113/113, native 83/83, Debug 248/248 with 862/862 tests, ReleaseFast, verify-S11, direct cold, and extracted 182/182 broad plus 32/32 cold gates passed. The later real-window pass exposed the validation gaps addressed by IV0-IV5 instead of reopening this historical implementation record. |
+| 2026-07-15 | Completed and accepted IV0-IV5 gameplay interaction validation and observability | Manual acceptance findings converted into typed shared solo/listen/dedicated scenarios, continuous invariants, bounded causal traces, Gameplay Inspector and normal-product feedback, validation-only semantic Metal ID readback, deterministic clean/nominal/adverse/blackout/reconnect matrix, seeded fuzz, and 8,192/32,768-tick soaks. The matrix found and corrected cross-lane avatar lifecycle resurrection through authority-ticked life events and exact protocol revision 13. ADR/design/evidence ownership and an executable documentation/source-package audit preserve the rationale. |
+| 2026-07-15 | Accepted the post-IV human-trace corrective and rendered closeout | The real-window JSON trace isolated unsafe district-edge drop placement, loss of the dead local projection, reason-domain collapse, and movement-trace flooding. The correction adds a retained noninteractive death proxy, safe deterministic drop/release placement, schema-2 typed reasons, semantic presentation traces, paced GNS ingress, causal rather than bitwise clean-repeat semantics, and bounded listen completion. A second rendered audit found the attacking NPC could occlude a dead proxy and the primitive product shader ignored combat material tint while the independent oracle accepted it; dead-avatar presentation separation, a reflected primitive tint uniform, and a 64-pixel death threshold close that gap. Final evidence is 198/198 aggregate steps with 246/246 tests, 58/58 two-rate installed Metal S11 steps, 148/148 focused session tests, and direct rendered collect/drop/melee/red-death/clean-shutdown acceptance. |
+| 2026-07-17 | Completed IC5-H bounded-object continuity and evidence capability correction | Human evidence isolated an authority-live vehicle omitted by exact district projection until observer relevance changed. The current four-vehicle/four-carryable cohort is continuously projected with typed bounded/controlled/held/dormant reasons, stable identities and tombstones; vehicle chassis/wheels share semantic identity; manifests declare evidence capabilities; note+handoff is atomic; immutable chronological visual reports use indexed actual times; accepted-ingress replay compares the recorded server tick; focused, real-GNS/fault, semantic replay, best-effort Metal replay, and a fresh 2,166-tick installed journey pass. Controlled IC5-G failure hardening and the physical human checkpoint remain open. |

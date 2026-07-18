@@ -31,9 +31,16 @@ Space brake, and Left Shift handbrake; F collects/drops the carryable; P toggles
 vehicle prediction; F8 manufactures a disconnect/reconnect; Escape quits.
 
 Walk or drive east across the district boundary to observe relevance transfer:
-the old district's unowned vehicle/carryable disappear, the owned dependency
-is retained, and the relevant NPC cohort changes. A second client can contend
-for the vehicle and carryable; the authority alone resolves ownership.
+the relevant character and NPC cohort changes while the bounded vehicle and
+carryable cohort remains continuously projected. Occupied vehicles and held
+objects are also retained as semantic dependencies. A second client can
+contend for the vehicle and carryable; the authority alone resolves ownership.
+
+The 2026-07-14 acceptance originally expected unowned vehicles and carryables
+to disappear at this seam. Human incident evidence showed that exact-district
+policy created a visible pop, so the expectation was corrected on 2026-07-17.
+This bounded-world policy is deliberately simpler and safer for the current
+four-vehicle/four-carryable budgets.
 
 ## Accepted boundaries
 

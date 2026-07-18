@@ -13,8 +13,11 @@ across constrained private listen and dedicated direct-IP placements. The S10
 damage/death/respawn slice is accepted: players and NPCs share bounded
 authoritative vitals, clients request server-validated melee, death tears down
 the disposable physical avatar while retaining the participant, and explicit
-safe respawn creates a new avatar incarnation. The intended
-experience supports solo play as a local placement of the same authority model
+safe respawn creates a new avatar incarnation. S11 is accepted as well: an
+authority-owned hostile NPC perceives, pursues, attacks through vitals, reacts,
+dies, and is safely replaced with a new generation and visible client and
+developer feedback. The intended experience supports solo play as a local
+placement of the same authority model
 used by optional private listen/invite and canonical public dedicated sessions.
 The selected network transport is the open-source GameNetworkingSockets flat C API over
 direct IP; Steam networking remains an optional non-vendored integration. It
@@ -33,7 +36,25 @@ record. M6 transactional authority hardening, MP6 playable room flow, and S10
 damage/death/respawn are complete and accepted:
 [`M6 (accepted)`](docs/validation/m6-transactional-authority-cycle.md) →
 [`MP6 (accepted)`](docs/validation/mp6-playable-multiplayer-room-flow.md) →
-[`S10 (accepted)`](docs/validation/s10-damage-death-respawn.md).
+[`S10 (accepted)`](docs/validation/s10-damage-death-respawn.md) →
+[`S11 (accepted)`](docs/validation/s11-npc-encounter-combat-response.md).
+Post-S11 manual real-window acceptance exposed a missing temporal gameplay
+validation and causal-observability layer. IV0-IV5 are now complete and
+accepted, including shared solo/listen/dedicated scenarios, deterministic
+fault/fuzz/reconnect coverage, routine and long soaks, and semantic Metal
+visibility. The continuing contract is recorded in the
+[`interaction validation design`](docs/design/gameplay-interaction-validation-and-observability.md),
+with durable rationale in
+[`ADR-020`](docs/adr/020-gameplay-interaction-validation-and-observability.md)
+and phase evidence in the
+[`validation ledger`](docs/validation/gameplay-interaction-validation-and-observability.md).
+Human acceptance further tightened that contract: physical controller teardown
+on death now leaves a red, noninteractive replicated death proxy until
+respawn; the hostile presentation separates from that proxy so it cannot hide
+the corpse; primitive material tints are enforced by the real product shader;
+carried objects are visibly released; drop placement stays within an active
+district; and gameplay trace schema 2 preserves typed rejection reasons and
+semantic presentation membership transitions.
 
 ## Toolchain Cohort
 
@@ -123,6 +144,12 @@ zig build
 # Build and run
 zig build run
 
+# The normal product creates one playable hostile encounter after the local
+# player and west district are authority-ready. Use Q for melee and R to request
+# respawn after death; this is ordinary product composition, not a validation
+# scenario flag. A separate narrow product owner correlates NPC-caused player
+# death, character despawn, cooldown, respawn, and the new avatar projection.
+
 # Compile the cold MP2 authority and presentation-only graphical client, then
 # run the real-GNS two-client acceptance proof and binary boundary audit.
 zig build check-mp2
@@ -167,8 +194,17 @@ zig build verify-mp6-room -j1 --summary failures
 # real graphical clients in both listen and dedicated placements.
 zig build verify-s10 -Deditor=false -j1 --summary failures
 
-# Verify that the filtered Zig source package retains the M5 architecture gate
-# and can compile/run its headless, persistence, snapshot, and session closure.
+# Run the accepted hostile-NPC encounter slice. This composes focused
+# authority/persistence/replay/fault/scale gates, the normal-product host
+# encounter lifecycle, installed solo Metal combat presentation, and graphical
+# listen and dedicated death-and-replacement proofs. Characterize the declared 64-NPC/
+# 16-participant synthetic ceiling separately in ReleaseFast.
+zig build verify-s11 -Deditor=true -j1 --summary failures
+zig build measure-s11 -Deditor=false -Doptimize=ReleaseFast
+
+# Verify that the filtered Zig source package retains the M5/M6/MP6/S11
+# architecture and can compile/run its product bootstrap, headless,
+# persistence, snapshot, replay, and session closure.
 zig build verify-source-package -Deditor=false --summary all
 
 # Manual three-terminal multiplayer test. Build/install once, then launch one authority
@@ -179,7 +215,8 @@ zig build install-mp2
 ./zig-out/bin/incinerator_mp2_client --connect 127.0.0.1:27020 --account 2
 
 # Client controls: WASD move, Space jump, E enter/exit, F collect/drop,
-# Q melee, R request respawn after death, Escape quit. While
+# Q melee, R request respawn after death, right mouse + drag to turn/look,
+# Escape quit. While
 # driving, W/S are throttle/reverse, A/D steer, Space brakes, and Left Shift is
 # the hand brake. P toggles vehicle prediction for live A/B comparison. F8
 # manufactures a transport loss and reconnect while playing. Recoverable
@@ -312,6 +349,12 @@ zig build smoke-installed-s3-macos \
   -Doptimize=ReleaseFast -Deditor=false
 zig build smoke-installed-s6-macos \
   -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s7-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s8-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s11-macos \
+  -Doptimize=ReleaseFast -Deditor=false
 zig build smoke-installed-s4-diagnostics-macos \
   -Doptimize=ReleaseFast -Deditor=false
 zig build smoke-installed-s4-replay-macos \
@@ -327,6 +370,15 @@ zig build smoke-window-lifecycle-macos \
 zig build smoke-init-failures-macos \
   -Doptimize=ReleaseFast -Deditor=false
 ```
+
+The installed S11 validation additionally performs four validation-only,
+fenced Metal object-ID captures at contact, player death, respawn, and NPC
+death. It asserts semantic pixel occupancy/bounds above and below the 60 Hz
+authority cadence, including a meaningful minimum footprint for the retained
+dead player. Shader reflection separately proves that primitive material tint
+reaches the real color pass; the ID oracle is not treated as proof of product
+swapchain color. The normal `incinerator_engine` binary contains none of the
+oracle or first-failure artifact path; those remain in `incinerator_validation`.
 
 `incinerator_engine` is the normal interactive client. Scripted slice
 scenarios, lifecycle probes, initialization failpoints, and deliberate faults
@@ -373,8 +425,9 @@ The normal sandbox samples the character or occupied vehicle position at fixed
 ticks through host-owned proximity hysteresis. Exactly two catalog-backed
 stream slots share one joined content worker and one bounded GPU registry.
 Entering a district reads and validates its exact cooked bundle, activates
-logical collision independently, resolves a fallback until the Metal fence
-signals, and then draws the authored scene instances. Adjacent hysteresis
+logical collision, and immediately draws every mandatory blocking proxy.
+Authored decorative scene instances are added after the Metal fence signals;
+they never replace collision presentation. Adjacent hysteresis
 permits both west and east districts to overlap while per-generation recycling
 lets either drain without releasing its neighbor. `--verify-install` validates
 installed cooked content without initializing SDL or a GPU. The installed S3
@@ -390,12 +443,17 @@ diagnostics, both render cadences, and complete two-slot drain from `/tmp`.
 | W / A / S / D | Move the character, or throttle/reverse and steer while driving |
 | E | Enter or exit the sandbox vehicle |
 | F | Collect the nearby carryable, or drop the held carryable into the current district |
+| Q | Request authoritative melee against the nearest valid target |
+| R | Request authoritative respawn after death and cooldown |
 | Space | Jump on foot; service brake while driving |
 | Left Shift | Handbrake while driving |
 | Right mouse + drag | Turn/look and orbit the current control target |
 | F1 | Toggle editor UI |
 | F2 | Toggle ImGui demo |
 | F3 | Toggle editor input passthrough |
+| Command+Option+I | Recommended macOS shortcut to flag a human-test anomaly |
+| F9 / Fn+F9 | Optional shortcut when macOS delivers the function key to SDL |
+| Command+Shift+9 | Optional alternate anomaly shortcut |
 
 Open the editor with F1, then use **Tools → Physics Debug & Profiler**. Its
 master switch and category checkboxes control bounded shapes, bounds, contacts,
@@ -404,6 +462,67 @@ upload/draw state, visible capacity loss, fixed phase spans, and per-frame
 draw/upload/stream/resource counts. These are host-only typed controls; they do
 not mutate simulation state. Use Instruments and Metal capture for deeper
 platform profiling.
+
+**Tools → Gameplay Inspector** explains the selected local player or NPC across
+its durable/replicated identity, authority and presentation pose, health/life,
+encounter deadline, separation, last action disposition, and filtered causal
+trace. Trace freeze, resume, and clear are bounded developer requests; durable
+incident streams replace the removed giant terminal JSON export. The tool
+cannot mutate gameplay authority. The small gameplay panel
+at the upper-left remains visible when F1 hides developer windows and gives
+plain-language health, damage, attack, cooldown, death, respawn, and rejected
+action feedback. A dead player remains visible in red until respawn, rather
+than disappearing as an implicit representation of authority teardown.
+
+Every Debug product run records a bounded schema-2 diagnostic bundle under
+`~/Library/Logs/Incinerator/runs`. Press Command+Option+I near an anomaly (or
+use F9/Fn+F9 when macOS actually delivers it), then open **Tools → Incident
+Capture**, add a note, and click **Save note + Copy for LLM**. The note is
+persisted before the handoff is refreshed and copied. The clipboard contains the
+run path, current health, anomaly index, and evidence limits—not a giant JSON
+payload. Each finalized anomaly has a 15-second typed pre-roll, four typed
+materialized windows, a 30 FPS product-only trail, five full-resolution
+human-visible anchors, a product-only flag frame, and a semantic-ID image/map.
+Use `visual-index.ndjson` actual timestamps rather than filenames to order
+images. To review a long trail chronologically without mutating the bundle:
+
+```bash
+zig build incident-visual-report -- <run-folder> <separate-output-folder>
+```
+
+Use an isolated root or run the graphical acceptance workflow with:
+
+```bash
+INCINERATOR_INCIDENT_ROOT=/tmp/incinerator-incidents \
+  zig build run -- --incident-smoke
+
+# Full scripted product journey: carry/drop, vehicle, both district crossings,
+# death/respawn, NPC death/replacement, resize, rapid flags, and handoff.
+INCINERATOR_INCIDENT_ROOT=/tmp/incinerator-journey \
+  zig build run -- --incident-journey
+
+# Same journey plus real SDL minimize/restore event acceptance.
+INCINERATOR_INCIDENT_ROOT=/tmp/incinerator-window-journey \
+  zig build run -- --incident-journey-window
+
+# Paired installed-product capture cost measurement. Run both commands under
+# comparable foreground conditions and compare the emitted p50/p95/p99 line.
+INCINERATOR_INCIDENT_ROOT=/tmp/incinerator-capture-benchmark \
+  zig build run -- --incident-benchmark
+zig build run -Dincident-capture=false -- --incident-benchmark
+
+zig build inspect-incident -- /absolute/path/to/run
+zig build replay-incident -- /absolute/path/to/run \
+  /Users/matt/repos/incinerator-engine/zig-out/share/incinerator/content
+
+# Best-effort graphical control/camera re-execution; semantic replay above is
+# the deterministic authority claim.
+zig build run -- --replay-incident=/absolute/path/to/run
+```
+
+See [ADR-021](docs/adr/021-local-human-test-incident-bundles.md), the
+[incident design](docs/design/human-test-incident-capture.md), and the
+[validation record](docs/validation/human-test-incident-capture.md).
 
 To author and persist the sandbox crate, supply an existing absolute save root
 and enable the editor explicitly:
@@ -497,6 +616,17 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`MP6 Acceptance Record`](docs/validation/mp6-playable-multiplayer-room-flow.md)
 - [`S10 Damage, Death, and Respawn`](docs/design/s10-damage-death-respawn.md)
 - [`S10 Acceptance Record`](docs/validation/s10-damage-death-respawn.md)
+- [`ADR-019: Authoritative NPC Encounter and Durable Replacement`](docs/adr/019-authoritative-npc-encounter-and-replacement.md)
+- [`S11 Playable NPC Encounter and Combat Response`](docs/design/s11-npc-encounter-combat-response.md)
+- [`S11 Acceptance Record`](docs/validation/s11-npc-encounter-combat-response.md)
+- [`S11 Performance Baseline`](docs/performance/s11-baseline.md)
+- [`Post-S11 Runtime Corrective Audit`](docs/validation/post-s11-runtime-corrective-audit.md)
+- [`ADR-020: Gameplay Interaction Validation and Observability`](docs/adr/020-gameplay-interaction-validation-and-observability.md)
+- [`Gameplay Interaction Validation and Observability Design`](docs/design/gameplay-interaction-validation-and-observability.md)
+- [`Gameplay Interaction Validation and Observability Evidence`](docs/validation/gameplay-interaction-validation-and-observability.md)
+- [`Human Test Incident Capture and LLM Diagnostic Handoff`](docs/design/human-test-incident-capture.md)
+- [`ADR-021: Local Human-Test Incident Bundles`](docs/adr/021-local-human-test-incident-bundles.md)
+- [`Human-Test Incident Capture Validation Record`](docs/validation/human-test-incident-capture.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 
@@ -509,8 +639,9 @@ input pump (per frame) -> authority ticks (fixed 60 Hz) -> presentation
 
 Embedded and dedicated placement now share the accepted 60 Hz authority rate;
 rendering remains independently paced and embedded replication remains 20 Hz.
-The embedded product routes character, vehicle, and carry gameplay
-through the shared session behavior and consumes their replicated client state.
+The embedded product routes character, vehicle, carry, melee, respawn, and NPC
+encounter gameplay through the shared session behavior and consumes replicated
+client state.
 M5 acceptance records the owner, regression, native, package, and independent-
 review evidence.
 
@@ -552,7 +683,22 @@ proximity policy in the host while exercising the complete lifecycle:
 - `NpcFeature` owns bounded autonomous-character authority, semantic goals,
   district-aware navigation state, persistence, diagnostics, and presentation;
   a separate fixed population planner is only a producer;
-- a private snapshot module owns the current `SnapshotV7` value, canonical
+- `VitalsFeature` owns bounded player/NPC health, damage application, and
+  exactly-once death facts; `NpcEncounterFeature` owns hostile perception,
+  target choice, attack timing, and locomotion/damage proposals without owning
+  transforms or health;
+- sandbox replacement policy owns durable delayed NPC replacement, while the
+  normal-product encounter owner only submits the initial hostile after its
+  player and west-district prerequisites are authority-ready;
+- the normal graphical product's separate character-lifecycle owner correlates
+  authority-owned local death, character despawn, respawn, and new replicated
+  avatar state without owning those transitions;
+- the automatic listen/dedicated product cohort is six NPCs, one per authored
+  route node. The 64-NPC value remains a synthetic scale ceiling, not the
+  automatic room population. The installed S8 graphical smoke uses one actor
+  to prove route/residency lifecycle; dedicated scale measurements retain the
+  complete 64-NPC/65-controller capacity claim;
+- a private snapshot module owns the current `SnapshotV11` value, canonical
   codec, cold preflight, cross-feature identity validation, and exact
   build/world fingerprints; the live sandbox authority owns transactional
   capture/restoration of feature-owned tuning, relationships, district,
@@ -579,7 +725,10 @@ class-reserved ingress, an eight-stage fail-stop cycle, double-buffered
 publication metadata, delivery leases and application receipts, bounded
 reconnect replay, and stage-seven durable dispositions. Physical transport and
 blocking storage remain outside the fixed tick, and M6 does not claim rollback
-of an already stepped Jolt world.
+of an already stepped Jolt world. The current S11 cohort derives a conservative
+172-publication participant-cycle bound, retains two cycles/344 records, and
+drains them under the separate 16-message wire ceiling; a slow consumer that
+exhausts the window is retired without faulting the room.
 MP6 composes that authority through one generation-safe room coordinator in a
 constrained listen owner and a ticketed dedicated owner. The host uses the
 typed local link, guests use real GNS, graphical presentation remains
@@ -588,10 +737,19 @@ S10 adds a backend-neutral bounded vitals feature plus authority-owned melee,
 death cleanup, dead reconnect, safe explicit respawn, and disposable avatar
 incarnation. The same protocol semantics are playable in local/listen and
 dedicated placements; health and hit confirmation are never client authority.
+S11 adds feature-owned hostile decisions, NPC melee proposals through vitals,
+durable delayed replacement, explicit streamed-route restore modes, and one
+renderer-neutral combat presentation owner. Automatic listen/dedicated
+bootstrap uses six distinct authored route nodes; the normal embedded product
+seeds one encounter through its host-managed authority; 64 NPCs remain a
+synthetic scale ceiling rather than the default playable population. The
+persistent headless host consumes restored encounter damage/death only through
+exact attack correlation and preserves unrelated FIFO heads as fault evidence.
 The former `GameWorld`, borrowed Flecs/Jolt composition, direct ECS render
 query, and editor mutation path have been removed. The editor keeps stats,
-camera, render, diagnostics, profiling, physics-debug, and crate-authoring
-panels. Persistent crate relocation now uses typed feature commands and exact
+camera, render, diagnostics, gameplay inspection, incident capture,
+physics-debug, crate-authoring, and interaction panels. Persistent crate
+relocation now uses typed feature commands and exact
 undo/redo change sets; the editor never receives raw Flecs/Jolt access.
 Fixed-rate simulation is not a claim of bitwise or cross-platform deterministic
 lockstep. The current zflecs wrapper permits one owned world per process. M3

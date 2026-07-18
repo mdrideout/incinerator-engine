@@ -73,8 +73,16 @@ pub const FragmentSettings = extern struct {
     base_color: [4]f32 = .{ 1, 1, 1, 1 },
 };
 
+/// Material tint for authored vertex-color primitives. White preserves the
+/// original mesh exactly; gameplay presentation colors multiply the authored
+/// detail instead of being silently ignored.
+pub const PrimitiveFragmentSettings = extern struct {
+    base_color: [4]f32 = .{ 1, 1, 1, 1 },
+};
+
 comptime {
     std.debug.assert(@sizeOf(FragmentSettings) == 32);
+    std.debug.assert(@sizeOf(PrimitiveFragmentSettings) == 16);
 }
 
 /// Render settings that can be toggled at runtime.
@@ -247,6 +255,8 @@ pub const Renderer = struct {
     current_cmd: ?*c.SDL_GPUCommandBuffer = null,
     current_render_pass: ?*c.SDL_GPURenderPass = null,
     current_swapchain: ?*c.SDL_GPUTexture = null, // Swapchain texture for this frame
+    current_swapchain_width: u32 = 0,
+    current_swapchain_height: u32 = 0,
 
     /// Initialize the GPU renderer for a window.
     /// This creates the GPU device and graphics pipeline.
@@ -484,6 +494,13 @@ pub const Renderer = struct {
         return self.swapchain_format;
     }
 
+    /// Borrow the depth format selected for this Metal renderer. Validation
+    /// adapters use it to prove the same depth semantics offscreen without
+    /// taking ownership of the renderer's depth target.
+    pub fn getDepthFormat(self: *const Renderer) c.SDL_GPUTextureFormat {
+        return self.depth_format;
+    }
+
     pub fn physicsDebugPipelinesAvailable(self: *const Renderer) bool {
         return self.physics_debug_pipelines != null;
     }
@@ -608,6 +625,8 @@ pub const Renderer = struct {
         self.current_cmd = cmd;
         self.current_render_pass = render_pass;
         self.current_swapchain = acquired_swapchain; // Store for editor overlay
+        self.current_swapchain_width = swapchain_width;
+        self.current_swapchain_height = swapchain_height;
 
         return .ready;
     }
@@ -682,25 +701,38 @@ pub const Renderer = struct {
         // =====================================================================
         // Step 3: Bind texture, sampler, and push fragment settings
         // =====================================================================
-        if (m.vertex_format == .pos_normal_uv) {
-            // Use mesh's texture if available, otherwise use placeholder (white)
-            const texture_handle = if (diffuse_texture) |tex|
-                tex.getHandle()
-            else
-                self.placeholder_texture.borrow().getHandle();
+        switch (m.vertex_format) {
+            .pos_color => {
+                const frag_settings = PrimitiveFragmentSettings{
+                    .base_color = base_color,
+                };
+                c.SDL_PushGPUFragmentUniformData(
+                    cmd,
+                    0,
+                    &frag_settings,
+                    @sizeOf(PrimitiveFragmentSettings),
+                );
+            },
+            .pos_normal_uv => {
+                // Use mesh's texture if available, otherwise use placeholder (white)
+                const texture_handle = if (diffuse_texture) |tex|
+                    tex.getHandle()
+                else
+                    self.placeholder_texture.borrow().getHandle();
 
-            const sampler_binding = c.SDL_GPUTextureSamplerBinding{
-                .texture = texture_handle,
-                .sampler = self.default_sampler,
-            };
-            c.SDL_BindGPUFragmentSamplers(render_pass, 0, &sampler_binding, 1);
+                const sampler_binding = c.SDL_GPUTextureSamplerBinding{
+                    .texture = texture_handle,
+                    .sampler = self.default_sampler,
+                };
+                c.SDL_BindGPUFragmentSamplers(render_pass, 0, &sampler_binding, 1);
 
-            // Push fragment settings (texture toggle)
-            const frag_settings = FragmentSettings{
-                .use_texture = if (self.render_settings.show_textures) 1.0 else 0.0,
-                .base_color = base_color,
-            };
-            c.SDL_PushGPUFragmentUniformData(cmd, 0, &frag_settings, @sizeOf(FragmentSettings));
+                // Push fragment settings (texture toggle)
+                const frag_settings = FragmentSettings{
+                    .use_texture = if (self.render_settings.show_textures) 1.0 else 0.0,
+                    .base_color = base_color,
+                };
+                c.SDL_PushGPUFragmentUniformData(cmd, 0, &frag_settings, @sizeOf(FragmentSettings));
+            },
         }
 
         // =====================================================================
@@ -754,6 +786,13 @@ pub const Renderer = struct {
         // Push MVP matrix to vertex shader
         const uniforms = Uniforms{ .mvp = zm.matToArr(mvp) };
         c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(Uniforms));
+        const frag_settings = PrimitiveFragmentSettings{};
+        c.SDL_PushGPUFragmentUniformData(
+            cmd,
+            0,
+            &frag_settings,
+            @sizeOf(PrimitiveFragmentSettings),
+        );
 
         // Bind vertex buffer
         const buffer_binding = c.SDL_GPUBufferBinding{
@@ -787,6 +826,13 @@ pub const Renderer = struct {
         // Push MVP matrix to vertex shader
         const uniforms = Uniforms{ .mvp = zm.matToArr(mvp) };
         c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(Uniforms));
+        const frag_settings = PrimitiveFragmentSettings{};
+        c.SDL_PushGPUFragmentUniformData(
+            cmd,
+            0,
+            &frag_settings,
+            @sizeOf(PrimitiveFragmentSettings),
+        );
 
         // Bind vertex buffer
         const buffer_binding = c.SDL_GPUBufferBinding{
@@ -818,6 +864,8 @@ pub const Renderer = struct {
         defer {
             self.current_cmd = null;
             self.current_swapchain = null;
+            self.current_swapchain_width = 0;
+            self.current_swapchain_height = 0;
         }
 
         if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
@@ -855,6 +903,19 @@ pub const Renderer = struct {
     /// Returns null if no frame is in progress.
     pub fn getSwapchainTexture(self: *Renderer) ?*c.SDL_GPUTexture {
         return self.current_swapchain;
+    }
+
+    pub fn getCurrentCommandBuffer(self: *Renderer) ?*c.SDL_GPUCommandBuffer {
+        return self.current_cmd;
+    }
+
+    pub fn getSwapchainExtent(self: *const Renderer) ?struct { width: u32, height: u32 } {
+        if (self.current_swapchain == null or self.current_swapchain_width == 0 or
+            self.current_swapchain_height == 0) return null;
+        return .{
+            .width = self.current_swapchain_width,
+            .height = self.current_swapchain_height,
+        };
     }
 
     /// Get the window dimensions
@@ -944,7 +1005,7 @@ fn createPipelinePosColor(
         .num_samplers = 0,
         .num_storage_textures = 0,
         .num_storage_buffers = 0,
-        .num_uniform_buffers = 0,
+        .num_uniform_buffers = 1,
         .props = 0,
     }) orelse {
         std.debug.print("Failed to create fragment shader: {s}\n", .{c.SDL_GetError()});
@@ -1266,7 +1327,7 @@ fn createPipelineLines(
         .num_samplers = 0,
         .num_storage_textures = 0,
         .num_storage_buffers = 0,
-        .num_uniform_buffers = 0,
+        .num_uniform_buffers = 1,
         .props = 0,
     }) orelse {
         std.debug.print("Failed to create line fragment shader: {s}\n", .{c.SDL_GetError()});

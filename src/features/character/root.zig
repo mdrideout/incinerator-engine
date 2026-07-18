@@ -423,6 +423,22 @@ pub fn Feature(comptime Controllers: type) type {
             };
         }
 
+        pub fn copyViews(self: *Self, storage: []CharacterView) ![]const CharacterView {
+            if (storage.len < self.active.items.len) {
+                return error.InsufficientCharacterViewStorage;
+            }
+            for (self.active.items, 0..) |runtime_id, index| {
+                storage[index] = try self.view(try self.runtime.identity(runtime_id));
+            }
+            std.mem.sort(
+                CharacterView,
+                storage[0..self.active.items.len],
+                {},
+                lessThanCharacterView,
+            );
+            return storage[0..self.active.items.len];
+        }
+
         pub fn extract(self: *Self, alpha: f32) ![]const CharacterDraw {
             if (!std.math.isFinite(alpha)) return error.InvalidInterpolationAlpha;
             self.presentations.clearRetainingCapacity();
@@ -634,7 +650,12 @@ pub fn Feature(comptime Controllers: type) type {
                 const locomotion = self.runtime.getMut(runtime_id, Locomotion) orelse
                     return error.CharacterLocomotionInvariantBroken;
                 const before = try self.controllers.prepareCharacter(controller.handle);
-                const velocity = calculateVelocity(self.config, locomotion.*, before, tick.delta_seconds);
+                const velocity = try calculateVelocity(
+                    self.config,
+                    locomotion.*,
+                    before,
+                    tick.delta_seconds,
+                );
                 const after = try self.controllers.updateCharacter(
                     controller.handle,
                     .{
@@ -681,7 +702,7 @@ pub fn Feature(comptime Controllers: type) type {
                 const history = self.runtime.getMut(runtime_id, TransformHistory) orelse
                     return error.CharacterTransformInvariantBroken;
                 history.previous = history.current;
-                history.current = poseFor(state.position, locomotion.facing_yaw);
+                history.current = try poseFor(state.position, locomotion.facing_yaw);
                 history.current_tick = tick.tick_index;
             }
         }
@@ -717,9 +738,9 @@ pub fn Feature(comptime Controllers: type) type {
             const yaw = if (restored_id != null)
                 spawn.facing_yaw
             else
-                normalizeYaw(spawn.facing_yaw);
+                try engine.transform.normalizeFacingYaw(spawn.facing_yaw);
             const state = try self.controllers.characterState(controller);
-            const pose = poseFor(state.position, yaw);
+            const pose = try poseFor(state.position, yaw);
             try self.runtime.set(runtime_id, Character, .{
                 .radius = self.config.radius,
                 .half_height = self.config.half_height,
@@ -764,7 +785,7 @@ pub fn Feature(comptime Controllers: type) type {
                 return error.CharacterControllerInvariantBroken;
             const state = try self.controllers.characterState(controller.handle);
             const result = driver_contract.DriverState{
-                .pose = poseFor(state.position, locomotion.facing_yaw),
+                .pose = try poseFor(state.position, locomotion.facing_yaw),
                 .mode = drive.mode,
                 .carried_item = switch (carry.mode) {
                     .empty => null,
@@ -823,7 +844,6 @@ pub fn Feature(comptime Controllers: type) type {
             try character_id.validate();
             try vehicle_id.validate();
             const normalized_exit = try exit_pose.normalized();
-            const facing_yaw = try yawFromRotation(normalized_exit.rotation);
             const runtime_id = self.runtime.resolve(character_id) orelse
                 return error.CharacterNotFound;
             _ = self.runtime.get(runtime_id, Character) orelse
@@ -832,6 +852,16 @@ pub fn Feature(comptime Controllers: type) type {
                 return error.CharacterControllerInvariantBroken;
             const locomotion = self.runtime.getMut(runtime_id, Locomotion) orelse
                 return error.CharacterLocomotionInvariantBroken;
+            // A rolled or pitched vehicle can have no usable horizontal
+            // forward projection. Exiting remains a gameplay operation in
+            // that state, so retain the driver's last valid semantic facing
+            // instead of failing the authority tick.
+            const facing_yaw = engine.transform.facingYawFromRotation(
+                normalized_exit.rotation,
+            ) catch |err| switch (err) {
+                error.DegenerateFacingDirection => locomotion.facing_yaw,
+                else => return err,
+            };
             const history = self.runtime.getMut(runtime_id, TransformHistory) orelse
                 return error.CharacterTransformInvariantBroken;
             const drive = self.runtime.getMut(runtime_id, DriveState) orelse
@@ -847,7 +877,7 @@ pub fn Feature(comptime Controllers: type) type {
                 controller.handle,
                 .{ .position = normalized_exit.position },
             )) orelse return .blocked;
-            const character_pose = poseFor(relocated.position, facing_yaw);
+            const character_pose = try poseFor(relocated.position, facing_yaw);
             locomotion.move = .{ 0, 0 };
             locomotion.facing_yaw = facing_yaw;
             locomotion.jump_requested = false;
@@ -936,7 +966,7 @@ pub fn Feature(comptime Controllers: type) type {
                 return error.CharacterCarryStateInvariantBroken;
             const state = try self.controllers.characterState(controller.handle);
             const result = interaction_contract.CarryState{
-                .pose = poseFor(state.position, locomotion.facing_yaw),
+                .pose = try poseFor(state.position, locomotion.facing_yaw),
                 .mobility = switch (drive.mode) {
                     .on_foot => .on_foot,
                     .driving => .driving,
@@ -1036,7 +1066,9 @@ pub fn Feature(comptime Controllers: type) type {
             const locomotion = self.runtime.getMut(runtime_id, Locomotion) orelse
                 return error.CharacterLocomotionInvariantBroken;
             locomotion.move = normalizeMove(actions.move);
-            locomotion.facing_yaw = normalizeYaw(actions.facing_yaw);
+            locomotion.facing_yaw = try engine.transform.normalizeFacingYaw(
+                actions.facing_yaw,
+            );
             locomotion.jump_requested = locomotion.jump_requested or actions.jump_pressed;
         }
 
@@ -1189,14 +1221,14 @@ fn calculateVelocity(
     locomotion: anytype,
     state: engine.physics.CharacterState,
     delta_seconds: f32,
-) [3]f32 {
+) ![3]f32 {
     const move = normalizeMove(locomotion.move);
-    const sin_yaw = @sin(locomotion.facing_yaw);
-    const cos_yaw = @cos(locomotion.facing_yaw);
+    const forward = try engine.transform.forwardFromFacingYaw(locomotion.facing_yaw);
+    const right = [3]f32{ -forward[2], 0, forward[0] };
     const horizontal = [3]f32{
-        (move[0] * cos_yaw + move[1] * sin_yaw) * config.move_speed,
+        (move[0] * right[0] + move[1] * forward[0]) * config.move_speed,
         0,
-        (move[0] * sin_yaw - move[1] * cos_yaw) * config.move_speed,
+        (move[0] * right[2] + move[1] * forward[2]) * config.move_speed,
     };
     const moving_towards_ground =
         state.velocity[1] - state.ground_velocity[1] < 0.1;
@@ -1293,28 +1325,10 @@ fn normalizeMove(move: [2]f32) [2]f32 {
     return .{ move[0] * inverse_length, move[1] * inverse_length };
 }
 
-fn normalizeYaw(yaw: f32) f32 {
-    return @mod(yaw + std.math.pi, std.math.tau) - std.math.pi;
-}
-
-fn yawFromRotation(rotation_value: [4]f32) !f32 {
-    const rotation = try engine.transform.normalizeQuaternion(rotation_value);
-    const x = rotation[0];
-    const y = rotation[1];
-    const z = rotation[2];
-    const w = rotation[3];
-    const yaw = normalizeYaw(std.math.atan2(
-        2 * (w * y + x * z),
-        1 - 2 * (y * y + z * z),
-    ));
-    return if (yaw == 0) 0 else yaw;
-}
-
-fn poseFor(position: [3]f32, yaw: f32) engine.physics.Pose {
-    const half_yaw = yaw * 0.5;
+fn poseFor(position: [3]f32, yaw: f32) !engine.physics.Pose {
     return .{
         .position = position,
-        .rotation = .{ 0, @sin(half_yaw), 0, @cos(half_yaw) },
+        .rotation = try engine.transform.rotationFromFacingYaw(yaw),
     };
 }
 
@@ -1402,6 +1416,10 @@ fn lessThanPersistentId(
 fn lessThanRecord(_: void, lhs: CharacterV1, rhs: CharacterV1) bool {
     if (lhs.id.namespace != rhs.id.namespace) return lhs.id.namespace < rhs.id.namespace;
     return lhs.id.local < rhs.id.local;
+}
+
+fn lessThanCharacterView(_: void, lhs: CharacterView, rhs: CharacterView) bool {
+    return lessThanPersistentId({}, lhs.id, rhs.id);
 }
 
 const FakeControllers = struct {
@@ -1870,6 +1888,14 @@ test "driver access makes CharacterVirtual dormant and exits transactionally" {
     const on_foot = (try drivers.driverState(character_id)).?;
     try std.testing.expectEqual(driver_contract.DriverMode.on_foot, on_foot.mode);
     try std.testing.expectEqual(exit_pose.position, on_foot.pose.position);
+    try std.testing.expectApproxEqAbs(
+        @as(f32, -0.5),
+        (try feature.view(character_id)).facing_yaw,
+        0.0001,
+    );
+    for (on_foot.pose.rotation, exit_pose.rotation) |actual, expected| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
     const draws = try feature.extract(0.5);
     try std.testing.expectEqual(@as(usize, 1), draws.len);
     try std.testing.expectEqual(exit_pose.position, draws[0].pose.position);
@@ -1880,6 +1906,36 @@ test "driver access makes CharacterVirtual dormant and exits transactionally" {
     const abandoned = (try drivers.driverState(character_id)).?;
     try std.testing.expectEqual(driver_contract.DriverMode.on_foot, abandoned.mode);
     try std.testing.expectEqual(@as(usize, 3), controllers.relocate_calls);
+
+    const retained_facing: f32 = 0.75;
+    try feature.applyActionsNow(.{
+        .id = character_id,
+        .move = .{ 0, 0 },
+        .facing_yaw = retained_facing,
+        .jump_pressed = false,
+    });
+    for ([_]f32{ std.math.pi / 2.0, std.math.pi / 2.0 - 0.0000001 }) |vertical_pitch| {
+        try drivers.beginDriving(character_id, vehicle_id);
+        const half_pitch = vertical_pitch * 0.5;
+        try std.testing.expectEqual(
+            driver_contract.ExitDisposition.exited,
+            try drivers.attemptEndDriving(character_id, vehicle_id, .{
+                .position = .{ 3, 0, -2 },
+                .rotation = .{ @sin(half_pitch), 0, 0, @cos(half_pitch) },
+            }),
+        );
+        const vertical_exit = (try drivers.driverState(character_id)).?;
+        try std.testing.expectApproxEqAbs(
+            retained_facing,
+            (try feature.view(character_id)).facing_yaw,
+            0.0001,
+        );
+        const expected = try engine.transform.rotationFromFacingYaw(retained_facing);
+        for (vertical_exit.pose.rotation, expected) |actual, component| {
+            try std.testing.expectApproxEqAbs(component, actual, 0.0001);
+        }
+    }
+    try std.testing.expectEqual(@as(usize, 5), controllers.relocate_calls);
 }
 
 test "carrier access is atomic and CharacterV1 restores with empty carry state" {
@@ -1920,6 +1976,10 @@ test "carrier access is atomic and CharacterV1 restores with empty carry state" 
         try std.testing.expectEqual(interaction_contract.CarrierMobility.on_foot, initial.mobility);
         try std.testing.expect(initial.carry_mode == .empty);
         try std.testing.expectEqual([3]f32{ 1, 2, 3 }, initial.pose.position);
+        const expected_rotation = try engine.transform.rotationFromFacingYaw(0.25);
+        for (initial.pose.rotation, expected_rotation) |actual, expected| {
+            try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+        }
         try std.testing.expect((try carriers.carryState(.{
             .namespace = 51,
             .local = 999,

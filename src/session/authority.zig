@@ -15,6 +15,8 @@ const vehicle_contract = @import("vehicle_contract");
 const district_feature_contract = @import("district_feature_contract");
 const interaction_feature_contract = @import("interaction_feature_contract");
 const npc_contract = @import("npc_contract");
+const npc_encounter_contract = @import("npc_encounter_contract");
+const npc_replacement_contract = @import("sandbox_npc_replacement_contract");
 const vitals_contract = @import("vitals_contract");
 const district_contract = @import("district_contract");
 const sandbox_district_recipe = @import("sandbox_district_recipe");
@@ -27,6 +29,29 @@ const gameplay_admission = @import("gameplay_admission");
 const snapshot_source = @import("snapshot_source");
 const transport_policy = @import("session_transport_policy");
 const authority_diagnostics = @import("session_authority_diagnostics");
+const sandbox_replay = @import("sandbox_replay");
+
+comptime {
+    if (protocol.vehicle_wheel_count != engine.physics.vehicle_wheel_count) {
+        @compileError("session and engine vehicle wheel counts must agree");
+    }
+}
+
+/// One collision-safe slot per advertised participant. Initial admission
+/// searches from the participant index and explicitly reserves its choice so
+/// multiple joins in the same authority cycle cannot select the same point.
+const automatic_spawn_candidates = [_][3]f32{
+    .{ -3, 0, 0 },  .{ -1, 0, 0 },  .{ 1, 0, 0 },  .{ 3, 0, 0 },
+    .{ 6, 0, 0 },   .{ -6, 0, 2 },  .{ -1, 0, 2 }, .{ 5, 0, 2 },
+    .{ -3, 0, 7 },  .{ -1, 0, 7 },  .{ 1, 0, 7 },  .{ 3, 0, 7 },
+    .{ -3, 0, -7 }, .{ -1, 0, -7 }, .{ 1, 0, -7 }, .{ 3, 0, -7 },
+};
+
+comptime {
+    if (automatic_spawn_candidates.len != budgets.max_participants) {
+        @compileError("automatic spawn slots must cover the participant capacity exactly");
+    }
+}
 
 pub const TransportConnection = struct { value: u32 };
 
@@ -59,6 +84,7 @@ const ReplayMessage = union(enum) {
 
 const ReliableReplayRecord = struct {
     active: bool = false,
+    transmitted: bool = false,
     delivery_id: u64 = 0,
     message: ReplayMessage = undefined,
 };
@@ -291,6 +317,15 @@ const ConnectionSlot = struct {
 
 const PlayerLifecycle = enum { spawning, alive, dead, respawn_pending };
 
+/// Presentation-only authority projection retained after the simulation
+/// character is torn down. The proxy carries no controller, collision, or
+/// vitals authority; it makes the canonical dead lifecycle visible until a
+/// replacement incarnation is fully registered.
+const PlayerDeathProxy = struct {
+    owner: district_contract.ChunkCoord,
+    state: protocol.CharacterState,
+};
+
 const ParticipantSlot = struct {
     active: bool = false,
     generation: u16 = 0,
@@ -309,6 +344,7 @@ const ParticipantSlot = struct {
     vitals_pending: bool = false,
     death_tick: u64 = 0,
     respawn_available_tick: u64 = 0,
+    death_proxy: ?PlayerDeathProxy = null,
     last_received_input: identity.InputSequence = .{ .value = 0 },
     last_applied_input: identity.InputSequence = .{ .value = 0 },
     pending_inputs: PendingInputs = .{},
@@ -323,6 +359,7 @@ const ParticipantSlot = struct {
     pending_interaction_action: ?protocol.InteractionAction = null,
     last_melee_action: identity.ActionSequence = .{ .value = 0 },
     pending_melee_action: ?protocol.MeleeAction = null,
+    pending_melee_target: ?vitals_contract.Target = null,
     melee_cooldown_until_tick: u64 = 0,
     last_respawn_action: identity.ActionSequence = .{ .value = 0 },
     pending_respawn_action: ?protocol.RespawnAction = null,
@@ -339,8 +376,10 @@ const ParticipantSlot = struct {
     replay_cursor_delivery_id: u64 = 0,
     replay_records: [budgets.reliable_replay_records_per_participant]ReliableReplayRecord =
         @splat(.{}),
+    gameplay_consumer_retired: bool = false,
     exit_pending: bool = false,
     spawn_pending: bool = false,
+    reserved_spawn_position: ?[3]f32 = null,
     host_spawn_request_id: ?u64 = null,
     despawn_pending: bool = false,
     retain_after_despawn: bool = false,
@@ -425,6 +464,22 @@ fn clearParticipantInputs(participant: *ParticipantSlot) void {
     participant.held_input_started_tick = 0;
 }
 
+fn hasPendingVehicleEnter(participant: *const ParticipantSlot) bool {
+    const action = participant.pending_vehicle_action orelse return false;
+    return action.kind == .enter;
+}
+
+fn hasIncomingPendingMelee(
+    participants: []const ParticipantSlot,
+    target: vitals_contract.Target,
+) bool {
+    for (participants) |participant| {
+        const pending = participant.pending_melee_target orelse continue;
+        if (std.meta.eql(pending, target)) return true;
+    }
+    return false;
+}
+
 fn nextGeneration(current: u16) u16 {
     const candidate = current +% 1;
     return if (candidate == 0) 1 else candidate;
@@ -454,6 +509,14 @@ const NpcSlot = struct {
     replicated: identity.ReplicatedEntityId = .invalid,
     vitals_pending: bool = false,
     despawn_pending: bool = false,
+    replacement_spawn_pending: bool = false,
+    death_proxy: ?NpcDeathProxy = null,
+};
+
+const NpcDeathProxy = struct {
+    owner: district_contract.ChunkCoord,
+    state: protocol.NpcState,
+    until_tick: u64,
 };
 
 const melee_damage: u16 = 34;
@@ -512,6 +575,60 @@ pub const HostObservationDiagnostics = struct {
     records_dropped: u64,
 };
 
+pub const npc_interest_enter_distance: f32 = 20;
+pub const npc_interest_exit_distance: f32 = 24;
+pub const npc_interest_exit_grace_ticks: u64 = 30;
+
+pub const NpcInterestReason = enum {
+    excluded,
+    same_district,
+    encounter,
+    proximity_enter,
+    proximity_retained,
+    grace,
+};
+
+pub const NpcInterestView = struct {
+    included: bool,
+    reason: NpcInterestReason,
+    evaluated_tick: u64,
+    grace_until_tick: u64,
+    observer_position: [3]f32,
+    npc_position: [3]f32,
+    observer_district: district_contract.ChunkCoord,
+    owner_district: district_contract.ChunkCoord,
+    distance_squared_xz: f32,
+    encounter_relevant: bool,
+};
+
+/// Authority-owned explanation for the deliberately bounded object cohort.
+/// Vehicles and carryables are currently cheap enough to replicate in full;
+/// district coordinates remain evidence, not an accidental visibility gate.
+pub const ObjectInterestReason = enum {
+    bounded_world,
+    controlled,
+    held,
+    district_dormant,
+};
+
+pub const ObjectInterestView = struct {
+    included: bool,
+    reason: ObjectInterestReason,
+    evaluated_tick: u64,
+    baseline_id: u32,
+    snapshot_sequence: u32,
+    observer_position: [3]f32,
+    object_position: [3]f32,
+    observer_district: district_contract.ChunkCoord,
+    owner_district: district_contract.ChunkCoord,
+    distance_squared_xz: f32,
+};
+
+pub const ReplicatedObjectIdentity = struct {
+    replicated: identity.ReplicatedEntityId,
+    persistent: engine.PersistentId,
+};
+
 fn beginAuthorityCycle(completed_tick: u64) authority_diagnostics.CycleTrace {
     return .{
         .target_tick = completed_tick +| 1,
@@ -543,6 +660,66 @@ const SnapshotRecord = struct {
     snapshot: protocol.Snapshot = protocol.Snapshot.empty(),
 };
 
+const NpcInterestState = struct {
+    included: bool = false,
+    reason: NpcInterestReason = .excluded,
+    evaluated_tick: u64 = 0,
+    grace_until_tick: u64 = 0,
+    observer_position: [3]f32 = .{ 0, 0, 0 },
+    npc_position: [3]f32 = .{ 0, 0, 0 },
+    observer_district: district_contract.ChunkCoord =
+        sandbox_district_recipe.navigation_west_coord,
+    owner_district: district_contract.ChunkCoord =
+        sandbox_district_recipe.navigation_west_coord,
+    distance_squared_xz: f32 = 0,
+    encounter_relevant: bool = false,
+
+    fn view(self: NpcInterestState) NpcInterestView {
+        return .{
+            .included = self.included,
+            .reason = self.reason,
+            .evaluated_tick = self.evaluated_tick,
+            .grace_until_tick = self.grace_until_tick,
+            .observer_position = self.observer_position,
+            .npc_position = self.npc_position,
+            .observer_district = self.observer_district,
+            .owner_district = self.owner_district,
+            .distance_squared_xz = self.distance_squared_xz,
+            .encounter_relevant = self.encounter_relevant,
+        };
+    }
+};
+
+const ObjectInterestState = struct {
+    included: bool = false,
+    reason: ObjectInterestReason = .bounded_world,
+    evaluated_tick: u64 = 0,
+    baseline_id: u32 = 0,
+    snapshot_sequence: u32 = 0,
+    observer_position: [3]f32 = .{ 0, 0, 0 },
+    object_position: [3]f32 = .{ 0, 0, 0 },
+    observer_district: district_contract.ChunkCoord =
+        sandbox_district_recipe.navigation_west_coord,
+    owner_district: district_contract.ChunkCoord =
+        sandbox_district_recipe.navigation_west_coord,
+    distance_squared_xz: f32 = 0,
+
+    fn view(self: ObjectInterestState) ObjectInterestView {
+        return .{
+            .included = self.included,
+            .reason = self.reason,
+            .evaluated_tick = self.evaluated_tick,
+            .baseline_id = self.baseline_id,
+            .snapshot_sequence = self.snapshot_sequence,
+            .observer_position = self.observer_position,
+            .object_position = self.object_position,
+            .observer_district = self.observer_district,
+            .owner_district = self.owner_district,
+            .distance_squared_xz = self.distance_squared_xz,
+        };
+    }
+};
+
 const ReplicationState = struct {
     history: [budgets.snapshot_history_capacity]SnapshotRecord = @splat(.{}),
     history_next: u8 = 0,
@@ -554,6 +731,9 @@ const ReplicationState = struct {
     last_sent_tick: u64 = 0,
     byte_credit: usize = 0,
     byte_remainder: usize = 0,
+    vehicle_interest: [budgets.max_vehicles]ObjectInterestState = @splat(.{}),
+    carryable_interest: [budgets.max_carryables]ObjectInterestState = @splat(.{}),
+    npc_interest: [budgets.max_npcs]NpcInterestState = @splat(.{}),
 };
 
 const UsedAdmissionNonce = struct {
@@ -759,6 +939,47 @@ pub const AcceptedIngress = struct {
         melee = 7,
         respawn = 8,
     };
+
+    /// Stable semantic digest with absolute authority ticks rebased to the
+    /// caller's scenario origin. Operational diagnostics pass zero; virtual
+    /// time acceptance runners pass their post-bootstrap start tick so their
+    /// retained ingress evidence uses one relative time domain.
+    pub fn fingerprintFromTickOrigin(
+        self: AcceptedIngress,
+        seed: u64,
+        tick_origin: u64,
+    ) u64 {
+        var result = seed;
+        inline for (.{
+            self.admitted_tick -| tick_origin,
+            self.account.value,
+            @as(u64, self.participant.index),
+            @as(u64, self.participant.generation),
+            @as(u64, self.connection.index),
+            @as(u64, self.connection.generation),
+            @as(u64, self.sequence.value),
+            @as(u64, self.action_sequence.value),
+            self.target_tick -| tick_origin,
+            @as(u64, @as(u32, @bitCast(self.move[0]))),
+            @as(u64, @as(u32, @bitCast(self.move[1]))),
+            @as(u64, @as(u32, @bitCast(self.facing_yaw))),
+            @as(u64, @intFromBool(self.jump_pressed)),
+            @as(u64, @intFromEnum(self.kind)),
+            @as(u64, self.vehicle.index),
+            @as(u64, self.vehicle.generation),
+            @as(u64, self.carryable.index),
+            @as(u64, self.carryable.generation),
+            @as(u64, self.avatar_incarnation),
+            @as(u64, @as(u32, @bitCast(self.vehicle_control[0]))),
+            @as(u64, @as(u32, @bitCast(self.vehicle_control[1]))),
+            @as(u64, @as(u32, @bitCast(self.vehicle_control[2]))),
+            @as(u64, @as(u32, @bitCast(self.vehicle_control[3]))),
+        }) |value| {
+            var stable: u64 = value;
+            result = std.hash.Wyhash.hash(result, std.mem.asBytes(&stable));
+        }
+        return result;
+    }
 };
 
 const IngressJournal = struct {
@@ -833,6 +1054,7 @@ const AuthorityCore = struct {
     outbox_high_water: u16 = 0,
     delivery_receipts: u64 = 0,
     reliable_replays: u64 = 0,
+    slow_gameplay_consumers_retired: u64 = 0,
     accepted_messages: u64 = 0,
     rejected_messages: u64 = 0,
     malformed_messages: u64 = 0,
@@ -1241,6 +1463,7 @@ const AuthorityCore = struct {
                 participant.pending_vehicle_action != null or
                 participant.pending_interaction_action != null or
                 participant.pending_melee_action != null or
+                participant.pending_melee_target != null or
                 participant.pending_respawn_action != null or
                 participant.vitals_pending or
                 participant.interaction_cleanup_pending or participant.exit_pending)
@@ -1672,9 +1895,37 @@ const AuthorityCore = struct {
 
     fn prepareSimulationTick(self: *AuthorityCore) !void {
         self.replenishReplicationBudgets();
-        try self.expireConnections(self.simulation.tickIndex());
+        const current_tick = self.simulation.tickIndex();
+        for (&self.npcs) |*npc| {
+            if (npc.death_proxy) |proxy| {
+                if (current_tick >= proxy.until_tick) {
+                    npc.death_proxy = null;
+                    self.force_snapshot = true;
+                }
+            }
+        }
+        try self.expireConnections(current_tick);
         try self.expireReconnects();
         try self.applyHeldInputs(self.simulation.tickIndex());
+    }
+
+    fn npcReplacementCandidates(npc_index: usize) [3]npc_contract.NodeRef {
+        const primary = if (npc_index % 2 == 0)
+            sandbox_district_recipe.navigation_west_coord
+        else
+            sandbox_district_recipe.navigation_east_coord;
+        const alternate = if (npc_index % 2 == 0)
+            sandbox_district_recipe.navigation_east_coord
+        else
+            sandbox_district_recipe.navigation_west_coord;
+        return .{
+            .{ .coord = primary, .index = @intCast(npc_index % 3) },
+            .{ .coord = primary, .index = @intCast((npc_index + 1) % 3) },
+            .{
+                .coord = alternate,
+                .index = if (npc_index % 2 == 0) 2 else 0,
+            },
+        };
     }
 
     fn drainSimulationOutcomes(self: *AuthorityCore) !void {
@@ -1684,7 +1935,40 @@ const AuthorityCore = struct {
         try self.processVehicleOutcomes();
         try self.processDistrictOutcomes();
         try self.processInteractionOutcomes();
+        try self.processNpcReplacementOutcomes();
         try self.processNpcOutcomes();
+        self.processNpcEncounterCues();
+    }
+
+    fn processNpcEncounterCues(self: *AuthorityCore) void {
+        while (self.simulation.pollNpcEncounterCue()) |_| {
+            self.force_snapshot = true;
+        }
+    }
+
+    fn processNpcReplacementOutcomes(self: *AuthorityCore) !void {
+        while (self.simulation.pollNpcReplacementOutcome()) |outcome| switch (outcome) {
+            .ready => |ready| {
+                if (ready.slot >= self.npcs.len) return error.InvalidNpcReplacementSlot;
+                const npc = &self.npcs[ready.slot];
+                if (npc.active or npc.spawn_pending or npc.despawn_pending or
+                    npc.replacement_spawn_pending)
+                {
+                    return error.InvalidNpcReplacementState;
+                }
+                npc.generation = ready.generation;
+                npc.replicated.generation = ready.generation;
+                npc.spawn_pending = true;
+                npc.replacement_spawn_pending = true;
+                try self.simulation.submitNpc(.{ .spawn = .{
+                    .request_id = npcSpawnRequestId(ready.slot, ready.generation),
+                    .node = ready.node,
+                    .goal = .hold,
+                } });
+                self.force_snapshot = true;
+            },
+            .deferred => self.force_snapshot = true,
+        };
     }
 
     fn extractReplication(self: *AuthorityCore) !void {
@@ -1737,6 +2021,7 @@ const AuthorityCore = struct {
                 participant.pending_vehicle_action != null or
                 participant.pending_interaction_action != null or
                 participant.pending_melee_action != null or
+                participant.pending_melee_target != null or
                 participant.pending_respawn_action != null or
                 participant.vitals_pending or
                 participant.interaction_cleanup_pending or participant.exit_pending)
@@ -1902,6 +2187,7 @@ const AuthorityCore = struct {
             .reliable_replay_records = reliable_replay_records,
             .delivery_receipts = self.delivery_receipts,
             .reliable_replays = self.reliable_replays,
+            .slow_gameplay_consumers_retired = self.slow_gameplay_consumers_retired,
             .accepted_messages = self.accepted_messages,
             .rejected_messages = self.rejected_messages,
             .malformed_messages = self.malformed_messages,
@@ -1999,6 +2285,13 @@ const AuthorityCore = struct {
         };
         try self.preflightReliablePublication(connection_index, 1);
         const next_generation = nextGeneration(self.participants[participant_index].generation);
+        const planned_spawn: ?[3]f32 = if (self.participant_spawn == .automatic)
+            try self.selectInitialSpawnPosition(participant_index) orelse {
+                try self.rejectConnection(connection_index, .session_full, true);
+                return;
+            }
+        else
+            null;
         const planned_participant = participantId(participant_index, next_generation);
         const credential_serial_before = self.credential_issuer.next_serial;
         const reconnect = try self.issueReconnectCredential(
@@ -2006,16 +2299,10 @@ const AuthorityCore = struct {
             external_identity,
             planned_participant,
         );
-        if (self.participant_spawn == .automatic) {
-            const lane = participant_index % 4;
-            const row = participant_index / 4;
+        if (planned_spawn) |spawn_position| {
             self.simulation.submitCharacter(.{ .spawn = .{
                 .request_id = spawnRequestId(participant_index, next_generation),
-                .position = .{
-                    @as(f32, @floatFromInt(lane)) * 2.0 - 3.0,
-                    0,
-                    @as(f32, @floatFromInt(row)) * 2.0,
-                },
+                .position = spawn_position,
             } }) catch |err| {
                 self.credential_issuer.next_serial = credential_serial_before;
                 return err;
@@ -2047,6 +2334,7 @@ const AuthorityCore = struct {
         self.connections[connection_index].participant_index = @intCast(participant_index);
         if (self.participant_spawn == .automatic) {
             participant.spawn_pending = true;
+            participant.reserved_spawn_position = planned_spawn;
         }
         try self.queueWelcome(connection_index, participant_index);
         self.accepted_messages +|= 1;
@@ -2387,7 +2675,12 @@ const AuthorityCore = struct {
         switch (action.kind) {
             .enter => {
                 if (participant.driving_vehicle_index != null or
-                    participant.holding_carryable_index != null)
+                    participant.holding_carryable_index != null or
+                    participant.pending_melee_action != null or
+                    hasIncomingPendingMelee(
+                        self.participants[0..],
+                        playerVitalsTarget(participant.*, character),
+                    ))
                 {
                     try self.queueVehicleActionResult(participant_index, action, .invalid_state);
                     self.vehicle_actions_rejected +|= 1;
@@ -2574,6 +2867,12 @@ const AuthorityCore = struct {
             try self.queueMeleeActionResult(participant_index, action, .dead);
             return;
         }
+        if (participant.driving_vehicle_index != null or
+            hasPendingVehicleEnter(participant))
+        {
+            try self.queueMeleeActionResult(participant_index, action, .invalid_state);
+            return;
+        }
         if (participant.vitals_pending) {
             try self.queueMeleeActionResult(participant_index, action, .invalid_state);
             return;
@@ -2602,6 +2901,11 @@ const AuthorityCore = struct {
             return;
         }
         const character = participant.character.?;
+        const pending_target = vitals_contract.Target{
+            .kind = target.?.kind,
+            .id = target.?.persistent,
+            .incarnation = .{ .value = target.?.incarnation },
+        };
         try self.simulation.submitVitals(.{ .damage = .{
             .source = .{
                 .kind = .player,
@@ -2609,11 +2913,7 @@ const AuthorityCore = struct {
                 .incarnation = .{ .value = participant.avatar_incarnation },
                 .action_sequence = action.sequence.value,
             },
-            .target = .{
-                .kind = target.?.kind,
-                .id = target.?.persistent,
-                .incarnation = .{ .value = target.?.incarnation },
-            },
+            .target = pending_target,
             .cause = .melee,
             .authority_tick = tick_index +| 1,
             .correlation = damageCorrelation(participant_index, action.sequence),
@@ -2621,6 +2921,7 @@ const AuthorityCore = struct {
             .ordinal = 1,
         } });
         participant.pending_melee_action = action;
+        participant.pending_melee_target = pending_target;
         self.accepted_messages +|= 1;
     }
 
@@ -2676,6 +2977,7 @@ const AuthorityCore = struct {
         } });
         participant.lifecycle = .spawning;
         participant.spawn_pending = true;
+        participant.reserved_spawn_position = spawn_position;
         participant.pending_respawn_action = action;
         self.ingress.append(.{
             .admitted_tick = self.simulation.tickIndex(),
@@ -2739,7 +3041,9 @@ const AuthorityCore = struct {
         for (self.participants, 0..) |candidate, index| {
             if (index == attacker_index or !candidate.active or
                 candidate.lifecycle != .alive or candidate.character == null or
-                candidate.despawn_pending or candidate.vitals_pending)
+                candidate.despawn_pending or candidate.vitals_pending or
+                candidate.driving_vehicle_index != null or
+                hasPendingVehicleEnter(&candidate))
             {
                 continue;
             }
@@ -2778,53 +3082,78 @@ const AuthorityCore = struct {
         self: *AuthorityCore,
         participant_index: usize,
     ) !?[3]f32 {
-        const candidates = [_][3]f32{
-            .{ -3, 0, 0 },  .{ 3, 0, 0 },  .{ -3, 0, 4 }, .{ 3, 0, 4 },
-            .{ -6, 0, -3 }, .{ 6, 0, -3 }, .{ 0, 0, 7 },  .{ 0, 0, -7 },
-        };
         const participant = self.participants[participant_index];
         const rotation = (@as(usize, participant_index) + participant.avatar_incarnation) %
-            candidates.len;
+            automatic_spawn_candidates.len;
         var selected: ?[3]f32 = null;
         var selected_score: f32 = -1;
-        for (0..candidates.len) |offset| {
-            const candidate = candidates[(rotation + offset) % candidates.len];
-            if (!try self.simulation.characterSpawnClear(candidate)) continue;
-            var nearest_threat: f32 = std.math.inf(f32);
-            var blocked = false;
-            for (self.participants, 0..) |other, other_index| {
-                if (other_index == participant_index or !other.active or
-                    other.lifecycle != .alive or other.character == null or
-                    other.despawn_pending)
-                {
-                    continue;
-                }
-                const view = try self.simulation.character(other.character.?);
-                const distance = horizontalDistanceSquared(candidate, view.position);
-                if (distance < 2.25) {
-                    blocked = true;
-                    break;
-                }
-                nearest_threat = @min(nearest_threat, distance);
-            }
-            if (blocked) continue;
-            for (self.npcs) |npc| {
-                if (!npc.active or npc.persistent == null or npc.despawn_pending) continue;
-                const view = try self.simulation.npc(npc.persistent.?);
-                const distance = horizontalDistanceSquared(candidate, view.position);
-                if (distance < 2.25) {
-                    blocked = true;
-                    break;
-                }
-                nearest_threat = @min(nearest_threat, distance);
-            }
-            if (blocked) continue;
+        for (0..automatic_spawn_candidates.len) |offset| {
+            const candidate = automatic_spawn_candidates[
+                (rotation + offset) % automatic_spawn_candidates.len
+            ];
+            const nearest_threat = try self.spawnCandidateScore(
+                participant_index,
+                candidate,
+            ) orelse continue;
             if (nearest_threat > selected_score) {
                 selected = candidate;
                 selected_score = nearest_threat;
             }
         }
         return selected;
+    }
+
+    fn selectInitialSpawnPosition(
+        self: *AuthorityCore,
+        participant_index: usize,
+    ) !?[3]f32 {
+        for (0..automatic_spawn_candidates.len) |offset| {
+            const candidate = automatic_spawn_candidates[
+                (participant_index + offset) % automatic_spawn_candidates.len
+            ];
+            if (try self.spawnCandidateScore(participant_index, candidate) != null) {
+                return candidate;
+            }
+        }
+        return null;
+    }
+
+    /// Real placement plus live-avatar/NPC separation. CharacterVirtual
+    /// instances are not rigid bodies in Jolt's shape query, so both checks
+    /// are required and intentionally kept in one authority policy.
+    fn spawnCandidateScore(
+        self: *AuthorityCore,
+        participant_index: usize,
+        candidate: [3]f32,
+    ) !?f32 {
+        if (!try self.simulation.characterSpawnClear(candidate)) return null;
+        var nearest_threat: f32 = std.math.inf(f32);
+        for (self.participants, 0..) |other, other_index| {
+            if (other_index == participant_index or !other.active) continue;
+            if (other.reserved_spawn_position) |reserved| {
+                const distance = horizontalDistanceSquared(candidate, reserved);
+                if (distance < 2.25) return null;
+                nearest_threat = @min(nearest_threat, distance);
+            }
+            // A spawned character owns space even while its vitals
+            // registration is moving the participant from spawning to alive.
+            // CharacterVirtual is absent from Jolt shape queries, so skipping
+            // this handoff state would permit a same-position admission.
+            if (other.despawn_pending) continue;
+            const occupied_position = try self.participantAvatarWorldPosition(other_index) orelse
+                continue;
+            const distance = horizontalDistanceSquared(candidate, occupied_position);
+            if (distance < 2.25) return null;
+            nearest_threat = @min(nearest_threat, distance);
+        }
+        for (self.npcs) |npc| {
+            if (!npc.active or npc.persistent == null or npc.despawn_pending) continue;
+            const view = try self.simulation.npc(npc.persistent.?);
+            const distance = horizontalDistanceSquared(candidate, view.position);
+            if (distance < 2.25) return null;
+            nearest_threat = @min(nearest_threat, distance);
+        }
+        return nearest_threat;
     }
 
     fn ingestBaselineAck(
@@ -3188,6 +3517,7 @@ const AuthorityCore = struct {
                         participant.host_spawn_request_id = null;
                     }
                     participant.spawn_pending = false;
+                    participant.reserved_spawn_position = null;
                     participant.character = spawned.id;
                     participant.vitals_pending = true;
                     if (participant.pending_respawn_action != null) {
@@ -3231,9 +3561,11 @@ const AuthorityCore = struct {
                             participant.pending_vehicle_action = null;
                             participant.pending_interaction_action = null;
                             participant.pending_melee_action = null;
+                            participant.pending_melee_target = null;
                             participant.exit_pending = false;
                             participant.interaction_cleanup_pending = false;
                             participant.spawn_pending = false;
+                            participant.reserved_spawn_position = null;
                             participant.host_spawn_request_id = null;
                             participant.despawn_pending = false;
                             participant.retain_after_despawn = false;
@@ -3266,6 +3598,7 @@ const AuthorityCore = struct {
                             participant.active = false;
                         }
                         participant.spawn_pending = false;
+                        participant.reserved_spawn_position = null;
                     } else return error.UnexpectedCharacterRejection;
                 },
             }
@@ -3470,15 +3803,12 @@ const AuthorityCore = struct {
                     }
                     self.active_districts[district_index] = true;
                     if (district_index == 1) {
-                        for (&self.npcs, 0..) |*npc, index| {
+                        for (self.npcs[0..budgets.product_npcs], 0..) |*npc, index| {
                             npc.spawn_pending = true;
-                            const coord = if (index % 2 == 0)
-                                sandbox_district_recipe.navigation_west_coord
-                            else
-                                sandbox_district_recipe.navigation_east_coord;
+                            const node = productNpcSpawnNode(index);
                             try self.simulation.submitNpc(.{ .spawn = .{
                                 .request_id = npcSpawnRequestId(index, npc.generation),
-                                .node = .{ .coord = coord, .index = @intCast(index % 3) },
+                                .node = node,
                                 .goal = .hold,
                             } });
                         }
@@ -3760,7 +4090,23 @@ const AuthorityCore = struct {
                         self.force_snapshot = true;
                     }
                 },
-                .rejected => if (self.world_bootstrap != .host_managed) {
+                .rejected => |rejected| if (decodeNpcSpawnRequestId(rejected.request_id)) |decoded| {
+                    const npc = &self.npcs[decoded.index];
+                    if (!npc.replacement_spawn_pending or !npc.spawn_pending or
+                        npc.generation != decoded.generation)
+                    {
+                        if (self.world_bootstrap != .host_managed) {
+                            return error.NpcBootstrapRejected;
+                        }
+                    } else {
+                        npc.spawn_pending = false;
+                        npc.replacement_spawn_pending = false;
+                        try self.simulation.deferNpcReplacement(
+                            @intCast(decoded.index),
+                            decoded.generation,
+                        );
+                    }
+                } else if (self.world_bootstrap != .host_managed) {
                     return error.NpcBootstrapRejected;
                 },
             }
@@ -3789,6 +4135,7 @@ const AuthorityCore = struct {
                     participant.vitals_pending = false;
                     participant.lifecycle = .alive;
                     participant.death_tick = 0;
+                    participant.death_proxy = null;
                     if (participant.pending_respawn_action) |action| {
                         try self.queueRespawnActionResult(
                             participant_index,
@@ -3800,6 +4147,7 @@ const AuthorityCore = struct {
                         try self.publishLifeEvent(.{
                             .avatar = participant.replicated,
                             .incarnation = participant.avatar_incarnation,
+                            .authority_tick = self.simulation.tickIndex(),
                             .health = vitals_contract.default_max_health,
                             .maximum_health = vitals_contract.default_max_health,
                             .state = .alive,
@@ -3815,6 +4163,13 @@ const AuthorityCore = struct {
                         return error.StaleNpcVitalsRegistration;
                     }
                     npc.vitals_pending = false;
+                    if (npc.replacement_spawn_pending) {
+                        try self.simulation.completeNpcReplacement(
+                            @intCast(npc_index),
+                            npc.generation,
+                        );
+                        npc.replacement_spawn_pending = false;
+                    }
                     self.force_snapshot = true;
                 },
             },
@@ -3833,12 +4188,18 @@ const AuthorityCore = struct {
                         {
                             return error.DamageCorrelationMismatch;
                         }
+                        const pending_target = attacker.pending_melee_target orelse
+                            return error.UnexpectedDamageOutcome;
+                        if (!std.meta.eql(pending_target, damage.proposal.target)) {
+                            return error.DamageTargetMismatch;
+                        }
                         const replicated = self.replicatedVitalsTarget(
                             damage.proposal.target,
                         ) orelse identity.ReplicatedEntityId.invalid;
                         try self.queueDamageResult(attacker_index, action, replicated, damage);
                         if (damage.disposition == .applied) self.melee_hits +|= 1;
                         attacker.pending_melee_action = null;
+                        attacker.pending_melee_target = null;
                     },
                     .npc => {
                         const npc_index = self.findNpcByPersistent(
@@ -3848,6 +4209,19 @@ const AuthorityCore = struct {
                             damage.proposal.source.incarnation.value)
                         {
                             return error.StaleNpcDamageInstigator;
+                        }
+                        if (damage.disposition == .applied and !damage.killed) {
+                            const target = self.replicatedVitalsTarget(
+                                damage.proposal.target,
+                            ) orelse return error.UnknownDamageTarget;
+                            try self.publishLifeEvent(.{
+                                .avatar = target,
+                                .incarnation = damage.proposal.target.incarnation.value,
+                                .authority_tick = damage.proposal.authority_tick,
+                                .health = damage.remaining_health,
+                                .maximum_health = vitals_contract.default_max_health,
+                                .state = .alive,
+                            });
                         }
                     },
                 }
@@ -3876,10 +4250,15 @@ const AuthorityCore = struct {
         try self.publishLifeEvent(.{
             .avatar = replicated,
             .incarnation = died.target.incarnation.value,
+            .authority_tick = died.authority_tick,
             .health = 0,
             .maximum_health = vitals_contract.default_max_health,
             .state = .dead,
             .instigator = instigator,
+            .respawn_ready_tick = if (died.target.kind == .player)
+                died.authority_tick +| respawn_cooldown_ticks
+            else
+                0,
         });
         switch (died.target.kind) {
             .player => {
@@ -3891,6 +4270,24 @@ const AuthorityCore = struct {
                 {
                     return error.StalePlayerDeathEvent;
                 }
+                const character = try self.simulation.character(died.target.id);
+                const position = try self.participantAvatarWorldPosition(
+                    participant_index,
+                ) orelse return error.ParticipantAuthorityInvariantBroken;
+                participant.death_proxy = .{
+                    .owner = try district_contract.chunkCoordForWorldPosition(position),
+                    .state = .{
+                        .entity = participant.replicated,
+                        .owner = participantId(participant_index, participant.generation),
+                        .position = position,
+                        .velocity = .{ 0, 0, 0 },
+                        .facing_yaw = character.facing_yaw,
+                        .incarnation = participant.avatar_incarnation,
+                        .health = 0,
+                        .maximum_health = vitals_contract.default_max_health,
+                        .life_state = .dead,
+                    },
+                };
                 participant.lifecycle = .dead;
                 participant.death_tick = died.authority_tick;
                 participant.respawn_available_tick = died.authority_tick +|
@@ -3905,7 +4302,43 @@ const AuthorityCore = struct {
                     return error.UnknownNpcDeathTarget;
                 const npc = &self.npcs[npc_index];
                 if (npc.despawn_pending) return error.DuplicateNpcDeathEvent;
+                const view = try self.simulation.npc(died.target.id);
+                const encounter = self.simulation.npcEncounter(died.target);
+                const owner = try district_contract.chunkCoordForWorldPosition(view.position);
+                npc.death_proxy = .{
+                    .owner = owner,
+                    .state = .{
+                        .entity = npc.replicated,
+                        .position = view.position,
+                        .velocity = .{ 0, 0, 0 },
+                        .facing_yaw = view.facing_yaw,
+                        .state = .active,
+                        .incarnation = npc.generation,
+                        .health = 0,
+                        .maximum_health = vitals_contract.default_max_health,
+                        .life_state = .dead,
+                        .encounter_state = if (encounter) |value|
+                            protocolNpcEncounterState(value.state)
+                        else
+                            .patrolling,
+                        .encounter_state_enter_tick = if (encounter) |value|
+                            value.state_enter_tick
+                        else
+                            died.authority_tick,
+                        .attack_impact_tick = 0,
+                        .attack_ready_tick = 0,
+                    },
+                    .until_tick = died.authority_tick +|
+                        self.simulation.npcDeathPresentationTicks(),
+                };
                 npc.despawn_pending = true;
+                const candidates = npcReplacementCandidates(npc_index);
+                try self.simulation.scheduleNpcReplacement(
+                    @intCast(npc_index),
+                    nextGeneration(npc.generation),
+                    died.authority_tick,
+                    &candidates,
+                );
                 try self.simulation.submitNpc(.{ .despawn = .{
                     .request_id = npcDeathRequestId(npc_index, npc.generation),
                     .id = died.target.id,
@@ -3952,9 +4385,9 @@ const AuthorityCore = struct {
                 continue;
             }
             // A retained, connected participant may temporarily have no
-            // character while the host tears it down and later respawns it.
-            // It must still receive the empty authoritative projection so the
-            // client removes the old replicated entity.
+            // simulation character while the host tears it down and later
+            // respawns it. Its authority-owned death proxy remains in the
+            // projection so death is a visible state rather than absence.
             if (participant.character != null) {
                 try self.updateParticipantRelevance(participant_index);
             }
@@ -4057,12 +4490,7 @@ const AuthorityCore = struct {
 
     fn updateParticipantRelevance(self: *AuthorityCore, participant_index: usize) !void {
         const participant = &self.participants[participant_index];
-        const character = participant.character orelse return;
-        const position = if (participant.driving_vehicle_index) |vehicle_index| blk: {
-            const persistent = self.vehicles[vehicle_index].persistent orelse
-                return error.VehicleAuthorityInvariantBroken;
-            break :blk (try self.simulation.vehicle(persistent)).state.chassis.pose.position;
-        } else (try self.simulation.character(character)).position;
+        const position = try self.participantAvatarWorldPosition(participant_index) orelse return;
         const candidate = try district_contract.chunkCoordForWorldPosition(position);
         if (std.meta.eql(candidate, participant.relevance_coord) or
             !self.isDistrictActive(candidate) or
@@ -4082,6 +4510,7 @@ const AuthorityCore = struct {
     ) !protocol.Snapshot {
         const target = self.participants[participant_index];
         const replication = &self.replication[participant_index];
+        const observer_position = try self.participantAvatarWorldPosition(participant_index);
         var snapshot = protocol.Snapshot.empty();
         snapshot.baseline_id = target.baseline_id;
         snapshot.sequence = replication.next_sequence;
@@ -4091,8 +4520,10 @@ const AuthorityCore = struct {
         snapshot.acknowledged_input = target.last_applied_input;
         for (self.participants, 0..) |participant, index| {
             if (!participant.active or participant.character == null or
-                participant.despawn_pending) continue;
+                participant.despawn_pending or participant.death_proxy != null) continue;
             const view = try self.simulation.character(participant.character.?);
+            const occupied_position = try self.participantAvatarWorldPosition(index) orelse
+                return error.ParticipantAuthorityInvariantBroken;
             const vital = self.simulation.vitals(playerVitalsTarget(
                 participant,
                 participant.character.?,
@@ -4101,7 +4532,7 @@ const AuthorityCore = struct {
             else
                 continue;
             const relevant = index == participant_index or std.meta.eql(
-                try district_contract.chunkCoordForWorldPosition(view.position),
+                try district_contract.chunkCoordForWorldPosition(occupied_position),
                 target.relevance_coord,
             );
             if (!relevant) continue;
@@ -4118,31 +4549,76 @@ const AuthorityCore = struct {
             };
             snapshot.character_count += 1;
         }
-        for (self.vehicles) |vehicle| {
+        for (self.participants, 0..) |participant, index| {
+            const proxy = participant.death_proxy orelse continue;
+            if (!participant.active) continue;
+            const relevant = index == participant_index or
+                std.meta.eql(proxy.owner, target.relevance_coord);
+            if (!relevant) continue;
+            if (snapshot.character_count == snapshot.characters.len) {
+                return error.CharacterSnapshotCapacityReached;
+            }
+            snapshot.characters[snapshot.character_count] = proxy.state;
+            snapshot.character_count += 1;
+        }
+        for (self.vehicles, 0..) |vehicle, vehicle_index| {
             if (!vehicle.active or vehicle.persistent == null) continue;
             const view = try self.simulation.vehicle(vehicle.persistent.?);
             const driver_index = if (view.driver_id) |driver|
                 self.findParticipantByCharacter(driver)
             else
                 null;
-            const relevant = (driver_index != null and driver_index.? == participant_index) or
-                std.meta.eql(
-                    try district_contract.chunkCoordForWorldPosition(view.state.chassis.pose.position),
-                    target.relevance_coord,
-                );
-            if (!relevant) continue;
+            recordObjectInterest(
+                &replication.vehicle_interest[vehicle_index],
+                snapshot.server_tick,
+                snapshot.baseline_id,
+                snapshot.sequence.value,
+                observer_position orelse .{ 0, 0, 0 },
+                target.relevance_coord,
+                view.state.chassis.pose.position,
+                if (driver_index != null and driver_index.? == participant_index)
+                    .controlled
+                else
+                    .bounded_world,
+            );
+            var wheels: [protocol.vehicle_wheel_count]protocol.VehicleWheelState = undefined;
+            for (&wheels, view.state.wheels) |*projected, wheel| {
+                projected.* = .{
+                    .spin_phase = wheel.rotation_angle,
+                    .angular_velocity = wheel.angular_velocity,
+                    .steer_angle = wheel.steer_angle,
+                    .suspension_length = wheel.suspension_length,
+                    .has_contact = wheel.has_contact,
+                };
+            }
             snapshot.vehicles[snapshot.vehicle_count] = .{
                 .entity = vehicle.replicated,
                 .position = view.state.chassis.pose.position,
                 .rotation = view.state.chassis.pose.rotation,
                 .linear_velocity = view.state.chassis.velocity.linear,
                 .angular_velocity = view.state.chassis.velocity.angular,
+                .wheels = wheels,
                 .driver = if (driver_index) |index|
                     participantId(index, self.participants[index].generation)
                 else
                     null,
             };
             snapshot.vehicle_count += 1;
+        }
+        for (self.carryables, 0..) |carryable, carryable_index| {
+            if (!carryable.active or carryable.persistent == null) continue;
+            const view = try self.simulation.carryable(carryable.persistent.?);
+            recordObjectInterest(
+                &replication.carryable_interest[carryable_index],
+                snapshot.server_tick,
+                snapshot.baseline_id,
+                snapshot.sequence.value,
+                observer_position orelse .{ 0, 0, 0 },
+                target.relevance_coord,
+                view.state.pose.position,
+                .district_dormant,
+            );
+            replication.carryable_interest[carryable_index].included = false;
         }
         const carryable_draws = try self.simulation.interactionPresentation();
         for (carryable_draws) |draw| {
@@ -4154,12 +4630,19 @@ const AuthorityCore = struct {
                 .inventory_held => |carrier| self.findParticipantByCharacter(carrier) orelse
                     return error.UnknownInteractionCarrier,
             };
-            const relevant = (holder_index != null and holder_index.? == participant_index) or
-                std.meta.eql(
-                    try district_contract.chunkCoordForWorldPosition(draw.pose.position),
-                    target.relevance_coord,
-                );
-            if (!relevant) continue;
+            recordObjectInterest(
+                &replication.carryable_interest[carryable_index],
+                snapshot.server_tick,
+                snapshot.baseline_id,
+                snapshot.sequence.value,
+                observer_position orelse .{ 0, 0, 0 },
+                target.relevance_coord,
+                draw.pose.position,
+                if (holder_index != null and holder_index.? == participant_index)
+                    .held
+                else
+                    .bounded_world,
+            );
             const holder = if (holder_index) |index|
                 participantId(index, self.participants[index].generation)
             else
@@ -4178,7 +4661,6 @@ const AuthorityCore = struct {
         snapshot.npc_update = true;
         const draws = try self.simulation.npcPresentation(0);
         for (draws) |draw| {
-            if (!std.meta.eql(draw.owner, target.relevance_coord)) continue;
             const npc_index = self.findNpcByPersistent(draw.persistent_id) orelse
                 return error.UnknownNpcPresentation;
             const view = try self.simulation.npc(draw.persistent_id);
@@ -4192,6 +4674,24 @@ const AuthorityCore = struct {
                 ))
             else
                 continue;
+            const encounter = self.simulation.npcEncounter(vital.target);
+            const interest_origin = observer_position orelse continue;
+            const encounter_relevant = if (encounter) |value| if (value.target) |encounter_target|
+                target.character != null and std.meta.eql(
+                    encounter_target,
+                    playerVitalsTarget(target, target.character.?),
+                )
+            else
+                false else false;
+            if (!evaluateNpcInterest(
+                &replication.npc_interest[npc_index],
+                snapshot.server_tick,
+                interest_origin,
+                target.relevance_coord,
+                view.position,
+                draw.owner,
+                encounter_relevant,
+            )) continue;
             snapshot.npcs[snapshot.npc_count] = .{
                 .entity = self.npcs[npc_index].replicated,
                 .position = view.position,
@@ -4206,7 +4706,36 @@ const AuthorityCore = struct {
                 .health = vital.current_health,
                 .maximum_health = vital.maximum_health,
                 .life_state = protocolLifeState(vital.life_state),
+                .encounter_state = if (encounter) |value|
+                    protocolNpcEncounterState(value.state)
+                else
+                    .patrolling,
+                .encounter_state_enter_tick = if (encounter) |value|
+                    value.state_enter_tick
+                else
+                    0,
+                .attack_impact_tick = if (encounter) |value| value.attack_impact_tick else 0,
+                .attack_ready_tick = if (encounter) |value| value.ready_tick else 0,
             };
+            snapshot.npc_count += 1;
+        }
+        for (self.npcs, 0..) |npc, npc_index| {
+            if (npc.active) continue;
+            const proxy = npc.death_proxy orelse continue;
+            const interest_origin = observer_position orelse continue;
+            if (snapshot.server_tick >= proxy.until_tick or !evaluateNpcInterest(
+                &replication.npc_interest[npc_index],
+                snapshot.server_tick,
+                interest_origin,
+                target.relevance_coord,
+                proxy.state.position,
+                proxy.owner,
+                false,
+            )) continue;
+            if (snapshot.npc_count == snapshot.npcs.len) {
+                return error.NpcSnapshotCapacityReached;
+            }
+            snapshot.npcs[snapshot.npc_count] = proxy.state;
             snapshot.npc_count += 1;
         }
         return snapshot;
@@ -4292,6 +4821,7 @@ const AuthorityCore = struct {
             participant.vitals_pending = false;
             participant.death_tick = 0;
             participant.respawn_available_tick = 0;
+            participant.death_proxy = null;
             participant.last_received_input = .{ .value = 0 };
             participant.last_applied_input = .{ .value = 0 };
             clearParticipantInputs(participant);
@@ -4303,6 +4833,7 @@ const AuthorityCore = struct {
             participant.pending_interaction_action = null;
             participant.last_melee_action = .{ .value = 0 };
             participant.pending_melee_action = null;
+            participant.pending_melee_target = null;
             participant.melee_cooldown_until_tick = 0;
             participant.last_respawn_action = .{ .value = 0 };
             participant.pending_respawn_action = null;
@@ -4318,11 +4849,13 @@ const AuthorityCore = struct {
             participant.applied_gameplay_delivery_id = 0;
             participant.replay_cursor_delivery_id = 0;
             participant.replay_records = @splat(.{});
+            participant.gameplay_consumer_retired = false;
             self.replication[index] = .{
                 .byte_credit = self.options.downstream_bytes_per_second,
             };
             participant.exit_pending = false;
             participant.spawn_pending = false;
+            participant.reserved_spawn_position = null;
             participant.host_spawn_request_id = null;
             participant.despawn_pending = false;
             participant.retain_after_despawn = false;
@@ -4404,6 +4937,8 @@ const AuthorityCore = struct {
                     .dead
                 else
                     .alive,
+                .melee_ready_tick = participant.melee_cooldown_until_tick,
+                .respawn_ready_tick = participant.respawn_available_tick,
             } },
             .delivery = .reliable,
             .lane = .control,
@@ -4448,6 +4983,7 @@ const AuthorityCore = struct {
         try self.queueGameplayResult(participant_index, .{ .melee_action_result = .{
             .sequence = action.sequence,
             .disposition = disposition,
+            .ready_tick = self.participants[participant_index].melee_cooldown_until_tick,
         } });
     }
 
@@ -4466,6 +5002,7 @@ const AuthorityCore = struct {
             .applied_damage = outcome.applied_amount,
             .remaining_health = outcome.remaining_health,
             .killed = outcome.killed,
+            .ready_tick = self.participants[participant_index].melee_cooldown_until_tick,
         } });
     }
 
@@ -4484,13 +5021,24 @@ const AuthorityCore = struct {
                 participant.avatar_incarnation
             else
                 action.dead_incarnation,
+            .ready_tick = participant.respawn_available_tick,
         } });
     }
 
     fn publishLifeEvent(self: *AuthorityCore, event: protocol.LifeEvent) !void {
+        // Resolve every slow consumer before changing a healthy ledger. A
+        // participant that exhausted its bounded replay window is retired;
+        // it cannot partially publish or fault the room for everyone else.
         for (self.participants, 0..) |participant, participant_index| {
-            if (!participant.active) continue;
-            try self.queueGameplayResult(participant_index, .{ .life_event = event });
+            if (!participant.active or participant.gameplay_consumer_retired) continue;
+            _ = try self.ensureGameplayCapacityOrRetire(participant_index, 1);
+        }
+        for (self.participants, 0..) |participant, participant_index| {
+            if (!participant.active or participant.gameplay_consumer_retired) continue;
+            self.appendGameplayResultAssumeCapacity(
+                participant_index,
+                .{ .life_event = event },
+            );
         }
     }
 
@@ -4575,37 +5123,116 @@ const AuthorityCore = struct {
         participant_index: usize,
         message: ReplayMessage,
     ) !void {
+        const messages = [_]ReplayMessage{message};
+        try self.queueGameplayResults(participant_index, &messages);
+    }
+
+    /// Commits one logical participant-local burst atomically to the retained
+    /// gameplay ledger. Wire quota and outbox space are deliberately absent
+    /// here: the send cursor drains the accepted facts over later cycles.
+    fn queueGameplayResults(
+        self: *AuthorityCore,
+        participant_index: usize,
+        messages: []const ReplayMessage,
+    ) !void {
+        if (!try self.ensureGameplayCapacityOrRetire(participant_index, messages.len)) return;
+        for (messages) |message| {
+            self.appendGameplayResultAssumeCapacity(participant_index, message);
+        }
+    }
+
+    fn ensureGameplayCapacityOrRetire(
+        self: *AuthorityCore,
+        participant_index: usize,
+        count: usize,
+    ) !bool {
+        if (!self.publication_preparing) return error.PublicationNotPreparing;
+        if (participant_index >= self.participants.len or
+            !self.participants[participant_index].active)
+        {
+            return error.InvalidGameplayPublicationParticipant;
+        }
+        if (self.participants[participant_index].gameplay_consumer_retired) return false;
+        if (count == 0) return true;
+        const participant = &self.participants[participant_index];
+        var available: usize = 0;
+        for (participant.replay_records) |record| {
+            available += @intFromBool(!record.active);
+        }
+        const additional_ids = count - 1;
+        const delivery_ids_available = participant.next_gameplay_delivery_id != 0 and
+            additional_ids <= std.math.maxInt(u64) - participant.next_gameplay_delivery_id;
+        if (available >= count and delivery_ids_available) return true;
+        try self.retireSlowGameplayConsumer(participant_index);
+        return false;
+    }
+
+    fn retireSlowGameplayConsumer(
+        self: *AuthorityCore,
+        participant_index: usize,
+    ) !void {
+        const participant = &self.participants[participant_index];
+        if (!participant.active or participant.gameplay_consumer_retired) return;
+        participant.gameplay_consumer_retired = true;
+        participant.reconnect = .invalid;
+        participant.retained_reconnect = .invalid;
+        participant.reconnect_confirmation_pending = false;
+        participant.pending_welcome_delivery_id = 0;
+        participant.replay_cursor_delivery_id = 0;
+        participant.replay_records = @splat(.{});
+        if (participant.connection_index) |connection_index| {
+            const connection = &self.connections[connection_index];
+            if (connection.active) {
+                // The disconnect notice is best-effort under the same bounded
+                // outbox. Retirement itself must never wait on more wire room.
+                if (!self.prepared_outbox.isFull()) {
+                    self.prepared_outbox.pushAssumeCapacity(.{
+                        .connection = connection.transport,
+                        .message = .{ .disconnected = .protocol_failure },
+                        .delivery = .reliable,
+                        .lane = .control,
+                        .close_after_send = true,
+                    });
+                }
+                self.detachConnection(connection_index, false);
+            }
+        }
+        participant.reconnect_deadline_tick = self.simulation.tickIndex();
+        try self.beginParticipantDespawn(participant_index);
+        self.slow_gameplay_consumers_retired +|= 1;
+    }
+
+    fn appendGameplayResultAssumeCapacity(
+        self: *AuthorityCore,
+        participant_index: usize,
+        message: ReplayMessage,
+    ) void {
         const participant = &self.participants[participant_index];
         const record = for (&participant.replay_records) |*candidate| {
             if (!candidate.active) break candidate;
-        } else return error.ReliableReplayCapacityReached;
+        } else unreachable;
         const delivery_id = participant.next_gameplay_delivery_id;
-        if (delivery_id == 0) return error.DeliveryIdExhausted;
-        if (participant.connection_index) |connection_index| {
-            if (self.connections[connection_index].active) {
-                if (self.prepared_outbox.isFull()) return error.QueueFull;
-                try self.consumeReliableQuota(connection_index);
-                self.prepared_outbox.pushAssumeCapacity(.{
-                    .connection = self.connections[connection_index].transport,
-                    .message = message.serverMessage(),
-                    .delivery = .reliable,
-                    .lane = .gameplay,
-                    .delivery_id = delivery_id,
-                });
-            }
-        }
+        std.debug.assert(delivery_id != 0);
         participant.next_gameplay_delivery_id +%= 1;
         record.* = .{
             .active = true,
             .delivery_id = delivery_id,
             .message = message,
         };
+        if (participant.connection_index) |connection_index| {
+            if (self.connections[connection_index].active and
+                participant.replay_cursor_delivery_id == 0)
+            {
+                participant.replay_cursor_delivery_id = delivery_id;
+            }
+        }
     }
 
     fn prepareReliableReplay(self: *AuthorityCore) !void {
         for (self.participants) |*participant| {
             const connection_index = participant.connection_index orelse continue;
-            if (!participant.active or participant.reconnect_confirmation_pending or
+            if (!participant.active or participant.gameplay_consumer_retired or
+                participant.reconnect_confirmation_pending or
                 participant.replay_cursor_delivery_id == 0 or
                 !self.connections[connection_index].active)
             {
@@ -4613,7 +5240,7 @@ const AuthorityCore = struct {
             }
             var cursor = participant.replay_cursor_delivery_id;
             while (cursor < participant.next_gameplay_delivery_id) {
-                const record = for (participant.replay_records) |candidate| {
+                const record = for (&participant.replay_records) |*candidate| {
                     if (candidate.active and candidate.delivery_id == cursor) break candidate;
                 } else return error.ReliableReplayLedgerGap;
                 if (self.prepared_outbox.isFull()) break;
@@ -4631,8 +5258,10 @@ const AuthorityCore = struct {
                     .lane = .gameplay,
                     .delivery_id = record.delivery_id,
                 });
+                const retransmission = record.transmitted;
+                record.transmitted = true;
                 cursor = record.delivery_id +| 1;
-                self.reliable_replays +|= 1;
+                if (retransmission) self.reliable_replays +|= 1;
             }
             participant.replay_cursor_delivery_id = if (cursor >= participant.next_gameplay_delivery_id) 0 else cursor;
         }
@@ -4902,13 +5531,41 @@ const AuthorityCore = struct {
         {
             return null;
         }
-        const character = participant.character orelse return null;
-        if (participant.driving_vehicle_index) |vehicle_index| {
-            const persistent = self.vehicles[vehicle_index].persistent orelse
-                return error.VehicleAuthorityInvariantBroken;
-            return (try self.simulation.vehicle(persistent)).state.chassis.pose.position;
+        return self.participantAvatarWorldPosition(participant_index);
+    }
+
+    /// Canonical world-space location occupied by a participant avatar. A
+    /// driver occupies the vehicle chassis, not the retained hidden character
+    /// controller pose. Every authority policy that reasons about player
+    /// location must pass through this boundary.
+    fn participantAvatarWorldPosition(
+        self: *AuthorityCore,
+        participant_index: usize,
+    ) !?[3]f32 {
+        if (participant_index >= self.participants.len) {
+            return error.ParticipantAuthorityInvariantBroken;
         }
-        return (try self.simulation.character(character)).position;
+        const participant = self.participants[participant_index];
+        const character = participant.character orelse {
+            if (participant.driving_vehicle_index != null) {
+                return error.VehicleAuthorityInvariantBroken;
+            }
+            return null;
+        };
+        const vehicle_index = participant.driving_vehicle_index orelse
+            return (try self.simulation.character(character)).position;
+        if (vehicle_index >= self.vehicles.len) {
+            return error.VehicleAuthorityInvariantBroken;
+        }
+        const vehicle = self.vehicles[vehicle_index];
+        if (!vehicle.active) return error.VehicleAuthorityInvariantBroken;
+        const persistent = vehicle.persistent orelse
+            return error.VehicleAuthorityInvariantBroken;
+        const view = try self.simulation.vehicle(persistent);
+        if (view.driver_id == null or !std.meta.eql(view.driver_id.?, character)) {
+            return error.VehicleAuthorityInvariantBroken;
+        }
+        return view.state.chassis.pose.position;
     }
 
     fn registerHostNpc(
@@ -5210,6 +5867,12 @@ pub const DedicatedAuthority = opaque {
         self: *const DedicatedAuthority,
     ) authority_diagnostics.Diagnostics {
         return self.stateConst().diagnostics();
+    }
+
+    pub fn npcReplacementDiagnostics(
+        self: *const DedicatedAuthority,
+    ) npc_replacement_contract.Diagnostics {
+        return self.stateConst().simulation.npcReplacementDiagnostics();
     }
 };
 
@@ -5621,6 +6284,20 @@ pub const EmbeddedDeveloperRole = struct {
         return authorityCore(self.context).simulation.diagnostics();
     }
 
+    pub fn beginFlightRecording(
+        self: EmbeddedDeveloperRole,
+        content: sandbox_replay.ContentCohort,
+    ) !sandbox.CaptureAdmission {
+        return authorityCore(self.context).simulation.beginFlightRecording(content, .{});
+    }
+
+    pub fn snapshotFlightRecording(
+        self: EmbeddedDeveloperRole,
+        allocator: std.mem.Allocator,
+    ) ![]u8 {
+        return authorityCore(self.context).simulation.snapshotFlightRecording(allocator);
+    }
+
     pub fn record(
         self: EmbeddedDeveloperRole,
         entry: engine.runtime.DiagnosticEntry,
@@ -5735,6 +6412,98 @@ pub const EmbeddedInspectionRole = struct {
         return authorityCoreConst(self.context).replicatedId(persistent);
     }
 
+    /// Last committed authority-owned interest evaluation for one observer
+    /// and NPC generation. This is diagnostic evidence, not a presentation
+    /// source of truth.
+    pub fn npcInterest(
+        self: EmbeddedInspectionRole,
+        participant: identity.ParticipantId,
+        npc_entity: identity.ReplicatedEntityId,
+    ) ?NpcInterestView {
+        if (!participant.isValid() or participant.index == 0 or
+            participant.index > budgets.max_participants)
+        {
+            return null;
+        }
+        const core = authorityCoreConst(self.context);
+        const participant_index = @as(usize, participant.index) - 1;
+        const participant_slot = core.participants[participant_index];
+        if (!participant_slot.active or
+            participant_slot.generation != participant.generation) return null;
+        for (core.npcs, 0..) |npc, npc_index| {
+            if ((!npc.active and npc.death_proxy == null) or
+                !std.meta.eql(npc.replicated, npc_entity)) continue;
+            return core.replication[participant_index].npc_interest[npc_index].view();
+        }
+        return null;
+    }
+
+    pub fn vehicleIdentity(
+        self: EmbeddedInspectionRole,
+        slot_index: usize,
+    ) ?ReplicatedObjectIdentity {
+        const core = authorityCoreConst(self.context);
+        if (slot_index >= core.vehicles.len) return null;
+        const slot = core.vehicles[slot_index];
+        if (!slot.active or slot.persistent == null) return null;
+        return .{ .replicated = slot.replicated, .persistent = slot.persistent.? };
+    }
+
+    pub fn carryableIdentity(
+        self: EmbeddedInspectionRole,
+        slot_index: usize,
+    ) ?ReplicatedObjectIdentity {
+        const core = authorityCoreConst(self.context);
+        if (slot_index >= core.carryables.len) return null;
+        const slot = core.carryables[slot_index];
+        if (!slot.active or slot.persistent == null) return null;
+        return .{ .replicated = slot.replicated, .persistent = slot.persistent.? };
+    }
+
+    pub fn vehicleInterest(
+        self: EmbeddedInspectionRole,
+        participant: identity.ParticipantId,
+        entity: identity.ReplicatedEntityId,
+    ) ?ObjectInterestView {
+        if (!participant.isValid() or participant.index == 0 or
+            participant.index > budgets.max_participants) return null;
+        const core = authorityCoreConst(self.context);
+        const participant_index = @as(usize, participant.index) - 1;
+        const participant_slot = core.participants[participant_index];
+        if (!participant_slot.active or
+            participant_slot.generation != participant.generation) return null;
+        for (core.vehicles, 0..) |vehicle, vehicle_index| {
+            if (!vehicle.active or !std.meta.eql(vehicle.replicated, entity)) continue;
+            const interest = core.replication[participant_index]
+                .vehicle_interest[vehicle_index];
+            if (interest.evaluated_tick == 0) return null;
+            return interest.view();
+        }
+        return null;
+    }
+
+    pub fn carryableInterest(
+        self: EmbeddedInspectionRole,
+        participant: identity.ParticipantId,
+        entity: identity.ReplicatedEntityId,
+    ) ?ObjectInterestView {
+        if (!participant.isValid() or participant.index == 0 or
+            participant.index > budgets.max_participants) return null;
+        const core = authorityCoreConst(self.context);
+        const participant_index = @as(usize, participant.index) - 1;
+        const participant_slot = core.participants[participant_index];
+        if (!participant_slot.active or
+            participant_slot.generation != participant.generation) return null;
+        for (core.carryables, 0..) |carryable, carryable_index| {
+            if (!carryable.active or !std.meta.eql(carryable.replicated, entity)) continue;
+            const interest = core.replication[participant_index]
+                .carryable_interest[carryable_index];
+            if (interest.evaluated_tick == 0) return null;
+            return interest.view();
+        }
+        return null;
+    }
+
     pub fn observationDiagnostics(
         self: EmbeddedInspectionRole,
     ) HostObservationDiagnostics {
@@ -5743,6 +6512,34 @@ pub const EmbeddedInspectionRole = struct {
             .pending_records = observations.pending(),
             .records_dropped = observations.records_dropped,
         };
+    }
+
+    pub fn npcEncounter(
+        self: EmbeddedInspectionRole,
+        persistent: engine.PersistentId,
+    ) ?npc_encounter_contract.View {
+        const core = authorityCoreConst(self.context);
+        const vital = core.simulation.currentVitals(.npc, persistent) orelse return null;
+        return core.simulation.npcEncounter(vital.target);
+    }
+
+    pub fn npcEncounterDiagnostics(
+        self: EmbeddedInspectionRole,
+    ) npc_encounter_contract.Diagnostics {
+        return authorityCoreConst(self.context).simulation.npcEncounterDiagnostics();
+    }
+
+    pub fn npcReplacementDiagnostics(
+        self: EmbeddedInspectionRole,
+    ) npc_replacement_contract.Diagnostics {
+        return authorityCoreConst(self.context).simulation.npcReplacementDiagnostics();
+    }
+
+    pub fn copyNpcEncounterTransitions(
+        self: EmbeddedInspectionRole,
+        storage: []npc_encounter_contract.Transition,
+    ) ![]const npc_encounter_contract.Transition {
+        return authorityCoreConst(self.context).simulation.copyNpcEncounterTransitions(storage);
     }
 };
 
@@ -5822,37 +6619,111 @@ fn persistentLessThan(lhs: engine.PersistentId, rhs: engine.PersistentId) bool {
         (lhs.namespace == rhs.namespace and lhs.local < rhs.local);
 }
 
-fn fingerprintIngress(seed: u64, record: AcceptedIngress) u64 {
-    var result = seed;
-    inline for (.{
-        record.admitted_tick,
-        record.account.value,
-        @as(u64, record.participant.index),
-        @as(u64, record.participant.generation),
-        @as(u64, record.connection.index),
-        @as(u64, record.connection.generation),
-        @as(u64, record.sequence.value),
-        @as(u64, record.action_sequence.value),
-        record.target_tick,
-        @as(u64, @as(u32, @bitCast(record.move[0]))),
-        @as(u64, @as(u32, @bitCast(record.move[1]))),
-        @as(u64, @as(u32, @bitCast(record.facing_yaw))),
-        @as(u64, @intFromBool(record.jump_pressed)),
-        @as(u64, @intFromEnum(record.kind)),
-        @as(u64, record.vehicle.index),
-        @as(u64, record.vehicle.generation),
-        @as(u64, record.carryable.index),
-        @as(u64, record.carryable.generation),
-        @as(u64, record.avatar_incarnation),
-        @as(u64, @as(u32, @bitCast(record.vehicle_control[0]))),
-        @as(u64, @as(u32, @bitCast(record.vehicle_control[1]))),
-        @as(u64, @as(u32, @bitCast(record.vehicle_control[2]))),
-        @as(u64, @as(u32, @bitCast(record.vehicle_control[3]))),
-    }) |value| {
-        var stable: u64 = value;
-        result = std.hash.Wyhash.hash(result, std.mem.asBytes(&stable));
+fn evaluateNpcInterest(
+    state: *NpcInterestState,
+    authority_tick: u64,
+    observer_position: [3]f32,
+    observer_district: district_contract.ChunkCoord,
+    npc_position: [3]f32,
+    owner_district: district_contract.ChunkCoord,
+    encounter_relevant: bool,
+) bool {
+    const dx = npc_position[0] - observer_position[0];
+    const dz = npc_position[2] - observer_position[2];
+    const distance_squared = dx * dx + dz * dz;
+    const same_district = std.meta.eql(observer_district, owner_district);
+    const enter_squared = npc_interest_enter_distance * npc_interest_enter_distance;
+    const exit_squared = npc_interest_exit_distance * npc_interest_exit_distance;
+
+    var included = false;
+    var reason: NpcInterestReason = .excluded;
+    if (same_district) {
+        included = true;
+        reason = .same_district;
+    } else if (encounter_relevant) {
+        included = true;
+        reason = .encounter;
+    } else if (!state.included and distance_squared <= enter_squared) {
+        included = true;
+        reason = .proximity_enter;
+    } else if (state.included and distance_squared <= exit_squared) {
+        included = true;
+        reason = .proximity_retained;
+    } else if (state.included and authority_tick <= state.grace_until_tick) {
+        included = true;
+        reason = .grace;
     }
-    return result;
+
+    if (included and reason != .grace) {
+        state.grace_until_tick = authority_tick +| npc_interest_exit_grace_ticks;
+    } else if (!included) {
+        state.grace_until_tick = 0;
+    }
+    state.included = included;
+    state.reason = reason;
+    state.evaluated_tick = authority_tick;
+    state.observer_position = observer_position;
+    state.npc_position = npc_position;
+    state.observer_district = observer_district;
+    state.owner_district = owner_district;
+    state.distance_squared_xz = distance_squared;
+    state.encounter_relevant = encounter_relevant;
+    return included;
+}
+
+fn recordObjectInterest(
+    state: *ObjectInterestState,
+    authority_tick: u64,
+    baseline_id: u32,
+    snapshot_sequence: u32,
+    observer_position: [3]f32,
+    observer_district: district_contract.ChunkCoord,
+    object_position: [3]f32,
+    reason: ObjectInterestReason,
+) void {
+    state.* = .{
+        .included = true,
+        .reason = reason,
+        .evaluated_tick = authority_tick,
+        .baseline_id = baseline_id,
+        .snapshot_sequence = snapshot_sequence,
+        .observer_position = observer_position,
+        .object_position = object_position,
+        .observer_district = observer_district,
+        .owner_district = district_contract.chunkCoordForWorldPosition(
+            object_position,
+        ) catch observer_district,
+        .distance_squared_xz = horizontalDistanceSquared(
+            observer_position,
+            object_position,
+        ),
+    };
+}
+
+test "bounded object interest records cross-district snapshot causality" {
+    var state = ObjectInterestState{};
+    recordObjectInterest(
+        &state,
+        42,
+        7,
+        19,
+        .{ -2, 0, 4 },
+        sandbox_district_recipe.navigation_west_coord,
+        .{ 18, 1, 4 },
+        .bounded_world,
+    );
+    const view = state.view();
+    try std.testing.expect(view.included);
+    try std.testing.expectEqual(ObjectInterestReason.bounded_world, view.reason);
+    try std.testing.expectEqual(@as(u64, 42), view.evaluated_tick);
+    try std.testing.expectEqual(@as(u32, 7), view.baseline_id);
+    try std.testing.expectEqual(@as(u32, 19), view.snapshot_sequence);
+    try std.testing.expect(!std.meta.eql(view.observer_district, view.owner_district));
+    try std.testing.expectEqual(@as(f32, 400), view.distance_squared_xz);
+}
+
+fn fingerprintIngress(seed: u64, record: AcceptedIngress) u64 {
+    return record.fingerprintFromTickOrigin(seed, 0);
 }
 
 fn playerVitalsTarget(
@@ -5878,6 +6749,19 @@ fn protocolLifeState(state: vitals_contract.LifeState) protocol.AvatarLifeState 
     return switch (state) {
         .alive => .alive,
         .dead => .dead,
+    };
+}
+
+fn protocolNpcEncounterState(
+    state: npc_encounter_contract.State,
+) protocol.NpcEncounterState {
+    return switch (state) {
+        .patrolling => .patrolling,
+        .pursuing => .pursuing,
+        .attack_windup => .attack_windup,
+        .attack_recovery => .attack_recovery,
+        .searching => .searching,
+        .returning => .returning,
     };
 }
 
@@ -5986,6 +6870,20 @@ fn npcSpawnRequestId(index: usize, generation: u16) u64 {
         @as(u64, @intCast(index + 1));
 }
 
+fn productNpcSpawnNode(index: usize) npc_contract.NodeRef {
+    std.debug.assert(index < budgets.product_npcs);
+    const nodes_per_district = budgets.product_npcs / 2;
+    std.debug.assert(budgets.product_npcs % 2 == 0);
+    std.debug.assert(nodes_per_district == 3);
+    return .{
+        .coord = if (index % 2 == 0)
+            sandbox_district_recipe.navigation_west_coord
+        else
+            sandbox_district_recipe.navigation_east_coord,
+        .index = @intCast(index / 2),
+    };
+}
+
 fn decodeNpcSpawnRequestId(value: u64) ?struct { index: usize, generation: u16 } {
     if (value & 0xffff_ffff_0000_0000 != 0x4d50_3700_0000_0000) return null;
     const raw_index: u16 = @truncate(value);
@@ -6087,6 +6985,120 @@ fn initTestEmbeddedAuthority(
     ));
 }
 
+const CombatVehicleFixture = struct {
+    authority: *EmbeddedAuthority,
+    attacker_transport: TransportConnection,
+    target_transport: TransportConnection,
+    attacker: protocol.Welcome,
+    target: protocol.Welcome,
+    vehicle: identity.ReplicatedEntityId,
+
+    fn deinit(self: CombatVehicleFixture) void {
+        self.authority.deinit();
+    }
+};
+
+fn initCombatVehicleFixture(
+    namespace: u64,
+    vehicle_rotation: [4]f32,
+) !CombatVehicleFixture {
+    var config = testEmbeddedCoreConfig(namespace, .host_managed);
+    config.simulation.vehicle.max_entry_distance = 5;
+    const authority = try initTestEmbeddedAuthority(config, .{}, 0x82);
+    errdefer authority.deinit();
+    const session = authority.session();
+    const attacker_transport = TransportConnection{ .value = 791 };
+    const target_transport = TransportConnection{ .value = 792 };
+    _ = try session.openConnection(attacker_transport);
+    try session.ingest(attacker_transport, .{ .hello = .{
+        .account = .{ .value = 791 },
+    } });
+    _ = try session.openConnection(target_transport);
+    try session.ingest(target_transport, .{ .hello = .{
+        .account = .{ .value = 792 },
+    } });
+    try session.tick();
+    var attacker: ?protocol.Welcome = null;
+    var target: ?protocol.Welcome = null;
+    while (takeOutboundForTest(session)) |outbound| switch (outbound.message) {
+        .welcome => |welcome| if (outbound.connection.value == attacker_transport.value) {
+            attacker = welcome;
+        } else if (outbound.connection.value == target_transport.value) {
+            target = welcome;
+        },
+        else => {},
+    };
+    const attacker_welcome = attacker orelse return error.MissingAttackerWelcome;
+    const target_welcome = target orelse return error.MissingTargetWelcome;
+
+    try authority.characters().spawnParticipant(attacker_transport, .{
+        .request_id = 1,
+        .position = .{ 0, 0, 2 },
+    });
+    try authority.characters().spawnParticipant(target_transport, .{
+        .request_id = 2,
+        .position = .{ 2, 0, 2 },
+    });
+    try authority.vehicles().submit(.{ .spawn = .{
+        .request_id = 3,
+        .chassis = .{ .pose = .{
+            .position = .{ 0, 2, 0 },
+            .rotation = vehicle_rotation,
+        } },
+    } });
+    try session.tick();
+    while (authority.characters().pollOutcome() != null) {}
+    while (authority.vehicles().pollOutcome() != null) {}
+    while (takeOutboundForTest(session) != null) {}
+
+    const core = embeddedAuthorityCore(authority);
+    const attacker_index = @as(usize, attacker_welcome.participant.index) - 1;
+    const target_index = @as(usize, target_welcome.participant.index) - 1;
+    var ready = false;
+    for (0..16) |_| {
+        if (core.participants[attacker_index].lifecycle == .alive and
+            !core.participants[attacker_index].vitals_pending and
+            core.participants[target_index].lifecycle == .alive and
+            !core.participants[target_index].vitals_pending and
+            core.vehicles[0].active)
+        {
+            ready = true;
+            break;
+        }
+        try session.tick();
+        while (takeOutboundForTest(session) != null) {}
+    }
+    if (!ready) return error.CombatVehicleFixtureNotReady;
+    for (0..120) |_| {
+        try session.tick();
+        while (takeOutboundForTest(session) != null) {}
+    }
+    try session.ingest(attacker_transport, .{ .input = .{
+        .session = attacker_welcome.session,
+        .participant = attacker_welcome.participant,
+        .sequence = .{ .value = 1 },
+        .target_tick = core.simulation.tickIndex() +| 1,
+        .move = .{ 0, 0 },
+        .facing_yaw = std.math.pi / 2.0,
+        .jump_pressed = false,
+    } });
+    try session.tick();
+    while (takeOutboundForTest(session) != null) {}
+    const melee_target = try core.selectMeleeTarget(attacker_index) orelse
+        return error.MissingCombatVehicleMeleeTarget;
+    if (!std.meta.eql(melee_target.persistent, core.participants[target_index].character.?)) {
+        return error.UnexpectedCombatVehicleMeleeTarget;
+    }
+    return .{
+        .authority = authority,
+        .attacker_transport = attacker_transport,
+        .target_transport = target_transport,
+        .attacker = attacker_welcome,
+        .target = target_welcome,
+        .vehicle = core.vehicles[0].replicated,
+    };
+}
+
 fn testRoomAuthorization(
     secret: protocol.AdmissionSecret,
     account: identity.AccountId,
@@ -6133,6 +7145,115 @@ fn takeOutboundForTest(owner: anytype) ?Outbound {
     const lease = owner.beginOutboundLease() orelse return null;
     owner.commitOutboundLease(lease.generation) catch unreachable;
     return lease.outbound;
+}
+
+test "automatic participant slots cover capacity and clear canonical blockers" {
+    const west = sandbox_district_recipe.build(
+        sandbox_district_recipe.navigation_west_coord,
+        sandbox_district_recipe.current_recipe_version,
+    ).ready;
+    const clearance = sandbox_district_recipe.CapsuleClearance{
+        .radius = (sandbox_host_contracts.CharacterConfig{}).radius,
+        .half_height = (sandbox_host_contracts.CharacterConfig{}).half_height,
+        .margin = 0.05,
+    };
+    try std.testing.expectEqual(budgets.max_participants, automatic_spawn_candidates.len);
+    for (automatic_spawn_candidates, 0..) |candidate, index| {
+        try std.testing.expect(sandbox_district_recipe.capsuleTraversalClear(
+            &west,
+            candidate,
+            candidate,
+            clearance,
+        ));
+        for (automatic_spawn_candidates[index + 1 ..]) |other| {
+            try std.testing.expect(horizontalDistanceSquared(candidate, other) >= 2.25);
+        }
+    }
+}
+
+test "automatic product NPC fixture uses every authored route node once" {
+    try std.testing.expectEqual(@as(usize, 6), budgets.product_npcs);
+    for (0..budgets.product_npcs) |index| {
+        const candidate = productNpcSpawnNode(index);
+        try std.testing.expect(candidate.index < 3);
+        for (0..index) |earlier_index| {
+            try std.testing.expect(!std.meta.eql(
+                candidate,
+                productNpcSpawnNode(earlier_index),
+            ));
+        }
+    }
+}
+
+test "automatic admission reserves full capacity around the live fixture" {
+    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    defer authority.deinit();
+    const core = authority.state();
+    var fixture_settled = false;
+    for (0..10_000) |_| {
+        var settled_npcs: usize = 0;
+        for (core.npcs) |npc| {
+            settled_npcs += @intFromBool(
+                npc.active and npc.persistent != null and
+                    !npc.spawn_pending and !npc.vitals_pending and
+                    !npc.despawn_pending,
+            );
+        }
+        if (core.vehicles[0].active and settled_npcs == budgets.product_npcs) {
+            fixture_settled = true;
+            break;
+        }
+        try authority.tick();
+        while (takeOutboundForTest(authority) != null) {}
+        std.Thread.yield() catch {};
+    }
+    try std.testing.expect(fixture_settled);
+
+    for (0..budgets.max_participants) |participant_index| {
+        const candidate = try core.selectInitialSpawnPosition(participant_index) orelse
+            return error.AutomaticSpawnCapacityUnavailable;
+        const participant = &core.participants[participant_index];
+        participant.active = true;
+        participant.lifecycle = .spawning;
+        participant.reserved_spawn_position = candidate;
+    }
+}
+
+test "spawning character remains occupied during reservation handoff" {
+    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    defer authority.deinit();
+    const core = authority.state();
+    const transport = TransportConnection{ .value = 101 };
+    _ = try authority.openConnection(transport);
+    try authority.ingest(transport, .{ .hello = .{
+        .account = .{ .value = 101 },
+    } });
+    _ = takeOutboundForTest(authority) orelse return error.MissingSpawnHandoffWelcome;
+
+    var character_spawned = false;
+    for (0..16) |_| {
+        if (core.participants[0].character != null) {
+            character_spawned = true;
+            break;
+        }
+        try authority.tick();
+        while (takeOutboundForTest(authority) != null) {}
+    }
+    try std.testing.expect(character_spawned);
+    const character = try core.simulation.character(core.participants[0].character.?);
+    try std.testing.expectEqual(automatic_spawn_candidates[0], character.position);
+
+    // Recreate the respawn outcome -> vitals registration handoff: the spawn
+    // reservation is gone, the character exists, and lifecycle is spawning.
+    core.participants[0].lifecycle = .spawning;
+    core.participants[0].reserved_spawn_position = automatic_spawn_candidates[15];
+    for (2..budgets.max_participants) |participant_index| {
+        const participant = &core.participants[participant_index];
+        participant.active = true;
+        participant.lifecycle = .spawning;
+        participant.reserved_spawn_position = automatic_spawn_candidates[participant_index - 1];
+    }
+    try std.testing.expect((try core.selectInitialSpawnPosition(1)) == null);
 }
 
 test "authority placement facades expose opaque role-scoped state" {
@@ -7369,6 +8490,473 @@ test "authority drops stale input without terminating an unreliable stream" {
     try std.testing.expectEqual(@as(u32, 1), ingress[0].sequence.value);
 }
 
+test "authoritative melee skips driving player targets" {
+    const authority = try initTestEmbeddedAuthority(
+        testEmbeddedCoreConfig(0x454d_4420, .automatic),
+        .{},
+        0x81,
+    );
+    defer authority.deinit();
+    const session = authority.session();
+    const core = embeddedAuthorityCore(authority);
+    const attacker_transport = TransportConnection{ .value = 781 };
+    const target_transport = TransportConnection{ .value = 782 };
+    _ = try session.openConnection(attacker_transport);
+    try session.ingest(attacker_transport, .{ .hello = .{
+        .account = .{ .value = 781 },
+    } });
+    _ = try session.openConnection(target_transport);
+    try session.ingest(target_transport, .{ .hello = .{
+        .account = .{ .value = 782 },
+    } });
+    try session.tick();
+    var attacker_welcome: ?protocol.Welcome = null;
+    var target_welcome: ?protocol.Welcome = null;
+    while (takeOutboundForTest(session)) |outbound| switch (outbound.message) {
+        .welcome => |welcome| if (outbound.connection.value == attacker_transport.value) {
+            attacker_welcome = welcome;
+        } else if (outbound.connection.value == target_transport.value) {
+            target_welcome = welcome;
+        },
+        else => {},
+    };
+    const attacker = attacker_welcome orelse return error.MissingAttackerWelcome;
+    const target = target_welcome orelse return error.MissingTargetWelcome;
+    const attacker_index = @as(usize, attacker.participant.index) - 1;
+    const target_index = @as(usize, target.participant.index) - 1;
+    var avatars_alive = false;
+    for (0..16) |_| {
+        if (core.participants[attacker_index].lifecycle == .alive and
+            core.participants[target_index].lifecycle == .alive)
+        {
+            avatars_alive = true;
+            break;
+        }
+        try session.tick();
+        while (takeOutboundForTest(session) != null) {}
+    }
+    try std.testing.expect(avatars_alive);
+
+    try session.ingest(attacker_transport, .{ .input = .{
+        .session = attacker.session,
+        .participant = attacker.participant,
+        .sequence = .{ .value = 1 },
+        .target_tick = core.simulation.tickIndex() +| 1,
+        .move = .{ 0, 0 },
+        .facing_yaw = std.math.pi / 2.0,
+        .jump_pressed = false,
+    } });
+    try session.tick();
+    while (takeOutboundForTest(session) != null) {}
+    const on_foot_target = try core.selectMeleeTarget(attacker_index) orelse
+        return error.MissingOnFootMeleeTarget;
+    try std.testing.expectEqual(vitals_contract.TargetKind.player, on_foot_target.kind);
+    try std.testing.expectEqual(
+        core.participants[target_index].character.?,
+        on_foot_target.persistent,
+    );
+
+    core.participants[target_index].driving_vehicle_index = 0;
+    try std.testing.expect((try core.selectMeleeTarget(attacker_index)) == null);
+    core.participants[target_index].driving_vehicle_index = null;
+}
+
+test "npc interest retains nearby and engaged actors across district boundaries" {
+    const west = sandbox_district_recipe.navigation_west_coord;
+    const east = sandbox_district_recipe.navigation_east_coord;
+    var state = NpcInterestState{};
+
+    try std.testing.expect(evaluateNpcInterest(
+        &state,
+        10,
+        .{ 0, 0, 0 },
+        west,
+        .{ 100, 0, 0 },
+        west,
+        false,
+    ));
+    try std.testing.expectEqual(NpcInterestReason.same_district, state.reason);
+
+    state = .{};
+    try std.testing.expect(evaluateNpcInterest(
+        &state,
+        20,
+        .{ 0, 0, 0 },
+        west,
+        .{ 19, 0, 0 },
+        east,
+        false,
+    ));
+    try std.testing.expectEqual(NpcInterestReason.proximity_enter, state.reason);
+    try std.testing.expectEqual(@as(u64, 50), state.grace_until_tick);
+
+    try std.testing.expect(evaluateNpcInterest(
+        &state,
+        21,
+        .{ 0, 0, 0 },
+        west,
+        .{ 23, 0, 0 },
+        east,
+        false,
+    ));
+    try std.testing.expectEqual(NpcInterestReason.proximity_retained, state.reason);
+    try std.testing.expectEqual(@as(u64, 51), state.grace_until_tick);
+
+    try std.testing.expect(evaluateNpcInterest(
+        &state,
+        51,
+        .{ 0, 0, 0 },
+        west,
+        .{ 25, 0, 0 },
+        east,
+        false,
+    ));
+    try std.testing.expectEqual(NpcInterestReason.grace, state.reason);
+    try std.testing.expect(!evaluateNpcInterest(
+        &state,
+        52,
+        .{ 0, 0, 0 },
+        west,
+        .{ 25, 0, 0 },
+        east,
+        false,
+    ));
+    try std.testing.expectEqual(NpcInterestReason.excluded, state.reason);
+
+    try std.testing.expect(evaluateNpcInterest(
+        &state,
+        60,
+        .{ 0, 0, 0 },
+        west,
+        .{ 200, 0, 0 },
+        east,
+        true,
+    ));
+    try std.testing.expectEqual(NpcInterestReason.encounter, state.reason);
+    try std.testing.expect(evaluateNpcInterest(
+        &state,
+        61,
+        .{ 0, 0, 0 },
+        west,
+        .{ 200, 0, 0 },
+        east,
+        false,
+    ));
+    try std.testing.expectEqual(NpcInterestReason.grace, state.reason);
+}
+
+test "relevant snapshot keeps a nearby NPC across the district seam" {
+    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    defer authority.deinit();
+    const transport = TransportConnection{ .value = 0x4e50_4301 };
+    _ = try authority.openConnection(transport);
+    try authority.ingest(transport, .{ .hello = .{
+        .account = .{ .value = 0x4e50_4301 },
+    } });
+    const welcome = takeOutboundForTest(authority).?.message.welcome;
+    const core = authority.state();
+    const participant_index = @as(usize, welcome.participant.index) - 1;
+
+    var npcs_ready = false;
+    for (0..32) |_| {
+        try authority.tick();
+        while (takeOutboundForTest(authority) != null) {}
+        for (core.npcs[0..budgets.product_npcs]) |npc| {
+            if (npc.active) {
+                npcs_ready = true;
+                break;
+            }
+        }
+        if (npcs_ready and core.participants[participant_index].character != null) break;
+    }
+    try std.testing.expect(npcs_ready);
+
+    core.participants[participant_index].relevance_coord =
+        sandbox_district_recipe.navigation_east_coord;
+    core.replication[participant_index].npc_interest = @splat(.{});
+    const draws = try core.simulation.npcPresentation(0);
+    var west_npc: ?usize = null;
+    for (draws) |draw| {
+        if (!std.meta.eql(draw.owner, sandbox_district_recipe.navigation_west_coord)) continue;
+        const index = core.findNpcByPersistent(draw.persistent_id) orelse continue;
+        const observer = (try core.participantAvatarWorldPosition(participant_index)).?;
+        const view = try core.simulation.npc(draw.persistent_id);
+        const dx = view.position[0] - observer[0];
+        const dz = view.position[2] - observer[2];
+        if (dx * dx + dz * dz <=
+            npc_interest_enter_distance * npc_interest_enter_distance)
+        {
+            west_npc = index;
+            break;
+        }
+    }
+    const npc_index = west_npc orelse return error.MissingNearbyCrossDistrictNpc;
+    const snapshot = try core.buildRelevantSnapshot(participant_index);
+    var found = false;
+    for (snapshot.npcs[0..snapshot.npc_count]) |npc| {
+        if (std.meta.eql(npc.entity, core.npcs[npc_index].replicated)) {
+            found = true;
+            break;
+        }
+    }
+    try std.testing.expect(found);
+    const interest = core.replication[participant_index].npc_interest[npc_index];
+    try std.testing.expect(interest.included);
+    try std.testing.expect(interest.reason != .excluded);
+    try std.testing.expect(!std.meta.eql(
+        interest.observer_district,
+        interest.owner_district,
+    ));
+}
+
+test "occupied character follows chassis while bounded vehicle stays projected across districts" {
+    const fixture = try initCombatVehicleFixture(
+        0x454d_4421,
+        .{ 0, 0.70710677, 0, 0.70710677 },
+    );
+    defer fixture.deinit();
+    const session = fixture.authority.session();
+    const core = embeddedAuthorityCore(fixture.authority);
+    const driver_index = @as(usize, fixture.attacker.participant.index) - 1;
+    const observer_index = @as(usize, fixture.target.participant.index) - 1;
+    try session.ingest(fixture.attacker_transport, .{ .vehicle_action = .{
+        .session = fixture.attacker.session,
+        .participant = fixture.attacker.participant,
+        .sequence = .{ .value = 1 },
+        .vehicle = fixture.vehicle,
+        .kind = .enter,
+    } });
+    try session.tick();
+    var entered = false;
+    while (takeOutboundForTest(session)) |outbound| switch (outbound.message) {
+        .vehicle_action_result => |result| entered = result.disposition == .entered,
+        else => {},
+    };
+    try std.testing.expect(entered);
+
+    var crossed = false;
+    for (0..720) |offset| {
+        try session.ingest(fixture.attacker_transport, .{ .vehicle_input = .{
+            .session = fixture.attacker.session,
+            .participant = fixture.attacker.participant,
+            .sequence = .{ .value = @intCast(offset + 2) },
+            .target_tick = core.simulation.tickIndex() +| 1,
+            .vehicle = fixture.vehicle,
+            .throttle = 1,
+            .steering = 0,
+            .brake = 0,
+            .hand_brake = 0,
+        } });
+        try session.tick();
+        while (takeOutboundForTest(session) != null) {}
+        const chassis = (try core.simulation.vehicle(core.vehicles[0].persistent.?))
+            .state.chassis.pose.position;
+        if (@abs(chassis[0]) > district_contract.chunk_half_span + 1) {
+            crossed = true;
+            break;
+        }
+    }
+    try std.testing.expect(crossed);
+    const character_position = (try core.simulation.character(
+        core.participants[driver_index].character.?,
+    )).position;
+    const chassis_position = (try core.participantAvatarWorldPosition(driver_index)).?;
+    try std.testing.expectEqualDeep(
+        sandbox_district_recipe.navigation_west_coord,
+        try district_contract.chunkCoordForWorldPosition(character_position),
+    );
+    const chassis_coord = try district_contract.chunkCoordForWorldPosition(chassis_position);
+    try std.testing.expect(!std.meta.eql(
+        sandbox_district_recipe.navigation_west_coord,
+        chassis_coord,
+    ));
+
+    core.participants[observer_index].relevance_coord =
+        sandbox_district_recipe.navigation_west_coord;
+    const west = try core.buildRelevantSnapshot(observer_index);
+    var west_has_driver = false;
+    for (west.characters[0..west.character_count]) |character| {
+        west_has_driver = west_has_driver or
+            std.meta.eql(character.owner, fixture.attacker.participant);
+    }
+    var west_has_vehicle = false;
+    for (west.vehicles[0..west.vehicle_count]) |vehicle| {
+        west_has_vehicle = west_has_vehicle or std.meta.eql(vehicle.entity, fixture.vehicle);
+    }
+    try std.testing.expect(!west_has_driver);
+    try std.testing.expect(west_has_vehicle);
+    const west_vehicle_interest = core.replication[observer_index].vehicle_interest[0];
+    try std.testing.expect(west_vehicle_interest.included);
+    try std.testing.expectEqual(
+        ObjectInterestReason.bounded_world,
+        west_vehicle_interest.reason,
+    );
+    try std.testing.expect(!std.meta.eql(
+        west_vehicle_interest.observer_district,
+        west_vehicle_interest.owner_district,
+    ));
+
+    core.participants[observer_index].relevance_coord = chassis_coord;
+    const remote = try core.buildRelevantSnapshot(observer_index);
+    var remote_has_driver = false;
+    for (remote.characters[0..remote.character_count]) |character| {
+        remote_has_driver = remote_has_driver or
+            std.meta.eql(character.owner, fixture.attacker.participant);
+    }
+    var remote_has_occupied_vehicle = false;
+    for (remote.vehicles[0..remote.vehicle_count]) |vehicle| {
+        remote_has_occupied_vehicle = remote_has_occupied_vehicle or
+            (std.meta.eql(vehicle.entity, fixture.vehicle) and vehicle.driver != null and
+                std.meta.eql(vehicle.driver.?, fixture.attacker.participant));
+    }
+    try std.testing.expect(remote_has_driver);
+    try std.testing.expect(remote_has_occupied_vehicle);
+
+    const local = try core.buildRelevantSnapshot(driver_index);
+    var local_has_driver = false;
+    for (local.characters[0..local.character_count]) |character| {
+        local_has_driver = local_has_driver or
+            std.meta.eql(character.owner, fixture.attacker.participant);
+    }
+    var local_has_occupied_vehicle = false;
+    for (local.vehicles[0..local.vehicle_count]) |vehicle| {
+        local_has_occupied_vehicle = local_has_occupied_vehicle or
+            (std.meta.eql(vehicle.entity, fixture.vehicle) and vehicle.driver != null and
+                std.meta.eql(vehicle.driver.?, fixture.attacker.participant));
+    }
+    try std.testing.expect(local_has_driver);
+    try std.testing.expect(local_has_occupied_vehicle);
+}
+
+test "same-cycle vehicle enter and melee permutations remain exclusive" {
+    const Case = enum {
+        attacker_enter_first,
+        attacker_melee_first,
+        target_enter_first,
+        attacker_melee_target_enter,
+    };
+    const cases = [_]Case{
+        .attacker_enter_first,
+        .attacker_melee_first,
+        .target_enter_first,
+        .attacker_melee_target_enter,
+    };
+    for (cases, 0..) |case, case_index| {
+        const fixture = try initCombatVehicleFixture(
+            0x454d_4430 + case_index,
+            .{ 0, 0, 0, 1 },
+        );
+        defer fixture.deinit();
+        const session = fixture.authority.session();
+        const core = embeddedAuthorityCore(fixture.authority);
+        const attacker_index = @as(usize, fixture.attacker.participant.index) - 1;
+        const target_index = @as(usize, fixture.target.participant.index) - 1;
+        const target_enters = case == .target_enter_first or
+            case == .attacker_melee_target_enter;
+        const vehicle_actor = if (target_enters)
+            fixture.target
+        else
+            fixture.attacker;
+        const vehicle_transport = if (target_enters)
+            fixture.target_transport
+        else
+            fixture.attacker_transport;
+        const vehicle_action = protocol.ClientMessage{ .vehicle_action = .{
+            .session = vehicle_actor.session,
+            .participant = vehicle_actor.participant,
+            .sequence = .{ .value = 1 },
+            .vehicle = fixture.vehicle,
+            .kind = .enter,
+        } };
+        const melee_action = protocol.ClientMessage{ .melee_action = .{
+            .session = fixture.attacker.session,
+            .participant = fixture.attacker.participant,
+            .sequence = .{ .value = 1 },
+            .avatar_incarnation = core.participants[attacker_index].avatar_incarnation,
+            .target_tick = core.simulation.tickIndex() +| 1,
+        } };
+        if (case == .attacker_melee_first or
+            case == .attacker_melee_target_enter)
+        {
+            try session.ingest(fixture.attacker_transport, melee_action);
+            try session.ingest(vehicle_transport, vehicle_action);
+        } else {
+            try session.ingest(vehicle_transport, vehicle_action);
+            try session.ingest(fixture.attacker_transport, melee_action);
+        }
+        try session.tick();
+        var vehicle_result: ?protocol.VehicleActionResult = null;
+        var melee_result: ?protocol.MeleeActionResult = null;
+        while (takeOutboundForTest(session)) |outbound| switch (outbound.message) {
+            .vehicle_action_result => |result| vehicle_result = result,
+            .melee_action_result => |result| melee_result = result,
+            else => {},
+        };
+        const applied_vehicle = vehicle_result orelse return error.MissingVehiclePermutationResult;
+        const applied_melee = melee_result orelse return error.MissingMeleePermutationResult;
+        const target_vitals = core.simulation.currentVitals(
+            .player,
+            core.participants[target_index].character.?,
+        ) orelse return error.MissingPermutationTargetVitals;
+        switch (case) {
+            .attacker_enter_first => {
+                try std.testing.expectEqual(
+                    protocol.VehicleActionDisposition.entered,
+                    applied_vehicle.disposition,
+                );
+                try std.testing.expectEqual(
+                    protocol.MeleeActionDisposition.invalid_state,
+                    applied_melee.disposition,
+                );
+                try std.testing.expectEqual(@as(u16, 100), target_vitals.current_health);
+                try std.testing.expectEqual(
+                    @as(u64, 0),
+                    core.participants[attacker_index].melee_cooldown_until_tick,
+                );
+                try std.testing.expect(core.participants[attacker_index].driving_vehicle_index != null);
+            },
+            .attacker_melee_first => {
+                try std.testing.expectEqual(
+                    protocol.VehicleActionDisposition.invalid_state,
+                    applied_vehicle.disposition,
+                );
+                try std.testing.expectEqual(
+                    protocol.MeleeActionDisposition.hit,
+                    applied_melee.disposition,
+                );
+                try std.testing.expectEqual(@as(u16, 100 - melee_damage), target_vitals.current_health);
+                try std.testing.expect(core.participants[attacker_index].melee_cooldown_until_tick > 0);
+                try std.testing.expect(core.participants[attacker_index].driving_vehicle_index == null);
+            },
+            .target_enter_first => {
+                try std.testing.expectEqual(
+                    protocol.VehicleActionDisposition.entered,
+                    applied_vehicle.disposition,
+                );
+                try std.testing.expectEqual(
+                    protocol.MeleeActionDisposition.miss,
+                    applied_melee.disposition,
+                );
+                try std.testing.expectEqual(@as(u16, 100), target_vitals.current_health);
+                try std.testing.expect(core.participants[target_index].driving_vehicle_index != null);
+            },
+            .attacker_melee_target_enter => {
+                try std.testing.expectEqual(
+                    protocol.VehicleActionDisposition.invalid_state,
+                    applied_vehicle.disposition,
+                );
+                try std.testing.expectEqual(
+                    protocol.MeleeActionDisposition.hit,
+                    applied_melee.disposition,
+                );
+                try std.testing.expectEqual(@as(u16, 100 - melee_damage), target_vitals.current_health);
+                try std.testing.expect(core.participants[attacker_index].melee_cooldown_until_tick > 0);
+                try std.testing.expect(core.participants[target_index].driving_vehicle_index == null);
+            },
+        }
+    }
+}
+
 test "authoritative melee kills once and explicit respawn replaces avatar incarnation" {
     const authority = try DedicatedAuthority.init(std.testing.allocator);
     defer authority.deinit();
@@ -7460,6 +9048,31 @@ test "authoritative melee kills once and explicit respawn replaces avatar incarn
     }
     try std.testing.expectEqual(PlayerLifecycle.dead, authority.state().participants[victim_index].lifecycle);
     try std.testing.expect(authority.state().participants[victim_index].character == null);
+    const retained_death = authority.state().participants[victim_index].death_proxy orelse
+        return error.MissingPlayerDeathPresentation;
+    try std.testing.expectEqual(protocol.AvatarLifeState.dead, retained_death.state.life_state);
+    try std.testing.expectEqual(@as(u16, 0), retained_death.state.health);
+    try std.testing.expectEqual(first_incarnation, retained_death.state.incarnation);
+    const dead_snapshot = try authority.state().buildRelevantSnapshot(victim_index);
+    var projected_dead = false;
+    for (dead_snapshot.characters[0..dead_snapshot.character_count]) |character| {
+        if (!std.meta.eql(character.owner, victim.participant)) continue;
+        try std.testing.expectEqual(protocol.AvatarLifeState.dead, character.life_state);
+        try std.testing.expectEqual(@as(u16, 0), character.health);
+        try std.testing.expectEqual(first_incarnation, character.incarnation);
+        projected_dead = true;
+    }
+    try std.testing.expect(projected_dead);
+    const observer_snapshot = try authority.state().buildRelevantSnapshot(attacker_index);
+    var observer_projected_dead = false;
+    for (observer_snapshot.characters[0..observer_snapshot.character_count]) |character| {
+        if (!std.meta.eql(character.owner, victim.participant)) continue;
+        try std.testing.expectEqual(protocol.AvatarLifeState.dead, character.life_state);
+        try std.testing.expectEqual(@as(u16, 0), character.health);
+        try std.testing.expectEqual(first_incarnation, character.incarnation);
+        observer_projected_dead = true;
+    }
+    try std.testing.expect(observer_projected_dead);
 
     _ = try authority.transportClosed(victim_transport);
     try authority.tick();
@@ -7472,13 +9085,23 @@ test "authoritative melee kills once and explicit respawn replaces avatar incarn
     } });
     try authority.tick();
     var dead_welcome: ?protocol.Welcome = null;
+    var dead_welcome_delivery_id: u64 = 0;
     while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
         .welcome => |welcome| if (outbound.connection.value == reconnected_transport.value) {
             dead_welcome = welcome;
+            dead_welcome_delivery_id = outbound.delivery_id;
         },
         else => {},
     };
     const reconnected = dead_welcome orelse return error.MissingDeadReconnectWelcome;
+    try authority.ingest(reconnected_transport, .{ .delivery_receipt = .{
+        .session = reconnected.session,
+        .participant = reconnected.participant,
+        .lane = .control,
+        .delivery_id = dead_welcome_delivery_id,
+    } });
+    try authority.tick();
+    while (takeOutboundForTest(authority) != null) {}
     try std.testing.expectEqual(protocol.AvatarLifeState.dead, reconnected.life_state);
     try std.testing.expectEqual(first_incarnation, reconnected.avatar_incarnation);
 
@@ -7511,6 +9134,7 @@ test "authoritative melee kills once and explicit respawn replaces avatar incarn
     try std.testing.expect(respawned.incarnation != first_incarnation);
     try std.testing.expectEqual(PlayerLifecycle.alive, authority.state().participants[victim_index].lifecycle);
     try std.testing.expect(authority.state().participants[victim_index].character != null);
+    try std.testing.expect(authority.state().participants[victim_index].death_proxy == null);
     var ingress_records: [16]AcceptedIngress = undefined;
     const ingress_count = authority.copyAcceptedIngress(&ingress_records);
     var melee_records: u8 = 0;
@@ -7522,6 +9146,130 @@ test "authoritative melee kills once and explicit respawn replaces avatar incarn
     };
     try std.testing.expectEqual(@as(u8, 3), melee_records);
     try std.testing.expectEqual(@as(u8, 1), respawn_records);
+}
+
+test "NPC death schedules one durable safe replacement with a new incarnation" {
+    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    defer authority.deinit();
+
+    var bootstrapped = false;
+    for (0..10_000) |_| {
+        try authority.tick();
+        while (takeOutboundForTest(authority) != null) {}
+        if (authority.state().npcs[0].active and authority.state().npcs[1].active and
+            !authority.state().npcs[0].vitals_pending and
+            !authority.state().npcs[1].vitals_pending)
+        {
+            bootstrapped = true;
+            break;
+        }
+        std.Thread.yield() catch {};
+    }
+    try std.testing.expect(bootstrapped);
+
+    const victim_before = authority.state().npcs[0];
+    const source = authority.state().npcs[1];
+    const victim_id = victim_before.persistent orelse return error.MissingNpcVictim;
+    const source_id = source.persistent orelse return error.MissingNpcSource;
+    const application_tick = authority.state().simulation.tickIndex() +| 1;
+    for (0..3) |index| {
+        try authority.state().simulation.submitVitals(.{ .damage = .{
+            .source = .{
+                .kind = .npc,
+                .id = source_id,
+                .incarnation = .{ .value = source.generation },
+                .action_sequence = @intCast(index + 1),
+            },
+            .target = .{
+                .kind = .npc,
+                .id = victim_id,
+                .incarnation = .{ .value = victim_before.generation },
+            },
+            .cause = .npc_melee,
+            .authority_tick = application_tick,
+            .correlation = 0x5331_31f0_0000_0000 + index,
+            .base_amount = 34,
+            .ordinal = @intCast(index),
+        } });
+    }
+    try authority.tick();
+    while (takeOutboundForTest(authority) != null) {}
+    try std.testing.expect(authority.state().npcs[0].despawn_pending);
+    const death_proxy = authority.state().npcs[0].death_proxy orelse
+        return error.MissingNpcDeathPresentation;
+    try std.testing.expectEqual(protocol.AvatarLifeState.dead, death_proxy.state.life_state);
+    try std.testing.expectEqual(@as(u16, 0), death_proxy.state.health);
+    try std.testing.expect(death_proxy.until_tick > authority.state().simulation.tickIndex());
+    try std.testing.expectEqual(
+        @as(u16, 1),
+        authority.state().simulation.npcReplacementDiagnostics().pending,
+    );
+
+    var replaced = false;
+    var observed_spawn_vitals_handoff = false;
+    var observed_proxy_after_despawn = false;
+    var observed_proxy_expiry = false;
+    for (0..500) |_| {
+        try authority.tick();
+        while (takeOutboundForTest(authority) != null) {}
+        const current = authority.state().npcs[0];
+        if (current.active and current.vitals_pending and current.persistent != null and
+            !std.meta.eql(current.persistent.?, victim_id))
+        {
+            const handoff = authority.state().simulation.npcReplacementDiagnostics();
+            try std.testing.expect(current.replacement_spawn_pending);
+            try std.testing.expectEqual(@as(u16, 1), handoff.awaiting_spawn);
+            observed_spawn_vitals_handoff = true;
+        }
+        if (!current.active and current.death_proxy != null) {
+            observed_proxy_after_despawn = true;
+        }
+        if (observed_proxy_after_despawn and current.death_proxy == null) {
+            observed_proxy_expiry = true;
+        }
+        if (current.active and !current.vitals_pending and current.persistent != null and
+            !std.meta.eql(current.persistent.?, victim_id))
+        {
+            try std.testing.expectEqual(
+                nextGeneration(victim_before.generation),
+                current.generation,
+            );
+            replaced = true;
+            break;
+        }
+    }
+    try std.testing.expect(replaced);
+    try std.testing.expect(observed_spawn_vitals_handoff);
+    try std.testing.expect(observed_proxy_after_despawn);
+    try std.testing.expect(observed_proxy_expiry);
+    const replacement_diagnostics = authority.state().simulation.npcReplacementDiagnostics();
+    try std.testing.expectEqual(@as(u16, 0), replacement_diagnostics.pending);
+    try std.testing.expectEqual(@as(u16, 0), replacement_diagnostics.awaiting_spawn);
+    try std.testing.expectEqual(@as(u64, 1), replacement_diagnostics.replacements_ready);
+}
+
+test "NPC replacement candidates retain a deterministic offscreen district option" {
+    const west = AuthorityCore.npcReplacementCandidates(0);
+    try std.testing.expectEqualDeep(
+        sandbox_district_recipe.navigation_west_coord,
+        west[0].coord,
+    );
+    try std.testing.expectEqualDeep(
+        sandbox_district_recipe.navigation_east_coord,
+        west[2].coord,
+    );
+    try std.testing.expectEqual(@as(u8, 2), west[2].index);
+
+    const east = AuthorityCore.npcReplacementCandidates(1);
+    try std.testing.expectEqualDeep(
+        sandbox_district_recipe.navigation_east_coord,
+        east[0].coord,
+    );
+    try std.testing.expectEqualDeep(
+        sandbox_district_recipe.navigation_west_coord,
+        east[2].coord,
+    );
+    try std.testing.expectEqual(@as(u8, 0), east[2].index);
 }
 
 test "authority defers admitted input until its declared target tick" {
@@ -7715,13 +9463,16 @@ test "accepted gameplay result replays after transport loss until application re
         .applied_damage = 34,
         .remaining_health = 66,
     } });
-    core.publishPrepared();
     core.publication_preparing = false;
+    try session.tick();
 
     const accepted = session.beginOutboundLease() orelse return error.MissingGameplayResult;
     const gameplay_delivery_id = accepted.outbound.delivery_id;
     try std.testing.expect(gameplay_delivery_id != 0);
     try session.commitOutboundLease(accepted.generation);
+    while (session.beginOutboundLease()) |remaining| {
+        try session.commitOutboundLease(remaining.generation);
+    }
 
     _ = try session.transportClosed(first_transport);
     const reconnect_transport = TransportConnection{ .value = 2 };
@@ -7763,6 +9514,266 @@ test "accepted gameplay result replays after transport loss until application re
     }
 }
 
+test "seventeen logical gameplay results drain in order across the wire budget" {
+    const authority = try initTestEmbeddedAuthority(
+        testEmbeddedCoreConfig(0x454d_4419, .host_managed),
+        .{},
+        0x19,
+    );
+    defer authority.deinit();
+    const session = authority.session();
+    const transport = TransportConnection{ .value = 1 };
+    _ = try session.openConnection(transport);
+    try session.ingest(transport, .{ .hello = .{ .account = .{ .value = 19 } } });
+    try session.tick();
+    const welcome_lease = session.beginOutboundLease() orelse return error.MissingInitialWelcome;
+    const welcome = welcome_lease.outbound.message.welcome;
+    try session.commitOutboundLease(welcome_lease.generation);
+    while (session.beginOutboundLease()) |remaining| {
+        try session.commitOutboundLease(remaining.generation);
+    }
+
+    const core = embeddedAuthorityCore(authority);
+    const participant_index = @as(usize, welcome.participant.index) - 1;
+    const burst_count = @as(usize, budgets.max_reliable_events_per_tick) + 1;
+    var burst: [burst_count]ReplayMessage = undefined;
+    for (&burst, 0..) |*message, index| {
+        message.* = .{ .vehicle_action_result = .{
+            .sequence = .{ .value = @intCast(index + 1) },
+            .vehicle = .{ .index = 17, .generation = 1 },
+            .action = .enter,
+            .disposition = .entered,
+        } };
+    }
+    core.publication_preparing = true;
+    try core.queueGameplayResults(participant_index, &burst);
+    core.publication_preparing = false;
+
+    try std.testing.expectEqual(@as(usize, 0), core.prepared_outbox.len);
+    try std.testing.expectEqual(
+        @as(u64, burst_count + 1),
+        core.participants[participant_index].next_gameplay_delivery_id,
+    );
+    try std.testing.expectEqual(
+        @as(u64, 1),
+        core.participants[participant_index].replay_cursor_delivery_id,
+    );
+    var retained: usize = 0;
+    for (core.participants[participant_index].replay_records) |record| {
+        retained += @intFromBool(record.active);
+    }
+    try std.testing.expectEqual(burst_count, retained);
+
+    try session.tick();
+    var expected_delivery_id: u64 = 1;
+    var first_drain_count: usize = 0;
+    while (session.beginOutboundLease()) |lease| {
+        if (lease.outbound.lane == .gameplay) {
+            try std.testing.expectEqual(expected_delivery_id, lease.outbound.delivery_id);
+            expected_delivery_id += 1;
+            first_drain_count += 1;
+        }
+        try session.commitOutboundLease(lease.generation);
+    }
+    try std.testing.expectEqual(
+        @as(usize, budgets.max_reliable_events_per_tick - 1),
+        first_drain_count,
+    );
+    try std.testing.expectEqual(
+        expected_delivery_id,
+        core.participants[participant_index].replay_cursor_delivery_id,
+    );
+
+    // Appending while a send/replay cursor is active extends the same ordered
+    // tail; it must never reset the cursor to the new delivery ID.
+    core.publication_preparing = true;
+    try core.queueGameplayResult(participant_index, .{ .vehicle_action_result = .{
+        .sequence = .{ .value = @intCast(burst_count + 1) },
+        .vehicle = .{ .index = 17, .generation = 1 },
+        .action = .enter,
+        .disposition = .entered,
+    } });
+    core.publication_preparing = false;
+    try std.testing.expectEqual(
+        expected_delivery_id,
+        core.participants[participant_index].replay_cursor_delivery_id,
+    );
+    try session.ingest(transport, .{ .delivery_receipt = .{
+        .session = welcome.session,
+        .participant = welcome.participant,
+        .lane = .gameplay,
+        .delivery_id = expected_delivery_id - 1,
+    } });
+    try session.tick();
+    var second_drain_count: usize = 0;
+    while (session.beginOutboundLease()) |lease| {
+        if (lease.outbound.lane == .gameplay) {
+            try std.testing.expectEqual(expected_delivery_id, lease.outbound.delivery_id);
+            expected_delivery_id += 1;
+            second_drain_count += 1;
+        }
+        try session.commitOutboundLease(lease.generation);
+    }
+    try std.testing.expectEqual(@as(usize, 3), second_drain_count);
+    try std.testing.expectEqual(@as(u64, burst_count + 2), expected_delivery_id);
+    try std.testing.expectEqual(
+        @as(u64, 0),
+        core.participants[participant_index].replay_cursor_delivery_id,
+    );
+    try std.testing.expect(
+        core.max_reliable_events_per_connection_tick <= budgets.max_reliable_events_per_tick,
+    );
+}
+
+test "gameplay overflow retires only slow consumers and keeps the room healthy" {
+    const authority = try initTestEmbeddedAuthority(
+        testEmbeddedCoreConfig(0x454d_4420, .host_managed),
+        .{},
+        0x20,
+    );
+    defer authority.deinit();
+    const session = authority.session();
+    const healthy_transport = TransportConnection{ .value = 1 };
+    const slow_transport = TransportConnection{ .value = 2 };
+    const grace_transport = TransportConnection{ .value = 3 };
+    for ([_]TransportConnection{ healthy_transport, slow_transport, grace_transport }, 0..) |
+        transport,
+        index,
+    | {
+        _ = try session.openConnection(transport);
+        try session.ingest(transport, .{ .hello = .{
+            .account = .{ .value = index + 20 },
+        } });
+    }
+    try session.tick();
+    var healthy_welcome: ?protocol.Welcome = null;
+    var slow_welcome: ?protocol.Welcome = null;
+    var grace_welcome: ?protocol.Welcome = null;
+    while (session.beginOutboundLease()) |lease| {
+        if (lease.outbound.message == .welcome) switch (lease.outbound.connection.value) {
+            1 => healthy_welcome = lease.outbound.message.welcome,
+            2 => slow_welcome = lease.outbound.message.welcome,
+            3 => grace_welcome = lease.outbound.message.welcome,
+            else => {},
+        };
+        try session.commitOutboundLease(lease.generation);
+    }
+    const healthy = healthy_welcome orelse return error.MissingHealthyWelcome;
+    const slow = slow_welcome orelse return error.MissingSlowWelcome;
+    const grace = grace_welcome orelse return error.MissingGraceWelcome;
+
+    _ = try session.transportClosed(grace_transport);
+    try session.tick();
+    while (session.beginOutboundLease()) |lease| {
+        try session.commitOutboundLease(lease.generation);
+    }
+
+    const core = embeddedAuthorityCore(authority);
+    const healthy_index = @as(usize, healthy.participant.index) - 1;
+    const slow_index = @as(usize, slow.participant.index) - 1;
+    const grace_index = @as(usize, grace.participant.index) - 1;
+    try std.testing.expect(core.participants[grace_index].connection_index == null);
+
+    const life = protocol.LifeEvent{
+        .avatar = .{ .index = 1, .generation = 1 },
+        .incarnation = 1,
+        .authority_tick = 1,
+        .health = vitals_contract.default_max_health,
+        .maximum_health = vitals_contract.default_max_health,
+        .state = .alive,
+    };
+    for ([_]usize{ slow_index, grace_index }) |participant_index| {
+        const participant = &core.participants[participant_index];
+        for (&participant.replay_records, 0..) |*record, index| {
+            record.* = .{
+                .active = true,
+                .delivery_id = index + 1,
+                .message = .{ .life_event = life },
+            };
+        }
+        participant.next_gameplay_delivery_id = participant.replay_records.len + 1;
+    }
+
+    // A participant-local burst with only one free slot retires that consumer
+    // before assigning either delivery ID.
+    const local_overflow_index = for (core.participants, 0..) |participant, index| {
+        if (!participant.active) break index;
+    } else unreachable;
+    core.participants[local_overflow_index] = .{
+        .active = true,
+        .generation = 1,
+    };
+    const local_overflow = &core.participants[local_overflow_index];
+    for (&local_overflow.replay_records, 0..) |*record, index| {
+        record.* = .{
+            .active = index + 1 != local_overflow.replay_records.len,
+            .delivery_id = index + 1,
+            .message = .{ .life_event = life },
+        };
+    }
+    local_overflow.next_gameplay_delivery_id = local_overflow.replay_records.len;
+    const overflow = [_]ReplayMessage{
+        .{ .vehicle_action_result = .{
+            .sequence = .{ .value = 1 },
+            .vehicle = .{ .index = 17, .generation = 1 },
+            .action = .enter,
+            .disposition = .entered,
+        } },
+        .{ .vehicle_action_result = .{
+            .sequence = .{ .value = 2 },
+            .vehicle = .{ .index = 17, .generation = 1 },
+            .action = .enter,
+            .disposition = .entered,
+        } },
+    };
+    core.publication_preparing = true;
+    try core.queueGameplayResults(local_overflow_index, &overflow);
+    try core.publishLifeEvent(life);
+    core.publishPrepared();
+    core.publication_preparing = false;
+
+    try std.testing.expect(!core.participants[slow_index].active);
+    try std.testing.expect(!core.participants[grace_index].active);
+    try std.testing.expect(!core.participants[local_overflow_index].active);
+    try std.testing.expect(core.findConnection(slow_transport) == null);
+    try std.testing.expectEqual(@as(u64, 3), core.slow_gameplay_consumers_retired);
+    for ([_]usize{ slow_index, grace_index, local_overflow_index }) |participant_index| {
+        for (core.participants[participant_index].replay_records) |record| {
+            try std.testing.expect(!record.active);
+        }
+    }
+
+    var slow_disconnects: usize = 0;
+    while (session.beginOutboundLease()) |lease| {
+        if (lease.outbound.connection.value == slow_transport.value and
+            lease.outbound.message == .disconnected)
+        {
+            try std.testing.expectEqual(
+                protocol.DisconnectReason.protocol_failure,
+                lease.outbound.message.disconnected,
+            );
+            slow_disconnects += 1;
+        }
+        try session.commitOutboundLease(lease.generation);
+    }
+    try std.testing.expectEqual(@as(usize, 1), slow_disconnects);
+
+    try session.tick();
+    var healthy_life_events: usize = 0;
+    while (session.beginOutboundLease()) |lease| {
+        if (lease.outbound.connection.value == healthy_transport.value and
+            lease.outbound.message == .life_event)
+        {
+            try std.testing.expectEqualDeep(life, lease.outbound.message.life_event);
+            healthy_life_events += 1;
+        }
+        try session.commitOutboundLease(lease.generation);
+    }
+    try std.testing.expectEqual(@as(usize, 1), healthy_life_events);
+    try std.testing.expect(core.participants[healthy_index].active);
+    try std.testing.expect(core.diagnostics().first_cycle_fault == null);
+}
+
 test "reconnect replay drains a full bounded ledger across quota-safe cycles" {
     const authority = try initTestEmbeddedAuthority(
         testEmbeddedCoreConfig(0x454d_4418, .host_managed),
@@ -7786,6 +9797,7 @@ test "reconnect replay drains a full bounded ledger across quota-safe cycles" {
         const delivery_id = index + 1;
         record.* = .{
             .active = true,
+            .transmitted = true,
             .delivery_id = delivery_id,
             .message = .{ .vehicle_action_result = .{
                 .sequence = .{ .value = @intCast(delivery_id) },
@@ -7902,6 +9914,57 @@ test "authority owns vehicle enter drive exit and dynamic seat projection" {
     try std.testing.expect(last_snapshot.vehicles[0].driver != null);
     try std.testing.expect(last_snapshot.vehicles[0].position[2] <
         initial.vehicles[0].position[2] - 1);
+    const core = authority.state();
+    const participant_index = @as(usize, welcome.participant.index) - 1;
+    const character_position = (try core.simulation.character(
+        core.participants[participant_index].character.?,
+    )).position;
+    const vehicle_index = core.participants[participant_index].driving_vehicle_index orelse
+        return error.MissingDrivingVehicleAuthority;
+    const chassis_position = (try core.simulation.vehicle(
+        core.vehicles[vehicle_index].persistent orelse return error.MissingVehicleAuthority,
+    )).state.chassis.pose.position;
+    try std.testing.expectEqual(
+        chassis_position,
+        (try core.participantAvatarWorldPosition(participant_index)).?,
+    );
+    try std.testing.expect(horizontalDistanceSquared(character_position, chassis_position) > 1);
+    try std.testing.expect((try core.spawnCandidateScore(
+        if (participant_index == 0) 1 else 0,
+        chassis_position,
+    )) == null);
+    var projected_wheel_motion = false;
+    for (last_snapshot.vehicles[0].wheels, initial.vehicles[0].wheels) |
+        current_wheel,
+        initial_wheel,
+    | {
+        projected_wheel_motion = projected_wheel_motion or
+            @abs(current_wheel.angular_velocity) > 0.01 or
+            @abs(current_wheel.spin_phase - initial_wheel.spin_phase) > 0.01;
+    }
+    try std.testing.expect(projected_wheel_motion);
+
+    try authority.ingest(transport, .{ .melee_action = .{
+        .session = welcome.session,
+        .participant = welcome.participant,
+        .sequence = .{ .value = 1 },
+        .avatar_incarnation = core.participants[participant_index].avatar_incarnation,
+        .target_tick = core.simulation.tickIndex() +| 1,
+    } });
+    try authority.tick();
+    var driving_melee_result: ?protocol.MeleeActionResult = null;
+    while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
+        .melee_action_result => |result| driving_melee_result = result,
+        else => {},
+    };
+    try std.testing.expectEqual(
+        protocol.MeleeActionDisposition.invalid_state,
+        (driving_melee_result orelse return error.MissingDrivingMeleeResult).disposition,
+    );
+    try std.testing.expectEqual(
+        @as(u64, 0),
+        core.participants[participant_index].melee_cooldown_until_tick,
+    );
 
     try authority.ingest(transport, .{ .vehicle_action = .{
         .session = welcome.session,
@@ -8057,19 +10120,29 @@ test "duplicate account and connection timeouts are bounded session decisions" {
         return error.MissingPrimaryTimeoutConnection;
     authority.state().connections[primary_connection].last_message_tick =
         std.math.maxInt(u64);
-    for (0..budgets.handshake_timeout_ticks) |_| try authority.tick();
-    try std.testing.expectEqual(
-        protocol.RejectionReason.invalid_state,
-        takeOutboundForTest(authority).?.message.rejected.reason,
-    );
+    var observed_handshake_timeout = false;
+    for (0..budgets.handshake_timeout_ticks) |_| {
+        try authority.tick();
+        while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
+            .rejected => |rejection| if (rejection.reason == .invalid_state) {
+                observed_handshake_timeout = true;
+            },
+            else => {},
+        };
+    }
+    try std.testing.expect(observed_handshake_timeout);
 
     authority.state().connections[primary_connection].last_message_tick = 0;
+    var observed_timeout = false;
     while (authority.diagnostics().tick <= budgets.idle_timeout_ticks) {
         try authority.tick();
+        while (takeOutboundForTest(authority)) |outbound| switch (outbound.message) {
+            .disconnected => |reason| if (reason == .timeout) {
+                observed_timeout = true;
+            },
+            else => {},
+        };
     }
-    try std.testing.expectEqual(
-        protocol.DisconnectReason.timeout,
-        takeOutboundForTest(authority).?.message.disconnected,
-    );
+    try std.testing.expect(observed_timeout);
     try std.testing.expectEqual(@as(u16, 1), authority.diagnostics().reconnecting_participants);
 }

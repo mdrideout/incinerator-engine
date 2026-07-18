@@ -7,7 +7,7 @@
 const std = @import("std");
 const district = @import("district_contract");
 
-pub const current_recipe_version: u32 = 2;
+pub const current_recipe_version: u32 = 3;
 pub const navigation_west_coord = district.ChunkCoord{ .x = 0, .z = 0 };
 pub const navigation_east_coord = district.ChunkCoord{ .x = 1, .z = 0 };
 
@@ -18,8 +18,10 @@ pub const PresentationPolicy = struct {
     coord: district.ChunkCoord,
     center_xz: [2]f32,
     half_extent_xz: [2]f32,
-    load_margin: f32,
-    unload_margin: f32,
+    prefetch_load_margin: f32,
+    prefetch_unload_margin: f32,
+    authority_load_margin: f32,
+    authority_unload_margin: f32,
 };
 
 pub const presentation_policies = [_]PresentationPolicy{
@@ -27,17 +29,180 @@ pub const presentation_policies = [_]PresentationPolicy{
         .coord = navigation_west_coord,
         .center_xz = .{ 0, 0 },
         .half_extent_xz = .{ 8, 8 },
-        .load_margin = 4,
-        .unload_margin = 8,
+        // The sandbox has one adjacent district in either direction. Warm
+        // that visual content from the neighboring district center while
+        // retaining the existing narrow logical/collision boundary.
+        .prefetch_load_margin = 24,
+        .prefetch_unload_margin = 28,
+        .authority_load_margin = 4,
+        .authority_unload_margin = 8,
     },
     .{
         .coord = navigation_east_coord,
         .center_xz = .{ district.chunk_span, 0 },
         .half_extent_xz = .{ 8, 8 },
-        .load_margin = 4,
-        .unload_margin = 8,
+        .prefetch_load_margin = 24,
+        .prefetch_unload_margin = 28,
+        .authority_load_margin = 4,
+        .authority_unload_margin = 8,
     },
 };
+
+/// Product presentation responsibility for each canonical static box.
+///
+/// Cooked meshes are authored decoration until a future content schema can
+/// explicitly bind mesh instances to collision. A blocking box therefore
+/// keeps a simple proxy in every residency state. The support surface is
+/// presented by the composition-owned ground mesh and must not be drawn a
+/// second time as a coplanar district proxy.
+pub const StaticBoxPresentation = enum {
+    host_support_surface,
+    blocking_proxy,
+};
+
+pub const PresentationPlan = struct {
+    authored_scene_resident: bool,
+    proxy_box_indices: [district.max_static_boxes]u8 = undefined,
+    proxy_box_count: u8 = 0,
+
+    pub fn proxyBoxIndices(self: *const PresentationPlan) []const u8 {
+        return self.proxy_box_indices[0..self.proxy_box_count];
+    }
+
+    pub fn presentsBlockingBox(self: *const PresentationPlan, box_index: usize) bool {
+        for (self.proxyBoxIndices()) |candidate| {
+            if (candidate == box_index) return true;
+        }
+        return false;
+    }
+};
+
+pub const CapsuleClearance = struct {
+    radius: f32,
+    half_height: f32,
+    margin: f32,
+};
+
+/// Build the renderer-neutral district draw contract. Authored content and
+/// collision proxies are additive: residency must never make a blocker
+/// disappear merely because the cooked scene contains unrelated geometry.
+pub fn presentationPlan(
+    logical_build: *const district.DistrictBuild,
+    authored_scene_resident: bool,
+) !PresentationPlan {
+    if (logical_build.validationFailure() != null) {
+        return error.InvalidDistrictPresentationBuild;
+    }
+
+    var plan = PresentationPlan{
+        .authored_scene_resident = authored_scene_resident,
+    };
+    for (logical_build.boxes(), 0..) |_, box_index| {
+        switch (staticBoxPresentation(box_index) orelse
+            return error.UnknownDistrictStaticBoxPresentation) {
+            .host_support_surface => {},
+            .blocking_proxy => {
+                plan.proxy_box_indices[plan.proxy_box_count] = @intCast(box_index);
+                plan.proxy_box_count += 1;
+            },
+        }
+    }
+    return plan;
+}
+
+/// Pure product-layout query used before the asynchronous district is active.
+/// It deliberately checks the same canonical blocking boxes that require
+/// presentation proxies, so spawn safety and visible collision cannot drift
+/// into separate catalogs.
+pub fn capsuleTraversalClear(
+    logical_build: *const district.DistrictBuild,
+    start: [3]f32,
+    end: [3]f32,
+    clearance: CapsuleClearance,
+) bool {
+    if (!validPoint(start) or !validPoint(end) or
+        !std.math.isFinite(clearance.radius) or clearance.radius <= 0 or
+        !std.math.isFinite(clearance.half_height) or clearance.half_height <= 0 or
+        !std.math.isFinite(clearance.margin) or clearance.margin < 0)
+    {
+        return false;
+    }
+    if (logical_build.validationFailure() != null) return false;
+
+    const capsule_min_y = @min(start[1], end[1]);
+    const capsule_max_y = @max(start[1], end[1]) +
+        2 * (clearance.half_height + clearance.radius);
+    const horizontal_extent = clearance.radius + clearance.margin;
+    for (logical_build.boxes(), 0..) |box, box_index| {
+        const role = staticBoxPresentation(box_index) orelse return false;
+        if (role != .blocking_proxy) continue;
+
+        // The installed recipe is intentionally axis-aligned. Reject layout
+        // drift conservatively until an oriented-box clearance query is part
+        // of the canonical contract.
+        if (!std.meta.eql(box.pose.rotation, [4]f32{ 0, 0, 0, 1 })) return false;
+        const box_min_y = box.pose.position[1] - box.half_extents[1];
+        const box_max_y = box.pose.position[1] + box.half_extents[1];
+        if (capsule_max_y < box_min_y or capsule_min_y > box_max_y) continue;
+
+        const minimum = [2]f32{
+            box.pose.position[0] - box.half_extents[0] - horizontal_extent,
+            box.pose.position[2] - box.half_extents[2] - horizontal_extent,
+        };
+        const maximum = [2]f32{
+            box.pose.position[0] + box.half_extents[0] + horizontal_extent,
+            box.pose.position[2] + box.half_extents[2] + horizontal_extent,
+        };
+        if (segmentIntersectsAabb2(
+            .{ start[0], start[2] },
+            .{ end[0], end[2] },
+            minimum,
+            maximum,
+        )) return false;
+    }
+    return true;
+}
+
+fn staticBoxPresentation(box_index: usize) ?StaticBoxPresentation {
+    return switch (box_index) {
+        0 => .host_support_surface,
+        1, 2 => .blocking_proxy,
+        else => null,
+    };
+}
+
+fn validPoint(point: [3]f32) bool {
+    for (point) |component| {
+        if (!std.math.isFinite(component)) return false;
+    }
+    return true;
+}
+
+fn segmentIntersectsAabb2(
+    start: [2]f32,
+    end: [2]f32,
+    minimum: [2]f32,
+    maximum: [2]f32,
+) bool {
+    var first_t: f32 = 0;
+    var last_t: f32 = 1;
+    for (0..2) |axis| {
+        const delta = end[axis] - start[axis];
+        if (@abs(delta) <= std.math.floatEps(f32)) {
+            if (start[axis] < minimum[axis] or start[axis] > maximum[axis]) {
+                return false;
+            }
+            continue;
+        }
+        var near_t = (minimum[axis] - start[axis]) / delta;
+        var far_t = (maximum[axis] - start[axis]) / delta;
+        if (near_t > far_t) std.mem.swap(f32, &near_t, &far_t);
+        first_t = @max(first_t, near_t);
+        last_t = @min(last_t, far_t);
+        if (first_t > last_t) return false;
+    }
+    return true;
+}
 
 pub fn build(
     coord: district.ChunkCoord,
@@ -368,6 +533,60 @@ test "installed recipe carries one exact connected bidirectional route" {
     try validateRoute(&forward);
     const reverse = [_]district.DistrictBuild{ east, west };
     try validateRoute(&reverse);
+}
+
+test "resident authored content cannot replace canonical blocker proxies" {
+    const west = build(navigation_west_coord, current_recipe_version).ready;
+    const staged = try presentationPlan(&west, false);
+    const resident = try presentationPlan(&west, true);
+
+    try std.testing.expect(!staged.authored_scene_resident);
+    try std.testing.expect(resident.authored_scene_resident);
+    try std.testing.expectEqual(@as(u8, 2), staged.proxy_box_count);
+    try std.testing.expectEqualSlices(u8, staged.proxyBoxIndices(), resident.proxyBoxIndices());
+    for (west.boxes(), 0..) |_, box_index| {
+        const role = staticBoxPresentation(box_index).?;
+        try std.testing.expectEqual(
+            role == .blocking_proxy,
+            resident.presentsBlockingBox(box_index),
+        );
+    }
+}
+
+test "capsule clearance shares the canonical blocking-box catalog" {
+    const west = build(navigation_west_coord, current_recipe_version).ready;
+    const capsule = CapsuleClearance{
+        .radius = 0.4,
+        .half_height = 0.5,
+        .margin = 0.5,
+    };
+    const spawn = [3]f32{ -2, 0, 4 };
+
+    try std.testing.expect(capsuleTraversalClear(&west, spawn, spawn, capsule));
+    for ([_][3]f32{
+        .{ -3, 0, 4 },
+        .{ -1, 0, 4 },
+        .{ -2, 0, 3 },
+        .{ -2, 0, 5 },
+    }) |destination| {
+        try std.testing.expect(capsuleTraversalClear(&west, spawn, destination, capsule));
+    }
+
+    // The previous spawn sat at the physics predictive-contact threshold of
+    // the low east wall and must remain rejected by the explicit margin.
+    const previous_spawn = [3]f32{ 0, 0, 4 };
+    try std.testing.expect(!capsuleTraversalClear(
+        &west,
+        previous_spawn,
+        previous_spawn,
+        capsule,
+    ));
+    try std.testing.expect(!capsuleTraversalClear(
+        &west,
+        spawn,
+        .{ 4, 0, 4 },
+        capsule,
+    ));
 }
 
 test "canonical recipe rejects unsupported cohorts" {

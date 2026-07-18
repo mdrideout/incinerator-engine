@@ -1,11 +1,12 @@
 # Apple Silicon macOS Runtime Readiness Record
 
-**Evidence date:** 2026-07-14
+**Evidence dates:** Historical baseline through 2026-07-14; post-S11 corrective,
+interaction-validation, and rendered closeout on 2026-07-15
 
-**Last reviewed:** 2026-07-14
+**Last reviewed:** 2026-07-15
 
-**Status:** Accepted through the M5 full-readiness refresh; MP6 and S10 add
-separate native graphical room and gameplay-lifecycle acceptance
+**Status:** Post-S11 native automated and direct rendered readiness accepted;
+current detail is owned by the linked interaction-validation ledger
 
 ## Scope
 
@@ -19,6 +20,10 @@ MP6 listen/dedicated graphical and real-GNS evidence is recorded separately in
 [`mp6-playable-multiplayer-room-flow.md`](mp6-playable-multiplayer-room-flow.md).
 S10's two-client graphical damage/death/respawn evidence is recorded in
 [`s10-damage-death-respawn.md`](s10-damage-death-respawn.md).
+S11's encounter evidence is recorded in
+[`s11-npc-encounter-combat-response.md`](s11-npc-encounter-combat-response.md),
+and its current runtime repair matrix is in the
+[`post-S11 corrective audit`](post-s11-runtime-corrective-audit.md).
 Scenario counts explicitly labeled historical below remain baseline evidence,
 not current clock claims. Apple Silicon macOS with Metal is the sole current
 platform target. Linux/SteamOS and Windows are future/deferred and impose no
@@ -29,7 +34,8 @@ gates remain valid with `-Deditor=false`; the aggregate uses `-Deditor=true` so
 S5 also proves the optional editor path. Dedicated steps install their
 executables and launch those Mach-O products with `/tmp` as the working
 directory. They do not run Zig's cache artifact or depend on repository-relative
-game content. S3-S8 commands remove `INCINERATOR_CONTENT_ROOT`, forcing the
+game content. Content-consuming S3-S11 commands remove
+`INCINERATOR_CONTENT_ROOT`, forcing the
 executable to derive installed cooked content from its own prefix.
 
 Graphical scenario and fault commands now execute the separately installed
@@ -49,8 +55,9 @@ zig build test-macos-readiness \
 
 The aggregate runs the following checks serially so concurrent graphical
 processes cannot turn WindowServer or Metal contention into a false result.
-The M5 refresh passed 81/81 build/runtime steps. The earlier post-cleanup
-invocation passed 80/80 and remains historical evidence for that tree.
+The M5 refresh passed 81/81 build/runtime steps, and the earlier post-cleanup
+invocation passed 80/80. Both are historical evidence for their dated trees.
+The current post-IV invocation passes 86/86 steps.
 
 ### Historical pre-M5 installed S2 visual runtime
 
@@ -67,6 +74,11 @@ successful exit observed; normal teardown emitted
 The corresponding 1,440-frame 240 Hz run passed the same evidence with the same
 720 fixed ticks. The historical installed S1 smoke also remains independently
 available and green after the bootstrap-profile split.
+
+Post-S11 correction: the installed S2 scenario now checks actual composed wheel
+poses instead of inferring them from chassis motion. Both the 240 Hz and 80 Hz
+Metal runs pass with wheel spin, wheel steering, vehicle movement, steering,
+brake, handbrake, crate displacement, and enter/exit flags all true.
 
 This proves that the installed validation host is self-contained for the
 current procedural sandbox. Shaders are embedded, SDL and Jolt are statically
@@ -166,17 +178,35 @@ zig build smoke-installed-s8-macos \
   -Doptimize=ReleaseFast -Deditor=false
 ```
 
-Observed result: both installed Metal runs admitted the exact two-district
-route cohort, spawned 64 stable NPC identities, crossed residency boundaries,
-waited and resumed, transferred ownership, entered dormancy, restored native
-controllers, and despawned every NPC. The 240 Hz run completed in 134 frames /
-67 fixed ticks; the 80 Hz run completed in 48 frames / 72 ticks.
+Observed result after IV0 solid-character correction: both installed Metal
+runs admitted the exact two-district route cohort and moved one stable NPC
+identity through spawn, destination wait/resume, ownership transfer, dormancy,
+native-controller restore, and despawn. The 240 Hz run completed in 188 frames
+/ 51 fixed ticks; the 80 Hz run completed in 63 frames / 51 ticks.
 
-Both runs peaked at 64 NPC draws and 64 native CharacterVirtual controllers,
-retained exact 64-count lifecycle evidence for wait/resume/transfer/dormancy,
-and returned entities, native controllers, draws, queues, district/GPU
-ownership, and bodies to the declared baseline. This is a fixed bounded route
-and population contract, not general AI, crowds, pathfinding, or networking.
+Both runs peaked at one NPC draw and one native CharacterVirtual controller,
+retained exact lifecycle evidence for wait/resume/transfer/dormancy, and
+returned entities, native controllers, draws, queues, district/GPU ownership,
+and bodies to the declared baseline. This graphical gate now has one
+responsibility: authored route and residency lifecycle. The separate S8
+fresh-process measurement, IV2 real-Jolt cohort, and saturation/preflight
+tests retain the complete 64-NPC/65-controller scale and capacity claim.
+
+### Installed S11 combat-presentation runtime
+
+```sh
+zig build smoke-installed-s11-macos \
+  -Doptimize=ReleaseFast -Deditor=false
+```
+
+The installed validation host runs 3,840 frames at 240 Hz and 1,280 frames at
+80 Hz from `/tmp` with repository content-root fallback removed. The contract
+requires authoritative NPC spawn, melee, player death/respawn, NPC death, both
+health bars, bounded hit flashes and expiry, windup, cooldown, respawn
+countdown/ready, retained dead-avatar anchor, respawned-character and NPC-death
+presentation, and clean Metal teardown. The current final-tree run passes at
+240 Hz with 3,840 frames/960 scripted ticks and at 80 Hz with 1,280 frames/960
+scripted ticks; every required presentation flag is true.
 
 ### Installed S4-A diagnostics and retained-fault runtime
 
@@ -270,7 +300,7 @@ After that process exited, the installed SDL/editor/GPU-free save tool opened
 the same `sandbox.isav`, validated its exact build/world/content cohort and
 integrity, constructed one fresh Flecs/Jolt world, restored the edited pose and
 zero velocity, and produced byte-identical canonical payload/envelope bytes for
-the current Snapshot V7 cohort: `payload=2036`, `envelope=2228`,
+the then-current Snapshot V7 cohort: `payload=2036`, `envelope=2228`,
 `canonical=true`, `editor_free=true`.
 
 The separate headless gate independently writes and cold-restores a save in two
@@ -287,19 +317,20 @@ zig build -Dproduct=headless -Doptimize=ReleaseFast test --summary all
 zig build -Dproduct=headless verify-cold-headless-product --summary all
 ```
 
-The cold product passes 32/32 steps and 52/52 tests in both the final Debug and
-`ReleaseFast` gates, including generated logical-manifest identity verification,
+At M3 closeout, the cold product passed 32/32 steps and 52/52 tests in both the
+then-final Debug and `ReleaseFast` gates, including generated logical-manifest
+identity verification,
 exact config/content/save preflight, bounded two-producer routing,
 real signal/lag/storage/corruption lifecycle cases, canonical restart, exact
 three-file installation, source and final-binary marker checks, and only
 `/usr/lib/libSystem.B.dylib` dynamic linkage. The isolated extracted tree runs
 with visual package/cache/shader inputs absent.
 
-The final 32,768-tick routine ReleaseFast process recorded a 451,500 ns fixed-
-tick p99, 733,394 peak allocated bytes, and 19,152,896 peak RSS bytes. The final
-131,072-tick long process recorded a 443,292 ns fixed-tick p99, 1,519,514 peak
-allocated bytes, and 18,169,856 peak RSS bytes. Both passed the automatic
-timing, allocation, absolute RSS, snapshot, and envelope ceilings with
+The M3-final 32,768-tick routine ReleaseFast process recorded a 451,500 ns
+fixed-tick p99, 733,394 peak allocated bytes, and 19,152,896 peak RSS bytes. The
+M3-final 131,072-tick long process recorded a 443,292 ns fixed-tick p99,
+1,519,514 peak allocated bytes, and 18,169,856 peak RSS bytes. Both passed the
+automatic timing, allocation, absolute RSS, snapshot, and envelope ceilings with
 canonical restore. See the [M3 acceptance record](m3-acceptance.md) and
 [M3 performance baseline](../performance/m3-baseline.md).
 
@@ -386,12 +417,16 @@ were true for those runs:
 
 | Artifact or semantic cohort | Current SHA-256 |
 |---|---|
-| West `s3_fixture.icdb` | `f811334db94a7737a4f153fd760b359c4391dea5030067fca4abd0e1cccafeb8` |
-| East `s6_east.icdb` | `3ecdb803f9be8125ff2971799a5cba6589a25551a0e6e40b911e3d7bf891c82d` |
-| Canonical `catalog.icat` | `af483aad28cb184dcfad4fc7e7f30437faaa6905f65554690e254e6694087901` |
-| Admitted `ContentCohort` | `83d3376f8bd4f0d23525921e4b2445e4fd09ee22282573d745eaf7428ba19ef0` |
+| West `s3_fixture.icdb` | `0396ed142f96fd2d6d19d92a55ee62a703d187d09c1e175a1affb22463317f2b` |
+| East `s6_east.icdb` | `fbf82af3f08570f1f503ae955aa282dd5c03f02a32a4ac52f1ddce810a1b4215` |
+| Canonical `catalog.icat` | `8d957755631a97a195a04e3475e2803be79e962b751bc2d2c81addf60a4de56b` |
+| Admitted `ContentCohort` | `05d57d84c108c9dc813207d363761f669bf78dd4f63c22c479a160f15df98761` |
 
 ## Automated Baseline
+
+The numeric bullets immediately below are the 2026-07-13 post-cleanup baseline,
+not current S11 counts. They are retained so later regressions can identify the
+tree that originally established each capability.
 
 - Debug and ReleaseFast, editor excluded: 169/169 build steps and 589/589 tests
   pass in each mode on the post-cleanup tree. Debug with the editor enabled
@@ -423,6 +458,37 @@ were true for those runs:
   authoring/cold restore, and the separate headless save/restart path serially,
   including when the caller supplies an invalid `INCINERATOR_CONTENT_ROOT`.
 - `zig fmt --check` and `git diff --check`: pass.
+
+### Historical post-S11 aggregate
+
+This table records the post-S11 checkpoint before the later IV/IC corrective
+cohorts. Current IC5-H evidence follows it.
+
+| Evidence | Result |
+|---|---|
+| `zig build test-macos-readiness -Doptimize=ReleaseFast -Deditor=true -j1 --summary all` | **Pass — 86/86 steps** |
+| Direct `-Dproduct=headless` test/lifecycle graph | **Pass — exit 0** |
+| Installed S2 240/80 wheel presentation | **Pass — all wheel, vehicle, input, crate, and enter/exit flags true at both cadences** |
+| Installed S8 240/80 route/residency lifecycle | **Pass — one physically valid actor planned/spawned/despawned; exact wait/resume/transfer/dormancy/controller lifecycle and clean drain at both cadences** |
+| Installed S11 240/80 combat presentation | **Pass — 3,840/960 and 1,280/960 frame/scripted-tick cohorts; every required flag true** |
+| Extracted source broad/cold graph | **Pass — 182/182 broad steps with 395/395 tests; 32/32 cold steps with 62/62 tests** |
+| Current Debug regression | **Pass — 253/253 steps and 885/885 tests** |
+| Current ReleaseFast regression | **Pass — failure-only summary exits 0 with no failures** |
+| Direct rendered normal product | **Pass — later acceptance confirmed F1/F2/F3, collect/drop, melee feedback, exact rejected vehicle reason, a retained visibly red and separately readable player-death state, respawn countdown, and clean Escape shutdown. Held movement/camera/vehicle controls remain covered by their installed graphical scenarios; see the interaction-validation ledger.** |
+
+### Current IC5-H corrective evidence — 2026-07-17
+
+| Evidence | Result |
+|---|---|
+| `zig build test -Deditor=false --summary all` | **Pass — 255/255 steps and 922/922 tests** |
+| `zig build verify-mp4c --summary all` | **Pass — 87/87 steps and 154/154 tests, including clean/nominal/adverse/blackout and real-GNS continuity** |
+| `zig build test-sandbox-developer-host --summary all` | **Pass — 28/28 steps and 42/42 tests** |
+| `zig build -Deditor=true --summary all` | **Pass — 53/53 install/build steps** |
+| Installed Metal incident journey | **Pass — 2,166 ticks, four complete anomalies, both district crossings, stable vehicle/carry projection, semantic replay, and best-effort graphical replay** |
+
+The exact run, inspector health, semantic vehicle-part evidence, stable identity
+sample counts, and reproduction commands are recorded in the
+[human-test incident validation ledger](human-test-incident-capture.md).
 
 Hosted run `29211872146` established the deterministic macOS M1 contract before
 S3-C: tests/builds, source packaging, installed-content relocation, and the

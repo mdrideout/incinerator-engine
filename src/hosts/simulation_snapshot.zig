@@ -15,6 +15,8 @@ const district_contract = @import("district_contract");
 const interactions = @import("interaction_feature_contract");
 const npcs = @import("npc_contract");
 const vitals = @import("vitals_contract");
+const npc_encounters = @import("npc_encounter_contract");
+const npc_replacements = @import("sandbox_npc_replacement_contract");
 const sandbox_district_recipe = @import("sandbox_district_recipe");
 const sandbox_navigation = @import("sandbox_navigation");
 const sandbox_replay = @import("sandbox_replay");
@@ -24,6 +26,7 @@ const npc_snapshot_validation = @import("npc_snapshot_validation");
 
 pub const schema_version = sandbox_host_contracts.snapshot_schema;
 pub const max_bytes: usize = 8 * 1024 * 1024;
+pub const NpcEncounterConfigV1 = npc_encounters.ConfigV1;
 
 pub const Limits = struct {
     max_crates: usize = 1024,
@@ -32,7 +35,7 @@ pub const Limits = struct {
     max_npcs: usize = npcs.max_npcs,
 };
 
-pub const SnapshotV7 = struct {
+pub const SnapshotV11 = struct {
     schema_version: u16,
     completed_ticks: u64,
     fixed_delta_seconds: f32,
@@ -42,6 +45,7 @@ pub const SnapshotV7 = struct {
     vehicle_config: vehicles.VehicleConfigV1,
     interaction_config: interactions.InteractionConfigV1,
     npc_config: npcs.NpcConfigV1,
+    npc_encounter_config: npc_encounters.ConfigV1,
     crates: []const crates.CrateV1,
     characters: []const characters.CharacterV1,
     vehicles: []const vehicles.VehicleV1,
@@ -49,6 +53,8 @@ pub const SnapshotV7 = struct {
     interactions: []const interactions.InteractionV1,
     npcs: []const npcs.NpcV1,
     vitals: []const vitals.VitalsV1 = &.{},
+    npc_encounters: []const npc_encounters.RecordV1,
+    npc_replacements: []const npc_replacements.RecordV1,
 };
 
 pub const CharacterRestoreOptions = struct {
@@ -90,6 +96,7 @@ pub fn worldConfig(config: sandbox_host_contracts.Config) !sandbox_replay.WorldC
         config.vehicle,
         config.interaction,
         config.npc,
+        config.npc_encounter,
         config.create_ground,
         if (config.block) |block| .{
             .position = block.position,
@@ -113,7 +120,7 @@ pub fn worldConfigFingerprint(
 /// a second public serialization path.
 pub fn encode(
     allocator: std.mem.Allocator,
-    value: SnapshotV7,
+    value: SnapshotV11,
     limits: Limits,
 ) ![]u8 {
     try validate(
@@ -140,9 +147,9 @@ pub fn parse(
     max_characters: usize,
     max_vehicles: usize,
     max_npcs: usize,
-) !std.json.Parsed(SnapshotV7) {
+) !std.json.Parsed(SnapshotV11) {
     if (bytes.len > max_bytes) return error.SnapshotTooLarge;
-    var parsed = try std.json.parseFromSlice(SnapshotV7, allocator, bytes, .{});
+    var parsed = try std.json.parseFromSlice(SnapshotV11, allocator, bytes, .{});
     errdefer parsed.deinit();
     try validate(
         parsed.value,
@@ -158,7 +165,7 @@ pub fn parse(
 /// admitted by its enclosing save envelope. Host-owned capacities and assets
 /// are inputs; logical tuning must reproduce the same canonical fingerprint.
 pub fn validateWorldConfig(
-    snapshot: SnapshotV7,
+    snapshot: SnapshotV11,
     expected: sandbox_host_contracts.Config,
 ) !void {
     const snapshot_character = try snapshot.character_config.toConfig(
@@ -171,6 +178,7 @@ pub fn validateWorldConfig(
     );
     const snapshot_interaction = try snapshot.interaction_config.toConfig();
     const snapshot_npc = try snapshot.npc_config.toConfig(expected.npc.assets);
+    const snapshot_npc_encounter = try snapshot.npc_encounter_config.toConfig();
     const embedded = try worldConfig(.{
         .namespace = snapshot.namespace,
         .fixed_delta_seconds = snapshot.fixed_delta_seconds,
@@ -181,6 +189,7 @@ pub fn validateWorldConfig(
         .vehicle = snapshot_vehicle,
         .interaction = snapshot_interaction,
         .npc = snapshot_npc,
+        .npc_encounter = snapshot_npc_encounter,
         .block = expected.block,
     });
     const embedded_digest = try embedded.fingerprint();
@@ -191,7 +200,7 @@ pub fn validateWorldConfig(
 }
 
 pub fn validate(
-    snapshot: SnapshotV7,
+    snapshot: SnapshotV11,
     max_crates: usize,
     max_characters: usize,
     max_vehicles: usize,
@@ -209,6 +218,7 @@ pub fn validate(
     try snapshot.vehicle_config.validate();
     try snapshot.interaction_config.validate();
     try snapshot.npc_config.validate();
+    _ = try snapshot.npc_encounter_config.toConfig();
     try validateNpcLimit(max_npcs);
     try validateVirtualCharacterBudget(max_characters, max_npcs);
     try crates.validateRecords(snapshot.crates, max_crates);
@@ -222,6 +232,33 @@ pub fn validate(
         snapshot.npcs,
     );
     try vitals.validateRecords(snapshot.vitals);
+    if (snapshot.npc_encounters.len > npc_encounters.max_records) {
+        return error.TooManyNpcEncounterRecords;
+    }
+    for (snapshot.npc_encounters, 0..) |record, index| {
+        try npc_encounters.validateRecord(record);
+        if (index != 0 and !npc_encounters.lessThanTarget(
+            {},
+            snapshot.npc_encounters[index - 1].npc,
+            record.npc,
+        )) return error.NpcEncounterRecordsNotCanonical;
+    }
+    if (snapshot.npc_replacements.len > npc_replacements.max_records) {
+        return error.TooManyNpcReplacementRecords;
+    }
+    for (snapshot.npc_replacements, 0..) |record, index| {
+        try npc_replacements.validateRecord(record);
+        if (index != 0 and snapshot.npc_replacements[index - 1].slot >= record.slot) {
+            return error.NpcReplacementRecordsNotCanonical;
+        }
+        for (record.candidates[0..record.candidate_count]) |candidate| {
+            switch (canonical_navigation.resolveNode(candidate)) {
+                .ready => {},
+                .district_inactive => unreachable,
+                .invalid_reference => return error.InvalidNpcReplacementCandidate,
+            }
+        }
+    }
 
     for (snapshot.crates) |record| {
         try validateIdentity(record.id, snapshot);
@@ -249,6 +286,15 @@ pub fn validate(
             } else false,
         };
         if (!present) return error.VitalsTargetNotFound;
+    }
+    for (snapshot.npc_encounters) |encounter| {
+        const npc_present = for (snapshot.npcs) |npc_record| {
+            if (std.meta.eql(npc_record.id, encounter.npc.id)) break true;
+        } else false;
+        const vitals_present = for (snapshot.vitals) |vital_record| {
+            if (std.meta.eql(vital_record.target, encounter.npc)) break true;
+        } else false;
+        if (!npc_present or !vitals_present) return error.NpcEncounterOwnerNotFound;
     }
     for (snapshot.vehicles, 0..) |record, index| {
         try validateIdentity(record.id, snapshot);
@@ -408,6 +454,7 @@ pub fn configFromReplayWorld(
         .vehicle = try world.vehicle.toConfig(max_vehicles, .{}),
         .interaction = try world.interaction.toConfig(),
         .npc = try world.npc.toConfig(.{}),
+        .npc_encounter = try world.npc_encounter.toConfig(),
         .block = if (world.block) |block| .{
             .position = block.position,
             .half_extents = block.half_extents,
@@ -415,7 +462,7 @@ pub fn configFromReplayWorld(
     };
 }
 
-fn validateIdentity(id: engine.PersistentId, snapshot: SnapshotV7) !void {
+fn validateIdentity(id: engine.PersistentId, snapshot: SnapshotV11) !void {
     if (id.namespace != snapshot.namespace) return error.ForeignIdentityNamespace;
     if (id.local >= snapshot.next_local_id) return error.IdentityCursorWouldCollide;
 }
@@ -432,7 +479,7 @@ fn validateVirtualCharacterBudget(max_characters: usize, max_npcs: usize) !void 
     }
 }
 
-fn emptySnapshot() SnapshotV7 {
+fn emptySnapshot() SnapshotV11 {
     return .{
         .schema_version = schema_version,
         .completed_ticks = 0,
@@ -443,6 +490,7 @@ fn emptySnapshot() SnapshotV7 {
         .vehicle_config = vehicles.VehicleConfigV1.fromConfig(.{}),
         .interaction_config = interactions.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npcs.NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = npc_encounters.ConfigV1.fromConfig(.{}),
         .crates = &.{},
         .characters = &.{},
         .vehicles = &.{},
@@ -450,10 +498,12 @@ fn emptySnapshot() SnapshotV7 {
         .interactions = &.{},
         .npcs = &.{},
         .vitals = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     };
 }
 
-test "canonical V7 snapshot round trips without native authority" {
+test "canonical V11 snapshot round trips without native authority" {
     const expected = emptySnapshot();
     const bytes = try encode(std.testing.allocator, expected, .{});
     defer std.testing.allocator.free(bytes);

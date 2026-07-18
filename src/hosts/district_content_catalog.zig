@@ -6,6 +6,8 @@ const district_contract = @import("district_contract");
 const sandbox_replay = @import("sandbox_replay");
 const sandbox_recipe = @import("sandbox_district_recipe");
 
+pub const ContentCohort = sandbox_replay.ContentCohort;
+
 pub const EntryIssue = struct { entry_index: u32 };
 pub const BundleLoadIssue = struct {
     entry_index: u32,
@@ -51,7 +53,7 @@ pub const AdmittedCatalog = struct {
         return self.catalog.identity();
     }
 
-    pub fn contentCohort(self: *const AdmittedCatalog) sandbox_replay.ContentCohort {
+    pub fn contentCohort(self: *const AdmittedCatalog) ContentCohort {
         return self.cohort;
     }
 

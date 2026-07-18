@@ -45,11 +45,14 @@ const district_streaming_host = @import("hosts/district_streaming_host.zig");
 const district_content_catalog = @import("district_content_catalog");
 const content = @import("content");
 const sandbox_controls = @import("sandbox_controls.zig");
+const sandbox_product_encounter = @import("sandbox_product_encounter");
+const sandbox_product_character_lifecycle = @import("sandbox_product_character_lifecycle");
 const developer_controls = @import("developer_controls");
 const developer_diagnostics = @import("developer_diagnostics");
 const developer_profile = @import("developer_profile");
 const authority_diagnostics = @import("session_authority_diagnostics");
 const sandbox_developer_host = @import("hosts/sandbox_developer_host.zig");
+const incident_input_replay = @import("hosts/incident_input_replay.zig");
 const sandbox_invocation = @import("sandbox_invocation");
 const sandbox_authoring = @import("sandbox_authoring");
 const sandbox_interaction = @import("sandbox_interaction");
@@ -59,6 +62,10 @@ const sdl = @import("sdl.zig");
 const shader_assets = @import("shader_assets");
 const editor_contract = @import("editor/tool.zig");
 const sandbox_host = @import("local_solo_session");
+const combat_presentation = @import("combat_presentation");
+const product_feedback = @import("sandbox/product_feedback.zig");
+const product_presentation_trace = @import("sandbox/product_presentation_trace.zig");
+const visibility_oracle = @import("visibility_oracle.zig");
 const sandbox_contracts = @import("sandbox_host_contracts");
 const session_budgets = @import("session_budgets");
 const population = @import("population_contract");
@@ -70,6 +77,11 @@ const CharacterControllerDiagnostics = @FieldType(
 );
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
+
+test {
+    _ = @import("hosts/incident_capture.zig");
+    _ = @import("hosts/incident_input_replay.zig");
+}
 
 const VisualSmokeConfig = sandbox_invocation.VisualSmokeConfig;
 const ProgramMode = sandbox_invocation.ProgramMode;
@@ -120,6 +132,7 @@ const s1_jump_tick: u64 = authority_ticks_per_second / 2;
 const s2_enter_tick: u64 = authority_ticks_per_second * 2;
 const s2_steer_tick: u64 = authority_ticks_per_second * 5 + 1;
 const s2_brake_tick: u64 = s2_steer_tick - authority_ticks_per_second / 6;
+const s2_hand_brake_tick: u64 = s2_brake_tick - authority_ticks_per_second / 6;
 const s2_exit_tick: u64 = s2_steer_tick + authority_ticks_per_second / 2;
 const s2_required_ticks: u64 = authority_ticks_per_second * 6;
 
@@ -176,7 +189,10 @@ const S2SmokeProgress = struct {
     drive_applied: bool = false,
     steering_applied: bool = false,
     brake_applied: bool = false,
+    hand_brake_applied: bool = false,
     steering_observed: bool = false,
+    wheel_spin_presented: bool = false,
+    wheel_steering_presented: bool = false,
     vehicle_moved: bool = false,
     crate_displaced: bool = false,
     exited: bool = false,
@@ -185,7 +201,70 @@ const S2SmokeProgress = struct {
     drive_input_sequence: ?u32 = null,
     steering_input_sequence: ?u32 = null,
     brake_input_sequence: ?u32 = null,
+    hand_brake_input_sequence: ?u32 = null,
 };
+
+fn observeS2WheelPresentation(
+    progress: *S2SmokeProgress,
+    vehicle_draws: []const sandbox_host.VehicleDraw,
+) void {
+    for (vehicle_draws) |draw| {
+        const chassis_axle = rotateVectorByQuaternion(
+            draw.chassis_pose.rotation,
+            .{ 1, 0, 0 },
+        );
+        const chassis_up = rotateVectorByQuaternion(
+            draw.chassis_pose.rotation,
+            .{ 0, 1, 0 },
+        );
+        for (draw.wheels) |wheel| {
+            if (wheel.index == .front_left or wheel.index == .front_right) {
+                const wheel_axle = rotateVectorByQuaternion(
+                    wheel.pose.rotation,
+                    .{ 1, 0, 0 },
+                );
+                progress.wheel_steering_presented =
+                    progress.wheel_steering_presented or
+                    @abs(dotVector3(chassis_axle, wheel_axle)) < 0.999;
+            }
+            const wheel_up = rotateVectorByQuaternion(
+                wheel.pose.rotation,
+                .{ 0, 1, 0 },
+            );
+            progress.wheel_spin_presented = progress.wheel_spin_presented or
+                @abs(dotVector3(chassis_up, wheel_up)) < 0.995;
+        }
+    }
+}
+
+fn rotateVectorByQuaternion(rotation: [4]f32, value: [3]f32) [3]f32 {
+    const vector = [3]f32{ rotation[0], rotation[1], rotation[2] };
+    const doubled_cross = scaleVector3(crossVector3(vector, value), 2);
+    return addVector3(
+        addVector3(value, scaleVector3(doubled_cross, rotation[3])),
+        crossVector3(vector, doubled_cross),
+    );
+}
+
+fn addVector3(left: [3]f32, right: [3]f32) [3]f32 {
+    return .{ left[0] + right[0], left[1] + right[1], left[2] + right[2] };
+}
+
+fn scaleVector3(value: [3]f32, scalar: f32) [3]f32 {
+    return .{ value[0] * scalar, value[1] * scalar, value[2] * scalar };
+}
+
+fn dotVector3(left: [3]f32, right: [3]f32) f32 {
+    return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
+}
+
+fn crossVector3(left: [3]f32, right: [3]f32) [3]f32 {
+    return .{
+        left[1] * right[2] - left[2] * right[1],
+        left[2] * right[0] - left[0] * right[2],
+        left[0] * right[1] - left[1] * right[0],
+    };
+}
 
 const WindowLifecycleSummary = struct {
     warmup_ready_frames: u64 = 0,
@@ -316,9 +395,9 @@ const S7InteractionSmokeSummary = struct {
 };
 
 const s7_replica_convergence_timeout_ticks: u64 = timing.TICK_RATE;
-/// The client relevance owner transfers only after crossing one meter into
-/// the east district. Drop beyond that seam so the strict same-frame draw
-/// assertion observes the east relevance baseline, not the old west view.
+/// Drop beyond the east seam so the smoke proves authority ownership transfer
+/// and district residency. The bounded carryable cohort itself is continuous
+/// across this boundary.
 const s7_east_relevance_drop_x: f32 = 9.0;
 
 fn s7ReplicaConverged(
@@ -340,7 +419,12 @@ fn s7ReplicaConverged(
     return false;
 }
 
-const s8_population_count: usize = population.max_population_commands;
+/// The installed S8 smoke proves one actor's complete authored-route and
+/// district-residency lifecycle. Capacity and density are separate concerns:
+/// the fresh-process S8 measurement and the IV2 real-Jolt cohort exercise the
+/// complete 64-NPC / 65-controller ceiling without stacking colliding actors
+/// on this smoke's single route origin.
+const s8_population_count: usize = 1;
 const s8_spawn_first_request_id: u64 = 8_000;
 const s8_despawn_first_request_id: u64 = 9_000;
 const s8_replica_convergence_timeout_ticks: u64 =
@@ -356,8 +440,8 @@ const s8_east_end = sandbox_contracts.NavigationNodeRef{
 };
 
 comptime {
-    if (s8_population_count != sandbox_contracts.npc_capacity) {
-        @compileError("the S8 population proof must exercise the complete NPC budget");
+    if (population.max_population_commands != sandbox_contracts.npc_capacity) {
+        @compileError("the population producer and sandbox NPC budget must match");
     }
 }
 
@@ -745,6 +829,341 @@ const S8PopulationEvidence = struct {
     }
 };
 
+const s11_npc_spawn_request_id: u64 = 11_000;
+
+const S11VisibilityCheckpoint = enum {
+    contact,
+    player_death,
+    respawn,
+    npc_death,
+
+    fn label(self: S11VisibilityCheckpoint) []const u8 {
+        return switch (self) {
+            .contact => "contact_windup",
+            .player_death => "player_death",
+            .respawn => "player_respawn",
+            .npc_death => "npc_death",
+        };
+    }
+};
+
+/// Validation-only state for the installed S11 acceptance. Authority results
+/// drive the script, while these flags are set only beside the actual Metal
+/// draw submissions that consume the extracted combat plans.
+const S11CombatSmokeProgress = struct {
+    active: bool = false,
+    npc_spawn_submitted: bool = false,
+    npc_spawned: bool = false,
+    npc_id: ?sandbox_contracts.PersistentId = null,
+    initial_incarnation: ?u16 = null,
+    dead_incarnation: ?u16 = null,
+    player_dead: bool = false,
+    player_respawned: bool = false,
+    respawn_accepted: bool = false,
+    accepted_melee_hits: u8 = 0,
+    provocation_hit: bool = false,
+    npc_killed: bool = false,
+    last_melee_request_tick: u64 = 0,
+    last_respawn_request_tick: u64 = 0,
+
+    character_bar_drawn: bool = false,
+    npc_bar_drawn: bool = false,
+    npc_windup_drawn: bool = false,
+    character_hit_flash_drawn: bool = false,
+    character_hit_flash_expired: bool = false,
+    npc_hit_flash_drawn: bool = false,
+    npc_hit_flash_expired: bool = false,
+    melee_cooldown_marker_drawn: bool = false,
+    respawn_countdown_marker_drawn: bool = false,
+    respawn_ready_marker_drawn: bool = false,
+    dead_hud_anchor_drawn: bool = false,
+    player_death_drawn: bool = false,
+    respawned_character_drawn: bool = false,
+    npc_death_drawn: bool = false,
+    product_hud_health: bool = false,
+    product_hud_damage: bool = false,
+    product_hud_death: bool = false,
+    product_hud_windup: bool = false,
+    product_hud_respawn_countdown: bool = false,
+    product_hud_respawn_ready: bool = false,
+    product_hud_action_feedback: bool = false,
+    visibility_contact: bool = false,
+    visibility_player_death: bool = false,
+    visibility_respawn: bool = false,
+    visibility_npc_death: bool = false,
+    visibility_bounds_valid: bool = true,
+    visibility_observations: u16 = 0,
+    character_flash_tick: u64 = 0,
+    character_flash_entity: ?sandbox_host.ReplicatedEntityId = null,
+    character_flash_incarnation: u16 = 0,
+    character_flash_health: u16 = 0,
+    npc_flash_tick: u64 = 0,
+    npc_flash_entity: ?sandbox_host.ReplicatedEntityId = null,
+    npc_flash_incarnation: u16 = 0,
+    npc_flash_health: u16 = 0,
+    character_flash_overran: bool = false,
+    npc_flash_overran: bool = false,
+    render_plan_mismatch: bool = false,
+
+    fn expectedHealthBarDrawCalls(plan: combat_presentation.HealthBarPlan) u64 {
+        if (!plan.visible) return 0;
+        return if (plan.fraction <= 0) 1 else 2;
+    }
+
+    fn observeCharacter(
+        self: *S11CombatSmokeProgress,
+        authority_tick: u64,
+        draw: sandbox_host.CharacterDraw,
+        health_bar_draw_calls: u64,
+    ) void {
+        if (!self.active) return;
+        const plan = draw.combat;
+        if (!std.meta.eql(plan.entity, draw.entity) or
+            plan.incarnation != draw.incarnation or plan.health != draw.health or
+            plan.maximum_health != draw.maximum_health or
+            plan.life_state != draw.life_state or
+            health_bar_draw_calls != expectedHealthBarDrawCalls(plan.health_bar))
+        {
+            self.render_plan_mismatch = true;
+        }
+        self.character_bar_drawn = self.character_bar_drawn or
+            (plan.health_bar.visible and health_bar_draw_calls != 0);
+        if (self.initial_incarnation == null and draw.local_player and !plan.dead) {
+            self.initial_incarnation = draw.incarnation;
+        }
+        if (plan.hit_flash and
+            std.meta.eql(plan.body_color, combat_presentation.colors.hit_flash))
+        {
+            self.character_hit_flash_drawn = true;
+            if (self.character_flash_entity == null or
+                !std.meta.eql(self.character_flash_entity.?, draw.entity) or
+                self.character_flash_incarnation != draw.incarnation or
+                self.character_flash_health != draw.health)
+            {
+                self.character_flash_tick = authority_tick;
+                self.character_flash_entity = draw.entity;
+                self.character_flash_incarnation = draw.incarnation;
+                self.character_flash_health = draw.health;
+            } else if (authority_tick >= self.character_flash_tick +|
+                combat_presentation.hit_flash_ticks)
+            {
+                self.character_flash_overran = true;
+            }
+        } else if (self.character_flash_entity) |entity| {
+            if (std.meta.eql(entity, draw.entity) and
+                self.character_flash_incarnation == draw.incarnation and
+                self.character_flash_health == draw.health and
+                authority_tick >= self.character_flash_tick +|
+                    combat_presentation.hit_flash_ticks)
+            {
+                self.character_hit_flash_expired = true;
+            }
+        }
+        if (self.player_respawned and draw.local_player and !plan.dead and
+            self.dead_incarnation != null and
+            draw.incarnation > self.dead_incarnation.?)
+        {
+            self.respawned_character_drawn = true;
+        }
+        if (draw.local_player and plan.dead and
+            std.meta.eql(plan.body_color, combat_presentation.colors.dead) and
+            plan.health_bar.visible and health_bar_draw_calls != 0)
+        {
+            self.player_death_drawn = true;
+        }
+    }
+
+    fn observeNpc(
+        self: *S11CombatSmokeProgress,
+        authority_tick: u64,
+        draw: sandbox_host.NpcDraw,
+        health_bar_draw_calls: u64,
+    ) void {
+        if (!self.active) return;
+        const plan = draw.combat;
+        if (!std.meta.eql(plan.entity.entity, draw.entity) or
+            plan.entity.incarnation != draw.incarnation or
+            plan.entity.health != draw.health or
+            plan.entity.maximum_health != draw.maximum_health or
+            plan.entity.life_state != draw.life_state or
+            plan.encounter_state != draw.encounter_state or
+            health_bar_draw_calls != expectedHealthBarDrawCalls(plan.entity.health_bar))
+        {
+            self.render_plan_mismatch = true;
+        }
+        self.npc_bar_drawn = self.npc_bar_drawn or
+            (plan.entity.health_bar.visible and health_bar_draw_calls != 0);
+        self.npc_windup_drawn = self.npc_windup_drawn or
+            (plan.windup and
+                std.meta.eql(plan.entity.body_color, combat_presentation.colors.npc_windup));
+        if (plan.entity.hit_flash and
+            std.meta.eql(plan.entity.body_color, combat_presentation.colors.hit_flash))
+        {
+            self.npc_hit_flash_drawn = true;
+            if (self.npc_flash_entity == null or
+                !std.meta.eql(self.npc_flash_entity.?, draw.entity) or
+                self.npc_flash_incarnation != draw.incarnation or
+                self.npc_flash_health != draw.health)
+            {
+                self.npc_flash_tick = authority_tick;
+                self.npc_flash_entity = draw.entity;
+                self.npc_flash_incarnation = draw.incarnation;
+                self.npc_flash_health = draw.health;
+            } else if (authority_tick >= self.npc_flash_tick +|
+                combat_presentation.hit_flash_ticks)
+            {
+                self.npc_flash_overran = true;
+            }
+        } else if (self.npc_flash_entity) |entity| {
+            if (std.meta.eql(entity, draw.entity) and
+                self.npc_flash_incarnation == draw.incarnation and
+                self.npc_flash_health == draw.health and
+                authority_tick >= self.npc_flash_tick +|
+                    combat_presentation.hit_flash_ticks)
+            {
+                self.npc_hit_flash_expired = true;
+            }
+        }
+        if (plan.entity.dead and
+            std.meta.eql(plan.entity.body_color, combat_presentation.colors.dead) and
+            plan.entity.health_bar.visible and health_bar_draw_calls != 0)
+        {
+            self.npc_death_drawn = true;
+        }
+    }
+
+    fn observeHud(
+        self: *S11CombatSmokeProgress,
+        hud: sandbox_host.LocalCombatHud,
+        marker_draw_calls: u64,
+    ) void {
+        if (!self.active or !hud.available) return;
+        const expected_marker_draw_calls: u64 =
+            @intFromBool(hud.melee_cooldown_marker) +
+            @intFromBool(hud.respawn_marker != .none);
+        if (marker_draw_calls != expected_marker_draw_calls) {
+            self.render_plan_mismatch = true;
+        }
+        if (self.initial_incarnation == null and hud.life_state == .alive) {
+            self.initial_incarnation = hud.incarnation;
+        }
+        if (hud.life_state == .dead) {
+            self.player_dead = true;
+            self.dead_incarnation = hud.incarnation;
+        } else if (self.dead_incarnation) |dead_incarnation| {
+            if (hud.incarnation > dead_incarnation) self.player_respawned = true;
+        }
+        if (hud.melee_cooldown_marker and marker_draw_calls != 0) {
+            self.melee_cooldown_marker_drawn = true;
+        }
+        switch (hud.respawn_marker) {
+            .countdown => if (marker_draw_calls != 0) {
+                self.respawn_countdown_marker_drawn = true;
+            },
+            .ready => if (marker_draw_calls != 0) {
+                self.respawn_ready_marker_drawn = true;
+            },
+            .none, .no_safe_spawn => {},
+        }
+        if (hud.life_state == .dead and hud.anchor_position != null and
+            hud.respawn_marker != .none and marker_draw_calls != 0)
+        {
+            self.dead_hud_anchor_drawn = true;
+        }
+    }
+
+    fn observeMeleeResult(
+        self: *S11CombatSmokeProgress,
+        result: sandbox_host.MeleeActionResult,
+    ) void {
+        if (!self.active or result.disposition != .hit) return;
+        self.accepted_melee_hits +|= 1;
+        if (!self.player_dead) self.provocation_hit = true;
+        self.npc_killed = self.npc_killed or result.killed;
+    }
+
+    fn observeRespawnResult(
+        self: *S11CombatSmokeProgress,
+        result: sandbox_host.RespawnActionResult,
+    ) void {
+        if (!self.active or result.disposition != .respawned) return;
+        self.respawn_accepted = true;
+        self.player_respawned = true;
+    }
+
+    fn observeProductHud(
+        self: *S11CombatSmokeProgress,
+        view: *const editor_contract.GameplayView,
+    ) void {
+        if (!self.active) return;
+        self.product_hud_health = self.product_hud_health or
+            view.local_maximum_health != 0;
+        self.product_hud_damage = self.product_hud_damage or
+            view.local_damage_feedback;
+        self.product_hud_death = self.product_hud_death or
+            view.local_life_state == .dead;
+        self.product_hud_respawn_countdown = self.product_hud_respawn_countdown or
+            (view.local_life_state == .dead and view.respawn_remaining_ticks != 0);
+        self.product_hud_respawn_ready = self.product_hud_respawn_ready or
+            view.respawn_instruction_visible;
+        self.product_hud_action_feedback = self.product_hud_action_feedback or
+            view.last_action.sequence != 0;
+        for (view.entitySlice()) |entity| {
+            self.product_hud_windup = self.product_hud_windup or entity.attack_windup;
+        }
+    }
+
+    fn requireComplete(self: S11CombatSmokeProgress) !void {
+        if (!self.npc_spawned or !self.player_dead or !self.player_respawned or
+            !self.respawn_accepted or self.accepted_melee_hits < 3 or
+            !self.npc_killed or !self.character_bar_drawn or
+            !self.npc_bar_drawn or !self.npc_windup_drawn or
+            !self.character_hit_flash_drawn or
+            !self.character_hit_flash_expired or
+            !self.npc_hit_flash_drawn or !self.npc_hit_flash_expired or
+            self.character_flash_overran or self.npc_flash_overran or
+            self.render_plan_mismatch or
+            !self.melee_cooldown_marker_drawn or
+            !self.respawn_countdown_marker_drawn or
+            !self.respawn_ready_marker_drawn or
+            !self.dead_hud_anchor_drawn or
+            !self.player_death_drawn or !self.respawned_character_drawn or
+            !self.npc_death_drawn or
+            !self.product_hud_health or !self.product_hud_damage or
+            !self.product_hud_death or !self.product_hud_windup or
+            !self.product_hud_respawn_countdown or
+            !self.product_hud_respawn_ready or
+            !self.product_hud_action_feedback or
+            !self.visibility_contact or !self.visibility_player_death or
+            !self.visibility_respawn or !self.visibility_npc_death or
+            !self.visibility_bounds_valid or self.visibility_observations < 7)
+        {
+            std.debug.print(
+                "S11_COMBAT_SMOKE_MISSING char_flash_overran={} " ++
+                    "npc_flash_overran={} render_plan_mismatch={} " ++
+                    "char_flash_expired={} npc_flash_expired={} " ++
+                    "visibility_contact={} visibility_death={} " ++
+                    "visibility_respawn={} visibility_npc_death={} " ++
+                    "visibility_bounds={} visibility_observations={d}\n",
+                .{
+                    self.character_flash_overran,
+                    self.npc_flash_overran,
+                    self.render_plan_mismatch,
+                    self.character_hit_flash_expired,
+                    self.npc_hit_flash_expired,
+                    self.visibility_contact,
+                    self.visibility_player_death,
+                    self.visibility_respawn,
+                    self.visibility_npc_death,
+                    self.visibility_bounds_valid,
+                    self.visibility_observations,
+                },
+            );
+            return error.S11CombatSmokeEvidenceMissing;
+        }
+    }
+};
+
 const DistrictStreamEvidence = struct {
     correlation: u64 = 0,
     gpu_reserved: ?u64 = null,
@@ -1105,14 +1524,156 @@ fn verifyInstalledContent(
 // Application State
 // ============================================================================
 
+const IncidentRunMode = enum {
+    interactive,
+    smoke,
+    benchmark,
+    journey,
+    journey_window,
+
+    fn isJourney(self: IncidentRunMode) bool {
+        return self == .journey or self == .journey_window;
+    }
+};
+
+const incident_benchmark_warmup_frames: u64 = 300;
+const incident_benchmark_sample_count: usize = 2_400;
+
+const IncidentBenchmarkProgress = struct {
+    samples_ns: [incident_benchmark_sample_count]u64 = undefined,
+    count: usize = 0,
+
+    fn observe(self: *IncidentBenchmarkProgress, frame_seconds: f64) void {
+        if (self.count == self.samples_ns.len) return;
+        const bounded_seconds = @max(frame_seconds, 0);
+        self.samples_ns[self.count] = @intFromFloat(@min(
+            bounded_seconds * @as(f64, @floatFromInt(std.time.ns_per_s)),
+            @as(f64, @floatFromInt(std.math.maxInt(u64))),
+        ));
+        self.count += 1;
+    }
+
+    fn complete(self: *const IncidentBenchmarkProgress) bool {
+        return self.count == self.samples_ns.len;
+    }
+
+    fn report(
+        self: *IncidentBenchmarkProgress,
+        snapshot: sandbox_developer_host.Owner.IncidentBenchmarkSnapshot,
+    ) void {
+        std.mem.sort(u64, self.samples_ns[0..self.count], {}, std.sort.asc(u64));
+        const p50 = self.samples_ns[percentileIndex(self.count, 50)];
+        const p95 = self.samples_ns[percentileIndex(self.count, 95)];
+        const p99 = self.samples_ns[percentileIndex(self.count, 99)];
+        const fence_mean = if (snapshot.fence_latency_samples == 0)
+            0
+        else
+            snapshot.fence_latency_total_ns / snapshot.fence_latency_samples;
+        std.debug.print(
+            "INCIDENT_CAPTURE_BENCHMARK capture={} samples={d} " ++
+                "frame_p50_ns={d} frame_p95_ns={d} frame_p99_ns={d} " ++
+                "download_bytes={d} queue_high_water={d} dropped={d} " ++
+                "artifact_bytes={d} screenshot_misses={d} " ++
+                "trail={d}/{d} anchors={d}/{d} " ++
+                "fence_samples={d} fence_mean_ns={d} fence_max_ns={d}\n",
+            .{
+                snapshot.enabled,
+                self.count,
+                p50,
+                p95,
+                p99,
+                snapshot.bounded_download_bytes,
+                snapshot.queue_high_water,
+                snapshot.dropped_records,
+                snapshot.bytes_written,
+                snapshot.screenshot_misses,
+                snapshot.trail_completed,
+                snapshot.trail_submitted,
+                snapshot.anchor_completed,
+                snapshot.anchor_submitted,
+                snapshot.fence_latency_samples,
+                fence_mean,
+                snapshot.fence_latency_max_ns,
+            },
+        );
+    }
+};
+
+fn percentileIndex(length: usize, percentile: usize) usize {
+    std.debug.assert(length != 0 and percentile <= 100);
+    return ((length - 1) * percentile) / 100;
+}
+
+const IncidentJourneyStage = enum {
+    bootstrap,
+    collect,
+    drop,
+    enter_vehicle,
+    drive,
+    exit_vehicle,
+    travel_east,
+    return_west,
+    await_player_death,
+    respawn,
+    fight_npc,
+    complete,
+};
+
+const IncidentJourneyNpc = struct {
+    entity: sandbox_host.ReplicatedEntityId,
+    incarnation: u16,
+};
+
+const IncidentJourneyProgress = struct {
+    stage: IncidentJourneyStage = .bootstrap,
+    stage_enter_tick: u64 = 0,
+    resume_after_respawn: ?IncidentJourneyStage = null,
+    initial_npc: ?IncidentJourneyNpc = null,
+    entered_vehicle: bool = false,
+    saw_east: bool = false,
+    saw_returned_west: bool = false,
+    saw_player_dead: bool = false,
+    saw_player_respawned: bool = false,
+    saw_npc_dead: bool = false,
+    npc_dead_tick: u64 = 0,
+    saw_npc_replacement: bool = false,
+    resized: bool = false,
+    resize_requested_tick: u64 = 0,
+    restored_size: bool = false,
+    restore_size_tick: u64 = 0,
+    minimize_requested: bool = false,
+    minimized_event: bool = false,
+    minimized_started_ns: u64 = 0,
+    restore_requested: bool = false,
+    restored_event: bool = false,
+    exercise_window_lifecycle: bool = false,
+    flag_count: u8 = 0,
+    rapid_flags_completed: bool = false,
+    completion_flagged: bool = false,
+    last_flag_tick: u64 = 0,
+    handoff_requested: bool = false,
+    handoff_request_tick: u64 = 0,
+
+    fn enter(self: *IncidentJourneyProgress, stage: IncidentJourneyStage, tick: u64) void {
+        self.stage = stage;
+        self.stage_enter_tick = tick;
+    }
+};
+
 const ValidationAppState = if (build_options.validation_mode or builtin.is_test) struct {
     profile: BootstrapProfile = .sandbox,
     s4_physics_debug_evidence: S4PhysicsDebugEvidence = .{},
     s2_smoke: S2SmokeProgress = .{},
     s7_scripted_move: [2]f32 = .{ 0, 0 },
     s7_character_actions_enabled: bool = true,
+    s11_combat: S11CombatSmokeProgress = .{},
     s4_fault_loop_probe: ?*S4FaultLoopProbe = null,
 } else void;
+
+const VisibilityOracleState = if (build_options.validation_mode)
+    ?visibility_oracle.Owner
+else
+    void;
 
 const App = struct {
     io: std.Io,
@@ -1143,6 +1704,10 @@ const App = struct {
     interaction_last_outcome: ?sandbox_contracts.InteractionOutcome,
     interaction_last_player_result: ?sandbox_host.InteractionActionResult,
     interaction_submission_failures: u64,
+    product_feedback: product_feedback.Owner,
+    product_presentation_trace: product_presentation_trace.Owner,
+    product_encounter: sandbox_product_encounter.Owner,
+    product_character_lifecycle: sandbox_product_character_lifecycle.Owner,
     validation: ValidationAppState,
     validation_tick_origin: u64 = 0,
     game_camera: camera.Camera,
@@ -1150,6 +1715,7 @@ const App = struct {
     ground_mesh: mesh.Mesh,
     block_mesh: mesh.Mesh,
     visuals: sandbox_visual_resources.SandboxVisualResources,
+    visibility_oracle: VisibilityOracleState,
     district_streaming: *district_streaming_host.Owner,
     district_focus_override: ?[2]f32,
 
@@ -1164,7 +1730,7 @@ const App = struct {
         comptime profile: BootstrapProfile,
         content_root: ?content.ContentRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, false, false, null);
+        return initWithOptions(io, profile, content_root, null, false, false, null, null);
     }
 
     pub fn initWithSaveRoot(
@@ -1173,7 +1739,25 @@ const App = struct {
         content_root: ?content.ContentRootPath,
         save_root: SaveRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, false, false, save_root);
+        return initWithOptions(io, profile, content_root, null, false, false, save_root, null);
+    }
+
+    pub fn initProduct(
+        io: std.Io,
+        content_root: ?content.ContentRootPath,
+        save_root: ?SaveRootPath,
+        incident_runs_root: ?[]const u8,
+    ) !App {
+        return initWithOptions(
+            io,
+            .sandbox,
+            content_root,
+            null,
+            false,
+            false,
+            save_root,
+            incident_runs_root,
+        );
     }
 
     fn initForDiagnosticsSmoke(
@@ -1182,7 +1766,7 @@ const App = struct {
         content_root: ?content.ContentRootPath,
         save_root: ?SaveRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, false, true, save_root);
+        return initWithOptions(io, profile, content_root, null, false, true, save_root, null);
     }
 
     fn initWithFailurePoint(
@@ -1191,7 +1775,7 @@ const App = struct {
         content_root: ?content.ContentRootPath,
         comptime failure_point: AppInitFailurePoint,
     ) !App {
-        return initWithOptions(io, profile, content_root, failure_point, false, false, null);
+        return initWithOptions(io, profile, content_root, failure_point, false, false, null, null);
     }
 
     fn initWithoutPhysicsDebugPipelinesForTest(
@@ -1199,7 +1783,7 @@ const App = struct {
         comptime profile: BootstrapProfile,
         content_root: ?content.ContentRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, true, false, null);
+        return initWithOptions(io, profile, content_root, null, true, false, null, null);
     }
 
     fn initWithOptions(
@@ -1210,6 +1794,7 @@ const App = struct {
         comptime omit_physics_debug_pipelines: bool,
         comptime diagnostic_fault_probe: bool,
         save_root: ?SaveRootPath,
+        incident_runs_root: ?[]const u8,
     ) !App {
         // Initialize SDL3 with video subsystem
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
@@ -1263,8 +1848,10 @@ const App = struct {
 
         const developer = try sandbox_developer_host.Owner.init(
             std.heap.page_allocator,
+            io,
             window,
             &gpu_renderer,
+            if (build_options.incident_capture_enabled) incident_runs_root else null,
         );
         errdefer developer.deinit();
 
@@ -1281,6 +1868,9 @@ const App = struct {
                 .material = sandbox_visual_resources.character_material_handle,
             },
         };
+        if (profile == .sandbox) {
+            try sandbox_contracts.validateDefaultCharacterSpawn(character_config);
+        }
         const vehicle_config = sandbox_contracts.VehicleConfig{
             .assets = .{
                 .chassis_mesh = sandbox_visual_resources.vehicle_chassis_mesh_handle,
@@ -1295,9 +1885,32 @@ const App = struct {
             character_config.half_height,
         );
         errdefer visuals.deinit();
+        var validation_visibility: VisibilityOracleState = if (build_options.validation_mode)
+            try visibility_oracle.Owner.init(&gpu_renderer)
+        else {};
+        errdefer if (build_options.validation_mode) {
+            if (validation_visibility) |*owner| owner.deinit();
+        };
         if (failure_point != null) {
             try injectAppInitFailure(failure_point, .after_visual_resources);
         }
+
+        // Admit the exact content cohort before cold authority construction so
+        // developer incident recording can begin at the only honest replay
+        // boundary. Streaming remains a separate owner after admission.
+        const streams_districts = profile == .sandbox or profile == .s3_smoke;
+        const needs_catalog = streams_districts or save_root != null;
+        const district_streaming = try district_streaming_host.Owner.init(
+            io,
+            std.heap.page_allocator,
+            gpu_renderer.getDevice(),
+            .{
+                .stream_content = streams_districts,
+                .admit_catalog = needs_catalog,
+                .content_root = content_root,
+            },
+        );
+        errdefer district_streaming.abortInit();
 
         // The visual solo product owns an embedded authority session.
         const simulation_config = sandbox_contracts.Config{
@@ -1329,6 +1942,10 @@ const App = struct {
             try sandbox_host.Placement.initComposition(
                 std.heap.page_allocator,
                 simulation_config,
+                .{ .recording_content = if (incident_runs_root != null)
+                    try district_streaming.contentCohort()
+                else
+                    null },
             );
         const simulation = embedded.placement;
         const persistence_source = embedded.snapshot_source;
@@ -1343,19 +1960,6 @@ const App = struct {
         errdefer std.heap.page_allocator.destroy(authoring_transactions);
         authoring_transactions.* = .{};
 
-        const streams_districts = profile == .sandbox or profile == .s3_smoke;
-        const needs_catalog = streams_districts or save_root != null;
-        const district_streaming = try district_streaming_host.Owner.init(
-            io,
-            std.heap.page_allocator,
-            gpu_renderer.getDevice(),
-            .{
-                .stream_content = streams_districts,
-                .admit_catalog = needs_catalog,
-                .content_root = content_root,
-            },
-        );
-        errdefer district_streaming.abortInit();
         const persistence = if (save_root) |root_path| owner: {
             const authority_cohort = simulation.inspection().persistenceCohort();
             break :owner try sandbox_persistence.Owner.open(
@@ -1392,7 +1996,8 @@ const App = struct {
                 .request_id = 1,
                 .position = switch (profile) {
                     .s2_smoke => .{ 0, 0, 2 },
-                    .sandbox, .s1_smoke => .{ 0, 0, 4 },
+                    .sandbox => sandbox_contracts.default_character_spawn_position,
+                    .s1_smoke => .{ 0, 0, 4 },
                     .s0_smoke, .s3_smoke => unreachable,
                 },
             } });
@@ -1418,12 +2023,18 @@ const App = struct {
         std.debug.print("   WASD - Move character / drive vehicle\n", .{});
         std.debug.print("   E - Enter / exit vehicle\n", .{});
         std.debug.print("   F - Collect / drop carryable\n", .{});
+        std.debug.print("   Q - Authoritative melee\n", .{});
+        std.debug.print("   R - Respawn after death / cooldown\n", .{});
         std.debug.print("   SPACE - Jump / vehicle brake\n", .{});
         std.debug.print("   LEFT SHIFT - Vehicle hand brake\n", .{});
         std.debug.print("   Right-click + drag - Turn/look\n", .{});
         std.debug.print("   F1 - Toggle editor UI\n", .{});
         std.debug.print("   F2 - Toggle ImGui demo\n", .{});
         std.debug.print("   F3 - Toggle editor input passthrough\n", .{});
+        if (developer.incidentRunPath() != null) {
+            std.debug.print("   Cmd+Option+I - Flag human-test anomaly\n", .{});
+            std.debug.print("   F9 / Fn+F9 - Optional anomaly shortcut\n", .{});
+        }
         std.debug.print("===========================================\n\n", .{});
 
         return App{
@@ -1453,12 +2064,17 @@ const App = struct {
             .interaction_last_outcome = null,
             .interaction_last_player_result = null,
             .interaction_submission_failures = 0,
+            .product_feedback = .{},
+            .product_presentation_trace = .{},
+            .product_encounter = .{},
+            .product_character_lifecycle = .{},
             .validation = if (build_options.validation_mode or builtin.is_test)
                 .{ .profile = profile }
             else {},
             .ground_mesh = ground_mesh,
             .block_mesh = block_mesh,
             .visuals = visuals,
+            .visibility_oracle = validation_visibility,
             .district_streaming = district_streaming,
             .district_focus_override = null,
             .persistence = persistence,
@@ -1477,6 +2093,10 @@ const App = struct {
         // but before normal submission. Retire and drain that work before any
         // editor, overlay, mesh, texture, or streamed-GPU owner is released.
         self.gpu_renderer.drainForExternalTeardown();
+
+        if (build_options.validation_mode) {
+            if (self.visibility_oracle) |*owner| owner.deinit();
+        }
 
         // The developer owner releases ImGui and optional debug GPU resources
         // while the renderer device is still valid.
@@ -1517,8 +2137,63 @@ const App = struct {
     /// cadence-injection, or acceptance-summary input, so validation code is
     /// unreachable from the normal client composition.
     pub fn runProduct(self: *App) !void {
+        return self.runProductLoop(.interactive, null);
+    }
+
+    pub fn runIncidentCaptureSmoke(self: *App) !void {
+        if (!build_options.incident_capture_enabled) return error.IncidentCaptureDisabled;
+        return self.runProductLoop(.smoke, null);
+    }
+
+    pub fn runIncidentCaptureBenchmark(self: *App) !void {
+        return self.runProductLoop(.benchmark, null);
+    }
+
+    pub fn runIncidentCaptureJourney(self: *App) !void {
+        if (!build_options.incident_capture_enabled) return error.IncidentCaptureDisabled;
+        return self.runProductLoop(.journey, null);
+    }
+
+    pub fn runIncidentCaptureWindowJourney(self: *App) !void {
+        if (!build_options.incident_capture_enabled) return error.IncidentCaptureDisabled;
+        return self.runProductLoop(.journey_window, null);
+    }
+
+    pub fn runIncidentReplay(
+        self: *App,
+        run_path: []const u8,
+    ) !void {
+        var replay = try incident_input_replay.Replay.load(
+            self.io,
+            std.heap.page_allocator,
+            run_path,
+        );
+        defer replay.deinit();
+        std.debug.print(
+            "INCIDENT_GRAPHICAL_REPLAY_BEGIN source={s} samples={d} final_tick={d}\n",
+            .{ run_path, replay.samples.len, replay.finalTick() },
+        );
+        try self.runProductLoop(.interactive, &replay);
+        std.debug.print(
+            "INCIDENT_GRAPHICAL_REPLAY_COMPLETE source={s} final_tick={d}\n",
+            .{ run_path, self.simulation.inspection().tickIndex() },
+        );
+    }
+
+    fn runProductLoop(
+        self: *App,
+        incident_mode: IncidentRunMode,
+        replay: ?*incident_input_replay.Replay,
+    ) !void {
         var running = true;
         var retained_runtime_error: ?anyerror = null;
+        var incident_flagged = false;
+        var handoff_requested = false;
+        var handoff_request_tick: u64 = 0;
+        var incident_journey = IncidentJourneyProgress{
+            .exercise_window_lifecycle = incident_mode == .journey_window,
+        };
+        var incident_benchmark = IncidentBenchmarkProgress{};
 
         game_loop: while (running) {
             var input_profile = self.beginHostProfile(
@@ -1529,7 +2204,11 @@ const App = struct {
             defer input_profile.finish(.failure);
             self.input_buffer.beginFrame();
             running = self.input_buffer.pumpEvents(self.developer.eventSink());
-            if (running and retained_runtime_error == null and
+            if (incident_mode.isJourney()) {
+                try self.advanceIncidentJourneyWindowLifecycle(&incident_journey);
+            }
+            if (replay == null and !incident_mode.isJourney() and running and
+                retained_runtime_error == null and
                 !self.developer.paused())
             {
                 try self.captureFrameActions();
@@ -1563,6 +2242,12 @@ const App = struct {
             content_profile.finish(.success);
 
             if (self.developer.takeSingleStep()) {
+                if (replay) |input_replay| try self.action_latch.captureFrame(
+                    input_replay.frameForTick(self.simulation.inspection().tickIndex() +| 1),
+                );
+                if (incident_mode.isJourney()) try self.action_latch.captureFrame(
+                    self.incidentJourneyActions(&incident_journey),
+                );
                 self.simulateTick(false, .none) catch |err| {
                     if (!self.developer.hasRetainedFault(self.developerAuthorityPort())) return err;
                     retained_runtime_error = err;
@@ -1575,9 +2260,18 @@ const App = struct {
                     _ = try self.renderFaultInspectionFrame();
                     continue :game_loop;
                 };
+                if (incident_mode.isJourney()) {
+                    try self.observeIncidentJourney(&incident_journey);
+                }
                 self.frame_timer.recordSingleStep();
             } else if (!self.developer.paused()) {
                 while (self.frame_timer.shouldTick()) {
+                    if (replay) |input_replay| try self.action_latch.captureFrame(
+                        input_replay.frameForTick(self.simulation.inspection().tickIndex() +| 1),
+                    );
+                    if (incident_mode.isJourney()) try self.action_latch.captureFrame(
+                        self.incidentJourneyActions(&incident_journey),
+                    );
                     self.simulateTick(false, .none) catch |err| {
                         if (!self.developer.hasRetainedFault(self.developerAuthorityPort())) return err;
                         retained_runtime_error = err;
@@ -1590,19 +2284,464 @@ const App = struct {
                         _ = try self.renderFaultInspectionFrame();
                         continue :game_loop;
                     };
+                    if (incident_mode.isJourney()) {
+                        try self.observeIncidentJourney(&incident_journey);
+                    }
                     self.frame_timer.recordCompletedTick();
                 }
             }
 
             _ = try self.render(self.frame_timer.alpha());
             self.developer.finishFrameProfile(.success);
-            self.developer.maybePrintFrameStats(
+            if (incident_mode == .benchmark and
+                self.frame_timer.total_frames > incident_benchmark_warmup_frames)
+            {
+                incident_benchmark.observe(self.frame_timer.getDeltaTime());
+                if (incident_benchmark.complete()) {
+                    incident_benchmark.report(
+                        self.developer.incidentBenchmarkSnapshot(),
+                    );
+                    break;
+                }
+            }
+            if (!incident_mode.isJourney()) self.developer.maybePrintFrameStats(
                 &self.frame_timer,
                 self.simulation.inspection().tickIndex(),
             );
+            if (incident_mode == .smoke) {
+                const tick = self.simulation.inspection().tickIndex();
+                if (!incident_flagged and tick >= 120) {
+                    if (!self.developer.queueIncidentHotkeyForAcceptance()) {
+                        return error.IncidentSmokeFlagFailed;
+                    }
+                    incident_flagged = true;
+                }
+                if (incident_flagged and !handoff_requested and tick >= 480) {
+                    if (!self.developer.requestIncidentHandoffWithReplayForAcceptance(
+                        self.developerAuthorityPort(),
+                    )) {
+                        return error.IncidentSmokeHandoffFailed;
+                    }
+                    handoff_requested = true;
+                    handoff_request_tick = tick;
+                }
+                if (handoff_requested and tick >= handoff_request_tick +| 60) break;
+            }
+            if (incident_mode.isJourney() and
+                try self.advanceIncidentJourneyAfterFrame(&incident_journey)) break;
+            if (replay) |input_replay| {
+                if (self.simulation.inspection().tickIndex() >= input_replay.finalTick() +| 60) break;
+            }
         }
 
         if (retained_runtime_error) |err| return err;
+        if (incident_mode.isJourney() and !incident_journey.handoff_requested) {
+            return error.IncidentJourneyInterrupted;
+        }
+    }
+
+    fn incidentJourneyActions(
+        self: *const App,
+        progress: *const IncidentJourneyProgress,
+    ) sandbox_controls.FrameSample {
+        const tick = self.simulation.inspection().tickIndex() +| 1;
+        var actions = sandbox_controls.FrameSample{};
+        switch (progress.stage) {
+            .bootstrap => if (tick >= 60 and tick < 90) {
+                actions.look_delta = .{ 0.004, -0.001 };
+            },
+            .collect, .drop => {
+                actions.carry_pressed = tick == progress.stage_enter_tick +| 1;
+            },
+            .enter_vehicle => {
+                if (self.simulation.player().focusPosition()) |position| {
+                    const vehicles = self.simulation.presentation().vehicles(0);
+                    if (vehicles.len != 0) {
+                        const target = vehicles[0].chassis_pose.position;
+                        if (tick == progress.stage_enter_tick +| 1) {
+                            std.debug.print(
+                                "INCIDENT_JOURNEY_VEHICLE_APPROACH tick={d} " ++
+                                    "character=[{d},{d},{d}] vehicle=[{d},{d},{d}] occupied={}\n",
+                                .{
+                                    tick,
+                                    position[0],
+                                    position[1],
+                                    position[2],
+                                    target[0],
+                                    target[1],
+                                    target[2],
+                                    vehicles[0].driver != null,
+                                },
+                            );
+                        }
+                        const delta = [2]f32{
+                            target[0] - position[0],
+                            target[2] - position[2],
+                        };
+                        const horizontal_distance_squared =
+                            delta[0] * delta[0] + delta[1] * delta[1];
+                        const vertical = target[1] - position[1];
+                        const distance_squared = horizontal_distance_squared + vertical * vertical;
+                        if (distance_squared > 4) {
+                            const inverse = 1.0 / @sqrt(horizontal_distance_squared);
+                            const world_x = delta[0] * inverse;
+                            const world_z = delta[1] * inverse;
+                            const sine = @sin(self.game_camera.yaw);
+                            const cosine = @cos(self.game_camera.yaw);
+                            actions.move = .{
+                                world_x * cosine + world_z * sine,
+                                world_x * sine - world_z * cosine,
+                            };
+                        } else {
+                            actions.interact_pressed =
+                                (tick -| progress.stage_enter_tick) % 30 == 1;
+                        }
+                    }
+                }
+            },
+            .exit_vehicle => {
+                actions.interact_pressed = (tick -| progress.stage_enter_tick) % 30 == 1;
+            },
+            .drive => {
+                actions.move = .{
+                    if (tick >= progress.stage_enter_tick +| 90) 0.6 else 0,
+                    1,
+                };
+                actions.hand_brake = tick >= progress.stage_enter_tick +| 140 and
+                    tick < progress.stage_enter_tick +| 150;
+                actions.brake = tick >= progress.stage_enter_tick +| 150;
+            },
+            .travel_east => {
+                actions.move = .{ 1, 0 };
+                actions.jump_pressed = tick == progress.stage_enter_tick +| 30;
+            },
+            .return_west => actions.move = .{ -1, 0 },
+            .await_player_death, .complete => {},
+            .respawn => {
+                actions.respawn_pressed = (tick -| progress.stage_enter_tick) % 30 == 1;
+            },
+            .fight_npc => {
+                if (progress.saw_npc_dead) {
+                    if (self.simulation.player().focusPosition()) |position| {
+                        // The west blocker occludes both local replacement
+                        // candidates from this point while keeping the player
+                        // more than the configured eight-metre safety radius
+                        // away. This exercises the ordinary safe-replacement
+                        // admission policy instead of bypassing it.
+                        const safe = [2]f32{ -8, -7 };
+                        const delta = [2]f32{
+                            safe[0] - position[0],
+                            safe[1] - position[2],
+                        };
+                        const distance_squared = delta[0] * delta[0] + delta[1] * delta[1];
+                        if (distance_squared > 1) {
+                            const inverse = 1.0 / @sqrt(distance_squared);
+                            const world_x = delta[0] * inverse;
+                            const world_z = delta[1] * inverse;
+                            const sine = @sin(self.game_camera.yaw);
+                            const cosine = @cos(self.game_camera.yaw);
+                            actions.move = .{
+                                world_x * cosine + world_z * sine,
+                                world_x * sine - world_z * cosine,
+                            };
+                        }
+                    }
+                } else {
+                    actions.melee_pressed = (tick -| progress.stage_enter_tick) % 30 == 1;
+                    const npcs = self.simulation.presentation().npcs(0);
+                    if (npcs.len != 0) {
+                        if (self.simulation.player().focusPosition()) |position| {
+                            const target = npcs[0].pose.position;
+                            const delta = [2]f32{
+                                target[0] - position[0],
+                                target[2] - position[2],
+                            };
+                            const desired_yaw = std.math.atan2(delta[0], -delta[1]);
+                            const yaw_delta = engine.transform.normalizeFacingYaw(
+                                desired_yaw - self.game_camera.yaw,
+                            ) catch 0;
+                            // Convert the exact desired turn into the ordinary
+                            // mouse-look input domain consumed by Camera.rotate.
+                            actions.look_delta[0] = yaw_delta / self.game_camera.look_sensitivity;
+                            const distance_squared = delta[0] * delta[0] + delta[1] * delta[1];
+                            if (distance_squared > 2.25) {
+                                const inverse = 1.0 / @sqrt(distance_squared);
+                                const world_x = delta[0] * inverse;
+                                const world_z = delta[1] * inverse;
+                                const sine = @sin(self.game_camera.yaw);
+                                const cosine = @cos(self.game_camera.yaw);
+                                actions.move = .{
+                                    world_x * cosine + world_z * sine,
+                                    world_x * sine - world_z * cosine,
+                                };
+                            }
+                        }
+                    }
+                }
+            },
+        }
+        return actions;
+    }
+
+    fn observeIncidentJourney(
+        self: *App,
+        progress: *IncidentJourneyProgress,
+    ) !void {
+        const tick = self.simulation.inspection().tickIndex();
+        const hud = self.simulation.presentation().combatHud();
+        if (hud.life_state == .dead and progress.stage != .respawn and
+            progress.stage != .complete)
+        {
+            progress.saw_player_dead = true;
+            progress.resume_after_respawn = if (progress.stage == .await_player_death)
+                .fight_npc
+            else
+                progress.stage;
+            progress.enter(.respawn, tick);
+        }
+
+        const npc_draws = self.simulation.presentation().npcs(0);
+        if (progress.initial_npc == null) for (npc_draws) |npc| {
+            if (npc.life_state != .alive) continue;
+            progress.initial_npc = .{
+                .entity = npc.entity,
+                .incarnation = npc.incarnation,
+            };
+            break;
+        };
+        if (progress.initial_npc) |initial| for (npc_draws) |npc| {
+            const same_incarnation = std.meta.eql(npc.entity, initial.entity) and
+                npc.incarnation == initial.incarnation;
+            if (same_incarnation and npc.life_state == .dead) {
+                if (!progress.saw_npc_dead) progress.npc_dead_tick = tick;
+                progress.saw_npc_dead = true;
+            }
+            if (progress.saw_npc_dead and !same_incarnation and npc.life_state == .alive) {
+                progress.saw_npc_replacement = true;
+            }
+        };
+
+        switch (progress.stage) {
+            .bootstrap => if (tick >= 120 and self.initial_carryable_id != null and
+                progress.initial_npc != null and
+                self.product_encounter.state == .bootstrap_complete)
+            {
+                progress.enter(.collect, tick);
+            },
+            .collect => if (self.interaction_last_player_result) |result| {
+                if (result.disposition == .collected) progress.enter(.drop, tick);
+            },
+            .drop => if (self.interaction_last_player_result) |result| {
+                if (result.disposition == .dropped) progress.enter(.enter_vehicle, tick);
+            },
+            .enter_vehicle => if (self.controlled_vehicle_id != null) {
+                progress.entered_vehicle = true;
+                progress.enter(.drive, tick);
+            },
+            .drive => if (tick >= progress.stage_enter_tick +| 180) {
+                progress.enter(.exit_vehicle, tick);
+            },
+            .exit_vehicle => if (progress.entered_vehicle and self.controlled_vehicle_id == null) {
+                progress.enter(.travel_east, tick);
+            },
+            .travel_east => if (self.simulation.player().focusPosition()) |position| {
+                if (position[0] >= 10 and
+                    self.simulation.districts().activeTicket(district_east_coord) != null)
+                {
+                    progress.saw_east = true;
+                    progress.enter(.return_west, tick);
+                }
+            },
+            .return_west => if (self.simulation.player().focusPosition()) |position| {
+                if (position[0] <= 4 and
+                    self.simulation.districts().activeTicket(district_west_coord) != null)
+                {
+                    progress.saw_returned_west = true;
+                    progress.enter(
+                        if (progress.saw_player_dead and progress.saw_player_respawned)
+                            .fight_npc
+                        else
+                            .await_player_death,
+                        tick,
+                    );
+                }
+            },
+            .await_player_death => {},
+            .respawn => if (progress.saw_player_dead and hud.life_state == .alive) {
+                progress.saw_player_respawned = true;
+                const next = progress.resume_after_respawn orelse .fight_npc;
+                progress.resume_after_respawn = null;
+                progress.enter(next, tick);
+            },
+            .fight_npc => if (progress.saw_npc_dead and progress.saw_npc_replacement) {
+                progress.enter(.complete, tick);
+            },
+            .complete => {},
+        }
+    }
+
+    fn advanceIncidentJourneyAfterFrame(
+        self: *App,
+        progress: *IncidentJourneyProgress,
+    ) !bool {
+        const tick = self.simulation.inspection().tickIndex();
+        if (tick > progress.stage_enter_tick +| 1_200 or tick > 3_600) {
+            const replacement = self.simulation.developer().diagnostics().npc_replacement;
+            std.debug.print(
+                "INCIDENT_JOURNEY_TIMEOUT stage={s} tick={d} stage_enter={d} " ++
+                    "replacement=pending:{d},spawning:{d},attempts:{d},ready:{d}," ++
+                    "retries:{d},inactive:{d},occupied:{d},near:{d},visible:{d}\n",
+                .{
+                    @tagName(progress.stage),
+                    tick,
+                    progress.stage_enter_tick,
+                    replacement.pending,
+                    replacement.awaiting_spawn,
+                    replacement.attempts,
+                    replacement.replacements_ready,
+                    replacement.retries,
+                    replacement.district_inactive,
+                    replacement.occupied,
+                    replacement.too_close_to_player,
+                    replacement.visible_to_player,
+                },
+            );
+            return error.IncidentJourneyIncomplete;
+        }
+
+        if (progress.flag_count == 0 and tick >= 120) {
+            if (!self.developer.queueIncidentHotkeyForAcceptance()) {
+                return error.IncidentJourneyFlagFailed;
+            }
+            progress.flag_count = 1;
+            progress.last_flag_tick = tick;
+        }
+        if (progress.exercise_window_lifecycle and
+            !progress.minimize_requested and tick >= 600)
+        {
+            if (!c.SDL_MinimizeWindow(self.window)) {
+                return error.IncidentJourneyMinimizeFailed;
+            }
+            if (!c.SDL_SyncWindow(self.window)) {
+                return error.IncidentJourneyMinimizeSyncFailed;
+            }
+            progress.minimize_requested = true;
+            progress.minimized_started_ns = c.SDL_GetTicksNS();
+        }
+        if (progress.saw_east and !progress.resized) {
+            if (!c.SDL_SetWindowSize(self.window, 1024, 640)) {
+                return error.IncidentJourneyResizeFailed;
+            }
+            progress.resized = true;
+            progress.resize_requested_tick = tick;
+        }
+        if (progress.saw_returned_west and progress.resized and !progress.restored_size) {
+            if (!c.SDL_SetWindowSize(self.window, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT)) {
+                return error.IncidentJourneyResizeFailed;
+            }
+            progress.restored_size = true;
+            progress.restore_size_tick = tick;
+        }
+        // Allow the restored drawable generation to accumulate the full
+        // two-second screenshot pre-roll before applying overlapping flags.
+        // Flagging on the same frame as a resize honestly produces partial
+        // evidence, but that belongs in an explicit pressure case rather than
+        // making the zero-loss reference journey timing-dependent.
+        if (progress.restored_size and !progress.rapid_flags_completed and
+            tick >= progress.restore_size_tick +| 120)
+        {
+            if (!self.developer.queueIncidentHotkeyForAcceptance() or
+                !self.developer.queueIncidentHotkeyForAcceptance())
+            {
+                return error.IncidentJourneyFlagFailed;
+            }
+            progress.flag_count += 2;
+            progress.last_flag_tick = tick;
+            progress.rapid_flags_completed = true;
+        }
+        if (progress.stage == .complete and progress.rapid_flags_completed and
+            !progress.completion_flagged)
+        {
+            if (!self.developer.queueIncidentHotkeyForAcceptance()) {
+                return error.IncidentJourneyFlagFailed;
+            }
+            progress.flag_count += 1;
+            progress.last_flag_tick = tick;
+            progress.completion_flagged = true;
+        }
+        if (progress.completion_flagged and !progress.handoff_requested and
+            tick >= progress.last_flag_tick +| 300)
+        {
+            if (!self.developer.requestIncidentHandoffWithReplayForAcceptance(
+                self.developerAuthorityPort(),
+            )) return error.IncidentJourneyHandoffFailed;
+            progress.handoff_requested = true;
+            progress.handoff_request_tick = tick;
+        }
+        if (progress.handoff_requested and tick >= progress.handoff_request_tick +| 60) {
+            if (!progress.entered_vehicle or !progress.saw_east or
+                !progress.saw_returned_west or !progress.saw_player_dead or
+                !progress.saw_player_respawned or !progress.saw_npc_dead or
+                !progress.saw_npc_replacement or !progress.resized or
+                !progress.restored_size or
+                (progress.exercise_window_lifecycle and
+                    (!progress.minimized_event or !progress.restored_event)) or
+                progress.flag_count != 4)
+            {
+                return error.IncidentJourneyIncomplete;
+            }
+            std.debug.print(
+                "INCIDENT_JOURNEY_COMPLETE tick={d} flags={d} " ++
+                    "vehicle={} districts={}/{} player={}/{} npc={}/{} " ++
+                    "resize={}/{} window_required={} window_observed={}/{}\n",
+                .{
+                    tick,
+                    progress.flag_count,
+                    progress.entered_vehicle,
+                    progress.saw_east,
+                    progress.saw_returned_west,
+                    progress.saw_player_dead,
+                    progress.saw_player_respawned,
+                    progress.saw_npc_dead,
+                    progress.saw_npc_replacement,
+                    progress.resized,
+                    progress.restored_size,
+                    progress.exercise_window_lifecycle,
+                    progress.minimized_event,
+                    progress.restored_event,
+                },
+            );
+            return true;
+        }
+        return false;
+    }
+
+    fn advanceIncidentJourneyWindowLifecycle(
+        self: *App,
+        progress: *IncidentJourneyProgress,
+    ) !void {
+        if (self.input_buffer.window_minimized_this_frame) {
+            if (!progress.minimize_requested) return error.IncidentJourneyUnexpectedMinimize;
+            progress.minimized_event = true;
+            progress.minimized_started_ns = c.SDL_GetTicksNS();
+        }
+        if (self.input_buffer.window_restored_this_frame) {
+            if (!progress.restore_requested) return error.IncidentJourneyUnexpectedRestore;
+            progress.restored_event = true;
+            self.frame_timer.resyncClock();
+        }
+        if (progress.minimized_event and !progress.restore_requested and
+            c.SDL_GetTicksNS() -| progress.minimized_started_ns >=
+                750 * std.time.ns_per_ms)
+        {
+            if (!c.SDL_RestoreWindow(self.window)) {
+                return error.IncidentJourneyRestoreFailed;
+            }
+            if (!c.SDL_SyncWindow(self.window)) {
+                return error.IncidentJourneyRestoreSyncFailed;
+            }
+            progress.restore_requested = true;
+        }
     }
 
     /// Run one validation scenario through the production adapters.
@@ -1612,6 +2751,9 @@ const App = struct {
         scenario: ScriptedScenario,
     ) !RunSummary {
         self.validation_tick_origin = self.simulation.inspection().tickIndex();
+        if (scenario == .s11_combat) {
+            self.validation.s11_combat = .{ .active = true };
+        }
         var running = true;
         var retained_runtime_error: ?anyerror = null;
         var summary = RunSummary{};
@@ -1807,7 +2949,7 @@ const App = struct {
                         return error.VisualSmokeCratePresentationMissing;
                     }
                     switch (scenario) {
-                        .none, .s3_streaming, .s7_interaction => {},
+                        .none, .s3_streaming, .s7_interaction, .s11_combat => {},
                         .s1_character => if (self.initial_character_id != null) {
                             if (presentation.character_count > 1) {
                                 return error.S1VisualSmokeCharacterPresentationMissing;
@@ -2022,8 +3164,14 @@ const App = struct {
                         return error.S2VisualSmokeSteeringAckMissing;
                     if (!self.validation.s2_smoke.brake_applied)
                         return error.S2VisualSmokeBrakeAckMissing;
+                    if (!self.validation.s2_smoke.hand_brake_applied)
+                        return error.S2VisualSmokeHandBrakeAckMissing;
                     if (!self.validation.s2_smoke.steering_observed)
                         return error.S2VisualSmokeSteeringMissing;
+                    if (!self.validation.s2_smoke.wheel_spin_presented)
+                        return error.S2VisualSmokeWheelSpinMissing;
+                    if (!self.validation.s2_smoke.wheel_steering_presented)
+                        return error.S2VisualSmokeWheelSteeringMissing;
                     if (!self.validation.s2_smoke.vehicle_moved)
                         return error.S2VisualSmokeVehicleDidNotMove;
                     if (!self.validation.s2_smoke.crate_displaced)
@@ -2045,6 +3193,7 @@ const App = struct {
                     }
                 },
                 .s3_streaming, .s7_interaction => {},
+                .s11_combat => try self.validation.s11_combat.requireComplete(),
                 .s4_physics_debug => try self.validateS4PhysicsDebugSmoke(summary),
             }
             const expected = try smokeExpectation(config);
@@ -2799,8 +3948,7 @@ const App = struct {
         return summary;
     }
 
-    /// Consume every NPC output at each completed-tick boundary. This keeps
-    /// the 64-wide smoke well below its bounded output capacities while also
+    /// Consume every NPC output at each completed-tick boundary while
     /// requiring exact per-request and per-identity lifecycle evidence.
     fn processS8NpcOutputs(
         self: *App,
@@ -4117,6 +5265,11 @@ const App = struct {
             .disarm_freeze_fn = developerDisarmFreeze,
             .resume_capture_fn = developerResumeCapture,
             .clear_fn = developerClear,
+            .gameplay_trace_fn = developerGameplayTrace,
+            .freeze_gameplay_trace_fn = developerFreezeGameplayTrace,
+            .resume_gameplay_trace_fn = developerResumeGameplayTrace,
+            .clear_gameplay_trace_fn = developerClearGameplayTrace,
+            .replay_snapshot_fn = developerReplaySnapshot,
             .extract_physics_debug_fn = developerExtractPhysicsDebug,
         };
     }
@@ -4171,6 +5324,36 @@ const App = struct {
     fn developerClear(context: *anyopaque) void {
         const self: *App = @ptrCast(@alignCast(context));
         self.simulation.developer().clear();
+    }
+
+    fn developerGameplayTrace(
+        context: *anyopaque,
+    ) engine.gameplay_trace.BorrowedView {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.developer().gameplayTrace().borrowedChronological();
+    }
+
+    fn developerFreezeGameplayTrace(context: *anyopaque) bool {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.developer().freezeGameplayTrace();
+    }
+
+    fn developerResumeGameplayTrace(context: *anyopaque) bool {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.developer().resumeGameplayTrace();
+    }
+
+    fn developerClearGameplayTrace(context: *anyopaque) void {
+        const self: *App = @ptrCast(@alignCast(context));
+        self.simulation.developer().clearGameplayTrace();
+    }
+
+    fn developerReplaySnapshot(
+        context: *anyopaque,
+        allocator: std.mem.Allocator,
+    ) ![]u8 {
+        const self: *App = @ptrCast(@alignCast(context));
+        return self.simulation.developer().snapshotFlightRecording(allocator);
     }
 
     fn developerExtractPhysicsDebug(
@@ -4267,6 +5450,8 @@ const App = struct {
             .jump_pressed = self.input_buffer.isKeyPressed(input.Key.SPACE),
             .interact_pressed = self.input_buffer.isKeyPressed(input.Key.E),
             .carry_pressed = self.input_buffer.isKeyPressed(input.Key.F),
+            .melee_pressed = self.input_buffer.isKeyPressed(input.Key.Q),
+            .respawn_pressed = self.input_buffer.isKeyPressed(input.Key.R),
             .brake = self.input_buffer.isKeyDown(input.Key.SPACE),
             .hand_brake = self.input_buffer.isKeyDown(input.Key.LSHIFT),
             .reset = self.input_buffer.gameplayActionsMustReset(),
@@ -4372,47 +5557,18 @@ const App = struct {
         const actions: sandbox_controls.TickSample = if (validation_composition)
             switch (scenario) {
                 .none => self.action_latch.takeTick(),
-                .s1_character => sandbox_controls.TickSample{
-                    .move = .{ 0, 1 },
-                    .look_delta = .{ 0, 0 },
-                    .jump_pressed = self.simulation.inspection().tickIndex() -|
-                        self.validation_tick_origin == s1_jump_tick,
-                    .interact_pressed = false,
-                    .brake = false,
-                    .hand_brake = false,
+                .s1_character => sandbox_controls.characterScenarioTick(
+                    self.simulation.inspection().tickIndex() -|
+                        self.validation_tick_origin,
+                    s1_jump_tick,
+                ),
+                .s2_vehicle, .s3_streaming, .s4_physics_debug => sandbox_controls.idleTickSample(),
+                .s7_interaction => blk: {
+                    var result = sandbox_controls.idleTickSample();
+                    result.move = self.validation.s7_scripted_move;
+                    break :blk result;
                 },
-                .s2_vehicle => sandbox_controls.TickSample{
-                    .move = .{ 0, 0 },
-                    .look_delta = .{ 0, 0 },
-                    .jump_pressed = false,
-                    .interact_pressed = false,
-                    .brake = false,
-                    .hand_brake = false,
-                },
-                .s3_streaming => sandbox_controls.TickSample{
-                    .move = .{ 0, 0 },
-                    .look_delta = .{ 0, 0 },
-                    .jump_pressed = false,
-                    .interact_pressed = false,
-                    .brake = false,
-                    .hand_brake = false,
-                },
-                .s4_physics_debug => sandbox_controls.TickSample{
-                    .move = .{ 0, 0 },
-                    .look_delta = .{ 0, 0 },
-                    .jump_pressed = false,
-                    .interact_pressed = false,
-                    .brake = false,
-                    .hand_brake = false,
-                },
-                .s7_interaction => sandbox_controls.TickSample{
-                    .move = self.validation.s7_scripted_move,
-                    .look_delta = .{ 0, 0 },
-                    .jump_pressed = false,
-                    .interact_pressed = false,
-                    .brake = false,
-                    .hand_brake = false,
-                },
+                .s11_combat => try self.s11ScriptedActions(),
             }
         else
             self.action_latch.takeTick();
@@ -4429,6 +5585,7 @@ const App = struct {
                 .s7_interaction => if (self.validation.s7_character_actions_enabled) if (self.initial_character_id != null) {
                     try self.submitCharacterActions(actions);
                 },
+                .s11_combat => try self.submitInteractiveActions(actions),
             }
         } else {
             try self.submitInteractiveActions(actions);
@@ -4478,15 +5635,40 @@ const App = struct {
             }
         }
         while (self.simulation.characters().pollOutcome()) |outcome| {
+            if (!validation_composition) {
+                switch (outcome) {
+                    .spawned => |spawned| {
+                        const projected = self.simulation.inspection().replicatedId(
+                            spawned.id,
+                        ) orelse return error.ProductCharacterProjectionMissing;
+                        try self.product_character_lifecycle.observeSpawn(
+                            &self.initial_character_id,
+                            spawned,
+                            self.simulation.presentation().combatHud(),
+                            projected,
+                        );
+                    },
+                    .despawned => |id| try self.product_character_lifecycle.observeDespawn(
+                        &self.initial_character_id,
+                        id,
+                        self.simulation.presentation().combatHud(),
+                    ),
+                    .rejected => return error.UnexpectedProductCharacterCommandRejection,
+                }
+                continue;
+            }
             switch (outcome) {
                 .spawned => |spawned| {
-                    if (spawned.request_id != 1 or self.initial_character_id != null) {
+                    const s11_respawn = scenario == .s11_combat and
+                        self.initial_character_id == null;
+                    if ((!s11_respawn and spawned.request_id != 1) or
+                        self.initial_character_id != null)
+                    {
                         return error.UnexpectedCharacterBootstrapOutcome;
                     }
                     self.initial_character_id = spawned.id;
                 },
-                .despawned => |id| if (validation_composition and
-                    scenario == .s7_interaction and
+                .despawned => |id| if ((scenario == .s7_interaction or scenario == .s11_combat) and
                     std.meta.eql(id, self.initial_character_id orelse
                         return error.UnexpectedCharacterBootstrapOutcome))
                 {
@@ -4500,6 +5682,11 @@ const App = struct {
         while (self.simulation.vehicles().pollEvent()) |_| {}
         try self.district_streaming.processOutcomes(self.districtAuthorityPort(), self.frame_timer.total_frames);
         try self.processInteractionOutcomes(validation_composition, scenario);
+        if (validation_composition and scenario == .s11_combat) {
+            try self.processS11NpcObservations();
+        } else if (!validation_composition) {
+            try self.processProductNpcObservations();
+        }
         try self.processPlayerActionResults(validation_composition, scenario);
         try self.maybeBootstrapCarryable(validation_composition, scenario);
         if (try self.districtPrefetchPosition()) |position_xz| {
@@ -4516,6 +5703,7 @@ const App = struct {
                 position_xz,
             );
         }
+        if (!validation_composition) try self.maybeBootstrapProductEncounter();
         if (validation_composition and scenario == .s2_vehicle) try self.observeS2State();
         try self.pumpPersistenceCommit();
         self.extractPhysicsDebug();
@@ -4854,21 +6042,264 @@ const App = struct {
     /// Submit one renderer frame, then let the developer owner acquire the
     /// optional same-queue fence needed by its retained debug geometry.
     fn submitCurrentFrame(self: *App) !void {
+        self.developer.prepareIncidentFrame(
+            &self.gpu_renderer,
+            self.simulation.inspection().tickIndex(),
+            self.frame_timer.total_frames,
+        );
         try self.gpu_renderer.submitFrame();
         self.developer.afterSuccessfulFrameSubmission(&self.gpu_renderer);
+    }
+
+    /// Capture only semantic S11 checkpoints. The serial readback is kept out
+    /// of the normal product and ordinary validation frames; each declared
+    /// entity must occupy at least one depth-tested Metal pixel at the exact
+    /// contact/death/respawn presentation state.
+    fn captureS11Visibility(
+        self: *App,
+        character_draws: []const sandbox_host.CharacterDraw,
+        npc_draws: []const sandbox_host.NpcDraw,
+        view_projection: zm.Mat,
+    ) !void {
+        if (!build_options.validation_mode) return;
+        const progress = &self.validation.s11_combat;
+        if (!progress.active) return;
+
+        var local_character: ?sandbox_host.CharacterDraw = null;
+        var dead_local_character: ?sandbox_host.CharacterDraw = null;
+        for (character_draws) |draw| {
+            if (draw.local_player and draw.life_state == .alive) {
+                local_character = draw;
+            } else if (draw.local_player and draw.life_state == .dead) {
+                dead_local_character = draw;
+            }
+        }
+        var living_npc: ?sandbox_host.NpcDraw = null;
+        var dead_npc: ?sandbox_host.NpcDraw = null;
+        for (npc_draws) |draw| {
+            if (draw.life_state == .alive and living_npc == null) living_npc = draw;
+            if (draw.life_state == .dead and dead_npc == null) dead_npc = draw;
+        }
+
+        const checkpoint: S11VisibilityCheckpoint = if (!progress.visibility_contact and
+            local_character != null and living_npc != null and
+            living_npc.?.combat.windup)
+            .contact
+        else if (!progress.visibility_player_death and progress.player_dead and
+            dead_local_character != null and living_npc != null)
+            .player_death
+        else if (!progress.visibility_respawn and progress.respawned_character_drawn and
+            local_character != null and living_npc != null)
+            .respawn
+        else if (!progress.visibility_npc_death and local_character != null and
+            dead_npc != null)
+            .npc_death
+        else
+            return;
+
+        const selected_npc = switch (checkpoint) {
+            .npc_death => dead_npc.?,
+            .contact, .player_death, .respawn => living_npc.?,
+        };
+        var draws: [2]visibility_oracle.Draw = undefined;
+        var entities: [2]?engine.gameplay_trace.EntityRef = @splat(null);
+        var count: usize = 0;
+        const character = if (checkpoint == .player_death)
+            dead_local_character.?
+        else
+            local_character.?;
+        const rotation = zm.quatToMat(zm.f32x4(
+            character.pose.rotation[0],
+            character.pose.rotation[1],
+            character.pose.rotation[2],
+            character.pose.rotation[3],
+        ));
+        const translation = zm.translation(
+            character.pose.position[0],
+            character.pose.position[1],
+            character.pose.position[2],
+        );
+        draws[count] = .{
+            .object_id = 1,
+            .mesh = try self.visuals.resolve(character.mesh, character.material),
+            .model = zm.mul(rotation, translation),
+            .view_projection = view_projection,
+            .display_color = character.combat.body_color,
+        };
+        entities[count] = gameplayEntityRef(character.entity, character.incarnation);
+        count += 1;
+        const npc_rotation = zm.quatToMat(zm.f32x4(
+            selected_npc.pose.rotation[0],
+            selected_npc.pose.rotation[1],
+            selected_npc.pose.rotation[2],
+            selected_npc.pose.rotation[3],
+        ));
+        const npc_translation = zm.translation(
+            selected_npc.pose.position[0],
+            selected_npc.pose.position[1],
+            selected_npc.pose.position[2],
+        );
+        // A newly respawned player can legitimately face away from the
+        // surviving NPC. That checkpoint declares only the player observable;
+        // contact, player death, and NPC death declare both. The oracle must
+        // test product semantics, not invent a requirement that every live
+        // world entity is on-camera.
+        if (checkpoint != .respawn) {
+            draws[count] = .{
+                .object_id = 2,
+                .mesh = try self.visuals.resolve(selected_npc.mesh, selected_npc.material),
+                .model = zm.mul(npc_rotation, npc_translation),
+                .view_projection = view_projection,
+                .display_color = selected_npc.combat.entity.body_color,
+            };
+            entities[count] = gameplayEntityRef(selected_npc.entity, selected_npc.incarnation);
+            count += 1;
+        }
+
+        const owner = if (self.visibility_oracle) |*value| value else return error.S11VisibilityOracleUnavailable;
+        const capture = owner.capture(
+            self.io,
+            "hostile_npc_approach_contact_death_respawn",
+            checkpoint.label(),
+            self.simulation.inspection().tickIndex(),
+            self.frame_timer.total_frames,
+            draws[0..count],
+        ) catch |err| {
+            const failed_id = owner.last_failed_object_id;
+            var failed_entity: ?engine.gameplay_trace.EntityRef = null;
+            if (failed_id) |id| {
+                for (draws[0..count], 0..) |draw, index| {
+                    if (draw.object_id == id) failed_entity = entities[index];
+                }
+            }
+            _ = self.simulation.developer().recordGameplayTrace(.{
+                .authority_tick = self.simulation.inspection().tickIndex(),
+                .presentation_frame = self.frame_timer.total_frames,
+                .actor = failed_entity,
+                .source = .visibility_oracle,
+                .stage = .visibility_observed,
+                .kind = .visibility,
+                .disposition = .invisible,
+                .reason_domain = .error_code,
+                .reason = @intFromError(err),
+                .fields = .{ .visibility = true },
+            });
+            _ = self.simulation.developer().freezeGameplayTrace();
+            return err;
+        };
+        for (capture.slice(), 0..) |observation, index| {
+            const bounds = observation.bounds orelse {
+                progress.visibility_bounds_valid = false;
+                return error.S11VisibilityBoundsMissing;
+            };
+            if (bounds.min_x > bounds.max_x or bounds.min_y > bounds.max_y or
+                bounds.max_x >= visibility_oracle.width or
+                bounds.max_y >= visibility_oracle.height)
+            {
+                progress.visibility_bounds_valid = false;
+                return error.S11VisibilityBoundsInvalid;
+            }
+            if (checkpoint == .player_death and index == 0 and
+                observation.pixel_count < visibility_oracle.minimum_meaningful_pixels)
+            {
+                progress.visibility_bounds_valid = false;
+                return error.S11PlayerDeathPresentationTooOccluded;
+            }
+            progress.visibility_observations +|= 1;
+            _ = self.simulation.developer().recordGameplayTrace(.{
+                .authority_tick = self.simulation.inspection().tickIndex(),
+                .presentation_frame = self.frame_timer.total_frames,
+                .actor = entities[index],
+                .source = .visibility_oracle,
+                .stage = .visibility_observed,
+                .kind = .visibility,
+                .disposition = .visible,
+                .fields = .{ .visibility = true },
+                .visible_pixels = observation.pixel_count,
+            });
+        }
+        switch (checkpoint) {
+            .contact => progress.visibility_contact = true,
+            .player_death => progress.visibility_player_death = true,
+            .respawn => progress.visibility_respawn = true,
+            .npc_death => progress.visibility_npc_death = true,
+        }
+    }
+
+    fn noteHostActionRejection(
+        self: *App,
+        tick: u64,
+        kind: engine.gameplay_trace.Kind,
+        err: anyerror,
+    ) void {
+        self.product_feedback.noteRejected(tick, kind, err);
+        const hud = self.simulation.presentation().combatHud();
+        _ = self.simulation.developer().recordGameplayTrace(.{
+            .authority_tick = tick,
+            .presentation_frame = self.frame_timer.total_frames,
+            .actor = if (hud.avatar.isValid())
+                gameplayEntityRef(hud.avatar, hud.incarnation)
+            else
+                null,
+            .source = .input,
+            .stage = .local_preflight,
+            .kind = kind,
+            .disposition = .rejected,
+            .reason_domain = .error_code,
+            .reason = @intFromError(err),
+        });
     }
 
     fn submitInteractiveActions(
         self: *App,
         actions: sandbox_controls.TickSample,
     ) !void {
+        const tick = self.simulation.inspection().tickIndex();
+        if (actions.respawn_pressed) {
+            self.simulation.player().requestRespawn() catch |err| {
+                if (!sandbox_controls.isRecoverableSubmissionError(.respawn, err)) return err;
+                self.product_feedback.noteRejected(tick, .respawn, err);
+                return;
+            };
+            self.product_feedback.noteSubmitted(tick, .respawn);
+            return;
+        }
+        if (actions.melee_pressed) {
+            if (self.controlled_vehicle_id == null) {
+                self.simulation.player().requestMelee() catch |err| {
+                    if (!sandbox_controls.isRecoverableSubmissionError(.melee, err)) return err;
+                    self.product_feedback.noteRejected(tick, .melee, err);
+                    return;
+                };
+                self.product_feedback.noteSubmitted(tick, .melee);
+            } else {
+                self.noteHostActionRejection(
+                    tick,
+                    .melee,
+                    error.CannotMeleeWhileDriving,
+                );
+            }
+            return;
+        }
         if (actions.carry_pressed) {
             try self.submitInteractionToggle();
             return;
         }
         if (actions.interact_pressed) {
-            if (self.simulation.player().focusPosition() == null) return;
-            try self.simulation.player().requestVehicleToggle();
+            if (self.simulation.player().focusPosition() == null) {
+                self.noteHostActionRejection(
+                    tick,
+                    .vehicle_toggle,
+                    error.LocalCharacterUnavailable,
+                );
+                return;
+            }
+            self.simulation.player().requestVehicleToggle() catch |err| {
+                if (!sandbox_controls.isRecoverableSubmissionError(.vehicle_toggle, err)) return err;
+                self.product_feedback.noteRejected(tick, .vehicle_toggle, err);
+                return;
+            };
+            self.product_feedback.noteSubmitted(tick, .vehicle_toggle);
             // Authority transitions consume the tick without applying the same
             // frame sample to either locomotion target.
             return;
@@ -4881,7 +6312,10 @@ const App = struct {
                 .brake = if (actions.brake) 1 else 0,
                 .hand_brake = if (actions.hand_brake) 1 else 0,
             };
-            const sequence = try self.simulation.player().submitVehicleControl(control);
+            const sequence = self.simulation.player().submitVehicleControl(control) catch |err| {
+                if (sandbox_controls.isRecoverableSubmissionError(.vehicle_control, err)) return;
+                return err;
+            };
             if (comptime build_options.validation_mode or builtin.is_test) {
                 if (self.validation.s2_smoke.drive_input_sequence == null) {
                     self.validation.s2_smoke.drive_input_sequence = sequence;
@@ -4896,19 +6330,44 @@ const App = struct {
                 {
                     self.validation.s2_smoke.brake_input_sequence = sequence;
                 }
+                if (control.hand_brake > 0.5 and
+                    self.validation.s2_smoke.hand_brake_input_sequence == null)
+                {
+                    self.validation.s2_smoke.hand_brake_input_sequence = sequence;
+                }
             }
         } else if (self.simulation.player().focusPosition() != null) {
-            try self.submitCharacterActions(actions);
+            self.submitCharacterActions(actions) catch |err| {
+                if (!sandbox_controls.isRecoverableSubmissionError(.character_control, err)) return err;
+            };
         }
     }
 
     fn submitInteractionToggle(self: *App) !void {
-        if (self.controlled_vehicle_id != null) return;
-        if (self.simulation.player().focusPosition() == null) return;
+        const tick = self.simulation.inspection().tickIndex();
+        if (self.controlled_vehicle_id != null) {
+            self.noteHostActionRejection(
+                tick,
+                .carry_toggle,
+                error.CannotCarryWhileDriving,
+            );
+            return;
+        }
+        if (self.simulation.player().focusPosition() == null) {
+            self.noteHostActionRejection(
+                tick,
+                .carry_toggle,
+                error.LocalCharacterUnavailable,
+            );
+            return;
+        }
         self.simulation.player().requestInteractionToggle() catch |err| {
             self.interaction_submission_failures +|= 1;
-            return err;
+            if (!sandbox_controls.isRecoverableSubmissionError(.carry_toggle, err)) return err;
+            self.product_feedback.noteRejected(tick, .carry_toggle, err);
+            return;
         };
+        self.product_feedback.noteSubmitted(tick, .carry_toggle);
     }
 
     fn maybeBootstrapCarryable(
@@ -4985,12 +6444,34 @@ const App = struct {
         self.district_focus_override = s6_west_only;
     }
 
+    fn maybeBootstrapProductEncounter(self: *App) !void {
+        const command = self.product_encounter.pendingSpawn(.{
+            .player_ready = self.initial_character_id != null,
+            .west_district_active = self.simulation.districts().activeTicket(district_west_coord) != null,
+        }) orelse return;
+        try self.simulation.npcs().submit(command);
+        try self.product_encounter.markSubmitted(command);
+    }
+
+    fn processProductNpcObservations(self: *App) !void {
+        while (self.simulation.npcs().pollOutcome()) |outcome| {
+            switch (try self.product_encounter.observe(outcome)) {
+                .unrelated => {},
+                .activated => std.debug.print(
+                    "Sandbox NPC encounter active (patrol, melee, death, respawn)\n",
+                    .{},
+                ),
+            }
+        }
+        while (self.simulation.npcs().pollEvent()) |_| {}
+    }
+
     fn submitCharacterActions(
         self: *App,
         actions: sandbox_controls.TickSample,
     ) !void {
         try self.simulation.player().submitMovement(.{
-            .move = actions.move,
+            .move = sandbox_controls.normalizedCharacterMove(actions.move),
             .facing_yaw = self.game_camera.yaw,
             .jump_pressed = actions.jump_pressed,
         });
@@ -4999,22 +6480,100 @@ const App = struct {
     fn s2ScriptedActions(self: *const App) sandbox_controls.TickSample {
         const tick = self.simulation.inspection().tickIndex() -|
             self.validation_tick_origin;
-        var actions = sandbox_controls.TickSample{
-            .move = .{ 0, 0 },
-            .look_delta = .{ 0, 0 },
-            .jump_pressed = false,
-            .interact_pressed = tick == s2_enter_tick or tick == s2_exit_tick,
-            .brake = false,
-            .hand_brake = false,
-        };
-        if (tick > s2_enter_tick and tick < s2_exit_tick) {
-            actions.move = .{
-                if (tick >= s2_steer_tick) 0.65 else 0,
-                1,
-            };
-            actions.brake = tick >= s2_brake_tick and tick < s2_steer_tick;
+        return sandbox_controls.vehicleScenarioTick(tick, .{
+            .enter_tick = s2_enter_tick,
+            .hand_brake_tick = s2_hand_brake_tick,
+            .brake_tick = s2_brake_tick,
+            .steer_tick = s2_steer_tick,
+            .exit_tick = s2_exit_tick,
+        });
+    }
+
+    fn s11ScriptedActions(self: *App) !sandbox_controls.TickSample {
+        var actions = sandbox_controls.idleTickSample();
+        const progress = &self.validation.s11_combat;
+        if (!progress.npc_spawn_submitted) {
+            if (self.initial_character_id != null and
+                self.simulation.districts().activeTicket(district_west_coord) != null)
+            {
+                try self.simulation.npcs().submit(.{ .spawn = .{
+                    .request_id = s11_npc_spawn_request_id,
+                    .node = .{ .coord = district_west_coord, .index = 0 },
+                    .goal = .{ .navigate_to = .{
+                        .coord = district_west_coord,
+                        .index = 1,
+                    } },
+                } });
+                progress.npc_spawn_submitted = true;
+            }
+            return actions;
+        }
+
+        const hud = self.simulation.presentation().combatHud();
+        if (!hud.available) return actions;
+        const tick = hud.authority_tick;
+        if (hud.life_state == .dead) {
+            if (progress.respawn_ready_marker_drawn and
+                hud.respawn_marker == .ready and
+                tick >= progress.last_respawn_request_tick +| 5)
+            {
+                actions.respawn_pressed = true;
+                progress.last_respawn_request_tick = tick;
+            }
+            return actions;
+        }
+
+        const npc_draws = self.simulation.presentation().npcs(1);
+        var target: ?sandbox_host.NpcDraw = null;
+        for (npc_draws) |draw| {
+            if (draw.life_state == .alive) {
+                target = draw;
+                break;
+            }
+        }
+        const npc = target orelse return actions;
+        const source = self.simulation.player().focusPosition() orelse return actions;
+        const delta_x = npc.pose.position[0] - source[0];
+        const delta_z = npc.pose.position[2] - source[2];
+        const distance_squared = delta_x * delta_x + delta_z * delta_z;
+        self.game_camera.yaw = std.math.atan2(delta_x, -delta_z);
+
+        const should_engage = !progress.provocation_hit or progress.player_respawned;
+        if (!should_engage) return actions;
+        if (distance_squared > 2.4 * 2.4) {
+            actions.move = .{ 0, 1 };
+        } else if (hud.melee_remaining_ticks == 0 and
+            tick >= progress.last_melee_request_tick +| 5)
+        {
+            actions.melee_pressed = true;
+            progress.last_melee_request_tick = tick;
         }
         return actions;
+    }
+
+    fn processS11NpcObservations(self: *App) !void {
+        const progress = &self.validation.s11_combat;
+        while (self.simulation.npcs().pollOutcome()) |outcome| switch (outcome) {
+            .spawned => |spawned| {
+                if (spawned.request_id != s11_npc_spawn_request_id or
+                    progress.npc_spawned or
+                    !std.meta.eql(spawned.owner, district_west_coord))
+                {
+                    return error.UnexpectedS11NpcOutcome;
+                }
+                progress.npc_spawned = true;
+                progress.npc_id = spawned.id;
+            },
+            .despawned => |despawned| {
+                if (!std.meta.eql(despawned.id, progress.npc_id orelse
+                    return error.UnexpectedS11NpcOutcome))
+                {
+                    return error.UnexpectedS11NpcOutcome;
+                }
+            },
+            .goal_set, .rejected => return error.UnexpectedS11NpcOutcome,
+        };
+        while (self.simulation.npcs().pollEvent()) |_| {}
     }
 
     fn processVehicleOutcomes(
@@ -5031,7 +6590,7 @@ const App = struct {
                     self.initial_vehicle_id = spawned.id;
                 },
                 .rejected => if (validation_composition) switch (scenario) {
-                    .none, .s1_character, .s2_vehicle, .s3_streaming, .s4_physics_debug, .s7_interaction => return error.ScriptedVehicleCommandRejected,
+                    .none, .s1_character, .s2_vehicle, .s3_streaming, .s4_physics_debug, .s7_interaction, .s11_combat => return error.ScriptedVehicleCommandRejected,
                 } else return error.UnexpectedVehicleCommandRejection,
                 .despawned => return error.UnexpectedVehicleBootstrapOutcome,
             }
@@ -5043,9 +6602,11 @@ const App = struct {
         comptime validation_composition: bool,
         scenario: ScriptedScenario,
     ) !void {
+        const action_tick = self.simulation.inspection().tickIndex();
         while (self.simulation.player().pollVehicleActionResult()) |result| {
             switch (result.disposition) {
                 .entered => {
+                    self.product_feedback.noteApplied(action_tick, .vehicle_toggle);
                     if (result.action != .enter or self.controlled_vehicle_id != null) {
                         return error.UnexpectedVehicleClientResult;
                     }
@@ -5061,6 +6622,7 @@ const App = struct {
                     }
                 },
                 .exited => {
+                    self.product_feedback.noteApplied(action_tick, .vehicle_toggle);
                     if (result.action != .exit or
                         !std.meta.eql(result.vehicle, self.controlled_vehicle_id orelse
                             return error.UnexpectedVehicleClientResult))
@@ -5075,6 +6637,11 @@ const App = struct {
                 else => if (validation_composition and scenario != .none) {
                     return error.ScriptedVehicleCommandRejected;
                 } else if (interactiveVehicleRejectionExpected(result)) {
+                    self.product_feedback.noteAuthorityRejected(
+                        action_tick,
+                        .vehicle_toggle,
+                        result.disposition,
+                    );
                     _ = self.simulation.developer().record(.{
                         .severity = .info,
                         .category = .command,
@@ -5093,19 +6660,122 @@ const App = struct {
         while (self.simulation.player().pollInteractionActionResult()) |result| {
             self.interaction_last_player_result = result;
             switch (result.disposition) {
-                .collected => if (result.action != .collect) {
-                    return error.UnexpectedInteractionClientResult;
+                .collected => {
+                    if (result.action != .collect) {
+                        return error.UnexpectedInteractionClientResult;
+                    }
+                    self.product_feedback.noteApplied(action_tick, .carry_toggle);
                 },
-                .dropped => if (result.action != .drop) {
-                    return error.UnexpectedInteractionClientResult;
+                .dropped => {
+                    if (result.action != .drop) {
+                        return error.UnexpectedInteractionClientResult;
+                    }
+                    self.product_feedback.noteApplied(action_tick, .carry_toggle);
                 },
                 else => {
                     self.interaction_submission_failures +|= 1;
+                    self.product_feedback.noteAuthorityRejected(
+                        action_tick,
+                        .carry_toggle,
+                        result.disposition,
+                    );
                     if (validation_composition and scenario == .s7_interaction) {
                         return error.S7InteractionCommandRejected;
                     }
                 },
             }
+        }
+        while (self.simulation.player().pollMeleeActionResult()) |result| {
+            switch (result.disposition) {
+                .hit, .miss => self.product_feedback.noteApplied(action_tick, .melee),
+                .cooldown, .dead, .wrong_incarnation, .invalid_state => self.product_feedback.noteAuthorityRejected(
+                    action_tick,
+                    .melee,
+                    result.disposition,
+                ),
+            }
+            if (validation_composition and scenario == .s11_combat) {
+                self.validation.s11_combat.observeMeleeResult(result);
+            }
+            std.debug.print(
+                "S11_SOLO_MELEE result={s} damage={d} health={d} killed={} ready_tick={d}\n",
+                .{
+                    @tagName(result.disposition),
+                    result.applied_damage,
+                    result.remaining_health,
+                    result.killed,
+                    result.ready_tick,
+                },
+            );
+        }
+        while (self.simulation.player().pollRespawnActionResult()) |result| {
+            switch (result.disposition) {
+                .respawned => self.product_feedback.noteApplied(action_tick, .respawn),
+                .alive,
+                .cooldown,
+                .cleanup_pending,
+                .no_safe_spawn,
+                .wrong_incarnation,
+                .invalid_state,
+                => self.product_feedback.noteAuthorityRejected(
+                    action_tick,
+                    .respawn,
+                    result.disposition,
+                ),
+            }
+            if (!validation_composition) {
+                try self.product_character_lifecycle.observeRespawnResult(
+                    &self.initial_character_id,
+                    self.simulation.presentation().combatHud(),
+                    result,
+                );
+            }
+            if (validation_composition and scenario == .s11_combat) {
+                self.validation.s11_combat.observeRespawnResult(result);
+            }
+            std.debug.print(
+                "S11_SOLO_RESPAWN result={s} incarnation={d} ready_tick={d}\n",
+                .{ @tagName(result.disposition), result.incarnation, result.ready_tick },
+            );
+        }
+        while (self.simulation.player().pollLifeEvent()) |event| {
+            if (!validation_composition) {
+                const hud = self.simulation.presentation().combatHud();
+                if (std.meta.eql(event.avatar, hud.avatar)) {
+                    const current = self.initial_character_id orelse
+                        return error.ProductCharacterIdentityMissingForLifeEvent;
+                    const projected = self.simulation.inspection().replicatedId(
+                        current,
+                    ) orelse return error.ProductCharacterProjectionMissingForLifeEvent;
+                    try self.product_character_lifecycle.observeLocalLife(
+                        current,
+                        projected,
+                        hud,
+                        event,
+                    );
+                }
+            }
+            if (validation_composition and scenario == .s11_combat) {
+                if (event.state == .dead) {
+                    self.validation.s11_combat.player_dead = true;
+                    self.validation.s11_combat.dead_incarnation = event.incarnation;
+                } else if (self.validation.s11_combat.dead_incarnation) |dead_incarnation| {
+                    if (event.incarnation > dead_incarnation) {
+                        self.validation.s11_combat.player_respawned = true;
+                    }
+                }
+            }
+            std.debug.print(
+                "S11_SOLO_LIFE entity={d}:{d} state={s} health={d}/{d} respawn_ready_tick={d}\n",
+                .{
+                    event.avatar.index,
+                    event.avatar.generation,
+                    @tagName(event.state),
+                    event.health,
+                    event.maximum_health,
+                    event.respawn_ready_tick,
+                },
+            );
         }
     }
 
@@ -5120,6 +6790,9 @@ const App = struct {
         }
         if (self.validation.s2_smoke.brake_input_sequence) |sequence| {
             self.validation.s2_smoke.brake_applied = acknowledged >= sequence;
+        }
+        if (self.validation.s2_smoke.hand_brake_input_sequence) |sequence| {
+            self.validation.s2_smoke.hand_brake_applied = acknowledged >= sequence;
         }
         const vehicle_id = self.initial_vehicle_id orelse
             return error.S2VisualSmokeVehicleSpawnMissing;
@@ -5138,6 +6811,267 @@ const App = struct {
             self.validation.s2_smoke.crate_displaced = self.validation.s2_smoke.crate_displaced or
                 distanceSquared(before, position) > 0.04;
         }
+    }
+
+    fn drawCombatHealthBar(
+        self: *App,
+        position: [3]f32,
+        y_offset: f32,
+        plan: combat_presentation.HealthBarPlan,
+        view_projection: zm.Mat,
+    ) u64 {
+        if (!plan.visible) return 0;
+        const width: f32 = 1;
+        const height: f32 = 0.08;
+        const depth: f32 = 0.05;
+        const geometry = combat_presentation.healthBarGeometry(plan, width);
+        const y = position[1] + y_offset;
+        const rotation = zm.rotationY(-self.game_camera.yaw);
+        const right = self.game_camera.getRight();
+        self.gpu_renderer.drawMeshWithMaterial(
+            &self.block_mesh,
+            null,
+            plan.empty_color,
+            zm.mul(
+                zm.mul(zm.scaling(width, height, depth), rotation),
+                zm.translation(position[0], y, position[2]),
+            ),
+            view_projection,
+        );
+        if (geometry.fill_width <= 0) return 1;
+        self.gpu_renderer.drawMeshWithMaterial(
+            &self.block_mesh,
+            null,
+            plan.fill_color,
+            zm.mul(
+                zm.mul(
+                    zm.scaling(geometry.fill_width, height * 1.15, depth * 1.15),
+                    rotation,
+                ),
+                zm.translation(
+                    position[0] + right[0] * geometry.fill_center_offset,
+                    y,
+                    position[2] + right[2] * geometry.fill_center_offset,
+                ),
+            ),
+            view_projection,
+        );
+        return 2;
+    }
+
+    fn drawCombatHudMarkers(
+        self: *App,
+        position: [3]f32,
+        y_offset: f32,
+        hud: combat_presentation.LocalHud,
+        view_projection: zm.Mat,
+    ) u64 {
+        var marker_count: u64 = 0;
+        if (hud.melee_cooldown_marker) {
+            self.drawCombatHudMarker(
+                position,
+                y_offset,
+                @intCast(marker_count),
+                combat_presentation.colors.melee_cooldown,
+                view_projection,
+            );
+            marker_count += 1;
+        }
+        const respawn_color = combat_presentation.respawnMarkerColor(
+            hud.respawn_marker,
+        );
+        if (respawn_color) |color| {
+            self.drawCombatHudMarker(
+                position,
+                y_offset,
+                @intCast(marker_count),
+                color,
+                view_projection,
+            );
+            marker_count += 1;
+        }
+        return marker_count;
+    }
+
+    fn drawCombatHudMarker(
+        self: *App,
+        position: [3]f32,
+        y_offset: f32,
+        marker_index: u8,
+        color: combat_presentation.Color,
+        view_projection: zm.Mat,
+    ) void {
+        const x_offset = (@as(f32, @floatFromInt(marker_index)) - 0.5) * 0.22;
+        self.gpu_renderer.drawMeshWithMaterial(
+            &self.block_mesh,
+            null,
+            color,
+            zm.mul(
+                zm.scaling(0.16, 0.16, 0.16),
+                zm.translation(
+                    position[0] + x_offset,
+                    position[1] + y_offset,
+                    position[2],
+                ),
+            ),
+            view_projection,
+        );
+    }
+
+    fn drawAuthoredDistrictScene(
+        self: *App,
+        scene: anytype,
+        view_projection: zm.Mat,
+    ) !u64 {
+        var draw_calls: u64 = 0;
+        for (scene.instances()) |instance| {
+            if (instance.mesh_index >= scene.meshes().len) {
+                return error.DistrictResidentInstanceInvalid;
+            }
+            const resident_mesh = scene.meshes()[instance.mesh_index];
+            self.gpu_renderer.drawMeshWithMaterial(
+                resident_mesh.mesh,
+                scene.materialTexture(resident_mesh.material_index),
+                scene.materialBaseColor(resident_mesh.material_index),
+                zm.loadMat(instance.transform[0..]),
+                view_projection,
+            );
+            draw_calls +|= 1;
+        }
+        return draw_calls;
+    }
+
+    fn prepareIncidentSemanticEvidence(
+        self: *App,
+        character_draws: []const sandbox_host.CharacterDraw,
+        vehicle_draws: []const sandbox_host.VehicleDraw,
+        carryable_draws: []const sandbox_host.CarryableDraw,
+        npc_draws: []const sandbox_host.NpcDraw,
+        view_projection: zm.Mat,
+    ) !void {
+        var draws: [sandbox_developer_host.incident_semantic_maximum_draws]sandbox_developer_host.IncidentSemanticDraw = undefined;
+        var count: usize = 0;
+        for (character_draws) |draw| {
+            if (count == draws.len) break;
+            const rotation = zm.quatToMat(zm.f32x4(
+                draw.pose.rotation[0],
+                draw.pose.rotation[1],
+                draw.pose.rotation[2],
+                draw.pose.rotation[3],
+            ));
+            draws[count] = .{
+                .entity = gameplayEntityRef(draw.entity, draw.incarnation),
+                .mesh = try self.visuals.resolve(draw.mesh, draw.material),
+                .model = zm.mul(rotation, zm.translation(
+                    draw.pose.position[0],
+                    draw.pose.position[1],
+                    draw.pose.position[2],
+                )),
+                .view_projection = view_projection,
+            };
+            count += 1;
+        }
+        for (vehicle_draws) |draw| {
+            if (count == draws.len) break;
+            const entity = gameplayEntityRef(draw.entity, draw.entity.generation);
+            const chassis_scale = zm.scaling(
+                draw.chassis_half_extents[0] * 2,
+                draw.chassis_half_extents[1] * 2,
+                draw.chassis_half_extents[2] * 2,
+            );
+            const chassis_rotation = zm.quatToMat(zm.f32x4(
+                draw.chassis_pose.rotation[0],
+                draw.chassis_pose.rotation[1],
+                draw.chassis_pose.rotation[2],
+                draw.chassis_pose.rotation[3],
+            ));
+            draws[count] = .{
+                .entity = entity,
+                .mesh = try self.visuals.resolve(
+                    draw.chassis_mesh,
+                    draw.chassis_material,
+                ),
+                .model = zm.mul(zm.mul(chassis_scale, chassis_rotation), zm.translation(
+                    draw.chassis_pose.position[0],
+                    draw.chassis_pose.position[1],
+                    draw.chassis_pose.position[2],
+                )),
+                .view_projection = view_projection,
+            };
+            count += 1;
+            for (draw.wheels) |wheel| {
+                if (count == draws.len) break;
+                const scale = zm.scaling(wheel.width, wheel.radius * 2, wheel.radius * 2);
+                const rotation = zm.quatToMat(zm.f32x4(
+                    wheel.pose.rotation[0],
+                    wheel.pose.rotation[1],
+                    wheel.pose.rotation[2],
+                    wheel.pose.rotation[3],
+                ));
+                draws[count] = .{
+                    .entity = entity,
+                    .mesh = try self.visuals.resolve(wheel.mesh, wheel.material),
+                    .model = zm.mul(zm.mul(scale, rotation), zm.translation(
+                        wheel.pose.position[0],
+                        wheel.pose.position[1],
+                        wheel.pose.position[2],
+                    )),
+                    .view_projection = view_projection,
+                };
+                count += 1;
+            }
+        }
+        for (carryable_draws) |draw| {
+            if (count == draws.len) break;
+            const scale = zm.scaling(
+                draw.half_extents[0] * 2,
+                draw.half_extents[1] * 2,
+                draw.half_extents[2] * 2,
+            );
+            const rotation = zm.quatToMat(zm.f32x4(
+                draw.pose.rotation[0],
+                draw.pose.rotation[1],
+                draw.pose.rotation[2],
+                draw.pose.rotation[3],
+            ));
+            draws[count] = .{
+                .entity = gameplayEntityRef(draw.entity, draw.entity.generation),
+                .mesh = &self.block_mesh,
+                .model = zm.mul(zm.mul(scale, rotation), zm.translation(
+                    draw.pose.position[0],
+                    draw.pose.position[1],
+                    draw.pose.position[2],
+                )),
+                .view_projection = view_projection,
+            };
+            count += 1;
+        }
+        for (npc_draws) |draw| {
+            if (count == draws.len) break;
+            const rotation = zm.quatToMat(zm.f32x4(
+                draw.pose.rotation[0],
+                draw.pose.rotation[1],
+                draw.pose.rotation[2],
+                draw.pose.rotation[3],
+            ));
+            draws[count] = .{
+                .entity = gameplayEntityRef(draw.entity, draw.incarnation),
+                .mesh = try self.visuals.resolve(draw.mesh, draw.material),
+                .model = zm.mul(rotation, zm.translation(
+                    draw.pose.position[0],
+                    draw.pose.position[1],
+                    draw.pose.position[2],
+                )),
+                .view_projection = view_projection,
+            };
+            count += 1;
+        }
+        self.developer.prepareIncidentSemanticFrame(
+            &self.gpu_renderer,
+            self.simulation.inspection().tickIndex(),
+            self.frame_timer.total_frames,
+            draws[0..count],
+        );
     }
 
     /// Render the current frame using SDL3 GPU API
@@ -5200,6 +7134,19 @@ const App = struct {
         const crate_draws = try self.simulation.crates().presentation(alpha);
         const carryable_draws = self.simulation.presentation().carryables(alpha);
         const npc_draws = self.simulation.presentation().npcs(alpha);
+        const combat_hud = self.simulation.presentation().combatHud();
+        try self.tracePresentationPlan(
+            character_draws,
+            vehicle_draws,
+            carryable_draws,
+            npc_draws,
+            combat_hud.authority_tick,
+        );
+        if (build_options.validation_mode or builtin.is_test) {
+            if (self.validation.profile == .s2_smoke and self.validation.s2_smoke.entered) {
+                observeS2WheelPresentation(&self.validation.s2_smoke, vehicle_draws);
+            }
+        }
         if (self.controlled_vehicle_id) |controlled_id| {
             for (vehicle_draws) |draw| {
                 if (std.meta.eql(draw.entity, controlled_id)) {
@@ -5265,57 +7212,59 @@ const App = struct {
             scene_draw_calls +|= 1;
         }
 
+        // Authored decoration may become visible from the adjacent district
+        // once its bounded prefetch reaches GPU residency. Logical collision
+        // and blocker proxies remain exclusively authority-ticketed below.
+        for (0..district_streaming_host.slot_count) |slot_index| {
+            if (try self.district_streaming.prefetchedVisual(slot_index)) |scene| {
+                scene_draw_calls +|= try self.drawAuthoredDistrictScene(scene, view_proj);
+            }
+        }
+
         for (district_draws) |draw| {
             const scene = try self.district_streaming.resolve(
                 draw.build.coord,
                 draw.ticket,
                 draw.assets.scene,
             );
-            if (scene.meshes().len == 0) {
-                // Logical activation is visible immediately, even while a
-                // cooked scene is staged or its Metal fence is unsignaled.
-                for (draw.build.boxes()) |box| {
-                    const scale = zm.scaling(
-                        box.half_extents[0] * 2,
-                        box.half_extents[1] * 2,
-                        box.half_extents[2] * 2,
-                    );
-                    const rotation = zm.quatToMat(zm.f32x4(
-                        box.pose.rotation[0],
-                        box.pose.rotation[1],
-                        box.pose.rotation[2],
-                        box.pose.rotation[3],
-                    ));
-                    const translation = zm.translation(
-                        box.pose.position[0],
-                        box.pose.position[1],
-                        box.pose.position[2],
-                    );
-                    self.gpu_renderer.drawMesh(
-                        &self.block_mesh,
-                        zm.mul(zm.mul(scale, rotation), translation),
-                        view_proj,
-                    );
-                    scene_draw_calls +|= 1;
+            const district_plan = try sandbox_contracts.districtPresentationPlan(
+                &draw.build,
+                scene.meshes().len != 0,
+            );
+            if (district_plan.authored_scene_resident) {
+                scene_draw_calls +|= try self.drawAuthoredDistrictScene(scene, view_proj);
+            }
+            // Cooked meshes are currently decoration, not proof that a
+            // collision primitive is represented. Mandatory blocker proxies
+            // remain visible before and after GPU residency.
+            for (district_plan.proxyBoxIndices()) |box_index| {
+                const index: usize = box_index;
+                if (index >= draw.build.boxes().len) {
+                    return error.DistrictPresentationProxyInvalid;
                 }
-            } else {
-                for (scene.instances()) |instance| {
-                    if (instance.mesh_index >= scene.meshes().len) {
-                        return error.DistrictResidentInstanceInvalid;
-                    }
-                    const resident_mesh = scene.meshes()[instance.mesh_index];
-                    const texture_view = scene.materialTexture(resident_mesh.material_index);
-                    const base_color = scene.materialBaseColor(resident_mesh.material_index);
-                    const authored_transform = zm.loadMat(instance.transform[0..]);
-                    self.gpu_renderer.drawMeshWithMaterial(
-                        resident_mesh.mesh,
-                        texture_view,
-                        base_color,
-                        authored_transform,
-                        view_proj,
-                    );
-                    scene_draw_calls +|= 1;
-                }
+                const box = draw.build.boxes()[index];
+                const scale = zm.scaling(
+                    box.half_extents[0] * 2,
+                    box.half_extents[1] * 2,
+                    box.half_extents[2] * 2,
+                );
+                const rotation = zm.quatToMat(zm.f32x4(
+                    box.pose.rotation[0],
+                    box.pose.rotation[1],
+                    box.pose.rotation[2],
+                    box.pose.rotation[3],
+                ));
+                const translation = zm.translation(
+                    box.pose.position[0],
+                    box.pose.position[1],
+                    box.pose.position[2],
+                );
+                self.gpu_renderer.drawMesh(
+                    &self.block_mesh,
+                    zm.mul(zm.mul(scale, rotation), translation),
+                    view_proj,
+                );
+                scene_draw_calls +|= 1;
             }
         }
 
@@ -5439,17 +7388,33 @@ const App = struct {
                 draw.pose.position[1],
                 draw.pose.position[2],
             );
-            self.gpu_renderer.drawMesh(
+            self.gpu_renderer.drawMeshWithMaterial(
                 character_mesh,
+                null,
+                draw.combat.body_color,
                 zm.mul(rotation, translation),
                 view_proj,
             );
             scene_draw_calls +|= 1;
+            const health_bar_draw_calls = self.drawCombatHealthBar(
+                draw.pose.position,
+                draw.radius + draw.half_height + 0.25,
+                draw.combat.health_bar,
+                view_proj,
+            );
+            scene_draw_calls +|= health_bar_draw_calls;
+            if (build_options.validation_mode or builtin.is_test) {
+                self.validation.s11_combat.observeCharacter(
+                    combat_hud.authority_tick,
+                    draw,
+                    health_bar_draw_calls,
+                );
+            }
         }
         // NPC authority exposes the same immutable typed resource contract as
-        // the player character. Navigation and population policy remain
-        // entirely outside the renderer; this loop submits only extracted
-        // poses and deliberately adds no navigation/crowd overlay.
+        // the player character. This loop submits only extracted poses; the
+        // optional sight/range/leash/route overlay arrives separately through
+        // the bounded developer-debug geometry path.
         for (npc_draws) |draw| {
             const npc_mesh = try self.visuals.resolve(draw.mesh, draw.material);
             const rotation = zm.quatToMat(zm.f32x4(
@@ -5463,12 +7428,44 @@ const App = struct {
                 draw.pose.position[1],
                 draw.pose.position[2],
             );
-            self.gpu_renderer.drawMesh(
+            self.gpu_renderer.drawMeshWithMaterial(
                 npc_mesh,
+                null,
+                draw.combat.entity.body_color,
                 zm.mul(rotation, translation),
                 view_proj,
             );
             scene_draw_calls +|= 1;
+            const health_bar_draw_calls = self.drawCombatHealthBar(
+                draw.pose.position,
+                draw.radius + draw.half_height + 0.25,
+                draw.combat.entity.health_bar,
+                view_proj,
+            );
+            scene_draw_calls +|= health_bar_draw_calls;
+            if (build_options.validation_mode or builtin.is_test) {
+                self.validation.s11_combat.observeNpc(
+                    combat_hud.authority_tick,
+                    draw,
+                    health_bar_draw_calls,
+                );
+            }
+        }
+        var combat_hud_marker_draw_calls: u64 = 0;
+        if (combat_hud.anchor_position) |position| {
+            combat_hud_marker_draw_calls = self.drawCombatHudMarkers(
+                position,
+                1.45,
+                combat_hud,
+                view_proj,
+            );
+            scene_draw_calls +|= combat_hud_marker_draw_calls;
+        }
+        if (build_options.validation_mode or builtin.is_test) {
+            self.validation.s11_combat.observeHud(
+                combat_hud,
+                combat_hud_marker_draw_calls,
+            );
         }
         self.mergeProfileCounts(.{ .draw_calls = scene_draw_calls });
         scene_draw_profile.finish(.success);
@@ -5483,6 +7480,11 @@ const App = struct {
         // 2. Let editor do its thing (copy pass + its own render pass)
         // 3. Submit everything together
         self.gpu_renderer.endRenderPass();
+        self.developer.prepareIncidentProductFrame(
+            &self.gpu_renderer,
+            self.simulation.inspection().tickIndex(),
+            self.frame_timer.total_frames,
+        );
 
         // Draw editor overlay (ImGui debug UI), then apply its fixed typed
         // request mailboxes only after the borrowed snapshot/view is unused.
@@ -5492,7 +7494,25 @@ const App = struct {
             self.simulation.inspection().tickIndex(),
         );
         defer editor_profile.finish(.failure);
-        try self.drawDeveloperOverlay();
+        const gameplay_view = self.gameplayEditorView(
+            character_draws,
+            vehicle_draws,
+            carryable_draws,
+            npc_draws,
+            combat_hud,
+        );
+        if (build_options.validation_mode or builtin.is_test) {
+            self.validation.s11_combat.observeProductHud(&gameplay_view);
+        }
+        self.updateProductTitle(character_draws, npc_draws, combat_hud);
+        try self.drawDeveloperOverlay(&gameplay_view);
+        try self.prepareIncidentSemanticEvidence(
+            character_draws,
+            vehicle_draws,
+            carryable_draws,
+            npc_draws,
+            view_proj,
+        );
         editor_profile.finish(.success);
 
         // Submit the frame (both scene and editor render passes)
@@ -5503,6 +7523,9 @@ const App = struct {
         );
         defer submission_profile.finish(.failure);
         try self.submitCurrentFrame();
+        if (build_options.validation_mode) {
+            try self.captureS11Visibility(character_draws, npc_draws, view_proj);
+        }
         submission_profile.finish(.success);
         return .{ .ready = .{
             .crate_count = crate_draws.len,
@@ -5533,7 +7556,693 @@ const App = struct {
         } };
     }
 
-    fn drawDeveloperOverlay(self: *App) !void {
+    fn gameplayEntityRef(
+        entity: sandbox_host.ReplicatedEntityId,
+        incarnation: u16,
+    ) engine.gameplay_trace.EntityRef {
+        return .{
+            .namespace = 2,
+            .local = (@as(u64, entity.generation) << 32) | @as(u64, entity.index),
+            .incarnation = incarnation,
+        };
+    }
+
+    fn gameplayViewContains(
+        view: *const editor_contract.GameplayView,
+        entity: engine.gameplay_trace.EntityRef,
+    ) bool {
+        for (view.entitySlice()) |candidate| {
+            if (std.meta.eql(candidate.entity, entity)) return true;
+        }
+        return false;
+    }
+
+    fn tracePresentationPlan(
+        self: *App,
+        character_draws: []const sandbox_host.CharacterDraw,
+        vehicle_draws: []const sandbox_host.VehicleDraw,
+        carryable_draws: []const sandbox_host.CarryableDraw,
+        npc_draws: []const sandbox_host.NpcDraw,
+        authority_tick: u64,
+    ) !void {
+        var observations: [product_presentation_trace.capacity]product_presentation_trace.Observation = undefined;
+        var count: usize = 0;
+        for (character_draws) |draw| {
+            if (count == observations.len) return error.PresentationTraceCapacityExceeded;
+            observations[count] = .{
+                .entity = gameplayEntityRef(draw.entity, draw.incarnation),
+                .position = draw.pose.position,
+                .health = draw.health,
+                .maximum_health = draw.maximum_health,
+                .life_state = @intFromEnum(draw.life_state),
+                .kind = if (draw.local_player) .local_player else .remote_player,
+                .radius = draw.radius,
+                .half_height = draw.half_height,
+            };
+            count += 1;
+        }
+        for (vehicle_draws) |draw| {
+            if (count == observations.len) return error.PresentationTraceCapacityExceeded;
+            observations[count] = .{
+                .entity = gameplayEntityRef(draw.entity, draw.entity.generation),
+                .position = draw.chassis_pose.position,
+                .health = 0,
+                .maximum_health = 0,
+                .life_state = 0,
+                .kind = .vehicle,
+                .radius = @max(draw.chassis_half_extents[0], draw.chassis_half_extents[2]),
+                .half_height = draw.chassis_half_extents[1],
+            };
+            count += 1;
+        }
+        for (carryable_draws) |draw| {
+            if (count == observations.len) return error.PresentationTraceCapacityExceeded;
+            observations[count] = .{
+                .entity = gameplayEntityRef(draw.entity, draw.entity.generation),
+                .position = draw.pose.position,
+                .health = 0,
+                .maximum_health = 0,
+                .life_state = 0,
+                .kind = .carryable,
+                .radius = @max(draw.half_extents[0], draw.half_extents[2]),
+                .half_height = draw.half_extents[1],
+            };
+            count += 1;
+        }
+        for (npc_draws) |draw| {
+            if (count == observations.len) return error.PresentationTraceCapacityExceeded;
+            observations[count] = .{
+                .entity = gameplayEntityRef(draw.entity, draw.incarnation),
+                .position = draw.pose.position,
+                .health = draw.health,
+                .maximum_health = draw.maximum_health,
+                .life_state = @intFromEnum(draw.life_state),
+                .kind = .npc,
+                .radius = draw.radius,
+                .half_height = draw.half_height,
+                .encounter_state = @intFromEnum(draw.encounter_state),
+                .attack_windup = draw.combat.windup,
+                .deadline_tick = if (draw.encounter_state == .attack_windup)
+                    draw.attack_impact_tick
+                else
+                    draw.attack_ready_tick,
+            };
+            count += 1;
+        }
+        const batch = try self.product_presentation_trace.observe(
+            authority_tick,
+            self.frame_timer.total_frames,
+            observations[0..count],
+        );
+        for (batch.slice()) |record| {
+            _ = self.simulation.developer().recordGameplayTrace(record);
+        }
+    }
+
+    fn gameplayLifeState(value: anytype) editor_contract.GameplayLifeState {
+        return switch (value) {
+            .alive => .alive,
+            .dead => .dead,
+        };
+    }
+
+    fn applyNpcInterestEvidence(
+        target: *editor_contract.GameplayEntityView,
+        evidence: ?sandbox_host.NpcInterestView,
+    ) void {
+        const value = evidence orelse return;
+        target.relevance_included = value.included;
+        target.relevance_reason = switch (value.reason) {
+            .excluded => .excluded,
+            .same_district => .same_district,
+            .encounter => .encounter,
+            .proximity_enter => .proximity_enter,
+            .proximity_retained => .proximity_retained,
+            .grace => .grace,
+        };
+        target.relevance_evaluated_tick = value.evaluated_tick;
+        target.relevance_grace_until_tick = value.grace_until_tick;
+        target.relevance_observer_position = value.observer_position;
+        target.relevance_observer_district = .{
+            value.observer_district.x,
+            value.observer_district.z,
+        };
+        target.relevance_owner_district = .{
+            value.owner_district.x,
+            value.owner_district.z,
+        };
+        target.relevance_distance_squared_xz = value.distance_squared_xz;
+        target.relevance_encounter = value.encounter_relevant;
+    }
+
+    fn applyObjectInterestEvidence(
+        target: *editor_contract.GameplayEntityView,
+        evidence: ?sandbox_host.ObjectInterestView,
+    ) void {
+        const value = evidence orelse return;
+        target.relevance_included = value.included;
+        target.relevance_reason = switch (value.reason) {
+            .bounded_world => .bounded_world,
+            .controlled => .controlled,
+            .held => .held,
+            .district_dormant => .district_dormant,
+        };
+        target.relevance_evaluated_tick = value.evaluated_tick;
+        target.relevance_baseline_id = value.baseline_id;
+        target.relevance_snapshot_sequence = value.snapshot_sequence;
+        target.relevance_observer_position = value.observer_position;
+        target.relevance_observer_district = .{
+            value.observer_district.x,
+            value.observer_district.z,
+        };
+        target.relevance_owner_district = .{
+            value.owner_district.x,
+            value.owner_district.z,
+        };
+        target.relevance_distance_squared_xz = value.distance_squared_xz;
+    }
+
+    fn gameplayEditorView(
+        self: *App,
+        character_draws: []const sandbox_host.CharacterDraw,
+        vehicle_draws: []const sandbox_host.VehicleDraw,
+        carryable_draws: []const sandbox_host.CarryableDraw,
+        npc_draws: []const sandbox_host.NpcDraw,
+        hud: combat_presentation.LocalHud,
+    ) editor_contract.GameplayView {
+        var result = editor_contract.GameplayView{
+            .authority_tick = hud.authority_tick,
+            .presentation_frame = self.frame_timer.total_frames,
+            .local_health = hud.health,
+            .local_maximum_health = hud.maximum_health,
+            .local_life_state = gameplayLifeState(hud.life_state),
+            .melee_remaining_ticks = hud.melee_remaining_ticks,
+            .respawn_remaining_ticks = hud.respawn_remaining_ticks,
+            .respawn_instruction_visible = hud.life_state == .dead and
+                hud.respawn_remaining_ticks == 0,
+        };
+        if (self.product_feedback.current(hud.authority_tick)) |feedback| {
+            result.last_action = .{
+                .sequence = feedback.sequence,
+                .action = feedback.kind,
+                .disposition = feedback.disposition,
+                .reason_domain = feedback.reason_domain,
+                .reason = feedback.reason,
+                .observed_tick = feedback.observed_tick,
+            };
+            const reason_text = actionFeedbackReason(
+                feedback.kind,
+                feedback.reason_domain,
+                feedback.reason,
+            );
+            if (reason_text.len > result.last_action.reason_text.len) unreachable;
+            @memcpy(
+                result.last_action.reason_text[0..reason_text.len],
+                reason_text,
+            );
+            result.last_action.reason_text_len = @intCast(reason_text.len);
+        }
+
+        const inspection = self.simulation.inspection();
+        for (character_draws) |draw| {
+            if (result.entity_count == editor_contract.gameplay_entity_capacity) break;
+            const persistent = inspection.persistentId(draw.entity);
+            var authority_present = false;
+            var authority_position = draw.pose.position;
+            var velocity: [3]f32 = .{ 0, 0, 0 };
+            var facing_yaw: f32 = 0;
+            var radius = draw.radius;
+            var half_height = draw.half_height;
+            if (persistent) |id| {
+                if (self.simulation.characters().view(id) catch null) |view| {
+                    authority_present = true;
+                    authority_position = view.position;
+                    velocity = view.velocity;
+                    facing_yaw = view.facing_yaw;
+                    radius = view.radius;
+                    half_height = view.half_height;
+                }
+            }
+            result.entities[result.entity_count] = .{
+                .entity = gameplayEntityRef(draw.entity, draw.incarnation),
+                .persistent_id = persistent,
+                .kind = if (draw.local_player) .local_player else .remote_player,
+                .authority_presence = if (authority_present) .present else .absent,
+                .replication_presence = .present,
+                .presentation_presence = .present,
+                .draw_presence = .present,
+                .authority_position = authority_position,
+                .presentation_position = draw.pose.position,
+                .velocity = velocity,
+                .facing_yaw = facing_yaw,
+                .radius = radius,
+                .half_height = half_height,
+                .health = draw.health,
+                .maximum_health = draw.maximum_health,
+                .life_state = gameplayLifeState(draw.life_state),
+            };
+            if (draw.local_player and draw.combat.hit_flash) {
+                result.local_damage_feedback = true;
+            }
+            result.entity_count += 1;
+        }
+        for (vehicle_draws) |draw| {
+            if (result.entity_count == editor_contract.gameplay_entity_capacity) break;
+            const persistent = inspection.persistentId(draw.entity);
+            var authority_present = false;
+            var authority_position = draw.chassis_pose.position;
+            var velocity: [3]f32 = .{ 0, 0, 0 };
+            if (persistent) |id| {
+                if (self.simulation.vehicles().view(id) catch null) |view| {
+                    authority_present = true;
+                    authority_position = view.state.chassis.pose.position;
+                    velocity = view.state.chassis.velocity.linear;
+                }
+            }
+            var projected = editor_contract.GameplayEntityView{
+                .entity = gameplayEntityRef(draw.entity, draw.entity.generation),
+                .persistent_id = persistent,
+                .kind = .vehicle,
+                .authority_presence = if (authority_present) .present else .absent,
+                .replication_presence = .present,
+                .presentation_presence = .present,
+                .draw_presence = .present,
+                .authority_position = authority_position,
+                .presentation_position = draw.chassis_pose.position,
+                .velocity = velocity,
+                .radius = @max(draw.chassis_half_extents[0], draw.chassis_half_extents[2]),
+                .half_height = draw.chassis_half_extents[1],
+                .health = 0,
+                .maximum_health = 0,
+                .life_state = .unknown,
+            };
+            applyObjectInterestEvidence(&projected, inspection.vehicleInterest(draw.entity));
+            result.entities[result.entity_count] = projected;
+            result.entity_count += 1;
+        }
+        for (carryable_draws) |draw| {
+            if (result.entity_count == editor_contract.gameplay_entity_capacity) break;
+            const persistent = inspection.persistentId(draw.entity);
+            var authority_present = false;
+            var authority_position = draw.pose.position;
+            var velocity: [3]f32 = .{ 0, 0, 0 };
+            if (persistent) |id| {
+                if (self.simulation.interactions().view(id) catch null) |view| {
+                    authority_present = true;
+                    if (draw.holder == null) {
+                        authority_position = view.state.pose.position;
+                        velocity = view.state.velocity.linear;
+                    }
+                }
+            }
+            var projected = editor_contract.GameplayEntityView{
+                .entity = gameplayEntityRef(draw.entity, draw.entity.generation),
+                .persistent_id = persistent,
+                .kind = .carryable,
+                .authority_presence = if (authority_present) .present else .absent,
+                .replication_presence = .present,
+                .presentation_presence = .present,
+                .draw_presence = .present,
+                .authority_position = authority_position,
+                .presentation_position = draw.pose.position,
+                .velocity = velocity,
+                .radius = @max(draw.half_extents[0], draw.half_extents[2]),
+                .half_height = draw.half_extents[1],
+                .health = 0,
+                .maximum_health = 0,
+                .life_state = .unknown,
+            };
+            applyObjectInterestEvidence(&projected, inspection.carryableInterest(draw.entity));
+            result.entities[result.entity_count] = projected;
+            result.entity_count += 1;
+        }
+        for (npc_draws) |draw| {
+            if (result.entity_count == editor_contract.gameplay_entity_capacity) break;
+            const persistent = inspection.persistentId(draw.entity);
+            var authority_present = false;
+            var authority_position = draw.pose.position;
+            var velocity: [3]f32 = .{ 0, 0, 0 };
+            var facing_yaw: f32 = 0;
+            const radius = draw.radius;
+            const half_height = draw.half_height;
+            if (persistent) |id| {
+                if (self.simulation.npcs().view(id) catch null) |view| {
+                    authority_present = true;
+                    authority_position = view.position;
+                    velocity = view.velocity;
+                    facing_yaw = view.facing_yaw;
+                }
+            }
+            var projected = editor_contract.GameplayEntityView{
+                .entity = gameplayEntityRef(draw.entity, draw.incarnation),
+                .persistent_id = persistent,
+                .kind = .npc,
+                .authority_presence = if (authority_present) .present else .absent,
+                .replication_presence = .present,
+                .presentation_presence = .present,
+                .draw_presence = .present,
+                .authority_position = authority_position,
+                .presentation_position = draw.pose.position,
+                .velocity = velocity,
+                .facing_yaw = facing_yaw,
+                .radius = radius,
+                .half_height = half_height,
+                .health = draw.health,
+                .maximum_health = draw.maximum_health,
+                .life_state = gameplayLifeState(draw.life_state),
+                .encounter_state = @intFromEnum(draw.encounter_state),
+                .attack_windup = draw.combat.windup,
+                .deadline_tick = if (draw.encounter_state == .attack_windup)
+                    draw.attack_impact_tick
+                else
+                    draw.attack_ready_tick,
+            };
+            applyNpcInterestEvidence(&projected, inspection.npcInterest(draw.entity));
+            result.entities[result.entity_count] = projected;
+            result.entity_count += 1;
+        }
+
+        for (self.product_presentation_trace.tombstoneSlice()) |tombstone| {
+            if (result.entity_count == editor_contract.gameplay_entity_capacity) break;
+            const prior = tombstone.observation;
+            const replicated = sandbox_host.ReplicatedEntityId{
+                .index = @truncate(prior.entity.local),
+                .generation = @truncate(prior.entity.local >> 32),
+            };
+            const persistent = inspection.persistentId(replicated);
+            var authority_presence: editor_contract.GameplayPresence = .absent;
+            var authority_position = prior.position;
+            var velocity = prior.velocity;
+            var facing_yaw = prior.facing_yaw;
+            if (persistent) |id| switch (prior.kind) {
+                .local_player, .remote_player => if (self.simulation.characters().view(id) catch null) |view| {
+                    authority_presence = .present;
+                    authority_position = view.position;
+                    velocity = view.velocity;
+                    facing_yaw = view.facing_yaw;
+                },
+                .npc => if (self.simulation.npcs().view(id) catch null) |view| {
+                    authority_presence = .present;
+                    authority_position = view.position;
+                    velocity = view.velocity;
+                    facing_yaw = view.facing_yaw;
+                },
+                .vehicle => if (self.simulation.vehicles().view(id) catch null) |view| {
+                    authority_presence = .present;
+                    authority_position = view.state.chassis.pose.position;
+                    velocity = view.state.chassis.velocity.linear;
+                },
+                .carryable => if (self.simulation.interactions().view(id) catch null) |view| {
+                    authority_presence = .present;
+                    authority_position = view.state.pose.position;
+                    velocity = view.state.velocity.linear;
+                },
+            };
+            var projected = editor_contract.GameplayEntityView{
+                .entity = prior.entity,
+                .persistent_id = persistent,
+                .kind = switch (prior.kind) {
+                    .local_player => .local_player,
+                    .remote_player => .remote_player,
+                    .npc => .npc,
+                    .vehicle => .vehicle,
+                    .carryable => .carryable,
+                },
+                .authority_presence = authority_presence,
+                .replication_presence = .absent,
+                .presentation_presence = .absent,
+                .draw_presence = .absent,
+                .removal_reason = if (authority_presence == .present)
+                    .replication_removed
+                else
+                    .authority_removed,
+                .removed_tick = tombstone.removed_tick,
+                .removed_frame = tombstone.removed_frame,
+                .authority_position = authority_position,
+                .presentation_position = prior.position,
+                .velocity = velocity,
+                .facing_yaw = facing_yaw,
+                .radius = prior.radius,
+                .half_height = prior.half_height,
+                .health = prior.health,
+                .maximum_health = prior.maximum_health,
+                .life_state = @enumFromInt(prior.life_state),
+                .encounter_state = prior.encounter_state,
+                .attack_windup = prior.attack_windup,
+                .deadline_tick = prior.deadline_tick,
+            };
+            if (prior.kind == .npc) {
+                applyNpcInterestEvidence(&projected, inspection.npcInterest(replicated));
+                if (projected.relevance_included == false) {
+                    projected.removal_reason = .relevance;
+                }
+            } else if (prior.kind == .vehicle) {
+                applyObjectInterestEvidence(&projected, inspection.vehicleInterest(replicated));
+                if (projected.relevance_included == false) {
+                    projected.removal_reason = .relevance;
+                }
+            } else if (prior.kind == .carryable) {
+                applyObjectInterestEvidence(&projected, inspection.carryableInterest(replicated));
+                if (projected.relevance_included == false) {
+                    projected.removal_reason = .relevance;
+                }
+            }
+            result.entities[result.entity_count] = projected;
+            result.entity_count += 1;
+        }
+
+        // Complete the causal union with bounded authority identities that
+        // have not reached the local client/presentation projection. This is
+        // the evidence that the original seam disappearance was missing.
+        for (0..session_budgets.max_vehicles) |slot_index| {
+            if (result.entity_count == editor_contract.gameplay_entity_capacity) break;
+            const identity = inspection.vehicleIdentity(slot_index) orelse continue;
+            const entity = gameplayEntityRef(
+                identity.replicated,
+                identity.replicated.generation,
+            );
+            if (gameplayViewContains(&result, entity)) continue;
+            const authority_view = self.simulation.vehicles().view(identity.persistent) catch
+                continue;
+            const interest = inspection.vehicleInterest(identity.replicated);
+            const half_extents = (sandbox_contracts.VehicleConfig{})
+                .tuning.chassis_half_extents;
+            var projected = editor_contract.GameplayEntityView{
+                .entity = entity,
+                .persistent_id = identity.persistent,
+                .kind = .vehicle,
+                .authority_presence = .present,
+                .replication_presence = .absent,
+                .presentation_presence = .absent,
+                .draw_presence = .absent,
+                .removal_reason = if (interest) |value|
+                    if (value.included) .replication_removed else .relevance
+                else
+                    .unknown,
+                .removed_tick = if (interest) |value| value.evaluated_tick else 0,
+                .authority_position = authority_view.state.chassis.pose.position,
+                .presentation_position = if (interest) |value|
+                    value.object_position
+                else
+                    authority_view.state.chassis.pose.position,
+                .velocity = authority_view.state.chassis.velocity.linear,
+                .radius = @max(half_extents[0], half_extents[2]),
+                .half_height = half_extents[1],
+                .health = 0,
+                .maximum_health = 0,
+                .life_state = .unknown,
+            };
+            applyObjectInterestEvidence(&projected, interest);
+            result.entities[result.entity_count] = projected;
+            result.entity_count += 1;
+        }
+        for (0..session_budgets.max_carryables) |slot_index| {
+            if (result.entity_count == editor_contract.gameplay_entity_capacity) break;
+            const identity = inspection.carryableIdentity(slot_index) orelse continue;
+            const entity = gameplayEntityRef(
+                identity.replicated,
+                identity.replicated.generation,
+            );
+            if (gameplayViewContains(&result, entity)) continue;
+            const authority_view = self.simulation.interactions().view(identity.persistent) catch
+                continue;
+            const interest = inspection.carryableInterest(identity.replicated);
+            const position = if (interest) |value|
+                value.object_position
+            else
+                authority_view.state.pose.position;
+            var projected = editor_contract.GameplayEntityView{
+                .entity = entity,
+                .persistent_id = identity.persistent,
+                .kind = .carryable,
+                .authority_presence = .present,
+                .replication_presence = .absent,
+                .presentation_presence = .absent,
+                .draw_presence = .absent,
+                .removal_reason = if (interest) |value|
+                    if (value.included) .replication_removed else .relevance
+                else
+                    .unknown,
+                .removed_tick = if (interest) |value| value.evaluated_tick else 0,
+                .authority_position = position,
+                .presentation_position = position,
+                .velocity = authority_view.state.velocity.linear,
+                .radius = @max(
+                    authority_view.half_extents[0],
+                    authority_view.half_extents[2],
+                ),
+                .half_height = authority_view.half_extents[1],
+                .health = 0,
+                .maximum_health = 0,
+                .life_state = .unknown,
+            };
+            applyObjectInterestEvidence(&projected, interest);
+            result.entities[result.entity_count] = projected;
+            result.entity_count += 1;
+        }
+
+        const entities = result.entitySlice();
+        for (0..entities.len) |first_index| {
+            var nearest: ?f32 = null;
+            for (entities, 0..) |second, second_index| {
+                if (first_index == second_index) continue;
+                const first = result.entities[first_index];
+                const dx = first.presentation_position[0] - second.presentation_position[0];
+                const dz = first.presentation_position[2] - second.presentation_position[2];
+                const separation = @sqrt(dx * dx + dz * dz);
+                nearest = if (nearest) |value| @min(value, separation) else separation;
+            }
+            result.entities[first_index].nearest_actor_separation = nearest;
+        }
+        return result;
+    }
+
+    fn actionFeedbackReason(
+        kind: engine.gameplay_trace.Kind,
+        domain: engine.gameplay_trace.ReasonDomain,
+        reason: u32,
+    ) []const u8 {
+        return switch (domain) {
+            .none => "none",
+            .error_code => if (reason == 0 or reason > std.math.maxInt(u16))
+                "unknown_error"
+            else
+                @errorName(@errorFromInt(@as(u16, @intCast(reason)))),
+            .protocol_disposition => switch (kind) {
+                .vehicle_toggle => enumFeedbackReasonName(
+                    sandbox_host.VehicleActionDisposition,
+                    reason,
+                    "unknown_vehicle_disposition",
+                ),
+                .carry_toggle => enumFeedbackReasonName(
+                    sandbox_host.InteractionActionDisposition,
+                    reason,
+                    "unknown_interaction_disposition",
+                ),
+                .melee => enumFeedbackReasonName(
+                    sandbox_host.MeleeActionDisposition,
+                    reason,
+                    "unknown_melee_disposition",
+                ),
+                .respawn => enumFeedbackReasonName(
+                    sandbox_host.RespawnActionDisposition,
+                    reason,
+                    "unknown_respawn_disposition",
+                ),
+                else => "protocol_disposition",
+            },
+            .validation_code => "validation_code",
+        };
+    }
+
+    fn enumFeedbackReasonName(
+        comptime E: type,
+        reason: u32,
+        fallback: []const u8,
+    ) []const u8 {
+        const value = std.enums.fromInt(E, reason) orelse return fallback;
+        return @tagName(value);
+    }
+
+    fn updateProductTitle(
+        self: *App,
+        character_draws: []const sandbox_host.CharacterDraw,
+        npc_draws: []const sandbox_host.NpcDraw,
+        hud: combat_presentation.LocalHud,
+    ) void {
+        var local_hurt = false;
+        for (character_draws) |draw| {
+            if (draw.local_player and draw.combat.hit_flash) local_hurt = true;
+        }
+        var npc_state: []const u8 = "none";
+        var npc_health: u16 = 0;
+        var npc_maximum_health: u16 = 0;
+        var attack_remaining: u64 = 0;
+        for (npc_draws) |draw| {
+            if (draw.encounter_state == .patrolling and draw.life_state == .alive) continue;
+            npc_state = @tagName(draw.encounter_state);
+            npc_health = draw.health;
+            npc_maximum_health = draw.maximum_health;
+            attack_remaining = draw.attack_impact_tick -| hud.authority_tick;
+            break;
+        }
+        const feedback = self.product_feedback.current(hud.authority_tick);
+        const action = if (feedback) |value| @tagName(value.kind) else "none";
+        const disposition = if (feedback) |value|
+            @tagName(value.disposition)
+        else
+            "none";
+        const reason = if (feedback) |value|
+            actionFeedbackReason(value.kind, value.reason_domain, value.reason)
+        else
+            "none";
+        const respawn = if (hud.life_state == .dead)
+            if (hud.respawn_remaining_ticks == 0) "PRESS R TO RESPAWN" else "respawn cooling down"
+        else
+            "alive";
+        const damage = if (hud.life_state == .dead)
+            "DEAD"
+        else if (local_hurt)
+            "DAMAGE RECEIVED"
+        else
+            "healthy";
+        const melee_result = if (hud.latest_melee_disposition) |value|
+            @tagName(value)
+        else
+            "none";
+        const respawn_result = if (hud.latest_respawn_disposition) |value|
+            @tagName(value)
+        else
+            "none";
+        var storage: [512]u8 = undefined;
+        const title = std.fmt.bufPrintZ(
+            &storage,
+            "Incinerator | HP {d}/{d} {s} | {s} {d}t | melee {d}t/{s} | NPC {s} HP {d}/{d} attack {d}t | action {s}/{s}/{s} | respawn-result {s}",
+            .{
+                hud.health,
+                hud.maximum_health,
+                damage,
+                respawn,
+                hud.respawn_remaining_ticks,
+                hud.melee_remaining_ticks,
+                melee_result,
+                npc_state,
+                npc_health,
+                npc_maximum_health,
+                attack_remaining,
+                action,
+                disposition,
+                reason,
+                respawn_result,
+            },
+        ) catch return;
+        _ = c.SDL_SetWindowTitle(self.window, title.ptr);
+    }
+
+    fn drawDeveloperOverlay(
+        self: *App,
+        gameplay_view: *const editor_contract.GameplayView,
+    ) !void {
         self.authoring_requests.clear();
         self.interaction_requests.clear();
         defer {
@@ -5558,6 +8267,30 @@ const App = struct {
                     .view = &interaction_view,
                     .requests = &self.interaction_requests,
                 },
+                .gameplay_view = gameplay_view,
+                .incident_input = .{
+                    .move_forward = self.input_buffer.isKeyDown(input.Key.W),
+                    .move_backward = self.input_buffer.isKeyDown(input.Key.S),
+                    .move_left = self.input_buffer.isKeyDown(input.Key.A),
+                    .move_right = self.input_buffer.isKeyDown(input.Key.D),
+                    .interact = self.input_buffer.isKeyDown(input.Key.E),
+                    .carry = self.input_buffer.isKeyDown(input.Key.F),
+                    .attack = self.input_buffer.isKeyDown(input.Key.Q),
+                    .respawn = self.input_buffer.isKeyDown(input.Key.R),
+                    .jump_or_brake = self.input_buffer.isKeyDown(input.Key.SPACE),
+                    .interact_pressed = self.input_buffer.isKeyPressed(input.Key.E),
+                    .carry_pressed = self.input_buffer.isKeyPressed(input.Key.F),
+                    .attack_pressed = self.input_buffer.isKeyPressed(input.Key.Q),
+                    .respawn_pressed = self.input_buffer.isKeyPressed(input.Key.R),
+                    .jump_pressed = self.input_buffer.isKeyPressed(input.Key.SPACE),
+                    .hand_brake = self.input_buffer.isKeyDown(input.Key.LSHIFT),
+                    .right_mouse = self.input_buffer.isMouseButtonDown(2),
+                    .mouse_delta_x = self.input_buffer.mouse_delta_x,
+                    .mouse_delta_y = self.input_buffer.mouse_delta_y,
+                    .keyboard_captured = self.input_buffer.keyboard_captured,
+                    .mouse_captured = self.input_buffer.mouse_captured,
+                    .window_minimized = self.input_buffer.window_minimized,
+                },
             },
         ));
         try self.applyAuthoringRequests(self.authoring_requests.slice());
@@ -5575,7 +8308,11 @@ const App = struct {
             },
         }
         self.gpu_renderer.endRenderPass();
-        try self.drawDeveloperOverlay();
+        const gameplay_view = editor_contract.GameplayView{
+            .authority_tick = self.simulation.inspection().tickIndex(),
+            .presentation_frame = self.frame_timer.total_frames,
+        };
+        try self.drawDeveloperOverlay(&gameplay_view);
         try self.submitCurrentFrame();
         return true;
     }
@@ -5692,17 +8429,71 @@ fn productMain(init: std.process.Init, args: anytype) !void {
     }
 
     const configured_save_root = try parseSaveRootOverride(args);
-    var app = if (configured_save_root) |save_root|
-        try App.initWithSaveRoot(
-            init.io,
-            .sandbox,
-            resolved_content_root,
-            save_root,
-        )
-    else
-        try App.init(init.io, .sandbox, resolved_content_root);
-    defer app.deinit();
-    try app.runProduct();
+    const incident_runs_root = if (build_options.incident_capture_enabled) root: {
+        if (init.environ_map.get("INCINERATOR_INCIDENT_ROOT")) |override| {
+            break :root override;
+        }
+        const home = init.environ_map.get("HOME") orelse return error.HomeDirectoryUnavailable;
+        break :root try std.fmt.allocPrint(
+            init.arena.allocator(),
+            "{s}/Library/Logs/Incinerator/runs",
+            .{home},
+        );
+    } else null;
+    var app = try App.initProduct(
+        init.io,
+        resolved_content_root,
+        configured_save_root,
+        incident_runs_root,
+    );
+    var app_deinitialized = false;
+    defer if (!app_deinitialized) app.deinit();
+    switch (mode) {
+        .incident_smoke => {
+            try app.runIncidentCaptureSmoke();
+            std.debug.print(
+                "INCIDENT_CAPTURE_SMOKE_RESULT run={s}\n",
+                .{app.developer.incidentRunPath() orelse "unavailable"},
+            );
+        },
+        .incident_benchmark => {
+            try app.runIncidentCaptureBenchmark();
+            const shutdown_started_ns = std.Io.Clock.Timestamp.now(
+                init.io,
+                .awake,
+            ).raw.nanoseconds;
+            app.deinit();
+            app_deinitialized = true;
+            const shutdown_finished_ns = std.Io.Clock.Timestamp.now(
+                init.io,
+                .awake,
+            ).raw.nanoseconds;
+            std.debug.print(
+                "INCIDENT_CAPTURE_BENCHMARK_SHUTDOWN capture={} latency_ns={d}\n",
+                .{
+                    build_options.incident_capture_enabled,
+                    @max(shutdown_finished_ns - shutdown_started_ns, 0),
+                },
+            );
+        },
+        .incident_journey => {
+            try app.runIncidentCaptureJourney();
+            std.debug.print(
+                "INCIDENT_CAPTURE_JOURNEY_RESULT run={s}\n",
+                .{app.developer.incidentRunPath() orelse "unavailable"},
+            );
+        },
+        .incident_journey_window => {
+            try app.runIncidentCaptureWindowJourney();
+            std.debug.print(
+                "INCIDENT_CAPTURE_WINDOW_JOURNEY_RESULT run={s}\n",
+                .{app.developer.incidentRunPath() orelse "unavailable"},
+            );
+        },
+        .incident_replay => |run_path| try app.runIncidentReplay(run_path),
+        .normal => try app.runProduct(),
+        .verify_install => unreachable,
+    }
 }
 
 fn initValidationApp(
@@ -5712,7 +8503,7 @@ fn initValidationApp(
     save_root: ?SaveRootPath,
 ) !App {
     return switch (mode) {
-        .normal, .s4_physics_debug_smoke => initValidationAppWithProfile(
+        .normal, .s4_physics_debug_smoke, .s11_combat_smoke => initValidationAppWithProfile(
             io,
             .sandbox,
             content_root,
@@ -5787,6 +8578,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         .s6_streaming_smoke,
         .s7_interaction_smoke,
         .s8_population_smoke,
+        .s11_combat_smoke,
         .s4_diagnostics_smoke,
         .s4_physics_debug_smoke,
         .s5_authoring_smoke,
@@ -5808,6 +8600,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         .s6_streaming_smoke,
         .s7_interaction_smoke,
         .s8_population_smoke,
+        .s11_combat_smoke,
         .s4_diagnostics_smoke,
         .s4_physics_debug_smoke,
         .s5_authoring_smoke,
@@ -5868,6 +8661,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
     var s6_streaming_smoke_succeeded = false;
     var s7_interaction_smoke_succeeded = false;
     var s8_population_smoke_succeeded = false;
+    var s11_combat_smoke_succeeded = false;
     var s4_physics_debug_smoke_succeeded = false;
     var s5_authoring_smoke_succeeded = false;
     var window_lifecycle_smoke_succeeded = false;
@@ -5894,6 +8688,9 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         }
         if (s8_population_smoke_succeeded) {
             std.debug.print("S8_POPULATION_SMOKE_SHUTDOWN status=clean\n", .{});
+        }
+        if (s11_combat_smoke_succeeded) {
+            std.debug.print("S11_COMBAT_SMOKE_SHUTDOWN status=clean\n", .{});
         }
         if (s4_physics_debug_smoke_succeeded) {
             std.debug.print("S4_PHYSICS_DEBUG_SMOKE_SHUTDOWN status=clean\n", .{});
@@ -5975,7 +8772,9 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
             std.debug.print(
                 "S2_VISUAL_SMOKE_RESULT ready_frames={d} unavailable_frames={d} " ++
                     "attempted_frames={d} vehicle_frames={d} vehicle_moved={} " ++
-                    "steering_observed={} brake_applied={} crate_displaced={} character_hidden={} " ++
+                    "steering_observed={} wheel_spin={} wheel_steering={} " ++
+                    "brake_applied={} hand_brake_applied={} " ++
+                    "crate_displaced={} character_hidden={} " ++
                     "character_restored={} exited={} ticks={d} alpha_min={d:.6} " ++
                     "alpha_max={d:.6} virtual_render_hz={d} gpu_driver={s}\n",
                 .{
@@ -5985,7 +8784,10 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                     summary.vehicle_presented_frames,
                     app.validation.s2_smoke.vehicle_moved,
                     app.validation.s2_smoke.steering_observed,
+                    app.validation.s2_smoke.wheel_spin_presented,
+                    app.validation.s2_smoke.wheel_steering_presented,
                     app.validation.s2_smoke.brake_applied,
+                    app.validation.s2_smoke.hand_brake_applied,
                     app.validation.s2_smoke.crate_displaced,
                     summary.character_hidden_while_driving,
                     summary.character_visible_after_exit,
@@ -6160,6 +8962,72 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                 },
             );
             s8_population_smoke_succeeded = true;
+        },
+        .s11_combat_smoke => |config| {
+            const summary = try app.runValidation(config, .s11_combat);
+            const evidence = app.validation.s11_combat;
+            std.debug.print(
+                "S11_COMBAT_SMOKE_RESULT frames={d} ticks={d} npc_spawned={} " ++
+                    "melee_hits={d} player_dead={} respawned={} npc_killed={} " ++
+                    "character_bar={} npc_bar={} character_flash={} " ++
+                    "character_flash_expired={} npc_flash={} npc_flash_expired={} " ++
+                    "windup={} cooldown_marker={} respawn_countdown={} " ++
+                    "respawn_ready={} retained_anchor={} player_death_body={} " ++
+                    "respawned_character={} " ++
+                    "npc_death={} product_hud_health={} product_hud_damage={} " ++
+                    "product_hud_death={} product_hud_windup={} " ++
+                    "product_hud_respawn_countdown={} product_hud_respawn_ready={} " ++
+                    "product_hud_action={} virtual_render_hz={d} gpu_driver={s}\n",
+                .{
+                    summary.ready_frames,
+                    app.simulation.inspection().tickIndex() -| app.validation_tick_origin,
+                    evidence.npc_spawned,
+                    evidence.accepted_melee_hits,
+                    evidence.player_dead,
+                    evidence.respawn_accepted,
+                    evidence.npc_killed,
+                    evidence.character_bar_drawn,
+                    evidence.npc_bar_drawn,
+                    evidence.character_hit_flash_drawn,
+                    evidence.character_hit_flash_expired,
+                    evidence.npc_hit_flash_drawn,
+                    evidence.npc_hit_flash_expired,
+                    evidence.npc_windup_drawn,
+                    evidence.melee_cooldown_marker_drawn,
+                    evidence.respawn_countdown_marker_drawn,
+                    evidence.respawn_ready_marker_drawn,
+                    evidence.dead_hud_anchor_drawn,
+                    evidence.player_death_drawn,
+                    evidence.respawned_character_drawn,
+                    evidence.npc_death_drawn,
+                    evidence.product_hud_health,
+                    evidence.product_hud_damage,
+                    evidence.product_hud_death,
+                    evidence.product_hud_windup,
+                    evidence.product_hud_respawn_countdown,
+                    evidence.product_hud_respawn_ready,
+                    evidence.product_hud_action_feedback,
+                    config.virtual_render_hz,
+                    shader_assets.driver,
+                },
+            );
+            std.debug.print(
+                "S11_VISIBILITY_RESULT contact={} player_death={} respawn={} " ++
+                    "npc_death={} observations={d} bounds={} captures={d}\n",
+                .{
+                    evidence.visibility_contact,
+                    evidence.visibility_player_death,
+                    evidence.visibility_respawn,
+                    evidence.visibility_npc_death,
+                    evidence.visibility_observations,
+                    evidence.visibility_bounds_valid,
+                    if (build_options.validation_mode)
+                        app.visibility_oracle.?.captures
+                    else
+                        0,
+                },
+            );
+            s11_combat_smoke_succeeded = true;
         },
         .s4_diagnostics_smoke => {
             const summary = try app.runS4DiagnosticsSmoke();
@@ -6468,7 +9336,7 @@ test "S8 per-identity evidence requires every exact lifecycle slot" {
     try std.testing.expectEqual(@as(u16, s8_population_count), summary.controller_resume_events);
 
     var missing = evidence;
-    missing.transferred[17] = false;
+    missing.transferred[0] = false;
     try std.testing.expectError(
         error.S8PopulationSmokeEvidenceMissing,
         missing.requireComplete(),
@@ -6502,12 +9370,6 @@ test "S8 per-identity evidence rejects duplicate missing and swapped outputs" {
             .owner = district_west_coord,
         } }),
     );
-    try evidence.observeOutcome(.population_spawned, &summary, .{ .spawned = .{
-        .request_id = s8_spawn_first_request_id + 1,
-        .id = second,
-        .owner = district_west_coord,
-    } });
-
     const first_waiting = sandbox_contracts.NpcEvent{ .state_changed = .{
         .id = first,
         .previous = .active,
@@ -6527,14 +9389,9 @@ test "S8 per-identity evidence rejects duplicate missing and swapped outputs" {
         error.UnexpectedS8NpcEvent,
         evidence.observeEvent(.destination_reloaded, &summary, second_waiting),
     );
-    try evidence.observeEvent(.destination_waiting, &summary, second_waiting);
     try std.testing.expectError(
         error.UnexpectedS8NpcEvent,
-        evidence.observeEvent(.destination_waiting, &summary, .{ .state_changed = .{
-            .id = s8TestIdentity(2),
-            .previous = .active,
-            .current = .waiting_at_boundary,
-        } }),
+        evidence.observeEvent(.destination_waiting, &summary, second_waiting),
     );
     try std.testing.expectError(
         error.UnexpectedS8NpcEvent,
@@ -6566,9 +9423,9 @@ test "S8 per-identity evidence rejects duplicate missing and swapped outputs" {
         error.S8PopulationSmokeEvidenceMissing,
         evidence.requireComplete(),
     );
-    try std.testing.expectEqual(@as(u8, 2), summary.spawned);
+    try std.testing.expectEqual(@as(u8, 1), summary.spawned);
     try std.testing.expectEqual(@as(u8, 1), summary.despawned);
-    try std.testing.expectEqual(@as(u16, 2), summary.waiting_events);
+    try std.testing.expectEqual(@as(u16, 1), summary.waiting_events);
 }
 
 test "authoring rejection reasons retain authority-level meaning" {
@@ -6588,6 +9445,13 @@ test "authoring rejection reasons retain authority-level meaning" {
         "authoring revision conflict",
         authoringRejectionDetail(.state_conflict),
     );
+}
+
+test "incident benchmark percentile indices are bounded samples" {
+    try std.testing.expectEqual(@as(usize, 0), percentileIndex(1, 99));
+    try std.testing.expectEqual(@as(usize, 4), percentileIndex(10, 50));
+    try std.testing.expectEqual(@as(usize, 8), percentileIndex(10, 95));
+    try std.testing.expectEqual(@as(usize, 8), percentileIndex(10, 99));
 }
 
 test "interactive vehicle rejections keep normal play healthy while carrying" {
@@ -6636,6 +9500,7 @@ test "all engine module tests are discovered" {
     std.testing.refAllDecls(@import("editor/tool.zig"));
     std.testing.refAllDecls(district_streaming_host);
     std.testing.refAllDecls(@import("input.zig"));
+    std.testing.refAllDecls(@import("incident_screenshot.zig"));
     std.testing.refAllDecls(@import("mesh.zig"));
     std.testing.refAllDecls(@import("renderer.zig"));
     std.testing.refAllDecls(@import("texture.zig"));

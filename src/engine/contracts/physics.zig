@@ -239,8 +239,12 @@ pub const VehicleWheelDynamics = struct {
 /// Exact negative zero is collapsed so logical snapshots can remain byte-stable.
 pub fn canonicalVehicleWheelRotation(angle: f32) !f32 {
     if (!std.math.isFinite(angle)) return error.NonFinitePhysicsValue;
-    const wrapped = @mod(angle, std.math.tau);
-    return if (wrapped == 0) 0 else wrapped;
+    const canonical_tau = @as(f32, std.math.tau);
+    const wrapped = @mod(@as(f64, angle), @as(f64, canonical_tau));
+    const narrowed: f32 = @floatCast(wrapped);
+    // A valid f64 value immediately below tau can round up to the forbidden
+    // f32 endpoint. Collapse that representation, and negative zero, to zero.
+    return if (narrowed == 0 or narrowed >= canonical_tau) 0 else narrowed;
 }
 
 /// Engine-neutral construction data for one conventional four-wheel car.
@@ -964,7 +968,7 @@ test "vehicle contract validates fixed wheel ordering input and adapter" {
             .{ .rotation_angle = -0.25 },
             .{ .rotation_angle = std.math.tau + 0.5 },
             .{ .rotation_angle = @bitCast(@as(u32, 0x8000_0000)) },
-            .{},
+            .{ .rotation_angle = -0.00000001 },
         },
     }).normalized();
     try std.testing.expectApproxEqAbs(
@@ -980,5 +984,14 @@ test "vehicle contract validates fixed wheel ordering input and adapter" {
     try std.testing.expectEqual(
         @as(u32, 0),
         @as(u32, @bitCast(wrapped.initial_wheel_dynamics[2].rotation_angle)),
+    );
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        @as(u32, @bitCast(wrapped.initial_wheel_dynamics[3].rotation_angle)),
+    );
+    try std.testing.expectApproxEqAbs(
+        @as(f32, 0.75),
+        try canonicalVehicleWheelRotation(std.math.tau * 8 + 0.75),
+        0.00001,
     );
 }

@@ -16,15 +16,38 @@ pub const product_carryables: usize = 1;
 pub const max_relevant_districts_per_client: usize = 4;
 pub const product_relevant_districts_per_client: usize = 1;
 pub const max_npcs: usize = 64;
-pub const product_npcs: usize = 64;
+/// The installed two-district route currently authors three distinct spawn
+/// nodes per district. Keep the default playable room to one NPC per authored
+/// point; the 64-NPC ceiling remains an explicit synthetic scale profile.
+pub const product_npcs: usize = 6;
 pub const npc_snapshot_hz: u32 = 10;
 pub const ticks_per_npc_snapshot: u32 = authority_tick_hz / npc_snapshot_hz;
 pub const snapshot_history_capacity: usize = 8;
 pub const full_snapshot_interval_ticks: u64 = authority_tick_hz;
 pub const max_delta_base_age_ticks: u64 = authority_tick_hz * 2;
 pub const max_snapshot_starvation_ticks: u64 = authority_tick_hz / 5;
+/// Per-connection transport work admitted in one authority cycle. This limits
+/// wire preparation; it is not a limit on logical gameplay publication.
 pub const max_reliable_events_per_tick: u16 = 16;
-pub const reliable_replay_records_per_participant: usize = 32;
+/// Conservative per-participant upper bounds for one accepted S11 cycle. One
+/// participant may consume the whole reserved gameplay mailbox, may also use
+/// its input quota, and may receive one completion from each already-pending
+/// vehicle, interaction, melee, and respawn transaction. Global life facts
+/// cover every NPC plus one death and respawn transition per participant.
+pub const max_immediate_gameplay_publications_per_participant_cycle: usize =
+    inbound_gameplay_capacity + @as(usize, max_input_messages_per_tick);
+pub const pending_gameplay_completion_families: usize = 4;
+pub const max_life_publications_per_participant_cycle: usize =
+    max_npcs + max_participants * 2;
+pub const max_gameplay_publications_per_participant_cycle: usize =
+    max_immediate_gameplay_publications_per_participant_cycle +
+    pending_gameplay_completion_families +
+    max_life_publications_per_participant_cycle;
+/// Retain two complete admitted cycles. A participant that cannot free enough
+/// room for the next logical publication is retired as a slow consumer; the
+/// room and other participants continue.
+pub const reliable_replay_records_per_participant: usize =
+    max_gameplay_publications_per_participant_cycle * 2;
 pub const admission_nonce_history_capacity: usize = 256;
 
 pub const max_wire_message_bytes: usize = 64 * 1024;
@@ -128,6 +151,11 @@ comptime {
     {
         @compileError("vehicle prediction horizon must fit the input history");
     }
+    if (reliable_replay_records_per_participant <
+        max_gameplay_publications_per_participant_cycle * 2)
+    {
+        @compileError("reliable gameplay ledger must retain two admitted cycles");
+    }
 }
 
 test "MP0 budgets retain the accepted rate and capacity relationships" {
@@ -137,4 +165,10 @@ test "MP0 budgets retain the accepted rate and capacity relationships" {
     try std.testing.expect(max_snapshot_bytes <= max_wire_message_bytes);
     try std.testing.expect(adverse_profile.rtt_ms > nominal_profile.rtt_ms);
     try std.testing.expect(adverse_profile.loss_percent > nominal_profile.loss_percent);
+    try std.testing.expect(max_reliable_events_per_tick <
+        max_gameplay_publications_per_participant_cycle);
+    try std.testing.expectEqual(
+        max_gameplay_publications_per_participant_cycle * 2,
+        reliable_replay_records_per_participant,
+    );
 }

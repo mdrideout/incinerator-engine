@@ -1,10 +1,12 @@
 # Incinerator Multiplayer-First Architecture and Delivery Plan
 
 **Status:** MP0-MP6, the M4 Apple Silicon macOS foundation, M5 client/authority
-cohesion, M6 transactional authority, and S10 damage/death/respawn are
-implemented and accepted
+cohesion, M6 transactional authority, S10 damage/death/respawn, and S11 NPC
+encounter/combat response are implemented and accepted; post-S11 corrective
+implementation, manual findings, and IV0-IV5 interaction validation and
+causal-observability closure are accepted
 
-**Last reviewed:** 2026-07-14
+**Last reviewed:** 2026-07-15
 
 **Current platform:** Apple Silicon macOS only
 
@@ -16,11 +18,16 @@ implemented and accepted
 [`M6 accepted`](docs/validation/m6-transactional-authority-cycle.md)
 → [`MP6 accepted`](docs/validation/mp6-playable-multiplayer-room-flow.md)
 → [`S10 accepted`](docs/validation/s10-damage-death-respawn.md)
+→ [`S11 accepted`](docs/validation/s11-npc-encounter-combat-response.md)
+→ [`post-S11 manual findings`](docs/validation/post-s11-runtime-corrective-audit.md)
+→ [`IV0-IV5 accepted`](docs/validation/gameplay-interaction-validation-and-observability.md)
 
 **Accepted decisions:**
 [ADR-016](docs/adr/016-authority-session-topology.md),
-[ADR-017](docs/adr/017-network-identity-protocol-and-replication.md), and
-[ADR-018](docs/adr/018-gamenetworkingsockets-and-steam-compatible-routing.md)
+[ADR-017](docs/adr/017-network-identity-protocol-and-replication.md),
+[ADR-018](docs/adr/018-gamenetworkingsockets-and-steam-compatible-routing.md),
+[ADR-019](docs/adr/019-authoritative-npc-encounter-and-replacement.md),
+and [ADR-020](docs/adr/020-gameplay-interaction-validation-and-observability.md)
 
 ## Purpose
 
@@ -385,6 +392,9 @@ reordering.
 - [x] Define teleport/hard-correction and smoothing thresholds.
 - [x] Add per-connection command quotas, stale windows, overflow, and timeout
   policy.
+- [x] Pace accumulated GNS input catch-up at the listen/dedicated adapter by
+  authority tick; leave excess messages queued and retain the authority quota
+  as the untrusted-ingress boundary.
 - [x] Add deterministic impaired-link tests and three-run latency/bandwidth/
   correction budgets.
 - [x] Extend flight recording to accepted participant/sequence/tick ingress and
@@ -592,6 +602,35 @@ three-second cooldown plus bounded collision/threat-aware spawn selection
 creates a new avatar incarnation. Two real graphical clients prove the full
 cycle in constrained listen and dedicated placements.
 
+### S11 — Playable NPC Encounter And Combat Response
+
+**Status:** Complete, independently reviewed, and accepted. Design:
+[`docs/design/s11-npc-encounter-combat-response.md`](docs/design/s11-npc-encounter-combat-response.md).
+Acceptance evidence is recorded in
+[`docs/validation/s11-npc-encounter-combat-response.md`](docs/validation/s11-npc-encounter-combat-response.md).
+
+**Outcome:** An authority-owned hostile NPC perceives eligible players, selects
+one deterministic target, pursues through the existing navigation owner,
+telegraphs and validates melee, emits damage through the shared vitals boundary,
+reacts, searches, disengages, dies, and is safely replaced with a new identity.
+Clients receive visible health, hit, cooldown, death, respawn, and attack-state
+feedback without owning AI decisions. Accepted solo, constrained-listen, and
+dedicated gates prove the same semantics under replay, reconnect, impairment,
+saturation, and the declared 64-NPC/16-participant synthetic ceiling.
+
+The post-S11 correction keeps the automatic listen/dedicated product cohort to
+six NPCs, one per authored route node, while retaining 64 only for synthetic
+scale and saturation. The ordinary embedded product seeds one playable hostile
+through its host-managed authority after the player and west district are
+ready. A separate product-character lifecycle owner correlates NPC-caused local
+death, despawn, cooldown, respawn, and new avatar projection without owning
+those authority transitions. Persisted NPC routes now distinguish an exact
+prefix from a deferred rebuild across inactive content. Reliable gameplay facts
+enter a derived 172-publication-per-participant cycle budget and a two-cycle
+344-record ledger, then drain independently beneath the 16-message
+per-connection wire ceiling; an exhausted consumer is retired without faulting
+the room.
+
 ## Transport and Service Decision
 
 ADR-018 selects the open-source GameNetworkingSockets flat C API and direct IP
@@ -700,6 +739,25 @@ hardening remain later programs.
    reconnect, reliable result replay, and two-client graphical listen/
    dedicated evidence are closed. Firearms, authoritative ragdolls, and lag
    compensation remain later slices.
+5. **S11 NPC encounter/combat response — complete and accepted.** The slice uses
+   the accepted NPC, navigation, vitals, session, replication, replay, and
+   placement boundaries for authority-owned sight/damage perception,
+   deterministic hostility/targeting, pursuit/search/disengagement,
+   telegraphed NPC melee, reaction/death/safe replacement, visible client
+   feedback, per-NPC inspection and spatial diagnostics, and full
+   fault/reconnect/scale evidence. Normal-product bootstrap, installed solo
+   combat presentation, and graphical listen/dedicated process gates prove the
+   playable path, authoritative NPC death, and generational replacement.
+   It adds no generic AI framework, firearms, Recast integration, Smart Object
+   system, public service, or MMO infrastructure.
+6. **IV0-IV5 gameplay interaction validation and observability — complete and
+   accepted.** Shared typed scenario semantics now span solo, listen, and
+   dedicated placements. Fixed-capacity causal traces, continuous gameplay
+   invariants, readable product/editor feedback, semantic Metal visibility,
+   deterministic fault/reconnect profiles, seeded action fuzzing, and routine/
+   long soaks exercise the same authority and client owners. The matrix also
+   found and closed cross-lane lifecycle ordering through exact protocol
+   revision 13 rather than a client-side timing fallback.
 
 No post-M4 phase silently broadens platform, public-service, Steamworks, public
 Internet listen-host, or MMO scope. MP6's explicit listen scope is limited to

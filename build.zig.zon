@@ -85,6 +85,7 @@
         "docs",
         "fixtures",
         "shaders",
+        "skills",
         "src",
         "third_party",
         "tools",

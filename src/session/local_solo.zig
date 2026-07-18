@@ -18,12 +18,15 @@ const diagnostics_contract = @import("sandbox_diagnostics_contract");
 const budgets = @import("session_budgets");
 const identity = @import("session_identity");
 const protocol = @import("session_protocol");
+const session_gameplay_trace = @import("gameplay_trace.zig");
+const combat_presentation = @import("combat_presentation");
 const snapshot_source = @import("snapshot_source");
 const local_link = @import("session_local_link");
 const session_client = @import("session_client");
 const replicated_world = @import("replicated_world");
 const session_authority = @import("session_authority");
 const authority_diagnostics = @import("session_authority_diagnostics");
+const sandbox_replay = @import("sandbox_replay");
 
 const local_transport = session_authority.TransportConnection{ .value = 1 };
 
@@ -42,13 +45,21 @@ pub const VehicleInput = struct {
 
 pub const ReplicatedEntityId = identity.ReplicatedEntityId;
 pub const ParticipantId = identity.ParticipantId;
+pub const NpcInterestView = session_authority.NpcInterestView;
+pub const ObjectInterestView = session_authority.ObjectInterestView;
+pub const ReplicatedObjectIdentity = session_authority.ReplicatedObjectIdentity;
 pub const VehicleActionKind = protocol.VehicleActionKind;
 pub const VehicleActionDisposition = protocol.VehicleActionDisposition;
 pub const InteractionActionKind = protocol.InteractionActionKind;
 pub const InteractionActionDisposition = protocol.InteractionActionDisposition;
+pub const MeleeActionDisposition = protocol.MeleeActionDisposition;
+pub const RespawnActionDisposition = protocol.RespawnActionDisposition;
 pub const MeleeActionResult = protocol.MeleeActionResult;
 pub const RespawnActionResult = protocol.RespawnActionResult;
 pub const LifeEvent = protocol.LifeEvent;
+pub const LocalCombatHud = combat_presentation.LocalHud;
+pub const gameplay_trace_capacity: usize = 1_024;
+pub const GameplayTraceJournal = engine.gameplay_trace.Journal(gameplay_trace_capacity);
 
 pub const VehicleActionResult = struct {
     sequence: u32,
@@ -131,6 +142,11 @@ pub const CharacterDraw = struct {
     camera_target: [3]f32,
     mesh: engine.rendering.MeshHandle,
     material: engine.rendering.MaterialHandle,
+    incarnation: u16,
+    health: u16,
+    maximum_health: u16,
+    life_state: protocol.AvatarLifeState,
+    combat: combat_presentation.EntityPlan,
 };
 
 pub const VehicleDraw = struct {
@@ -158,6 +174,15 @@ pub const NpcDraw = struct {
     half_height: f32,
     mesh: engine.rendering.MeshHandle,
     material: engine.rendering.MaterialHandle,
+    incarnation: u16,
+    health: u16,
+    maximum_health: u16,
+    life_state: protocol.AvatarLifeState,
+    encounter_state: protocol.NpcEncounterState,
+    encounter_state_enter_tick: u64,
+    attack_impact_tick: u64,
+    attack_ready_tick: u64,
+    combat: combat_presentation.NpcPlan,
 };
 
 pub const TickStage = enum {
@@ -246,6 +271,12 @@ const State = struct {
     vehicle_draws: [budgets.max_vehicles]VehicleDraw = undefined,
     carryable_draws: [budgets.max_carryables]CarryableDraw = undefined,
     npc_draws: [budgets.max_npcs]NpcDraw = undefined,
+    combat_presentation_owner: combat_presentation.Owner = .{},
+    gameplay_trace: GameplayTraceJournal = .{},
+    submitted_movement_trace: session_gameplay_trace.MovementState = .{},
+    admitted_movement_trace: session_gameplay_trace.MovementState = .{},
+    submitted_vehicle_trace: session_gameplay_trace.VehicleState = .{},
+    admitted_vehicle_trace: session_gameplay_trace.VehicleState = .{},
 
     fn establish(self: *State) !void {
         _ = try self.authority.session().openConnection(local_transport);
@@ -275,6 +306,7 @@ const State = struct {
     fn deliverClientIngress(self: *State) !void {
         while (self.link.receiveForAuthority()) |message| {
             try self.authority.session().ingest(local_transport, message);
+            self.traceAdmittedClientMessage(message);
         }
     }
 
@@ -314,6 +346,22 @@ const State = struct {
             };
             const applied_before = self.client.diagnostics().snapshots_applied;
             try self.client.receiveDelivered(delivered);
+            self.traceAppliedServerMessage(message);
+            switch (message) {
+                .melee_action_result => |result| self.combat_presentation_owner.noteFeedback(
+                    self.client.avatar_entity,
+                    .{ .melee = result },
+                ),
+                .respawn_action_result => |result| self.combat_presentation_owner.noteFeedback(
+                    self.client.avatar_entity,
+                    .{ .respawn = result },
+                ),
+                .life_event => |event| self.combat_presentation_owner.noteFeedback(
+                    self.client.avatar_entity,
+                    .{ .life = event },
+                ),
+                else => {},
+            }
             const projection_applied = self.client.diagnostics().snapshots_applied !=
                 applied_before;
             if (projection_stamp) |stamp| if (projection_applied) {
@@ -370,56 +418,97 @@ const State = struct {
 
     fn submitMovement(self: *State, input: PlayerInput) !void {
         const target_tick = try std.math.add(u64, self.authority.inspection().tickIndex(), 1);
-        try self.link.sendFromClient(try self.client.input(
+        const message = self.client.input(
             target_tick,
             input.move,
             input.facing_yaw,
             input.jump_pressed,
-        ));
+        ) catch |err| {
+            self.tracePreflightRejection(.movement, err);
+            return err;
+        };
+        try self.link.sendFromClient(message);
+        self.traceSubmittedClientMessage(message);
     }
 
     fn submitVehicleControl(self: *State, input: VehicleInput) !u32 {
         const vehicle = self.client.ownedVehicle() orelse
             return error.VehicleControlUnavailable;
         const target_tick = try std.math.add(u64, self.authority.inspection().tickIndex(), 1);
-        const message = try self.client.vehicleInput(
+        const message = self.client.vehicleInput(
             target_tick,
             vehicle.entity,
             input.throttle,
             input.steering,
             input.brake,
             input.hand_brake,
-        );
+        ) catch |err| {
+            self.tracePreflightRejection(.vehicle_control, err);
+            return err;
+        };
         try self.link.sendFromClient(message);
+        self.traceSubmittedClientMessage(message);
         return message.vehicle_input.sequence.value;
     }
 
     fn requestVehicleToggle(self: *State) !void {
         if (self.client.ownedVehicle()) |vehicle| {
-            try self.link.sendFromClient(try self.client.vehicleAction(.exit, vehicle.entity));
+            const message = self.client.vehicleAction(.exit, vehicle.entity) catch |err| {
+                self.tracePreflightRejection(.vehicle_toggle, err);
+                return err;
+            };
+            try self.link.sendFromClient(message);
+            self.traceSubmittedClientMessage(message);
             return;
         }
-        const position = self.focusPosition() orelse return error.LocalCharacterUnavailable;
+        const position = self.focusPosition() orelse {
+            self.tracePreflightRejection(.vehicle_toggle, error.LocalCharacterUnavailable);
+            return error.LocalCharacterUnavailable;
+        };
         const vehicle = nearestVehicle(
             self.client.world.vehicleSlice(),
             position,
             self.config.vehicle.max_entry_distance,
-        ) orelse return error.NoVehicleInRange;
-        try self.link.sendFromClient(try self.client.vehicleAction(.enter, vehicle));
+        ) orelse {
+            self.tracePreflightRejection(.vehicle_toggle, error.NoVehicleInRange);
+            return error.NoVehicleInRange;
+        };
+        const message = self.client.vehicleAction(.enter, vehicle) catch |err| {
+            self.tracePreflightRejection(.vehicle_toggle, err);
+            return err;
+        };
+        try self.link.sendFromClient(message);
+        self.traceSubmittedClientMessage(message);
     }
 
     fn requestInteractionToggle(self: *State) !void {
         if (self.client.heldCarryable()) |carryable| {
-            try self.link.sendFromClient(try self.client.interactionAction(.drop, carryable.entity));
+            const message = self.client.interactionAction(.drop, carryable.entity) catch |err| {
+                self.tracePreflightRejection(.carry_toggle, err);
+                return err;
+            };
+            try self.link.sendFromClient(message);
+            self.traceSubmittedClientMessage(message);
             return;
         }
-        const position = self.focusPosition() orelse return error.LocalCharacterUnavailable;
+        const position = self.focusPosition() orelse {
+            self.tracePreflightRejection(.carry_toggle, error.LocalCharacterUnavailable);
+            return error.LocalCharacterUnavailable;
+        };
         const carryable = nearestCarryable(
             self.client.world.carryableSlice(),
             position,
             self.config.interaction.collect_range,
-        ) orelse return error.NoCarryableInRange;
-        try self.link.sendFromClient(try self.client.interactionAction(.collect, carryable));
+        ) orelse {
+            self.tracePreflightRejection(.carry_toggle, error.NoCarryableInRange);
+            return error.NoCarryableInRange;
+        };
+        const message = self.client.interactionAction(.collect, carryable) catch |err| {
+            self.tracePreflightRejection(.carry_toggle, err);
+            return err;
+        };
+        try self.link.sendFromClient(message);
+        self.traceSubmittedClientMessage(message);
     }
 
     fn requestInteraction(
@@ -427,19 +516,94 @@ const State = struct {
         action: InteractionActionKind,
         carryable: ReplicatedEntityId,
     ) !void {
-        try self.link.sendFromClient(try self.client.interactionAction(
+        const message = self.client.interactionAction(
             action,
             carryable,
-        ));
+        ) catch |err| {
+            self.tracePreflightRejection(.carry_toggle, err);
+            return err;
+        };
+        try self.link.sendFromClient(message);
+        self.traceSubmittedClientMessage(message);
     }
 
     fn requestMelee(self: *State) !void {
         const target_tick = try std.math.add(u64, self.authority.inspection().tickIndex(), 1);
-        try self.link.sendFromClient(try self.client.meleeAction(target_tick));
+        const message = self.client.meleeAction(target_tick) catch |err| {
+            self.tracePreflightRejection(.melee, err);
+            return err;
+        };
+        try self.link.sendFromClient(message);
+        self.traceSubmittedClientMessage(message);
     }
 
     fn requestRespawn(self: *State) !void {
-        try self.link.sendFromClient(try self.client.respawnAction());
+        const message = self.client.respawnAction() catch |err| {
+            self.tracePreflightRejection(.respawn, err);
+            return err;
+        };
+        try self.link.sendFromClient(message);
+        self.traceSubmittedClientMessage(message);
+    }
+
+    fn tracePreflightRejection(
+        self: *State,
+        kind: engine.gameplay_trace.Kind,
+        err: anyerror,
+    ) void {
+        _ = self.gameplay_trace.append(.{
+            .authority_tick = self.authority.inspection().tickIndex(),
+            .actor = self.traceAvatar(),
+            .source = .client,
+            .stage = .local_preflight,
+            .kind = kind,
+            .disposition = .rejected,
+            .reason_domain = .error_code,
+            .reason = @intFromError(err),
+        });
+    }
+
+    fn traceSubmittedClientMessage(self: *State, message: protocol.ClientMessage) void {
+        const value = session_gameplay_trace.clientRecord(
+            message,
+            &self.submitted_movement_trace,
+            &self.submitted_vehicle_trace,
+            self.authority.inspection().tickIndex(),
+            self.traceAvatar(),
+            .client,
+            .client_submitted,
+        ) orelse return;
+        _ = self.gameplay_trace.append(value);
+    }
+
+    fn traceAdmittedClientMessage(self: *State, message: protocol.ClientMessage) void {
+        const value = session_gameplay_trace.clientRecord(
+            message,
+            &self.admitted_movement_trace,
+            &self.admitted_vehicle_trace,
+            self.authority.inspection().tickIndex(),
+            self.traceAvatar(),
+            .authority,
+            .authority_admitted,
+        ) orelse return;
+        _ = self.gameplay_trace.append(value);
+    }
+
+    fn traceAppliedServerMessage(self: *State, message: protocol.ServerMessage) void {
+        const value = session_gameplay_trace.appliedServerRecord(
+            message,
+            self.authority.inspection().tickIndex(),
+            self.traceAvatar(),
+        ) orelse return;
+        _ = self.gameplay_trace.append(value);
+    }
+
+    fn traceAvatar(self: *const State) ?engine.gameplay_trace.EntityRef {
+        if (!self.client.avatar_entity.isValid()) return null;
+        return session_gameplay_trace.replicatedEntity(
+            self.client.avatar_entity,
+            self.client.avatar_incarnation,
+        );
     }
 
     fn takeVehicleActionResult(self: *State) ?VehicleActionResult {
@@ -496,14 +660,25 @@ const State = struct {
             if (std.meta.eql(character.owner, self.client.participant)) {
                 if (self.client.localPresentation()) |predicted| character = predicted;
             }
-            const half_yaw = character.facing_yaw * 0.5;
+            const rotation = engine.transform.rotationFromFacingYaw(
+                character.facing_yaw,
+            ) catch unreachable;
+            const local_player = std.meta.eql(
+                character.owner,
+                self.client.participant,
+            );
+            const combat = self.combat_presentation_owner.characterPlan(
+                self.client.world.server_tick,
+                character,
+                local_player,
+            );
             self.character_draws[count] = .{
                 .entity = character.entity,
                 .owner = character.owner,
-                .local_player = std.meta.eql(character.owner, self.client.participant),
+                .local_player = local_player,
                 .pose = .{
                     .position = character.position,
-                    .rotation = .{ 0, @sin(half_yaw), 0, @cos(half_yaw) },
+                    .rotation = rotation,
                 },
                 .radius = self.config.character.radius,
                 .half_height = self.config.character.half_height,
@@ -515,6 +690,11 @@ const State = struct {
                 },
                 .mesh = self.config.character.assets.mesh,
                 .material = self.config.character.assets.material,
+                .incarnation = character.incarnation,
+                .health = character.health,
+                .maximum_health = character.maximum_health,
+                .life_state = character.life_state,
+                .combat = combat,
             };
             count += 1;
         }
@@ -530,26 +710,38 @@ const State = struct {
         for (self.client.world.vehicleSlice()) |entry| {
             var vehicle = replicated_world.World.interpolateVehicle(entry, alpha);
             if (vehicle.driver) |driver| if (std.meta.eql(driver, self.client.participant)) {
-                if (self.client.localVehiclePresentation()) |predicted| vehicle = predicted;
+                if (self.client.localVehiclePresentation()) |predicted| {
+                    vehicle = replicated_world.applyPredictedChassis(vehicle, predicted);
+                }
             };
             const chassis_pose = engine.physics.Pose{
                 .position = vehicle.position,
                 .rotation = vehicle.rotation,
             };
+            const layout = replicated_world.VehicleWheelLayout{
+                .attachment_positions = self.config.vehicle.tuning.wheel_attachment_positions,
+                .radius = self.config.vehicle.tuning.wheel_radius,
+                .width = self.config.vehicle.tuning.wheel_width,
+                .suspension_max_length = self.config.vehicle.tuning.suspension_max_length,
+                .max_steer_radians = self.config.vehicle.tuning.max_steer_radians,
+            };
+            // The client world and placement config validate these values before
+            // presentation; a failure here is an internal ownership invariant.
+            const wheel_poses = replicated_world.composeVehicleWheelPoses(
+                vehicle,
+                layout,
+            ) catch unreachable;
             var wheels: [engine.physics.vehicle_wheel_count]vehicle_contract.WheelDraw = undefined;
-            for (&wheels, self.config.vehicle.tuning.wheel_attachment_positions, 0..) |
+            for (&wheels, wheel_poses, 0..) |
                 *wheel,
-                attachment,
+                pose,
                 index,
             | {
-                var visual_offset = attachment;
-                visual_offset[1] -= (self.config.vehicle.tuning.suspension_min_length +
-                    self.config.vehicle.tuning.suspension_max_length) * 0.5;
                 wheel.* = .{
                     .index = @enumFromInt(index),
-                    .pose = localOffsetPose(chassis_pose, visual_offset),
-                    .radius = self.config.vehicle.tuning.wheel_radius,
-                    .width = self.config.vehicle.tuning.wheel_width,
+                    .pose = .{ .position = pose.position, .rotation = pose.rotation },
+                    .radius = layout.radius,
+                    .width = layout.width,
                     .mesh = self.config.vehicle.assets.wheel_mesh,
                     .material = self.config.vehicle.assets.wheel_material,
                 };
@@ -595,15 +787,32 @@ const State = struct {
         frame_alpha: f32,
     ) []const NpcDraw {
         const alpha = self.npcProjectionAlpha(frame_alpha);
+        const local_character = self.localCharacterForNpcPresentation(frame_alpha);
         var count: usize = 0;
         for (self.client.world.npcSlice()) |entry| {
-            const npc = replicated_world.World.interpolateNpc(entry, alpha);
-            const half_yaw = npc.facing_yaw * 0.5;
+            var npc = replicated_world.World.interpolateNpc(entry, alpha);
+            if (local_character) |character| {
+                npc = replicated_world.separateNpcPresentation(
+                    npc,
+                    character,
+                    self.config.npc.radius,
+                    self.config.character.radius,
+                ).state;
+            }
+            const rotation = engine.transform.rotationFromFacingYaw(
+                npc.facing_yaw,
+            ) catch unreachable;
+            // Sparse NPC snapshots publish state; the common replicated
+            // server tick owns presentation deadlines between them.
+            const combat = self.combat_presentation_owner.npcPlan(
+                self.client.world.server_tick,
+                npc,
+            );
             self.npc_draws[count] = .{
                 .entity = npc.entity,
                 .pose = .{
                     .position = npc.position,
-                    .rotation = .{ 0, @sin(half_yaw), 0, @cos(half_yaw) },
+                    .rotation = rotation,
                 },
                 .state = switch (npc.state) {
                     .active => .active,
@@ -613,10 +822,60 @@ const State = struct {
                 .half_height = self.config.npc.half_height,
                 .mesh = self.config.npc.assets.mesh,
                 .material = self.config.npc.assets.material,
+                .incarnation = npc.incarnation,
+                .health = npc.health,
+                .maximum_health = npc.maximum_health,
+                .life_state = npc.life_state,
+                .encounter_state = npc.encounter_state,
+                .encounter_state_enter_tick = npc.encounter_state_enter_tick,
+                .attack_impact_tick = npc.attack_impact_tick,
+                .attack_ready_tick = npc.attack_ready_tick,
+                .combat = combat,
             };
             count += 1;
         }
         return self.npc_draws[0..count];
+    }
+
+    fn localCharacterForNpcPresentation(
+        self: *const State,
+        frame_alpha: f32,
+    ) ?protocol.CharacterState {
+        if (self.client.ownedVehicle() != null) return null;
+        // Prediction exists only for a living controllable avatar. A retained
+        // dead avatar still participates in presentation separation: allowing
+        // the attacking NPC to consume the corpse projection makes an explicit
+        // death body look like a despawn to the human tester.
+        if (self.client.avatar_life_state == .alive) {
+            if (self.client.localPresentation()) |predicted| return predicted;
+        }
+        const alpha = self.projectionAlpha(frame_alpha);
+        for (self.client.world.slice()) |entry| {
+            if (std.meta.eql(entry.current.owner, self.client.participant)) {
+                return replicated_world.World.interpolate(entry, alpha);
+            }
+        }
+        return null;
+    }
+
+    fn combatHud(self: *State) LocalCombatHud {
+        var local_character: ?protocol.CharacterState = null;
+        for (self.client.world.slice()) |entry| {
+            if (std.meta.eql(entry.current.owner, self.client.participant)) {
+                local_character = entry.current;
+                break;
+            }
+        }
+        return self.combat_presentation_owner.localHud(.{
+            .authority_tick = self.client.world.server_tick,
+            .avatar = self.client.avatar_entity,
+            .incarnation = self.client.avatar_incarnation,
+            .life_state = self.client.avatar_life_state,
+            .melee_ready_tick = self.client.melee_ready_tick,
+            .respawn_ready_tick = self.client.respawn_ready_tick,
+            .character = local_character,
+            .owned_vehicle = self.client.ownedVehicle(),
+        });
     }
 
     fn issueSnapshotSource(self: *State) !snapshot_source.Source {
@@ -692,11 +951,21 @@ fn stateFromConst(context: *const anyopaque) *const State {
 }
 
 pub const Placement = opaque {
+    pub const InitOptions = struct {
+        recording_content: ?sandbox_replay.ContentCohort = null,
+    };
+
     pub fn initComposition(
         allocator: std.mem.Allocator,
         config: host_contracts.Config,
+        options: InitOptions,
     ) !Composition {
-        const placement = try initOwned(allocator, config, false);
+        const placement = try initOwned(
+            allocator,
+            config,
+            false,
+            options.recording_content,
+        );
         errdefer placement.deinit();
         return .{
             .snapshot_source = try stateFrom(placement).issueSnapshotSource(),
@@ -708,7 +977,7 @@ pub const Placement = opaque {
         allocator: std.mem.Allocator,
         config: host_contracts.Config,
     ) !Composition {
-        const placement = try initOwned(allocator, config, true);
+        const placement = try initOwned(allocator, config, true, null);
         errdefer placement.deinit();
         return .{
             .snapshot_source = try stateFrom(placement).issueSnapshotSource(),
@@ -776,6 +1045,7 @@ fn initOwned(
     allocator: std.mem.Allocator,
     config: host_contracts.Config,
     comptime diagnostic_fault_probe: bool,
+    recording_content: ?sandbox_replay.ContentCohort,
 ) !*Placement {
     const state = try allocator.create(State);
     errdefer allocator.destroy(state);
@@ -796,6 +1066,10 @@ fn initOwned(
             authority_config,
         );
     errdefer authority.deinit();
+    if (recording_content) |cohort| switch (try authority.developer().beginFlightRecording(cohort)) {
+        .admitted => {},
+        .rejected => return error.ColdFlightRecordingRejected,
+    };
     state.* = .{
         .allocator = allocator,
         .authority = authority,
@@ -897,6 +1171,10 @@ pub const PresentationRole = struct {
 
     pub fn npcs(self: PresentationRole, alpha: f32) []const NpcDraw {
         return stateFrom(self.context).npcPresentation(alpha);
+    }
+
+    pub fn combatHud(self: PresentationRole) LocalCombatHud {
+        return stateFrom(self.context).combatHud();
     }
 };
 
@@ -1163,6 +1441,13 @@ pub const DeveloperRole = struct {
         return stateFrom(self.context).authority.developer().diagnostics();
     }
 
+    pub fn snapshotFlightRecording(
+        self: DeveloperRole,
+        allocator: std.mem.Allocator,
+    ) ![]u8 {
+        return stateFrom(self.context).authority.developer().snapshotFlightRecording(allocator);
+    }
+
     /// Retained authority observation for developer tooling only. Product
     /// action handling consumes PlayerRole results instead.
     pub fn lastInteractionObservation(
@@ -1195,6 +1480,33 @@ pub const DeveloperRole = struct {
 
     pub fn journal(self: DeveloperRole) *const engine.runtime.DiagnosticJournal {
         return stateFrom(self.context).authority.developer().journal();
+    }
+
+    pub fn gameplayTrace(self: DeveloperRole) *const GameplayTraceJournal {
+        return &stateFromConst(self.context).gameplay_trace;
+    }
+
+    /// Host-owned input policy may reject an action before it reaches the
+    /// session client (for example melee while driving). Keep that ordinary
+    /// disposition in the same causal journal without exposing the journal
+    /// itself as mutable editor state.
+    pub fn recordGameplayTrace(
+        self: DeveloperRole,
+        value: engine.gameplay_trace.Record,
+    ) engine.gameplay_trace.AppendResult {
+        return stateFrom(self.context).gameplay_trace.append(value);
+    }
+
+    pub fn freezeGameplayTrace(self: DeveloperRole) bool {
+        return stateFrom(self.context).gameplay_trace.freeze();
+    }
+
+    pub fn resumeGameplayTrace(self: DeveloperRole) bool {
+        return stateFrom(self.context).gameplay_trace.resumeCapture();
+    }
+
+    pub fn clearGameplayTrace(self: DeveloperRole) void {
+        stateFrom(self.context).gameplay_trace.clear();
     }
 
     pub fn firstFault(self: DeveloperRole) ?engine.runtime.RuntimeFault {
@@ -1246,6 +1558,58 @@ pub const InspectionRole = struct {
         return stateFromConst(self.context).authority.inspection().replicatedId(
             persistent,
         );
+    }
+
+    /// Privileged host/editor identity lookup for an exact active replicated
+    /// generation. Presentation code does not use this capability.
+    pub fn persistentId(
+        self: InspectionRole,
+        replicated: ReplicatedEntityId,
+    ) ?engine.PersistentId {
+        return stateFromConst(self.context).authority.inspection().persistentId(
+            replicated,
+        );
+    }
+
+    pub fn npcInterest(
+        self: InspectionRole,
+        replicated: ReplicatedEntityId,
+    ) ?NpcInterestView {
+        const state = stateFromConst(self.context);
+        const participant = state.client.participantId() orelse return null;
+        return state.authority.inspection().npcInterest(participant, replicated);
+    }
+
+    pub fn vehicleIdentity(
+        self: InspectionRole,
+        slot_index: usize,
+    ) ?ReplicatedObjectIdentity {
+        return stateFromConst(self.context).authority.inspection().vehicleIdentity(slot_index);
+    }
+
+    pub fn carryableIdentity(
+        self: InspectionRole,
+        slot_index: usize,
+    ) ?ReplicatedObjectIdentity {
+        return stateFromConst(self.context).authority.inspection().carryableIdentity(slot_index);
+    }
+
+    pub fn vehicleInterest(
+        self: InspectionRole,
+        replicated: ReplicatedEntityId,
+    ) ?ObjectInterestView {
+        const state = stateFromConst(self.context);
+        const participant = state.client.participantId() orelse return null;
+        return state.authority.inspection().vehicleInterest(participant, replicated);
+    }
+
+    pub fn carryableInterest(
+        self: InspectionRole,
+        replicated: ReplicatedEntityId,
+    ) ?ObjectInterestView {
+        const state = stateFromConst(self.context);
+        const participant = state.client.participantId() orelse return null;
+        return state.authority.inspection().carryableInterest(participant, replicated);
     }
 
     pub fn clientDiagnostics(self: InspectionRole) ClientDiagnostics {
@@ -1328,38 +1692,6 @@ fn distanceSquared(a: [3]f32, b: [3]f32) f64 {
     return result;
 }
 
-fn localOffsetPose(chassis: engine.physics.Pose, offset: [3]f32) engine.physics.Pose {
-    const rotated = rotateVector(chassis.rotation, offset);
-    return .{
-        .position = .{
-            chassis.position[0] + rotated[0],
-            chassis.position[1] + rotated[1],
-            chassis.position[2] + rotated[2],
-        },
-        .rotation = chassis.rotation,
-    };
-}
-
-fn rotateVector(q: [4]f32, value: [3]f32) [3]f32 {
-    const qv = [3]f32{ q[0], q[1], q[2] };
-    const first = cross(qv, value);
-    const doubled = [3]f32{ first[0] * 2, first[1] * 2, first[2] * 2 };
-    const second = cross(qv, doubled);
-    return .{
-        value[0] + doubled[0] * q[3] + second[0],
-        value[1] + doubled[1] * q[3] + second[1],
-        value[2] + doubled[2] * q[3] + second[2],
-    };
-}
-
-fn cross(a: [3]f32, b: [3]f32) [3]f32 {
-    return .{
-        a[1] * b[2] - a[2] * b[1],
-        a[2] * b[0] - a[0] * b[2],
-        a[0] * b[1] - a[1] * b[0],
-    };
-}
-
 test "public solo handles are opaque and role scoped" {
     switch (@typeInfo(Placement)) {
         .@"opaque" => {},
@@ -1389,6 +1721,17 @@ test "public solo handles are opaque and role scoped" {
         try std.testing.expect(!@hasField(Draw, "persistent_id"));
         try std.testing.expect(@hasField(Draw, "entity"));
     }
+    inline for (.{ "incarnation", "health", "maximum_health", "life_state", "combat" }) |field| {
+        try std.testing.expect(@hasField(CharacterDraw, field));
+        try std.testing.expect(@hasField(NpcDraw, field));
+    }
+    inline for (.{
+        "encounter_state",
+        "encounter_state_enter_tick",
+        "attack_impact_tick",
+        "attack_ready_tick",
+    }) |field| try std.testing.expect(@hasField(NpcDraw, field));
+    try std.testing.expect(@hasDecl(PresentationRole, "combatHud"));
     try std.testing.expect(!@hasField(CharacterAdminCommand, "actions"));
     try std.testing.expect(!@hasField(VehicleAdminCommand, "enter"));
     try std.testing.expect(!@hasField(VehicleAdminCommand, "drive"));
@@ -1399,7 +1742,7 @@ test "public solo handles are opaque and role scoped" {
 }
 
 test "solo placement joins shared authority and applies replicated movement" {
-    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4301), false);
+    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4301), false, null);
     defer placement.deinit();
     try placement.characters().submit(.{ .spawn = .{
         .request_id = 1,
@@ -1454,7 +1797,20 @@ test "solo placement joins shared authority and applies replicated movement" {
 }
 
 test "solo vehicle actions and control use shared authority admission" {
-    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4302), false);
+    const config = testConfig(0x4c4f_4302);
+    try std.testing.expectEqualDeep(
+        config.vehicle.tuning.wheel_attachment_positions,
+        replicated_world.default_vehicle_wheel_layout.attachment_positions,
+    );
+    try std.testing.expectEqual(
+        config.vehicle.tuning.wheel_radius,
+        replicated_world.default_vehicle_wheel_layout.radius,
+    );
+    try std.testing.expectEqual(
+        config.vehicle.tuning.wheel_width,
+        replicated_world.default_vehicle_wheel_layout.width,
+    );
+    const placement = try initOwned(std.testing.allocator, config, false, null);
     defer placement.deinit();
     try placement.characters().submit(.{ .spawn = .{
         .request_id = 1,
@@ -1486,10 +1842,51 @@ test "solo vehicle actions and control use shared authority admission" {
         .hand_brake = 0,
     });
     try placement.lifecycle().tick();
+    const authority_vehicle = try placement.vehicles().view(vehicle_id);
+    try std.testing.expect(@abs(authority_vehicle.state.wheels[0].steer_angle) > 0.01);
+    var projected = protocol.VehicleState{
+        .entity = entered.vehicle,
+        .position = authority_vehicle.state.chassis.pose.position,
+        .rotation = authority_vehicle.state.chassis.pose.rotation,
+        .linear_velocity = authority_vehicle.state.chassis.velocity.linear,
+        .angular_velocity = authority_vehicle.state.chassis.velocity.angular,
+        .driver = null,
+    };
+    for (&projected.wheels, authority_vehicle.state.wheels) |*wheel, authority_wheel| {
+        wheel.* = .{
+            .spin_phase = authority_wheel.rotation_angle,
+            .angular_velocity = authority_wheel.angular_velocity,
+            .steer_angle = authority_wheel.steer_angle,
+            .suspension_length = authority_wheel.suspension_length,
+            .has_contact = authority_wheel.has_contact,
+        };
+    }
+    const composed = try replicated_world.composeVehicleWheelPoses(projected, .{
+        .attachment_positions = config.vehicle.tuning.wheel_attachment_positions,
+        .radius = config.vehicle.tuning.wheel_radius,
+        .width = config.vehicle.tuning.wheel_width,
+        .suspension_max_length = config.vehicle.tuning.suspension_max_length,
+        .max_steer_radians = config.vehicle.tuning.max_steer_radians,
+    });
+    for (composed, authority_vehicle.state.wheels) |pose, authority_wheel| {
+        for (pose.position, authority_wheel.pose.position) |actual, expected| {
+            try std.testing.expectApproxEqAbs(expected, actual, 0.001);
+        }
+        try std.testing.expect(@abs(quaternionDot(
+            pose.rotation,
+            authority_wheel.pose.rotation,
+        )) > 0.999);
+    }
     var ack_wait: u8 = 0;
     while (placement.inspection().clientDiagnostics().client.last_acknowledged_input.value <
         input_sequence and ack_wait < budgets.ticks_per_snapshot)
     {
+        _ = try placement.player().submitVehicleControl(.{
+            .throttle = 1,
+            .steering = 0.25,
+            .brake = 0,
+            .hand_brake = 0,
+        });
         try placement.lifecycle().tick();
         ack_wait += 1;
     }
@@ -1502,10 +1899,18 @@ test "solo vehicle actions and control use shared authority admission" {
     const draws = placement.presentation().vehicles(0.5);
     try std.testing.expectEqual(@as(usize, 1), draws.len);
     try std.testing.expectEqual(entered.vehicle, draws[0].entity);
+    try std.testing.expect(!std.meta.eql(
+        draws[0].chassis_pose.rotation,
+        draws[0].wheels[0].pose.rotation,
+    ));
+}
+
+fn quaternionDot(a: [4]f32, b: [4]f32) f32 {
+    return a[0] * b[0] + a[1] * b[1] + a[2] * b[2] + a[3] * b[3];
 }
 
 test "host character teardown retains the admitted local participant" {
-    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4305), false);
+    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4305), false, null);
     defer placement.deinit();
     try placement.characters().submit(.{ .spawn = .{
         .request_id = 1,
@@ -1541,7 +1946,7 @@ test "host character teardown retains the admitted local participant" {
 }
 
 test "solo carry collect and drop use shared authority admission" {
-    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4306), false);
+    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4306), false, null);
     defer placement.deinit();
     try placement.characters().submit(.{ .spawn = .{
         .request_id = 1,
@@ -1631,7 +2036,7 @@ test "solo carry collect and drop use shared authority admission" {
 }
 
 test "solo replication remains twenty hertz on the sixty hertz authority clock" {
-    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4303), false);
+    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4303), false, null);
     defer placement.deinit();
     try placement.characters().submit(.{ .spawn = .{
         .request_id = 1,
@@ -1665,6 +2070,7 @@ test "composition transfers one quiescence-checked snapshot source" {
     const composition = try Placement.initComposition(
         std.testing.allocator,
         testConfig(0x4c4f_4304),
+        .{},
     );
     defer composition.placement.deinit();
     const bytes = try composition.snapshot_source.observe(std.testing.allocator);
@@ -1683,6 +2089,7 @@ test "persistence rejects admitted input that has not reached its target tick" {
     const composition = try Placement.initComposition(
         std.testing.allocator,
         testConfig(0x4c4f_4307),
+        .{},
     );
     defer composition.placement.deinit();
     try composition.placement.characters().submit(.{ .spawn = .{
@@ -1724,6 +2131,7 @@ test "failed local authority tick records only successfully completed stages" {
         std.testing.allocator,
         testConfig(0x4c4f_4308),
         true,
+        null,
     );
     defer placement.deinit();
     const completed_before_fault = placement.inspection().clientDiagnostics().authority.tick;
@@ -1783,7 +2191,7 @@ test "npc interpolation clock advances only with npc-bearing snapshots" {
 }
 
 test "ignored snapshots do not advance local interpolation clocks" {
-    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4309), false);
+    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4309), false, null);
     defer placement.deinit();
     try placement.characters().submit(.{ .spawn = .{
         .request_id = 1,

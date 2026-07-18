@@ -124,6 +124,12 @@ pub fn main(init: std.process.Init) !void {
         try verify(init, args[2], args[3], .match_only);
     } else if (std.mem.eql(u8, args[1], "verify-smoke")) {
         try verify(init, args[2], args[3], .altered_evidence);
+    } else if (std.mem.eql(u8, args[1], "verify-incident")) {
+        const capture_path = try std.fs.path.join(
+            init.arena.allocator(),
+            &.{ args[2], "replay/accepted-ingress.icrp" },
+        );
+        try verify(init, capture_path, args[3], .match_only);
     } else {
         printUsage();
         return error.UnknownCommand;
@@ -136,6 +142,7 @@ fn printUsage() void {
         \\  incinerator_replay record-smoke <capture-path> <installed-content-root>
         \\  incinerator_replay verify        <capture-path> <installed-content-root>
         \\  incinerator_replay verify-smoke  <capture-path> <installed-content-root>
+        \\  incinerator_replay verify-incident <run-folder> <installed-content-root>
         \\
     , .{});
 }

@@ -142,6 +142,13 @@ pub fn Feature(
             ) navigation_contract.TraversalValidation {
                 return self.feature.validateNavigationTraversal(source, target);
             }
+
+            pub fn nearestActiveNode(
+                self: *NavigationAccess,
+                position: [3]f32,
+            ) navigation_contract.NearestNodeResolution {
+                return self.feature.resolveNearestNavigationNode(position);
+            }
         };
 
         allocator: std.mem.Allocator,
@@ -522,6 +529,39 @@ pub fn Feature(
                 .ordinal = ordinal,
                 .edge = district.build.navigation_edges[edge_index],
             } };
+        }
+
+        fn resolveNearestNavigationNode(
+            self: *const Self,
+            position: [3]f32,
+        ) navigation_contract.NearestNodeResolution {
+            self.runtime.assertOwnerThread();
+            const coord = district_contract.chunkCoordForWorldPosition(position) catch
+                return .unavailable;
+            const canonical = canonicalNavigationBuild(CanonicalContent, coord) orelse
+                return .unavailable;
+            if (canonical.navigation_node_count == 0) return .unavailable;
+
+            var best: ?navigation_contract.ResolvedNode = null;
+            var best_distance_squared = std.math.inf(f32);
+            for (0..canonical.navigation_node_count) |index| {
+                const resolved = switch (self.resolveNavigationNode(.{
+                    .coord = coord,
+                    .index = @intCast(index),
+                })) {
+                    .ready => |value| value,
+                    .district_inactive => return .district_inactive,
+                    .invalid_reference => return .unavailable,
+                };
+                const dx = resolved.node.position[0] - position[0];
+                const dz = resolved.node.position[2] - position[2];
+                const distance_squared = dx * dx + dz * dz;
+                if (best == null or distance_squared < best_distance_squared) {
+                    best = resolved;
+                    best_distance_squared = distance_squared;
+                }
+            }
+            return .{ .ready = best orelse return .unavailable };
         }
 
         fn validateNavigationTraversal(

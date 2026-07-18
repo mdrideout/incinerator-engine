@@ -58,6 +58,7 @@ pub const Diagnostics = struct {
     reliable_replay_records: u16,
     delivery_receipts: u64,
     reliable_replays: u64,
+    slow_gameplay_consumers_retired: u64,
     accepted_messages: u64,
     rejected_messages: u64,
     malformed_messages: u64,

@@ -9,6 +9,7 @@ const std = @import("std");
 const budgets = @import("session_budgets");
 const identity = @import("session_identity");
 const protocol = @import("session_protocol");
+const combat_presentation = @import("combat_presentation");
 const room = @import("session_room");
 const room_coordinator = @import("room_coordinator");
 const room_ticket = @import("room_ticket");
@@ -52,6 +53,11 @@ pub const Runtime = struct {
     guest_connections: [budgets.max_participants]GuestConnection = @splat(.{}),
     receive_storage: [budgets.max_wire_message_bytes]u8 = undefined,
     encode_storage: [budgets.max_wire_message_bytes]u8 = undefined,
+    combat_feedback: combat_presentation.FeedbackQueue = .{},
+    guest_input_ingress: transport_policy.InputIngressBudget(
+        budgets.max_participants,
+        budgets.max_input_messages_per_tick,
+    ) = .{},
     closed: bool = false,
 
     pub fn create(
@@ -300,6 +306,7 @@ pub const Runtime = struct {
 
     pub fn requestHostMelee(self: *Runtime) !void {
         if (self.client.state != .joined or self.client.pending_melee_action != null) return;
+        if (self.client.ownedVehicle() != null) return;
         try self.host_link.sendFromClient(try self.client.meleeAction(
             self.authority.session().diagnostics().tick +| 1,
         ));
@@ -312,6 +319,10 @@ pub const Runtime = struct {
 
     pub fn roomView(self: *const Runtime) room_coordinator.View {
         return self.coordinator.view();
+    }
+
+    pub fn takeCombatFeedback(self: *Runtime) ?combat_presentation.Feedback {
+        return self.combat_feedback.pop();
     }
 
     pub fn close(self: *Runtime, io: std.Io) !void {
@@ -382,8 +393,10 @@ pub const Runtime = struct {
     }
 
     fn receiveGuestIngress(self: *Runtime, now_unix_seconds: u64) !void {
+        self.guest_input_ingress.beginTick(self.authority.session().diagnostics().tick);
         for (&self.guest_connections, 0..) |*connection, connection_index| {
             if (!connection.transport.isValid()) continue;
+            if (!self.guest_input_ingress.available(connection_index)) continue;
             var count: usize = 0;
             while (count < budgets.inbound_message_capacity) : (count += 1) {
                 const received = try self.network.receive(
@@ -427,6 +440,10 @@ pub const Runtime = struct {
                     message,
                     now_unix_seconds,
                 );
+                if (transport_policy.isClientInputSample(message)) {
+                    std.debug.assert(self.guest_input_ingress.consume(connection_index));
+                    if (!self.guest_input_ingress.available(connection_index)) break;
+                }
             }
         }
     }
@@ -522,6 +539,7 @@ pub const Runtime = struct {
                 );
             }
             while (self.client.takeMeleeActionResult()) |result| {
+                try self.combat_feedback.push(.{ .melee = result });
                 std.debug.print(
                     "S10_LISTEN_HOST_MELEE result={s} damage={d} health={d} killed={}\n",
                     .{
@@ -533,12 +551,14 @@ pub const Runtime = struct {
                 );
             }
             while (self.client.takeRespawnActionResult()) |result| {
+                try self.combat_feedback.push(.{ .respawn = result });
                 std.debug.print(
                     "S10_LISTEN_HOST_RESPAWN result={s} incarnation={d}\n",
                     .{ @tagName(result.disposition), result.incarnation },
                 );
             }
             while (self.client.takeLifeEvent()) |event| {
+                try self.combat_feedback.push(.{ .life = event });
                 std.debug.print(
                     "S10_LISTEN_HOST_LIFE avatar={d}:{d} incarnation={d} state={s} health={d}\n",
                     .{

@@ -66,6 +66,10 @@ pub const Graph = struct {
     npc: *std.Build.Module,
     vitals_contract: *std.Build.Module,
     vitals: *std.Build.Module,
+    npc_encounter_contract: *std.Build.Module,
+    npc_encounter: *std.Build.Module,
+    sandbox_npc_replacement_contract: *std.Build.Module,
+    sandbox_npc_replacement: *std.Build.Module,
     population_contract: *std.Build.Module,
     interaction_feature_contract: *std.Build.Module,
     interaction: *std.Build.Module,
@@ -84,6 +88,7 @@ pub const Graph = struct {
     session_budgets: *std.Build.Module,
     session_identity: *std.Build.Module,
     session_protocol: *std.Build.Module,
+    combat_presentation: *std.Build.Module,
     gameplay_admission: *std.Build.Module,
     snapshot_source: *std.Build.Module,
     session_transport_policy: *std.Build.Module,
@@ -231,12 +236,12 @@ pub fn create(
     );
     const simulation_cohort_options = cohort_options.createModule();
     const network_options = b.addOptions();
-    network_options.addOption(u16, "protocol_revision", 10);
+    network_options.addOption(u16, "protocol_revision", 13);
     network_options.addOption(u64, "build_cohort", networkBuildCohort());
     network_options.addOption(
         u64,
         "content_cohort",
-        std.hash.Wyhash.hash(0x494e_434e, "s10-vitals-sandbox-content-v1"),
+        std.hash.Wyhash.hash(0x494e_434e, "s11-npc-encounter-content-v1"),
     );
     const network_cohort_options = network_options.createModule();
 
@@ -497,6 +502,41 @@ pub fn create(
             .{ .name = "vitals_contract", .module = vitals_contract },
         },
     });
+    const npc_encounter_contract = b.createModule(.{
+        .root_source_file = b.path("src/features/npc_encounter/contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts },
+            .{ .name = "vitals_contract", .module = vitals_contract },
+        },
+    });
+    const npc_encounter = b.createModule(.{
+        .root_source_file = b.path("src/features/npc_encounter/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
+            .{ .name = "vitals_contract", .module = vitals_contract },
+        },
+    });
+    const sandbox_npc_replacement_contract = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_npc_replacement_contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "npc_contract", .module = npc_contract }},
+    });
+    const sandbox_npc_replacement = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_npc_replacement.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
+        },
+    });
     const population_contract = b.createModule(.{
         .root_source_file = b.path("src/features/population/contract.zig"),
         .target = target,
@@ -575,6 +615,9 @@ pub fn create(
             .{ .name = "district_feature_contract", .module = district_feature_contract },
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "vitals_contract", .module = vitals_contract },
+            .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
+            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
             .{ .name = "district_worker_contract", .module = district_worker_contract },
         },
     });
@@ -599,6 +642,7 @@ pub fn create(
             .{ .name = "district_contract", .module = district_contract },
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
             .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract },
         },
@@ -615,6 +659,9 @@ pub fn create(
             .{ .name = "district_feature_contract", .module = district_feature_contract },
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "vitals_contract", .module = vitals_contract },
+            .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
+            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
             .{ .name = "district_contract", .module = district_contract },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts },
@@ -636,7 +683,9 @@ pub fn create(
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "npc_contract", .module = npc_contract },
             .{ .name = "vitals_contract", .module = vitals_contract },
+            .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
             .{ .name = "npc_snapshot_validation", .module = npc_snapshot_validation },
+            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
             .{ .name = "sandbox_navigation", .module = sandbox_navigation },
             .{ .name = "sandbox_replay", .module = sandbox_replay },
@@ -666,6 +715,10 @@ pub fn create(
             .{ .name = "npc_feature", .module = npc },
             .{ .name = "vitals_contract", .module = vitals_contract },
             .{ .name = "vitals_feature", .module = vitals },
+            .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
+            .{ .name = "npc_encounter_feature", .module = npc_encounter },
+            .{ .name = "sandbox_npc_replacement", .module = sandbox_npc_replacement },
+            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
             .{ .name = "district_worker_contract", .module = district_worker_contract },
             .{ .name = "district_replay_loader", .module = district_replay_loader },
             .{ .name = "jolt_physics", .module = jolt_physics },
@@ -694,6 +747,16 @@ pub fn create(
             .{ .name = "session_budgets", .module = session_budgets },
             .{ .name = "session_identity", .module = session_identity },
             .{ .name = "network_cohort_options", .module = network_cohort_options },
+        },
+    });
+    const combat_presentation = b.createModule(.{
+        .root_source_file = b.path("src/session/combat_presentation.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets },
+            .{ .name = "session_identity", .module = session_identity },
+            .{ .name = "session_protocol", .module = session_protocol },
         },
     });
     const gameplay_admission = b.createModule(.{
@@ -772,6 +835,7 @@ pub fn create(
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts },
             .{ .name = "session_budgets", .module = session_budgets },
             .{ .name = "session_identity", .module = session_identity },
             .{ .name = "session_protocol", .module = session_protocol },
@@ -807,11 +871,13 @@ pub fn create(
             .{ .name = "session_budgets", .module = session_budgets },
             .{ .name = "session_identity", .module = session_identity },
             .{ .name = "session_protocol", .module = session_protocol },
+            .{ .name = "combat_presentation", .module = combat_presentation },
             .{ .name = "snapshot_source", .module = snapshot_source },
             .{ .name = "session_local_link", .module = session_local_link },
             .{ .name = "session_client", .module = session_client },
             .{ .name = "replicated_world", .module = replicated_world },
             .{ .name = "session_authority_diagnostics", .module = session_authority_diagnostics },
+            .{ .name = "sandbox_replay", .module = sandbox_replay },
         },
     });
     const session_authority = b.createModule(.{
@@ -830,6 +896,8 @@ pub fn create(
             .{ .name = "district_feature_contract", .module = district_feature_contract },
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
+            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
             .{ .name = "vitals_contract", .module = vitals_contract },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
             .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract },
@@ -840,6 +908,7 @@ pub fn create(
             .{ .name = "snapshot_source", .module = snapshot_source },
             .{ .name = "session_transport_policy", .module = session_transport_policy },
             .{ .name = "session_authority_diagnostics", .module = session_authority_diagnostics },
+            .{ .name = "sandbox_replay", .module = sandbox_replay },
         },
     });
     local_solo_session.addImport("session_authority", session_authority);
@@ -875,6 +944,10 @@ pub fn create(
         .npc = npc,
         .vitals_contract = vitals_contract,
         .vitals = vitals,
+        .npc_encounter_contract = npc_encounter_contract,
+        .npc_encounter = npc_encounter,
+        .sandbox_npc_replacement_contract = sandbox_npc_replacement_contract,
+        .sandbox_npc_replacement = sandbox_npc_replacement,
         .population_contract = population_contract,
         .interaction_feature_contract = interaction_feature_contract,
         .interaction = interaction,
@@ -893,6 +966,7 @@ pub fn create(
         .session_budgets = session_budgets,
         .session_identity = session_identity,
         .session_protocol = session_protocol,
+        .combat_presentation = combat_presentation,
         .gameplay_admission = gameplay_admission,
         .snapshot_source = snapshot_source,
         .session_transport_policy = session_transport_policy,
@@ -920,7 +994,7 @@ fn networkBuildCohort() u64 {
         cohort.gns_revision,
         "authority-60hz",
         "snapshot-20hz",
-        "protocol-v10",
+        "protocol-v12",
     }) |part| fingerprint = std.hash.Wyhash.hash(fingerprint, part);
     return fingerprint;
 }

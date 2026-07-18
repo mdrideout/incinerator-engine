@@ -9,6 +9,9 @@
 - Purpose: narrow automated proof of coordinate-specific district cooking,
   adjacent authored transforms, deterministic dependency identity, catalog
   installation, and multi-district streaming
+- Playable presentation: intentionally insufficient; these triangles do not
+  represent the district's blocking collision, which requires explicit visual
+  proxies until authored collision bindings exist
 
 This fixture is project-owned conformance material. The repository's engine
 license and any separate game license remain intentionally undecided; this

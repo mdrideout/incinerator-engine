@@ -41,14 +41,34 @@ rollback of an already stepped Flecs/Jolt world.
   IDs and cumulative application receipts.
 - [x] The client rejects gaps, applies duplicates idempotently, and preserves
   applied delivery identity across transport loss.
-- [x] Reliable gameplay results retain a bounded 32-record replay ledger until
-  application acknowledgement.
+- [x] At M6 closeout, reliable gameplay results retained a bounded 32-record
+  replay ledger until application acknowledgement; the current amended
+  capacity is recorded below.
 - [x] Reconnect waits for the new `Welcome` application receipt before replay,
   then drains a full ledger over quota-safe ordered batches.
 - [x] Credential rotation keeps only the one predecessor needed until welcome
   confirmation; repeated loss cannot create unbounded credential history.
 - [x] Local typed links, impaired links, and GNS hosts commit authority leases
   only after their respective semantic/transport acceptance point.
+
+### Post-S11 reliable-delivery amendment (2026-07-15)
+
+The 32-record value above is the historical M6 closeout cohort. S11 combat and
+life publication intentionally supersede that capacity without changing M6's
+ownership model:
+
+- the 16-event value limits per-connection wire preparation in one authority
+  tick; it is not a logical gameplay-publication limit;
+- one conservative admitted participant cycle derives 172 possible gameplay
+  facts from gameplay/input admission, already-pending completion families,
+  and the 64-NPC/16-participant life-fact ceiling;
+- the current ledger retains two complete cycles, or 344 records, and an
+  ordered cursor drains it over later quota-safe ticks; and
+- a participant that exhausts the bounded window is retired as a slow consumer
+  without partially publishing its burst or faulting healthy room authority.
+
+Exact 17-message ordered drain, full-ledger reconnect, slow-consumer isolation,
+and one-wire-batch client/presentation FIFO tests fix this amended contract.
 
 ## Durable Ownership
 

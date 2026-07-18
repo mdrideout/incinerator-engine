@@ -17,6 +17,8 @@ const stats_tool = @import("tools/stats_tool.zig");
 const camera_tool = @import("tools/camera_tool.zig");
 const render_tool = @import("tools/render_tool.zig");
 const diagnostics_tool = @import("tools/diagnostics_tool.zig");
+const gameplay_inspector_tool = @import("tools/gameplay_inspector_tool.zig");
+const incident_capture_tool = @import("tools/incident_capture_tool.zig");
 const physics_debug_tool = @import("tools/physics_debug_tool.zig");
 const crate_authoring_tool = @import("tools/crate_authoring_tool.zig");
 const interaction_tool = @import("tools/interaction_tool.zig");
@@ -42,6 +44,8 @@ const default_tools = [_]Tool{
     Tool.init(camera_tool.descriptor),
     Tool.init(render_tool.descriptor),
     Tool.init(diagnostics_tool.descriptor),
+    Tool.init(gameplay_inspector_tool.descriptor),
+    Tool.init(incident_capture_tool.descriptor),
     Tool.init(physics_debug_tool.descriptor),
     Tool.init(crate_authoring_tool.descriptor),
     Tool.init(interaction_tool.descriptor),
@@ -55,6 +59,8 @@ pub const Editor = struct {
     tools: [default_tools.len]Tool = default_tools,
     stats: stats_tool.State = .{},
     crate_authoring: crate_authoring_tool.State = .{},
+    gameplay_inspector: gameplay_inspector_tool.State = .{},
+    incident_capture: incident_capture_tool.State = .{},
 
     /// Initialize the owned editor after the renderer has claimed its window.
     pub fn init(
@@ -134,6 +140,9 @@ pub const Editor = struct {
             framebuffer_scale,
         );
 
+        gameplay_inspector_tool.drawProductHud(&frame.gameplay);
+        incident_capture_tool.drawProductStatus(&frame.incident);
+
         if (!self.visible) {
             drawHiddenHint();
             self.backend.render(cmd, swapchain_texture);
@@ -179,6 +188,14 @@ pub const Editor = struct {
             .camera => camera_tool.draw(frame.camera),
             .render => render_tool.draw(render_settings),
             .diagnostics => diagnostics_tool.draw(&frame.developer),
+            .gameplay_inspector => gameplay_inspector_tool.draw(
+                &self.gameplay_inspector,
+                &frame.gameplay,
+            ),
+            .incident_capture => incident_capture_tool.draw(
+                &self.incident_capture,
+                &frame.incident,
+            ),
             .physics_debug => physics_debug_tool.draw(&frame.visualization),
             .crate_authoring => crate_authoring_tool.draw(
                 &self.crate_authoring,
@@ -283,11 +300,13 @@ test "editor runtime and tool state belong to each value" {
     first.tools[0].toggle();
     first.stats.history_index = 7;
     first.crate_authoring.dirty = true;
+    first.gameplay_inspector.selected = .{ .namespace = 1, .local = 2 };
 
     try std.testing.expect(second.visible);
     try std.testing.expect(second.tools[0].enabled);
     try std.testing.expectEqual(@as(usize, 0), second.stats.history_index);
     try std.testing.expect(!second.crate_authoring.dirty);
+    try std.testing.expect(second.gameplay_inspector.selected == null);
 }
 
 test "owned editor event routing mutates only its receiver" {

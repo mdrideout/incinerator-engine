@@ -29,6 +29,8 @@ pub fn Feature() type {
         events: engine.BoundedQueue(contract.Event, contract.max_events) = .{},
         proposals: [contract.max_pending_commands]contract.DamageProposal = undefined,
         proposal_count: u16 = 0,
+        applied_facts: [contract.max_pending_commands]contract.AppliedDamageFact = undefined,
+        applied_fact_count: u16 = 0,
         proposals_applied: u64 = 0,
         proposals_rejected: u64 = 0,
         deaths: u64 = 0,
@@ -63,8 +65,30 @@ pub fn Feature() type {
             return self.outcomes.pop();
         }
 
+        pub fn peekOutcome(self: *const Self) ?contract.Outcome {
+            return self.outcomes.peek();
+        }
+
+        /// The owner thread must remain exclusive between peek and commit.
+        pub fn commitOutcome(self: *Self, expected: contract.Outcome) !void {
+            const actual = self.outcomes.peek() orelse return error.VitalsOutcomeMissing;
+            if (!std.meta.eql(actual, expected)) return error.VitalsOutcomeCommitMismatch;
+            _ = self.outcomes.pop().?;
+        }
+
         pub fn pollEvent(self: *Self) ?contract.Event {
             return self.events.pop();
+        }
+
+        pub fn peekEvent(self: *const Self) ?contract.Event {
+            return self.events.peek();
+        }
+
+        /// The owner thread must remain exclusive between peek and commit.
+        pub fn commitEvent(self: *Self, expected: contract.Event) !void {
+            const actual = self.events.peek() orelse return error.VitalsEventMissing;
+            if (!std.meta.eql(actual, expected)) return error.VitalsEventCommitMismatch;
+            _ = self.events.pop().?;
         }
 
         pub fn hasPendingCommands(self: *const Self) bool {
@@ -87,6 +111,17 @@ pub fn Feature() type {
                 }
             }
             return null;
+        }
+
+        pub fn copyAppliedDamage(
+            self: *const Self,
+            storage: []contract.AppliedDamageFact,
+        ) ![]const contract.AppliedDamageFact {
+            if (storage.len < self.applied_fact_count) {
+                return error.InsufficientAppliedDamageStorage;
+            }
+            @memcpy(storage[0..self.applied_fact_count], self.applied_facts[0..self.applied_fact_count]);
+            return storage[0..self.applied_fact_count];
         }
 
         pub fn snapshotRecords(
@@ -146,6 +181,7 @@ pub fn Feature() type {
         fn applySystem(raw: *anyopaque, _: *engine.Runtime, context: engine.TickContext) !void {
             const self: *Self = @ptrCast(@alignCast(raw));
             self.proposal_count = 0;
+            self.applied_fact_count = 0;
             while (self.commands.peek()) |queued| {
                 if (queued.eligible_tick > context.tick_index) break;
                 const command = self.commands.pop().?;
@@ -257,6 +293,15 @@ pub fn Feature() type {
                     .correlation = proposal.correlation,
                 } });
             }
+            self.applied_facts[self.applied_fact_count] = .{
+                .source = proposal.source,
+                .target = proposal.target,
+                .authority_tick = tick_index,
+                .applied_amount = outcome.applied_amount,
+                .remaining_health = outcome.remaining_health,
+                .killed = outcome.killed,
+            };
+            self.applied_fact_count += 1;
             try self.pushOutcome(.{ .damage = outcome });
         }
 
@@ -380,7 +425,7 @@ test "same-tick overkill clamps and emits exactly one death" {
     try feature.enqueue(.{ .damage = .{
         .source = second,
         .target = target,
-        .cause = .scripted_npc,
+        .cause = .npc_melee,
         .authority_tick = 2,
         .correlation = 2,
         .base_amount = 70,

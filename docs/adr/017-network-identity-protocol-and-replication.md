@@ -7,16 +7,20 @@
 **Platform:** Apple Silicon macOS architecture proof only
 
 **Implementation:** The bounded identity/codec/full-character-snapshot subset
-was implemented and audited in MP0-MP2 on 2026-07-13. Prediction, delta
-baselines, interest management, accepted-ingress replay, and non-character
-feature projections remain assigned to MP3/MP4.
+was implemented and audited in MP0-MP2 on 2026-07-13. MP3/MP4 subsequently
+completed prediction, delta baselines, interest management, accepted-ingress
+replay, and feature projections. M5/M6/MP6/S10/S11 retain those boundaries
+through embedded/listen/dedicated cohesion, transactional publication, player
+lifecycle, and NPC combat. Protocol revision 13 is current.
+
+**Amended:** 2026-07-15 after the S11 corrective review
 
 ## Context
 
 Incinerator already has persistent logical identities, process-local runtime
-and physics handles, feature-owned typed commands/outcomes, Snapshot V7,
-same-cohort semantic replay, exact content fingerprints, and bounded external
-producer routing. None of those is by itself a multiplayer protocol.
+and physics handles, feature-owned typed commands/outcomes, a canonical durable
+snapshot, same-cohort semantic replay, exact content fingerprints, and bounded
+external producer routing. None of those is by itself a multiplayer protocol.
 
 Remote clients introduce untrusted bytes, connection churn, participant
 ownership, duplicates, loss, reordering, stale input, per-client relevance,
@@ -97,8 +101,8 @@ component replication.
 
 ### Durable, replication, prediction, and replay schemas are distinct
 
-`SnapshotV7` remains a complete canonical durable record. It is not sent as a
-join snapshot or reused as the replication wire schema.
+`SnapshotV11` is the current complete canonical durable record. It is not sent
+as a join snapshot or reused as the replication wire schema.
 
 A replication snapshot is assembled per connection from explicit
 feature-owned records after a completed authority tick. It may be partial,

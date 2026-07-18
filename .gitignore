@@ -19,6 +19,8 @@ zig-out/
 /docgen_tmp/
 .shader-tools/
 .DS_Store
+__pycache__/
+*.py[cod]
 
 # Game engine files
 imgui.ini

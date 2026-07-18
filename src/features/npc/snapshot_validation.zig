@@ -29,8 +29,10 @@ pub fn validateRecords(
         try validateFiniteVector(record.position);
         try validateFiniteVector(record.velocity);
         try (engine.physics.Velocity{ .linear = record.velocity }).validate();
-        if (!std.math.isFinite(record.facing_yaw) or
-            record.facing_yaw != normalizeYaw(record.facing_yaw) or
+        const canonical_facing = engine.transform.normalizeFacingYaw(
+            record.facing_yaw,
+        ) catch return error.NonCanonicalNpcFacing;
+        if (record.facing_yaw != canonical_facing or
             isNegativeZero(record.facing_yaw))
         {
             return error.NonCanonicalNpcFacing;
@@ -72,7 +74,9 @@ pub fn validateRecords(
         }
         switch (record.goal) {
             .hold => {
-                if (record.route.next != null or record.route.patrol_leg != .none) {
+                if (record.route.next != null or record.route.patrol_leg != .none or
+                    record.route.mode != .exact_prefix)
+                {
                     return error.NpcHoldCursorMismatch;
                 }
             },
@@ -81,17 +85,33 @@ pub fn validateRecords(
                 if (record.route.patrol_leg != .none) {
                     return error.NpcNavigateCursorMismatch;
                 }
-                if ((record.route.next == null) !=
-                    navigation.NodeRef.eql(record.route.current, target))
-                {
-                    return error.NpcNavigateCursorMismatch;
+                switch (record.route.mode) {
+                    .exact_prefix => {
+                        if ((record.route.next == null) !=
+                            navigation.NodeRef.eql(record.route.current, target))
+                        {
+                            return error.NpcNavigateCursorMismatch;
+                        }
+                        try verifyActiveRoutePrefix(
+                            navigation_access,
+                            record.route.current,
+                            target,
+                            record.route.next,
+                        );
+                    },
+                    .deferred_rebuild => {
+                        if (record.route.next != null or
+                            navigation.NodeRef.eql(record.route.current, target))
+                        {
+                            return error.NpcNavigateCursorMismatch;
+                        }
+                        try verifyDeferredRoute(
+                            navigation_access,
+                            record.route.current,
+                            target,
+                        );
+                    },
                 }
-                try verifyActiveRoutePrefix(
-                    navigation_access,
-                    record.route.current,
-                    target,
-                    record.route.next,
-                );
             },
             .patrol_between => |patrol| {
                 try requireValidContentNode(navigation_access, patrol.first);
@@ -101,17 +121,33 @@ pub fn validateRecords(
                     .toward_second => patrol.second,
                     .none => return error.NpcPatrolCursorMismatch,
                 };
-                if ((record.route.next == null) !=
-                    navigation.NodeRef.eql(record.route.current, target))
-                {
-                    return error.NpcPatrolCursorMismatch;
+                switch (record.route.mode) {
+                    .exact_prefix => {
+                        if ((record.route.next == null) !=
+                            navigation.NodeRef.eql(record.route.current, target))
+                        {
+                            return error.NpcPatrolCursorMismatch;
+                        }
+                        try verifyActiveRoutePrefix(
+                            navigation_access,
+                            record.route.current,
+                            target,
+                            record.route.next,
+                        );
+                    },
+                    .deferred_rebuild => {
+                        if (record.route.next != null or
+                            navigation.NodeRef.eql(record.route.current, target))
+                        {
+                            return error.NpcPatrolCursorMismatch;
+                        }
+                        try verifyDeferredRoute(
+                            navigation_access,
+                            record.route.current,
+                            target,
+                        );
+                    },
                 }
-                try verifyActiveRoutePrefix(
-                    navigation_access,
-                    record.route.current,
-                    target,
-                    record.route.next,
-                );
             },
         }
     }
@@ -138,6 +174,18 @@ fn verifyActiveRoutePrefix(
     };
     if (!optionalNodeRefEql(expected_next, route.next(0))) {
         return error.NpcPersistedRouteMismatch;
+    }
+}
+
+fn verifyDeferredRoute(
+    access: anytype,
+    start: navigation.NodeRef,
+    target: navigation.NodeRef,
+) !void {
+    switch (try buildRoute(access, start, target)) {
+        .ready, .inactive => {},
+        .invalid_content => return error.NpcPersistedRouteInvalid,
+        .no_path => return error.NpcPersistedGoalUnreachable,
     }
 }
 
@@ -283,14 +331,6 @@ fn ownerRouteNodeValue(
 fn optionalNodeRefEql(a: ?navigation.NodeRef, b: ?navigation.NodeRef) bool {
     if (a == null or b == null) return a == null and b == null;
     return navigation.NodeRef.eql(a.?, b.?);
-}
-
-fn normalizeYaw(yaw: f32) f32 {
-    if (!std.math.isFinite(yaw)) return yaw;
-    const tau: f32 = 2 * std.math.pi;
-    var result = @mod(yaw + std.math.pi, tau) - std.math.pi;
-    if (result == 0) result = 0;
-    return result;
 }
 
 fn isNegativeZero(value: f32) bool {

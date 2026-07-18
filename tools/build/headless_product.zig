@@ -24,6 +24,8 @@ pub fn build(
     const district_feature_contract_module = graph.district_feature_contract;
     const interaction_feature_contract_module = graph.interaction_feature_contract;
     const npc_contract_module = graph.npc_contract;
+    const npc_encounter_contract_module = graph.npc_encounter_contract;
+    const vitals_contract_module = graph.vitals_contract;
     const sandbox_host_contracts_module = graph.sandbox_host_contracts;
     const sandbox_diagnostics_contract_module = graph.sandbox_diagnostics_contract;
     const simulation_snapshot_module = graph.simulation_snapshot;
@@ -51,6 +53,7 @@ pub fn build(
         .imports = &.{
             .{ .name = "headless_config", .module = headless_config_module },
             .{ .name = "headless_content_manifest", .module = graph.headless_content_manifest },
+            .{ .name = "sandbox_district_recipe", .module = graph.sandbox_district_recipe },
         },
     });
     const headless_clock_module = b.createModule(.{
@@ -108,6 +111,8 @@ pub fn build(
             .{ .name = "district_feature_contract", .module = district_feature_contract_module },
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract_module },
             .{ .name = "npc_contract", .module = npc_contract_module },
+            .{ .name = "npc_encounter_contract", .module = npc_encounter_contract_module },
+            .{ .name = "vitals_contract", .module = vitals_contract_module },
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },

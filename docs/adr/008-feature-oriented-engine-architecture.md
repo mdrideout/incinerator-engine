@@ -1,8 +1,8 @@
 # ADR-008: Feature-Oriented Engine Architecture
 
-**Status:** Accepted, implemented, and validated through M3
+**Status:** Accepted and implemented through the post-S11 corrective pass
 **Date:** 2026-07-09
-**Amended:** 2026-07-13
+**Amended:** 2026-07-13; 2026-07-15 after S11 corrective review
 **Decision Maker:** Matt
 
 ## Context
@@ -99,7 +99,7 @@ domain rejection is reported as a typed outcome;
 infrastructure, adapter, and invariant errors put the runtime into a terminal
 fault state that permits diagnostics and teardown but rejects further normal
 ticks, command submission, and persistence. The composition owns the current
-`SnapshotV7` world schema, runtime clock/identity metadata, global identity
+`SnapshotV11` world schema, runtime clock/identity metadata, global identity
 policy, validated cross-feature relationships, and logical district
 reconstruction;
 features own their logical V1 records and feature-specific persisted tuning.
@@ -110,6 +110,13 @@ linking authority, while district, interaction, and NPC restore rebuild
 validated logical ownership without persisting worker or backend handles.
 Any partial link or activation failure rolls back before the candidate world is
 discarded.
+
+The S11 corrective amendment preserves that ownership while adding explicit
+persisted NPC route modes, durable encounter/replacement state, and exact
+transactional headless replacement and restored-combat consumption. It is an
+intentional current-cohort break, not a compatibility reader for `SnapshotV7`.
+The cold product graph declares its vitals and encounter contract roots
+directly; a client-root import cannot satisfy or conceal a headless dependency.
 
 The current zflecs wrapper permits one live engine-owned world per process. A
 shared lease rejects a second owner before entering zflecs and preserves the

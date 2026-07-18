@@ -1,6 +1,8 @@
 # ADR-007: Product, Platform, and Compatibility Scope
 
-**Status:** Accepted, implemented, and amended 2026-07-13 (macOS-only scope)
+**Status:** Accepted and implemented for product/package/platform compatibility;
+the initial network delivery sequence was superseded by ADR-016 through ADR-018
+on 2026-07-13
 
 **Date:** 2026-07-09
 
@@ -14,7 +16,10 @@ The engine started as a learning project and is now being rebuilt around a concr
 
 ### Product and network scope
 
-Incinerator is a game-specific engine for a single-player, GTA-style sandbox first. A future authoritative online/MMO game is an aspiration, not a current delivery commitment.
+At this decision's 2026-07-09 acceptance, Incinerator was scoped as a
+game-specific engine for a single-player, GTA-style sandbox first. An
+authoritative online/MMO game was an aspiration rather than a current delivery
+commitment.
 
 The initial engine preserves only the inexpensive properties that keep that future credible:
 
@@ -24,7 +29,12 @@ The initial engine preserves only the inexpensive properties that keep that futu
 - a headless composition that can later become a server host;
 - commands and events that do not assume input is local.
 
-Replication, prediction, reconciliation, interest management, distributed persistence, account services, and MMO operations remain deferred until an explicit multiplayer vertical slice is approved.
+Replication, prediction, reconciliation, interest management, distributed
+persistence, account services, and MMO operations were deferred until an
+explicit multiplayer vertical slice was approved. ADR-016 through ADR-018
+subsequently accepted that multiplayer-first architecture. MP0-MP6 now
+implement its local/listen/dedicated authority foundation; public services,
+distributed persistence, Steam routing, and MMO operations remain deferred.
 
 The intended future model is an authoritative server, not deterministic peer/client lockstep. Jolt's cross-platform deterministic build option is therefore deliberately `false`. Fixed-rate simulation and stable scheduling remain valuable, but the engine does not promise bitwise-identical physics across architectures or platforms.
 
@@ -100,9 +110,15 @@ Before a future stable engine release, the project may deliberately version a pu
 - optional in-process ImGui editor capabilities in development builds;
 - a server composition only when the multiplayer slice begins.
 
+This list records the initial host sequence. The later accepted topology in
+ADR-016 now has executable embedded, constrained listen, and dedicated
+placements over one authority/session model.
+
 ## Consequences
 
-- Near-term architecture is judged by the single-player slice, not hypothetical MMO scale.
+- The initial local program was judged by its single-player slice rather than
+  hypothetical MMO scale; later multiplayer work is judged by ADR-016 through
+  ADR-019 and the living architecture review.
 - Persistence and presentation boundaries are established early because they are useful now as well as online later.
 - Cross-platform deterministic physics is not a multiplayer prerequisite for the chosen authoritative-server strategy.
 - Platform support is explicitly limited to Apple Silicon macOS. Secondary

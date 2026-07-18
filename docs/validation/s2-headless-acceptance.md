@@ -74,6 +74,15 @@ real adapters and owns cross-feature identity and restore policy.
   tick and chassis/four-wheel extraction. CI validates the report schema and
   lifecycle cleanup, never noisy elapsed-time thresholds.
 
+### Post-S11 corrective amendment (2026-07-15)
+
+The current installed regression also exercises the handbrake and inspects the
+actual shared wheel-pose composition. It requires visible wheel spin and front
+wheel steering at both 240 Hz and 80 Hz rather than treating chassis movement
+as wheel evidence. Exact final-tree markers remain pending in the
+[`post-S11 runtime corrective audit`](post-s11-runtime-corrective-audit.md);
+the historical S2 counts above are intentionally unchanged.
+
 The complete Apple Silicon macOS Debug, ReleaseFast, and editor-enabled Debug
 matrices each pass 179/179 tests. The filtered source-package extraction passes
 16/16 tests and executes the isolated macOS headless graph. Linux/SteamOS and

@@ -29,6 +29,7 @@ pub const ProgramMode = union(enum) {
     s6_streaming_smoke: VisualSmokeConfig,
     s7_interaction_smoke: VisualSmokeConfig,
     s8_population_smoke: VisualSmokeConfig,
+    s11_combat_smoke: VisualSmokeConfig,
     s4_diagnostics_smoke,
     s4_physics_debug_smoke: VisualSmokeConfig,
     s5_authoring_smoke,
@@ -36,7 +37,15 @@ pub const ProgramMode = union(enum) {
     init_failure_smoke,
 };
 
-pub const ProductMode = enum { normal, verify_install };
+pub const ProductMode = union(enum) {
+    normal,
+    verify_install,
+    incident_smoke,
+    incident_benchmark,
+    incident_journey,
+    incident_journey_window,
+    incident_replay: []const u8,
+};
 
 pub const BootstrapProfile = enum { sandbox, s0_smoke, s1_smoke, s2_smoke, s3_smoke };
 
@@ -47,6 +56,7 @@ pub const ScriptedScenario = enum {
     s3_streaming,
     s4_physics_debug,
     s7_interaction,
+    s11_combat,
 };
 
 pub const ContentLayout = enum {
@@ -84,6 +94,7 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
     var s6_streaming_smoke = false;
     var s7_interaction_smoke = false;
     var s8_population_smoke = false;
+    var s11_combat_smoke = false;
     var s4_diagnostics_smoke = false;
     var s4_physics_debug_smoke = false;
     var s5_authoring_smoke = false;
@@ -120,6 +131,9 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
         } else if (std.mem.eql(u8, arg, "--s8-population-smoke")) {
             if (s8_population_smoke) return error.DuplicateArgument;
             s8_population_smoke = true;
+        } else if (std.mem.eql(u8, arg, "--s11-combat-smoke")) {
+            if (s11_combat_smoke) return error.DuplicateArgument;
+            s11_combat_smoke = true;
         } else if (std.mem.eql(u8, arg, "--s4-diagnostics-smoke")) {
             if (s4_diagnostics_smoke) return error.DuplicateArgument;
             s4_diagnostics_smoke = true;
@@ -165,7 +179,7 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
     if (verify_install) {
         if (visual_smoke or s1_visual_smoke or s2_visual_smoke or
             s3_streaming_smoke or s6_streaming_smoke or s7_interaction_smoke or
-            s8_population_smoke or
+            s8_population_smoke or s11_combat_smoke or
             window_lifecycle_smoke or init_failure_smoke or
             s4_diagnostics_smoke or s4_physics_debug_smoke or
             s5_authoring_smoke or save_root_seen or
@@ -182,6 +196,7 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
         @as(u8, @intFromBool(s6_streaming_smoke)) +
         @as(u8, @intFromBool(s7_interaction_smoke)) +
         @as(u8, @intFromBool(s8_population_smoke)) +
+        @as(u8, @intFromBool(s11_combat_smoke)) +
         @as(u8, @intFromBool(s4_diagnostics_smoke)) +
         @as(u8, @intFromBool(s4_physics_debug_smoke)) +
         @as(u8, @intFromBool(s5_authoring_smoke)) +
@@ -194,7 +209,7 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
     }
     if (!visual_smoke and !s1_visual_smoke and !s2_visual_smoke and
         !s3_streaming_smoke and !s6_streaming_smoke and !s7_interaction_smoke and
-        !s8_population_smoke and
+        !s8_population_smoke and !s11_combat_smoke and
         !s4_physics_debug_smoke and
         (frames != null or virtual_render_hz != null))
     {
@@ -220,7 +235,7 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
     }
     if (!visual_smoke and !s1_visual_smoke and !s2_visual_smoke and
         !s3_streaming_smoke and !s6_streaming_smoke and !s7_interaction_smoke and
-        !s8_population_smoke)
+        !s8_population_smoke and !s11_combat_smoke)
     {
         return .normal;
     }
@@ -230,6 +245,8 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
             1_440
         else if (s8_population_smoke)
             3_600
+        else if (s11_combat_smoke)
+            3_840
         else if (s3_streaming_smoke or s6_streaming_smoke or s7_interaction_smoke)
             1_200
         else
@@ -237,7 +254,9 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
         .virtual_render_hz = virtual_render_hz orelse 240,
     };
     try validateSmokeAttemptBound(config);
-    return if (s8_population_smoke)
+    return if (s11_combat_smoke)
+        .{ .s11_combat_smoke = config }
+    else if (s8_population_smoke)
         .{ .s8_population_smoke = config }
     else if (s7_interaction_smoke)
         .{ .s7_interaction_smoke = config }
@@ -255,6 +274,11 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
 
 pub fn parseProductMode(args: anytype) !ProductMode {
     var verify_install = false;
+    var incident_smoke = false;
+    var incident_benchmark = false;
+    var incident_journey = false;
+    var incident_journey_window = false;
+    var incident_replay: ?[]const u8 = null;
     var content_root_seen = false;
     var save_root_seen = false;
     for (args[1..args.len]) |raw_arg| {
@@ -262,6 +286,25 @@ pub fn parseProductMode(args: anytype) !ProductMode {
         if (std.mem.eql(u8, arg, "--verify-install")) {
             if (verify_install) return error.DuplicateArgument;
             verify_install = true;
+        } else if (std.mem.eql(u8, arg, "--incident-smoke")) {
+            if (incident_smoke) return error.DuplicateArgument;
+            incident_smoke = true;
+        } else if (std.mem.eql(u8, arg, "--incident-benchmark")) {
+            if (incident_benchmark) return error.DuplicateArgument;
+            incident_benchmark = true;
+        } else if (std.mem.eql(u8, arg, "--incident-journey")) {
+            if (incident_journey) return error.DuplicateArgument;
+            incident_journey = true;
+        } else if (std.mem.eql(u8, arg, "--incident-journey-window")) {
+            if (incident_journey_window) return error.DuplicateArgument;
+            incident_journey_window = true;
+        } else if (std.mem.startsWith(u8, arg, "--replay-incident=")) {
+            if (incident_replay != null) return error.DuplicateArgument;
+            const path = arg["--replay-incident=".len..];
+            if (!std.fs.path.isAbsolute(path) or path.len == 0) {
+                return error.InvalidIncidentRunPath;
+            }
+            incident_replay = path;
         } else if (std.mem.startsWith(u8, arg, "--content-root=")) {
             if (content_root_seen) return error.DuplicateArgument;
             _ = try content.ContentRootPath.parse(arg["--content-root=".len..]);
@@ -274,8 +317,30 @@ pub fn parseProductMode(args: anytype) !ProductMode {
             return error.UnknownArgument;
         }
     }
-    if (verify_install and save_root_seen) return error.ConflictingProgramModes;
-    return if (verify_install) .verify_install else .normal;
+    if ((verify_install and (save_root_seen or incident_smoke or incident_benchmark or incident_journey or
+        incident_journey_window or incident_replay != null)) or
+        (incident_smoke and (save_root_seen or incident_benchmark or incident_journey or
+            incident_journey_window or incident_replay != null)) or
+        (incident_benchmark and (save_root_seen or incident_journey or
+            incident_journey_window or incident_replay != null)) or
+        (incident_journey and (save_root_seen or incident_journey_window or
+            incident_replay != null)) or
+        (incident_journey_window and (save_root_seen or incident_replay != null)) or
+        (incident_replay != null and save_root_seen)) return error.ConflictingProgramModes;
+    return if (verify_install)
+        .verify_install
+    else if (incident_smoke)
+        .incident_smoke
+    else if (incident_benchmark)
+        .incident_benchmark
+    else if (incident_journey)
+        .incident_journey
+    else if (incident_journey_window)
+        .incident_journey_window
+    else if (incident_replay) |path|
+        .{ .incident_replay = path }
+    else
+        .normal;
 }
 
 pub fn parseContentRootOverride(args: anytype) !?content.ContentRootPath {
@@ -348,6 +413,27 @@ test "product mode accepts only product invocation options" {
     try std.testing.expect((try parseProductMode(&[_][]const u8{"incinerator"})) == .normal);
     try std.testing.expect((try parseProductMode(&[_][]const u8{
         "incinerator",
+        "--incident-smoke",
+    })) == .incident_smoke);
+    try std.testing.expect((try parseProductMode(&[_][]const u8{
+        "incinerator",
+        "--incident-benchmark",
+    })) == .incident_benchmark);
+    try std.testing.expect((try parseProductMode(&[_][]const u8{
+        "incinerator",
+        "--incident-journey",
+    })) == .incident_journey);
+    try std.testing.expect((try parseProductMode(&[_][]const u8{
+        "incinerator",
+        "--incident-journey-window",
+    })) == .incident_journey_window);
+    const replay = try parseProductMode(&[_][]const u8{
+        "incinerator",
+        "--replay-incident=/tmp/incinerator-run",
+    });
+    try std.testing.expectEqualStrings("/tmp/incinerator-run", replay.incident_replay);
+    try std.testing.expect((try parseProductMode(&[_][]const u8{
+        "incinerator",
         "--verify-install",
         "--content-root=/tmp/incinerator-content",
     })) == .verify_install);
@@ -362,6 +448,34 @@ test "product mode accepts only product invocation options" {
     try std.testing.expectError(
         error.UnknownArgument,
         parseProductMode(&[_][]const u8{ "incinerator", "--visual-smoke" }),
+    );
+    try std.testing.expectError(
+        error.ConflictingProgramModes,
+        parseProductMode(&[_][]const u8{
+            "incinerator",
+            "--incident-smoke",
+            "--incident-journey",
+        }),
+    );
+    try std.testing.expectError(
+        error.ConflictingProgramModes,
+        parseProductMode(&[_][]const u8{
+            "incinerator",
+            "--incident-benchmark",
+            "--incident-journey",
+        }),
+    );
+    try std.testing.expectError(
+        error.ConflictingProgramModes,
+        parseProductMode(&[_][]const u8{
+            "incinerator",
+            "--incident-journey",
+            "--incident-journey-window",
+        }),
+    );
+    try std.testing.expectError(
+        error.UnknownArgument,
+        parseProductMode(&[_][]const u8{ "incinerator", "--s11-combat-smoke" }),
     );
 }
 
@@ -435,6 +549,12 @@ test "program mode parsing keeps visual smoke explicit and bounded" {
     });
     try std.testing.expectEqual(@as(u64, 3_600), s8_smoke.s8_population_smoke.frames);
     try std.testing.expectEqual(@as(u32, 240), s8_smoke.s8_population_smoke.virtual_render_hz);
+    const s11_smoke = try parseProgramMode(&[_][]const u8{
+        "incinerator",
+        "--s11-combat-smoke",
+    });
+    try std.testing.expectEqual(@as(u64, 3_840), s11_smoke.s11_combat_smoke.frames);
+    try std.testing.expectEqual(@as(u32, 240), s11_smoke.s11_combat_smoke.virtual_render_hz);
     const window_smoke = try parseProgramMode(&[_][]const u8{
         "incinerator",
         "--window-lifecycle-smoke",
@@ -522,6 +642,22 @@ test "program mode parsing keeps visual smoke explicit and bounded" {
             "incinerator",
             "--s7-interaction-smoke",
             "--s8-population-smoke",
+        }),
+    );
+    try std.testing.expectError(
+        error.ConflictingProgramModes,
+        parseProgramMode(&[_][]const u8{
+            "incinerator",
+            "--s8-population-smoke",
+            "--s11-combat-smoke",
+        }),
+    );
+    try std.testing.expectError(
+        error.DuplicateArgument,
+        parseProgramMode(&[_][]const u8{
+            "incinerator",
+            "--s11-combat-smoke",
+            "--s11-combat-smoke",
         }),
     );
     try std.testing.expectError(

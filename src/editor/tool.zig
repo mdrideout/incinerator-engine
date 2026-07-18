@@ -29,6 +29,7 @@ const developer_profile = @import("developer_profile");
 const developer_visualization = @import("developer_visualization");
 const sandbox_authoring = @import("sandbox_authoring");
 const sandbox_interaction = @import("sandbox_interaction");
+const incident = @import("../engine/incident.zig");
 
 pub const DeveloperSnapshot = developer_diagnostics.Snapshot(sandbox_host.Diagnostics);
 pub const ProfileSpanView = developer_profile.SpanRing(
@@ -114,6 +115,151 @@ pub const InteractionView = struct {
     request_rejections: u64 = 0,
 };
 
+// ============================================================================
+// Gameplay observability views
+// ============================================================================
+
+/// Complete bounded live session cohort plus one retained tombstone cohort.
+/// Generation replacement can temporarily keep both identities observable.
+pub const gameplay_entity_capacity: usize = 176;
+
+pub const GameplayEntityKind = enum {
+    local_player,
+    remote_player,
+    npc,
+    vehicle,
+    carryable,
+};
+
+pub const GameplayLifeState = enum {
+    unknown,
+    alive,
+    dead,
+};
+
+pub const GameplayPresence = enum {
+    unavailable,
+    absent,
+    present,
+};
+
+pub const GameplayRemovalReason = enum {
+    none,
+    relevance,
+    replication_removed,
+    authority_removed,
+    presentation_removed,
+    unknown,
+};
+
+pub const GameplayRelevanceReason = enum {
+    unavailable,
+    excluded,
+    same_district,
+    encounter,
+    proximity_enter,
+    proximity_retained,
+    grace,
+    bounded_world,
+    controlled,
+    held,
+    district_dormant,
+};
+
+pub const GameplayEntityView = struct {
+    entity: engine.gameplay_trace.EntityRef,
+    persistent_id: ?engine.PersistentId = null,
+    kind: GameplayEntityKind,
+    authority_presence: GameplayPresence,
+    replication_presence: GameplayPresence,
+    presentation_presence: GameplayPresence,
+    draw_presence: GameplayPresence,
+    removal_reason: GameplayRemovalReason = .none,
+    removed_tick: u64 = 0,
+    removed_frame: u64 = 0,
+    relevance_included: ?bool = null,
+    relevance_reason: GameplayRelevanceReason = .unavailable,
+    relevance_evaluated_tick: u64 = 0,
+    relevance_baseline_id: u32 = 0,
+    relevance_snapshot_sequence: u32 = 0,
+    relevance_grace_until_tick: u64 = 0,
+    relevance_observer_position: [3]f32 = .{ 0, 0, 0 },
+    relevance_observer_district: [2]i32 = .{ 0, 0 },
+    relevance_owner_district: [2]i32 = .{ 0, 0 },
+    relevance_distance_squared_xz: f32 = 0,
+    relevance_encounter: bool = false,
+    authority_position: [3]f32,
+    presentation_position: [3]f32,
+    velocity: [3]f32 = .{ 0, 0, 0 },
+    facing_yaw: f32 = 0,
+    radius: f32,
+    half_height: f32,
+    health: u16,
+    maximum_health: u16,
+    life_state: GameplayLifeState,
+    encounter_state: u16 = 0,
+    attack_windup: bool = false,
+    target: ?engine.gameplay_trace.EntityRef = null,
+    deadline_tick: u64 = 0,
+    nearest_actor_separation: ?f32 = null,
+};
+
+pub const GameplayActionFeedback = struct {
+    pub const reason_text_capacity: usize = 48;
+
+    sequence: u64 = 0,
+    action: engine.gameplay_trace.Kind = .movement,
+    disposition: engine.gameplay_trace.Disposition = .observed,
+    reason_domain: engine.gameplay_trace.ReasonDomain = .none,
+    reason: u32 = 0,
+    reason_text: [reason_text_capacity]u8 = @splat(0),
+    reason_text_len: u8 = 0,
+    observed_tick: u64 = 0,
+
+    pub fn reasonText(self: *const GameplayActionFeedback) []const u8 {
+        return self.reason_text[0..@min(
+            @as(usize, self.reason_text_len),
+            self.reason_text.len,
+        )];
+    }
+};
+
+/// Immutable per-frame projection assembled by the visual composition. It
+/// contains values only; the editor receives no feature, session, or physics
+/// authority handle.
+pub const GameplayView = struct {
+    authority_tick: u64,
+    presentation_frame: u64,
+    entities: [gameplay_entity_capacity]GameplayEntityView = undefined,
+    entity_count: u8 = 0,
+    local_health: u16 = 0,
+    local_maximum_health: u16 = 0,
+    local_life_state: GameplayLifeState = .unknown,
+    melee_remaining_ticks: u64 = 0,
+    respawn_remaining_ticks: u64 = 0,
+    respawn_instruction_visible: bool = false,
+    local_damage_feedback: bool = false,
+    last_action: GameplayActionFeedback = .{},
+
+    pub fn entitySlice(self: *const GameplayView) []const GameplayEntityView {
+        return self.entities[0..@min(
+            @as(usize, self.entity_count),
+            gameplay_entity_capacity,
+        )];
+    }
+};
+
+pub const GameplayInput = struct {
+    view: *const GameplayView,
+    trace: engine.gameplay_trace.BorrowedView,
+    requests: *engine.gameplay_trace.RequestBuffer,
+};
+
+pub const IncidentInput = struct {
+    view: *const incident.View,
+    requests: *incident.RequestBuffer,
+};
+
 pub const DeveloperInput = struct {
     snapshot: *const DeveloperSnapshot,
     journal: engine.runtime.DiagnosticJournal.BorrowedView,
@@ -148,6 +294,8 @@ pub const FrameInput = struct {
     visualization: VisualizationInput,
     authoring: AuthoringInput,
     interaction: InteractionInput,
+    gameplay: GameplayInput,
+    incident: IncidentInput,
 };
 
 // ============================================================================
@@ -162,6 +310,8 @@ pub const ToolId = enum {
     camera,
     render,
     diagnostics,
+    gameplay_inspector,
+    incident_capture,
     physics_debug,
     crate_authoring,
     interaction,

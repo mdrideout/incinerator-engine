@@ -43,6 +43,15 @@ pub const EdgeResolution = union(enum) {
     invalid_ordinal,
 };
 
+/// Result of projecting an authoritative world position onto the nearest
+/// admitted node in its owning active district. Ties are resolved by node
+/// index so native iteration order can never affect gameplay.
+pub const NearestNodeResolution = union(enum) {
+    ready: ResolvedNode,
+    district_inactive,
+    unavailable,
+};
+
 pub const TraversalValidation = enum {
     valid,
     invalid_source,
@@ -82,6 +91,12 @@ pub fn assertImplementation(comptime NavigationAccess: type) void {
             "validateTraversal",
             .{ *NavigationAccess, NodeRef, NodeRef },
             TraversalValidation,
+        );
+        assertMethod(
+            NavigationAccess,
+            "nearestActiveNode",
+            .{ *NavigationAccess, [3]f32 },
+            NearestNodeResolution,
         );
     }
 }
@@ -130,6 +145,10 @@ const Example = struct {
 
     pub fn validateTraversal(_: *Example, _: NodeRef, _: NodeRef) TraversalValidation {
         return .not_connected;
+    }
+
+    pub fn nearestActiveNode(_: *Example, _: [3]f32) NearestNodeResolution {
+        return .district_inactive;
     }
 };
 

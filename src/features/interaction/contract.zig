@@ -19,8 +19,10 @@ pub const declared_budget = Budget{};
 
 pub const Config = struct {
     collect_range: f32 = 2.5,
-    /// Local-space offset from the carrier pose used for every drop. Keeping
-    /// this fixed makes boundary ownership and replay deterministic.
+    /// Preferred local-space offset from the carrier pose. Boundary placement
+    /// tries deterministic quarter-turn alternatives before using the last
+    /// active district-owned pose, so a held object remains releasable without
+    /// making residency ownership implicit.
     drop_offset: [3]f32 = .{ 0, 0.75, -1.5 },
 
     pub fn validate(self: Config) !void {
@@ -143,6 +145,18 @@ pub const Dropped = struct {
     carryable_id: engine.PersistentId,
     owner: district_contract.ChunkCoord,
     pose: engine.physics.Pose,
+    placement: DropPlacement,
+};
+
+/// Explains the deterministic placement choice without changing the action's
+/// terminal success semantics. The normal configured pose wins; an adjacent
+/// orientation keeps a boundary drop beside the carrier; the last active
+/// world pose is the final invariant-preserving release when the carrier has
+/// already escaped loaded residency.
+pub const DropPlacement = enum {
+    configured_offset,
+    alternate_offset,
+    previous_active_pose,
 };
 
 pub const Outcome = union(enum) {

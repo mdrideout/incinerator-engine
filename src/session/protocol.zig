@@ -183,6 +183,8 @@ pub const Welcome = struct {
     avatar: identity.ReplicatedEntityId,
     avatar_incarnation: u16,
     life_state: AvatarLifeState,
+    melee_ready_tick: u64 = 0,
+    respawn_ready_tick: u64 = 0,
 };
 
 pub const CharacterState = struct {
@@ -197,12 +199,59 @@ pub const CharacterState = struct {
     life_state: AvatarLifeState = .alive,
 };
 
+/// Compact, engine-neutral wheel presentation projected by authority. The
+/// client combines these values with cohort-owned vehicle layout data and the
+/// presented chassis pose; Jolt transforms and solver caches never cross the
+/// session boundary.
+pub const vehicle_wheel_count: usize = 4;
+pub const max_vehicle_wheel_angular_velocity: f32 = 4_096;
+pub const max_vehicle_wheel_steer_angle: f32 = std.math.pi / 2.0;
+pub const max_vehicle_wheel_suspension_length: f32 = 4;
+
+pub const VehicleWheelState = struct {
+    /// Canonical visual spin phase in [0, 2pi). Angular velocity disambiguates
+    /// phase wrapping when a wheel advances more than half a turn between the
+    /// 20 Hz vehicle snapshots.
+    spin_phase: f32 = 0,
+    angular_velocity: f32 = 0,
+    /// Engine convention: positive steers toward +X when the chassis faces -Z.
+    steer_angle: f32 = 0,
+    suspension_length: f32 = 0,
+    has_contact: bool = false,
+
+    pub fn validate(self: VehicleWheelState) !void {
+        try validateFiniteComponents(&[_]f32{
+            self.spin_phase,
+            self.angular_velocity,
+            self.steer_angle,
+            self.suspension_length,
+        });
+        if (self.spin_phase < 0 or self.spin_phase >= std.math.tau or
+            @as(u32, @bitCast(self.spin_phase)) == 0x8000_0000)
+        {
+            return error.NonCanonicalVehicleWheelPhase;
+        }
+        if (@abs(self.angular_velocity) > max_vehicle_wheel_angular_velocity) {
+            return error.VehicleWheelAngularVelocityOutOfRange;
+        }
+        if (@abs(self.steer_angle) >= max_vehicle_wheel_steer_angle) {
+            return error.VehicleWheelSteerAngleOutOfRange;
+        }
+        if (self.suspension_length < 0 or
+            self.suspension_length > max_vehicle_wheel_suspension_length)
+        {
+            return error.InvalidVehicleWheelSuspension;
+        }
+    }
+};
+
 pub const VehicleState = struct {
     entity: identity.ReplicatedEntityId,
     position: [3]f32,
     rotation: [4]f32,
     linear_velocity: [3]f32,
     angular_velocity: [3]f32,
+    wheels: [vehicle_wheel_count]VehicleWheelState = @splat(.{}),
     driver: ?identity.ParticipantId,
 };
 
@@ -226,6 +275,15 @@ pub const AvatarLifeState = enum(u8) {
     dead = 2,
 };
 
+pub const NpcEncounterState = enum(u8) {
+    patrolling = 1,
+    pursuing = 2,
+    attack_windup = 3,
+    attack_recovery = 4,
+    searching = 5,
+    returning = 6,
+};
+
 pub const NpcState = struct {
     entity: identity.ReplicatedEntityId,
     position: [3]f32,
@@ -236,6 +294,10 @@ pub const NpcState = struct {
     health: u16 = 100,
     maximum_health: u16 = 100,
     life_state: AvatarLifeState = .alive,
+    encounter_state: NpcEncounterState = .patrolling,
+    encounter_state_enter_tick: u64 = 0,
+    attack_impact_tick: u64 = 0,
+    attack_ready_tick: u64 = 0,
 };
 
 pub const SnapshotKind = enum(u8) {
@@ -384,6 +446,7 @@ pub const MeleeActionResult = struct {
     applied_damage: u16 = 0,
     remaining_health: u16 = 0,
     killed: bool = false,
+    ready_tick: u64 = 0,
 };
 
 pub const RespawnActionDisposition = enum(u8) {
@@ -401,15 +464,20 @@ pub const RespawnActionResult = struct {
     disposition: RespawnActionDisposition,
     avatar: identity.ReplicatedEntityId = .invalid,
     incarnation: u16,
+    ready_tick: u64 = 0,
 };
 
 pub const LifeEvent = struct {
     avatar: identity.ReplicatedEntityId,
     incarnation: u16,
+    /// Authority ordering stamp used to reconcile reliable events with the
+    /// independently delivered unreliable snapshot lane.
+    authority_tick: u64,
     health: u16,
     maximum_health: u16,
     state: AvatarLifeState,
     instigator: ?identity.ParticipantId = null,
+    respawn_ready_tick: u64 = 0,
 };
 
 pub const Rejection = struct {
@@ -619,6 +687,8 @@ pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
             try encodeReplicatedEntity(&encoder, value.avatar);
             try encoder.u16Value(value.avatar_incarnation);
             try encoder.u8Value(@intFromEnum(value.life_state));
+            try encoder.u64Value(value.melee_ready_tick);
+            try encoder.u64Value(value.respawn_ready_tick);
         },
         .snapshot => |value| try encodeSnapshot(&encoder, value),
         .relevance_baseline => |value| {
@@ -650,21 +720,25 @@ pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
             try encoder.u16Value(value.applied_damage);
             try encoder.u16Value(value.remaining_health);
             try encoder.u8Value(@intFromBool(value.killed));
+            try encoder.u64Value(value.ready_tick);
         },
         .respawn_action_result => |value| {
             try encoder.u32Value(value.sequence.value);
             try encoder.u8Value(@intFromEnum(value.disposition));
             try encodeReplicatedEntity(&encoder, value.avatar);
             try encoder.u16Value(value.incarnation);
+            try encoder.u64Value(value.ready_tick);
         },
         .life_event => |value| {
             try encodeReplicatedEntity(&encoder, value.avatar);
             try encoder.u16Value(value.incarnation);
+            try encoder.u64Value(value.authority_tick);
             try encoder.u16Value(value.health);
             try encoder.u16Value(value.maximum_health);
             try encoder.u8Value(@intFromEnum(value.state));
             try encoder.u8Value(@intFromBool(value.instigator != null));
             if (value.instigator) |instigator| try encodeParticipant(&encoder, instigator);
+            try encoder.u64Value(value.respawn_ready_tick);
         },
         .rejected => |value| {
             try encoder.u8Value(@intFromEnum(value.reason));
@@ -699,6 +773,8 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
             .avatar = try decodeReplicatedEntity(&decoder),
             .avatar_incarnation = try decoder.u16Value(),
             .life_state = try enumFromInt(AvatarLifeState, try decoder.u8Value()),
+            .melee_ready_tick = try decoder.u64Value(),
+            .respawn_ready_tick = try decoder.u64Value(),
         } },
         .snapshot => .{ .snapshot = try decodeSnapshot(&decoder) },
         .relevance_baseline => blk: {
@@ -764,6 +840,7 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
                 1 => true,
                 else => return error.InvalidBoolean,
             },
+            .ready_tick = try decoder.u64Value(),
         } },
         .respawn_action_result => .{ .respawn_action_result = .{
             .sequence = .{ .value = try decoder.u32Value() },
@@ -773,10 +850,12 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
             ) catch return error.InvalidEnum,
             .avatar = try decodeReplicatedEntity(&decoder),
             .incarnation = try decoder.u16Value(),
+            .ready_tick = try decoder.u64Value(),
         } },
         .life_event => .{ .life_event = .{
             .avatar = try decodeReplicatedEntity(&decoder),
             .incarnation = try decoder.u16Value(),
+            .authority_tick = try decoder.u64Value(),
             .health = try decoder.u16Value(),
             .maximum_health = try decoder.u16Value(),
             .state = enumFromInt(
@@ -788,6 +867,7 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
                 1 => try decodeParticipant(&decoder),
                 else => return error.InvalidBoolean,
             },
+            .respawn_ready_tick = try decoder.u64Value(),
         } },
         .rejected => .{ .rejected = .{
             .reason = enumFromInt(
@@ -991,7 +1071,8 @@ pub fn validateServer(message: ServerMessage) !void {
         },
         .life_event => |value| {
             try value.avatar.validate();
-            if (value.incarnation == 0 or value.maximum_health == 0 or
+            if (value.incarnation == 0 or value.authority_tick == 0 or
+                value.maximum_health == 0 or
                 value.health > value.maximum_health)
             {
                 return error.InvalidLifeEvent;
@@ -1187,6 +1268,7 @@ fn validateSnapshot(value: Snapshot) !void {
         try validateProjectionQuaternion(vehicle.rotation);
         try validateFiniteComponents(&vehicle.linear_velocity);
         try validateFiniteComponents(&vehicle.angular_velocity);
+        for (vehicle.wheels) |wheel| try wheel.validate();
     }
     for (value.carryableSlice()) |carryable| {
         try carryable.entity.validate();
@@ -1834,6 +1916,13 @@ fn encodeVehicle(encoder: *Encoder, value: VehicleState) !void {
     for (value.rotation) |component| try encoder.f32Value(component);
     for (value.linear_velocity) |component| try encoder.f32Value(component);
     for (value.angular_velocity) |component| try encoder.f32Value(component);
+    for (value.wheels) |wheel| {
+        try encoder.f32Value(wheel.spin_phase);
+        try encoder.f32Value(wheel.angular_velocity);
+        try encoder.f32Value(wheel.steer_angle);
+        try encoder.f32Value(wheel.suspension_length);
+        try encoder.u8Value(@intFromBool(wheel.has_contact));
+    }
     try encoder.u8Value(@intFromBool(value.driver != null));
     if (value.driver) |driver| try encodeParticipant(encoder, driver);
 }
@@ -1845,12 +1934,26 @@ fn decodeVehicle(decoder: *Decoder) !VehicleState {
         .rotation = undefined,
         .linear_velocity = undefined,
         .angular_velocity = undefined,
+        .wheels = undefined,
         .driver = null,
     };
     for (&value.position) |*component| component.* = try decoder.f32Value();
     for (&value.rotation) |*component| component.* = try decoder.f32Value();
     for (&value.linear_velocity) |*component| component.* = try decoder.f32Value();
     for (&value.angular_velocity) |*component| component.* = try decoder.f32Value();
+    for (&value.wheels) |*wheel| {
+        wheel.* = .{
+            .spin_phase = try decoder.f32Value(),
+            .angular_velocity = try decoder.f32Value(),
+            .steer_angle = try decoder.f32Value(),
+            .suspension_length = try decoder.f32Value(),
+            .has_contact = switch (try decoder.u8Value()) {
+                0 => false,
+                1 => true,
+                else => return error.InvalidBoolean,
+            },
+        };
+    }
     value.driver = switch (try decoder.u8Value()) {
         0 => null,
         1 => try decodeParticipant(decoder),
@@ -1903,6 +2006,10 @@ fn encodeNpc(encoder: *Encoder, value: NpcState) !void {
     try encoder.u16Value(value.health);
     try encoder.u16Value(value.maximum_health);
     try encoder.u8Value(@intFromEnum(value.life_state));
+    try encoder.u8Value(@intFromEnum(value.encounter_state));
+    try encoder.u64Value(value.encounter_state_enter_tick);
+    try encoder.u64Value(value.attack_impact_tick);
+    try encoder.u64Value(value.attack_ready_tick);
 }
 
 fn decodeNpc(decoder: *Decoder) !NpcState {
@@ -1916,6 +2023,10 @@ fn decodeNpc(decoder: *Decoder) !NpcState {
         .health = 0,
         .maximum_health = 0,
         .life_state = undefined,
+        .encounter_state = undefined,
+        .encounter_state_enter_tick = 0,
+        .attack_impact_tick = 0,
+        .attack_ready_tick = 0,
     };
     for (&value.position) |*component| component.* = try decoder.f32Value();
     for (&value.velocity) |*component| component.* = try decoder.f32Value();
@@ -1931,6 +2042,13 @@ fn decodeNpc(decoder: *Decoder) !NpcState {
         AvatarLifeState,
         try decoder.u8Value(),
     ) catch return error.InvalidEnum;
+    value.encounter_state = enumFromInt(
+        NpcEncounterState,
+        try decoder.u8Value(),
+    ) catch return error.InvalidEnum;
+    value.encounter_state_enter_tick = try decoder.u64Value();
+    value.attack_impact_tick = try decoder.u64Value();
+    value.attack_ready_tick = try decoder.u64Value();
     return value;
 }
 
@@ -2136,6 +2254,16 @@ test "snapshot round trips at the validation ceiling" {
             .angular_velocity = .{ 0, 0, 0 },
             .driver = if (index == 0) .{ .index = 1, .generation = 1 } else null,
         };
+        for (&vehicle.wheels, 0..) |*wheel, wheel_index| {
+            wheel.* = .{
+                .spin_phase = @as(f32, @floatFromInt(wheel_index)) * 0.75,
+                .angular_velocity = @as(f32, @floatFromInt(wheel_index + 1)) * 8,
+                .steer_angle = if (wheel_index < 2) 0.2 else 0,
+                .suspension_length = 0.2 +
+                    @as(f32, @floatFromInt(wheel_index)) * 0.05,
+                .has_contact = wheel_index % 2 == 0,
+            };
+        }
     }
     for (snapshot.carryables[0..snapshot.carryable_count], 0..) |*carryable, index| {
         carryable.* = .{
@@ -2316,6 +2444,43 @@ test "snapshot validation rejects zero sequence and invalid physical projection"
     };
     try std.testing.expectError(
         error.DegenerateQuaternion,
+        validateServer(.{ .snapshot = snapshot }),
+    );
+
+    snapshot.vehicles[0].rotation = .{ 0, 0, 0, 1 };
+    snapshot.vehicles[0].wheels[0].spin_phase = std.math.tau;
+    try std.testing.expectError(
+        error.NonCanonicalVehicleWheelPhase,
+        validateServer(.{ .snapshot = snapshot }),
+    );
+    try std.testing.expectError(
+        error.NonCanonicalVehicleWheelPhase,
+        encodeServer(.{ .snapshot = snapshot }, &storage),
+    );
+    snapshot.vehicles[0].wheels[0].spin_phase = 0;
+    snapshot.vehicles[0].wheels[0].suspension_length = -0.01;
+    try std.testing.expectError(
+        error.InvalidVehicleWheelSuspension,
+        validateServer(.{ .snapshot = snapshot }),
+    );
+    snapshot.vehicles[0].wheels[0].suspension_length = 0;
+    snapshot.vehicles[0].wheels[0].angular_velocity =
+        max_vehicle_wheel_angular_velocity + 1;
+    try std.testing.expectError(
+        error.VehicleWheelAngularVelocityOutOfRange,
+        validateServer(.{ .snapshot = snapshot }),
+    );
+    snapshot.vehicles[0].wheels[0].angular_velocity = 0;
+    snapshot.vehicles[0].wheels[0].steer_angle = max_vehicle_wheel_steer_angle;
+    try std.testing.expectError(
+        error.VehicleWheelSteerAngleOutOfRange,
+        validateServer(.{ .snapshot = snapshot }),
+    );
+    snapshot.vehicles[0].wheels[0].steer_angle = 0;
+    snapshot.vehicles[0].wheels[0].suspension_length =
+        max_vehicle_wheel_suspension_length + 1;
+    try std.testing.expectError(
+        error.InvalidVehicleWheelSuspension,
         validateServer(.{ .snapshot = snapshot }),
     );
 
@@ -2534,6 +2699,13 @@ test "acknowledged delta materializes updates removals and retained NPC state" {
         .angular_velocity = .{ 0, 0, 0 },
         .driver = null,
     };
+    current.vehicles[0].wheels[0] = .{
+        .spin_phase = 5.75,
+        .angular_velocity = 72,
+        .steer_angle = 0.35,
+        .suspension_length = 0.27,
+        .has_contact = true,
+    };
     const delta = try makeDelta(base, current, false);
     try std.testing.expectEqual(SnapshotKind.delta, delta.kind);
     try std.testing.expectEqual(@as(u8, 1), delta.removed_character_count);
@@ -2542,6 +2714,7 @@ test "acknowledged delta materializes updates removals and retained NPC state" {
     const materialized = try materializeDelta(base, delta);
     try std.testing.expectEqual(@as(u8, 0), materialized.character_count);
     try std.testing.expectEqual(@as(u8, 1), materialized.vehicle_count);
+    try std.testing.expectEqualDeep(current.vehicles[0], materialized.vehicles[0]);
     try std.testing.expectEqual(@as(u8, 1), materialized.npc_count);
     try std.testing.expectEqual(current.sequence, materialized.sequence);
 }
@@ -2635,6 +2808,7 @@ test "melee respawn and life messages preserve avatar incarnation" {
     const death = ServerMessage{ .life_event = .{
         .avatar = .{ .index = 4, .generation = 7 },
         .incarnation = 7,
+        .authority_tick = 19,
         .health = 0,
         .maximum_health = 100,
         .state = .dead,

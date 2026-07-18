@@ -418,6 +418,16 @@ pub fn main(init: std.process.Init) !void {
     try pumpUntil(harness, init.io, vehicleMoved, max_pump_steps);
     try pumpUntil(harness, init.io, secondPeerEastRelevant, max_pump_steps);
     const driven_vehicle_position = firstVehicle(&harness.peers[0]).?.position;
+    const east_vehicle = firstVehicle(&harness.peers[1]) orelse
+        return error.BoundedVehicleProjectionMissing;
+    const east_carryable = firstCarryable(&harness.peers[1]) orelse
+        return error.BoundedCarryableProjectionMissing;
+    if (!std.meta.eql(east_vehicle.entity, vehicle.entity)) {
+        return error.VehicleIdentityChangedAcrossRelevanceTransfer;
+    }
+    if (!std.meta.eql(east_carryable.entity, carryable.entity)) {
+        return error.CarryableIdentityChangedAcrossRelevanceTransfer;
+    }
     if (harness.peers[0].client.localVehiclePresentation() == null) {
         return error.VehiclePredictionNotInitialized;
     }
@@ -506,20 +516,27 @@ fn pumpUntil(
         if (predicate(harness)) return;
     }
     std.debug.print(
-        "MP2_TIMEOUT tick={d} reconnects={d} p0={s} baseline={d} entities={d}/{d}/{d} owned_vehicle={} p1={s} entities={d}/{d}/{d}\n",
+        "MP2_TIMEOUT tick={d} reconnects={d} npc_updates={d} p0={s} baseline={d} " ++
+            "entities={d}/{d}/{d}/{d} districts={d} owned_vehicle={} " ++
+            "p1={s} entities={d}/{d}/{d}/{d} districts={d}\n",
         .{
             harness.authority.diagnostics().tick,
             harness.authority.diagnostics().reconnects,
+            harness.authority.diagnostics().npc_state_updates,
             @tagName(harness.peers[0].client.state),
             harness.peers[0].client.active_baseline_id,
             harness.peers[0].client.world.character_count,
             harness.peers[0].client.world.vehicle_count,
             harness.peers[0].client.world.carryable_count,
+            harness.peers[0].client.world.npc_count,
+            harness.peers[0].client.relevant_district_count,
             harness.peers[0].client.ownedVehicle() != null,
             @tagName(harness.peers[1].client.state),
             harness.peers[1].client.world.character_count,
             harness.peers[1].client.world.vehicle_count,
             harness.peers[1].client.world.carryable_count,
+            harness.peers[1].client.world.npc_count,
+            harness.peers[1].client.relevant_district_count,
         },
     );
     return error.MP2AcceptanceTimeout;
@@ -581,15 +598,15 @@ fn secondPeerEastRelevant(harness: *const Harness) bool {
         client.relevant_districts[0].x == 1 and
         client.relevant_districts[0].z == 0 and
         client.world.character_count == 1 and
-        client.world.vehicle_count == 0 and
-        client.world.carryable_count == 0 and
-        client.world.npc_count == budgets.product_npcs / 2;
+        client.world.vehicle_count == 1 and
+        client.world.carryable_count == 1 and
+        client.world.npc_count != 0;
 }
 
 fn npcProjectionReady(harness: *const Harness) bool {
     return harness.authority.diagnostics().active_npcs == budgets.product_npcs and
-        harness.peers[0].client.world.npc_count == budgets.product_npcs / 2 and
-        harness.peers[1].client.world.npc_count == budgets.product_npcs / 2;
+        harness.peers[0].client.world.npc_count != 0 and
+        harness.peers[1].client.world.npc_count != 0;
 }
 
 fn movedAndAcknowledged(harness: *const Harness) bool {

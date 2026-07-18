@@ -105,6 +105,7 @@ pub const Phase = enum {
     reading,
     cancelling_content,
     content_ready,
+    prefetched,
     request_submitted,
     request_submitted_cancel,
     loading,
@@ -180,6 +181,7 @@ const StateTag = enum {
     reading,
     cancelling_content,
     content_ready,
+    prefetched,
     request_submitted,
     request_submitted_cancel,
     loading,
@@ -194,6 +196,7 @@ const StreamState = union(StateTag) {
     reading: Reading,
     cancelling_content: Reading,
     content_ready: Reading,
+    prefetched: Reading,
     request_submitted: Submitted,
     request_submitted_cancel: Submitted,
     loading: Bound,
@@ -354,12 +357,13 @@ const State = struct {
             const slot = &self.slots[slot_index];
             if (!slot.wantsContent()) continue;
             switch (slot.state) {
-                .content_ready => {
+                .prefetched => {
                     if (!slot.authority_proximity.inside) continue;
                     if (self.logicalTransitionInFlight()) continue;
                     try self.submitPrepared(authority, frame_index, slot_index);
                     return;
                 },
+                .content_ready => {},
                 .idle => {
                     if (self.content_owner != null) continue;
                     try self.beginContentRequest(authority, frame_index, slot_index);
@@ -529,6 +533,13 @@ const State = struct {
                     ready.generation,
                 );
             },
+            .prefetched => |ready| try self.rejectReserved(
+                authority,
+                frame_index,
+                slot_index,
+                ready.scene,
+                ready.generation,
+            ),
             .request_submitted => |submitted| {
                 self.clearPendingScene(slot_index);
                 slot.state = .{ .request_submitted_cancel = submitted };
@@ -588,7 +599,7 @@ const State = struct {
         if (slot.prefetch_proximity.inside) switch (slot.state) {
             // No logical command or ticket exists yet. Keep the warmed bytes
             // while prediction still wants them, but do not submit them.
-            .reading, .content_ready => return,
+            .reading, .content_ready, .prefetched => return,
             else => {},
         };
         try self.requestDeparture(authority, frame_index, slot_index);
@@ -637,10 +648,14 @@ const State = struct {
     ) !void {
         const slot = &self.slots[slot_index];
         const pending = if (slot.pending_scene) |*scene| scene else return;
+        const prefetched_generation: ?u64 = switch (slot.state) {
+            .content_ready => |value| value.generation,
+            else => null,
+        };
         const scene_handle = switch (slot.state) {
             .request_submitted => |value| value.scene,
             .loading, .active => |value| value.scene,
-            .content_ready => return,
+            .content_ready => |value| value.scene,
             else => return error.DistrictPendingSceneStateMismatch,
         };
         var upload_plan = try district_scene_adapter.build(pending.view());
@@ -653,6 +668,12 @@ const State = struct {
         )) return;
         pending.deinit();
         slot.pending_scene = null;
+        if (prefetched_generation) |generation| {
+            slot.state = .{ .prefetched = .{
+                .scene = scene_handle,
+                .generation = generation,
+            } };
+        }
     }
 
     fn submitPrepared(
@@ -663,13 +684,12 @@ const State = struct {
     ) !void {
         const slot = &self.slots[slot_index];
         const ready = switch (slot.state) {
-            .content_ready => |value| value,
+            .prefetched => |value| value,
             else => return error.DistrictPreparedSceneStateMismatch,
         };
-        const pending = if (slot.pending_scene) |*scene| scene else return error.DistrictPreparedSceneMissing;
+        if (slot.pending_scene != null) return error.DistrictPreparedSceneOwnershipMismatch;
         if (authority.state(slot.coord) != null) return error.DistrictLogicalStateMismatch;
         const request_id = try takeMonotonicId(&self.next_request_id);
-        var upload_plan = try district_scene_adapter.build(pending.view());
         try authority.submit(.{ .request_load = .{
             .request_id = request_id,
             .coord = slot.coord,
@@ -689,15 +709,6 @@ const State = struct {
             engine.diagnostic_contracts.codes.district_stream_logical_submitted,
             null,
         );
-        if (!try self.stageUpload(
-            authority,
-            frame_index,
-            slot_index,
-            ready.scene,
-            &upload_plan,
-        )) return;
-        pending.deinit();
-        slot.pending_scene = null;
     }
 
     fn pumpContent(
@@ -1185,20 +1196,26 @@ pub const Owner = opaque {
         errdefer state.registry.deinit();
 
         for (&state.slots, sandbox_recipe.presentation_policies) |*stream_slot, policy| {
-            const proximity_config = district_presentation.ProximityConfig{
+            const prefetch_config = district_presentation.ProximityConfig{
                 .center_xz = policy.center_xz,
                 .half_extent_xz = policy.half_extent_xz,
-                .load_margin = policy.load_margin,
-                .unload_margin = policy.unload_margin,
+                .load_margin = policy.prefetch_load_margin,
+                .unload_margin = policy.prefetch_unload_margin,
+            };
+            const authority_config = district_presentation.ProximityConfig{
+                .center_xz = policy.center_xz,
+                .half_extent_xz = policy.half_extent_xz,
+                .load_margin = policy.authority_load_margin,
+                .unload_margin = policy.authority_unload_margin,
             };
             stream_slot.* = .{
                 .coord = policy.coord,
                 .presentation = Presentation.init(&state.registry),
                 .prefetch_proximity = try district_presentation.ProximityHysteresis.init(
-                    proximity_config,
+                    prefetch_config,
                 ),
                 .authority_proximity = try district_presentation.ProximityHysteresis.init(
-                    proximity_config,
+                    authority_config,
                 ),
             };
         }
@@ -1353,6 +1370,11 @@ pub const Owner = opaque {
         return catalog.cohortFingerprint();
     }
 
+    pub fn contentCohort(self: *Owner) !district_content_catalog.ContentCohort {
+        const catalog = if (ownerState(self).catalog) |*value| value else return error.DistrictCatalogMissing;
+        return catalog.contentCohort();
+    }
+
     pub fn slot(self: *Owner, slot_index: usize) !SlotView {
         const source = try self.checkedSlotConst(slot_index);
         return slotView(source);
@@ -1396,6 +1418,29 @@ pub const Owner = opaque {
         const slot_index = ownerState(self).slotIndexForCoord(coord) orelse
             return error.DistrictPresentationSlotMissing;
         return ownerState(self).slots[slot_index].presentation.resolve(ticket, scene);
+    }
+
+    /// Resolve an already resident authored scene before logical district
+    /// activation. The caller may draw decoration only; collision proxies and
+    /// authority extraction remain gated by the district feature ticket.
+    pub fn prefetchedVisual(
+        self: *Owner,
+        slot_index: usize,
+    ) !?district_gpu_registry.SdlSceneView {
+        const state = ownerState(self);
+        const stream_slot = try self.checkedSlotConst(slot_index);
+        switch (stream_slot.state) {
+            .prefetched,
+            .request_submitted,
+            .request_submitted_cancel,
+            .loading,
+            .cancelling_logical,
+            => {},
+            else => return null,
+        }
+        const scene = sceneHandle(stream_slot.state) orelse return null;
+        if (try state.registry.residency(scene) != .resident) return null;
+        return try state.registry.resolve(scene);
     }
 
     pub fn sceneResidency(
@@ -1470,6 +1515,7 @@ pub const Owner = opaque {
                     .reading => .reading,
                     .cancelling_content => .cancelling_content,
                     .content_ready => .content_ready,
+                    .prefetched => .prefetched,
                     .request_submitted => .request_submitted,
                     .request_submitted_cancel => .request_submitted_cancel,
                     .loading => .loading,
@@ -1513,7 +1559,7 @@ fn ensureOperationalPhase(teardown_prepared: bool) !void {
 fn sceneHandle(state: StreamState) ?engine.rendering.SceneHandle {
     return switch (state) {
         .idle => null,
-        .reading, .cancelling_content, .content_ready => |value| value.scene,
+        .reading, .cancelling_content, .content_ready, .prefetched => |value| value.scene,
         .request_submitted, .request_submitted_cancel => |value| value.scene,
         .loading, .active => |value| value.scene,
         .cancelling_logical => |value| value.bound.scene,
@@ -1530,6 +1576,7 @@ fn slotView(source: *const Slot) SlotView {
             .reading => .reading,
             .cancelling_content => .cancelling_content,
             .content_ready => .content_ready,
+            .prefetched => .prefetched,
             .request_submitted => .request_submitted,
             .request_submitted_cancel => .request_submitted_cancel,
             .loading => .loading,
@@ -1547,7 +1594,7 @@ fn slotView(source: *const Slot) SlotView {
     };
     switch (source.state) {
         .idle => {},
-        .reading, .cancelling_content, .content_ready => |value| {
+        .reading, .cancelling_content, .content_ready, .prefetched => |value| {
             result.content_generation = value.generation;
         },
         .request_submitted, .request_submitted_cancel => |value| {
@@ -1662,6 +1709,33 @@ test "monotonic district stream identifiers reject invalid and exhausted state" 
     try std.testing.expectError(error.DistrictSequenceExhausted, takeMonotonicId(&invalid));
     var exhausted: u64 = std.math.maxInt(u64);
     try std.testing.expectError(error.DistrictSequenceExhausted, takeMonotonicId(&exhausted));
+}
+
+test "adjacent visual prefetch enters before authority residency" {
+    const east = sandbox_recipe.presentation_policies[east_slot_index];
+    var prefetch = try district_presentation.ProximityHysteresis.init(.{
+        .center_xz = east.center_xz,
+        .half_extent_xz = east.half_extent_xz,
+        .load_margin = east.prefetch_load_margin,
+        .unload_margin = east.prefetch_unload_margin,
+    });
+    var authority = try district_presentation.ProximityHysteresis.init(.{
+        .center_xz = east.center_xz,
+        .half_extent_xz = east.half_extent_xz,
+        .load_margin = east.authority_load_margin,
+        .unload_margin = east.authority_unload_margin,
+    });
+    const west_center = sandbox_recipe.presentation_policies[west_slot_index].center_xz;
+    try std.testing.expectEqual(
+        district_presentation.ProximityAction.enter,
+        try prefetch.observe(west_center),
+    );
+    try std.testing.expectEqual(
+        district_presentation.ProximityAction.none,
+        try authority.observe(west_center),
+    );
+    try std.testing.expect(prefetch.inside);
+    try std.testing.expect(!authority.inside);
 }
 
 test "only bounded GPU pressure is a retryable district stage failure" {

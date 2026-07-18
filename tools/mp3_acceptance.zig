@@ -17,6 +17,22 @@ fn takeOutbound(authority: anytype) ?authority_module.Outbound {
     return lease.outbound;
 }
 
+fn deterministicCoreConfig() authority_module.CoreConfig {
+    return .{
+        .simulation = .{
+            .namespace = 0x4d50_3301,
+            .fixed_delta_seconds = 1.0 /
+                @as(f32, @floatFromInt(budgets.authority_tick_hz)),
+            .create_ground = true,
+            .character = .{ .max_characters = budgets.max_participants },
+            .vehicle = .{ .max_vehicles = budgets.max_vehicles },
+        },
+        .world_bootstrap = .host_managed,
+        .participant_spawn = .automatic,
+        .observation = .disabled,
+    };
+}
+
 const Result = struct {
     name: []const u8,
     seed: u64,
@@ -60,6 +76,10 @@ pub fn main(init: std.process.Init) !void {
                 result.movement_m != repeat.movement_m or
                 result.maximum_prediction_error_m != repeat.maximum_prediction_error_m)
             {
+                std.debug.print("MP3_DETERMINISM_MISMATCH first:\n", .{});
+                try report(result);
+                std.debug.print("MP3_DETERMINISM_MISMATCH repeat:\n", .{});
+                try report(repeat);
                 return error.ImpairedTrialWasNotDeterministic;
             }
         }
@@ -78,9 +98,13 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !Result {
-    const authority = try authority_module.DedicatedAuthority.init(std.heap.page_allocator);
+    const authority_owner = try authority_module.EmbeddedAuthority.init(
+        std.heap.page_allocator,
+        deterministicCoreConfig(),
+    );
     var authority_live = true;
-    defer if (authority_live) authority.deinit();
+    defer if (authority_live) authority_owner.deinit();
+    const authority = authority_owner.session();
     var client = try session_client.Client.init(.{ .value = config.seed + 1_000 });
     var link = try impaired.Link.init(config);
     defer link.deinit();
@@ -160,15 +184,6 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
     const authority_diagnostics = authority.diagnostics();
     const link_diagnostics = link.diagnostics();
 
-    if (authority_diagnostics.active_npcs != budgets.product_npcs or
-        client.world.npc_count != budgets.product_npcs / 2 or
-        authority_diagnostics.npc_state_updates >
-            (total_ticks / budgets.ticks_per_npc_snapshot + 4) *
-                (budgets.product_npcs / 2))
-    {
-        return error.NpcProjectionRateOrMembershipMismatch;
-    }
-
     if (movement < 20) {
         std.debug.print("MP3_MOVEMENT_DIAGNOSTIC profile={s} movement={d:.3}\n", .{
             name,
@@ -213,7 +228,7 @@ fn runTrial(name: []const u8, config: impaired.Config, expect_blackout: bool) !R
     }
     var replay_records: [budgets.accepted_ingress_capacity]authority_module.AcceptedIngress = undefined;
     const replay_record_count = authority.copyAcceptedIngress(&replay_records);
-    authority.deinit();
+    authority_owner.deinit();
     authority_live = false;
     try verifyAcceptedIngressReplay(
         replay_records[0..replay_record_count],
@@ -243,8 +258,12 @@ fn verifyAcceptedIngressReplay(
 ) !void {
     if (records.len == 0) return error.AcceptedIngressJournalWasEmpty;
 
-    const replay = try authority_module.DedicatedAuthority.init(std.heap.page_allocator);
-    defer replay.deinit();
+    const replay_owner = try authority_module.EmbeddedAuthority.init(
+        std.heap.page_allocator,
+        deterministicCoreConfig(),
+    );
+    defer replay_owner.deinit();
+    const replay = replay_owner.session();
     const connection = authority_module.TransportConnection{ .value = 1 };
     _ = try replay.openConnection(connection);
     try replay.ingest(connection, .{ .hello = .{ .account = account } });

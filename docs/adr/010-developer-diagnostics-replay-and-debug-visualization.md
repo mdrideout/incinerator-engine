@@ -1,9 +1,9 @@
 # ADR-010: Developer Diagnostics, Replay, and Debug Visualization
 
-**Status:** Accepted, implemented, and validated through M5
+**Status:** Accepted and implemented through the post-S11 corrective pass
 **Date:** 2026-07-13
 **Amended:** 2026-07-13 after M3 bounded-authority completion; 2026-07-14 after
-M5 client/authority cohesion
+M5 client/authority cohesion; 2026-07-15 after S11 streamed-route correction
 **Decision Maker:** Matt
 
 **M5 amendment (2026-07-14):** the developer snapshot schema advances to
@@ -107,10 +107,15 @@ Jolt solver/contact/vehicle caches, world construction parameters, pending
 commands, and active asynchronous generations. A mid-run capture request at a
 non-replayable boundary returns a structured `not_replayable_boundary` result.
 
-The current same-cohort contract uses `SnapshotV7`, replay schema cohort 5,
-and the canonical catalog content cohort. The same exclusion of opaque Jolt,
-pending queue, asynchronous generation, and presentation state still applies;
-no older replay or snapshot cohort is accepted.
+The current same-cohort contract uses `SnapshotV11`, replay schema cohort 10,
+`world-config-v5`, and the canonical catalog content cohort. Snapshot V11 adds
+explicit exact-prefix/deferred-rebuild NPC route meaning so inactive streamed
+content cannot manufacture goal completion. Replay cohorts 9 and 10 add the
+authority-owned vitals and NPC-replacement orchestration ingress required to
+replay death and repopulation without mutating digested state outside the
+recorded command spine. The same exclusion of opaque Jolt, pending queue,
+asynchronous generation, and presentation state still applies; no older
+replay or snapshot cohort is accepted.
 
 The build graph provides one generated simulation-cohort module containing
 the exact dependency revisions, schema/schedule cohorts, Jolt flags/workers,

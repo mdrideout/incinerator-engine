@@ -14,6 +14,9 @@ const vehicles = @import("vehicle_contract");
 const districts = @import("district_feature_contract");
 const interactions = @import("interaction_feature_contract");
 const npcs = @import("npc_contract");
+const vitals = @import("vitals_contract");
+const npc_encounters = @import("npc_encounter_contract");
+const npc_replacements = @import("sandbox_npc_replacement_contract");
 const district_contract = @import("district_contract");
 const sandbox_recipe = @import("sandbox_district_recipe");
 const sandbox_host_contracts = @import("sandbox_host_contracts");
@@ -27,7 +30,7 @@ pub const DigestCategory = replay.Category;
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'R', 'P', 'L', 'A', 'Y' };
 pub const format_version: u16 = 1;
-pub const schema_cohort: u16 = 5;
+pub const schema_cohort: u16 = 10;
 pub const header_size: usize = 64;
 pub const integrity_size: usize = @sizeOf(Digest);
 pub const max_envelope_bytes: usize = 8 * 1024 * 1024;
@@ -261,6 +264,7 @@ pub const WorldConfig = struct {
     vehicle: vehicles.VehicleConfigV1,
     interaction: interactions.InteractionConfigV1,
     npc: npcs.NpcConfigV1,
+    npc_encounter: npc_encounters.ConfigV1,
     ground: ?StaticBox = default_ground,
     block: ?StaticBox = null,
 
@@ -272,6 +276,7 @@ pub const WorldConfig = struct {
         vehicle: vehicles.Config,
         interaction: interactions.Config,
         npc: npcs.Config,
+        npc_encounter: npc_encounters.Config,
         create_ground: bool,
         block: ?StaticBox,
     ) !WorldConfig {
@@ -288,6 +293,7 @@ pub const WorldConfig = struct {
             .vehicle = vehicles.VehicleConfigV1.fromConfig(vehicle),
             .interaction = interactions.InteractionConfigV1.fromConfig(interaction),
             .npc = npcs.NpcConfigV1.fromConfig(npc),
+            .npc_encounter = npc_encounters.ConfigV1.fromConfig(npc_encounter),
             .ground = if (create_ground) default_ground else null,
             .block = block,
         };
@@ -331,6 +337,7 @@ pub const WorldConfig = struct {
         try self.vehicle.validate();
         try self.interaction.validate();
         try self.npc.validate();
+        _ = try self.npc_encounter.toConfig();
         const virtual_character_capacity = std.math.add(
             u64,
             self.max_characters,
@@ -485,6 +492,73 @@ pub const CommandSource = enum(u8) {
     district = 4,
     interaction = 5,
     npc = 6,
+    vitals = 7,
+    npc_replacement = 8,
+};
+
+pub const NormalizedNpcReplacementSchedule = struct {
+    slot: u8,
+    generation: u16,
+    death_tick: u64,
+    candidate_count: u8,
+    candidates: [npc_replacements.max_candidates]npcs.NodeRef,
+};
+
+pub const NpcReplacementCorrelation = struct {
+    slot: u8,
+    generation: u16,
+};
+
+pub const NpcReplacementCommandTag = enum(u8) {
+    schedule = 1,
+    complete = 2,
+    defer_spawn = 3,
+};
+
+/// Authority-to-simulation replacement orchestration is deterministic replay
+/// ingress even though it is not a player command. Keeping it in the same
+/// normalized spine prevents a death from mutating the encounter digest
+/// outside the recorded boundary.
+pub const NormalizedNpcReplacementCommand = union(NpcReplacementCommandTag) {
+    schedule: NormalizedNpcReplacementSchedule,
+    complete: NpcReplacementCorrelation,
+    defer_spawn: NpcReplacementCorrelation,
+
+    pub fn fromSchedule(
+        slot: u8,
+        generation: u16,
+        death_tick: u64,
+        candidates: []const npcs.NodeRef,
+    ) !NormalizedNpcReplacementCommand {
+        if (candidates.len == 0 or candidates.len > npc_replacements.max_candidates) {
+            return error.InvalidNpcReplacementCandidateCount;
+        }
+        var stored: [npc_replacements.max_candidates]npcs.NodeRef = @splat(.{});
+        @memcpy(stored[0..candidates.len], candidates);
+        const result: NormalizedNpcReplacementCommand = .{ .schedule = .{
+            .slot = slot,
+            .generation = generation,
+            .death_tick = death_tick,
+            .candidate_count = @intCast(candidates.len),
+            .candidates = stored,
+        } };
+        try validateNormalizedNpcReplacementCommand(result);
+        return result;
+    }
+
+    pub fn completeCommand(
+        slot: u8,
+        generation: u16,
+    ) NormalizedNpcReplacementCommand {
+        return .{ .complete = .{ .slot = slot, .generation = generation } };
+    }
+
+    pub fn deferCommand(
+        slot: u8,
+        generation: u16,
+    ) NormalizedNpcReplacementCommand {
+        return .{ .defer_spawn = .{ .slot = slot, .generation = generation } };
+    }
 };
 
 pub const NormalizedCommand = union(CommandSource) {
@@ -494,6 +568,8 @@ pub const NormalizedCommand = union(CommandSource) {
     district: NormalizedDistrictCommand,
     interaction: interactions.Command,
     npc: npcs.Command,
+    vitals: vitals.Command,
+    npc_replacement: NormalizedNpcReplacementCommand,
 
     pub fn fromCrate(command: crates.Command) NormalizedCommand {
         return .{ .crate = command };
@@ -517,6 +593,16 @@ pub const NormalizedCommand = union(CommandSource) {
 
     pub fn fromNpc(command: npcs.Command) NormalizedCommand {
         return .{ .npc = command };
+    }
+
+    pub fn fromVitals(command: vitals.Command) NormalizedCommand {
+        return .{ .vitals = command };
+    }
+
+    pub fn fromNpcReplacement(
+        command: NormalizedNpcReplacementCommand,
+    ) NormalizedCommand {
+        return .{ .npc_replacement = command };
     }
 
     pub fn fingerprint(self: NormalizedCommand) !Digest {
@@ -987,6 +1073,7 @@ pub fn firstDivergence(expected: TickDigests, actual: TickDigests) ?Divergence {
         .district,
         .interaction,
         .npc,
+        .npc_encounter,
     }) |category| {
         const expected_digest = expected.get(category);
         const actual_digest = actual.get(category);
@@ -1140,7 +1227,7 @@ fn encodeSimulationCohort(sink: anytype, value: SimulationCohort) !void {
 }
 
 fn encodeWorldConfig(sink: anytype, value: WorldConfig) !void {
-    try sink.writeBytes("world-config-v3");
+    try sink.writeBytes("world-config-v5");
     try sink.writeU64(value.namespace);
     try sink.writeF32(value.fixed_delta_seconds);
     try sink.writeU32(value.max_crates);
@@ -1153,6 +1240,7 @@ fn encodeWorldConfig(sink: anytype, value: WorldConfig) !void {
     try encodeVehicleConfig(sink, value.vehicle);
     try encodeInteractionConfig(sink, value.interaction);
     try encodeNpcConfig(sink, value.npc);
+    try encodeNpcEncounterConfig(sink, value.npc_encounter);
     try encodeOptionalStaticBox(sink, value.ground);
     try encodeOptionalStaticBox(sink, value.block);
 }
@@ -1169,6 +1257,35 @@ fn encodeNpcConfig(sink: anytype, value: npcs.NpcConfigV1) !void {
     try sink.writeF32(value.stick_to_floor_distance);
     try sink.writeF32(value.step_up_height);
     try sink.writeF32(value.arrival_distance);
+}
+
+fn encodeNpcEncounterConfig(
+    sink: anytype,
+    value: npc_encounters.ConfigV1,
+) !void {
+    try sink.writeU8(value.hostile_npc_limit);
+    try sink.writeF32(value.sight_radius);
+    try sink.writeF32(value.sight_facing_cos);
+    try sink.writeU16(value.last_seen_memory_ticks);
+    try sink.writeF32(value.pursuit_leash);
+    try sink.writeU8(value.ambient_perception_interval_ticks);
+    try sink.writeU8(value.engaged_perception_interval_ticks);
+    try sink.writeU8(value.route_replan_interval_ticks);
+    try sink.writeF32(value.directive_position_threshold);
+    try sink.writeF32(value.search_arrival_distance);
+    try sink.writeF32(value.combat_standoff_distance);
+    try sink.writeF32(value.melee_range);
+    try sink.writeF32(value.melee_facing_cos);
+    try sink.writeU16(value.attack_windup_ticks);
+    try sink.writeU16(value.attack_recovery_ticks);
+    try sink.writeU16(value.attack_damage);
+    try sink.writeU16(value.death_presentation_ticks);
+    try sink.writeU16(value.replacement_delay_ticks);
+    try sink.writeU16(value.replacement_retry_ticks);
+    try sink.writeF32(value.replacement_min_player_distance);
+    try sink.writeF32(value.replacement_visibility_radius);
+    try sink.writeU8(value.los_queries_per_tick);
+    try sink.writeU8(value.los_queries_per_npc);
 }
 
 fn encodeInteractionConfig(
@@ -1240,6 +1357,7 @@ const VehicleCommandTag = enum(u8) {
 const InteractionCommandTag = enum(u8) { spawn = 1, despawn = 2, collect = 3, drop = 4 };
 const NpcCommandTag = enum(u8) { spawn = 1, set_goal = 2, despawn = 3 };
 const NpcGoalTag = enum(u8) { hold = 1, navigate_to = 2, patrol_between = 3 };
+const VitalsCommandTag = enum(u8) { register = 1, remove = 2, damage = 3 };
 
 fn encodeNormalizedCommand(sink: anytype, command: NormalizedCommand) !void {
     try sink.writeU8(@intFromEnum(std.meta.activeTag(command)));
@@ -1250,7 +1368,67 @@ fn encodeNormalizedCommand(sink: anytype, command: NormalizedCommand) !void {
         .district => |value| try encodeDistrictCommand(sink, value),
         .interaction => |value| try encodeInteractionCommand(sink, value),
         .npc => |value| try encodeNpcCommand(sink, value),
+        .vitals => |value| try encodeVitalsCommand(sink, value),
+        .npc_replacement => |value| try encodeNpcReplacementCommand(sink, value),
     }
+}
+
+fn encodeNpcReplacementCommand(
+    sink: anytype,
+    command: NormalizedNpcReplacementCommand,
+) !void {
+    try sink.writeU8(@intFromEnum(std.meta.activeTag(command)));
+    switch (command) {
+        .schedule => |schedule| {
+            try sink.writeU8(schedule.slot);
+            try sink.writeU16(schedule.generation);
+            try sink.writeU64(schedule.death_tick);
+            try sink.writeU8(schedule.candidate_count);
+            for (schedule.candidates[0..schedule.candidate_count]) |candidate| {
+                try encodeNavigationNodeRef(sink, candidate);
+            }
+        },
+        .complete, .defer_spawn => |correlation| {
+            try sink.writeU8(correlation.slot);
+            try sink.writeU16(correlation.generation);
+        },
+    }
+}
+
+fn encodeVitalsCommand(sink: anytype, command: vitals.Command) !void {
+    switch (command) {
+        .register => |value| {
+            try sink.writeU8(@intFromEnum(VitalsCommandTag.register));
+            try encodeVitalsTarget(sink, value.target);
+            try sink.writeU16(value.maximum_health);
+            try sink.writeU16(value.current_health);
+            try sink.writeU8(@intFromEnum(value.life_state));
+            try sink.writeU64(value.death_tick);
+        },
+        .remove => |value| {
+            try sink.writeU8(@intFromEnum(VitalsCommandTag.remove));
+            try encodeVitalsTarget(sink, value);
+        },
+        .damage => |value| {
+            try sink.writeU8(@intFromEnum(VitalsCommandTag.damage));
+            try sink.writeU8(@intFromEnum(value.source.kind));
+            try encodePersistentId(sink, value.source.id);
+            try sink.writeU16(value.source.incarnation.value);
+            try sink.writeU32(value.source.action_sequence);
+            try encodeVitalsTarget(sink, value.target);
+            try sink.writeU8(@intFromEnum(value.cause));
+            try sink.writeU64(value.authority_tick);
+            try sink.writeU64(value.correlation);
+            try sink.writeU16(value.base_amount);
+            try sink.writeU16(value.ordinal);
+        },
+    }
+}
+
+fn encodeVitalsTarget(sink: anytype, value: vitals.Target) !void {
+    try sink.writeU8(@intFromEnum(value.kind));
+    try encodePersistentId(sink, value.id);
+    try sink.writeU16(value.incarnation.value);
 }
 
 fn encodeNpcCommand(sink: anytype, command: npcs.Command) !void {
@@ -1510,6 +1688,7 @@ fn encodeTickDigests(sink: anytype, digests: TickDigests) !void {
     try sink.writeBytes(&digests.district);
     try sink.writeBytes(&digests.interaction);
     try sink.writeBytes(&digests.npc);
+    try sink.writeBytes(&digests.npc_encounter);
 }
 
 fn encodeOptionalStaticBox(sink: anytype, value: ?StaticBox) !void {
@@ -1580,7 +1759,7 @@ fn encodedDistrictIngressSize(ingress: DistrictCompletionIngress) !usize {
 }
 
 fn encodedTickDigestsSize() usize {
-    return 8 + 7 * @sizeOf(Digest);
+    return 8 + 8 * @sizeOf(Digest);
 }
 
 fn validateRecordedCommand(record: RecordedCommand) !void {
@@ -1672,6 +1851,43 @@ fn validateNormalizedCommand(command: NormalizedCommand) !void {
             },
         },
         .npc => |value| try npcs.validateCommand(value),
+        .vitals => |value| switch (value) {
+            .register => |register| try vitals.validateRegister(register),
+            .remove => |target| try target.validate(),
+            .damage => |damage| try damage.validate(),
+        },
+        .npc_replacement => |value| try validateNormalizedNpcReplacementCommand(value),
+    }
+}
+
+fn validateNormalizedNpcReplacementCommand(
+    command: NormalizedNpcReplacementCommand,
+) !void {
+    switch (command) {
+        .schedule => |schedule| {
+            if (schedule.slot >= npc_replacements.max_records or
+                schedule.generation == 0 or schedule.death_tick == 0 or
+                schedule.candidate_count == 0 or
+                schedule.candidate_count > npc_replacements.max_candidates)
+            {
+                return error.InvalidNpcReplacementSchedule;
+            }
+            for (schedule.candidates[0..schedule.candidate_count], 0..) |candidate, index| {
+                try npc_replacements.validateNode(candidate);
+                for (schedule.candidates[0..index]) |earlier| {
+                    if (npcs.NodeRef.eql(earlier, candidate)) {
+                        return error.DuplicateNpcReplacementCandidate;
+                    }
+                }
+            }
+        },
+        .complete, .defer_spawn => |correlation| {
+            if (correlation.slot >= npc_replacements.max_records or
+                correlation.generation == 0)
+            {
+                return error.InvalidNpcReplacementCorrelation;
+            }
+        },
     }
 }
 
@@ -2073,7 +2289,7 @@ fn decodeSimulationCohort(reader: *Reader) !SimulationCohort {
 }
 
 fn decodeWorldConfig(reader: *Reader) !WorldConfig {
-    try reader.requireBytes("world-config-v3");
+    try reader.requireBytes("world-config-v5");
     return .{
         .namespace = try reader.readU64(),
         .fixed_delta_seconds = try reader.readF32(),
@@ -2087,6 +2303,7 @@ fn decodeWorldConfig(reader: *Reader) !WorldConfig {
         .vehicle = try decodeVehicleConfig(reader),
         .interaction = try decodeInteractionConfig(reader),
         .npc = try decodeNpcConfig(reader),
+        .npc_encounter = try decodeNpcEncounterConfig(reader),
         .ground = try decodeOptionalStaticBox(reader),
         .block = try decodeOptionalStaticBox(reader),
     };
@@ -2105,6 +2322,34 @@ fn decodeNpcConfig(reader: *Reader) !npcs.NpcConfigV1 {
         .stick_to_floor_distance = try reader.readF32(),
         .step_up_height = try reader.readF32(),
         .arrival_distance = try reader.readF32(),
+    };
+}
+
+fn decodeNpcEncounterConfig(reader: *Reader) !npc_encounters.ConfigV1 {
+    return .{
+        .hostile_npc_limit = try reader.readU8(),
+        .sight_radius = try reader.readF32(),
+        .sight_facing_cos = try reader.readF32(),
+        .last_seen_memory_ticks = try reader.readU16(),
+        .pursuit_leash = try reader.readF32(),
+        .ambient_perception_interval_ticks = try reader.readU8(),
+        .engaged_perception_interval_ticks = try reader.readU8(),
+        .route_replan_interval_ticks = try reader.readU8(),
+        .directive_position_threshold = try reader.readF32(),
+        .search_arrival_distance = try reader.readF32(),
+        .combat_standoff_distance = try reader.readF32(),
+        .melee_range = try reader.readF32(),
+        .melee_facing_cos = try reader.readF32(),
+        .attack_windup_ticks = try reader.readU16(),
+        .attack_recovery_ticks = try reader.readU16(),
+        .attack_damage = try reader.readU16(),
+        .death_presentation_ticks = try reader.readU16(),
+        .replacement_delay_ticks = try reader.readU16(),
+        .replacement_retry_ticks = try reader.readU16(),
+        .replacement_min_player_distance = try reader.readF32(),
+        .replacement_visibility_radius = try reader.readF32(),
+        .los_queries_per_tick = try reader.readU8(),
+        .los_queries_per_npc = try reader.readU8(),
     };
 }
 
@@ -2195,7 +2440,93 @@ fn decodeNormalizedCommand(reader: *Reader) !NormalizedCommand {
         .district => .{ .district = try decodeDistrictCommand(reader) },
         .interaction => .{ .interaction = try decodeInteractionCommand(reader) },
         .npc => .{ .npc = try decodeNpcCommand(reader) },
+        .vitals => .{ .vitals = try decodeVitalsCommand(reader) },
+        .npc_replacement => .{
+            .npc_replacement = try decodeNpcReplacementCommand(reader),
+        },
     };
+}
+
+fn decodeNpcReplacementCommand(reader: *Reader) !NormalizedNpcReplacementCommand {
+    const tag = std.enums.fromInt(NpcReplacementCommandTag, try reader.readU8()) orelse
+        return error.InvalidNpcReplacementCommandTag;
+    const command: NormalizedNpcReplacementCommand = switch (tag) {
+        .schedule => blk: {
+            const slot = try reader.readU8();
+            const generation = try reader.readU16();
+            const death_tick = try reader.readU64();
+            const candidate_count = try reader.readU8();
+            if (candidate_count == 0 or candidate_count > npc_replacements.max_candidates) {
+                return error.InvalidNpcReplacementCandidateCount;
+            }
+            var candidates: [npc_replacements.max_candidates]npcs.NodeRef = @splat(.{});
+            for (candidates[0..candidate_count]) |*candidate| {
+                candidate.* = try decodeNavigationNodeRef(reader);
+            }
+            break :blk .{ .schedule = .{
+                .slot = slot,
+                .generation = generation,
+                .death_tick = death_tick,
+                .candidate_count = candidate_count,
+                .candidates = candidates,
+            } };
+        },
+        .complete => .{ .complete = .{
+            .slot = try reader.readU8(),
+            .generation = try reader.readU16(),
+        } },
+        .defer_spawn => .{ .defer_spawn = .{
+            .slot = try reader.readU8(),
+            .generation = try reader.readU16(),
+        } },
+    };
+    try validateNormalizedNpcReplacementCommand(command);
+    return command;
+}
+
+fn decodeVitalsCommand(reader: *Reader) !vitals.Command {
+    const tag = std.enums.fromInt(VitalsCommandTag, try reader.readU8()) orelse
+        return error.InvalidVitalsCommandTag;
+    const command: vitals.Command = switch (tag) {
+        .register => .{ .register = .{
+            .target = try decodeVitalsTarget(reader),
+            .maximum_health = try reader.readU16(),
+            .current_health = try reader.readU16(),
+            .life_state = std.enums.fromInt(vitals.LifeState, try reader.readU8()) orelse
+                return error.InvalidVitalsLifeState,
+            .death_tick = try reader.readU64(),
+        } },
+        .remove => .{ .remove = try decodeVitalsTarget(reader) },
+        .damage => .{ .damage = .{
+            .source = .{
+                .kind = std.enums.fromInt(vitals.TargetKind, try reader.readU8()) orelse
+                    return error.InvalidVitalsTargetKind,
+                .id = try decodePersistentId(reader),
+                .incarnation = .{ .value = try reader.readU16() },
+                .action_sequence = try reader.readU32(),
+            },
+            .target = try decodeVitalsTarget(reader),
+            .cause = std.enums.fromInt(vitals.Cause, try reader.readU8()) orelse
+                return error.InvalidVitalsCause,
+            .authority_tick = try reader.readU64(),
+            .correlation = try reader.readU64(),
+            .base_amount = try reader.readU16(),
+            .ordinal = try reader.readU16(),
+        } },
+    };
+    try validateNormalizedCommand(.{ .vitals = command });
+    return command;
+}
+
+fn decodeVitalsTarget(reader: *Reader) !vitals.Target {
+    const target = vitals.Target{
+        .kind = std.enums.fromInt(vitals.TargetKind, try reader.readU8()) orelse
+            return error.InvalidVitalsTargetKind,
+        .id = try decodePersistentId(reader),
+        .incarnation = .{ .value = try reader.readU16() },
+    };
+    try target.validate();
+    return target;
 }
 
 fn decodeNpcCommand(reader: *Reader) !npcs.Command {
@@ -2475,6 +2806,7 @@ fn decodeTickDigests(reader: *Reader) !TickDigests {
         .district = try reader.readDigest(),
         .interaction = try reader.readDigest(),
         .npc = try reader.readDigest(),
+        .npc_encounter = try reader.readDigest(),
     };
 }
 
@@ -2639,6 +2971,7 @@ fn testWorldConfig() !WorldConfig {
         .{ .max_vehicles = 2 },
         .{},
         .{},
+        .{},
         true,
         .{ .position = .{ 0, 1, -4 }, .half_extents = .{ 2, 1, 0.5 } },
     );
@@ -2665,6 +2998,7 @@ fn testTickDigests(tick_index: u64, seed: u8) TickDigests {
         .district = [_]u8{seed +% 4} ** 32,
         .interaction = [_]u8{seed +% 5} ** 32,
         .npc = [_]u8{seed +% 6} ** 32,
+        .npc_encounter = [_]u8{seed +% 7} ** 32,
     };
 }
 
@@ -2871,7 +3205,7 @@ fn refreshIntegrity(bytes: []u8) void {
 
 test "current simulation cohort pins the exact Jolt worker and capacity configuration" {
     try current_simulation_cohort.validate();
-    try std.testing.expectEqual(@as(u16, 5), current_simulation_cohort.replay_schema);
+    try std.testing.expectEqual(@as(u16, 10), current_simulation_cohort.replay_schema);
     try std.testing.expectEqual(@as(u16, 5), current_simulation_cohort.engine_schedule_cohort);
     try std.testing.expectEqual(
         sandbox_host_contracts.snapshot_schema,
@@ -3130,6 +3464,59 @@ test "NPC command codec covers every command goal and validates while decoding" 
     );
 }
 
+test "NPC replacement orchestration codec is canonical bounded replay ingress" {
+    try std.testing.expectEqual(
+        @as(u8, 8),
+        @intFromEnum(CommandSource.npc_replacement),
+    );
+    const candidates = [_]npcs.NodeRef{
+        .{ .coord = sandbox_recipe.navigation_west_coord, .index = 0 },
+        .{ .coord = sandbox_recipe.navigation_west_coord, .index = 1 },
+        .{ .coord = sandbox_recipe.navigation_east_coord, .index = 2 },
+    };
+    const commands = [_]NormalizedCommand{
+        NormalizedCommand.fromNpcReplacement(
+            try NormalizedNpcReplacementCommand.fromSchedule(0, 2, 41, &candidates),
+        ),
+        NormalizedCommand.fromNpcReplacement(
+            NormalizedNpcReplacementCommand.completeCommand(0, 2),
+        ),
+        NormalizedCommand.fromNpcReplacement(
+            NormalizedNpcReplacementCommand.deferCommand(0, 2),
+        ),
+    };
+    const expected_sizes = [_]usize{ 41, 5, 5 };
+    for (commands, expected_sizes) |command, expected_size| {
+        try validateNormalizedCommand(command);
+        var storage: [128]u8 = undefined;
+        var sink = ByteSink{ .bytes = &storage };
+        try encodeNormalizedCommand(&sink, command);
+        try std.testing.expectEqual(expected_size, sink.cursor);
+        var reader = Reader{ .bytes = storage[0..sink.cursor] };
+        const decoded = try decodeNormalizedCommand(&reader);
+        try std.testing.expect(std.meta.eql(command, decoded));
+        try std.testing.expectEqual(sink.cursor, reader.cursor);
+        try std.testing.expectEqual(try command.fingerprint(), try decoded.fingerprint());
+    }
+
+    var duplicate = candidates;
+    duplicate[1] = duplicate[0];
+    try std.testing.expectError(
+        error.DuplicateNpcReplacementCandidate,
+        NormalizedNpcReplacementCommand.fromSchedule(0, 2, 41, &duplicate),
+    );
+
+    var storage: [128]u8 = undefined;
+    var sink = ByteSink{ .bytes = &storage };
+    try encodeNormalizedCommand(&sink, commands[0]);
+    storage[1] = 0xff;
+    var hostile = Reader{ .bytes = storage[0..sink.cursor] };
+    try std.testing.expectError(
+        error.InvalidNpcReplacementCommandTag,
+        decodeNormalizedCommand(&hostile),
+    );
+}
+
 test "world and content cohorts are renderer-free canonical construction inputs" {
     const world = try testWorldConfig();
     try world.validate();
@@ -3141,16 +3528,16 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     try std.testing.expectEqual(@as(f32, 2.5), world.interaction.collect_range);
     try std.testing.expectEqual(@as(f32, 2.5), world.npc.move_speed);
     try std.testing.expect(!@hasField(WorldConfig, "assets"));
-    var world_v3_sizer = SizeSink{};
-    try encodeWorldConfig(&world_v3_sizer, world);
-    try std.testing.expectEqual(@as(usize, 343), world_v3_sizer.size);
-    try std.testing.expectEqual(@as(usize, 232), encodedTickDigestsSize());
-    var world_v3_expected: Digest = undefined;
+    var world_v5_sizer = SizeSink{};
+    try encodeWorldConfig(&world_v5_sizer, world);
+    try std.testing.expectEqual(@as(usize, 403), world_v5_sizer.size);
+    try std.testing.expectEqual(@as(usize, 264), encodedTickDigestsSize());
+    var world_v5_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
-        &world_v3_expected,
-        "0ba288eeb62c2cd1c8ee2b76564502313bb3c26c047836eaeb7cdaacfe8027d8",
+        &world_v5_expected,
+        "1333462c77d94fa48e767c1523ff41bd0e463215beebf446bc3a1870babaa316",
     );
-    try std.testing.expectEqual(world_v3_expected, try world.fingerprint());
+    try std.testing.expectEqual(world_v5_expected, try world.fingerprint());
 
     const baseline_world_fingerprint = try world.fingerprint();
     var npc_tuning_variants = [_]WorldConfig{world} ** 11;
@@ -3193,6 +3580,15 @@ test "world and content cohorts are renderer-free canonical construction inputs"
         &(try changed_npc.fingerprint()),
     ));
 
+    var changed_encounter = world;
+    changed_encounter.npc_encounter.combat_standoff_distance = 1.6;
+    try changed_encounter.validate();
+    try std.testing.expect(!std.mem.eql(
+        u8,
+        &(try world.fingerprint()),
+        &(try changed_encounter.fingerprint()),
+    ));
+
     const content = try testContentCohort();
     try content.validate();
     try std.testing.expectEqual(
@@ -3202,15 +3598,16 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     const same = try testContentCohort();
     try std.testing.expectEqual(try content.fingerprint(), try same.fingerprint());
 
-    // Recipe V2 intentionally changes the renderer-free content cohort even
+    // Recipe V3 adds distinct adjacent visual-prefetch and authority-residency
+    // policy, intentionally advancing the renderer-free content cohort even
     // when the synthetic bundle/catalog digests remain the same.
-    var recipe_v2_expected: Digest = undefined;
+    var recipe_v3_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
-        &recipe_v2_expected,
-        "59617f99b6e9bde383bc18659340e62549c337a7e93e44bfa1280cebcb3d1528",
+        &recipe_v3_expected,
+        "a7490d06339fa0a5fb7897b914490d0356bd2b1ef3c5881a6a9790d3ce9731e8",
     );
-    const recipe_v2_actual = try content.fingerprint();
-    try std.testing.expectEqualSlices(u8, &recipe_v2_expected, &recipe_v2_actual);
+    const recipe_v3_actual = try content.fingerprint();
+    try std.testing.expectEqualSlices(u8, &recipe_v3_expected, &recipe_v3_actual);
 
     const catalog = try ContentCohort.init(
         "district/catalog",
@@ -3222,7 +3619,7 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     );
     try catalog.validate();
     const catalog_fingerprint = try catalog.fingerprint();
-    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v2_actual));
+    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v3_actual));
 
     var catalog_fixture = try testCapture();
     catalog_fixture.content = catalog;

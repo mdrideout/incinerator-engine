@@ -12,7 +12,7 @@ const snapshot_validation = @import("npc_snapshot_validation");
 const navigation = @import("navigation_contract");
 
 const logical_state_domain = "incinerator.npc.logical";
-const logical_state_schema: u16 = 2;
+const logical_state_schema: u16 = 3;
 
 const NodeRef = feature_contract.NodeRef;
 const ChunkCoord = feature_contract.ChunkCoord;
@@ -26,7 +26,9 @@ const Config = feature_contract.Config;
 const NpcConfigV1 = feature_contract.NpcConfigV1;
 const Goal = feature_contract.Goal;
 const State = feature_contract.State;
+const EncounterLocomotion = feature_contract.EncounterLocomotion;
 const PatrolLeg = feature_contract.PatrolLeg;
+const PersistedRouteMode = feature_contract.PersistedRouteMode;
 const RoutePlan = feature_contract.RoutePlan;
 const RouteCursor = feature_contract.RouteCursor;
 const NpcRouteCursorV1 = feature_contract.NpcRouteCursorV1;
@@ -79,6 +81,15 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             position: [3]f32,
             velocity: [3]f32,
             facing_yaw: f32,
+            encounter_locomotion: ?EncounterLocomotion = null,
+            /// Transient cooked-graph route for encounter pursuit. The
+            /// encounter feature persists the destination and rebuilds this
+            /// scratch route after restore.
+            encounter_route: ?RouteCursor = null,
+            /// Restore/streaming handoff retained while a pursuit route cannot
+            /// yet be resolved through active content. `encounter_locomotion`
+            /// remains `.hold` until this typed intent can be installed.
+            pending_encounter_locomotion: ?EncounterLocomotion = null,
         };
         /// The controller is valid only for the exact owner content cohort.
         /// Tickets are runtime-only and are never persisted.
@@ -115,6 +126,29 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
         controllers_resumed: u64 = 0,
         presentation: [max_npcs]NpcDraw = undefined,
         presentation_count: usize = 0,
+
+        /// Completed-tick composition port consumed by `npc_encounter`.
+        /// Applying intent here cannot move a controller; the next registered
+        /// NPC movement phase remains the sole mutation point.
+        pub const EncounterAccess = struct {
+            feature: *Self,
+
+            pub fn apply(
+                self: *EncounterAccess,
+                id: engine.PersistentId,
+                locomotion: EncounterLocomotion,
+            ) !void {
+                try self.feature.applyEncounterLocomotion(id, locomotion);
+            }
+
+            pub fn restore(
+                self: *EncounterAccess,
+                id: engine.PersistentId,
+                locomotion: EncounterLocomotion,
+            ) !void {
+                try self.feature.restoreEncounterLocomotion(id, locomotion);
+            }
+        };
 
         pub fn init(
             runtime: *engine.Runtime,
@@ -175,6 +209,18 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             return result;
         }
 
+        pub fn peekOutcome(self: *const Self) ?Outcome {
+            return self.outcomes.peek();
+        }
+
+        /// The owner thread must remain exclusive between peek and commit.
+        pub fn commitOutcome(self: *Self, expected: Outcome) !void {
+            const actual = self.outcomes.peek() orelse return error.NpcOutcomeMissing;
+            if (!std.meta.eql(actual, expected)) return error.NpcOutcomeCommitMismatch;
+            _ = self.outcomes.pop().?;
+            self.observeQueueHighWater();
+        }
+
         pub fn pollEvent(self: *Self) ?Event {
             const result = self.events.pop();
             self.observeQueueHighWater();
@@ -187,6 +233,19 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
 
         pub fn count(self: *const Self) usize {
             return self.record_count;
+        }
+
+        pub fn encounterAccess(self: *Self) EncounterAccess {
+            return .{ .feature = self };
+        }
+
+        pub fn copyViews(self: *Self, storage: []NpcView) ![]const NpcView {
+            if (storage.len < self.record_count) return error.InsufficientNpcViewStorage;
+            for (self.records[0..self.record_count], 0..) |runtime_id, index| {
+                storage[index] = try self.view(try self.runtime.identity(runtime_id));
+            }
+            std.mem.sort(NpcView, storage[0..self.record_count], {}, lessThanView);
+            return storage[0..self.record_count];
         }
 
         pub fn view(self: *Self, id: engine.PersistentId) !NpcView {
@@ -206,7 +265,123 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 .velocity = logical.velocity,
                 .facing_yaw = logical.facing_yaw,
                 .controller_present = controller.handle != null,
+                .encounter_locomotion = logical.encounter_locomotion,
             };
+        }
+
+        fn applyEncounterLocomotion(
+            self: *Self,
+            id: engine.PersistentId,
+            locomotion: EncounterLocomotion,
+        ) !void {
+            try self.runtime.ensureSnapshotBoundary();
+            try locomotion.validate();
+            const runtime_id = self.runtime.resolve(id) orelse return error.NpcNotFound;
+            _ = self.runtime.get(runtime_id, Npc) orelse return error.NotAnNpc;
+            const logical = self.runtime.getMut(runtime_id, LogicalState) orelse
+                return error.NpcLogicalStateInvariantBroken;
+            switch (locomotion) {
+                .resume_route => {
+                    logical.pending_encounter_locomotion = null;
+                    const start = try encounterOwnerRouteNode(self, logical.*);
+                    const patrol_leg = logical.route.patrol_leg;
+                    logical.route = switch (try self.buildGoalRoute(
+                        start,
+                        logical.goal,
+                        logical.position,
+                    )) {
+                        .ready => |route| route,
+                        // Streaming residency is not a semantic route failure.
+                        // Retain an owner-aligned cursor until every cohort
+                        // needed by the admitted goal is active again; normal
+                        // residency reconciliation owns the eventual rebuild.
+                        .inactive => routeAwaitingRebuild(
+                            start,
+                            patrol_leg,
+                            logical.position,
+                        ),
+                        .invalid_content => return error.NpcEncounterReturnRouteInvalid,
+                        .no_path => return error.NpcEncounterReturnRouteUnavailable,
+                    };
+                    logical.encounter_locomotion = null;
+                    logical.encounter_route = null;
+                },
+                .hold, .face_and_hold => {
+                    logical.pending_encounter_locomotion = null;
+                    logical.encounter_locomotion = locomotion;
+                    if (logical.encounter_route == null) {
+                        const anchor = try encounterOwnerRouteNode(self, logical.*);
+                        logical.encounter_route = .{
+                            .plan = planWithOne(anchor),
+                            .segment_start = logical.position,
+                        };
+                    }
+                },
+                .pursue_position => |position| {
+                    if (!try self.installEncounterPursuit(logical, position)) {
+                        try deferEncounterLocomotion(logical, locomotion);
+                    }
+                },
+            }
+        }
+
+        fn restoreEncounterLocomotion(
+            self: *Self,
+            id: engine.PersistentId,
+            locomotion: EncounterLocomotion,
+        ) !void {
+            try self.runtime.ensureSnapshotBoundary();
+            try locomotion.validate();
+            const runtime_id = self.runtime.resolve(id) orelse return error.NpcNotFound;
+            _ = self.runtime.get(runtime_id, Npc) orelse return error.NotAnNpc;
+            const logical = self.runtime.getMut(runtime_id, LogicalState) orelse
+                return error.NpcLogicalStateInvariantBroken;
+            switch (locomotion) {
+                .resume_route => {
+                    logical.encounter_locomotion = null;
+                    logical.encounter_route = null;
+                    logical.pending_encounter_locomotion = null;
+                },
+                .hold, .face_and_hold => {
+                    logical.pending_encounter_locomotion = null;
+                    try installAnchoredEncounterLocomotion(logical, locomotion);
+                },
+                .pursue_position => |position| {
+                    if (!try self.installEncounterPursuit(logical, position)) {
+                        try deferEncounterLocomotion(logical, locomotion);
+                    }
+                },
+            }
+        }
+
+        fn installEncounterPursuit(
+            self: *Self,
+            logical: *LogicalState,
+            position: [3]f32,
+        ) !bool {
+            const start = switch (self.navigation_access.nearestActiveNode(logical.position)) {
+                .ready => |resolved| resolved.reference,
+                .district_inactive => return false,
+                .unavailable => return error.NpcEncounterStartNodeUnavailable,
+            };
+            const target = switch (self.navigation_access.nearestActiveNode(position)) {
+                .ready => |resolved| resolved.reference,
+                .district_inactive => return false,
+                .unavailable => return error.NpcEncounterTargetNodeUnavailable,
+            };
+            const plan = switch (try self.buildRoute(start, target)) {
+                .ready => |value| value,
+                .inactive => return false,
+                .invalid_content => return error.NpcEncounterRouteInvalid,
+                .no_path => return error.NpcEncounterRouteUnavailable,
+            };
+            logical.encounter_locomotion = .{ .pursue_position = position };
+            logical.encounter_route = .{
+                .plan = plan,
+                .segment_start = logical.position,
+            };
+            logical.pending_encounter_locomotion = null;
+            return true;
         }
 
         pub fn extract(self: *Self, alpha: f32) ![]const NpcDraw {
@@ -259,19 +434,17 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 const logical = self.runtime.get(runtime_id, LogicalState) orelse
                     return error.NpcLogicalStateInvariantBroken;
                 const id = try self.runtime.identity(runtime_id);
+                const route = try persistentRouteCursor(logical.*);
                 records[index] = .{
                     .id = id,
                     .owner = logical.owner,
                     .goal = logical.goal,
-                    .route = .{
-                        .current = try currentRouteNode(logical.route),
-                        .next = logical.route.next(),
-                        .route_index = 0,
-                        .patrol_leg = logical.route.patrol_leg,
-                    },
+                    .route = route,
                     .position = canonicalVector(logical.position),
                     .velocity = canonicalVector(logical.velocity),
-                    .facing_yaw = canonicalFloat(normalizeYaw(logical.facing_yaw)),
+                    .facing_yaw = canonicalFloat(try engine.transform.normalizeFacingYaw(
+                        logical.facing_yaw,
+                    )),
                 };
             }
             std.mem.sort(NpcV1, records, {}, lessThanRecord);
@@ -309,20 +482,18 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             std.mem.sort(engine.PersistentId, ids[0..self.record_count], {}, lessThanPersistentId);
             writer.writeU32(@intCast(self.record_count));
             for (ids[0..self.record_count]) |id| {
-                const value = try self.view(id);
+                const runtime_id = self.runtime.resolve(id) orelse
+                    return error.NpcLogicalStateInvariantBroken;
+                const logical = self.runtime.get(runtime_id, LogicalState) orelse
+                    return error.NpcLogicalStateInvariantBroken;
                 writePersistentId(writer, id);
-                writeCoord(writer, value.owner);
-                try writeGoal(writer, value.goal);
-                writePersistentRouteCursor(writer, .{
-                    .current = try currentRouteNode(value.route),
-                    .next = value.route.next(),
-                    .route_index = 0,
-                    .patrol_leg = value.route.patrol_leg,
-                });
-                writeState(writer, value.state);
-                try writeVector3(writer, value.position);
-                try writeVector3(writer, value.velocity);
-                try writer.writeF32(value.facing_yaw);
+                writeCoord(writer, logical.owner);
+                try writeGoal(writer, logical.goal);
+                writePersistentRouteCursor(writer, try persistentRouteCursor(logical.*));
+                writeState(writer, logical.state);
+                try writeVector3(writer, logical.position);
+                try writeVector3(writer, logical.velocity);
+                try writer.writeF32(logical.facing_yaw);
             }
             writer.writeU32(@intCast(self.commands.len));
             for (0..self.commands.len) |index| {
@@ -442,7 +613,45 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 const before = try self.controllers.prepareCharacter(handle);
                 var horizontal = [2]f32{ 0, 0 };
                 if (logical.state == .active) {
-                    if (logical.route.next()) |next_ref| {
+                    if (logical.encounter_locomotion) |locomotion| switch (locomotion) {
+                        .resume_route => unreachable,
+                        .hold => {},
+                        .face_and_hold => |target_position| {
+                            const dx = target_position[0] - before.position[0];
+                            const dz = target_position[2] - before.position[2];
+                            if (dx * dx + dz * dz > std.math.floatEps(f32)) {
+                                logical.facing_yaw = try engine.transform.normalizeFacingYaw(
+                                    std.math.atan2(dx, -dz),
+                                );
+                            }
+                        },
+                        .pursue_position => |target_position| {
+                            const movement_target = if (logical.encounter_route) |route|
+                                if (route.next()) |next_ref|
+                                    switch (self.navigation_access.resolveNode(next_ref)) {
+                                        .ready => |resolved| resolved.node.position,
+                                        .district_inactive => return error.NpcEncounterRouteDistrictInactive,
+                                        .invalid_reference => return error.NpcEncounterRouteInvalid,
+                                    }
+                                else
+                                    target_position
+                            else
+                                target_position;
+                            const dx = movement_target[0] - before.position[0];
+                            const dz = movement_target[2] - before.position[2];
+                            const distance = @sqrt(dx * dx + dz * dz);
+                            if (distance > self.config.arrival_distance) {
+                                const speed = @min(
+                                    self.config.move_speed,
+                                    distance / tick.delta_seconds,
+                                );
+                                horizontal = .{ dx / distance * speed, dz / distance * speed };
+                                logical.facing_yaw = try engine.transform.normalizeFacingYaw(
+                                    std.math.atan2(dx, -dz),
+                                );
+                            }
+                        },
+                    } else if (logical.route.next()) |next_ref| {
                         const target: ?navigation.ResolvedNode = switch (self.navigation_access.resolveNode(next_ref)) {
                             .ready => |resolved| resolved,
                             .district_inactive => blk: {
@@ -461,7 +670,9 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                                     distance / tick.delta_seconds,
                                 );
                                 horizontal = .{ dx / distance * speed, dz / distance * speed };
-                                logical.facing_yaw = normalizeYaw(std.math.atan2(dx, -dz));
+                                logical.facing_yaw = try engine.transform.normalizeFacingYaw(
+                                    std.math.atan2(dx, -dz),
+                                );
                             }
                         }
                     }
@@ -517,7 +728,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
 
                 const next_owner = try navigation.ownerForPosition(logical.position);
                 if (!navigation.ChunkCoord.eql(next_owner, logical.owner)) {
-                    const next_ref = logical.route.next() orelse
+                    const next_ref = encounterNextNode(logical.*) orelse
                         return error.NpcUnexpectedOwnerTransfer;
                     if (!navigation.ChunkCoord.eql(next_ref.coord, next_owner)) {
                         return error.NpcUnexpectedOwnerTransfer;
@@ -543,11 +754,15 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                     } });
                 }
 
-                try self.advanceIfArrived(runtime_id, logical);
+                if (logical.encounter_route != null) {
+                    try self.advanceEncounterRouteIfArrived(logical);
+                } else if (logical.encounter_locomotion == null) {
+                    try self.advanceIfArrived(runtime_id, logical);
+                }
                 const history = self.runtime.getMut(runtime_id, TransformHistory) orelse
                     return error.NpcTransformInvariantBroken;
                 history.previous = history.current;
-                history.current = poseFor(logical.position, logical.facing_yaw);
+                history.current = try poseFor(logical.position, logical.facing_yaw);
                 history.current_tick = tick.tick_index;
             }
         }
@@ -930,11 +1145,14 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                     {
                         try self.rebuildRestoredRoute(logical);
                     }
+                    try self.reconcileEncounterResidency(logical);
                     if (controller.handle == null) {
                         try self.createController(logical, controller, resolved.ticket);
                         self.controllers_resumed +|= 1;
                     }
-                    const desired: State = if (try self.destinationReady(logical.*))
+                    const desired: State = if (logical.encounter_locomotion != null)
+                        .active
+                    else if (try self.destinationReady(logical.*))
                         .active
                     else
                         .waiting_at_boundary;
@@ -944,12 +1162,50 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
         }
 
         fn destinationReady(self: *Self, logical: LogicalState) !bool {
+            if (logical.route.needs_rebuild and logical.route.next() == null) {
+                return switch (logical.goal) {
+                    .hold => true,
+                    .navigate_to, .patrol_between => self.rebuildTargetReady(logical),
+                };
+            }
             const next_ref = logical.route.next() orelse return true;
             return switch (self.navigation_access.resolveNode(next_ref)) {
                 .ready => true,
                 .district_inactive => false,
                 .invalid_reference => error.NpcRouteReferenceInvalid,
             };
+        }
+
+        fn reconcileEncounterResidency(self: *Self, logical: *LogicalState) !void {
+            if (logical.pending_encounter_locomotion) |pending| {
+                switch (pending) {
+                    .pursue_position => |position| {
+                        _ = try self.installEncounterPursuit(logical, position);
+                    },
+                    .hold, .face_and_hold, .resume_route => {
+                        return error.NpcEncounterPendingLocomotionInvariantBroken;
+                    },
+                }
+                return;
+            }
+            const locomotion = logical.encounter_locomotion orelse return;
+            switch (locomotion) {
+                .pursue_position => {
+                    const route = logical.encounter_route orelse
+                        return error.NpcEncounterRouteInvariantBroken;
+                    const next = route.next() orelse return;
+                    switch (self.navigation_access.resolveNode(next)) {
+                        .ready => {},
+                        .district_inactive => try deferEncounterLocomotion(
+                            logical,
+                            locomotion,
+                        ),
+                        .invalid_reference => return error.NpcEncounterRouteInvalid,
+                    }
+                },
+                .hold, .face_and_hold => {},
+                .resume_route => return error.NpcEncounterLocomotionInvariantBroken,
+            }
         }
 
         /// A single node probe gates semantic route reconstruction. Inactive
@@ -982,6 +1238,12 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
         fn rebuildRestoredRoute(self: *Self, logical: *LogicalState) !void {
             const persisted_next = logical.route.next();
             const current = try currentRouteNode(logical.route);
+            const deferred_without_prefix = persisted_next == null and
+                !isCompletedGoalEndpoint(
+                    logical.goal,
+                    current,
+                    logical.route.patrol_leg,
+                );
             const rebuilt = switch (try self.buildRestoredGoalRoute(
                 current,
                 logical.goal,
@@ -994,12 +1256,15 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 .invalid_content => return error.NpcPersistedGoalInvalid,
                 .no_path => return error.NpcPersistedGoalUnreachable,
             };
-            if (!isCompletedPatrolEndpoint(
-                logical.goal,
-                current,
-                logical.route.patrol_leg,
-                persisted_next,
-            ) and !optionalNodeRefEql(persisted_next, rebuilt.next())) {
+            if (!deferred_without_prefix and
+                !isCompletedPatrolEndpoint(
+                    logical.goal,
+                    current,
+                    logical.route.patrol_leg,
+                    persisted_next,
+                ) and
+                !optionalNodeRefEql(persisted_next, rebuilt.next()))
+            {
                 return error.NpcPersistedRouteMismatch;
             }
             logical.route = rebuilt;
@@ -1030,14 +1295,16 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 .state = if (ticket == null) .dormant else .active,
                 .position = canonicalVector(position),
                 .velocity = canonicalVector(velocity),
-                .facing_yaw = canonicalFloat(normalizeYaw(facing_yaw)),
+                .facing_yaw = canonicalFloat(try engine.transform.normalizeFacingYaw(
+                    facing_yaw,
+                )),
             };
             var controller = RuntimeController{};
             if (ticket) |active_ticket| {
                 try self.createController(&logical, &controller, active_ticket);
             }
             errdefer if (controller.handle) |handle| self.destroyControllerOrPanic(handle);
-            const pose = poseFor(logical.position, logical.facing_yaw);
+            const pose = try poseFor(logical.position, logical.facing_yaw);
             try self.runtime.set(runtime_id, Npc, .{});
             try self.runtime.set(runtime_id, LogicalState, logical);
             try self.runtime.set(runtime_id, RuntimeController, controller);
@@ -1063,13 +1330,15 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 record.position,
             )) {
                 .ready => |rebuilt| {
-                    if (!isCompletedPatrolEndpoint(
-                        record.goal,
-                        record.route.current,
-                        record.route.patrol_leg,
-                        record.route.next,
-                    ) and !optionalNodeRefEql(record.route.next, rebuilt.next())) {
-                        return error.NpcPersistedRouteMismatch;
+                    if (record.route.mode == .exact_prefix) {
+                        if (!isCompletedPatrolEndpoint(
+                            record.goal,
+                            record.route.current,
+                            record.route.patrol_leg,
+                            record.route.next,
+                        ) and !optionalNodeRefEql(record.route.next, rebuilt.next())) {
+                            return error.NpcPersistedRouteMismatch;
+                        }
                     }
                     route = rebuilt;
                 },
@@ -1157,6 +1426,27 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             logical.route.segment_start = logical.position;
             if (logical.route.next() != null) return;
 
+            // A compact exact-prefix restore may retain one verified edge
+            // while farther goal content is inactive. Consuming that edge is
+            // not semantic goal completion: install the arrived node as the
+            // deferred owner-aligned anchor and let residency reconciliation
+            // rebuild only after the actual target is ready.
+            if (logical.route.needs_rebuild and
+                !isCompletedGoalEndpoint(
+                    logical.goal,
+                    next_ref,
+                    logical.route.patrol_leg,
+                ))
+            {
+                logical.route = routeAwaitingRebuild(
+                    next_ref,
+                    logical.route.patrol_leg,
+                    logical.position,
+                );
+                try self.transition(runtime_id, logical, .waiting_at_boundary);
+                return;
+            }
+
             try self.emitEvent(.{ .goal_reached = .{
                 .id = try self.runtime.identity(runtime_id),
                 .node = next_ref,
@@ -1207,6 +1497,26 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                     }
                 },
             }
+        }
+
+        fn advanceEncounterRouteIfArrived(self: *Self, logical: *LogicalState) !void {
+            const route = if (logical.encounter_route) |*value| value else return;
+            const next_ref = route.next() orelse return;
+            const target = switch (self.navigation_access.resolveNode(next_ref)) {
+                .ready => |resolved| resolved,
+                .district_inactive => return,
+                .invalid_reference => return error.NpcEncounterRouteInvalid,
+            };
+            const dx = target.node.position[0] - logical.position[0];
+            const dz = target.node.position[2] - logical.position[2];
+            const distance = @sqrt(dx * dx + dz * dz);
+            if (distance > self.config.arrival_distance and
+                !passedTarget(route.segment_start, target.node.position, logical.position))
+            {
+                return;
+            }
+            route.index += 1;
+            route.segment_start = logical.position;
         }
 
         fn transition(
@@ -1286,6 +1596,103 @@ fn planWithOne(reference: navigation.NodeRef) RoutePlan {
     return result;
 }
 
+fn routeAwaitingRebuild(
+    anchor: navigation.NodeRef,
+    patrol_leg: PatrolLeg,
+    position: [3]f32,
+) RouteCursor {
+    return .{
+        .plan = planWithOne(anchor),
+        .patrol_leg = patrol_leg,
+        .segment_start = position,
+        .needs_rebuild = true,
+    };
+}
+
+fn persistentRouteCursor(logical: anytype) !NpcRouteCursorV1 {
+    const base_current = try currentRouteNode(logical.route);
+    if (logical.encounter_route) |encounter_route| {
+        if (!navigation.ChunkCoord.eql(base_current.coord, logical.owner)) {
+            const anchor = ownerRouteNodeValue(logical.owner, encounter_route) orelse
+                return error.NpcEncounterOwnerRouteInvariantBroken;
+            const mode: PersistedRouteMode = if (isCompletedGoalEndpoint(
+                logical.goal,
+                anchor,
+                logical.route.patrol_leg,
+            ))
+                .exact_prefix
+            else
+                .deferred_rebuild;
+            return .{
+                .current = anchor,
+                .patrol_leg = logical.route.patrol_leg,
+                .mode = mode,
+            };
+        }
+    }
+    const next = logical.route.next();
+    const mode: PersistedRouteMode = if (logical.route.needs_rebuild and
+        next == null and
+        !isCompletedGoalEndpoint(logical.goal, base_current, logical.route.patrol_leg))
+        .deferred_rebuild
+    else
+        .exact_prefix;
+    return .{
+        .current = base_current,
+        .next = next,
+        .patrol_leg = logical.route.patrol_leg,
+        .mode = mode,
+    };
+}
+
+fn installAnchoredEncounterLocomotion(
+    logical: anytype,
+    locomotion: EncounterLocomotion,
+) !void {
+    const anchor = ownerRouteNodeValue(logical.owner, logical.route) orelse
+        return error.NpcEncounterOwnerRouteInvariantBroken;
+    logical.encounter_locomotion = locomotion;
+    logical.encounter_route = .{
+        .plan = planWithOne(anchor),
+        .segment_start = logical.position,
+    };
+}
+
+fn deferEncounterLocomotion(
+    logical: anytype,
+    locomotion: EncounterLocomotion,
+) !void {
+    const route = logical.encounter_route orelse logical.route;
+    const anchor = ownerRouteNodeValue(logical.owner, route) orelse
+        return error.NpcEncounterOwnerRouteInvariantBroken;
+    logical.encounter_locomotion = .hold;
+    logical.encounter_route = .{
+        .plan = planWithOne(anchor),
+        .segment_start = logical.position,
+    };
+    logical.pending_encounter_locomotion = locomotion;
+}
+
+fn encounterNextNode(logical: anytype) ?navigation.NodeRef {
+    if (logical.encounter_route) |route| return route.next();
+    return logical.route.next();
+}
+
+fn encounterOwnerRouteNode(self: anytype, logical: anytype) !navigation.NodeRef {
+    if (logical.encounter_route) |route| {
+        return ownerRouteNodeValue(logical.owner, route) orelse
+            error.NpcEncounterOwnerRouteInvariantBroken;
+    }
+    return switch (self.navigation_access.nearestActiveNode(logical.position)) {
+        .ready => |resolved| if (navigation.ChunkCoord.eql(resolved.reference.coord, logical.owner))
+            resolved.reference
+        else
+            error.NpcEncounterOwnerPositionInvariantBroken,
+        .district_inactive => error.NpcEncounterOwnerDistrictInactive,
+        .unavailable => error.NpcEncounterOwnerNodeUnavailable,
+    };
+}
+
 fn routeFromRecord(record: NpcRouteCursorV1, position: [3]f32) RouteCursor {
     var result = RouteCursor{
         .index = 0,
@@ -1310,7 +1717,8 @@ fn currentRouteNode(route: RouteCursor) !navigation.NodeRef {
 }
 
 fn ownerRouteNode(logical: anytype) !navigation.NodeRef {
-    return ownerRouteNodeValue(logical.owner, logical.route) orelse
+    const route = logical.encounter_route orelse logical.route;
+    return ownerRouteNodeValue(logical.owner, route) orelse
         error.NpcOwnerRouteInvariantBroken;
 }
 
@@ -1345,6 +1753,22 @@ fn isCompletedPatrolEndpoint(
     };
 }
 
+fn isCompletedGoalEndpoint(
+    goal: Goal,
+    current: navigation.NodeRef,
+    leg: PatrolLeg,
+) bool {
+    return switch (goal) {
+        .hold => true,
+        .navigate_to => |target| navigation.NodeRef.eql(current, target),
+        .patrol_between => |patrol| switch (leg) {
+            .toward_first => navigation.NodeRef.eql(current, patrol.first),
+            .toward_second => navigation.NodeRef.eql(current, patrol.second),
+            .none => false,
+        },
+    };
+}
+
 fn rejection(
     kind: CommandKind,
     reason: RejectionReason,
@@ -1359,20 +1783,11 @@ fn rejection(
     } };
 }
 
-fn poseFor(position: [3]f32, yaw: f32) engine.physics.Pose {
-    const half_yaw = yaw * 0.5;
+fn poseFor(position: [3]f32, yaw: f32) !engine.physics.Pose {
     return .{
         .position = position,
-        .rotation = .{ 0, @sin(half_yaw), 0, @cos(half_yaw) },
+        .rotation = try engine.transform.rotationFromFacingYaw(yaw),
     };
-}
-
-fn normalizeYaw(yaw: f32) f32 {
-    if (!std.math.isFinite(yaw)) return yaw;
-    const tau: f32 = 2 * std.math.pi;
-    var result = @mod(yaw + std.math.pi, tau) - std.math.pi;
-    if (result == 0) result = 0;
-    return result;
 }
 
 fn canonicalFloat(value: f32) f32 {
@@ -1412,6 +1827,10 @@ fn lessThanPersistentId(_: void, lhs: engine.PersistentId, rhs: engine.Persisten
 }
 
 fn lessThanRecord(_: void, lhs: NpcV1, rhs: NpcV1) bool {
+    return lessThanPersistentId({}, lhs.id, rhs.id);
+}
+
+fn lessThanView(_: void, lhs: NpcView, rhs: NpcView) bool {
     return lessThanPersistentId({}, lhs.id, rhs.id);
 }
 
@@ -1458,6 +1877,7 @@ fn writePersistentRouteCursor(
     if (route.next) |next| writeNodeRef(writer, next);
     writer.writeU8(route.route_index);
     writePatrolLeg(writer, route.patrol_leg);
+    writer.writeU8(@intFromEnum(route.mode));
 }
 
 fn writeVector3(writer: *engine.contracts.replay.Writer, value: [3]f32) !void {
@@ -1660,6 +2080,34 @@ const FakeNavigation = struct {
             }
         }
         return .not_connected;
+    }
+
+    pub fn nearestActiveNode(
+        self: *FakeNavigation,
+        position: [3]f32,
+    ) navigation.NearestNodeResolution {
+        const coord = navigation.ownerForPosition(position) catch return .unavailable;
+        if (!self.active(coord)) return .district_inactive;
+        var best: ?navigation.ResolvedNode = null;
+        var best_distance_squared = std.math.inf(f32);
+        for (0..3) |index| {
+            const resolved = switch (self.resolveNode(.{
+                .coord = coord,
+                .index = @intCast(index),
+            })) {
+                .ready => |value| value,
+                .district_inactive => return .district_inactive,
+                .invalid_reference => return .unavailable,
+            };
+            const dx = resolved.node.position[0] - position[0];
+            const dz = resolved.node.position[2] - position[2];
+            const distance_squared = dx * dx + dz * dz;
+            if (best == null or distance_squared < best_distance_squared) {
+                best = resolved;
+                best_distance_squared = distance_squared;
+            }
+        }
+        return .{ .ready = best orelse return .unavailable };
     }
 
     fn active(self: *const FakeNavigation, coord: navigation.ChunkCoord) bool {
@@ -2066,6 +2514,18 @@ test "cold NPC preflight rejects hostile owner cursor and content records" {
         snapshot_validation.validateRecords(&access, &.{hostile}),
     );
     hostile = valid;
+    hostile.route.next = null;
+    try std.testing.expectError(
+        error.NpcNavigateCursorMismatch,
+        snapshot_validation.validateRecords(&access, &.{hostile}),
+    );
+    hostile = valid;
+    hostile.route.mode = .deferred_rebuild;
+    try std.testing.expectError(
+        error.NpcNavigateCursorMismatch,
+        snapshot_validation.validateRecords(&access, &.{hostile}),
+    );
+    hostile = valid;
     hostile.route.next = westNode(2);
     try std.testing.expectError(
         error.NpcPersistedRouteMismatch,
@@ -2093,6 +2553,111 @@ test "cold NPC preflight rejects hostile owner cursor and content records" {
         error.DuplicateNpcPersistentId,
         snapshot_validation.validateRecords(&access, &.{ valid, valid }),
     );
+}
+
+test "intentional deferred cursor cold restores and canonicalizes with active content" {
+    var world: TestWorld = undefined;
+    try world.init();
+    defer world.deinit();
+
+    var deferred = validNpcRecord(1);
+    deferred.route.next = null;
+    deferred.route.mode = .deferred_rebuild;
+    try world.feature.restoreRecords(&.{deferred});
+
+    const view_value = try world.feature.view(deferred.id);
+    try std.testing.expectEqual(State.active, view_value.state);
+    try std.testing.expect(!view_value.route.needs_rebuild);
+    try std.testing.expect(view_value.route.next() != null);
+
+    const snapshot = try world.feature.snapshotRecords(std.testing.allocator);
+    defer std.testing.allocator.free(snapshot);
+    try std.testing.expectEqual(@as(usize, 1), snapshot.len);
+    try std.testing.expectEqual(PersistedRouteMode.exact_prefix, snapshot[0].route.mode);
+    try std.testing.expect(navigation.NodeRef.eql(westNode(1), snapshot[0].route.next.?));
+}
+
+test "cold restored exact prefix waits instead of completing a farther inactive goal" {
+    var world: TestWorld = undefined;
+    try world.init();
+    defer world.deinit();
+
+    world.navigation_access.east_active = false;
+    const record = validNpcRecord(1);
+    try world.feature.restoreRecords(&.{record});
+    var restored = try world.feature.view(record.id);
+    try std.testing.expect(restored.route.needs_rebuild);
+    try std.testing.expect(navigation.NodeRef.eql(westNode(1), restored.route.next().?));
+
+    var falsely_completed = false;
+    for (0..32) |_| {
+        try world.runtime.tick();
+        while (world.feature.pollEvent()) |event| switch (event) {
+            .goal_reached => falsely_completed = true,
+            else => {},
+        };
+        restored = try world.feature.view(record.id);
+        if (restored.state == .waiting_at_boundary and restored.route.next() == null) break;
+    }
+    try std.testing.expect(!falsely_completed);
+    try std.testing.expectEqual(State.waiting_at_boundary, restored.state);
+    try std.testing.expect(restored.route.needs_rebuild);
+    try std.testing.expect(navigation.NodeRef.eql(
+        westNode(1),
+        try currentRouteNode(restored.route),
+    ));
+
+    world.navigation_access.east_active = true;
+    world.navigation_access.east_generation += 1;
+    try world.runtime.tick();
+    restored = try world.feature.view(record.id);
+    try std.testing.expectEqual(State.active, restored.state);
+    try std.testing.expect(!restored.route.needs_rebuild);
+    try std.testing.expect(restored.route.next() != null);
+}
+
+test "cold restored patrol prefix waits without flipping its semantic leg" {
+    var world: TestWorld = undefined;
+    try world.init();
+    defer world.deinit();
+
+    world.navigation_access.east_active = false;
+    const record = patrolRecord(
+        1,
+        westNode(0),
+        westNode(1),
+        .toward_second,
+        nodePosition(westNode(0)),
+    );
+    try world.feature.restoreRecords(&.{record});
+    var restored = try world.feature.view(record.id);
+    var falsely_completed = false;
+    for (0..32) |_| {
+        try world.runtime.tick();
+        while (world.feature.pollEvent()) |event| switch (event) {
+            .goal_reached => falsely_completed = true,
+            else => {},
+        };
+        restored = try world.feature.view(record.id);
+        if (restored.state == .waiting_at_boundary and restored.route.next() == null) break;
+    }
+    try std.testing.expect(!falsely_completed);
+    try std.testing.expectEqual(State.waiting_at_boundary, restored.state);
+    try std.testing.expect(restored.route.needs_rebuild);
+    try std.testing.expectEqual(PatrolLeg.toward_second, restored.route.patrol_leg);
+    try std.testing.expect(navigation.NodeRef.eql(
+        westNode(1),
+        try currentRouteNode(restored.route),
+    ));
+
+    world.navigation_access.east_active = true;
+    world.navigation_access.east_generation += 1;
+    try world.runtime.tick();
+    restored = try world.feature.view(record.id);
+    try std.testing.expectEqual(State.active, restored.state);
+    try std.testing.expect(!restored.route.needs_rebuild);
+    try std.testing.expectEqual(PatrolLeg.toward_second, restored.route.patrol_leg);
+    try std.testing.expect(restored.route.next() != null);
 }
 
 test "NPC waits crosses half-open boundary binds generations and becomes dormant" {
@@ -2147,6 +2712,194 @@ test "NPC waits crosses half-open boundary binds generations and becomes dormant
     try std.testing.expect(view_value.controller_present);
 }
 
+test "encounter pursuit crosses ownership and resumes an owner-aligned route" {
+    var world: TestWorld = undefined;
+    try world.init();
+    defer world.deinit();
+
+    const id = try spawnPatrol(&world, 1);
+    var encounter = world.feature.encounterAccess();
+    try encounter.apply(id, .{ .pursue_position = nodePosition(eastNode(2)) });
+
+    var crossed = false;
+    for (0..80) |_| {
+        try world.runtime.tick();
+        const view_value = try world.feature.view(id);
+        if (navigation.ChunkCoord.eql(view_value.owner, east_coord)) {
+            crossed = true;
+            break;
+        }
+    }
+    try std.testing.expect(crossed);
+
+    try encounter.apply(id, .{ .face_and_hold = nodePosition(eastNode(2)) });
+    try world.runtime.tick();
+    try std.testing.expect(navigation.ChunkCoord.eql(
+        east_coord,
+        (try world.feature.view(id)).owner,
+    ));
+
+    try encounter.apply(id, .resume_route);
+    const rebased = try world.feature.view(id);
+    try std.testing.expect(navigation.ChunkCoord.eql(rebased.owner, east_coord));
+    try std.testing.expect(navigation.ChunkCoord.eql(
+        (try currentRouteNode(rebased.route)).coord,
+        east_coord,
+    ));
+    try world.runtime.tick();
+    const resumed = try world.feature.view(id);
+    try std.testing.expect(ownerRouteNodeValue(resumed.owner, resumed.route) != null);
+}
+
+test "encounter resume waits for an inactive patrol destination then rebuilds" {
+    var world: TestWorld = undefined;
+    try world.init();
+    defer world.deinit();
+
+    const id = try spawnPatrol(&world, 1);
+    const admitted = try world.feature.view(id);
+    try std.testing.expectEqual(PatrolLeg.toward_second, admitted.route.patrol_leg);
+
+    var encounter = world.feature.encounterAccess();
+    try encounter.apply(id, .{ .face_and_hold = nodePosition(westNode(1)) });
+    world.navigation_access.east_active = false;
+    try encounter.apply(id, .resume_route);
+
+    var deferred = try world.feature.view(id);
+    try std.testing.expect(deferred.encounter_locomotion == null);
+    try std.testing.expectEqual(@as(?navigation.NodeRef, null), deferred.route.next());
+    try std.testing.expectEqual(PatrolLeg.toward_second, deferred.route.patrol_leg);
+    try std.testing.expect(deferred.route.needs_rebuild);
+    try std.testing.expect(navigation.ChunkCoord.eql(
+        deferred.owner,
+        (try currentRouteNode(deferred.route)).coord,
+    ));
+
+    try world.runtime.tick();
+    deferred = try world.feature.view(id);
+    try std.testing.expectEqual(State.waiting_at_boundary, deferred.state);
+    try std.testing.expect(deferred.route.needs_rebuild);
+    const deferred_snapshot = try world.feature.snapshotRecords(std.testing.allocator);
+    defer std.testing.allocator.free(deferred_snapshot);
+    try std.testing.expectEqual(@as(usize, 1), deferred_snapshot.len);
+    try std.testing.expectEqual(@as(?navigation.NodeRef, null), deferred_snapshot[0].route.next);
+    try std.testing.expectEqual(
+        PersistedRouteMode.deferred_rebuild,
+        deferred_snapshot[0].route.mode,
+    );
+
+    world.navigation_access.east_active = true;
+    world.navigation_access.east_generation += 1;
+    try world.runtime.tick();
+    const rebuilt = try world.feature.view(id);
+    try std.testing.expectEqual(State.active, rebuilt.state);
+    try std.testing.expect(!rebuilt.route.needs_rebuild);
+    try std.testing.expect(rebuilt.route.next() != null);
+    try std.testing.expectEqual(PatrolLeg.toward_second, rebuilt.route.patrol_leg);
+}
+
+test "encounter resume survives dormant owner and rebuilds after owner reload" {
+    var world: TestWorld = undefined;
+    try world.init();
+    defer world.deinit();
+
+    const id = try spawnPatrol(&world, 1);
+    var encounter = world.feature.encounterAccess();
+    try encounter.apply(id, .{ .face_and_hold = nodePosition(westNode(1)) });
+
+    world.navigation_access.west_active = false;
+    try world.runtime.tick();
+    var dormant = try world.feature.view(id);
+    try std.testing.expectEqual(State.dormant, dormant.state);
+    try std.testing.expect(!dormant.controller_present);
+
+    try encounter.apply(id, .resume_route);
+    dormant = try world.feature.view(id);
+    try std.testing.expect(dormant.encounter_locomotion == null);
+    try std.testing.expect(dormant.route.needs_rebuild);
+    try std.testing.expectEqual(PatrolLeg.toward_second, dormant.route.patrol_leg);
+    try std.testing.expect(navigation.ChunkCoord.eql(
+        dormant.owner,
+        (try currentRouteNode(dormant.route)).coord,
+    ));
+    try world.runtime.tick();
+    try std.testing.expectEqual(State.dormant, (try world.feature.view(id)).state);
+    const dormant_snapshot = try world.feature.snapshotRecords(std.testing.allocator);
+    defer std.testing.allocator.free(dormant_snapshot);
+    try std.testing.expectEqual(@as(usize, 1), dormant_snapshot.len);
+    try std.testing.expectEqual(@as(?navigation.NodeRef, null), dormant_snapshot[0].route.next);
+    try std.testing.expectEqual(
+        PersistedRouteMode.deferred_rebuild,
+        dormant_snapshot[0].route.mode,
+    );
+
+    world.navigation_access.west_active = true;
+    world.navigation_access.west_generation += 1;
+    try world.runtime.tick();
+    const rebuilt = try world.feature.view(id);
+    try std.testing.expectEqual(State.active, rebuilt.state);
+    try std.testing.expect(rebuilt.controller_present);
+    try std.testing.expect(!rebuilt.route.needs_rebuild);
+    try std.testing.expect(rebuilt.route.next() != null);
+    try std.testing.expectEqual(PatrolLeg.toward_second, rebuilt.route.patrol_leg);
+}
+
+test "restored pursuit holds for an inactive target then installs on reload" {
+    var world: TestWorld = undefined;
+    try world.init();
+    defer world.deinit();
+
+    world.navigation_access.east_active = false;
+    const record = validNpcRecord(1);
+    try world.feature.restoreRecords(&.{record});
+    var encounter = world.feature.encounterAccess();
+    try encounter.restore(record.id, .{ .pursue_position = nodePosition(eastNode(2)) });
+
+    var deferred = try world.feature.view(record.id);
+    try std.testing.expect(std.meta.activeTag(deferred.encounter_locomotion.?) == .hold);
+    try world.runtime.tick();
+    deferred = try world.feature.view(record.id);
+    try std.testing.expectEqual(State.active, deferred.state);
+    try std.testing.expect(std.meta.activeTag(deferred.encounter_locomotion.?) == .hold);
+
+    world.navigation_access.east_active = true;
+    world.navigation_access.east_generation += 1;
+    try world.runtime.tick();
+    const resumed = try world.feature.view(record.id);
+    try std.testing.expectEqual(State.active, resumed.state);
+    try std.testing.expect(
+        std.meta.activeTag(resumed.encounter_locomotion.?) == .pursue_position,
+    );
+}
+
+test "restored pursuit holds through dormant owner then installs on reload" {
+    var world: TestWorld = undefined;
+    try world.init();
+    defer world.deinit();
+
+    world.navigation_access.west_active = false;
+    const record = validNpcRecord(1);
+    try world.feature.restoreRecords(&.{record});
+    var encounter = world.feature.encounterAccess();
+    try encounter.restore(record.id, .{ .pursue_position = nodePosition(eastNode(2)) });
+
+    var dormant = try world.feature.view(record.id);
+    try std.testing.expectEqual(State.dormant, dormant.state);
+    try std.testing.expect(std.meta.activeTag(dormant.encounter_locomotion.?) == .hold);
+    try world.runtime.tick();
+    try std.testing.expectEqual(State.dormant, (try world.feature.view(record.id)).state);
+
+    world.navigation_access.west_active = true;
+    world.navigation_access.west_generation += 1;
+    try world.runtime.tick();
+    dormant = try world.feature.view(record.id);
+    try std.testing.expectEqual(State.active, dormant.state);
+    try std.testing.expect(dormant.controller_present);
+    try std.testing.expect(
+        std.meta.activeTag(dormant.encounter_locomotion.?) == .pursue_position,
+    );
+}
+
 fn patrolRecord(
     id_local: u64,
     current: navigation.NodeRef,
@@ -2182,6 +2935,12 @@ fn expectRecordRoundTrip(record: NpcV1) !void {
     defer std.testing.allocator.free(snapshot);
     try std.testing.expectEqualDeep(@as(usize, 1), snapshot.len);
     try std.testing.expectEqualDeep(record, snapshot[0]);
+    const draws = try world.feature.extract(1);
+    try std.testing.expectEqual(@as(usize, 1), draws.len);
+    const expected_rotation = try engine.transform.rotationFromFacingYaw(record.facing_yaw);
+    for (draws[0].pose.rotation, expected_rotation) |actual, expected| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
 }
 
 test "compact patrol persistence round trips both interior directions" {
@@ -2592,8 +3351,8 @@ test "NPC extraction is sorted interpolated immutable clamped and residency filt
         try std.testing.expectEqual(test_mesh, draw.mesh);
         try std.testing.expectEqual(test_material, draw.material);
         const expected_pose = try engine.transform.interpolate(
-            poseFor(nodePosition(westNode(0)), 0),
-            poseFor(view_value.position, view_value.facing_yaw),
+            try poseFor(nodePosition(westNode(0)), 0),
+            try poseFor(view_value.position, view_value.facing_yaw),
             0.5,
         );
         try std.testing.expectEqualDeep(expected_pose, draw.pose);

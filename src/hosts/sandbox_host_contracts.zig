@@ -12,6 +12,7 @@ const vehicles = @import("vehicle_contract");
 const districts = @import("district_contract");
 const interactions = @import("interaction_feature_contract");
 const npcs = @import("npc_contract");
+const npc_encounters = @import("npc_encounter_contract");
 const sandbox_district_recipe = @import("sandbox_district_recipe");
 const sandbox_diagnostics = @import("sandbox_diagnostics_contract");
 
@@ -37,7 +38,14 @@ pub const district_presentation_policies = sandbox_district_recipe.presentation_
 pub const navigation_east_coord = sandbox_district_recipe.navigation_east_coord;
 pub const navigation_west_coord = sandbox_district_recipe.navigation_west_coord;
 pub const npc_capacity = npcs.max_npcs;
-pub const snapshot_schema: u16 = 8;
+pub const snapshot_schema: u16 = 11;
+pub const DistrictPresentationPlan = sandbox_district_recipe.PresentationPlan;
+
+/// Default playable product spawn and the local movement envelope guaranteed
+/// clear before the asynchronous west district is admitted to authority.
+pub const default_character_spawn_position = [3]f32{ -2, 0, 4 };
+pub const default_character_spawn_clearance: f32 = 0.5;
+pub const default_character_initial_traversal: f32 = 1.0;
 
 /// Renderer-neutral optional collision primitive in the sandbox recipe.
 pub const StaticBox = struct {
@@ -59,6 +67,7 @@ pub const Config = struct {
     vehicle: VehicleConfig = .{},
     interaction: interactions.Config = .{},
     npc: npcs.Config = .{},
+    npc_encounter: npc_encounters.Config = .{},
     block: ?StaticBox = null,
 };
 
@@ -74,6 +83,106 @@ pub fn proceduralDistrictBuild(coord: ChunkCoord) !districts.DistrictBuild {
     };
 }
 
+/// Keep the renderer's authored scene and mandatory collision proxies under
+/// one renderer-neutral product contract.
+pub fn districtPresentationPlan(
+    build: *const districts.DistrictBuild,
+    authored_scene_resident: bool,
+) !DistrictPresentationPlan {
+    return sandbox_district_recipe.presentationPlan(build, authored_scene_resident);
+}
+
+/// Reject product bootstrap if a recipe change makes the default capsule or
+/// its first metre of camera-relative movement intersect a blocking box.
+pub fn validateDefaultCharacterSpawn(config: CharacterConfig) !void {
+    try config.validate();
+    const west = try proceduralDistrictBuild(navigation_west_coord);
+    const clearance = sandbox_district_recipe.CapsuleClearance{
+        .radius = config.radius,
+        .half_height = config.half_height,
+        .margin = default_character_spawn_clearance,
+    };
+    if (!sandbox_district_recipe.capsuleTraversalClear(
+        &west,
+        default_character_spawn_position,
+        default_character_spawn_position,
+        clearance,
+    )) return error.DefaultCharacterSpawnBlocked;
+
+    const diagonal = default_character_initial_traversal * 0.70710677;
+    for ([_][2]f32{
+        .{ -default_character_initial_traversal, 0 },
+        .{ default_character_initial_traversal, 0 },
+        .{ 0, -default_character_initial_traversal },
+        .{ 0, default_character_initial_traversal },
+        .{ -diagonal, -diagonal },
+        .{ -diagonal, diagonal },
+        .{ diagonal, -diagonal },
+        .{ diagonal, diagonal },
+    }) |offset| {
+        const destination = [3]f32{
+            default_character_spawn_position[0] + offset[0],
+            default_character_spawn_position[1],
+            default_character_spawn_position[2] + offset[1],
+        };
+        if (!sandbox_district_recipe.capsuleTraversalClear(
+            &west,
+            default_character_spawn_position,
+            destination,
+            clearance,
+        )) return error.DefaultCharacterInitialTraversalBlocked;
+    }
+}
+
+/// Validate every installed route edge with the canonical NPC capsule against
+/// every blocker it can cross. Topology alone cannot guarantee a traversable
+/// route after either collision geometry or NPC dimensions change.
+pub fn validateCanonicalNavigationClearance(config: npcs.Config) !void {
+    try config.validate();
+    const builds = [_]districts.DistrictBuild{
+        try proceduralDistrictBuild(navigation_west_coord),
+        try proceduralDistrictBuild(navigation_east_coord),
+    };
+    try sandbox_district_recipe.validateRoute(&builds);
+    const clearance = sandbox_district_recipe.CapsuleClearance{
+        .radius = config.radius,
+        .half_height = config.half_height,
+        .margin = config.arrival_distance,
+    };
+    for (builds) |source_build| {
+        for (source_build.navigationNodes()) |source| {
+            const first: usize = source.first_edge;
+            const end = first + source.edge_count;
+            for (source_build.navigationEdges()[first..end]) |edge| {
+                const target_build = if (districts.ChunkCoord.eql(
+                    edge.target.coord,
+                    navigation_west_coord,
+                ))
+                    &builds[0]
+                else if (districts.ChunkCoord.eql(
+                    edge.target.coord,
+                    navigation_east_coord,
+                ))
+                    &builds[1]
+                else
+                    return error.CanonicalNavigationTargetMissing;
+                if (edge.target.index >= target_build.navigation_node_count) {
+                    return error.CanonicalNavigationTargetMissing;
+                }
+                const target = target_build.navigation_nodes[edge.target.index];
+                for (builds) |collision_build| {
+                    if (!sandbox_district_recipe.capsuleTraversalClear(
+                        &collision_build,
+                        source.position,
+                        target.position,
+                        clearance,
+                    )) return error.CanonicalNavigationEdgeBlocked;
+                }
+            }
+        }
+    }
+}
+
 test "graphical sandbox contracts publish values without mutable authority" {
     const Module = @This();
     try std.testing.expect(!@hasDecl(Module, "Simulation"));
@@ -82,5 +191,16 @@ test "graphical sandbox contracts publish values without mutable authority" {
 
     const config = Config{ .namespace = 42 };
     try std.testing.expectEqual(@as(u64, 42), config.namespace);
-    try std.testing.expectEqual(snapshot_schema, @as(u16, 8));
+    try std.testing.expectEqual(snapshot_schema, @as(u16, 11));
+}
+
+test "default playable spawn and initial traversal clear canonical blockers" {
+    try validateDefaultCharacterSpawn(.{});
+    try validateCanonicalNavigationClearance(.{});
+
+    const west = try proceduralDistrictBuild(navigation_west_coord);
+    const staged = try districtPresentationPlan(&west, false);
+    const resident = try districtPresentationPlan(&west, true);
+    try std.testing.expectEqual(@as(u8, 2), staged.proxy_box_count);
+    try std.testing.expectEqualSlices(u8, staged.proxyBoxIndices(), resident.proxyBoxIndices());
 }

@@ -30,9 +30,11 @@ the complete macOS evidence matrix passes again.
 1. **Greenfield means current cohort only.** No migration readers, deprecated
    aliases, legacy content fingerprints, compatibility constructors, or old
    command-line/build aliases are retained without a current consumer.
-2. **Current schema names are not compatibility shims.** `SnapshotV7` and
-   feature `V1` records remain valid names for the only accepted wire schemas.
-   Every non-current cohort is rejected.
+2. **Schema names are not compatibility shims.** At the 2026-07-13 cleanup
+   closeout, `SnapshotV7` and feature `V1` records were the only accepted
+   schemas. Later greenfield slices intentionally advance the current snapshot
+   cohort without retaining migration readers; see `OVERHAUL_PLAN.md` for the
+   current value.
 3. **Apple Silicon macOS is the only maintained platform.** Linux, SteamOS,
    Windows, Intel macOS, mobile, web, and consoles have no current build,
    shader, CI, packaging, API-stability, or abstraction requirement.
@@ -53,9 +55,10 @@ the complete macOS evidence matrix passes again.
    banner and point to the current readiness record.
 8. **No license is added.** Licensing and public distribution remain an owner
    decision; the repository currently grants no license.
-9. **Multiplayer remains deferred.** S9 transport, replication, prediction,
-   accounts, distributed persistence, anti-cheat, and MMO operations are not
-   part of cleanup.
+9. **At cleanup closeout, multiplayer remained deferred.** S9 transport,
+   replication, prediction, accounts, distributed persistence, anti-cheat, and
+   MMO operations were not part of cleanup. Later multiplayer work is tracked
+   by the living roadmap rather than retroactively folded into this record.
 
 ## Audit Findings Register
 
@@ -110,8 +113,9 @@ greenfield policy, accepted architecture, scope, and verification contract.
 
 ### C0 acceptance
 
-- [x] No current document calls Snapshot V4/V5 the active schema; the active
-  composition is `SnapshotV7`.
+- [x] At cleanup closure, no current document called Snapshot V4/V5 the active
+  schema; the then-active composition was `SnapshotV7`. This is historical
+  cleanup evidence, not a claim about the later S11 cohort.
 - [x] No current document says feature authority queues remain unbounded or
   that M3 is future work.
 - [x] ADR status accurately distinguishes accepted, implemented, validated,

@@ -1,0 +1,1599 @@
+//! Bounded per-process human-test incident bundle and asynchronous writer.
+//!
+//! Producers submit already-bounded typed projections. The writer thread is
+//! the sole owner of stream file handles and durable manifest/handoff writes.
+
+const std = @import("std");
+const builtin = @import("builtin");
+const build_options = @import("build_options");
+const engine = @import("incinerator_engine");
+const sandbox_replay = @import("sandbox_replay");
+const editor_contract = @import("../editor/tool.zig");
+
+const incident = @import("../engine/incident.zig");
+
+pub const stream_rotation_bytes: u64 = 4 * 1024 * 1024;
+pub const run_budget_bytes: u64 = 512 * 1024 * 1024;
+pub const writer_queue_capacity: usize = 1024;
+pub const max_line_bytes: usize = 2048;
+pub const pre_roll_ns: u64 = 15 * std.time.ns_per_s;
+pub const post_roll_ns: u64 = 5 * std.time.ns_per_s;
+pub const retained_unflagged_runs: usize = 20;
+
+const Stream = enum { timeline, state, input, metrics, anomalies };
+const ByteClass = enum { stream, visual, replay, metadata };
+
+const Line = struct {
+    stream: Stream,
+    sequence: u64,
+    len: u16,
+    bytes: [max_line_bytes]u8,
+
+    fn slice(self: *const Line) []const u8 {
+        return self.bytes[0..self.len];
+    }
+};
+
+const Handoff = struct {
+    len: u16,
+    bytes: [incident.max_handoff_bytes]u8,
+
+    fn slice(self: *const Handoff) []const u8 {
+        return self.bytes[0..self.len];
+    }
+};
+
+const HandoffJob = struct {
+    bytes: []u8,
+};
+
+pub const VisualSource = enum {
+    product_trail,
+    human_visible,
+    product_flag,
+    semantic_id,
+};
+
+pub const VisualFrameMetadata = struct {
+    capture_sequence: u64,
+    source: VisualSource,
+    requested_offset_ms: ?i16,
+    flag_monotonic_ns: u64,
+    target_monotonic_ns: u64,
+    captured_monotonic_ns: u64,
+    submitted_monotonic_ns: u64,
+    completed_monotonic_ns: u64,
+    authority_tick: u64,
+    presentation_frame: u64,
+    drawable_generation: u32,
+    width: u16,
+    height: u16,
+    bgra: bool,
+    fence_latency_ns: u64,
+    pixel_digest: u64,
+    suspicious: bool,
+};
+
+/// Complete live semantic cohort including chassis plus four wheels for every
+/// bounded vehicle. Keep aligned with the renderer semantic oracle ceiling.
+pub const maximum_semantic_entries: usize = 128;
+
+pub const SemanticMapEntry = struct {
+    object_id: u32,
+    entity: engine.gameplay_trace.EntityRef,
+    color_rgb: [3]u8,
+};
+
+const Image = struct {
+    anomaly_id: incident.AnomalyId,
+    metadata: VisualFrameMetadata,
+    pixels: ?[]u8,
+    semantic_entries: [maximum_semantic_entries]SemanticMapEntry = undefined,
+    semantic_entry_count: u8 = 0,
+};
+
+const Replay = struct {
+    bytes: []u8,
+};
+
+const Marker = struct {
+    anomaly_id: incident.AnomalyId,
+    authority_tick: u64,
+    presentation_frame: u64,
+    wall_unix_ms: i64,
+    monotonic_ns: u64,
+    lifecycle_status: incident.AnomalyStatus,
+    artifact_count: u16,
+    artifact_failures: u16,
+    human_anchor_mask: u5,
+    product_flag_present: bool,
+    semantic_id_present: bool,
+    selected: ?engine.gameplay_trace.EntityRef,
+    note: [incident.max_note_bytes]u8,
+    note_len: u8,
+};
+
+const Job = union(enum) {
+    line: Line,
+    handoff: HandoffJob,
+    image: Image,
+    replay: Replay,
+    marker: Marker,
+    checkpoint,
+    flush,
+    shutdown,
+};
+
+const Queue = struct {
+    mutex: std.atomic.Mutex = .unlocked,
+    jobs: [writer_queue_capacity]Job = undefined,
+    read_index: usize = 0,
+    count: usize = 0,
+    high_water: usize = 0,
+    dropped: u64 = 0,
+    stopped: bool = false,
+    writer_ready: bool = false,
+    writer_failed: bool = false,
+    bytes_written: u64 = 0,
+    stream_bytes_written: u64 = 0,
+    visual_bytes_written: u64 = 0,
+    replay_bytes_written: u64 = 0,
+    metadata_bytes_written: u64 = 0,
+    screenshot_misses: u64 = 0,
+    replay_attached: bool = false,
+    anomaly_count: u8 = 0,
+    last_admitted_sequence: u64 = 0,
+    last_durable_sequence: u64 = 0,
+    last_written_sequence: u64 = 0,
+    handoff_ready: bool = false,
+    handoff: Handoff = undefined,
+
+    fn lock(self: *Queue) void {
+        while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
+    }
+
+    fn unlock(self: *Queue) void {
+        self.mutex.unlock();
+    }
+
+    fn push(self: *Queue, job: Job) bool {
+        self.lock();
+        defer self.unlock();
+        if (self.stopped or self.count == self.jobs.len) {
+            self.dropped +|= 1;
+            return false;
+        }
+        const index = (self.read_index + self.count) % self.jobs.len;
+        self.jobs[index] = job;
+        self.count += 1;
+        self.high_water = @max(self.high_water, self.count);
+        return true;
+    }
+
+    fn pop(self: *Queue) ?Job {
+        self.lock();
+        defer self.unlock();
+        if (self.count == 0) return null;
+        const job = self.jobs[self.read_index];
+        self.read_index = (self.read_index + 1) % self.jobs.len;
+        self.count -= 1;
+        return job;
+    }
+};
+
+const StreamFile = struct {
+    stream: Stream,
+    segment: u32 = 1,
+    bytes: u64 = 0,
+    opened_ns: u64 = 0,
+    file: ?std.Io.File = null,
+
+    fn close(self: *StreamFile, io: std.Io) void {
+        if (self.file) |file| file.close(io);
+        self.file = null;
+    }
+};
+
+const Writer = struct {
+    io: std.Io,
+    queue: *Queue,
+    run_path: []const u8,
+    started_wall_unix_ms: i64,
+    budget_bytes: u64 = run_budget_bytes,
+    streams: [5]StreamFile = .{
+        .{ .stream = .timeline },
+        .{ .stream = .state },
+        .{ .stream = .input },
+        .{ .stream = .metrics },
+        .{ .stream = .anomalies },
+    },
+    last_flush_ns: u64 = 0,
+
+    fn run(self: *Writer) void {
+        self.writeManifest("running") catch {
+            self.fail();
+            self.queue.lock();
+            self.queue.stopped = true;
+            self.queue.unlock();
+            return;
+        };
+        self.last_flush_ns = monotonicNowNs(self.io);
+        self.setReady();
+        while (true) {
+            const job = self.queue.pop() orelse {
+                const now = monotonicNowNs(self.io);
+                if (now -| self.last_flush_ns >= std.time.ns_per_s) {
+                    self.flushAll() catch self.fail();
+                    self.writeManifest("running") catch self.fail();
+                    self.last_flush_ns = now;
+                }
+                std.Io.sleep(self.io, .fromMilliseconds(10), .awake) catch {};
+                continue;
+            };
+            switch (job) {
+                .line => |line| self.writeLine(line) catch self.fail(),
+                .handoff => |handoff| {
+                    defer std.heap.page_allocator.free(handoff.bytes);
+                    self.flushAll() catch self.fail();
+                    self.writeManifest("running") catch self.fail();
+                    self.writeHandoff(handoff.bytes) catch self.fail();
+                    self.writeManifest("running") catch self.fail();
+                },
+                .image => |image| {
+                    defer if (image.pixels) |pixels| std.heap.page_allocator.free(pixels);
+                    self.writeImage(image) catch self.fail();
+                },
+                .replay => |replay| {
+                    defer std.heap.page_allocator.free(replay.bytes);
+                    self.writeReplay(replay.bytes) catch self.fail();
+                },
+                .marker => |marker| self.writeMarkerAndWindows(marker) catch self.fail(),
+                .checkpoint => {
+                    self.flushAll() catch self.fail();
+                    self.writeManifest("running") catch self.fail();
+                },
+                .flush => self.flushAll() catch self.fail(),
+                .shutdown => break,
+            }
+        }
+        self.flushAll() catch self.fail();
+        for (&self.streams) |*stream| stream.close(self.io);
+        self.writeManifest(if (self.failed()) "partial" else "complete") catch self.fail();
+        self.queue.lock();
+        self.queue.stopped = true;
+        self.queue.unlock();
+    }
+
+    fn fail(self: *Writer) void {
+        self.queue.lock();
+        self.queue.writer_failed = true;
+        self.queue.unlock();
+    }
+
+    fn failed(self: *Writer) bool {
+        self.queue.lock();
+        defer self.queue.unlock();
+        return self.queue.writer_failed;
+    }
+
+    fn setReady(self: *Writer) void {
+        self.queue.lock();
+        self.queue.writer_ready = true;
+        self.queue.unlock();
+    }
+
+    fn streamFile(self: *Writer, stream: Stream) *StreamFile {
+        return &self.streams[@intFromEnum(stream)];
+    }
+
+    fn ensureStreamFile(self: *Writer, value: *StreamFile, incoming: usize) !std.Io.File {
+        const now = monotonicNowNs(self.io);
+        if (value.file != null and (value.stream == .anomalies or
+            (value.bytes + incoming <= stream_rotation_bytes and
+                now -| value.opened_ns < 30 * std.time.ns_per_s)))
+        {
+            return value.file.?;
+        }
+        value.close(self.io);
+        if (value.bytes != 0) value.segment += 1;
+        value.bytes = 0;
+        value.opened_ns = now;
+        var path_buffer: [incident.max_path_bytes]u8 = undefined;
+        const path = if (value.stream == .anomalies)
+            try std.fmt.bufPrint(&path_buffer, "{s}/anomalies.ndjson", .{self.run_path})
+        else
+            try std.fmt.bufPrint(
+                &path_buffer,
+                "{s}/streams/{s}-{d:0>6}.ndjson",
+                .{ self.run_path, @tagName(value.stream), value.segment },
+            );
+        value.file = try std.Io.Dir.cwd().createFile(self.io, path, .{
+            .exclusive = true,
+            .permissions = std.Io.File.Permissions.fromMode(0o600),
+        });
+        return value.file.?;
+    }
+
+    fn writeLine(self: *Writer, line: Line) !void {
+        try self.ensureBudget(line.len + 1);
+        const stream = self.streamFile(line.stream);
+        const file = try self.ensureStreamFile(stream, line.len + 1);
+        try file.writeStreamingAll(self.io, line.slice());
+        try file.writeStreamingAll(self.io, "\n");
+        stream.bytes += line.len + 1;
+        self.queue.lock();
+        self.queue.last_written_sequence = @max(
+            self.queue.last_written_sequence,
+            line.sequence,
+        );
+        self.queue.unlock();
+        self.noteBytes(.stream, line.len + 1);
+    }
+
+    fn writeHandoff(self: *Writer, bytes: []const u8) !void {
+        try self.ensureBudget(bytes.len);
+        var path_buffer: [incident.max_path_bytes]u8 = undefined;
+        const path = try std.fmt.bufPrint(&path_buffer, "{s}/LLM_HANDOFF.md", .{self.run_path});
+        var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, path, .{
+            .replace = true,
+            .permissions = std.Io.File.Permissions.fromMode(0o600),
+        });
+        defer atomic.deinit(self.io);
+        try atomic.file.writeStreamingAll(self.io, bytes);
+        try atomic.file.sync(self.io);
+        try atomic.replace(self.io);
+        self.noteBytes(.metadata, bytes.len);
+        var handoff = Handoff{ .len = @intCast(bytes.len), .bytes = @splat(0) };
+        @memcpy(handoff.bytes[0..bytes.len], bytes);
+        self.queue.lock();
+        self.queue.handoff = handoff;
+        self.queue.handoff_ready = true;
+        self.queue.unlock();
+    }
+
+    fn writeReplay(self: *Writer, bytes: []const u8) !void {
+        try self.ensureBudget(bytes.len);
+        var path_buffer: [incident.max_path_bytes]u8 = undefined;
+        const path = try std.fmt.bufPrint(
+            &path_buffer,
+            "{s}/replay/accepted-ingress.icrp",
+            .{self.run_path},
+        );
+        var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, path, .{
+            .replace = true,
+            .permissions = std.Io.File.Permissions.fromMode(0o600),
+        });
+        defer atomic.deinit(self.io);
+        try atomic.file.writeStreamingAll(self.io, bytes);
+        try atomic.file.sync(self.io);
+        try atomic.replace(self.io);
+        self.noteBytes(.replay, bytes.len);
+        self.queue.lock();
+        self.queue.replay_attached = true;
+        self.queue.unlock();
+    }
+
+    fn writeMarkerAndWindows(self: *Writer, marker: Marker) !void {
+        try self.flushAll();
+        var directory_buffer: [incident.max_path_bytes]u8 = undefined;
+        const directory = try std.fmt.bufPrint(
+            &directory_buffer,
+            "{s}/anomalies/anomaly-{d:0>4}",
+            .{ self.run_path, marker.anomaly_id },
+        );
+        _ = try std.Io.Dir.createDirPathStatus(
+            .cwd(),
+            self.io,
+            directory,
+            std.Io.Dir.Permissions.fromMode(0o700),
+        );
+        var path_buffer: [incident.max_path_bytes]u8 = undefined;
+        const path = try std.fmt.bufPrint(&path_buffer, "{s}/marker.json", .{directory});
+        var selected_buffer: [128]u8 = undefined;
+        const selected = entityJson(&selected_buffer, marker.selected);
+        var escaped_note_buffer: [incident.max_note_bytes * 2]u8 = undefined;
+        const note = escapeJson(
+            &escaped_note_buffer,
+            marker.note[0..@min(@as(usize, marker.note_len), marker.note.len)],
+        );
+        var buffer: [1536]u8 = undefined;
+        const json = try std.fmt.bufPrint(
+            &buffer,
+            "{{\"schema\":{d},\"kind\":\"incident_marker\",\"anomaly_id\":{d},\"lifecycle_status\":\"{s}\",\"authority_tick\":{d},\"presentation_frame\":{d},\"wall_unix_ms\":{d},\"flag_monotonic_ns\":{d},\"window_start_ns\":{d},\"window_end_ns\":{d},\"artifacts\":{{\"count\":{d},\"failures\":{d},\"human_m2000ms\":{},\"human_m1000ms\":{},\"human_flag\":{},\"human_p1000ms\":{},\"human_p3000ms\":{},\"product_flag\":{},\"semantic_id_flag\":{}}},\"selected_entity\":{s},\"semantic_id_status\":\"{s}\",\"note\":\"{s}\"}}\n",
+            .{ incident.schema_version, marker.anomaly_id, @tagName(marker.lifecycle_status), marker.authority_tick, marker.presentation_frame, marker.wall_unix_ms, marker.monotonic_ns, marker.monotonic_ns -| pre_roll_ns, marker.monotonic_ns +| post_roll_ns, marker.artifact_count, marker.artifact_failures, marker.human_anchor_mask & 1 != 0, marker.human_anchor_mask & 2 != 0, marker.human_anchor_mask & 4 != 0, marker.human_anchor_mask & 8 != 0, marker.human_anchor_mask & 16 != 0, marker.product_flag_present, marker.semantic_id_present, selected, if (marker.semantic_id_present) "available" else "missing", note },
+        );
+        try self.ensureBudget(json.len);
+        var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, path, .{
+            .replace = true,
+            .permissions = std.Io.File.Permissions.fromMode(0o600),
+        });
+        defer atomic.deinit(self.io);
+        try atomic.file.writeStreamingAll(self.io, json);
+        try atomic.file.sync(self.io);
+        try atomic.replace(self.io);
+        self.noteBytes(.metadata, json.len);
+        inline for ([_]Stream{ .timeline, .state, .input, .metrics }) |stream| {
+            try self.writeStreamWindow(
+                directory,
+                stream,
+                marker.monotonic_ns -| pre_roll_ns,
+                marker.monotonic_ns +| post_roll_ns,
+            );
+        }
+    }
+
+    fn writeStreamWindow(
+        self: *Writer,
+        anomaly_directory: []const u8,
+        stream: Stream,
+        start_ns: u64,
+        end_ns: u64,
+    ) !void {
+        var streams_path_buffer: [incident.max_path_bytes]u8 = undefined;
+        const streams_path = try std.fmt.bufPrint(&streams_path_buffer, "{s}/streams", .{self.run_path});
+        var output_path_buffer: [incident.max_path_bytes]u8 = undefined;
+        const output_path = try std.fmt.bufPrint(
+            &output_path_buffer,
+            "{s}/{s}-window.ndjson",
+            .{ anomaly_directory, @tagName(stream) },
+        );
+        var output = try std.Io.Dir.cwd().createFileAtomic(self.io, output_path, .{
+            .replace = true,
+            .permissions = std.Io.File.Permissions.fromMode(0o600),
+        });
+        defer output.deinit(self.io);
+        var streams = try std.Io.Dir.cwd().openDir(self.io, streams_path, .{ .iterate = true });
+        defer streams.close(self.io);
+        var walker = try streams.walk(std.heap.page_allocator);
+        defer walker.deinit();
+        var segment_paths = try std.ArrayList([]u8).initCapacity(
+            std.heap.page_allocator,
+            4,
+        );
+        defer {
+            for (segment_paths.items) |segment_path| {
+                std.heap.page_allocator.free(segment_path);
+            }
+            segment_paths.deinit(std.heap.page_allocator);
+        }
+        while (try walker.next(self.io)) |entry| {
+            if (entry.kind != .file or !std.mem.startsWith(u8, entry.path, @tagName(stream)) or
+                !std.mem.endsWith(u8, entry.path, ".ndjson")) continue;
+            try segment_paths.append(
+                std.heap.page_allocator,
+                try std.heap.page_allocator.dupe(u8, entry.path),
+            );
+        }
+        std.mem.sort([]u8, segment_paths.items, {}, struct {
+            fn lessThan(_: void, left: []u8, right: []u8) bool {
+                return std.mem.lessThan(u8, left, right);
+            }
+        }.lessThan);
+        for (segment_paths.items) |segment_path| {
+            const source_path = try std.fs.path.join(
+                std.heap.page_allocator,
+                &.{ streams_path, segment_path },
+            );
+            defer std.heap.page_allocator.free(source_path);
+            const bytes = try std.Io.Dir.cwd().readFileAlloc(
+                self.io,
+                source_path,
+                std.heap.page_allocator,
+                .limited(stream_rotation_bytes + max_line_bytes),
+            );
+            defer std.heap.page_allocator.free(bytes);
+            var lines = std.mem.splitScalar(u8, bytes, '\n');
+            while (lines.next()) |line| {
+                if (line.len == 0) continue;
+                const timestamp = jsonU64(line, "\"monotonic_ns\":") orelse continue;
+                if (timestamp < start_ns or timestamp > end_ns) continue;
+                try self.ensureBudget(line.len + 1);
+                try output.file.writeStreamingAll(self.io, line);
+                try output.file.writeStreamingAll(self.io, "\n");
+                self.noteBytes(.metadata, line.len + 1);
+            }
+        }
+        try output.file.sync(self.io);
+        try output.replace(self.io);
+    }
+
+    fn writeImage(self: *Writer, image: Image) !void {
+        var anomaly_directory_buffer: [incident.max_path_bytes]u8 = undefined;
+        const anomaly_directory = try std.fmt.bufPrint(
+            &anomaly_directory_buffer,
+            "{s}/anomalies/anomaly-{d:0>4}",
+            .{ self.run_path, image.anomaly_id },
+        );
+        _ = try std.Io.Dir.createDirPathStatus(
+            .cwd(),
+            self.io,
+            anomaly_directory,
+            std.Io.Dir.Permissions.fromMode(0o700),
+        );
+
+        var relative_buffer: [incident.max_path_bytes]u8 = undefined;
+        const relative_path = switch (image.metadata.source) {
+            .product_trail => try std.fmt.bufPrint(
+                &relative_buffer,
+                "visual/frame-{d:0>8}_{d:0>8}.ppm",
+                .{ image.metadata.capture_sequence, image.metadata.presentation_frame },
+            ),
+            .human_visible => try std.fmt.bufPrint(
+                &relative_buffer,
+                "anomalies/anomaly-{d:0>4}/screenshot-human-{s}.ppm",
+                .{ image.anomaly_id, visualOffsetLabel(image.metadata.requested_offset_ms orelse 0) },
+            ),
+            .product_flag => try std.fmt.bufPrint(
+                &relative_buffer,
+                "anomalies/anomaly-{d:0>4}/screenshot-product-flag.ppm",
+                .{image.anomaly_id},
+            ),
+            .semantic_id => try std.fmt.bufPrint(
+                &relative_buffer,
+                "anomalies/anomaly-{d:0>4}/semantic-id-flag.ppm",
+                .{image.anomaly_id},
+            ),
+        };
+        if (image.pixels) |pixels| {
+            const visual_bytes = @as(usize, image.metadata.width) * image.metadata.height * 3 + 64;
+            try self.ensureBudget(visual_bytes);
+            var absolute_buffer: [incident.max_path_bytes]u8 = undefined;
+            const absolute_path = try std.fmt.bufPrint(
+                &absolute_buffer,
+                "{s}/{s}",
+                .{ self.run_path, relative_path },
+            );
+            const file = try std.Io.Dir.cwd().createFile(self.io, absolute_path, .{
+                .exclusive = true,
+                .permissions = std.Io.File.Permissions.fromMode(0o600),
+            });
+            defer file.close(self.io);
+            var header: [64]u8 = undefined;
+            const header_text = try std.fmt.bufPrint(
+                &header,
+                "P6\n{d} {d}\n255\n",
+                .{ image.metadata.width, image.metadata.height },
+            );
+            try file.writeStreamingAll(self.io, header_text);
+            var row: [4096 * 3]u8 = undefined;
+            if (image.metadata.width > 4096) return error.ImageWidthUnsupported;
+            for (0..image.metadata.height) |y| {
+                for (0..image.metadata.width) |x| {
+                    const source = (y * image.metadata.width + x) * 4;
+                    const destination = x * 3;
+                    const red_offset: usize = if (image.metadata.bgra) 2 else 0;
+                    const blue_offset: usize = if (image.metadata.bgra) 0 else 2;
+                    row[destination + 0] = pixels[source + red_offset];
+                    row[destination + 1] = pixels[source + 1];
+                    row[destination + 2] = pixels[source + blue_offset];
+                }
+                try file.writeStreamingAll(self.io, row[0 .. image.metadata.width * 3]);
+            }
+            try file.sync(self.io);
+            self.noteBytes(
+                .visual,
+                header_text.len + @as(usize, image.metadata.width) * image.metadata.height * 3,
+            );
+        }
+
+        var index_path_buffer: [incident.max_path_bytes]u8 = undefined;
+        const index_path = try std.fmt.bufPrint(
+            &index_path_buffer,
+            "{s}/visual-index.ndjson",
+            .{anomaly_directory},
+        );
+        var index_line_buffer: [2048]u8 = undefined;
+        const actual_delta_ms = signedDeltaMs(
+            image.metadata.captured_monotonic_ns,
+            image.metadata.flag_monotonic_ns,
+        );
+        const index_line = try std.fmt.bufPrint(
+            &index_line_buffer,
+            "{{\"schema\":{d},\"kind\":\"visual_frame\",\"anomaly_id\":{d},\"capture_sequence\":{d},\"source\":\"{s}\",\"requested_offset_ms\":{?d},\"target_monotonic_ns\":{d},\"captured_monotonic_ns\":{d},\"actual_offset_ms\":{d},\"submitted_monotonic_ns\":{d},\"completed_monotonic_ns\":{d},\"writer_observed_monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"drawable_generation\":{d},\"width\":{d},\"height\":{d},\"pixel_format\":\"{s}\",\"fence_latency_ns\":{d},\"pixel_digest\":\"{x:0>16}\",\"suspicious\":{},\"path\":\"{s}\"}}\n",
+            .{ incident.schema_version, image.anomaly_id, image.metadata.capture_sequence, @tagName(image.metadata.source), image.metadata.requested_offset_ms, image.metadata.target_monotonic_ns, image.metadata.captured_monotonic_ns, actual_delta_ms, image.metadata.submitted_monotonic_ns, image.metadata.completed_monotonic_ns, monotonicNowNs(self.io), image.metadata.authority_tick, image.metadata.presentation_frame, image.metadata.drawable_generation, image.metadata.width, image.metadata.height, if (image.metadata.bgra) "bgra8" else "rgba8", image.metadata.fence_latency_ns, image.metadata.pixel_digest, image.metadata.suspicious, relative_path },
+        );
+        try self.ensureBudget(index_line.len);
+        const index_file = try std.Io.Dir.cwd().createFile(self.io, index_path, .{
+            .truncate = false,
+            .permissions = std.Io.File.Permissions.fromMode(0o600),
+        });
+        defer index_file.close(self.io);
+        const end = try index_file.length(self.io);
+        try index_file.writePositionalAll(self.io, index_line, end);
+        try index_file.sync(self.io);
+        self.noteBytes(.metadata, index_line.len);
+        if (image.metadata.source == .semantic_id) try self.writeSemanticMap(image);
+    }
+
+    fn writeSemanticMap(self: *Writer, image: Image) !void {
+        if (image.semantic_entry_count == 0) return error.EmptySemanticMap;
+        var path_buffer: [incident.max_path_bytes]u8 = undefined;
+        const path = try std.fmt.bufPrint(
+            &path_buffer,
+            "{s}/anomalies/anomaly-{d:0>4}/semantic-id-map.json",
+            .{ self.run_path, image.anomaly_id },
+        );
+        var json_buffer: [32 * 1024]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&json_buffer);
+        try writer.print(
+            "{{\"schema\":{d},\"kind\":\"semantic_id_map\",\"anomaly_id\":{d},\"capture_sequence\":{d},\"width\":{d},\"height\":{d},\"entries\":[",
+            .{ incident.schema_version, image.anomaly_id, image.metadata.capture_sequence, image.metadata.width, image.metadata.height },
+        );
+        for (image.semantic_entries[0..image.semantic_entry_count], 0..) |entry, index| {
+            if (index != 0) try writer.writeAll(",");
+            try writer.print(
+                "{{\"object_id\":{d},\"entity\":{{\"namespace\":{d},\"local\":{d},\"incarnation\":{d}}},\"color_rgb\":[{d},{d},{d}]}}",
+                .{ entry.object_id, entry.entity.namespace, entry.entity.local, entry.entity.incarnation, entry.color_rgb[0], entry.color_rgb[1], entry.color_rgb[2] },
+            );
+        }
+        try writer.writeAll("]}\n");
+        const json = json_buffer[0..writer.end];
+        try self.ensureBudget(json.len);
+        var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, path, .{
+            .replace = true,
+            .permissions = std.Io.File.Permissions.fromMode(0o600),
+        });
+        defer atomic.deinit(self.io);
+        try atomic.file.writeStreamingAll(self.io, json);
+        try atomic.file.sync(self.io);
+        try atomic.replace(self.io);
+        self.noteBytes(.metadata, json.len);
+    }
+
+    fn writeManifest(self: *Writer, status: []const u8) !void {
+        var path_buffer: [incident.max_path_bytes]u8 = undefined;
+        const path = try std.fmt.bufPrint(&path_buffer, "{s}/manifest.json", .{self.run_path});
+        var manifest_buffer: [4096]u8 = undefined;
+        self.queue.lock();
+        const dropped = self.queue.dropped;
+        const bytes = self.queue.bytes_written;
+        const high_water = self.queue.high_water;
+        const queued = self.queue.count;
+        const writer_failed = self.queue.writer_failed;
+        const last_admitted = self.queue.last_admitted_sequence;
+        const last_durable = self.queue.last_durable_sequence;
+        const stream_bytes = self.queue.stream_bytes_written;
+        const visual_bytes = self.queue.visual_bytes_written;
+        const replay_bytes = self.queue.replay_bytes_written;
+        const metadata_bytes = self.queue.metadata_bytes_written;
+        const screenshot_misses = self.queue.screenshot_misses;
+        const replay_attached = self.queue.replay_attached;
+        const anomaly_count = self.queue.anomaly_count;
+        self.queue.unlock();
+        const manifest = try std.fmt.bufPrint(
+            &manifest_buffer,
+            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.12\",\"jolt\":\"5.5.0\",\"protocol\":12,\"replay\":{d},\"snapshot\":11}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true}},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"writer_queue_capacity\":{d},\"writer_queue\":{d},\"queue_high_water\":{d},\"dropped_records\":{d},\"writer_failed\":{},\"last_admitted_sequence\":{d},\"last_durable_sequence\":{d},\"bytes_written\":{d},\"bytes_by_class\":{{\"streams\":{d},\"visual\":{d},\"replay\":{d},\"metadata\":{d}}},\"screenshot_misses\":{d},\"anomaly_count\":{d},\"replay_status\":\"{s}\",\"screenshot_format\":\"ppm-p6\",\"privacy\":{{\"local_only\":true,\"captures_text_input\":false,\"captures_credentials\":false,\"captures_reserved_shortcut_candidates\":true}}}}\n",
+            .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), sandbox_replay.schema_cohort, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, writer_queue_capacity, queued, high_water, dropped, writer_failed, last_admitted, last_durable, bytes, stream_bytes, visual_bytes, replay_bytes, metadata_bytes, screenshot_misses, anomaly_count, if (replay_attached) "attached" else "not_attached" },
+        );
+        var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, path, .{
+            .replace = true,
+            .permissions = std.Io.File.Permissions.fromMode(0o600),
+        });
+        defer atomic.deinit(self.io);
+        try atomic.file.writeStreamingAll(self.io, manifest);
+        try atomic.file.sync(self.io);
+        try atomic.replace(self.io);
+    }
+
+    fn flushAll(self: *Writer) !void {
+        for (&self.streams) |*stream| if (stream.file) |file| try file.sync(self.io);
+        self.queue.lock();
+        self.queue.last_durable_sequence = self.queue.last_written_sequence;
+        self.queue.unlock();
+    }
+
+    fn noteBytes(self: *Writer, class: ByteClass, amount: usize) void {
+        self.queue.lock();
+        self.queue.bytes_written +|= amount;
+        switch (class) {
+            .stream => self.queue.stream_bytes_written +|= amount,
+            .visual => self.queue.visual_bytes_written +|= amount,
+            .replay => self.queue.replay_bytes_written +|= amount,
+            .metadata => self.queue.metadata_bytes_written +|= amount,
+        }
+        if (self.queue.bytes_written > self.budget_bytes) self.queue.writer_failed = true;
+        self.queue.unlock();
+    }
+
+    fn ensureBudget(self: *Writer, amount: usize) !void {
+        self.queue.lock();
+        defer self.queue.unlock();
+        if (amount > self.budget_bytes or
+            self.queue.bytes_written > self.budget_bytes - @as(u64, @intCast(amount)))
+        {
+            self.queue.writer_failed = true;
+            return error.IncidentRunBudgetExceeded;
+        }
+    }
+};
+
+const ActiveAnomaly = struct {
+    view: incident.AnomalyView,
+    monotonic_ns: u64,
+    post_roll_deadline_ns: u64,
+    selected: ?engine.gameplay_trace.EntityRef,
+    human_anchor_mask: u5 = 0,
+    product_flag_present: bool = false,
+    semantic_id_present: bool = false,
+};
+
+pub const Capture = struct {
+    allocator: std.mem.Allocator,
+    io: std.Io,
+    queue: Queue = .{},
+    writer: Writer,
+    thread: ?std.Thread = null,
+    run_path: [incident.max_path_bytes]u8 = @splat(0),
+    run_path_len: u16 = 0,
+    next_sequence: u64 = 1,
+    next_anomaly_id: incident.AnomalyId = 1,
+    anomalies: [incident.max_anomalies]ActiveAnomaly = undefined,
+    anomaly_count: u8 = 0,
+    last_gameplay_sequence: u64 = 0,
+    last_diagnostic_sequence: u64 = 0,
+    last_state_sample_ns: u64 = 0,
+    last_input_sample_ns: u64 = 0,
+    last_metrics_sample_ns: u64 = 0,
+    last_input: incident.InputSample = .{},
+    status: [incident.max_status_bytes]u8 = @splat(0),
+    status_len: u8 = 0,
+    screenshot_misses: u64 = 0,
+    last_screenshot_metrics_ns: u64 = 0,
+    handoff_pending_post_roll: bool = false,
+    shortcuts: incident.ShortcutView = .{},
+
+    pub fn create(
+        allocator: std.mem.Allocator,
+        io: std.Io,
+        runs_root: []const u8,
+    ) !*Capture {
+        const result = try allocator.create(Capture);
+        errdefer allocator.destroy(result);
+        result.* = .{
+            .allocator = allocator,
+            .io = io,
+            .writer = undefined,
+        };
+        _ = try std.Io.Dir.createDirPathStatus(
+            .cwd(),
+            io,
+            runs_root,
+            std.Io.Dir.Permissions.fromMode(0o700),
+        );
+        applyRetention(io, allocator, runs_root) catch {};
+        const wall_ns = wallNowNs(io);
+        const suffix = std.hash.Wyhash.hash(@intCast(wall_ns), std.mem.asBytes(&wall_ns));
+        const timestamp = utcFilename(wall_ns);
+        const path = try std.fmt.bufPrint(
+            &result.run_path,
+            "{s}/{s}_solo_{x:0>8}",
+            .{ runs_root, timestamp.slice(), @as(u32, @truncate(suffix)) },
+        );
+        result.run_path_len = @intCast(path.len);
+        try std.Io.Dir.cwd().createDir(
+            io,
+            result.runPath(),
+            std.Io.Dir.Permissions.fromMode(0o700),
+        );
+        for ([_][]const u8{ "streams", "anomalies", "visual", "replay" }) |child| {
+            var child_buffer: [incident.max_path_bytes]u8 = undefined;
+            const child_path = try std.fmt.bufPrint(&child_buffer, "{s}/{s}", .{ result.runPath(), child });
+            _ = try std.Io.Dir.createDirPathStatus(
+                .cwd(),
+                io,
+                child_path,
+                std.Io.Dir.Permissions.fromMode(0o700),
+            );
+        }
+        result.writer = .{
+            .io = io,
+            .queue = &result.queue,
+            .run_path = result.runPath(),
+            .started_wall_unix_ms = @intCast(@divFloor(wall_ns, std.time.ns_per_ms)),
+        };
+        // `Capture` must be moved to its final address before start() so the
+        // writer's internal pointers remain stable.
+        return result;
+    }
+
+    pub fn start(self: *Capture) !void {
+        self.writer.queue = &self.queue;
+        self.writer.run_path = self.runPath();
+        self.thread = try std.Thread.spawn(.{}, Writer.run, .{&self.writer});
+        self.setStatus("Incident recording active (Cmd+Option+I; F9 optional)");
+    }
+
+    pub fn deinit(self: *Capture) void {
+        if (self.thread != null) {
+            for (self.anomalies[0..self.anomaly_count]) |*anomaly| {
+                if (anomaly.view.status != .capturing) continue;
+                anomaly.view.status = .partial;
+                self.recordAnomalyIndex(
+                    anomaly.view.id,
+                    anomaly.view.authority_tick,
+                    anomaly.view.presentation_frame,
+                    anomaly.view.wall_unix_ms,
+                    "post_roll_finalized",
+                    .partial,
+                    anomaly.view.noteSlice(),
+                );
+                self.queueMarker(anomaly);
+            }
+            if (self.handoff_pending_post_roll) {
+                self.handoff_pending_post_roll = false;
+                _ = self.enqueueHandoff();
+            }
+            while (true) {
+                self.queue.lock();
+                const stopped = self.queue.stopped;
+                self.queue.unlock();
+                if (stopped or self.queue.push(.shutdown)) break;
+                std.Io.sleep(self.io, .fromMilliseconds(1), .awake) catch {};
+            }
+            self.thread.?.join();
+            self.thread = null;
+        }
+        // Jobs with owned payloads can remain only if thread creation failed.
+        while (self.queue.pop()) |job| switch (job) {
+            .image => |image| if (image.pixels) |pixels| std.heap.page_allocator.free(pixels),
+            .replay => |replay| std.heap.page_allocator.free(replay.bytes),
+            else => {},
+        };
+        self.* = undefined;
+    }
+
+    pub fn destroy(self: *Capture) void {
+        const allocator = self.allocator;
+        self.deinit();
+        allocator.destroy(self);
+    }
+
+    pub fn runPath(self: *const Capture) []const u8 {
+        return self.run_path[0..self.run_path_len];
+    }
+
+    pub fn nowNs(self: *const Capture) u64 {
+        return monotonicNowNs(self.io);
+    }
+
+    pub fn anomalyFlagNs(self: *Capture, id: incident.AnomalyId) ?u64 {
+        return (self.findAnomaly(id) orelse return null).monotonic_ns;
+    }
+
+    pub fn observe(
+        self: *Capture,
+        gameplay: engine.gameplay_trace.BorrowedView,
+        diagnostics: engine.runtime.DiagnosticJournal.BorrowedView,
+        view: *const editor_contract.GameplayView,
+        input_sample: incident.InputSample,
+        camera_yaw: f32,
+        camera_pitch: f32,
+        frame_time_ms: f32,
+    ) void {
+        const now = monotonicNowNs(self.io);
+        self.drainGameplay(gameplay, now);
+        self.drainDiagnostics(diagnostics, now);
+        if (now -| self.last_state_sample_ns >= 250 * std.time.ns_per_ms) {
+            self.last_state_sample_ns = now;
+            self.recordState(view, camera_yaw, camera_pitch, now);
+        }
+        if (!std.meta.eql(input_sample, self.last_input) or
+            now -| self.last_input_sample_ns >= std.time.ns_per_s)
+        {
+            self.last_input_sample_ns = now;
+            self.last_input = input_sample;
+            self.recordInput(view, input_sample, now);
+        }
+        if (now -| self.last_metrics_sample_ns >= std.time.ns_per_s) {
+            self.last_metrics_sample_ns = now;
+            self.recordMetrics(view, frame_time_ms, now);
+        }
+        self.finishPostRoll(now);
+    }
+
+    pub fn flag(
+        self: *Capture,
+        authority_tick: u64,
+        presentation_frame: u64,
+        selected: ?engine.gameplay_trace.EntityRef,
+    ) ?incident.AnomalyId {
+        if (self.anomaly_count == self.anomalies.len) {
+            self.setStatus("Anomaly capacity reached; flag rejected visibly");
+            return null;
+        }
+        const now = monotonicNowNs(self.io);
+        const wall_ms: i64 = @intCast(@divFloor(wallNowNs(self.io), std.time.ns_per_ms));
+        const id = self.next_anomaly_id;
+        self.next_anomaly_id +|= 1;
+        self.anomalies[self.anomaly_count] = .{
+            .view = .{
+                .id = id,
+                .authority_tick = authority_tick,
+                .presentation_frame = presentation_frame,
+                .wall_unix_ms = wall_ms,
+                .status = .capturing,
+            },
+            .monotonic_ns = now,
+            .post_roll_deadline_ns = now +| post_roll_ns,
+            .selected = selected,
+        };
+        self.anomaly_count += 1;
+        self.queue.lock();
+        self.queue.anomaly_count = self.anomaly_count;
+        self.queue.unlock();
+        var selected_buffer: [128]u8 = undefined;
+        const selected_json = if (selected) |entity|
+            std.fmt.bufPrint(
+                &selected_buffer,
+                "{{\"namespace\":{d},\"local\":{d},\"incarnation\":{d}}}",
+                .{ entity.namespace, entity.local, entity.incarnation },
+            ) catch "null"
+        else
+            "null";
+        self.recordFormatted(.timeline, "{{\"schema\":{d},\"kind\":\"anomaly_flag\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"wall_unix_ms\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"anomaly_id\":{d},\"pre_roll_ns\":{d},\"post_roll_ns\":{d},\"selected_entity\":{s}}}", .{ incident.schema_version, self.takeSequence(), now, wall_ms, authority_tick, presentation_frame, id, pre_roll_ns, post_roll_ns, selected_json });
+        self.recordAnomalyIndex(id, authority_tick, presentation_frame, wall_ms, "flagged", .capturing, "");
+        _ = self.queue.push(.checkpoint);
+        var status_buffer: [incident.max_status_bytes]u8 = undefined;
+        const status = std.fmt.bufPrint(&status_buffer, "Anomaly #{d} flagged; collecting 5s post-roll", .{id}) catch "Anomaly flagged";
+        self.setStatus(status);
+        return id;
+    }
+
+    pub fn saveNote(self: *Capture, id: incident.AnomalyId, note: []const u8) bool {
+        const anomaly = self.findAnomaly(id) orelse return false;
+        const bounded = note[0..@min(note.len, incident.max_note_bytes)];
+        @memset(&anomaly.view.note, 0);
+        @memcpy(anomaly.view.note[0..bounded.len], bounded);
+        anomaly.view.note_len = @intCast(bounded.len);
+        self.recordAnomalyIndex(
+            id,
+            anomaly.view.authority_tick,
+            anomaly.view.presentation_frame,
+            anomaly.view.wall_unix_ms,
+            "note_updated",
+            anomaly.view.status,
+            bounded,
+        );
+        if (anomaly.view.status != .capturing) self.queueMarker(anomaly);
+        self.setStatus("Anomaly note saved");
+        return true;
+    }
+
+    pub fn observeScreenshotHealth(
+        self: *Capture,
+        trail_submitted: u64,
+        trail_completed: u64,
+        anchor_submitted: u64,
+        anchor_completed: u64,
+        missed: u64,
+        fence_failures: u64,
+        attached: u64,
+        suspicious: u64,
+        anchor_width: u32,
+        anchor_height: u32,
+        trail_bytes_per_slot: u32,
+        anchor_bytes_per_slot: u32,
+        trail_slots: u8,
+        anchor_slots: u8,
+        bounded_download_bytes: u64,
+    ) void {
+        self.screenshot_misses = missed;
+        self.queue.lock();
+        self.queue.screenshot_misses = missed;
+        self.queue.unlock();
+        const now = monotonicNowNs(self.io);
+        if (now -| self.last_screenshot_metrics_ns < std.time.ns_per_s) return;
+        self.last_screenshot_metrics_ns = now;
+        self.recordFormatted(.metrics, "{{\"schema\":{d},\"kind\":\"screenshot_metrics\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"trail_submitted\":{d},\"trail_completed\":{d},\"anchor_submitted\":{d},\"anchor_completed\":{d},\"missed\":{d},\"fence_failures\":{d},\"attached\":{d},\"suspicious\":{d},\"anchor_width\":{d},\"anchor_height\":{d},\"trail_bytes_per_slot\":{d},\"anchor_bytes_per_slot\":{d},\"trail_slots\":{d},\"anchor_slots\":{d},\"bounded_gpu_download_bytes\":{d}}}", .{ incident.schema_version, self.takeSequence(), now, trail_submitted, trail_completed, anchor_submitted, anchor_completed, missed, fence_failures, attached, suspicious, anchor_width, anchor_height, trail_bytes_per_slot, anchor_bytes_per_slot, trail_slots, anchor_slots, bounded_download_bytes });
+    }
+
+    pub fn recordShortcut(
+        self: *Capture,
+        stage: incident.ShortcutStage,
+        candidate: incident.ShortcutCandidate,
+        anomaly_id: ?incident.AnomalyId,
+    ) void {
+        switch (stage) {
+            .received => {
+                self.shortcuts.received +|= 1;
+                self.shortcuts.last_event_type = candidate.event_type;
+                self.shortcuts.last_window_id = candidate.window_id;
+                self.shortcuts.last_scancode = candidate.scancode;
+                self.shortcuts.last_keycode = candidate.keycode;
+                self.shortcuts.last_raw = candidate.raw;
+                self.shortcuts.last_modifiers = candidate.modifiers;
+                self.shortcuts.last_repeat = candidate.repeat;
+                self.shortcuts.last_focused = candidate.focused;
+                self.shortcuts.last_matched = candidate.matched;
+            },
+            .matched => {
+                self.shortcuts.matched +|= 1;
+                self.shortcuts.last_matched = true;
+            },
+            .queued => self.shortcuts.queued +|= 1,
+            .applied => self.shortcuts.applied +|= 1,
+        }
+        self.recordFormatted(.input, "{{\"schema\":{d},\"kind\":\"developer_shortcut\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"sdl_timestamp_ns\":{d},\"stage\":\"{s}\",\"window_id\":{d},\"event_type\":{d},\"scancode\":{d},\"keycode\":{d},\"raw\":{d},\"modifiers\":{d},\"repeat\":{},\"focused\":{},\"matched\":{},\"anomaly_id\":{?d}}}", .{ incident.schema_version, self.takeSequence(), monotonicNowNs(self.io), candidate.event_monotonic_ns, @tagName(stage), candidate.window_id, candidate.event_type, candidate.scancode, candidate.keycode, candidate.raw, candidate.modifiers, candidate.repeat, candidate.focused, candidate.matched, anomaly_id });
+    }
+
+    pub fn requestHandoff(self: *Capture) bool {
+        for (self.anomalies[0..self.anomaly_count]) |anomaly| {
+            if (anomaly.view.status == .capturing) {
+                self.handoff_pending_post_roll = true;
+                self.setStatus("LLM handoff queued until anomaly post-roll completes");
+                return true;
+            }
+        }
+        return self.enqueueHandoff();
+    }
+
+    fn enqueueHandoff(self: *Capture) bool {
+        var buffer: [incident.max_handoff_bytes]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&buffer);
+        writer.print(
+            "# Incinerator human-test anomaly bundle\n\nRun folder:\n{s}\n\nHuman tester requested diagnostics at wall_unix_ms={d}.\n\nFlagged anomalies:\n",
+            .{ self.runPath(), @divFloor(wallNowNs(self.io), std.time.ns_per_ms) },
+        ) catch return false;
+        for (self.anomalies[0..self.anomaly_count]) |anomaly| {
+            writer.print(
+                "- #{d} wall_unix_ms={d} tick={d} frame={d} status={s} evidence=anomalies/anomaly-{d:0>4}/",
+                .{ anomaly.view.id, anomaly.view.wall_unix_ms, anomaly.view.authority_tick, anomaly.view.presentation_frame, @tagName(anomaly.view.status), anomaly.view.id },
+            ) catch return false;
+            if (anomaly.view.note_len != 0) {
+                writer.print(": {s}", .{anomaly.view.noteSlice()}) catch return false;
+            }
+            writer.writeAll("\n") catch return false;
+        }
+        writer.print(
+            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; five human-visible anchors when admitted; a product-only flag frame; a continuous product trail; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheel draws under one stable identity.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
+            .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
+        ) catch return false;
+        const owned = std.heap.page_allocator.dupe(u8, buffer[0..writer.end]) catch return false;
+        if (!self.queue.push(.{ .handoff = .{ .bytes = owned } })) {
+            std.heap.page_allocator.free(owned);
+            return false;
+        }
+        _ = self.queue.push(.flush);
+        self.setStatus("Preparing LLM handoff and clipboard text...");
+        return true;
+    }
+
+    pub fn takeHandoff(self: *Capture, buffer: *[incident.max_handoff_bytes]u8) ?[]const u8 {
+        self.queue.lock();
+        defer self.queue.unlock();
+        if (!self.queue.handoff_ready) return null;
+        const value = self.queue.handoff;
+        @memcpy(buffer[0..value.len], value.slice());
+        self.queue.handoff_ready = false;
+        self.setStatusLocked("LLM handoff copied; folder path and anomaly index are ready");
+        return buffer[0..value.len];
+    }
+
+    pub fn attachReplay(self: *Capture, owned_bytes: []u8) bool {
+        if (self.queue.push(.{ .replay = .{ .bytes = owned_bytes } })) return true;
+        std.heap.page_allocator.free(owned_bytes);
+        return false;
+    }
+
+    pub fn attachVisual(
+        self: *Capture,
+        anomaly_id: incident.AnomalyId,
+        metadata: VisualFrameMetadata,
+        owned_rgba: ?[]u8,
+    ) bool {
+        if (self.queue.push(.{ .image = .{
+            .anomaly_id = anomaly_id,
+            .metadata = metadata,
+            .pixels = owned_rgba,
+            .semantic_entry_count = 0,
+        } })) {
+            if (self.findAnomaly(anomaly_id)) |anomaly| {
+                anomaly.view.artifact_count +|= 1;
+                switch (metadata.source) {
+                    .human_visible => if (metadata.requested_offset_ms) |offset| {
+                        anomaly.human_anchor_mask |= switch (offset) {
+                            -2000 => 1,
+                            -1000 => 2,
+                            0 => 4,
+                            1000 => 8,
+                            3000 => 16,
+                            else => 0,
+                        };
+                    },
+                    .product_flag => anomaly.product_flag_present = true,
+                    .semantic_id => anomaly.semantic_id_present = true,
+                    .product_trail => {},
+                }
+            }
+            return true;
+        }
+        self.screenshot_misses +|= 1;
+        self.queue.lock();
+        self.queue.screenshot_misses = self.screenshot_misses;
+        self.queue.unlock();
+        if (owned_rgba) |pixels| std.heap.page_allocator.free(pixels);
+        return false;
+    }
+
+    pub fn attachSemanticVisual(
+        self: *Capture,
+        anomaly_id: incident.AnomalyId,
+        metadata: VisualFrameMetadata,
+        owned_rgba: []u8,
+        entries: []const SemanticMapEntry,
+    ) bool {
+        if (metadata.source != .semantic_id or entries.len == 0 or
+            entries.len > maximum_semantic_entries)
+        {
+            std.heap.page_allocator.free(owned_rgba);
+            self.noteVisualFailure(anomaly_id);
+            return false;
+        }
+        var image = Image{
+            .anomaly_id = anomaly_id,
+            .metadata = metadata,
+            .pixels = owned_rgba,
+            .semantic_entry_count = @intCast(entries.len),
+        };
+        @memcpy(image.semantic_entries[0..entries.len], entries);
+        if (!self.queue.push(.{ .image = image })) {
+            std.heap.page_allocator.free(owned_rgba);
+            self.noteVisualFailure(anomaly_id);
+            return false;
+        }
+        if (self.findAnomaly(anomaly_id)) |anomaly| {
+            anomaly.view.artifact_count +|= 1;
+            anomaly.semantic_id_present = true;
+        }
+        return true;
+    }
+
+    pub fn noteVisualFailure(self: *Capture, anomaly_id: incident.AnomalyId) void {
+        self.screenshot_misses +|= 1;
+        if (self.findAnomaly(anomaly_id)) |anomaly| {
+            anomaly.view.artifact_failures +|= 1;
+        }
+        self.queue.lock();
+        self.queue.screenshot_misses = self.screenshot_misses;
+        self.queue.unlock();
+    }
+
+    pub fn snapshot(self: *Capture, request_rejections: u64) incident.View {
+        var result = incident.View{};
+        @memcpy(result.run_path[0..self.run_path_len], self.runPath());
+        result.run_path_len = self.run_path_len;
+        result.anomaly_count = self.anomaly_count;
+        for (self.anomalies[0..self.anomaly_count], 0..) |anomaly, index| {
+            result.anomalies[index] = anomaly.view;
+        }
+        @memcpy(result.status[0..self.status_len], self.status[0..self.status_len]);
+        result.status_len = self.status_len;
+        result.request_rejections = request_rejections;
+        result.shortcuts = self.shortcuts;
+        self.queue.lock();
+        result.health = .{
+            .enabled = true,
+            .writer_ready = self.queue.writer_ready,
+            .writer_failed = self.queue.writer_failed,
+            .queued = @intCast(@min(self.queue.count, std.math.maxInt(u16))),
+            .queue_high_water = @intCast(@min(self.queue.high_water, std.math.maxInt(u16))),
+            .dropped_records = self.queue.dropped,
+            .bytes_written = self.queue.bytes_written,
+            .screenshot_misses = self.screenshot_misses,
+            .last_durable_sequence = self.queue.last_durable_sequence,
+            .last_admitted_sequence = self.queue.last_admitted_sequence,
+        };
+        self.queue.unlock();
+        return result;
+    }
+
+    fn drainGameplay(self: *Capture, view: engine.gameplay_trace.BorrowedView, now: u64) void {
+        for (0..view.len()) |index| {
+            const record = view.at(index).?;
+            if (record.sequence <= self.last_gameplay_sequence) continue;
+            self.last_gameplay_sequence = record.sequence;
+            var actor_buffer: [128]u8 = undefined;
+            var target_buffer: [128]u8 = undefined;
+            const actor = entityJson(&actor_buffer, record.actor);
+            const target = entityJson(&target_buffer, record.target);
+            self.recordFormatted(.timeline, "{{\"schema\":{d},\"kind\":\"gameplay_trace\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"trace_sequence\":{d},\"authority_tick\":{d},\"presentation_frame\":{?d},\"source\":\"{s}\",\"stage\":\"{s}\",\"action\":\"{s}\",\"disposition\":\"{s}\",\"reason_domain\":\"{s}\",\"reason\":{d},\"correlation_id\":{d},\"actor\":{s},\"target\":{s},\"position\":[{d},{d},{d}],\"health\":{d},\"maximum_health\":{d},\"state\":{d},\"deadline_tick\":{d},\"visible_pixels\":{d}}}", .{ incident.schema_version, self.takeSequence(), now, record.sequence, record.authority_tick, record.presentation_frame, @tagName(record.source), @tagName(record.stage), @tagName(record.kind), @tagName(record.disposition), @tagName(record.reason_domain), record.reason, record.correlation_id, actor, target, record.position[0], record.position[1], record.position[2], record.health, record.maximum_health, record.state, record.deadline_tick, record.visible_pixels });
+        }
+    }
+
+    fn drainDiagnostics(self: *Capture, view: engine.runtime.DiagnosticJournal.BorrowedView, now: u64) void {
+        for (0..view.len()) |index| {
+            const entry = view.at(index).?.*;
+            if (entry.sequence <= self.last_diagnostic_sequence) continue;
+            self.last_diagnostic_sequence = entry.sequence;
+            self.recordFormatted(.timeline, "{{\"schema\":{d},\"kind\":\"diagnostic\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"diagnostic_sequence\":{d},\"severity\":\"{s}\",\"category\":\"{s}\",\"code\":{d},\"authority_tick\":{?d},\"presentation_frame\":{?d},\"thread_role\":\"{s}\",\"thread_id\":{?d},\"correlation_id\":{d}}}", .{ incident.schema_version, self.takeSequence(), now, entry.sequence, @tagName(entry.severity), @tagName(entry.category), entry.code, entry.tick_index, entry.frame_index, @tagName(entry.thread_role), entry.thread_id, entry.correlation_id });
+        }
+    }
+
+    fn recordState(self: *Capture, view: *const editor_contract.GameplayView, yaw: f32, pitch: f32, now: u64) void {
+        self.recordFormatted(.state, "{{\"schema\":{d},\"kind\":\"camera_state\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"yaw\":{d},\"pitch\":{d},\"entity_count\":{d}}}", .{ incident.schema_version, self.takeSequence(), now, view.authority_tick, view.presentation_frame, yaw, pitch, view.entity_count });
+        for (view.entitySlice()) |entity| self.recordEntityState(view, entity, now);
+    }
+
+    fn recordEntityState(
+        self: *Capture,
+        view: *const editor_contract.GameplayView,
+        entity: editor_contract.GameplayEntityView,
+        now: u64,
+    ) void {
+        const sequence = self.takeSequence();
+        var buffer: [max_line_bytes]u8 = undefined;
+        var persistent_buffer: [128]u8 = undefined;
+        const persistent_json = if (entity.persistent_id) |id|
+            std.fmt.bufPrint(
+                &persistent_buffer,
+                "{{\"namespace\":{d},\"local\":{d}}}",
+                .{ id.namespace, id.local },
+            ) catch "null"
+        else
+            "null";
+        var writer = std.Io.Writer.fixed(&buffer);
+        writer.print(
+            "{{\"schema\":{d},\"kind\":\"entity_state\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"entity\":{{\"namespace\":{d},\"local\":{d},\"incarnation\":{d}}},\"persistent_id\":{s},\"entity_kind\":\"{s}\",\"authority_presence\":\"{s}\",\"replication_presence\":\"{s}\",\"presentation_presence\":\"{s}\",\"draw_presence\":\"{s}\",\"removal_reason\":\"{s}\",\"removed_tick\":{d},\"removed_frame\":{d},",
+            .{ incident.schema_version, sequence, now, view.authority_tick, view.presentation_frame, entity.entity.namespace, entity.entity.local, entity.entity.incarnation, persistent_json, @tagName(entity.kind), @tagName(entity.authority_presence), @tagName(entity.replication_presence), @tagName(entity.presentation_presence), @tagName(entity.draw_presence), @tagName(entity.removal_reason), entity.removed_tick, entity.removed_frame },
+        ) catch return self.noteDropped();
+        writer.print(
+            "\"authority_position\":[{d},{d},{d}],\"presentation_position\":[{d},{d},{d}],\"velocity\":[{d},{d},{d}],\"facing_yaw\":{d},\"radius\":{d},\"half_height\":{d},\"health\":{d},\"maximum_health\":{d},\"life_state\":\"{s}\",\"encounter_state\":{d},\"attack_windup\":{},\"deadline_tick\":{d},\"nearest_actor_separation\":{?d},",
+            .{ entity.authority_position[0], entity.authority_position[1], entity.authority_position[2], entity.presentation_position[0], entity.presentation_position[1], entity.presentation_position[2], entity.velocity[0], entity.velocity[1], entity.velocity[2], entity.facing_yaw, entity.radius, entity.half_height, entity.health, entity.maximum_health, @tagName(entity.life_state), entity.encounter_state, entity.attack_windup, entity.deadline_tick, entity.nearest_actor_separation },
+        ) catch return self.noteDropped();
+        const relevance_included = if (entity.relevance_included) |included|
+            if (included) "true" else "false"
+        else
+            "null";
+        writer.print(
+            "\"relevance_included\":{s},\"relevance_reason\":\"{s}\",\"relevance_evaluated_tick\":{d},\"relevance_baseline_id\":{d},\"relevance_snapshot_sequence\":{d},\"relevance_grace_until_tick\":{d},\"relevance_observer_position\":[{d},{d},{d}],\"relevance_observer_district\":[{d},{d}],\"relevance_owner_district\":[{d},{d}],\"relevance_distance_squared_xz\":{d},\"relevance_encounter\":{}}}",
+            .{ relevance_included, @tagName(entity.relevance_reason), entity.relevance_evaluated_tick, entity.relevance_baseline_id, entity.relevance_snapshot_sequence, entity.relevance_grace_until_tick, entity.relevance_observer_position[0], entity.relevance_observer_position[1], entity.relevance_observer_position[2], entity.relevance_observer_district[0], entity.relevance_observer_district[1], entity.relevance_owner_district[0], entity.relevance_owner_district[1], entity.relevance_distance_squared_xz, entity.relevance_encounter },
+        ) catch return self.noteDropped();
+        self.enqueueLine(.state, sequence, buffer[0..writer.end]);
+    }
+
+    fn recordInput(self: *Capture, view: *const editor_contract.GameplayView, value: incident.InputSample, now: u64) void {
+        self.recordFormatted(.input, "{{\"schema\":{d},\"kind\":\"semantic_input\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"forward\":{},\"backward\":{},\"left\":{},\"right\":{},\"interact\":{},\"carry\":{},\"attack\":{},\"respawn\":{},\"jump_or_brake\":{},\"interact_pressed\":{},\"carry_pressed\":{},\"attack_pressed\":{},\"respawn_pressed\":{},\"jump_pressed\":{},\"hand_brake\":{},\"right_mouse\":{},\"mouse_delta\":[{d},{d}],\"keyboard_captured\":{},\"mouse_captured\":{},\"window_minimized\":{}}}", .{ incident.schema_version, self.takeSequence(), now, view.authority_tick, view.presentation_frame, value.move_forward, value.move_backward, value.move_left, value.move_right, value.interact, value.carry, value.attack, value.respawn, value.jump_or_brake, value.interact_pressed, value.carry_pressed, value.attack_pressed, value.respawn_pressed, value.jump_pressed, value.hand_brake, value.right_mouse, value.mouse_delta_x, value.mouse_delta_y, value.keyboard_captured, value.mouse_captured, value.window_minimized });
+    }
+
+    fn recordMetrics(self: *Capture, view: *const editor_contract.GameplayView, frame_time_ms: f32, now: u64) void {
+        self.queue.lock();
+        const queued = self.queue.count;
+        const high_water = self.queue.high_water;
+        const dropped = self.queue.dropped;
+        const bytes = self.queue.bytes_written;
+        self.queue.unlock();
+        self.recordFormatted(.metrics, "{{\"schema\":{d},\"kind\":\"recorder_metrics\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"frame_time_ms\":{d},\"writer_queue\":{d},\"writer_queue_high_water\":{d},\"dropped_records\":{d},\"bytes_written\":{d},\"screenshot_misses\":{d}}}", .{ incident.schema_version, self.takeSequence(), now, view.authority_tick, view.presentation_frame, frame_time_ms, queued, high_water, dropped, bytes, self.screenshot_misses });
+    }
+
+    fn finishPostRoll(self: *Capture, now: u64) void {
+        for (self.anomalies[0..self.anomaly_count]) |*anomaly| {
+            if (anomaly.view.status != .capturing or now < anomaly.post_roll_deadline_ns) continue;
+            anomaly.view.status = if (anomaly.human_anchor_mask != 0b1_1111 or
+                !anomaly.product_flag_present or !anomaly.semantic_id_present or
+                anomaly.view.artifact_failures != 0) .partial else .complete;
+            self.queueMarker(anomaly);
+            self.recordAnomalyIndex(
+                anomaly.view.id,
+                anomaly.view.authority_tick,
+                anomaly.view.presentation_frame,
+                anomaly.view.wall_unix_ms,
+                "post_roll_finalized",
+                anomaly.view.status,
+                anomaly.view.noteSlice(),
+            );
+            _ = self.queue.push(.flush);
+            var status_buffer: [incident.max_status_bytes]u8 = undefined;
+            const status = std.fmt.bufPrint(&status_buffer, "Anomaly #{d} post-roll {s}", .{ anomaly.view.id, @tagName(anomaly.view.status) }) catch "Anomaly post-roll finalized";
+            self.setStatus(status);
+        }
+        if (self.handoff_pending_post_roll) {
+            for (self.anomalies[0..self.anomaly_count]) |anomaly| {
+                if (anomaly.view.status == .capturing) return;
+            }
+            self.handoff_pending_post_roll = false;
+            _ = self.enqueueHandoff();
+        }
+    }
+
+    fn recordAnomalyIndex(self: *Capture, id: incident.AnomalyId, tick: u64, frame: u64, wall_ms: i64, event: []const u8, lifecycle_status: incident.AnomalyStatus, note: []const u8) void {
+        var escaped: [incident.max_note_bytes * 2]u8 = undefined;
+        const safe_note = escapeJson(&escaped, note);
+        self.recordFormatted(.anomalies, "{{\"schema\":{d},\"kind\":\"anomaly_index\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"wall_unix_ms\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"anomaly_id\":{d},\"event\":\"{s}\",\"lifecycle_status\":\"{s}\",\"note\":\"{s}\"}}", .{ incident.schema_version, self.takeSequence(), monotonicNowNs(self.io), wall_ms, tick, frame, id, event, @tagName(lifecycle_status), safe_note });
+    }
+
+    fn queueMarker(self: *Capture, anomaly: *const ActiveAnomaly) void {
+        _ = self.queue.push(.{ .marker = .{
+            .anomaly_id = anomaly.view.id,
+            .authority_tick = anomaly.view.authority_tick,
+            .presentation_frame = anomaly.view.presentation_frame,
+            .wall_unix_ms = anomaly.view.wall_unix_ms,
+            .monotonic_ns = anomaly.monotonic_ns,
+            .lifecycle_status = anomaly.view.status,
+            .artifact_count = anomaly.view.artifact_count,
+            .artifact_failures = anomaly.view.artifact_failures,
+            .human_anchor_mask = anomaly.human_anchor_mask,
+            .product_flag_present = anomaly.product_flag_present,
+            .semantic_id_present = anomaly.semantic_id_present,
+            .selected = anomaly.selected,
+            .note = anomaly.view.note,
+            .note_len = anomaly.view.note_len,
+        } });
+    }
+
+    fn recordFormatted(self: *Capture, stream: Stream, comptime format: []const u8, args: anytype) void {
+        var buffer: [max_line_bytes]u8 = undefined;
+        const bytes = std.fmt.bufPrint(&buffer, format, args) catch return self.noteDropped();
+        self.enqueueLine(stream, self.next_sequence -| 1, bytes);
+    }
+
+    fn enqueueLine(self: *Capture, stream: Stream, sequence: u64, bytes: []const u8) void {
+        var line = Line{
+            .stream = stream,
+            .sequence = sequence,
+            .len = @intCast(bytes.len),
+            .bytes = undefined,
+        };
+        @memcpy(line.bytes[0..bytes.len], bytes);
+        if (self.queue.push(.{ .line = line })) {
+            self.queue.lock();
+            self.queue.last_admitted_sequence = @max(
+                self.queue.last_admitted_sequence,
+                line.sequence,
+            );
+            self.queue.unlock();
+        }
+    }
+
+    fn noteDropped(self: *Capture) void {
+        self.queue.lock();
+        self.queue.dropped +|= 1;
+        self.queue.unlock();
+    }
+
+    fn takeSequence(self: *Capture) u64 {
+        const value = self.next_sequence;
+        self.next_sequence +|= 1;
+        return value;
+    }
+
+    fn findAnomaly(self: *Capture, id: incident.AnomalyId) ?*ActiveAnomaly {
+        for (self.anomalies[0..self.anomaly_count]) |*anomaly| {
+            if (anomaly.view.id == id) return anomaly;
+        }
+        return null;
+    }
+
+    fn setStatus(self: *Capture, text: []const u8) void {
+        const bounded = text[0..@min(text.len, self.status.len)];
+        @memset(&self.status, 0);
+        @memcpy(self.status[0..bounded.len], bounded);
+        self.status_len = @intCast(bounded.len);
+    }
+
+    fn setStatusLocked(self: *Capture, text: []const u8) void {
+        const bounded = text[0..@min(text.len, self.status.len)];
+        @memset(&self.status, 0);
+        @memcpy(self.status[0..bounded.len], bounded);
+        self.status_len = @intCast(bounded.len);
+    }
+};
+
+const TimestampText = struct {
+    bytes: [32]u8,
+    len: u8,
+    fn slice(self: *const TimestampText) []const u8 {
+        return self.bytes[0..self.len];
+    }
+};
+
+fn utcFilename(unix_ns: i96) TimestampText {
+    const seconds: u64 = if (unix_ns <= 0) 0 else @intCast(@divFloor(unix_ns, std.time.ns_per_s));
+    const millis: u16 = @intCast(@divFloor(@mod(unix_ns, std.time.ns_per_s), std.time.ns_per_ms));
+    const epoch = std.time.epoch.EpochSeconds{ .secs = seconds };
+    const year_day = epoch.getEpochDay().calculateYearDay();
+    const month_day = year_day.calculateMonthDay();
+    const day_seconds = epoch.getDaySeconds();
+    var result = TimestampText{ .bytes = undefined, .len = 0 };
+    const value = std.fmt.bufPrint(
+        &result.bytes,
+        "{d:0>4}-{d:0>2}-{d:0>2}T{d:0>2}-{d:0>2}-{d:0>2}.{d:0>3}Z",
+        .{ year_day.year, @intFromEnum(month_day.month), month_day.day_index + 1, day_seconds.getHoursIntoDay(), day_seconds.getMinutesIntoHour(), day_seconds.getSecondsIntoMinute(), millis },
+    ) catch unreachable;
+    result.len = @intCast(value.len);
+    return result;
+}
+
+fn wallNowNs(io: std.Io) i96 {
+    return std.Io.Clock.Timestamp.now(io, .real).raw.nanoseconds;
+}
+
+fn monotonicNowNs(io: std.Io) u64 {
+    const value = std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds;
+    if (value <= 0) return 0;
+    return std.math.cast(u64, value) orelse std.math.maxInt(u64);
+}
+
+fn escapeJson(destination: []u8, source: []const u8) []const u8 {
+    var count: usize = 0;
+    for (source) |byte| {
+        const replacement: ?[]const u8 = switch (byte) {
+            '"' => "\\\"",
+            '\\' => "\\\\",
+            '\n' => "\\n",
+            '\r' => "\\r",
+            '\t' => "\\t",
+            else => if (byte < 0x20) "?" else null,
+        };
+        if (replacement) |bytes| {
+            if (count + bytes.len > destination.len) break;
+            @memcpy(destination[count..][0..bytes.len], bytes);
+            count += bytes.len;
+        } else {
+            if (count == destination.len) break;
+            destination[count] = byte;
+            count += 1;
+        }
+    }
+    return destination[0..count];
+}
+
+fn entityJson(
+    destination: []u8,
+    entity: ?engine.gameplay_trace.EntityRef,
+) []const u8 {
+    const value = entity orelse return "null";
+    return std.fmt.bufPrint(
+        destination,
+        "{{\"namespace\":{d},\"local\":{d},\"incarnation\":{d}}}",
+        .{ value.namespace, value.local, value.incarnation },
+    ) catch "null";
+}
+
+fn jsonU64(line: []const u8, key: []const u8) ?u64 {
+    const key_index = std.mem.indexOf(u8, line, key) orelse return null;
+    var index = key_index + key.len;
+    const start = index;
+    while (index < line.len and line[index] >= '0' and line[index] <= '9') : (index += 1) {}
+    if (index == start) return null;
+    return std.fmt.parseInt(u64, line[start..index], 10) catch null;
+}
+
+fn visualOffsetLabel(offset_ms: i16) []const u8 {
+    return switch (offset_ms) {
+        -2000 => "m2000ms",
+        -1000 => "m1000ms",
+        0 => "flag",
+        1000 => "p1000ms",
+        3000 => "p3000ms",
+        else => "unclassified",
+    };
+}
+
+fn signedDeltaMs(value: u64, origin: u64) i64 {
+    const magnitude = if (value >= origin) value - origin else origin - value;
+    const milliseconds = @min(magnitude / std.time.ns_per_ms, @as(u64, std.math.maxInt(i64)));
+    const signed: i64 = @intCast(milliseconds);
+    return if (value >= origin) signed else -signed;
+}
+
+fn applyRetention(
+    io: std.Io,
+    allocator: std.mem.Allocator,
+    runs_root: []const u8,
+) !void {
+    var root = try std.Io.Dir.cwd().openDir(io, runs_root, .{ .iterate = true });
+    defer root.close(io);
+    var candidates = try std.ArrayList([]u8).initCapacity(allocator, retained_unflagged_runs + 8);
+    defer {
+        for (candidates.items) |name| allocator.free(name);
+        candidates.deinit(allocator);
+    }
+    var iterator = root.iterate();
+    while (try iterator.next(io)) |entry| {
+        if (entry.kind != .directory or std.mem.indexOf(u8, entry.name, "_solo_") == null) continue;
+        var manifest_path_buffer: [incident.max_path_bytes]u8 = undefined;
+        const manifest_path = std.fmt.bufPrint(
+            &manifest_path_buffer,
+            "{s}/{s}/manifest.json",
+            .{ runs_root, entry.name },
+        ) catch continue;
+        const manifest = std.Io.Dir.cwd().readFileAlloc(
+            io,
+            manifest_path,
+            allocator,
+            .limited(4096),
+        ) catch continue;
+        defer allocator.free(manifest);
+        if (std.mem.indexOf(u8, manifest, "\"status\":\"running\"") != null) continue;
+        var anomaly_path_buffer: [incident.max_path_bytes]u8 = undefined;
+        const anomaly_path = std.fmt.bufPrint(
+            &anomaly_path_buffer,
+            "{s}/{s}/anomalies.ndjson",
+            .{ runs_root, entry.name },
+        ) catch continue;
+        if (std.Io.Dir.cwd().openFile(io, anomaly_path, .{})) |file| {
+            defer file.close(io);
+            const stat = file.stat(io) catch continue;
+            if (stat.size != 0) continue;
+        } else |_| {}
+        try candidates.append(allocator, try allocator.dupe(u8, entry.name));
+    }
+    std.mem.sort([]u8, candidates.items, {}, struct {
+        fn lessThan(_: void, left: []u8, right: []u8) bool {
+            return std.mem.lessThan(u8, left, right);
+        }
+    }.lessThan);
+    const remove_count = candidates.items.len -| retained_unflagged_runs;
+    for (candidates.items[0..remove_count]) |name| try root.deleteTree(io, name);
+}
+
+test "JSON note escaping is bounded" {
+    var buffer: [32]u8 = undefined;
+    try std.testing.expectEqualStrings("a\\\"b\\nc", escapeJson(&buffer, "a\"b\nc"));
+}
+
+test "UTC filename is stable and path safe" {
+    const value = utcFilename(0);
+    try std.testing.expectEqualStrings("1970-01-01T00-00-00.000Z", value.slice());
+}
+
+test "NDJSON monotonic timestamp extraction is exact" {
+    try std.testing.expectEqual(
+        @as(?u64, 42),
+        jsonU64("{\"monotonic_ns\":42,\"kind\":\"state\"}", "\"monotonic_ns\":"),
+    );
+    try std.testing.expectEqual(
+        @as(?u64, null),
+        jsonU64("{\"kind\":\"state\"}", "\"monotonic_ns\":"),
+    );
+}
+
+test "writer queue saturation is bounded and explicit" {
+    var queue = Queue{};
+    for (0..writer_queue_capacity) |_| try std.testing.expect(queue.push(.flush));
+    try std.testing.expect(!queue.push(.flush));
+    try std.testing.expectEqual(writer_queue_capacity, queue.high_water);
+    try std.testing.expectEqual(@as(u64, 1), queue.dropped);
+}
+
+test "writer run budget fails closed with exact byte accounting" {
+    var queue = Queue{};
+    var writer = Writer{
+        .io = std.testing.io,
+        .queue = &queue,
+        .run_path = "/unused",
+        .started_wall_unix_ms = 0,
+        .budget_bytes = 16,
+    };
+    try writer.ensureBudget(16);
+    writer.noteBytes(.visual, 16);
+    try std.testing.expectEqual(@as(u64, 16), queue.bytes_written);
+    try std.testing.expectEqual(@as(u64, 16), queue.visual_bytes_written);
+    try std.testing.expectError(error.IncidentRunBudgetExceeded, writer.ensureBudget(1));
+    try std.testing.expect(queue.writer_failed);
+
+    queue = .{};
+    try std.testing.expectError(error.IncidentRunBudgetExceeded, writer.ensureBudget(17));
+    try std.testing.expect(queue.writer_failed);
+}
+
+test "capture creation rejects an unusable root without a compatibility fallback" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    try temporary.dir.writeFile(std.testing.io, .{
+        .sub_path = "not-a-directory",
+        .data = "bounded failure fixture",
+    });
+    var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const root_len = try temporary.dir.realPath(std.testing.io, &root_buffer);
+    var invalid_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const invalid = try std.fmt.bufPrint(
+        &invalid_buffer,
+        "{s}/not-a-directory/runs",
+        .{root_buffer[0..root_len]},
+    );
+    try std.testing.expectError(
+        error.NotDir,
+        Capture.create(std.testing.allocator, std.testing.io, invalid),
+    );
+}

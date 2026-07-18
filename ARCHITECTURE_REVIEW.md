@@ -1,20 +1,24 @@
 # Incinerator Engine Architecture Review
 
-**Status:** Living assessment; MP0-MP6, the M4 Apple Silicon macOS multiplayer
-foundation, M5 client/authority cohesion, M6 transactional authority, and S10
-authoritative damage/death/respawn are implemented and accepted
+**Status:** Living assessment; the accepted gameplay/session foundation now
+includes schema-2 local incident evidence, authority-owned NPC relevance,
+one-hop district visual prefetch, the long IC5-G gameplay/replay journey, and
+the IC5-H bounded vehicle/carry continuity and evidence-capability correction.
+The real window lifecycle and bounded capture-cost gates also pass. Controlled
+IC5-G destructive/failure hardening and the physical macOS/human visual
+checkpoint remain open.
 
-**Last reviewed:** 2026-07-14
+**Last reviewed:** 2026-07-17
 
-**Scope:** Current post-S10 architecture, its demonstrated strengths, and its
+**Scope:** Current post-S11 architecture, its demonstrated strengths, and its
 remaining structural pressure before another product or service slice
 
 **Related roadmap:** [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md)
 
 **Multiplayer strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
-**Latest accepted slice:**
-[`docs/validation/s10-damage-death-respawn.md`](docs/validation/s10-damage-death-respawn.md)
+**Latest accepted program:**
+[`docs/validation/gameplay-interaction-validation-and-observability.md`](docs/validation/gameplay-interaction-validation-and-observability.md)
 
 **Accepted cohesion contract:**
 [`docs/design/m5-client-authority-cohesion.md`](docs/design/m5-client-authority-cohesion.md)
@@ -23,6 +27,10 @@ remaining structural pressure before another product or service slice
 [`M6 accepted`](docs/validation/m6-transactional-authority-cycle.md)
 → [`MP6 accepted`](docs/validation/mp6-playable-multiplayer-room-flow.md)
 → [`S10 accepted`](docs/validation/s10-damage-death-respawn.md)
+→ [`S11 accepted`](docs/validation/s11-npc-encounter-combat-response.md)
+→ [`post-S11 automated closeout passed; manual acceptance exposed validation gaps`](docs/validation/post-s11-runtime-corrective-audit.md)
+→ [`IV0-IV5 interaction validation and observability accepted`](docs/validation/gameplay-interaction-validation-and-observability.md)
+→ [`IC5-A-IC5-H corrective work implemented`](docs/design/incident-evidence-reliability-and-boundary-corrections.md)
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 
@@ -85,6 +93,15 @@ stage-seven durable disposition. Physical network delivery and blocking storage
 remain separate owner state machines. The guarantee is atomic publication, not
 rollback of an already stepped Flecs/Jolt world.
 
+The incident corrective tree preserves those ownership boundaries rather than
+introducing a telemetry bus. The developer host owns fixed requests and local
+evidence orchestration; the writer alone owns files; renderer adapters own
+bounded GPU capture state; authority owns relevance; and replay exposes one
+explicit consumable-output boundary. Tri-state cross-boundary membership and
+tombstones make disappearance diagnosable without copying an ECS/world into
+the recorder. The district fix remains a sandbox-specific one-hop visual
+prefetch policy, not a generalized streaming framework.
+
 The accepted MP6 tree returns the program to player-visible product pressure.
 It presents the room/admission core through one generation-safe graphical
 coordinator and proves constrained localhost/LAN listen plus dedicated direct-IP
@@ -93,9 +110,12 @@ slice that adds feature-owned vitals, server-derived damage, exactly-once death 
 and a stable participant possessing a generational disposable avatar. It
 closes that slice with a backend-neutral bounded vitals owner, authoritative
 Jolt-queried melee, typed death cleanup, dead reconnect, deterministic safe
-explicit respawn, protocol revision 10 lifecycle projection, and real graphical
-listen/dedicated process evidence. Health, death, and spawn placement remain
-server truth in every placement.
+explicit respawn, and real graphical listen/dedicated process evidence. S11
+extends that boundary through deterministic hostile NPC encounters and durable
+replacement. The post-S11 corrective pass advances the semantic protocol to
+revision 12 for authoritative wheel presentation and retains health, death,
+spawn placement, NPC decisions, and vehicle state as server truth in every
+placement.
 
 ## Accepted Architectural Thesis
 
@@ -147,7 +167,7 @@ an optional non-vendored Steamworks adapter for Steam networking compatibility.
   explicit lifetimes and do not masquerade as each other.
 - Dynamic physics owns simulation transforms; presentation reads interpolated
   previous/current state.
-- Snapshot V7 is canonical logical state and contains no Flecs IDs, Jolt
+- Snapshot V11 is canonical logical state and contains no Flecs IDs, Jolt
   handles, GPU objects, borrowed pointers, or asynchronous worker ownership.
 - Feature queues and external-producer paths are bounded with typed admission,
   reserved authority outcomes, and visible observational loss.
@@ -185,8 +205,10 @@ an optional non-vendored Steamworks adapter for Steam networking compatibility.
 
 ## Findings Register
 
-Priorities describe the next multiplayer-first program, not regressions in the
-already accepted S0-S8/M3 evidence.
+Priorities describe current structural pressure and explicit triggers. Resolved
+rows preserve what later slices corrected; open rows are not regressions in the
+accepted phase evidence, but they must not disappear behind a broad closeout
+claim.
 
 | ID | Finding | Priority | Trigger / target | Status |
 |---|---|---:|---|---|
@@ -194,7 +216,7 @@ already accepted S0-S8/M3 evidence.
 | A-F002 | `Simulation` remains a broad private live-authority facade; canonical DTOs and the durable snapshot codec/preflight are extracted, while live composition, restore, replay capture, ticking, outcomes, diagnostics, and queries remain together where they share the world | P1 | Keep the authority surface narrow; split only responsibilities that gain an independent lifecycle or consumer | Mitigated and accepted for current scope; retain as a measured pressure point |
 | A-F003 | The Jolt adapter combines runtime/world, bodies, characters, vehicles, contacts, and debug extraction in one physical module | P2 | Before a multiplayer phase materially changes two or more physics concerns | Open |
 | A-F004 | Feature implementation roots still combine private components, systems, persistence/restore, extraction, diagnostics, and extensive tests; canonical public value/protocol contracts are now extracted | P2 | Split only roots materially changed by M5 or the next gameplay slice; do not perform unrelated file-only churn | Partially mitigated; open measured pressure point |
-| A-F005 | M6 now provides class-reserved ingress, preflighted admission, eight-stage fail-stop execution, atomic derivative/metadata publication, leased adapter delivery, application receipts, reconnect replay, and staged durable decisions; intra-phase feature order remains registration order | P1 | Retain intra-phase scheduling as a separate measured pressure point; change only after profiling demonstrates a need | Transactional boundary resolved and accepted in M6; scheduling pressure retained |
+| A-F005 | M6 now provides class-reserved ingress, preflighted admission, eight-stage fail-stop execution, atomic derivative/metadata publication, leased adapter delivery, application receipts, reconnect replay, and staged durable decisions; intra-phase feature order remains registration order | P1 | Preserve S11's typed next-tick locomotion directive and declared vitals proposal boundary; add no scheduler DAG without measured need | Transactional boundary resolved in M6; S11 proves combat ordering without registration order becoming a rule |
 | A-F006 | The visual product had no client/authority separation or local-session seam; character input reached `Simulation` directly | P0 | MP1 | Resolved for the character slice: typed local session plus separate MP2 products |
 | A-F007 | Client replicated-state plus bounded character and owned-vehicle prediction/reconciliation exist without a second Flecs/Jolt world; remote vehicles remain interpolated | P1 | MP3 / MP4-A2 | Resolved and contract-tested through MP4-A2 |
 | A-F008 | Persistent/runtime and session/account/participant/connection/replicated/input/snapshot identities must remain distinct | P0 | MP0/MP2 | Resolved and contract-tested |
@@ -212,7 +234,37 @@ already accepted S0-S8/M3 evidence.
 | A-F020 | The implemented MP5 registry models bounded room/admission state, but the graphical product has no single generation-safe create/join/connect/synchronize/reconnect coordinator and listen placement is not executable | P1 | MP6 playable room flow | Resolved and accepted in MP6: one sanitized generation-safe coordinator drives graphical listen and dedicated placements |
 | A-F021 | Participant lifecycle formerly assumed one active character identity and had no explicit stable-player/disposable-avatar incarnation contract for death and replacement | P1 | S10 damage/death/respawn | Resolved and accepted in S10: the participant survives death/reconnect while each physical avatar has a checked disposable incarnation |
 | A-F022 | No feature formerly owned generic player/NPC vitals, deterministic same-tick damage application, exactly-once death, or typed cross-feature death cleanup | P1 | S10 damage/death/respawn | Resolved and accepted in S10 through the backend-neutral bounded vitals feature and authority-coordinated typed cleanup |
-| A-F023 | `AuthorityCore` now contains substantial transaction, replication, room-facing session, and player-lifecycle coordination in one physical module even though those responsibilities retain explicit private contracts | P2 | Before a second combat producer or materially broader player lifecycle policy | Open measured pressure point; extract a cohesive owner only when the next slice creates an independent lifecycle or test seam, not as file-count churn |
+| A-F023 | `AuthorityCore` contains substantial transaction, replication, room-facing session, player lifecycle, and thin NPC death-proxy/replacement routing in one physical module even though those responsibilities retain explicit private contracts | P2 | Reassess only when another slice creates an independently testable session-lifecycle owner | Mitigated and accepted through S11: autonomy and durable replacement policy remain separate owners; no cohesive extraction seam justified file churn |
+| A-F024 | Logical blockers, their mandatory visual proxies, character spawn clearance, and navigation clearance previously had separate implicit assumptions, allowing invisible collision and unsafe authored positions | P0 | Post-S11 corrective pass | Resolved: one canonical recipe now drives blocker presentation and swept capsule preflight; default movement, all automatic participant slots, and every installed navigation edge are checked |
+| A-F025 | Character/NPC facing, chassis-derived exit direction, and wheel presentation previously duplicated conventions or discarded authoritative wheel motion at the client boundary | P0 | Post-S11 corrective pass | Resolved: one engine facing contract, explicit degenerate-exit fallback, protocol revision 12 wheel state, and one shared pure wheel composer; installed 240/80 Hz Metal gates prove wheel spin and steering plus the full vehicle-control scenario |
+| A-F026 | Graphical network products rendered no relevant district blockers, ignored mouse-look events, and used one arrival clock for common 20 Hz and NPC 10 Hz projection lanes | P1 | Post-S11 corrective pass | Resolved: bounded relevant-district presentation, shared right-drag/focus-loss policy, and client-owned applied-world clocks per projection lane |
+| A-F027 | Arithmetic participant spawn positions intersected canonical blockers and did not reserve same-cycle choices or account for live fixture placement | P1 | Post-S11 corrective pass | Resolved: one bounded initial/respawn catalog, real Jolt placement queries, continuous materialized-character occupancy through the vitals handoff, driving-aware live-character/NPC scoring, same-cycle reservations, and participant-capacity evidence against the fully settled vehicle plus 64-NPC synthetic fixture |
+| A-F028 | The composition-owned global support body and each streamed district support box remain coplanar physical surfaces | P2 | Before changing support topology, contact behavior, or streaming bootstrap order | Open: choose one support-surface owner in a coordinated world/bootstrap migration; do not remove either opportunistically |
+| A-F029 | The first client vehicle layout is a hard-coded single-archetype cohort assumption rather than an admitted catalog identity; wheel unwrap also estimates whole turns from endpoint velocity across gaps | P2 | Before a second vehicle archetype or materially harsher vehicle replication profile | Open: project archetype identity and admit its layout/tuning digest; then evaluate authoritative unwrapped phase or a server-tick presentation timeline |
+| A-F030 | Vehicle snapshots still resend raw float wheel state, authority projection is recomputed per relevant participant, and graphical multiplayer acceptance proves lifecycle semantics more strongly than exact draw composition | P2 | Measure the declared four-active-vehicle/64-NPC profile or add another client-visible dynamic feature | Open measured pressure point; retain simple current limits until bandwidth/projection/render-plan evidence justifies change |
+| A-F031 | Accepted S11 combat/life fields reached the solo client but were discarded by `local_solo` draw extraction and the renderer displayed unchanged character/NPC materials | P1 | Post-S11 corrective pass | Resolved: one renderer-neutral, tick-keyed combat presentation owner feeds solo and graphical network scenes with health bars, hit flashes, encounter/death colors, and retained cooldown/respawn/no-safe-spawn HUD markers |
+| A-F032 | Several policies treated the retained hidden CharacterVirtual pose as the player location while driving, and the authority still admitted on-foot melee from or against vehicle occupants | P1 | Post-S11 corrective pass | Resolved: one authority participant-world-position boundary uses the occupied chassis for focus/relevance/spawn safety; replacement visibility does the same through a narrow vehicle read port; client and authority both enforce on-foot-only melee |
+| A-F033 | Durable pending NPC replacement records could be restored by the persistent headless product, but no operational consumer completed or deferred the emitted replacement outcome | P1 | Post-S11 corrective pass | Resolved: the headless composition advances an exact transaction from ready to correlated NPC spawn to vitals registration; only the matching `registered` outcome completes replacement, spawn rejection defers, vitals rejection compensates with an exact despawn before deferral, unrelated FIFO heads remain fault evidence, and in-flight transactions forbid quiescent save while settled state cold-restores and resaves exactly |
+| A-F034 | The accepted S11 record claimed an engaged-NPC replication priority while all NPC projection still uses the global 10 Hz lane | P2 | Before combat density or reaction readability depends on a faster engaged cadence | Open; measure and design an explicit priority budget instead of treating cue-forced publication as a second cadence |
+| A-F035 | Sandbox replacement candidates are still selected inside session authority, and hostile assignment follows current persistent-identity rank rather than authored durable population intent | P2 | Before multiple NPC roles/archetypes, encounter populations, or wanted/faction behavior | Open; move authored candidate/role intent behind a sandbox population contract without introducing a generic AI framework |
+| A-F036 | Reliable life feedback fans out room-wide, carries no NPC source cue, and graphical acceptance/inspection remains stronger on lifecycle logs than source direction, semantic mid-state JIP, and per-NPC decision evidence | P2 | Before directional damage UI, materially larger rooms, or more sophisticated NPC behavior | Open; add relevance/recipient policy and a typed source cue only with the product UI that consumes it, then strengthen renderer-neutral semantic acceptance and selected-NPC inspection |
+| A-F037 | NPC replacement placement queries rigid bodies and live-player separation, but do not explicitly reject another live `CharacterVirtual`; the 64-NPC synthetic stress cohort necessarily maps many actors onto only six authored route nodes | P2 | Before a denser authored population/slot contract or crowd behavior where overlap is unacceptable | Open by design: automatic product bootstrap is now six NPCs, one per authored node, while the 64-NPC synthetic ceiling deliberately permits co-location. Requiring live-capsule separation against the current six-node stress fixture would make replacement impossible; author sufficient slots/crowd policy first, then add a bounded NPC-separation query if that product contract requires it |
+| A-F038 | A compact saved NPC route prefix could be mistaken for a completed farther goal while destination content was inactive, flipping a patrol leg; restored pursuit could also be lost while its target cohort or owner was unavailable | P1 | Post-S11 corrective pass | Resolved: persisted routes distinguish `exact_prefix` from owner-aligned `deferred_rebuild`; inactive content cannot manufacture goal completion, patrol intent survives, and pending pursuit installs only after the required target/owner cohort reloads. Snapshot V11/replay 8 and focused navigate/patrol/pursuit restore tests fix the contract |
+| A-F039 | Valid S11 life/action bursts competed directly with the 16-message per-connection wire quota, conflating logical publication with transport preparation and allowing one slow consumer to threaten room progress | P1 | Post-S11 corrective pass | Resolved: one conservative admitted cycle derives 172 participant publications and the ledger retains two cycles (344 records); a cursor drains ordered batches under the 16-message wire ceiling, overflow retires only the slow participant, and exact burst/reconnect/client/presentation FIFO tests preserve bounded delivery |
+| A-F040 | The normal `zig build run` product had no playable hostile NPC even though validation-only S11 compositions did, so the accepted solo product claim exceeded ordinary composition | P1 | Post-S11 corrective pass | Resolved: a narrow product owner waits for the player and west district, submits one initial hostile through the host-managed authority, correlates its exact result, and has a renderer-free normal-product host test; the installed validation smoke separately proves the full combat presentation |
+| A-F041 | After that bootstrap correction, ordinary product routing still classified the authority-owned character despawn and new spawn caused by NPC combat death/respawn as bootstrap faults | P1 | Second post-S11 audit | Resolved and revalidated: a narrow product-character lifecycle owner correlates local life facts, replicated avatar/HUD state, persistent-character despawn, respawn result, new character spawn, and new projection; the renderer-free normal-product host proves NPC-caused death, cooldown, respawn, and post-respawn survival |
+| A-F042 | A cold-restored hostile encounter could resume NPC melee in the persistent headless product, but that host had no exact owner for the resulting public vitals damage/death FIFO pair | P1 | Second post-S11 audit | Resolved: encounter attacks have a stable typed correlation domain; the operational host peeks and commits only an exact owned damage outcome plus its exact lethal death event, preserves unrelated heads as fault evidence, and proves cold-restored combat reaches quiescence and resaves |
+| A-F043 | The client-owned combat-presentation owner retains local feedback and HUD-anchor state without an explicit local avatar/session identity key, so a future fresh join that reuses one graphical scene could briefly display the prior avatar's cooldown, disposition, or anchor | P2 | Before fresh room/account switching or avatar-identity replacement can reuse a graphical scene | Open: key local presentation by session plus participant/avatar generation/incarnation, reset local-only feedback/anchor on an identity transition, retain it across same-avatar reconnect, and test both paths |
+| A-F044 | The dedicated cold `-Dproduct=headless` build graph drifted from the shared simulation imports after S11: `vitals_contract` and `npc_encounter_contract` reached the client graph but not the cold root | P1 | Final post-S11 packaging audit | Resolved and verified: the cold product declares both exact root imports, its direct test/lifecycle gate exits successfully, and the current extracted-source aggregate passes 182/182 broad steps with 409/409 tests plus 32/32 cold steps with 62/62 tests |
+| A-F045 | Human trace evidence showed that death removed the local projection, district-edge drop placement rejected valid player intent without a readable reason, and high-rate movement samples evicted useful causal context | P1 | Post-IV human-trace corrective | Resolved: authority retains a noninteractive zero-health death proxy through respawn; interaction tries bounded active-district placements then the last active pose; trace schema 2 preserves typed reason domains, coalesces analog movement, and records semantic presentation transitions; product feedback names the exact disposition |
+| A-F046 | MP3 included asynchronous world bootstrap, the listen observer could finish before the remote member, and IV5 clean-repeat compared live sampled bytes as though the non-lockstep engine promised bitwise determinism | P1 | Post-IV aggregate stabilization | Resolved without weakening product claims: MP3 uses its deterministic host-managed empty-world scope, listen waits for bounded remote completion, and IV5 settles bootstrap then compares causal action/submission/outcome semantics while the impaired link retains exact same-message seeded decisions |
+| A-F047 | `drawMeshWithMaterial` ignored `base_color` for `pos_color` primitives, so combat supplied a red corpse while the product remained orange; the independent visibility fragment used the intended color and accepted a nearly occluded corpse | P1 | Final rendered human acceptance | Resolved: primitive material tint is a reflected 16-byte fragment contract, debug draws push white explicitly, dead avatars remain in NPC presentation separation, and the Metal death checkpoint requires at least 64 depth-tested local-corpse pixels. Direct swapchain acceptance confirms the corpse is visibly red and distinct from the hostile |
+| A-F048 | V1 human incident evidence treated flag time as symptom time, sampled too sparsely, lost absent entity membership, reported stale live health, and omitted an NPC encounter replay output lane | P0 | IC5 evidence corrective | Resolved in schema 2: bounded product trail plus human/semantic lanes use actual indexed times; lifecycle and live health are atomic/reduced; tri-state membership, tombstones, and relevance facts cross authority/replication/presentation/draw; one replay boundary classifies public outputs. The long normal/resize/minimize/rapid-flag/replay journey and capture A/B pass; physical shortcut and human continuity acceptance remain IC5-G gates. |
+| A-F049 | District recipe cohort 3 reached manifests, replay, configs, and graphical streaming while the cold headless manifest validator duplicated and retained recipe 2 | P0 | IC5 source-package closeout | Resolved without compatibility: `headless_content` imports the sandbox recipe owner for exact fail-closed admission, and the cold lifecycle plus filtered-source gates execute the current cohort. |
+| A-F050 | NPC death scheduled replacement directly at the authority-to-simulation seam, mutating the `npc_encounter` digest outside the normalized replay command spine; short replays never reached death and missed it | P0 | IC5-G long replay | Resolved in replay cohort 10: bounded schedule/defer/complete ingress is canonically encoded and applied before its eligible tick; focused codec/simulation tests and the 2,106-tick journey replay match through death and replacement. |
+| A-F051 | The initial full-drawable anchor policy reserved 239,155,200 bytes on a Retina 2560x1440 window, violating the declared 128 MiB capture-memory boundary | P0 | IC5-G capture-cost gate | Resolved without relaxing the budget: the 30 Hz product lane owns transient continuity and four 1 Hz full-drawable slots own human/UI context. Measured bounded downloads are 121,190,400 bytes; a fresh smoke and full journey retain all five requested anchors with zero warnings. |
+| A-F052 | A process killed while post-roll was capturing had no materialized anomaly marker yet, and both fresh-agent diagnostic consumers aborted instead of explaining the valid live partial state | P0 | IC5-G unclean-exit gate | Resolved: the atomic running manifest and anomaly index remain authoritative; inspector and canonical/personal skill report `capturing`, `marker=pending`, zero finalized windows, absent replay/handoff, and explicit partial-in-time warnings without mutating the bundle. |
+| A-F053 | Exact district equality removed an authority-live vehicle/carryable from the client projection, while incident state and semantic maps could not prove those object boundaries; accepted-ingress replay then compared a newer authority frame once the objects remained visible | P0 | IC5-H human vehicle incident | Resolved with the deliberately bounded four-vehicle/four-carryable projection, typed bounded/controlled/held/dormant evidence, stable identities and tombstones, shared chassis/wheel semantic identity, a manifest capability matrix, recorded-tick replay comparison, and same-identity real-GNS/Metal seam acceptance. A future spatial policy requires measured hysteresis and no-pop evidence; no generic replication graph was added. |
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,
@@ -328,18 +380,43 @@ not as an unbounded file-reorganization phase.
     bounded vitals, authoritative melee, exactly-once death cleanup, dead
     reconnect, and deterministic generational avatar respawn are accepted in
     [`S10 Damage, Death, And Respawn Acceptance`](docs/validation/s10-damage-death-respawn.md).
-11. **Reassess scale and ECS access.** Use measured replicated populations and
-   snapshot budgets before adding Flecs queries, access declarations, or
-   parallel scheduling.
+11. **S11 scale and ECS access reassessment — complete.** The paired ReleaseFast
+    64-NPC/16-participant workload measured a worst 49,083 ns p99, 81,920-byte
+    paired RSS delta, 147,160 fixed feature bytes, and zero workload
+    allocations. Fixed-array single-threaded authority remains appropriate;
+    no Flecs query, scheduler, or parallel execution response is justified.
 
-## Architecture Definition of Done Through S10
+12. **S11 architectural pressure test — complete and accepted.** The
+    [`S11 NPC Encounter And Combat-Response Acceptance`](docs/validation/s11-npc-encounter-combat-response.md)
+    applies the accepted source-of-truth model to authority-owned perception,
+    target selection, navigation desire, NPC melee, damage reaction, death,
+    replacement, presentation, and debugging. Its entry gates explicitly keep
+    autonomy out of `AuthorityCore`, preserve NPC/vitals movement and health
+    ownership, reject registration order as a combat rule, and provide
+    deterministic fault/replay/reconnect/64-NPC scale evidence without a
+    scheduler, generic AI framework, or parallel-ECS response.
+13. **Post-S11 playable-runtime correction and interaction validation —
+    accepted.** The corrective and IV phases close the movement/facing,
+    blocker, wheel, client-input, projection-clock, combat-presentation,
+    streamed-route, reliable-delivery, persistent-headless, ordinary
+    product-bootstrap/lifecycle, causal-trace, silent-action, close-contact,
+    and human-visible death gaps found by real play plus independent audits.
+    It also reduces automatic product population to six distinct authored
+    nodes while retaining 64 as a synthetic pressure profile and A-F037 as an
+    explicit density trigger. The complete automated matrix and direct rendered
+    acceptance pass; the historical corrective record is superseded by the
+    accepted
+    [`Gameplay Interaction Validation And Observability Evidence`](docs/validation/gameplay-interaction-validation-and-observability.md).
+
+## Architecture Definition of Done Through S11
 
 M4 satisfies the remote multiplayer foundation. M5 satisfies embedded
 cohesion. M6 satisfies the transactional authority boundary. MP6 satisfies the
 playable room and constrained listen/dedicated placement criteria. S10 proves
-that a player-visible combat/lifecycle feature can extend those boundaries
-without moving source of truth into the client; the linked acceptance records
-contain the evidence.
+player combat/lifecycle authority. S11 proves that a second combat producer,
+autonomous NPC behavior, death presentation, and durable replacement can extend
+those boundaries without moving source of truth into the client; the linked
+acceptance records contain the evidence.
 
 - Embedded solo, constrained listen, and dedicated placement share one authority
   model; public Internet/Steam/NAT listen-host productization remains future work.
@@ -350,6 +427,9 @@ contain the evidence.
 - Local and network links deliver the same typed protocol semantics without a
   generic message bus.
 - Durable and replicated state have separate schemas, limits, and validation.
+- Persisted NPC route modes distinguish an exact admitted prefix from an
+  owner-aligned deferred rebuild, and pending encounter pursuit survives
+  inactive streamed content without false completion.
 - Session/network identity never leaks raw Flecs or Jolt handles.
 - Prediction is explicitly non-authoritative and corrects from server state.
 - Feature-owned replication does not expose private components or backend
@@ -362,8 +442,20 @@ contain the evidence.
 - Adapter acceptance, client application receipt, reconnect replay, and durable
   storage are explicit bounded owner state machines rather than hidden inside
   simulation mutation.
+- Logical gameplay publication is independent from the per-tick wire quota;
+  bounded ledgers drain through ordered cursors and retire only a consumer that
+  exhausts its declared retained window.
 - Existing save, replay, diagnostics, package, and macOS readiness guarantees
   remain intact or are deliberately superseded by reviewed evidence.
+- NPC movement, vitals, encounter decisions, replacement policy, session
+  projection, and client presentation retain distinct owners and contracts.
+- The normal embedded product composes one playable hostile through the same
+  host-managed authority boundary rather than relying on a validation-only
+  scenario. A separate narrow product-character owner correlates the local
+  player's authority-owned death/despawn/respawn lifecycle instead of treating
+  expected character outcomes as bootstrap faults.
+- The declared fully engaged scale ceiling remains far below the retained
+  4.166 ms feature budget with zero workload allocation.
 
 ## Explicit Non-Goals
 
@@ -408,6 +500,10 @@ These are comparison points, not frameworks Incinerator promises to reproduce:
   spawn occupancy checks.
 - [Valve lag compensation](https://developer.valvesoftware.com/wiki/Lag_Compensation)
   is a later bounded-rewind reference and is explicitly not part of S10.
+- [Unreal Gameplay Debugger](https://dev.epicgames.com/documentation/unreal-engine/using-the-gameplay-debugger-in-unreal-engine)
+  and [Visual Logger](https://dev.epicgames.com/documentation/en-us/unreal-engine/visual-logger-in-unreal-engine)
+  inform S11's immutable inspection, spatial overlays, and bounded transition
+  evidence without becoming runtime dependencies.
 
 ## Review Cadence
 

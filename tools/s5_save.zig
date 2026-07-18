@@ -739,6 +739,7 @@ fn verifyCompactNpcSnapshot(
     ) or
         !sandbox_contracts.ChunkCoord.eql(record.owner, sandbox_contracts.navigation_west_coord) or
         record.route.route_index != 0 or
+        record.route.mode != .exact_prefix or
         !sandbox_contracts.ChunkCoord.eql(record.route.current.coord, sandbox_contracts.navigation_west_coord))
     {
         return error.UnexpectedNpcSnapshotRecord;
@@ -817,6 +818,27 @@ fn requireHostileNpcRestoreRejections(
         return error.HostileNpcSnapshotWasAccepted;
     } else |err| {
         if (err != error.NonCanonicalNpcRouteIndex) return err;
+    }
+
+    hostile_records[0].route.route_index = 0;
+    hostile_records[0].route.mode = .deferred_rebuild;
+    const hostile_mode_payload = try std.json.Stringify.valueAlloc(
+        allocator,
+        hostile_snapshot,
+        .{},
+    );
+    defer allocator.free(hostile_mode_payload);
+    if (sandbox.Simulation.fromSnapshotForWorld(
+        allocator,
+        hostile_mode_payload,
+        smokeConfig(),
+        .{},
+    )) |unexpected| {
+        var world = unexpected;
+        world.deinit();
+        return error.HostileNpcSnapshotWasAccepted;
+    } else |err| {
+        if (err != error.NpcHoldCursorMismatch) return err;
     }
 }
 

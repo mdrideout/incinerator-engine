@@ -34,6 +34,10 @@ pub const Server = struct {
     receive_storage: [budgets.max_wire_message_bytes]u8 = undefined,
     encode_storage: [budgets.max_wire_message_bytes]u8 = undefined,
     admission_time_unix_seconds: ?u64 = null,
+    input_ingress: transport_policy.InputIngressBudget(
+        budgets.max_participants,
+        budgets.max_input_messages_per_tick,
+    ) = .{},
 
     pub fn init(allocator: std.mem.Allocator, port: u16, allow_remote: bool) !Server {
         return initWithOptions(allocator, port, allow_remote, .{}, null);
@@ -91,8 +95,10 @@ pub const Server = struct {
     pub fn pumpNetwork(self: *Server) !void {
         self.network.runCallbacks();
         while (self.network.pollEvent()) |event| try self.handleEvent(event);
-        for (&self.connections) |*connection| {
+        self.input_ingress.beginTick(self.authority.diagnostics().tick);
+        for (&self.connections, 0..) |*connection, connection_index| {
             if (!connection.isValid()) continue;
+            if (!self.input_ingress.available(connection_index)) continue;
             var received_count: usize = 0;
             while (received_count < budgets.inbound_message_capacity) : (received_count += 1) {
                 const received = self.network.receive(
@@ -135,6 +141,10 @@ pub const Server = struct {
                     );
                 } else {
                     try self.authority.ingest(.{ .value = connection.value }, message);
+                }
+                if (transport_policy.isClientInputSample(message)) {
+                    std.debug.assert(self.input_ingress.consume(connection_index));
+                    if (!self.input_ingress.available(connection_index)) break;
                 }
             }
         }

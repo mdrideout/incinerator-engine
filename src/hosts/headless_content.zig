@@ -8,6 +8,7 @@
 const std = @import("std");
 const headless_config = @import("headless_config");
 const admitted_manifest = @import("headless_content_manifest");
+const sandbox_recipe = @import("sandbox_district_recipe");
 
 pub const schema_version: u16 = 1;
 pub const max_manifest_bytes: usize = 16 * 1024;
@@ -98,7 +99,7 @@ fn validateDistrict(
 ) !void {
     if (!std.mem.eql(u8, district.semantic_id, semantic_id) or
         district.coord_x != coord_x or district.coord_z != coord_z or
-        district.recipe_version != 2)
+        district.recipe_version != sandbox_recipe.current_recipe_version)
     {
         return error.IncompatibleLogicalCatalog;
     }

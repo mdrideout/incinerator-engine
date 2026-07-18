@@ -457,6 +457,12 @@ pub const Physics = struct {
     temp_allocator: *c.JPH_TempAllocator,
     scratch_allocator: std.mem.Allocator,
     contact_debug_capture: ContactDebugCapture,
+    /// One Physics-owned registry makes every CharacterVirtual visible to
+    /// every other controller without adding proxy rigid bodies. Jolt's simple
+    /// implementation is intentionally single-threaded and O(n^2); the engine
+    /// already updates at most 65 controllers on this owner thread and measures
+    /// that declared cohort before accepting a larger population.
+    character_collision: *c.JPH_CharacterVsCharacterCollision,
     body_handles: std.AutoHashMap(u64, BodyHandleRecord),
     character_handles: std.AutoHashMap(u64, CharacterHandleRecord),
     vehicle_handles: std.AutoHashMap(u64, VehicleHandleRecord),
@@ -601,6 +607,11 @@ pub const Physics = struct {
         );
         errdefer contact_debug_capture.deinit(system, allocator);
         contact_debug_capture.install(system);
+
+        const character_collision =
+            c.JPH_CharacterVsCharacterCollision_CreateSimple() orelse
+            return error.CharacterCollisionRegistryCreationFailed;
+        errdefer c.JPH_CharacterVsCharacterCollision_Destroy(character_collision);
         if (failure_point != null) {
             try failInitAt(failure_point, .after_contact_listener);
         }
@@ -617,6 +628,7 @@ pub const Physics = struct {
             .temp_allocator = temp_allocator,
             .scratch_allocator = allocator,
             .contact_debug_capture = contact_debug_capture,
+            .character_collision = character_collision,
             .body_handles = std.AutoHashMap(u64, BodyHandleRecord).init(allocator),
             .character_handles = std.AutoHashMap(u64, CharacterHandleRecord).init(allocator),
             .vehicle_handles = std.AutoHashMap(u64, VehicleHandleRecord).init(allocator),
@@ -634,6 +646,7 @@ pub const Physics = struct {
         if (self.vehicle_handles.count() != 0) {
             @panic("physics world deinitialized with live vehicle handles");
         }
+        c.JPH_CharacterVsCharacterCollision_Destroy(self.character_collision);
         self.contact_debug_capture.deinit(self.system, self.scratch_allocator);
         c.JPH_PhysicsSystem_Destroy(self.system);
         c.JPH_TempAllocator_Destroy(self.temp_allocator);
@@ -779,6 +792,18 @@ pub const Physics = struct {
             self.system,
         ) orelse return error.CharacterCreationFailed;
         errdefer c.JPH_CharacterBase_Destroy(@ptrCast(character));
+        c.JPH_CharacterVirtual_SetCharacterVsCharacterCollision(
+            character,
+            self.character_collision,
+        );
+        c.JPH_CharacterVsCharacterCollisionSimple_AddCharacter(
+            self.character_collision,
+            character,
+        );
+        errdefer c.JPH_CharacterVsCharacterCollisionSimple_RemoveCharacter(
+            self.character_collision,
+            character,
+        );
 
         var velocity = toVec3(desc.velocity);
         c.JPH_CharacterVirtual_SetLinearVelocity(character, &velocity);
@@ -806,6 +831,11 @@ pub const Physics = struct {
         character_id: CharacterId,
     ) !void {
         const character = try self.characterPtr(character_id);
+        c.JPH_CharacterVsCharacterCollisionSimple_RemoveCharacter(
+            self.character_collision,
+            character,
+        );
+        c.JPH_CharacterVirtual_SetCharacterVsCharacterCollision(character, null);
         c.JPH_CharacterBase_Destroy(@ptrCast(character));
         if (!self.character_handles.remove(character_id.serial)) {
             @panic("character handle index removal invariant failed");
@@ -3361,6 +3391,82 @@ test "virtual character creation reconstructs grounded contacts" {
     const state = try controllers.characterState(character);
     try std.testing.expectEqual(engine.physics.GroundState.on_ground, state.ground_state);
     try std.testing.expectApproxEqAbs(@as(f32, 0), state.position[1], 0.0001);
+}
+
+test "virtual characters preserve capsule separation while moving toward each other" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+
+    const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 10, 1, 10 });
+    defer _ = physics.removeBody(ground);
+    var controllers = physics.characterControllers();
+    const radius: f32 = 0.4;
+    const first = try controllers.createCharacter(.{
+        .position = .{ -1.5, 0, 0 },
+        .radius = radius,
+    });
+    defer controllers.destroyCharacter(first) catch unreachable;
+    const second = try controllers.createCharacter(.{
+        .position = .{ 1.5, 0, 0 },
+        .radius = radius,
+    });
+    defer controllers.destroyCharacter(second) catch unreachable;
+
+    const minimum_separation = radius * 2.0 - 0.02;
+    for (0..240) |_| {
+        const first_state = try controllers.updateCharacter(
+            first,
+            .{ .velocity = .{ 2, 0, 0 } },
+            1.0 / 120.0,
+        );
+        const second_state = try controllers.updateCharacter(
+            second,
+            .{ .velocity = .{ -2, 0, 0 } },
+            1.0 / 120.0,
+        );
+        const dx = first_state.position[0] - second_state.position[0];
+        const dz = first_state.position[2] - second_state.position[2];
+        try std.testing.expect(@sqrt(dx * dx + dz * dz) >= minimum_separation);
+    }
+}
+
+test "declared player plus NPC controller cohort remains bounded and measurable" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+
+    const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 40, 1, 40 });
+    defer _ = physics.removeBody(ground);
+    var controllers = physics.characterControllers();
+    const declared_product_cohort: usize = 65;
+    var handles: [declared_product_cohort]CharacterId = undefined;
+    for (&handles, 0..) |*handle, index| {
+        const column: f32 = @floatFromInt(index % 9);
+        const row: f32 = @floatFromInt(index / 9);
+        handle.* = try controllers.createCharacter(.{
+            .position = .{ column * 2, 0, row * 2 },
+        });
+    }
+    defer for (handles) |handle| controllers.destroyCharacter(handle) catch unreachable;
+
+    const started = std.Io.Clock.Timestamp.now(std.testing.io, .awake);
+    // Keep the routine gate comfortably below Zig's per-test watchdog while
+    // still sampling 1,950 controller updates at the exact product ceiling.
+    const measured_ticks: usize = 30;
+    for (0..measured_ticks) |_| {
+        for (handles) |handle| {
+            const state = try controllers.updateCharacter(
+                handle,
+                .{ .velocity = .{ 0, 0, 0 } },
+                1.0 / 60.0,
+            );
+            try state.validate();
+        }
+    }
+    const elapsed_ns: u64 = @intCast(started.untilNow(std.testing.io).raw.nanoseconds);
+    const update_count = declared_product_cohort * measured_ticks;
+    try std.testing.expect(elapsed_ns != 0);
+    try std.testing.expect(elapsed_ns / update_count != 0);
+    try std.testing.expectEqual(declared_product_cohort, controllers.controllerCount());
 }
 
 test "virtual character relocation is transactional when an exit is blocked" {

@@ -1,0 +1,6 @@
+interface:
+  display_name: "Incinerator Incident Diagnostics"
+  short_description: "Inspect, replay, and verify incident bundles"
+  default_prompt: "Use $incinerator-incident-diagnostics to inspect this Incinerator anomaly bundle and attempt verified reproduction."
+policy:
+  allow_implicit_invocation: true

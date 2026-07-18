@@ -15,6 +15,59 @@ const CookDependency = struct {
     bundle: std.Build.LazyPath,
 };
 
+const SourceIdentity = struct {
+    revision: []const u8,
+    dirty: bool,
+    dirty_fingerprint: []const u8,
+};
+
+fn sourceIdentity(b: *std.Build) SourceIdentity {
+    var code: u8 = 0;
+    const revision_output = b.runAllowFail(
+        &.{ "git", "rev-parse", "--verify", "HEAD" },
+        &code,
+        .ignore,
+    ) catch return .{
+        .revision = "source-package",
+        .dirty = false,
+        .dirty_fingerprint = "unavailable",
+    };
+    if (code != 0) return .{
+        .revision = "source-package",
+        .dirty = false,
+        .dirty_fingerprint = "unavailable",
+    };
+    const revision = std.mem.trim(u8, revision_output, " \t\r\n");
+    code = 0;
+    const status_output = b.runAllowFail(
+        &.{ "git", "status", "--porcelain=v1", "--untracked-files=normal" },
+        &code,
+        .ignore,
+    ) catch return .{
+        .revision = revision,
+        .dirty = true,
+        .dirty_fingerprint = "status-unavailable",
+    };
+    if (code != 0) return .{
+        .revision = revision,
+        .dirty = true,
+        .dirty_fingerprint = "status-unavailable",
+    };
+    const status = std.mem.trim(u8, status_output, " \t\r\n");
+    if (status.len == 0) return .{
+        .revision = revision,
+        .dirty = false,
+        .dirty_fingerprint = "clean",
+    };
+    return .{
+        .revision = revision,
+        .dirty = true,
+        .dirty_fingerprint = b.fmt("wyhash-{x:0>16}", .{
+            std.hash.Wyhash.hash(0, status),
+        }),
+    };
+}
+
 fn runContentCooker(
     b: *std.Build,
     cooker: *std.Build.Step.Compile,
@@ -143,6 +196,11 @@ pub fn build(b: *std.Build) void {
         "editor",
         "Enable the editor UI (ImGui tools). Defaults to true in Debug, false in Release.",
     ) orelse default_editor_enabled;
+    const incident_capture_enabled = b.option(
+        bool,
+        "incident-capture",
+        "Enable bounded local human-test incident bundles. Defaults to true in Debug.",
+    ) orelse (optimize == .Debug);
 
     // It's also possible to define more custom flags to toggle optional features
     // of this build script using `b.option()`. All defined flags (including
@@ -177,6 +235,10 @@ pub fn build(b: *std.Build) void {
     const npc_feature_module = graph.npc;
     const vitals_contract_module = graph.vitals_contract;
     const vitals_feature_module = graph.vitals;
+    const npc_encounter_contract_module = graph.npc_encounter_contract;
+    const npc_encounter_feature_module = graph.npc_encounter;
+    const sandbox_npc_replacement_contract_module = graph.sandbox_npc_replacement_contract;
+    const sandbox_npc_replacement_module = graph.sandbox_npc_replacement;
     const population_contract_module = graph.population_contract;
     const interaction_feature_contract_module = graph.interaction_feature_contract;
     const interaction_feature_module = graph.interaction;
@@ -193,6 +255,7 @@ pub fn build(b: *std.Build) void {
     const session_budgets_module = graph.session_budgets;
     const session_identity_module = graph.session_identity;
     const session_protocol_module = graph.session_protocol;
+    const combat_presentation_module = graph.combat_presentation;
     const gameplay_admission_module = graph.gameplay_admission;
     const snapshot_source_module = graph.snapshot_source;
     const session_transport_policy_module = graph.session_transport_policy;
@@ -289,12 +352,21 @@ pub fn build(b: *std.Build) void {
     // Creates an importable module containing build-time configuration.
     // Code can access these via: const options = @import("build_options");
     const options = b.addOptions();
+    const source_identity = sourceIdentity(b);
     options.addOption(bool, "editor_enabled", editor_enabled);
     options.addOption(bool, "validation_mode", false);
+    options.addOption(bool, "incident_capture_enabled", incident_capture_enabled);
+    options.addOption([]const u8, "source_revision", source_identity.revision);
+    options.addOption(bool, "source_dirty", source_identity.dirty);
+    options.addOption([]const u8, "source_dirty_fingerprint", source_identity.dirty_fingerprint);
 
     const validation_options = b.addOptions();
     validation_options.addOption(bool, "editor_enabled", editor_enabled);
     validation_options.addOption(bool, "validation_mode", true);
+    validation_options.addOption(bool, "incident_capture_enabled", false);
+    validation_options.addOption([]const u8, "source_revision", source_identity.revision);
+    validation_options.addOption(bool, "source_dirty", source_identity.dirty);
+    validation_options.addOption([]const u8, "source_dirty_fingerprint", source_identity.dirty_fingerprint);
 
     const exe = b.addExecutable(.{
         .name = "incinerator_engine",
@@ -691,11 +763,72 @@ pub fn build(b: *std.Build) void {
 
     addClientImport(exe, validation_exe, "population_contract", population_contract_module);
     addClientImport(exe, validation_exe, "session_budgets", session_budgets_module);
+    const sandbox_product_encounter_module = b.createModule(.{
+        .root_source_file = b.path("src/sandbox/product_encounter.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "npc_contract", .module = npc_contract_module },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
+        },
+    });
+    addClientImport(
+        exe,
+        validation_exe,
+        "sandbox_product_encounter",
+        sandbox_product_encounter_module,
+    );
+    const sandbox_product_character_lifecycle_module = b.createModule(.{
+        .root_source_file = b.path("src/sandbox/product_character_lifecycle.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts_module },
+            .{ .name = "session_identity", .module = session_identity_module },
+        },
+    });
+    addClientImport(
+        exe,
+        validation_exe,
+        "sandbox_product_character_lifecycle",
+        sandbox_product_character_lifecycle_module,
+    );
+    const sandbox_product_encounter_host_test_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_product_encounter_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "local_solo_session", .module = local_solo_session_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "sandbox_product_encounter", .module = sandbox_product_encounter_module },
+            .{
+                .name = "sandbox_product_character_lifecycle",
+                .module = sandbox_product_character_lifecycle_module,
+            },
+        },
+    });
+    const sandbox_gameplay_scenarios_module = b.createModule(.{
+        .root_source_file = b.path("src/sandbox/gameplay_scenarios.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "incinerator_engine", .module = mod }},
+    });
     const sandbox_controls_module = b.createModule(.{
         .root_source_file = b.path("src/sandbox_controls.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{
+            .name = "sandbox_gameplay_scenarios",
+            .module = sandbox_gameplay_scenarios_module,
+        }},
     });
+    addClientImport(
+        exe,
+        validation_exe,
+        "sandbox_gameplay_scenarios",
+        sandbox_gameplay_scenarios_module,
+    );
     const developer_profile_module = b.createModule(.{
         .root_source_file = b.path("src/hosts/developer_profile.zig"),
         .target = target,
@@ -723,6 +856,7 @@ pub fn build(b: *std.Build) void {
         developer_visualization_module,
     );
     addClientImport(exe, validation_exe, "sandbox_authoring", sandbox_authoring_module);
+    addClientImport(exe, validation_exe, "sandbox_replay", sandbox_replay_module);
     const district_content_catalog_module = b.createModule(.{
         .root_source_file = b.path("src/hosts/district_content_catalog.zig"),
         .target = target,
@@ -805,6 +939,7 @@ pub fn build(b: *std.Build) void {
     );
     content_relocation_step.dependOn(&run_content_catalog_relocation.step);
     addClientImport(exe, validation_exe, "local_solo_session", local_solo_session_module);
+    addClientImport(exe, validation_exe, "combat_presentation", combat_presentation_module);
     const sandbox_interaction_module = b.createModule(.{
         .root_source_file = b.path("src/hosts/sandbox_interaction.zig"),
         .target = target,
@@ -857,6 +992,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "developer_visualization", .module = developer_visualization_module },
             .{ .name = "session_authority_diagnostics", .module = session_authority_diagnostics_module },
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "sandbox_replay", .module = sandbox_replay_module },
         },
     });
     if (editor_gui_module) |module| {
@@ -924,10 +1060,13 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "zmath", .module = zmath.module("root") },
+            .{ .name = "engine_contracts", .module = contracts_module },
             .{ .name = "session_budgets", .module = session_budgets_module },
             .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "combat_presentation", .module = combat_presentation_module },
             .{ .name = "session_client", .module = session_client_module },
             .{ .name = "replicated_world", .module = replicated_world_module },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
             .{ .name = "mp2_presentation", .module = mp2_presentation_module },
         },
     });
@@ -952,6 +1091,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "gns_direct", .module = gns_direct_module },
             .{ .name = "mp2_presentation", .module = mp2_presentation_module },
             .{ .name = "client_scene", .module = client_scene_module },
+            .{ .name = "sandbox_gameplay_scenarios", .module = sandbox_gameplay_scenarios_module },
         },
     });
     mp2_client_module.linkLibrary(sdl_lib);
@@ -989,6 +1129,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "session_budgets", .module = session_budgets_module },
             .{ .name = "session_identity", .module = session_identity_module },
             .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "combat_presentation", .module = combat_presentation_module },
             .{ .name = "session_room", .module = session_room_module },
             .{ .name = "room_coordinator", .module = room_coordinator_module },
             .{ .name = "room_ticket", .module = room_ticket_module },
@@ -1008,6 +1149,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "mp6_listen_room", .module = mp6_listen_room_module },
             .{ .name = "client_scene", .module = client_scene_module },
             .{ .name = "mp2_presentation", .module = mp2_presentation_module },
+            .{ .name = "sandbox_gameplay_scenarios", .module = sandbox_gameplay_scenarios_module },
         },
     });
     mp6_listen_client_module.linkLibrary(sdl_lib);
@@ -1156,6 +1298,30 @@ pub fn build(b: *std.Build) void {
     );
     verify_s10_dedicated_step.dependOn(&verify_s10_dedicated_process.step);
     verify_s10_dedicated_step.dependOn(mp6_host_test_step);
+    const verify_s11_listen_process = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_s11_listen_process.sh"),
+    });
+    verify_s11_listen_process.addFileArg(mp6_listen_client_exe.getEmittedBin());
+    verify_s11_listen_process.addFileArg(mp2_client_exe.getEmittedBin());
+    const verify_s11_listen_step = b.step(
+        "verify-s11-listen",
+        "Run two-client graphical listen NPC damage/death/replacement",
+    );
+    verify_s11_listen_step.dependOn(&verify_s11_listen_process.step);
+    verify_s11_listen_step.dependOn(mp6_host_test_step);
+    const verify_s11_dedicated_process = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_s11_dedicated_process.sh"),
+    });
+    verify_s11_dedicated_process.addFileArg(mp6_server_exe.getEmittedBin());
+    verify_s11_dedicated_process.addFileArg(mp2_client_exe.getEmittedBin());
+    const verify_s11_dedicated_step = b.step(
+        "verify-s11-dedicated",
+        "Run two-client graphical dedicated NPC damage/death/replacement",
+    );
+    verify_s11_dedicated_step.dependOn(&verify_s11_dedicated_process.step);
+    verify_s11_dedicated_step.dependOn(mp6_host_test_step);
     const mp6_lifecycle_acceptance_module = b.createModule(.{
         .root_source_file = b.path("tools/mp6_lifecycle_acceptance.zig"),
         .target = target,
@@ -1263,6 +1429,96 @@ pub fn build(b: *std.Build) void {
     verify_mp3_step.dependOn(&run_mp2_loopback.step);
     verify_mp3_step.dependOn(&run_mp2_server_tests.step);
     verify_mp3_step.dependOn(&run_mp2_client_tests.step);
+
+    const interaction_validation_module = b.createModule(.{
+        .root_source_file = b.path("tools/interaction_validation.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+            .{ .name = "session_client", .module = session_client_module },
+            .{ .name = "session_authority", .module = session_authority_module },
+            .{ .name = "impaired_link", .module = impaired_link_module },
+            .{ .name = "sandbox_gameplay_scenarios", .module = sandbox_gameplay_scenarios_module },
+        },
+    });
+    const interaction_validation_exe = b.addExecutable(.{
+        .name = "incinerator_interaction_validation",
+        .root_module = interaction_validation_module,
+    });
+    const interaction_validation_tests = b.addTest(.{
+        .root_module = interaction_validation_module,
+    });
+    const run_interaction_validation_tests = b.addRunArtifact(interaction_validation_tests);
+    const run_interaction_validation = b.addRunArtifact(interaction_validation_exe);
+    if (b.args) |args| run_interaction_validation.addArgs(args);
+    const run_interaction_validation_step = b.step(
+        "run-interaction-validation",
+        "Run one replayable IV5 gameplay journey/fault/fuzz configuration",
+    );
+    run_interaction_validation_step.dependOn(&run_interaction_validation.step);
+
+    const interaction_matrix_step = b.step(
+        "verify-interaction-matrix",
+        "Run deterministic clean/fault/reconnect gameplay journey matrix",
+    );
+    interaction_matrix_step.dependOn(&run_interaction_validation_tests.step);
+    inline for (.{
+        .{ "clean", "20753", true },
+        .{ "nominal", "20754", false },
+        .{ "nominal", "20755", false },
+        .{ "nominal", "20756", false },
+        .{ "adverse", "20757", false },
+        .{ "adverse", "20758", false },
+        .{ "adverse", "20759", false },
+        .{ "blackout", "20760", false },
+    }) |trial| {
+        const run = b.addRunArtifact(interaction_validation_exe);
+        run.addArgs(&.{
+            "--profile",
+            trial[0],
+            "--seed",
+            trial[1],
+            "--ticks",
+            "4800",
+            "--reconnect",
+        });
+        if (trial[2]) run.addArg("--repeat");
+        interaction_matrix_step.dependOn(&run.step);
+    }
+    const run_interaction_routine_soak = b.addRunArtifact(interaction_validation_exe);
+    run_interaction_routine_soak.addArgs(&.{
+        "--profile",
+        "adverse",
+        "--seed",
+        "20817",
+        "--ticks",
+        "8192",
+        "--fuzz",
+        "--reconnect",
+    });
+    const interaction_routine_soak_step = b.step(
+        "soak-interactions",
+        "Run the routine 8,192-tick seeded gameplay interaction soak",
+    );
+    interaction_routine_soak_step.dependOn(&run_interaction_routine_soak.step);
+    const run_interaction_long_soak = b.addRunArtifact(interaction_validation_exe);
+    run_interaction_long_soak.addArgs(&.{
+        "--profile",
+        "adverse",
+        "--seed",
+        "20818",
+        "--ticks",
+        "32768",
+        "--fuzz",
+        "--reconnect",
+    });
+    const interaction_long_soak_step = b.step(
+        "soak-interactions-long",
+        "Run the opt-in 32,768-tick seeded gameplay interaction soak",
+    );
+    interaction_long_soak_step.dependOn(&run_interaction_long_soak.step);
 
     const mp4_acceptance_module = b.createModule(.{
         .root_source_file = b.path("tools/mp4_acceptance.zig"),
@@ -1401,6 +1657,7 @@ pub fn build(b: *std.Build) void {
         .imports = &.{
             .{ .name = "headless_config", .module = headless_config_module },
             .{ .name = "headless_content_manifest", .module = graph.headless_content_manifest },
+            .{ .name = "sandbox_district_recipe", .module = graph.sandbox_district_recipe },
         },
     });
     const headless_clock_module = b.createModule(.{
@@ -1458,6 +1715,8 @@ pub fn build(b: *std.Build) void {
             .{ .name = "district_feature_contract", .module = district_feature_contract_module },
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract_module },
             .{ .name = "npc_contract", .module = npc_contract_module },
+            .{ .name = "npc_encounter_contract", .module = npc_encounter_contract_module },
+            .{ .name = "vitals_contract", .module = vitals_contract_module },
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
@@ -1604,6 +1863,44 @@ pub fn build(b: *std.Build) void {
     );
     run_replay_tool_step.dependOn(&run_replay_tool.step);
 
+    const replay_incident = b.addRunArtifact(replay_tool_exe);
+    replay_incident.addArg("verify-incident");
+    if (b.args) |args| replay_incident.addArgs(args);
+    const replay_incident_step = b.step(
+        "replay-incident",
+        "Verify an incident bundle replay: zig build replay-incident -- <run-folder> <installed-content-root>",
+    );
+    replay_incident_step.dependOn(&replay_incident.step);
+
+    const incident_inspect_module = b.createModule(.{
+        .root_source_file = b.path("tools/incident_inspect.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const incident_inspect_exe = b.addExecutable(.{
+        .name = "incinerator_incident_inspect",
+        .root_module = incident_inspect_module,
+    });
+    b.installArtifact(incident_inspect_exe);
+    const run_incident_inspect = b.addRunArtifact(incident_inspect_exe);
+    if (b.args) |args| run_incident_inspect.addArgs(args);
+    const inspect_incident_step = b.step(
+        "inspect-incident",
+        "Validate and summarize a run: zig build inspect-incident -- <run-folder>",
+    );
+    inspect_incident_step.dependOn(&run_incident_inspect.step);
+
+    const incident_visual_report = b.addSystemCommand(&.{
+        "python3",
+        b.pathFromRoot("tools/incident_visual_report.py"),
+    });
+    if (b.args) |args| incident_visual_report.addArgs(args);
+    const incident_visual_report_step = b.step(
+        "incident-visual-report",
+        "Create read-only PNG contact sheets: zig build incident-visual-report -- <run-folder> <new-output-folder>",
+    );
+    incident_visual_report_step.dependOn(&incident_visual_report.step);
+
     // Durable authoring/save verification is a separate cold, SDL/editor/GPU-
     // free product. The installed smoke invokes it twice so restore occurs in
     // a genuinely fresh process.
@@ -1728,6 +2025,39 @@ pub fn build(b: *std.Build) void {
     );
     s8_measure_test_step.dependOn(&run_s8_measure_tests.step);
 
+    const s11_measure_root_module = b.createModule(.{
+        .root_source_file = b.path("tools/s11_measure.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "npc_encounter_feature", .module = npc_encounter_feature_module },
+            .{ .name = "npc_encounter_contract", .module = npc_encounter_contract_module },
+            .{ .name = "vitals_contract", .module = vitals_contract_module },
+        },
+    });
+    const s11_measure_exe = b.addExecutable(.{
+        .name = "incinerator_s11_measure",
+        .root_module = s11_measure_root_module,
+    });
+    const s11_measure_check_step = b.step(
+        "check-s11-measure",
+        "Compile the SDL-free S11 encounter measurement",
+    );
+    s11_measure_check_step.dependOn(&s11_measure_exe.step);
+    const run_s11_measure = b.addRunArtifact(s11_measure_exe);
+    const s11_measure_step = b.step(
+        "measure-s11",
+        "Run the ReleaseFast paired S11 encounter measurement",
+    );
+    s11_measure_step.dependOn(&run_s11_measure.step);
+    const s11_measure_tests = b.addTest(.{ .root_module = s11_measure_root_module });
+    const run_s11_measure_tests = b.addRunArtifact(s11_measure_tests);
+    const s11_measure_test_step = b.step(
+        "test-s11-measure",
+        "Run S11 measurement methodology and statistic tests",
+    );
+    s11_measure_test_step.dependOn(&run_s11_measure_tests.step);
+
     const headless_tests = b.addTest(.{ .root_module = headless_root_module });
     const run_headless_tests = b.addRunArtifact(headless_tests);
     const external_producers_tests = b.addTest(.{ .root_module = external_producers_module });
@@ -1844,7 +2174,11 @@ pub fn build(b: *std.Build) void {
     );
     const installed_s8_smoke_step = b.step(
         "smoke-installed-s8-macos",
-        "Run installed S8 64-NPC population Metal smokes at 240/80 Hz from /tmp (native Apple Silicon only)",
+        "Run installed S8 route/residency lifecycle Metal smokes at 240/80 Hz from /tmp (native Apple Silicon only)",
+    );
+    const installed_s11_smoke_step = b.step(
+        "smoke-installed-s11-macos",
+        "Run installed S11 combat-presentation Metal smokes at 240/80 Hz from /tmp (native Apple Silicon only)",
     );
     const installed_s4_diagnostics_smoke_step = b.step(
         "smoke-installed-s4-diagnostics-macos",
@@ -2019,6 +2353,30 @@ pub fn build(b: *std.Build) void {
         );
         installed_s8_smoke_below.step.dependOn(&installed_s8_smoke_above.step);
         installed_s8_smoke_step.dependOn(&installed_s8_smoke_below.step);
+
+        const installed_s11_smoke_above = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
+            "--s11-combat-smoke",
+            "--frames=3840",
+            "--virtual-render-hz=240",
+        });
+        installed_s11_smoke_above.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s11_smoke_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s11_smoke_above.step.dependOn(b.getInstallStep());
+        const installed_s11_smoke_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s11-combat-smoke",
+            "--frames=1280",
+            "--virtual-render-hz=80",
+        });
+        installed_s11_smoke_below.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s11_smoke_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s11_smoke_below.step.dependOn(&installed_s11_smoke_above.step);
+        installed_s11_smoke_step.dependOn(&installed_s11_smoke_below.step);
 
         const installed_s4_diagnostics_smoke = addValidationCommand(b, install_validation_step, &.{
             installed_validation_path,
@@ -2310,12 +2668,35 @@ pub fn build(b: *std.Build) void {
         );
         readiness_s8_below.step.dependOn(&readiness_s8_above.step);
 
+        const readiness_s11_above = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s11-combat-smoke",
+            "--frames=3840",
+            "--virtual-render-hz=240",
+        });
+        readiness_s11_above.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s11_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s11_above.step.dependOn(&readiness_s8_below.step);
+        const readiness_s11_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s11-combat-smoke",
+            "--frames=1280",
+            "--virtual-render-hz=80",
+        });
+        readiness_s11_below.setCwd(.{ .cwd_relative = "/tmp" });
+        readiness_s11_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        readiness_s11_below.step.dependOn(&readiness_s11_above.step);
+
         const readiness_window = b.addSystemCommand(&.{
             installed_validation_path,
             "--window-lifecycle-smoke",
         });
         readiness_window.setCwd(.{ .cwd_relative = "/tmp" });
-        readiness_window.step.dependOn(&readiness_s8_below.step);
+        readiness_window.step.dependOn(&readiness_s11_below.step);
 
         const readiness_init = b.addSystemCommand(&.{
             installed_validation_path,
@@ -2477,6 +2858,7 @@ pub fn build(b: *std.Build) void {
         installed_s6_smoke_step.dependOn(&native_only.step);
         installed_s7_smoke_step.dependOn(&native_only.step);
         installed_s8_smoke_step.dependOn(&native_only.step);
+        installed_s11_smoke_step.dependOn(&native_only.step);
         installed_s4_diagnostics_smoke_step.dependOn(&native_only.step);
         installed_s4_replay_smoke_step.dependOn(&native_only.step);
         installed_s4_physics_debug_smoke_step.dependOn(&native_only.step);
@@ -2610,6 +2992,41 @@ pub fn build(b: *std.Build) void {
     );
     vitals_feature_test_step.dependOn(&run_vitals_contract_tests.step);
     vitals_feature_test_step.dependOn(&run_vitals_feature_tests.step);
+
+    const npc_encounter_contract_tests = b.addTest(.{
+        .root_module = npc_encounter_contract_module,
+    });
+    const run_npc_encounter_contract_tests = b.addRunArtifact(
+        npc_encounter_contract_tests,
+    );
+    const npc_encounter_feature_tests = b.addTest(.{
+        .root_module = npc_encounter_feature_module,
+    });
+    const run_npc_encounter_feature_tests = b.addRunArtifact(
+        npc_encounter_feature_tests,
+    );
+    const npc_encounter_test_step = b.step(
+        "test-npc-encounter",
+        "Run bounded authoritative NPC encounter tests",
+    );
+    npc_encounter_test_step.dependOn(&run_npc_encounter_contract_tests.step);
+    npc_encounter_test_step.dependOn(&run_npc_encounter_feature_tests.step);
+    const npc_replacement_tests = b.addTest(.{
+        .root_module = sandbox_npc_replacement_module,
+    });
+    const run_npc_replacement_tests = b.addRunArtifact(npc_replacement_tests);
+    const npc_replacement_contract_tests = b.addTest(.{
+        .root_module = sandbox_npc_replacement_contract_module,
+    });
+    const run_npc_replacement_contract_tests = b.addRunArtifact(
+        npc_replacement_contract_tests,
+    );
+    const npc_replacement_test_step = b.step(
+        "test-npc-replacement",
+        "Run durable safe NPC replacement policy tests",
+    );
+    npc_replacement_test_step.dependOn(&run_npc_replacement_tests.step);
+    npc_replacement_test_step.dependOn(&run_npc_replacement_contract_tests.step);
 
     const driver_contract_tests = b.addTest(.{ .root_module = driver_contract_module });
     const run_driver_contract_tests = b.addRunArtifact(driver_contract_tests);
@@ -2793,6 +3210,34 @@ pub fn build(b: *std.Build) void {
     );
     sandbox_controls_test_step.dependOn(&run_sandbox_controls_tests.step);
 
+    const sandbox_product_encounter_tests = b.addTest(.{
+        .root_module = sandbox_product_encounter_module,
+    });
+    const run_sandbox_product_encounter_tests = b.addRunArtifact(
+        sandbox_product_encounter_tests,
+    );
+    const sandbox_product_encounter_test_step = b.step(
+        "test-sandbox-product-encounter",
+        "Run product-composition NPC encounter bootstrap tests",
+    );
+    sandbox_product_encounter_test_step.dependOn(
+        &run_sandbox_product_encounter_tests.step,
+    );
+
+    const sandbox_product_encounter_host_tests = b.addTest(.{
+        .root_module = sandbox_product_encounter_host_test_module,
+    });
+    const run_sandbox_product_encounter_host_tests = b.addRunArtifact(
+        sandbox_product_encounter_host_tests,
+    );
+    const sandbox_product_encounter_host_test_step = b.step(
+        "test-sandbox-product-encounter-host",
+        "Run normal product NPC encounter and local character lifecycle through the host-managed session",
+    );
+    sandbox_product_encounter_host_test_step.dependOn(
+        &run_sandbox_product_encounter_host_tests.step,
+    );
+
     const sandbox_invocation_tests = b.addTest(.{
         .root_module = sandbox_invocation_module,
     });
@@ -2936,6 +3381,8 @@ pub fn build(b: *std.Build) void {
     const run_session_identity_tests = b.addRunArtifact(session_identity_tests);
     const session_protocol_tests = b.addTest(.{ .root_module = session_protocol_module });
     const run_session_protocol_tests = b.addRunArtifact(session_protocol_tests);
+    const combat_presentation_tests = b.addTest(.{ .root_module = combat_presentation_module });
+    const run_combat_presentation_tests = b.addRunArtifact(combat_presentation_tests);
     const gameplay_admission_tests = b.addTest(.{ .root_module = gameplay_admission_module });
     const run_gameplay_admission_tests = b.addRunArtifact(gameplay_admission_tests);
     const snapshot_source_tests = b.addTest(.{ .root_module = snapshot_source_module });
@@ -2990,6 +3437,7 @@ pub fn build(b: *std.Build) void {
     session_contract_test_step.dependOn(&run_session_budgets_tests.step);
     session_contract_test_step.dependOn(&run_session_identity_tests.step);
     session_contract_test_step.dependOn(&run_session_protocol_tests.step);
+    session_contract_test_step.dependOn(&run_combat_presentation_tests.step);
     session_contract_test_step.dependOn(&run_gameplay_admission_tests.step);
     session_contract_test_step.dependOn(&run_snapshot_source_tests.step);
     session_contract_test_step.dependOn(&run_session_transport_policy_tests.step);
@@ -3130,6 +3578,9 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_character_feature_tests.step);
     test_step.dependOn(&run_vitals_contract_tests.step);
     test_step.dependOn(&run_vitals_feature_tests.step);
+    test_step.dependOn(&run_npc_encounter_contract_tests.step);
+    test_step.dependOn(&run_npc_encounter_feature_tests.step);
+    test_step.dependOn(&run_npc_replacement_tests.step);
     test_step.dependOn(&run_driver_contract_tests.step);
     test_step.dependOn(&run_interaction_contract_tests.step);
     test_step.dependOn(&run_vehicle_feature_tests.step);
@@ -3147,6 +3598,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_district_presentation_tests.step);
     test_step.dependOn(&run_district_streaming_host_tests.step);
     test_step.dependOn(&run_sandbox_controls_tests.step);
+    test_step.dependOn(&run_sandbox_product_encounter_tests.step);
+    test_step.dependOn(&run_sandbox_product_encounter_host_tests.step);
     test_step.dependOn(&run_sandbox_invocation_tests.step);
     test_step.dependOn(&run_sandbox_host_contracts_tests.step);
     test_step.dependOn(&run_developer_controls_tests.step);
@@ -3171,6 +3624,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_session_prediction_tests.step);
     test_step.dependOn(&run_vehicle_prediction_tests.step);
     test_step.dependOn(&run_impaired_link_tests.step);
+    test_step.dependOn(&run_interaction_validation_tests.step);
     test_step.dependOn(&run_session_local_link_tests.step);
     test_step.dependOn(&run_replicated_world_tests.step);
     test_step.dependOn(&run_session_client_tests.step);
@@ -3205,6 +3659,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_s7_measure_tests.step);
     test_step.dependOn(&s8_measure_exe.step);
     test_step.dependOn(&run_s8_measure_tests.step);
+    test_step.dependOn(&s11_measure_exe.step);
+    test_step.dependOn(&run_s11_measure_tests.step);
     test_step.dependOn(&m3_soak_exe.step);
     test_step.dependOn(&run_m3_soak_tests.step);
 
@@ -3269,6 +3725,43 @@ pub fn build(b: *std.Build) void {
         "Verify filtered source-package membership and executable source closure",
     );
     verify_source_package_step.dependOn(&verify_source_package_command.step);
+
+    const verify_s11_step = b.step(
+        "verify-s11",
+        "Run authoritative NPC encounter, durability, network, and graphical acceptance",
+    );
+    verify_s11_step.dependOn(npc_encounter_test_step);
+    verify_s11_step.dependOn(npc_replacement_test_step);
+    verify_s11_step.dependOn(vitals_feature_test_step);
+    verify_s11_step.dependOn(simulation_snapshot_test_step);
+    verify_s11_step.dependOn(sandbox_simulation_test_step);
+    verify_s11_step.dependOn(sandbox_replay_test_step);
+    verify_s11_step.dependOn(session_contract_test_step);
+    verify_s11_step.dependOn(developer_diagnostics_test_step);
+    verify_s11_step.dependOn(s11_measure_test_step);
+    verify_s11_step.dependOn(verify_mp4d_step);
+    verify_s11_step.dependOn(verify_mp6_lifecycle_step);
+    verify_s11_step.dependOn(check_mp6_step);
+    verify_s11_step.dependOn(check_validation_step);
+    verify_s11_step.dependOn(verify_source_package_step);
+    verify_s11_step.dependOn(verify_s11_listen_step);
+    verify_s11_step.dependOn(verify_s11_dedicated_step);
+    verify_s11_step.dependOn(installed_s11_smoke_step);
+    verify_s11_step.dependOn(sandbox_product_encounter_host_test_step);
+
+    const interaction_validation_audit_command = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_interaction_validation.sh"),
+    });
+    const verify_interactions_step = b.step(
+        "verify-interactions",
+        "Run the accepted interaction scenario, topology, fault, soak, Metal, and documentation gate",
+    );
+    verify_interactions_step.dependOn(verify_s11_step);
+    verify_interactions_step.dependOn(interaction_matrix_step);
+    verify_interactions_step.dependOn(interaction_routine_soak_step);
+    verify_interactions_step.dependOn(verify_m5_architecture_step);
+    verify_interactions_step.dependOn(&interaction_validation_audit_command.step);
 
     const verify_m5_step = b.step(
         "verify-m5",
@@ -3378,17 +3871,31 @@ fn buildShaders(
     const triangle_fragment = compileShader(b, tools, "shaders/triangle.frag", "triangle.frag");
     const model_vertex = compileShader(b, tools, "shaders/model.vert", "model.vert");
     const model_fragment = compileShader(b, tools, "shaders/model.frag", "model.frag");
+    const visibility_fragment = compileShader(
+        b,
+        tools,
+        "shaders/visibility.frag",
+        "visibility.frag",
+    );
 
     const extension = format.fileExtension();
     _ = generated.addCopyFile(triangle_vertex.target, b.fmt("triangle.vert.{s}", .{extension}));
     _ = generated.addCopyFile(triangle_fragment.target, b.fmt("triangle.frag.{s}", .{extension}));
     _ = generated.addCopyFile(model_vertex.target, b.fmt("model.vert.{s}", .{extension}));
     _ = generated.addCopyFile(model_fragment.target, b.fmt("model.frag.{s}", .{extension}));
+    _ = generated.addCopyFile(
+        visibility_fragment.target,
+        b.fmt("visibility.frag.{s}", .{extension}),
+    );
 
     _ = generated.addCopyFile(reflectShader(b, tools, triangle_vertex.spirv, "triangle.vert"), "triangle.vert.json");
     _ = generated.addCopyFile(reflectShader(b, tools, triangle_fragment.spirv, "triangle.frag"), "triangle.frag.json");
     _ = generated.addCopyFile(reflectShader(b, tools, model_vertex.spirv, "model.vert"), "model.vert.json");
     _ = generated.addCopyFile(reflectShader(b, tools, model_fragment.spirv, "model.frag"), "model.frag.json");
+    _ = generated.addCopyFile(
+        reflectShader(b, tools, visibility_fragment.spirv, "visibility.frag"),
+        "visibility.frag.json",
+    );
 
     const module_source = generated.add("shader_assets.zig", b.fmt(
         \\pub const Format = enum {{ msl }};
@@ -3399,11 +3906,13 @@ fn buildShaders(
         \\pub const triangle_fragment = @embedFile("triangle.frag.{s}");
         \\pub const model_vertex = @embedFile("model.vert.{s}");
         \\pub const model_fragment = @embedFile("model.frag.{s}");
+        \\pub const visibility_fragment = @embedFile("visibility.frag.{s}");
         \\
     , .{
         @tagName(format),
         format.entrypoint(),
         format.driver(),
+        extension,
         extension,
         extension,
         extension,
@@ -3415,6 +3924,7 @@ fn buildShaders(
         \\pub const triangle_fragment = @embedFile("triangle.frag.json");
         \\pub const model_vertex = @embedFile("model.vert.json");
         \\pub const model_fragment = @embedFile("model.frag.json");
+        \\pub const visibility_fragment = @embedFile("visibility.frag.json");
         \\
     );
 

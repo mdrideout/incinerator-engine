@@ -44,6 +44,7 @@ pub const DistrictStreamState = enum {
     /// Decode is retained by this slot while the one logical loader finishes
     /// another slot's transition.
     content_ready,
+    prefetched,
     request_submitted,
     request_submitted_cancel,
     loading,
@@ -332,6 +333,56 @@ fn formatNpcDiagnosticsAlloc(allocator: std.mem.Allocator, simulation: anytype) 
     );
 }
 
+fn formatNpcEncounterDiagnosticsAlloc(
+    allocator: std.mem.Allocator,
+    simulation: anytype,
+) ![]u8 {
+    const SimulationDiagnostics = @TypeOf(simulation);
+    if (!@hasField(SimulationDiagnostics, "npc_encounter") or
+        !@hasField(SimulationDiagnostics, "npc_replacement"))
+    {
+        return allocator.dupe(u8, "npc_encounter=absent");
+    }
+    const encounter = simulation.npc_encounter;
+    const replacement = simulation.npc_replacement;
+    return std.fmt.allocPrint(
+        allocator,
+        "npc_encounter records={d} patrol={d} pursue={d} windup={d} recovery={d} " ++
+            "search={d} return={d} los={d} deferred={d} acquired={d} switched={d} " ++
+            "lost={d} attacks={d}/{d}/{d} reactions={d} trace={d} " ++
+            "replacement pending={d} spawning={d} attempts={d} ready={d} retries={d} " ++
+            "retry_reasons=inactive:{d} occupied:{d} near:{d} visible:{d}",
+        .{
+            encounter.records,
+            encounter.patrolling,
+            encounter.pursuing,
+            encounter.attack_windup,
+            encounter.attack_recovery,
+            encounter.searching,
+            encounter.returning,
+            encounter.los_queries,
+            encounter.los_deferred,
+            encounter.targets_acquired,
+            encounter.targets_switched,
+            encounter.targets_lost,
+            encounter.attacks_started,
+            encounter.attacks_committed,
+            encounter.attacks_cancelled,
+            encounter.hit_reactions,
+            encounter.transition_history,
+            replacement.pending,
+            replacement.awaiting_spawn,
+            replacement.attempts,
+            replacement.replacements_ready,
+            replacement.retries,
+            replacement.district_inactive,
+            replacement.occupied,
+            replacement.too_close_to_player,
+            replacement.visible_to_player,
+        },
+    );
+}
+
 fn formatCompletedAuthorityStagesAlloc(
     allocator: std.mem.Allocator,
     trace: authority_diagnostics.CycleTrace,
@@ -482,6 +533,11 @@ pub fn formatTextAlloc(
     defer allocator.free(district_streams_text);
     const npc_text = try formatNpcDiagnosticsAlloc(allocator, snapshot.simulation);
     defer allocator.free(npc_text);
+    const npc_encounter_text = try formatNpcEncounterDiagnosticsAlloc(
+        allocator,
+        snapshot.simulation,
+    );
+    defer allocator.free(npc_encounter_text);
     const authority_text = try formatAuthoritySessionAlloc(
         allocator,
         snapshot.authority_session,
@@ -489,8 +545,8 @@ pub fn formatTextAlloc(
     defer allocator.free(authority_text);
     const subsystem_text = try std.fmt.allocPrint(
         allocator,
-        "{s} {s} {s}",
-        .{ district_streams_text, npc_text, authority_text },
+        "{s} {s} {s} {s}",
+        .{ district_streams_text, npc_text, npc_encounter_text, authority_text },
     );
     defer allocator.free(subsystem_text);
     if (snapshot.simulation.first_fault) |fault| {

@@ -66,6 +66,34 @@ pub const CanonicalAccess = struct {
         }
         return .not_connected;
     }
+
+    pub fn nearestActiveNode(
+        self: *CanonicalAccess,
+        position: [3]f32,
+    ) navigation.NearestNodeResolution {
+        const coord = navigation.ownerForPosition(position) catch return .unavailable;
+        const build = canonicalBuild(coord) orelse return .unavailable;
+        var best: ?navigation.ResolvedNode = null;
+        var best_distance_squared = std.math.inf(f32);
+        for (0..build.navigation_node_count) |index| {
+            const resolved = switch (self.resolveNode(.{
+                .coord = coord,
+                .index = @intCast(index),
+            })) {
+                .ready => |value| value,
+                .district_inactive => return .district_inactive,
+                .invalid_reference => return .unavailable,
+            };
+            const dx = resolved.node.position[0] - position[0];
+            const dz = resolved.node.position[2] - position[2];
+            const distance_squared = dx * dx + dz * dz;
+            if (best == null or distance_squared < best_distance_squared) {
+                best = resolved;
+                best_distance_squared = distance_squared;
+            }
+        }
+        return .{ .ready = best orelse return .unavailable };
+    }
 };
 
 fn canonicalBuild(coord: navigation.ChunkCoord) ?district.DistrictBuild {

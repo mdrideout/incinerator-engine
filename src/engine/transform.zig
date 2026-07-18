@@ -5,6 +5,66 @@ const std = @import("std");
 pub const Vec3 = [3]f32;
 pub const Quaternion = [4]f32;
 
+/// Canonical semantic facing convention shared by gameplay and presentation:
+///
+/// - the engine is right-handed with +Y up;
+/// - yaw 0 faces local/world -Z;
+/// - positive yaw turns toward +X (right), so +pi/2 faces +X;
+/// - canonical yaw is in [-pi, pi), with zero stored as positive zero.
+///
+/// Positive semantic facing yaw therefore has the opposite sign from a
+/// right-handed quaternion rotation about +Y. Keeping that conversion here
+/// prevents camera, locomotion, physics poses, and presentation from each
+/// inventing a subtly different convention.
+pub fn normalizeFacingYaw(yaw: f32) !f32 {
+    if (!std.math.isFinite(yaw)) return error.NonFiniteFacingYaw;
+    const normalized = @mod(yaw + std.math.pi, std.math.tau) - std.math.pi;
+    return if (normalized == 0) 0 else normalized;
+}
+
+/// Unit horizontal forward direction for a semantic facing yaw.
+pub fn forwardFromFacingYaw(yaw: f32) !Vec3 {
+    const normalized = try normalizeFacingYaw(yaw);
+    return .{ @sin(normalized), 0, -@cos(normalized) };
+}
+
+/// Convert semantic facing yaw to the engine's right-handed quaternion pose.
+pub fn rotationFromFacingYaw(yaw: f32) !Quaternion {
+    const normalized = try normalizeFacingYaw(yaw);
+    const half_rotation = normalized * -0.5;
+    return .{ 0, @sin(half_rotation), 0, @cos(half_rotation) };
+}
+
+/// Recover semantic horizontal facing from a validated engine quaternion.
+/// Pitch and roll are tolerated as long as local -Z has a horizontal heading.
+pub fn facingYawFromRotation(raw_rotation: Quaternion) !f32 {
+    const rotation = try normalizeQuaternion(raw_rotation);
+    const x = rotation[0];
+    const y = rotation[1];
+    const z = rotation[2];
+    const w = rotation[3];
+    const forward_x = -2 * (x * z + w * y);
+    const forward_z = -(1 - 2 * (x * x + y * y));
+    const horizontal_length_squared = forward_x * forward_x + forward_z * forward_z;
+    if (!std.math.isFinite(horizontal_length_squared) or
+        horizontal_length_squared <= 1.0e-12)
+    {
+        return error.DegenerateFacingDirection;
+    }
+    return normalizeFacingYaw(std.math.atan2(forward_x, -forward_z));
+}
+
+/// Interpolate canonical facing along the shortest wrapped angular arc.
+/// Finite alpha is clamped to [0, 1], matching `interpolate` for full poses.
+pub fn interpolateFacingYaw(previous: f32, current: f32, alpha: f32) !f32 {
+    if (!std.math.isFinite(alpha)) return error.InvalidInterpolationAlpha;
+    const from = try normalizeFacingYaw(previous);
+    const to = try normalizeFacingYaw(current);
+    const delta = try normalizeFacingYaw(to - from);
+    const clamped_alpha = std.math.clamp(alpha, 0, 1);
+    return normalizeFacingYaw(from + delta * clamped_alpha);
+}
+
 pub const Pose = struct {
     position: Vec3 = .{ 0, 0, 0 },
     rotation: Quaternion = .{ 0, 0, 0, 1 },
@@ -175,4 +235,93 @@ test "captured physics quaternion normalization is exact and idempotent" {
     const twice = try normalizeQuaternion(once);
     try std.testing.expectEqual(rotation, once);
     try std.testing.expectEqual(once, twice);
+}
+
+test "semantic facing basis agrees with quaternion rotation" {
+    const cases = [_]struct {
+        yaw: f32,
+        forward: Vec3,
+    }{
+        .{ .yaw = 0, .forward = .{ 0, 0, -1 } },
+        .{ .yaw = std.math.pi / 2.0, .forward = .{ 1, 0, 0 } },
+        .{ .yaw = -std.math.pi / 2.0, .forward = .{ -1, 0, 0 } },
+    };
+
+    for (cases) |case| {
+        const forward = try forwardFromFacingYaw(case.yaw);
+        const rotation = try rotationFromFacingYaw(case.yaw);
+        const rotated_forward = rotateVectorForTest(rotation, .{ 0, 0, -1 });
+        for (forward, rotated_forward, case.forward) |semantic, rotated, expected| {
+            try std.testing.expectApproxEqAbs(expected, semantic, 0.00001);
+            try std.testing.expectApproxEqAbs(expected, rotated, 0.00001);
+        }
+        try std.testing.expectApproxEqAbs(
+            try normalizeFacingYaw(case.yaw),
+            try facingYawFromRotation(rotation),
+            0.00001,
+        );
+    }
+}
+
+test "semantic facing is canonical and rejects invalid boundaries" {
+    try std.testing.expectApproxEqAbs(
+        @as(f32, -std.math.pi),
+        try normalizeFacingYaw(std.math.pi),
+        0.00001,
+    );
+    try std.testing.expectEqual(
+        @as(u32, 0),
+        @as(u32, @bitCast(try normalizeFacingYaw(-0.0))),
+    );
+    try std.testing.expectError(
+        error.NonFiniteFacingYaw,
+        normalizeFacingYaw(std.math.nan(f32)),
+    );
+    try std.testing.expectError(
+        error.DegenerateQuaternion,
+        facingYawFromRotation(.{ 0, 0, 0, 0 }),
+    );
+    try std.testing.expectError(
+        error.DegenerateFacingDirection,
+        facingYawFromRotation(.{ @sin(std.math.pi / 4.0), 0, 0, @cos(std.math.pi / 4.0) }),
+    );
+}
+
+test "semantic facing interpolation takes the shortest wrapped arc" {
+    const degrees_to_radians = std.math.pi / 180.0;
+    const previous = 179.0 * degrees_to_radians;
+    const current = -179.0 * degrees_to_radians;
+    const midpoint = try interpolateFacingYaw(previous, current, 0.5);
+    try std.testing.expectApproxEqAbs(@as(f32, std.math.pi), @abs(midpoint), 0.00001);
+    try std.testing.expectApproxEqAbs(
+        previous,
+        try interpolateFacingYaw(previous, current, -1),
+        0.00001,
+    );
+    try std.testing.expectApproxEqAbs(
+        current,
+        try interpolateFacingYaw(previous, current, 2),
+        0.00001,
+    );
+    try std.testing.expectError(
+        error.InvalidInterpolationAlpha,
+        interpolateFacingYaw(previous, current, std.math.nan(f32)),
+    );
+}
+
+fn rotateVectorForTest(rotation: Quaternion, value: Vec3) Vec3 {
+    const axis = Vec3{ rotation[0], rotation[1], rotation[2] };
+    const twice_cross = Vec3{
+        2 * (axis[1] * value[2] - axis[2] * value[1]),
+        2 * (axis[2] * value[0] - axis[0] * value[2]),
+        2 * (axis[0] * value[1] - axis[1] * value[0]),
+    };
+    return .{
+        value[0] + rotation[3] * twice_cross[0] +
+            axis[1] * twice_cross[2] - axis[2] * twice_cross[1],
+        value[1] + rotation[3] * twice_cross[1] +
+            axis[2] * twice_cross[0] - axis[0] * twice_cross[2],
+        value[2] + rotation[3] * twice_cross[2] +
+            axis[0] * twice_cross[1] - axis[1] * twice_cross[0],
+    };
 }

@@ -296,6 +296,48 @@ pub fn draw(ctx: *const DeveloperInput) void {
                 npc_total_event_drops,
             },
         );
+        const encounter = simulation.npc_encounter;
+        zgui.text(
+            "Encounter records={d} patrol={d} pursue={d} windup={d} recovery={d} search={d} return={d}",
+            .{
+                encounter.records,
+                encounter.patrolling,
+                encounter.pursuing,
+                encounter.attack_windup,
+                encounter.attack_recovery,
+                encounter.searching,
+                encounter.returning,
+            },
+        );
+        zgui.text(
+            "Encounter LOS queries={d} deferred={d} targets +/switch/lost={d}/{d}/{d} attacks start/commit/cancel={d}/{d}/{d} hits={d}",
+            .{
+                encounter.los_queries,
+                encounter.los_deferred,
+                encounter.targets_acquired,
+                encounter.targets_switched,
+                encounter.targets_lost,
+                encounter.attacks_started,
+                encounter.attacks_committed,
+                encounter.attacks_cancelled,
+                encounter.hit_reactions,
+            },
+        );
+        const replacement = simulation.npc_replacement;
+        zgui.text(
+            "Replacement pending={d} awaiting={d} attempts={d} ready={d} retries={d} reasons inactive/occupied/near/visible={d}/{d}/{d}/{d}",
+            .{
+                replacement.pending,
+                replacement.awaiting_spawn,
+                replacement.attempts,
+                replacement.replacements_ready,
+                replacement.retries,
+                replacement.district_inactive,
+                replacement.occupied,
+                replacement.too_close_to_player,
+                replacement.visible_to_player,
+            },
+        );
         const procedural_worker = simulation.district_worker;
         zgui.text(
             "Procedural worker={s}, generation={?d}, started={}, cancel={}, completion={s}",

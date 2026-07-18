@@ -91,11 +91,14 @@ the independently validated manifest fingerprint. The host fails before world
 construction on a malformed, oversized, unknown, incompatible, or mismatched
 startup input.
 
-The durable save remains the S5 bounded envelope around `SnapshotV7`. Its
+At M3 acceptance, the durable save was the S5 bounded envelope around
+`SnapshotV7`. Its
 simulation-build, world-configuration, content, payload-schema, size, and
 integrity fields must match before snapshot preflight can construct the sole
 world. Stale candidates are discarded explicitly; candidates are never
-promoted to committed saves.
+promoted to committed saves. Later greenfield slices intentionally supersede
+that payload cohort; the current value is recorded in the living architecture
+review rather than retroactively changing this M3 decision.
 
 ### Bounded producer and feature authority
 

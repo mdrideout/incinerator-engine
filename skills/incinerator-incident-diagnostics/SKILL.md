@@ -1,0 +1,113 @@
+---
+name: incinerator-incident-diagnostics
+description: Inspect and diagnose schema-2 Incinerator Engine human-test incident folders containing live manifests, anomaly lifecycle events, materialized NDJSON windows, product and human-visible trailing images, semantic-ID evidence, shortcut delivery records, and accepted-ingress replay captures. Use when a tester supplies an incident folder or LLM handoff, flags a visual/gameplay/input anomaly, asks what happened near a timestamp, or asks to reproduce and verify a repair.
+---
+
+# Incinerator Incident Diagnostics
+
+Treat the bundle as indexed evidence, not as proof by itself. Keep semantic
+authority replay, best-effort graphical re-execution, and human perceptual
+confirmation as separate claims. Never mutate the supplied run folder.
+
+## Start
+
+1. Resolve the absolute run folder and read `LLM_HANDOFF.md`, `manifest.json`,
+   and `anomalies.ndjson`.
+2. Run `python3 scripts/summarize_incident.py <run-folder>` from this skill
+   directory. A running/partial manifest, loss, writer failure, suspicious
+   image, missing artifact, or missing replay limits the conclusion.
+3. From the engine repository run:
+
+   ```sh
+   zig build inspect-incident -- <run-folder>
+   zig build replay-incident -- <run-folder> <absolute-installed-content-root>
+   ```
+
+   When a visual transition is difficult to scan, generate read-only PNG
+   contact sheets outside the original bundle:
+
+   ```sh
+   zig build incident-visual-report -- <run-folder> <new-output-folder>
+   ```
+
+4. Read [references/schema.md](references/schema.md) before interpreting
+   fields and [references/reproduction.md](references/reproduction.md) before
+   claiming a repair.
+
+## Reduce lifecycle before diagnosis
+
+Do not select the last anomaly row blindly. Reduce `event` in order:
+
+- `flagged` creates a `capturing` anomaly;
+- `note_updated` changes the note without changing lifecycle;
+- `post_roll_finalized` changes lifecycle to `complete` or `partial`; and
+- `handoff_refreshed` does not change lifecycle.
+
+`marker.json` must agree with the reduced lifecycle. Use its
+`flag_monotonic_ns`, window bounds, authority tick, presentation frame, and
+selected identity. A human flag is a reaction time, not necessarily symptom
+time; inspect the entire -4/+3 second visual window and -15/+5 second typed
+window.
+
+## Correlate the anomaly
+
+Read all four materialized windows. Prefer recorder sequence for projection
+order, authority tick for simulation order, presentation frame for draw order,
+and monotonic time for same-process cross-stream correlation. Wall time is for
+the human handoff only.
+
+- `timeline-window.ndjson`: action disposition, lifecycle, district streaming,
+  diagnostic code, correlation, spawn/despawn, and anomaly flag.
+- `state-window.ndjson`: tri-state authority/replication/presentation/draw
+  membership, tombstones, relevance reason/facts, transforms, vitals,
+  encounter state, and separation.
+- `input-window.ndjson`: semantic held state and explicit pressed edges, UI
+  capture/minimize state, plus reserved-shortcut `received`, `matched`,
+  `queued`, and `applied` stages.
+- `metrics-window.ndjson`: frame time, recorder pressure/loss, visual memory,
+  cadence, and fence failures.
+- `visual-index.ndjson`: use actual capture time—not filename or mtime—to order
+  product trail, human-visible anchors, product flag, and semantic-ID frame.
+
+Search stable identity as namespace/local/incarnation. Search typed removal and
+relevance reasons rather than inferring absence from a missing current draw.
+Read `manifest.json.evidence_capabilities` before assuming an entity kind has
+full boundary or semantic-part coverage. For vehicles and carryables, follow
+`persistent_id`, bounded-world interest, baseline/snapshot sequence, observer
+and owner districts, and `replication_removed` tombstones. Multiple semantic
+object IDs may intentionally map chassis/wheels to one stable vehicle identity.
+Use the summarizer's `removals_by_kind` cross-tab; a room-wide removal total
+without its entity kind can misattribute a hidden driver or dead NPC to the
+vehicle being investigated.
+
+## Assign the boundary
+
+- Authority absent: authority/lifecycle ownership.
+- Authority present and replication absent: interest/publication/client receipt.
+- Replication present and presentation absent: presentation planning.
+- Presentation present and draw absent: draw submission.
+- Draw present but semantic ID absent: camera/frustum/depth/visibility.
+- Semantic and product-only present but human-visible corrupt: final pass or
+  capture adapter/UI composition.
+- Reserved key `received` absent: macOS-to-SDL delivery; received but not
+  matched/queued/applied: route stage named by the record.
+- Loss, writer failure, suspicious/truncated image, or missing window: evidence
+  failure; do not assign gameplay root cause from that gap.
+
+State observed facts, boundary inference, and remaining uncertainty separately.
+
+## Reproduce and verify
+
+Run semantic replay first. A match proves accepted authority ingress reproduces
+logical digests for the recorded cohort. It does not prove GPU, OS, or public
+network timing. Then run:
+
+```sh
+zig build run -- --replay-incident=<absolute-run-folder>
+```
+
+After a repair, add the smallest deterministic scenario/invariant, run focused
+and inherited tests, rerun semantic replay, perform graphical re-execution,
+capture a new Metal bundle, inspect actual visual timing and semantic mapping,
+and request human confirmation when readability or visual continuity was the
+complaint.

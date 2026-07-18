@@ -146,6 +146,24 @@ pub const Camera = struct {
     }
 };
 
+/// Shared right-button drag policy for graphical products. SDL event decoding
+/// remains host-owned; camera mutation and focus-loss cancellation do not.
+pub const DragLook = struct {
+    active: bool = false,
+
+    pub fn setActive(self: *DragLook, active: bool) void {
+        self.active = active;
+    }
+
+    pub fn reset(self: *DragLook) void {
+        self.active = false;
+    }
+
+    pub fn apply(self: *const DragLook, camera: *Camera, dx: f32, dy: f32) void {
+        if (self.active) camera.rotate(dx, dy);
+    }
+};
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -170,6 +188,24 @@ test "pitch clamp" {
     cam.rotate(0.0, 10000.0); // Try to look way down
     try std.testing.expect(cam.pitch > -std.math.pi / 2.0);
     try std.testing.expect(cam.pitch < std.math.pi / 2.0);
+}
+
+test "drag look rotates only while active and cancels cleanly" {
+    var camera = Camera{};
+    var look = DragLook{};
+    look.apply(&camera, 100, -50);
+    try std.testing.expectEqual(@as(f32, 0), camera.yaw);
+    try std.testing.expectEqual(@as(f32, 0), camera.pitch);
+
+    look.setActive(true);
+    look.apply(&camera, 100, -50);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2), camera.yaw, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.1), camera.pitch, 0.0001);
+
+    look.reset();
+    look.apply(&camera, 100, -50);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.2), camera.yaw, 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 0.1), camera.pitch, 0.0001);
 }
 
 test "follow camera orbits behind and above its target" {

@@ -57,6 +57,7 @@ test "SDL GPU shader interfaces and resources match the renderer contract" {
             .stage = "frag",
             .input_locations = &.{0},
             .output_locations = &.{0},
+            .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 16 }},
         },
         .{
             .source = "model.vert",
@@ -75,6 +76,14 @@ test "SDL GPU shader interfaces and resources match the renderer contract" {
             .textures = &.{.{ .set = 2, .binding = 0 }},
             .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 32 }},
         },
+        .{
+            .source = "visibility.frag",
+            .reflection = reflections.visibility_fragment,
+            .stage = "frag",
+            .input_locations = &.{},
+            .output_locations = &.{ 0, 1 },
+            .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 32 }},
+        },
     };
 
     for (contracts) |contract| try validateContract(contract);
@@ -85,6 +94,7 @@ test "selected backend artifacts have the expected container and entry point" {
     try std.testing.expectEqualStrings("main0", shader_assets.entrypoint);
     try std.testing.expect(std.mem.indexOf(u8, shader_assets.triangle_vertex, "vertex main0") != null);
     try std.testing.expect(std.mem.indexOf(u8, shader_assets.triangle_fragment, "fragment main0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, shader_assets.visibility_fragment, "fragment main0") != null);
 }
 
 fn validateContract(contract: Contract) !void {

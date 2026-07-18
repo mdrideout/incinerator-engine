@@ -15,11 +15,17 @@ const room_ticket = @import("room_ticket");
 const gns = @import("gns_direct");
 const presentation = @import("mp2_presentation");
 const client_scene = @import("client_scene");
+const gameplay_scenarios = @import("sandbox_gameplay_scenarios");
 
 const c = presentation.c;
 const default_endpoint = "127.0.0.1:27020";
 
 const S10SmokeRole = enum { none, attacker, victim };
+const S11SmokeRole = enum { none, attacker, observer };
+const S11Topology = enum { dedicated, listen };
+const s11_scenario = gameplay_scenarios.get(
+    .hostile_npc_approach_contact_death_respawn,
+);
 
 const Invocation = struct {
     endpoint: []const u8 = default_endpoint,
@@ -30,6 +36,8 @@ const Invocation = struct {
     max_frames: ?u64 = null,
     smoke_actions: bool = false,
     s10_smoke_role: S10SmokeRole = .none,
+    s11_smoke_role: S11SmokeRole = .none,
+    s11_topology: S11Topology = .dedicated,
 };
 
 const App = struct {
@@ -66,6 +74,17 @@ const App = struct {
     s10_respawn_requested: bool = false,
     s10_pass_printed: bool = false,
     s10_smoke_role: S10SmokeRole = .none,
+    s11_encounter_observed: bool = false,
+    s11_scenario_start_tick: ?u64 = null,
+    s11_smoke_role: S11SmokeRole = .none,
+    s11_last_melee_request_tick: u64 = 0,
+    s11_last_respawn_request_tick: u64 = 0,
+    s11_dead_npc_index: u32 = 0,
+    s11_dead_npc_generation: u16 = 0,
+    s11_death_tick: u64 = 0,
+    s11_death_observed: bool = false,
+    s11_replacement_observed: bool = false,
+    s11_pass_printed: bool = false,
     frame: u64 = 0,
     last_input_tick: u64 = 0,
     clock: client_clock.Clock = .{},
@@ -164,6 +183,7 @@ const App = struct {
             .retry = reconnect_policy.Policy.init(account),
             .smoke_actions = invocation.smoke_actions,
             .s10_smoke_role = invocation.s10_smoke_role,
+            .s11_smoke_role = invocation.s11_smoke_role,
             .endpoint = endpoint_buffer,
             .endpoint_len = @intCast(endpoint.len),
         };
@@ -191,6 +211,7 @@ const App = struct {
             try self.reconnectIfDue(now_ns);
             self.scheduleSmokeActions();
             self.scheduleS10Actions();
+            self.scheduleS11Actions();
             try self.sendVehicleActionIfRequested();
             try self.sendInteractionActionIfRequested();
             try self.sendMeleeActionIfRequested();
@@ -205,7 +226,10 @@ const App = struct {
                 if (self.last_input_tick < due_tick) self.last_input_tick = due_tick;
             }
             self.observeSmokeProgress();
+            self.observeS11Lifecycle();
             self.finishS10Smoke();
+            self.finishS11Smoke();
+            try self.validateS11Deadline();
             try self.scene.render(&self.client, now_ns);
             self.frame += 1;
             if (self.frame % 60 == 0) self.updateTitle();
@@ -256,6 +280,24 @@ const App = struct {
             c.SDL_EVENT_KEY_UP => {
                 const index: usize = @intCast(event.key.scancode);
                 if (index < self.keys.len) self.keys[index] = false;
+            },
+            c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
+                if (event.button.button == c.SDL_BUTTON_RIGHT) {
+                    self.scene.setLookActive(true);
+                }
+            },
+            c.SDL_EVENT_MOUSE_BUTTON_UP => {
+                if (event.button.button == c.SDL_BUTTON_RIGHT) {
+                    self.scene.setLookActive(false);
+                }
+            },
+            c.SDL_EVENT_MOUSE_MOTION => self.scene.applyLookMotion(
+                event.motion.xrel,
+                event.motion.yrel,
+            ),
+            c.SDL_EVENT_WINDOW_FOCUS_LOST => {
+                self.keys = @splat(false);
+                self.scene.cancelLook();
             },
             else => {},
         };
@@ -329,12 +371,13 @@ const App = struct {
                 },
                 .snapshot => |snapshot| {
                     self.clock.observe(snapshot.server_tick);
-                    self.scene.observeSnapshot(now_ns);
+                    self.scene.observeAppliedWorld(&self.client, now_ns);
                     try self.finishRoomSynchronization();
+                    self.observeNpcEncounter();
                 },
                 .relevance_baseline => |baseline| {
                     self.clock.observe(baseline.snapshot.server_tick);
-                    self.scene.observeSnapshot(now_ns);
+                    self.scene.observeAppliedWorld(&self.client, now_ns);
                     std.debug.print(
                         "MP4_BASELINE id={d} districts={d} entities={d}\n",
                         .{
@@ -347,8 +390,14 @@ const App = struct {
                         },
                     );
                     try self.finishRoomSynchronization();
+                    self.observeNpcEncounter();
                 },
                 .vehicle_action_result => |result| {
+                    // This host renders/logs the delivered value directly, but
+                    // the client owner also retains correlated results for
+                    // pull-based hosts. Consume that copy so repeated normal
+                    // enter/exit play cannot exhaust the bounded queue.
+                    _ = self.client.takeVehicleActionResult();
                     std.debug.print(
                         "MP4_VEHICLE_ACTION action={s} result={s} vehicle={d}:{d}\n",
                         .{
@@ -360,6 +409,7 @@ const App = struct {
                     );
                 },
                 .interaction_action_result => |result| {
+                    _ = self.client.takeInteractionActionResult();
                     std.debug.print(
                         "MP4_INTERACTION_ACTION action={s} result={s} carryable={d}:{d}\n",
                         .{
@@ -371,6 +421,10 @@ const App = struct {
                     );
                 },
                 .melee_action_result => |result| {
+                    self.scene.noteCombatFeedback(
+                        &self.client,
+                        .{ .melee = result },
+                    );
                     _ = self.client.takeMeleeActionResult();
                     std.debug.print(
                         "S10_CLIENT_MELEE result={s} damage={d} health={d} killed={}\n",
@@ -381,8 +435,17 @@ const App = struct {
                             result.killed,
                         },
                     );
+                    if (self.s11_smoke_role == .attacker and result.killed and
+                        result.target.isValid() and clientHasNpc(&self.client, result.target.index, result.target.generation))
+                    {
+                        self.noteS11NpcDeath(result.target.index, result.target.generation);
+                    }
                 },
                 .respawn_action_result => |result| {
+                    self.scene.noteCombatFeedback(
+                        &self.client,
+                        .{ .respawn = result },
+                    );
                     _ = self.client.takeRespawnActionResult();
                     std.debug.print(
                         "S10_CLIENT_RESPAWN result={s} incarnation={d}\n",
@@ -390,6 +453,10 @@ const App = struct {
                     );
                 },
                 .life_event => |event| {
+                    self.scene.noteCombatFeedback(
+                        &self.client,
+                        .{ .life = event },
+                    );
                     _ = self.client.takeLifeEvent();
                     std.debug.print(
                         "S10_CLIENT_LIFE avatar={d}:{d} incarnation={d} state={s} health={d}\n",
@@ -500,6 +567,23 @@ const App = struct {
             return;
         }
         const tick = self.client.world.server_tick;
+        if (self.s11_smoke_role != .none) {
+            const seek_replacement = self.s11_death_observed and
+                self.client.world.server_tick >= self.s11_death_tick +| 360;
+            try self.sendClientMessage(try self.client.input(
+                target_tick,
+                if (seek_replacement)
+                    .{ 0, 1 }
+                else
+                    .{ 0, 0 },
+                if (seek_replacement)
+                    std.math.pi / 2.0
+                else
+                    nearestLivingNpcYaw(&self.client) orelse self.scene.camera.yaw,
+                false,
+            ));
+            return;
+        }
         if (self.s10_smoke_role != .none) {
             try self.sendClientMessage(try self.client.input(
                 target_tick,
@@ -569,6 +653,7 @@ const App = struct {
         if (!self.melee_action_requested) return;
         self.melee_action_requested = false;
         if (self.client.state != .joined or self.client.pending_melee_action != null) return;
+        if (self.client.ownedVehicle() != null) return;
         try self.sendClientMessage(try self.client.meleeAction(
             self.client.world.server_tick +| 1,
         ));
@@ -579,7 +664,7 @@ const App = struct {
         self.respawn_action_requested = false;
         if (self.client.state != .joined or self.client.pending_respawn_action != null) return;
         const message = self.client.respawnAction() catch |err| switch (err) {
-            error.AvatarLifecycleUnavailable => return,
+            error.AvatarLifecycleUnavailable, error.AvatarAlive => return,
             else => return err,
         };
         try self.sendClientMessage(message);
@@ -620,6 +705,107 @@ const App = struct {
                 self.respawn_action_requested = true;
                 self.s10_respawn_requested = true;
             }
+        }
+    }
+
+    fn scheduleS11Actions(self: *App) void {
+        if (self.s11_smoke_role == .none or self.client.state != .joined) return;
+        const tick = self.client.world.server_tick;
+        if (self.s11_scenario_start_tick == null) self.s11_scenario_start_tick = tick;
+        if (self.client.avatar_life_state == .dead) {
+            if (self.client.pending_respawn_action == null and
+                tick >= self.client.respawn_ready_tick and
+                tick >= self.s11_last_respawn_request_tick +| 30)
+            {
+                self.respawn_action_requested = true;
+                self.s11_last_respawn_request_tick = tick;
+            }
+            return;
+        }
+        if (self.s11_smoke_role != .attacker or self.s11_death_observed or
+            self.client.pending_melee_action != null)
+        {
+            return;
+        }
+        if (tick < self.client.melee_ready_tick or
+            tick < self.s11_last_melee_request_tick +| 5)
+        {
+            return;
+        }
+        const distance = nearestLivingNpcDistanceSquared(&self.client) orelse return;
+        // Submit once the authoritative target is close enough to be
+        // approaching melee. The authority still owns the exact 2.25 m,
+        // facing, LOS, life, and cooldown decision.
+        if (distance > 4.0 * 4.0) return;
+        self.melee_action_requested = true;
+        self.s11_last_melee_request_tick = tick;
+    }
+
+    fn observeS11Lifecycle(self: *App) void {
+        if (self.s11_smoke_role == .none or self.client.state != .joined) return;
+        if (!self.s11_death_observed) {
+            for (self.client.world.npcSlice()) |entry| {
+                if (entry.current.life_state != .dead) continue;
+                self.noteS11NpcDeath(
+                    entry.current.entity.index,
+                    entry.current.entity.generation,
+                );
+                break;
+            }
+        }
+        if (!self.s11_death_observed or self.s11_replacement_observed) return;
+        for (self.client.world.npcSlice()) |entry| {
+            if (entry.current.entity.index != self.s11_dead_npc_index or
+                entry.current.entity.generation == self.s11_dead_npc_generation or
+                entry.current.life_state != .alive)
+            {
+                continue;
+            }
+            self.s11_replacement_observed = true;
+            std.debug.print(
+                "S11_CLIENT_REPLACEMENT entity={d} previous_generation={d} current_generation={d} health={d}\n",
+                .{
+                    entry.current.entity.index,
+                    self.s11_dead_npc_generation,
+                    entry.current.entity.generation,
+                    entry.current.health,
+                },
+            );
+            break;
+        }
+    }
+
+    fn noteS11NpcDeath(self: *App, index: u32, generation: u16) void {
+        if (self.s11_death_observed) return;
+        self.s11_death_observed = true;
+        self.s11_dead_npc_index = index;
+        self.s11_dead_npc_generation = generation;
+        self.s11_death_tick = self.client.world.server_tick;
+        std.debug.print(
+            "S11_CLIENT_NPC_DEATH entity={d} generation={d}\n",
+            .{ index, generation },
+        );
+    }
+
+    fn finishS11Smoke(self: *App) void {
+        if (self.s11_smoke_role == .none or self.s11_pass_printed or
+            !self.s11_death_observed or !self.s11_replacement_observed)
+        {
+            return;
+        }
+        std.debug.print(
+            "S11_CLIENT_PASS role={s} npc_death=true replacement=true\n",
+            .{@tagName(self.s11_smoke_role)},
+        );
+        self.s11_pass_printed = true;
+        self.running = false;
+    }
+
+    fn validateS11Deadline(self: *const App) !void {
+        if (self.s11_smoke_role == .none or self.s11_pass_printed) return;
+        const start = self.s11_scenario_start_tick orelse return;
+        if (self.client.world.server_tick > start +| s11_scenario.deadline_ticks) {
+            return error.S11SharedScenarioDeadlineExceeded;
         }
     }
 
@@ -727,7 +913,7 @@ const App = struct {
     }
 
     fn updateTitle(self: *App) void {
-        var title_storage: [256]u8 = undefined;
+        var title_storage: [384]u8 = undefined;
         const stats = self.network.stats(self.connection);
         const room_view = if (self.room) |*coordinator| coordinator.view() else null;
         const room_state = if (room_view) |view| @tagName(view.state) else "direct-development";
@@ -742,9 +928,46 @@ const App = struct {
             if (view.failure) |failure| @tagName(failure) else "none"
         else
             "none";
+        const combat_hud = self.scene.combatHud();
+        const local_health = if (combat_hud) |hud| hud.health else 0;
+        const local_maximum_health = if (combat_hud) |hud| hud.maximum_health else 0;
+        const local_life = if (combat_hud) |hud|
+            hud.life_state
+        else
+            protocol.AvatarLifeState.dead;
+        var encounter_state: protocol.NpcEncounterState = .patrolling;
+        var encounter_health: u16 = 0;
+        var encounter_maximum_health: u16 = 0;
+        var encounter_impact_tick: u64 = 0;
+        for (self.client.world.npcSlice()) |entry| {
+            if (entry.current.encounter_state == .patrolling and
+                entry.current.life_state == .alive) continue;
+            encounter_state = entry.current.encounter_state;
+            encounter_health = entry.current.health;
+            encounter_maximum_health = entry.current.maximum_health;
+            encounter_impact_tick = entry.current.attack_impact_tick;
+            break;
+        }
+        const authority_tick = self.client.world.server_tick;
+        const melee_cooldown = if (combat_hud) |hud|
+            hud.melee_remaining_ticks
+        else
+            self.client.melee_ready_tick -| authority_tick;
+        const respawn_cooldown = if (combat_hud) |hud|
+            hud.respawn_remaining_ticks
+        else
+            self.client.respawn_ready_tick -| authority_tick;
+        const respawn_disposition = if (combat_hud) |hud|
+            if (hud.latest_respawn_disposition) |disposition|
+                @tagName(disposition)
+            else
+                "none"
+        else
+            "none";
+        const npc_impact = encounter_impact_tick -| authority_tick;
         const title = std.fmt.bufPrintZ(
             &title_storage,
-            "Room {s} members {d} ready {d} connected {d} failure {s} | session {s} | entities {d} | ping {d} ms | age {d}t | net d/f/m {d}/{d}/{d} | mode {s} | carry {s} | pred {s} | correction {d}/{d} max {d:.2}m/{d:.1}deg",
+            "Room {s} members {d} ready {d} connected {d} failure {s} | session {s} | HP {d}/{d} {s} respawn {d}t/{s} melee {d}t | NPC {s} HP {d}/{d} impact {d}t | entities {d} | ping {d} ms | age {d}t | net d/f/m {d}/{d}/{d} | mode {s} | carry {s} | pred {s} | correction {d}/{d} max {d:.2}m/{d:.1}deg",
             .{
                 room_state,
                 room_members,
@@ -752,6 +975,16 @@ const App = struct {
                 connected_members,
                 room_failure,
                 @tagName(self.client.state),
+                local_health,
+                local_maximum_health,
+                @tagName(local_life),
+                respawn_cooldown,
+                respawn_disposition,
+                melee_cooldown,
+                @tagName(encounter_state),
+                encounter_health,
+                encounter_maximum_health,
+                npc_impact,
                 self.client.world.character_count + self.client.world.vehicle_count +
                     self.client.world.carryable_count + self.client.world.npc_count,
                 if (stats) |value| value.ping_ms else -1,
@@ -769,6 +1002,24 @@ const App = struct {
             },
         ) catch return;
         _ = c.SDL_SetWindowTitle(self.window, title.ptr);
+    }
+
+    fn observeNpcEncounter(self: *App) void {
+        if (self.s11_encounter_observed) return;
+        for (self.client.world.npcSlice()) |entry| {
+            if (entry.current.encounter_state == .patrolling) continue;
+            self.s11_encounter_observed = true;
+            std.debug.print(
+                "S11_CLIENT_ENCOUNTER state={s} health={d}/{d} impact_tick={d}\n",
+                .{
+                    @tagName(entry.current.encounter_state),
+                    entry.current.health,
+                    entry.current.maximum_health,
+                    entry.current.attack_impact_tick,
+                },
+            );
+            return;
+        }
     }
 
     fn finishRoomSynchronization(self: *App) !void {
@@ -817,11 +1068,21 @@ pub fn main(init: std.process.Init) !void {
     var app = try App.init(init, invocation);
     defer app.deinit();
     std.debug.print(
-        "MP6_CLIENT_CONNECT endpoint={s} account={d} ticketed={} controls=WASD/SPACE/LSHIFT/E enter-exit/F collect-drop/Q melee/R respawn/P prediction/F8 reconnect/C cancel/L leave/ESC\n",
+        "MP6_CLIENT_CONNECT endpoint={s} account={d} ticketed={} controls=WASD/SPACE/LSHIFT/right-drag look/E enter-exit/F collect-drop/Q melee/R respawn/P prediction/F8 reconnect/C cancel/L leave/ESC\n",
         .{
             app.endpoint[0..app.endpoint_len],
             app.client.account.value,
             invocation.ticket_path != null,
+        },
+    );
+    if (invocation.s11_smoke_role != .none) std.debug.print(
+        "S11_SCENARIO_ADAPTER topology={s} role={s} scenario={s} seed={x} deadline_ticks={d}\n",
+        .{
+            @tagName(invocation.s11_topology),
+            @tagName(invocation.s11_smoke_role),
+            s11_scenario.name,
+            s11_scenario.seed,
+            s11_scenario.deadline_ticks,
         },
     );
     try app.run(invocation.max_frames);
@@ -882,6 +1143,41 @@ fn distanceSquared(a: [3]f32, b: [3]f32) f32 {
     return x * x + y * y + z * z;
 }
 
+fn nearestLivingNpcDistanceSquared(client: *const session_client.Client) ?f32 {
+    const own = localCharacterPosition(client) orelse return null;
+    var selected: ?f32 = null;
+    for (client.world.npcSlice()) |entry| {
+        if (entry.current.life_state != .alive) continue;
+        const distance = distanceSquared(own, entry.current.position);
+        if (selected == null or distance < selected.?) selected = distance;
+    }
+    return selected;
+}
+
+fn clientHasNpc(client: *const session_client.Client, index: u32, generation: u16) bool {
+    for (client.world.npcSlice()) |entry| {
+        if (entry.current.entity.index == index and
+            entry.current.entity.generation == generation) return true;
+    }
+    return false;
+}
+
+fn nearestLivingNpcYaw(client: *const session_client.Client) ?f32 {
+    const own = localCharacterPosition(client) orelse return null;
+    var selected: ?[3]f32 = null;
+    var selected_distance = std.math.inf(f32);
+    for (client.world.npcSlice()) |entry| {
+        if (entry.current.life_state != .alive) continue;
+        const distance = distanceSquared(own, entry.current.position);
+        if (distance < selected_distance) {
+            selected_distance = distance;
+            selected = entry.current.position;
+        }
+    }
+    const target = selected orelse return null;
+    return std.math.atan2(target[0] - own[0], -(target[2] - own[2]));
+}
+
 fn parseInvocation(args: []const []const u8) !Invocation {
     var result = Invocation{};
     var index: usize = 1;
@@ -915,6 +1211,14 @@ fn parseInvocation(args: []const []const u8) !Invocation {
         } else if (std.mem.eql(u8, args[index], "--s10-victim")) {
             if (result.s10_smoke_role != .none) return error.DuplicateS10SmokeRole;
             result.s10_smoke_role = .victim;
+        } else if (std.mem.eql(u8, args[index], "--s11-attacker")) {
+            if (result.s11_smoke_role != .none) return error.DuplicateS11SmokeRole;
+            result.s11_smoke_role = .attacker;
+        } else if (std.mem.eql(u8, args[index], "--s11-observer")) {
+            if (result.s11_smoke_role != .none) return error.DuplicateS11SmokeRole;
+            result.s11_smoke_role = .observer;
+        } else if (std.mem.eql(u8, args[index], "--s11-listen")) {
+            result.s11_topology = .listen;
         } else return error.UnknownArgument;
     }
     return result;

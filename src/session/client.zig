@@ -32,6 +32,8 @@ pub const Diagnostics = struct {
     respawns_accepted: u64,
     respawns_rejected: u64,
     life_events: u64,
+    stale_life_events: u64,
+    avatar_lifecycle_tick: u64,
     baselines_applied: u64,
     delta_snapshots_applied: u64,
     full_snapshots_applied: u64,
@@ -48,17 +50,21 @@ pub const Diagnostics = struct {
 };
 
 const action_result_capacity: usize = 4;
+const life_event_result_capacity: usize = budgets.max_reliable_events_per_tick;
 
-fn ResultQueue(comptime T: type) type {
+fn ResultQueue(comptime T: type, comptime capacity: usize) type {
+    if (capacity == 0 or capacity > std.math.maxInt(u8)) {
+        @compileError("client result queue capacity must fit its bounded counters");
+    }
     return struct {
         const Self = @This();
 
-        items: [action_result_capacity]T = undefined,
+        items: [capacity]T = undefined,
         head: u8 = 0,
         count: u8 = 0,
 
         fn hasCapacity(self: *const Self) bool {
-            return self.count < action_result_capacity;
+            return self.count < capacity;
         }
 
         fn push(self: *Self, value: T) !void {
@@ -108,7 +114,10 @@ pub const Client = struct {
     // remain the gameplay source of truth.
     retired_vehicle_action: ?protocol.VehicleAction = null,
     vehicle_actions_issued: u64 = 0,
-    vehicle_action_results: ResultQueue(protocol.VehicleActionResult) = .{},
+    vehicle_action_results: ResultQueue(
+        protocol.VehicleActionResult,
+        action_result_capacity,
+    ) = .{},
     vehicle_actions_accepted: u64 = 0,
     vehicle_actions_rejected: u64 = 0,
     vehicle_action_results_late: u64 = 0,
@@ -118,7 +127,10 @@ pub const Client = struct {
     pending_interaction_action: ?protocol.InteractionAction = null,
     retired_interaction_action: ?protocol.InteractionAction = null,
     interaction_actions_issued: u64 = 0,
-    interaction_action_results: ResultQueue(protocol.InteractionActionResult) = .{},
+    interaction_action_results: ResultQueue(
+        protocol.InteractionActionResult,
+        action_result_capacity,
+    ) = .{},
     interaction_actions_accepted: u64 = 0,
     interaction_actions_rejected: u64 = 0,
     interaction_action_results_late: u64 = 0,
@@ -127,20 +139,39 @@ pub const Client = struct {
     next_melee_action: identity.ActionSequence = .{ .value = 1 },
     pending_melee_action: ?protocol.MeleeAction = null,
     retired_melee_action: ?protocol.MeleeAction = null,
-    melee_action_results: ResultQueue(protocol.MeleeActionResult) = .{},
+    melee_action_results: ResultQueue(
+        protocol.MeleeActionResult,
+        action_result_capacity,
+    ) = .{},
     melee_actions_accepted: u64 = 0,
     melee_actions_rejected: u64 = 0,
     next_respawn_action: identity.ActionSequence = .{ .value = 1 },
     pending_respawn_action: ?protocol.RespawnAction = null,
     retired_respawn_action: ?protocol.RespawnAction = null,
-    respawn_action_results: ResultQueue(protocol.RespawnActionResult) = .{},
+    respawn_action_results: ResultQueue(
+        protocol.RespawnActionResult,
+        action_result_capacity,
+    ) = .{},
     respawns_accepted: u64 = 0,
     respawns_rejected: u64 = 0,
-    life_event_results: ResultQueue(protocol.LifeEvent) = .{},
+    // Authority may legally use the entire reliable gameplay wire allowance
+    // for life events in one delivery batch. Local and network hosts only get
+    // a chance to drain after that batch has entered the client owner.
+    life_event_results: ResultQueue(
+        protocol.LifeEvent,
+        life_event_result_capacity,
+    ) = .{},
     life_events: u64 = 0,
+    /// A newer unreliable snapshot can legitimately cross an older reliable
+    /// damage event in transit. Such an event remains observable feedback but
+    /// cannot resurrect the cached lifecycle for the same incarnation.
+    stale_life_events: u64 = 0,
     avatar_incarnation: u16 = 0,
     avatar_entity: identity.ReplicatedEntityId = .invalid,
     avatar_life_state: ?protocol.AvatarLifeState = null,
+    avatar_lifecycle_tick: u64 = 0,
+    melee_ready_tick: u64 = 0,
+    respawn_ready_tick: u64 = 0,
     baselines_applied: u64 = 0,
     active_baseline_id: u32 = 0,
     pending_baseline_ack: ?u32 = null,
@@ -216,6 +247,9 @@ pub const Client = struct {
                 self.avatar_entity = welcome.avatar;
                 self.avatar_incarnation = welcome.avatar_incarnation;
                 self.avatar_life_state = welcome.life_state;
+                self.avatar_lifecycle_tick = welcome.authority_tick;
+                self.melee_ready_tick = welcome.melee_ready_tick;
+                self.respawn_ready_tick = welcome.respawn_ready_tick;
                 if (welcome.life_state == .dead) {
                     self.prediction.clearOwnership();
                     self.vehicle_prediction.clearOwnership();
@@ -258,12 +292,18 @@ pub const Client = struct {
                 try self.life_event_results.push(event);
                 self.life_events +|= 1;
                 if (self.ownsReplicatedAvatar(event.avatar)) {
-                    self.avatar_entity = event.avatar;
-                    self.avatar_incarnation = event.incarnation;
-                    self.avatar_life_state = event.state;
-                    if (event.state == .dead) {
-                        self.prediction.clearOwnership();
-                        self.vehicle_prediction.clearOwnership();
+                    if (!self.lifeEventAdvancesLifecycle(event)) {
+                        self.stale_life_events +|= 1;
+                    } else {
+                        self.avatar_entity = event.avatar;
+                        self.avatar_incarnation = event.incarnation;
+                        self.avatar_life_state = event.state;
+                        self.avatar_lifecycle_tick = event.authority_tick;
+                        self.respawn_ready_tick = event.respawn_ready_tick;
+                        if (event.state == .dead) {
+                            self.prediction.clearOwnership();
+                            self.vehicle_prediction.clearOwnership();
+                        }
                     }
                 }
             },
@@ -441,6 +481,7 @@ pub const Client = struct {
             if (pending.sequence.value == result.sequence.value) {
                 try self.melee_action_results.push(result);
                 self.pending_melee_action = null;
+                self.melee_ready_tick = result.ready_tick;
                 if (result.disposition == .hit) self.melee_actions_accepted +|= 1 else self.melee_actions_rejected +|= 1;
                 return;
             }
@@ -460,9 +501,11 @@ pub const Client = struct {
                 try self.respawn_action_results.push(result);
                 self.pending_respawn_action = null;
                 self.avatar_incarnation = result.incarnation;
+                self.respawn_ready_tick = result.ready_tick;
                 if (result.disposition == .respawned) {
                     self.avatar_entity = result.avatar;
                     self.avatar_life_state = .alive;
+                    self.respawn_ready_tick = 0;
                 }
                 if (result.disposition == .respawned) self.respawns_accepted +|= 1 else self.respawns_rejected +|= 1;
                 return;
@@ -652,6 +695,7 @@ pub const Client = struct {
         if (self.pending_melee_action != null) return error.MeleeActionPending;
         if (!self.melee_action_results.hasCapacity()) return error.MeleeActionResultsPending;
         if (self.avatar_life_state != .alive) return error.AvatarDead;
+        if (self.ownedVehicle() != null) return error.CannotMeleeWhileDriving;
         const character = self.ownedCharacter() orelse return error.AvatarUnavailable;
         if (character.life_state != .alive) return error.AvatarDead;
         const action = protocol.MeleeAction{
@@ -775,6 +819,10 @@ pub const Client = struct {
         return null;
     }
 
+    pub fn relevantDistrictSlice(self: *const Client) []const protocol.DistrictCoord {
+        return self.relevant_districts[0..self.relevant_district_count];
+    }
+
     pub fn heldCarryable(self: *const Client) ?protocol.CarryableState {
         for (self.world.carryableSlice()) |entry| {
             if (entry.current.holder) |holder| {
@@ -806,6 +854,8 @@ pub const Client = struct {
             .respawns_accepted = self.respawns_accepted,
             .respawns_rejected = self.respawns_rejected,
             .life_events = self.life_events,
+            .stale_life_events = self.stale_life_events,
+            .avatar_lifecycle_tick = self.avatar_lifecycle_tick,
             .baselines_applied = self.baselines_applied,
             .delta_snapshots_applied = self.delta_snapshots_applied,
             .full_snapshots_applied = self.full_snapshots_applied,
@@ -820,6 +870,14 @@ pub const Client = struct {
             .prediction = self.prediction.diagnostics(),
             .vehicle_prediction = self.vehicle_prediction.diagnostics(),
         };
+    }
+
+    /// Immutable joined-session identity for privileged local host
+    /// inspection. Gameplay presentation continues to use replicated
+    /// ownership rather than this diagnostic capability.
+    pub fn participantId(self: *const Client) ?identity.ParticipantId {
+        if (self.state != .joined or !self.participant.isValid()) return null;
+        return self.participant;
     }
 
     fn ownedCharacter(self: *const Client) ?protocol.CharacterState {
@@ -850,9 +908,12 @@ pub const Client = struct {
         self.last_acknowledged_input = snapshot.acknowledged_input;
         self.snapshots_applied +|= 1;
         if (self.ownedCharacter()) |character| {
-            self.avatar_incarnation = character.incarnation;
-            self.avatar_entity = character.entity;
-            self.avatar_life_state = character.life_state;
+            if (self.snapshotAdvancesLifecycle(character, snapshot.server_tick)) {
+                self.avatar_incarnation = character.incarnation;
+                self.avatar_entity = character.entity;
+                self.avatar_life_state = character.life_state;
+                self.avatar_lifecycle_tick = snapshot.server_tick;
+            }
             if (character.life_state == .dead) {
                 self.prediction.clearOwnership();
                 self.vehicle_prediction.clearOwnership();
@@ -933,12 +994,37 @@ pub const Client = struct {
         self.snapshot_history_next = 0;
         self.pending_snapshot_ack = null;
     }
+
+    fn lifeEventAdvancesLifecycle(self: *const Client, event: protocol.LifeEvent) bool {
+        if (incarnationNewer(event.incarnation, self.avatar_incarnation)) return true;
+        if (event.incarnation != self.avatar_incarnation) return false;
+        if (event.authority_tick < self.avatar_lifecycle_tick) return false;
+        return !(event.authority_tick == self.avatar_lifecycle_tick and
+            self.avatar_life_state == .dead and event.state == .alive);
+    }
+
+    fn snapshotAdvancesLifecycle(
+        self: *const Client,
+        character: protocol.CharacterState,
+        authority_tick: u64,
+    ) bool {
+        if (incarnationNewer(character.incarnation, self.avatar_incarnation)) return true;
+        if (character.incarnation != self.avatar_incarnation) return false;
+        if (authority_tick < self.avatar_lifecycle_tick) return false;
+        return !(authority_tick == self.avatar_lifecycle_tick and
+            self.avatar_life_state == .dead and character.life_state == .alive);
+    }
 };
 
 const SnapshotRecord = struct {
     valid: bool = false,
     snapshot: protocol.Snapshot = protocol.Snapshot.empty(),
 };
+
+fn incarnationNewer(candidate: u16, reference: u16) bool {
+    const delta = candidate -% reference;
+    return delta != 0 and delta < 0x8000;
+}
 
 fn joinedTestClient(account_value: u64) !Client {
     var client = try Client.init(.{ .value = account_value });
@@ -1055,6 +1141,41 @@ test "reliable application delivery is cumulative and duplicate replay is idempo
     );
 }
 
+test "one full reliable life-event wire batch is retained and drained in order" {
+    var client = try joinedTestClient(20);
+    const batch_size: usize = budgets.max_reliable_events_per_tick;
+
+    for (1..batch_size + 1) |ordinal| {
+        try client.receiveDelivered(.{
+            .delivery_id = @intCast(ordinal),
+            .message = .{ .life_event = .{
+                .avatar = .{
+                    .index = @intCast(100 + ordinal),
+                    .generation = 1,
+                },
+                .incarnation = 1,
+                .authority_tick = @intCast(ordinal),
+                .health = @intCast(ordinal),
+                .maximum_health = @intCast(batch_size),
+                .state = .alive,
+            } },
+        });
+    }
+
+    const receipt = (client.takeDeliveryReceipt() orelse
+        return error.MissingDeliveryReceipt).delivery_receipt;
+    try std.testing.expectEqual(protocol.ReliableLane.gameplay, receipt.lane);
+    try std.testing.expectEqual(@as(u64, @intCast(batch_size)), receipt.delivery_id);
+    try std.testing.expectEqual(@as(u64, @intCast(batch_size)), client.life_events);
+
+    for (1..batch_size + 1) |ordinal| {
+        const event = client.takeLifeEvent() orelse return error.MissingLifeEvent;
+        try std.testing.expectEqual(@as(u32, @intCast(100 + ordinal)), event.avatar.index);
+        try std.testing.expectEqual(@as(u16, @intCast(ordinal)), event.health);
+    }
+    try std.testing.expect(client.takeLifeEvent() == null);
+}
+
 test "transport loss preserves the credential required for reconnect" {
     var client = try Client.init(.{ .value = 9 });
     _ = try client.begin();
@@ -1128,6 +1249,38 @@ test "reordered unreliable snapshots are dropped without failing the client" {
     try std.testing.expectEqual(@as(u64, 1), client.world.stale_snapshots);
 }
 
+test "older alive feedback cannot resurrect a dead snapshot incarnation" {
+    var client = try joinedTestClient(21);
+    var death = protocol.Snapshot.empty();
+    death.sequence.value = 1;
+    death.server_tick = 20;
+    death.character_count = 1;
+    death.characters[0] = .{
+        .entity = client.avatar_entity,
+        .owner = client.participant,
+        .position = .{ 0, 0, 0 },
+        .velocity = .{ 0, 0, 0 },
+        .facing_yaw = 0,
+        .health = 0,
+        .life_state = .dead,
+    };
+    try client.receive(.{ .snapshot = death });
+    try std.testing.expectEqual(protocol.AvatarLifeState.dead, client.avatar_life_state.?);
+
+    const delayed_feedback = protocol.LifeEvent{
+        .avatar = client.avatar_entity,
+        .incarnation = client.avatar_incarnation,
+        .authority_tick = 19,
+        .health = 75,
+        .maximum_health = 100,
+        .state = .alive,
+    };
+    try client.receive(.{ .life_event = delayed_feedback });
+    try std.testing.expectEqual(protocol.AvatarLifeState.dead, client.avatar_life_state.?);
+    try std.testing.expectEqual(@as(u64, 1), client.diagnostics().stale_life_events);
+    try std.testing.expectEqualDeep(delayed_feedback, client.takeLifeEvent().?);
+}
+
 test "off-lane delta advances common state without replacing NPC interpolation endpoints" {
     var client = try Client.init(.{ .value = 9 });
     _ = try client.begin();
@@ -1168,6 +1321,11 @@ test "off-lane delta advances common state without replacing NPC interpolation e
         .district_count = 1,
         .snapshot = baseline_snapshot,
     } });
+    try std.testing.expectEqual(@as(usize, 1), client.relevantDistrictSlice().len);
+    try std.testing.expectEqualDeep(
+        protocol.DistrictCoord{ .x = 0, .z = 0 },
+        client.relevantDistrictSlice()[0],
+    );
 
     var npc_update = baseline_snapshot;
     npc_update.sequence.value = 2;
@@ -1266,6 +1424,10 @@ test "vehicle control follows snapshot ownership and reliable action correlation
     try std.testing.expectError(
         error.CharacterControlUnavailable,
         client.input(2, .{ 0, 1 }, 0, false),
+    );
+    try std.testing.expectError(
+        error.CannotMeleeWhileDriving,
+        client.meleeAction(2),
     );
 
     snapshot.sequence.value = 3;
@@ -1373,6 +1535,31 @@ test "client vehicle and interaction action sequences skip zero on wrap" {
     )).interaction_action;
     try std.testing.expectEqual(@as(u32, 1), wrapped_interaction.sequence.value);
     try std.testing.expectEqual(@as(u32, 2), interaction_client.next_interaction_action.value);
+}
+
+test "consumed vehicle and interaction results remain playable beyond queue capacity" {
+    const vehicle = identity.ReplicatedEntityId{ .index = 17, .generation = 1 };
+    const carryable = identity.ReplicatedEntityId{ .index = 21, .generation = 1 };
+    var client = try joinedTestClient(93);
+
+    for (0..action_result_capacity * 2 + 1) |_| {
+        const action = (try client.vehicleAction(.enter, vehicle)).vehicle_action;
+        try client.receive(vehicleResult(action, .too_far));
+        const result = client.takeVehicleActionResult() orelse
+            return error.MissingVehicleActionResult;
+        try std.testing.expectEqual(action.sequence, result.sequence);
+    }
+
+    for (0..action_result_capacity * 2 + 1) |_| {
+        const action = (try client.interactionAction(
+            .collect,
+            carryable,
+        )).interaction_action;
+        try client.receive(interactionResult(action, .too_far));
+        const result = client.takeInteractionActionResult() orelse
+            return error.MissingInteractionActionResult;
+        try std.testing.expectEqual(action.sequence, result.sequence);
+    }
 }
 
 test "vehicle action results remain bounded and nonfatal across reconnect races" {

@@ -10,6 +10,8 @@ const district_contract = @import("district_contract");
 const district_feature_contract = @import("district_feature_contract");
 const interaction_contract = @import("interaction_feature_contract");
 const npc_contract = @import("npc_contract");
+const npc_encounter_contract = @import("npc_encounter_contract");
+const vitals_contract = @import("vitals_contract");
 const sandbox_contracts = @import("sandbox_host_contracts");
 const sandbox_diagnostics = @import("sandbox_diagnostics_contract");
 const sandbox_replay = @import("sandbox_replay");
@@ -75,27 +77,349 @@ const OperationalSummary = struct {
     observational_events_consumed: u64,
 };
 
+const HeadlessNpcReplacementCorrelation = struct {
+    // `HLRP` owns one request-ID domain for this host composition.
+    const domain: u64 = 0x484c_5250_0000_0000;
+
+    const Operation = enum(u8) {
+        spawn = 1,
+        despawn = 2,
+    };
+
+    const Decoded = struct {
+        correlation: HeadlessNpcReplacementCorrelation,
+        operation: Operation,
+    };
+
+    slot: u8,
+    generation: u16,
+
+    fn requestId(
+        self: HeadlessNpcReplacementCorrelation,
+        operation: Operation,
+    ) u64 {
+        return domain |
+            (@as(u64, self.generation) << 16) |
+            (@as(u64, @intFromEnum(operation)) << 8) |
+            @as(u64, self.slot + 1);
+    }
+
+    fn decode(request_id: u64) ?Decoded {
+        if (request_id & 0xffff_ffff_0000_0000 != domain) return null;
+        const raw_slot: u8 = @truncate(request_id);
+        const operation = std.enums.fromInt(
+            Operation,
+            @as(u8, @truncate(request_id >> 8)),
+        ) orelse return null;
+        const generation: u16 = @truncate(request_id >> 16);
+        if (raw_slot == 0 or raw_slot > npc_contract.max_npcs or generation == 0) {
+            return null;
+        }
+        return .{
+            .correlation = .{
+                .slot = raw_slot - 1,
+                .generation = generation,
+            },
+            .operation = operation,
+        };
+    }
+};
+
+const HeadlessNpcReplacementStage = union(enum) {
+    awaiting_spawn: HeadlessNpcReplacementCorrelation,
+    awaiting_vitals: struct {
+        correlation: HeadlessNpcReplacementCorrelation,
+        id: engine.PersistentId,
+    },
+    awaiting_despawn: struct {
+        correlation: HeadlessNpcReplacementCorrelation,
+        id: engine.PersistentId,
+    },
+};
+
 const OperationalConsumers = struct {
     observational_events: u64 = 0,
+    npc_replacements: [npc_contract.max_npcs]?HeadlessNpcReplacementStage =
+        @splat(null),
+    npc_replacement_transaction_count: u8 = 0,
 
     fn consume(self: *OperationalConsumers, world: *simulation.Simulation) !void {
         const diagnostics = world.diagnostics();
         if (diagnostics.characters.outcomes.occupancy != 0 or
             diagnostics.vehicles.outcomes.occupancy != 0 or
             diagnostics.district.outcomes.occupancy != 0 or
-            diagnostics.interaction.outcomes.occupancy != 0 or
-            diagnostics.npc.outcomes.occupancy != 0)
+            diagnostics.interaction.outcomes.occupancy != 0)
         {
             // Preserve the authoritative outcome in its owner queue as fault
             // evidence. This host submitted no commands in these categories.
             return error.UnownedHeadlessFeatureOutcome;
         }
+        try self.consumeNpcReplacements(world);
+        try self.consumeNpcOutcomes(world);
+        try self.consumeVitalsOutcomes(world);
         while (world.pollCharacterEvent() != null) self.observational_events +|= 1;
         while (world.pollVehicleEvent() != null) self.observational_events +|= 1;
         while (world.pollDistrictEvent() != null) self.observational_events +|= 1;
         while (world.pollNpcEvent() != null) self.observational_events +|= 1;
+        while (world.pollNpcEncounterCue() != null) self.observational_events +|= 1;
+    }
+
+    fn ensureQuiescent(self: *const OperationalConsumers) !void {
+        if (self.npc_replacement_transaction_count != 0) {
+            return error.HeadlessNpcReplacementTransactionPending;
+        }
+    }
+
+    fn consumeNpcReplacements(
+        self: *OperationalConsumers,
+        world: *simulation.Simulation,
+    ) !void {
+        while (world.peekNpcReplacementOutcome()) |outcome| switch (outcome) {
+            .ready => |ready| {
+                if (ready.slot >= npc_contract.max_npcs) {
+                    return error.InvalidHeadlessNpcReplacementSlot;
+                }
+                const slot: usize = ready.slot;
+                if (self.npc_replacements[slot] != null) {
+                    return error.DuplicateHeadlessNpcReplacementTransaction;
+                }
+                const correlation = HeadlessNpcReplacementCorrelation{
+                    .slot = ready.slot,
+                    .generation = ready.generation,
+                };
+                try world.submitNpc(.{ .spawn = .{
+                    .request_id = correlation.requestId(.spawn),
+                    .node = ready.node,
+                    .goal = .hold,
+                } });
+                self.npc_replacements[slot] = .{ .awaiting_spawn = correlation };
+                self.npc_replacement_transaction_count += 1;
+                // The owner thread cannot interleave queue mutation between
+                // this exact-value lease and commit.
+                try world.commitNpcReplacementOutcome(outcome);
+            },
+            .deferred => |deferred| {
+                if (deferred.slot >= npc_contract.max_npcs or
+                    self.npc_replacements[deferred.slot] != null)
+                {
+                    return error.InvalidHeadlessNpcReplacementDeferral;
+                }
+                try world.commitNpcReplacementOutcome(outcome);
+            },
+        };
+    }
+
+    fn consumeNpcOutcomes(
+        self: *OperationalConsumers,
+        world: *simulation.Simulation,
+    ) !void {
+        while (world.peekNpcOutcome()) |outcome| {
+            const request_id = switch (outcome) {
+                .spawned => |spawned| spawned.request_id,
+                .despawned => |despawned| despawned.request_id,
+                .rejected => |rejected| rejected.request_id,
+                .goal_set => return error.UnownedHeadlessFeatureOutcome,
+            };
+            const decoded = HeadlessNpcReplacementCorrelation.decode(request_id) orelse
+                return error.UnownedHeadlessFeatureOutcome;
+            const stage = self.npc_replacements[decoded.correlation.slot] orelse
+                return error.UnownedHeadlessFeatureOutcome;
+            switch (decoded.operation) {
+                .spawn => {
+                    const correlation = switch (stage) {
+                        .awaiting_spawn => |value| value,
+                        else => return error.UnownedHeadlessFeatureOutcome,
+                    };
+                    if (!std.meta.eql(correlation, decoded.correlation)) {
+                        return error.UnownedHeadlessFeatureOutcome;
+                    }
+                    switch (outcome) {
+                        .spawned => |spawned| {
+                            try world.submitVitals(.{ .register = .{ .target = .{
+                                .kind = .npc,
+                                .id = spawned.id,
+                                .incarnation = .{ .value = 1 },
+                            } } });
+                            self.npc_replacements[correlation.slot] = .{
+                                .awaiting_vitals = .{
+                                    .correlation = correlation,
+                                    .id = spawned.id,
+                                },
+                            };
+                        },
+                        .rejected => |rejected| {
+                            if (rejected.command != .spawn or rejected.id != null) {
+                                return error.UnownedHeadlessFeatureOutcome;
+                            }
+                            try world.deferNpcReplacement(
+                                correlation.slot,
+                                correlation.generation,
+                            );
+                            self.clearNpcReplacement(correlation.slot);
+                        },
+                        else => return error.UnownedHeadlessFeatureOutcome,
+                    }
+                },
+                .despawn => {
+                    const pending = switch (stage) {
+                        .awaiting_despawn => |value| value,
+                        else => return error.UnownedHeadlessFeatureOutcome,
+                    };
+                    if (!std.meta.eql(pending.correlation, decoded.correlation)) {
+                        return error.UnownedHeadlessFeatureOutcome;
+                    }
+                    switch (outcome) {
+                        .despawned => |despawned| {
+                            if (!std.meta.eql(despawned.id, pending.id)) {
+                                return error.UnownedHeadlessFeatureOutcome;
+                            }
+                        },
+                        .rejected => |rejected| {
+                            if (rejected.command != .despawn or
+                                rejected.id == null or
+                                !std.meta.eql(rejected.id.?, pending.id) or
+                                (rejected.reason != .npc_not_found and
+                                    rejected.reason != .not_owned))
+                            {
+                                return error.UnownedHeadlessFeatureOutcome;
+                            }
+                        },
+                        else => return error.UnownedHeadlessFeatureOutcome,
+                    }
+                    try world.deferNpcReplacement(
+                        pending.correlation.slot,
+                        pending.correlation.generation,
+                    );
+                    self.clearNpcReplacement(pending.correlation.slot);
+                },
+            }
+            try world.commitNpcOutcome(outcome);
+        }
+    }
+
+    fn consumeVitalsOutcomes(
+        self: *OperationalConsumers,
+        world: *simulation.Simulation,
+    ) !void {
+        while (world.peekVitalsOutcome()) |outcome| {
+            if (std.meta.activeTag(outcome) == .damage) {
+                const damage = outcome.damage;
+                if (!ownsEncounterDamage(world, damage)) {
+                    return error.UnownedHeadlessFeatureOutcome;
+                }
+                if (damage.killed) {
+                    const expected_event = vitals_contract.Event{ .died = .{
+                        .target = damage.proposal.target,
+                        .source = damage.proposal.source,
+                        .cause = damage.proposal.cause,
+                        .authority_tick = damage.proposal.authority_tick,
+                        .correlation = damage.proposal.correlation,
+                    } };
+                    const actual_event = world.peekVitalsEvent() orelse
+                        return error.HeadlessEncounterDeathEventMissing;
+                    if (!std.meta.eql(actual_event, expected_event)) {
+                        return error.UnownedHeadlessFeatureOutcome;
+                    }
+                    try world.commitVitalsOutcome(outcome);
+                    try world.commitVitalsEvent(expected_event);
+                    self.observational_events +|= 2;
+                } else {
+                    try world.commitVitalsOutcome(outcome);
+                    self.observational_events +|= 1;
+                }
+                continue;
+            }
+            const target = switch (outcome) {
+                .registered => |value| value,
+                .rejected => |value| value.target,
+                .removed => return error.UnownedHeadlessFeatureOutcome,
+                .damage => unreachable,
+            };
+            const slot = self.findAwaitingVitals(target) orelse
+                return error.UnownedHeadlessFeatureOutcome;
+            const pending = self.npc_replacements[slot].?.awaiting_vitals;
+            switch (outcome) {
+                .registered => {
+                    try world.completeNpcReplacement(
+                        pending.correlation.slot,
+                        pending.correlation.generation,
+                    );
+                    self.clearNpcReplacement(pending.correlation.slot);
+                },
+                .rejected => |rejected| {
+                    switch (rejected.reason) {
+                        .capacity_reached, .duplicate_target, .invalid_initial_state => {},
+                        // `Rejected` predates command-kind correlation. These
+                        // reasons may belong to an unrelated remove command,
+                        // so retain the exact FIFO head as fault evidence.
+                        .target_missing, .stale_incarnation => return error.UnownedHeadlessFeatureOutcome,
+                    }
+                    try world.submitNpc(.{ .despawn = .{
+                        .request_id = pending.correlation.requestId(.despawn),
+                        .id = pending.id,
+                    } });
+                    self.npc_replacements[slot] = .{ .awaiting_despawn = .{
+                        .correlation = pending.correlation,
+                        .id = pending.id,
+                    } };
+                },
+                .removed, .damage => unreachable,
+            }
+            try world.commitVitalsOutcome(outcome);
+        }
+        // Death events are consumed only as the exact mate of an owned killed
+        // damage outcome above. Any remaining event belongs to another host
+        // transaction and must stay at the FIFO head as fault evidence.
+        if (world.peekVitalsEvent() != null) {
+            return error.UnownedHeadlessFeatureOutcome;
+        }
+    }
+
+    fn findAwaitingVitals(
+        self: *const OperationalConsumers,
+        target: anytype,
+    ) ?u8 {
+        if (target.kind != .npc or target.incarnation.value != 1) return null;
+        for (self.npc_replacements, 0..) |maybe_stage, slot| {
+            const stage = maybe_stage orelse continue;
+            const pending = switch (stage) {
+                .awaiting_vitals => |value| value,
+                else => continue,
+            };
+            if (std.meta.eql(pending.id, target.id)) return @intCast(slot);
+        }
+        return null;
+    }
+
+    fn clearNpcReplacement(self: *OperationalConsumers, slot: u8) void {
+        std.debug.assert(self.npc_replacements[slot] != null);
+        std.debug.assert(self.npc_replacement_transaction_count != 0);
+        self.npc_replacements[slot] = null;
+        self.npc_replacement_transaction_count -= 1;
     }
 };
+
+fn ownsEncounterDamage(
+    world: *const simulation.Simulation,
+    damage: vitals_contract.DamageOutcome,
+) bool {
+    const proposal = damage.proposal;
+    if (proposal.source.kind != .npc or proposal.target.kind != .player or
+        proposal.cause != .npc_melee)
+    {
+        return false;
+    }
+    const source = vitals_contract.Target{
+        .kind = .npc,
+        .id = proposal.source.id,
+        .incarnation = proposal.source.incarnation,
+    };
+    if (world.npcEncounter(source) == null) return false;
+    return proposal.correlation == npc_encounter_contract.attackDamageCorrelation(
+        source,
+        proposal.source.action_sequence,
+    );
+}
 
 const SyntheticProducers = struct {
     handles: [2]headless_authority.ProducerHandle,
@@ -454,6 +778,7 @@ fn runOperationalAuthority(
         return error.HeadlessProducerShutdownInvariant;
     }
     if (terminal_error) |err| return err;
+    try consumers.ensureQuiescent();
 
     const envelope = try authority.saveEnvelope(init.gpa, metadata);
     defer init.gpa.free(envelope);
@@ -1049,7 +1374,7 @@ test "real Jolt lifecycle saves destroys restores and destroys" {
     }
 }
 
-test "V7 snapshot composes crate character and empty NPC records under one runtime envelope" {
+test "V11 snapshot composes crate character and empty NPC records under one runtime envelope" {
     const allocator = std.testing.allocator;
     var saved: []u8 = undefined;
     var crate_id: engine.PersistentId = undefined;
@@ -1219,7 +1544,7 @@ fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
         .linear_velocity = .{ 0.5, 0.25, -0.25 },
         .angular_velocity = .{ 0.1, 0.2, 0.3 },
     }};
-    const initial = simulation_snapshot.SnapshotV7{
+    const initial = simulation_snapshot.SnapshotV11{
         .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 10,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -1229,12 +1554,15 @@ fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
         .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
         .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &crate_records,
         .characters = &.{},
         .vehicles = &.{},
         .districts = &.{},
         .interactions = &.{},
         .npcs = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     };
     const initial_v7 = try std.json.Stringify.valueAlloc(allocator, initial, .{});
     defer allocator.free(initial_v7);
@@ -1457,7 +1785,7 @@ test "multi-record V7 save is sorted and byte-stable across fresh restore" {
             .angular_velocity = .{ -0.3, 0.4, -0.2 },
         },
     };
-    const snapshot = simulation_snapshot.SnapshotV7{
+    const snapshot = simulation_snapshot.SnapshotV11{
         .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 17,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -1467,12 +1795,15 @@ test "multi-record V7 save is sorted and byte-stable across fresh restore" {
         .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
         .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &crate_records,
         .characters = &.{},
         .vehicles = &.{},
         .districts = &.{},
         .interactions = &.{},
         .npcs = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     };
     const unsorted = try std.json.Stringify.valueAlloc(allocator, snapshot, .{});
     defer allocator.free(unsorted);
@@ -1561,7 +1892,7 @@ test "failed fresh loads do not mutate a live simulation" {
         error.SnapshotTooLarge,
         simulation.Simulation.fromSnapshot(allocator, oversized, .{}),
     );
-    const empty_snapshot = simulation_snapshot.SnapshotV7{
+    const empty_snapshot = simulation_snapshot.SnapshotV11{
         .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -1571,12 +1902,15 @@ test "failed fresh loads do not mutate a live simulation" {
         .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
         .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &.{},
         .characters = &.{},
         .vehicles = &.{},
         .districts = &.{},
         .interactions = &.{},
         .npcs = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     };
     const valid_empty = try std.json.Stringify.valueAlloc(allocator, empty_snapshot, .{});
     defer allocator.free(valid_empty);
@@ -1616,7 +1950,7 @@ fn restoreAllocationCase(allocator: std.mem.Allocator) !void {
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0.25,
     }};
-    const logical_snapshot = simulation_snapshot.SnapshotV7{
+    const logical_snapshot = simulation_snapshot.SnapshotV11{
         .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 3,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -1626,12 +1960,15 @@ fn restoreAllocationCase(allocator: std.mem.Allocator) !void {
         .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
         .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &crate_records,
         .characters = &character_records,
         .vehicles = &.{},
         .districts = &.{},
         .interactions = &.{},
         .npcs = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     };
     const snapshot = try std.json.Stringify.valueAlloc(allocator, logical_snapshot, .{});
     defer allocator.free(snapshot);
@@ -1874,6 +2211,642 @@ fn unloadDistrict(
     }
     if (world.pollDistrictOutcome() != null) return error.ExtraDistrictOutcome;
     while (world.pollDistrictEvent() != null) {}
+}
+
+fn stageReadyNpcReplacement(
+    world: *simulation.Simulation,
+    slot: u8,
+    generation: u16,
+    candidate: npc_contract.NodeRef,
+) !district_contract.LoadTicket {
+    const ticket = try requestDistrictAt(
+        world,
+        1,
+        candidate.coord,
+        district_test_assets,
+    );
+    try waitForDistrictActivation(world, ticket);
+    try world.scheduleNpcReplacement(
+        slot,
+        generation,
+        world.tickIndex(),
+        &.{candidate},
+    );
+    try world.tick();
+    const outcome = world.peekNpcReplacementOutcome() orelse
+        return error.NpcReplacementReadyMissing;
+    switch (outcome) {
+        .ready => |ready| {
+            try std.testing.expectEqual(slot, ready.slot);
+            try std.testing.expectEqual(generation, ready.generation);
+            try std.testing.expect(npc_contract.NodeRef.eql(candidate, ready.node));
+        },
+        .deferred => return error.NpcReplacementUnexpectedlyDeferred,
+    }
+    return ticket;
+}
+
+test "operational headless completes a due NPC replacement after cold restore" {
+    const allocator = std.testing.allocator;
+    const config = sandbox_contracts.Config{
+        .namespace = 8_211,
+        .create_ground = false,
+        .npc_encounter = .{ .replacement_delay_ticks = 2 },
+    };
+    const candidate = npc_contract.NodeRef{
+        .coord = sandbox_contracts.navigation_west_coord,
+        .index = 0,
+    };
+    var pending_save: []u8 = undefined;
+
+    {
+        var world = try simulation.Simulation.init(allocator, config);
+        defer world.deinit();
+        const ticket = try requestDistrictAt(
+            &world,
+            1,
+            candidate.coord,
+            district_test_assets,
+        );
+        try waitForDistrictActivation(&world, ticket);
+        try world.scheduleNpcReplacement(
+            0,
+            2,
+            world.tickIndex(),
+            &.{candidate},
+        );
+        try std.testing.expectEqual(
+            @as(u16, 1),
+            world.npcReplacementDiagnostics().pending,
+        );
+        pending_save = try world.save(allocator);
+    }
+    defer allocator.free(pending_save);
+
+    var replacement_id: engine.PersistentId = undefined;
+    var completed_save: []u8 = undefined;
+    {
+        var restored = try simulation.Simulation.fromSnapshotForWorld(
+            allocator,
+            pending_save,
+            config,
+            district_test_assets,
+        );
+        defer restored.deinit();
+        var consumers = OperationalConsumers{};
+        try consumers.consume(&restored);
+
+        try restored.tick();
+        try consumers.consume(&restored);
+        try std.testing.expectEqual(
+            @as(u8, 0),
+            consumers.npc_replacement_transaction_count,
+        );
+        try std.testing.expectEqual(
+            @as(u16, 1),
+            restored.npcReplacementDiagnostics().pending,
+        );
+
+        try restored.tick();
+        try consumers.consume(&restored);
+        try std.testing.expectEqual(
+            @as(u8, 1),
+            consumers.npc_replacement_transaction_count,
+        );
+        const ready = restored.npcReplacementDiagnostics();
+        try std.testing.expectEqual(@as(u16, 0), ready.pending);
+        try std.testing.expectEqual(@as(u16, 1), ready.awaiting_spawn);
+        try std.testing.expectEqual(@as(u16, 0), ready.outcomes_pending);
+        try std.testing.expectError(
+            error.HeadlessNpcReplacementTransactionPending,
+            consumers.ensureQuiescent(),
+        );
+        try std.testing.expectError(error.CommandsPending, restored.save(allocator));
+
+        try restored.tick();
+        try consumers.consume(&restored);
+        try std.testing.expectEqual(
+            @as(u8, 1),
+            consumers.npc_replacement_transaction_count,
+        );
+        try std.testing.expectEqual(@as(usize, 1), restored.npcCount());
+        const awaiting_vitals = restored.npcReplacementDiagnostics();
+        try std.testing.expectEqual(@as(u16, 0), awaiting_vitals.pending);
+        try std.testing.expectEqual(@as(u16, 1), awaiting_vitals.awaiting_spawn);
+        try std.testing.expectEqual(@as(u16, 0), awaiting_vitals.outcomes_pending);
+        try std.testing.expectError(
+            error.HeadlessNpcReplacementTransactionPending,
+            consumers.ensureQuiescent(),
+        );
+        try std.testing.expectError(error.CommandsPending, restored.save(allocator));
+
+        try restored.tick();
+        try consumers.consume(&restored);
+        try std.testing.expectEqual(
+            @as(u8, 0),
+            consumers.npc_replacement_transaction_count,
+        );
+        const complete = restored.npcReplacementDiagnostics();
+        try std.testing.expectEqual(@as(u16, 0), complete.pending);
+        try std.testing.expectEqual(@as(u16, 0), complete.awaiting_spawn);
+        try std.testing.expectEqual(@as(u16, 0), complete.outcomes_pending);
+        const draws = try restored.npcPresentation(1);
+        try std.testing.expectEqual(@as(usize, 1), draws.len);
+        replacement_id = draws[0].persistent_id;
+        const replacement_vitals = restored.currentVitals(.npc, replacement_id) orelse
+            return error.ReplacementVitalsMissing;
+        try std.testing.expectEqual(@as(u16, 100), replacement_vitals.current_health);
+        try std.testing.expect(restored.firstFault() == null);
+        try std.testing.expect(restored.operationalQuiescenceReason() == null);
+        try consumers.ensureQuiescent();
+        completed_save = try restored.save(allocator);
+    }
+    defer allocator.free(completed_save);
+
+    var completed = try simulation.Simulation.fromSnapshotForWorld(
+        allocator,
+        completed_save,
+        config,
+        district_test_assets,
+    );
+    defer completed.deinit();
+    try std.testing.expectEqual(@as(usize, 1), completed.npcCount());
+    try std.testing.expect(completed.currentVitals(.npc, replacement_id) != null);
+    const diagnostics = completed.npcReplacementDiagnostics();
+    try std.testing.expectEqual(@as(u16, 0), diagnostics.pending);
+    try std.testing.expectEqual(@as(u16, 0), diagnostics.awaiting_spawn);
+    try std.testing.expectEqual(@as(u16, 0), diagnostics.outcomes_pending);
+    try std.testing.expect(completed.pollNpcReplacementOutcome() == null);
+    try std.testing.expect(completed.firstFault() == null);
+    try std.testing.expect(completed.operationalQuiescenceReason() == null);
+    const cold_resave = try completed.save(allocator);
+    defer allocator.free(cold_resave);
+    try std.testing.expectEqualSlices(u8, completed_save, cold_resave);
+}
+
+test "operational headless preserves and faults unrelated NPC outcomes" {
+    var world = try simulation.Simulation.init(std.testing.allocator, .{
+        .namespace = 8_212,
+        .create_ground = false,
+    });
+    defer world.deinit();
+    try world.submitNpc(.{ .spawn = .{
+        .request_id = 99,
+        .node = .{
+            .coord = sandbox_contracts.navigation_west_coord,
+            .index = 0,
+        },
+        .goal = .hold,
+    } });
+    try world.tick();
+
+    var consumers = OperationalConsumers{};
+    const head = world.peekNpcOutcome() orelse return error.NpcOutcomeMissing;
+    try std.testing.expectError(
+        error.UnownedHeadlessFeatureOutcome,
+        consumers.consume(&world),
+    );
+    try std.testing.expectEqualDeep(head, world.peekNpcOutcome().?);
+}
+
+test "operational headless retains ready outcome when NPC submission is saturated" {
+    const config = sandbox_contracts.Config{
+        .namespace = 8_213,
+        .create_ground = false,
+        .npc_encounter = .{ .replacement_delay_ticks = 1 },
+    };
+    var world = try simulation.Simulation.init(std.testing.allocator, config);
+    defer world.deinit();
+    const candidate = npc_contract.NodeRef{
+        .coord = sandbox_contracts.navigation_west_coord,
+        .index = 0,
+    };
+    _ = try stageReadyNpcReplacement(&world, 0, 2, candidate);
+    const ready = world.peekNpcReplacementOutcome().?;
+
+    for (0..npc_contract.max_pending_commands) |index| {
+        try world.submitNpc(.{ .despawn = .{
+            .request_id = 1_000 + @as(u64, @intCast(index)),
+            .id = .{ .namespace = config.namespace, .local = 10_000 + index },
+        } });
+    }
+
+    var consumers = OperationalConsumers{};
+    try std.testing.expectError(error.NpcCommandQueueFull, consumers.consume(&world));
+    try std.testing.expectEqualDeep(ready, world.peekNpcReplacementOutcome().?);
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        consumers.npc_replacement_transaction_count,
+    );
+    try consumers.ensureQuiescent();
+}
+
+test "operational headless retains spawned outcome when vitals submission is saturated" {
+    const config = sandbox_contracts.Config{
+        .namespace = 8_214,
+        .create_ground = false,
+        .npc_encounter = .{ .replacement_delay_ticks = 1 },
+    };
+    var world = try simulation.Simulation.init(std.testing.allocator, config);
+    defer world.deinit();
+    const candidate = npc_contract.NodeRef{
+        .coord = sandbox_contracts.navigation_west_coord,
+        .index = 0,
+    };
+    _ = try stageReadyNpcReplacement(&world, 0, 2, candidate);
+
+    var consumers = OperationalConsumers{};
+    try consumers.consume(&world);
+    try world.tick();
+    const spawned = world.peekNpcOutcome() orelse return error.NpcSpawnOutcomeMissing;
+    const npc_id = switch (spawned) {
+        .spawned => |value| value.id,
+        else => return error.NpcUnexpectedSpawnOutcome,
+    };
+    for (0..256) |index| {
+        try world.submitVitals(.{ .remove = .{
+            .kind = .npc,
+            .id = .{ .namespace = config.namespace, .local = 20_000 + index },
+            .incarnation = .{ .value = 1 },
+        } });
+    }
+
+    try std.testing.expectError(error.VitalsCommandQueueFull, consumers.consume(&world));
+    try std.testing.expectEqualDeep(spawned, world.peekNpcOutcome().?);
+    try std.testing.expectEqual(@as(usize, 1), world.npcCount());
+    try std.testing.expect(world.currentVitals(.npc, npc_id) == null);
+    try std.testing.expect(
+        consumers.npc_replacements[0].? == .awaiting_spawn,
+    );
+    try std.testing.expectError(
+        error.HeadlessNpcReplacementTransactionPending,
+        consumers.ensureQuiescent(),
+    );
+}
+
+test "operational headless preserves a stale mixed FIFO head" {
+    const config = sandbox_contracts.Config{
+        .namespace = 8_215,
+        .create_ground = false,
+        .npc_encounter = .{ .replacement_delay_ticks = 1 },
+    };
+    var world = try simulation.Simulation.init(std.testing.allocator, config);
+    defer world.deinit();
+    const candidate = npc_contract.NodeRef{
+        .coord = sandbox_contracts.navigation_west_coord,
+        .index = 0,
+    };
+    _ = try stageReadyNpcReplacement(&world, 0, 2, candidate);
+    try world.submitNpc(.{ .despawn = .{
+        .request_id = (HeadlessNpcReplacementCorrelation{
+            .slot = 0,
+            .generation = 3,
+        }).requestId(.spawn),
+        .id = .{ .namespace = config.namespace, .local = 30_000 },
+    } });
+
+    var consumers = OperationalConsumers{};
+    try consumers.consume(&world);
+    try world.tick();
+    const stale_head = world.peekNpcOutcome() orelse return error.NpcOutcomeMissing;
+    try std.testing.expectEqual(@as(u32, 2), world.diagnostics().npc.outcomes.occupancy);
+    try std.testing.expectError(
+        error.UnownedHeadlessFeatureOutcome,
+        consumers.consume(&world),
+    );
+    try std.testing.expectEqualDeep(stale_head, world.peekNpcOutcome().?);
+    try std.testing.expectEqual(@as(usize, 1), world.npcCount());
+    try std.testing.expect(
+        consumers.npc_replacements[0].? == .awaiting_spawn,
+    );
+}
+
+test "operational headless preserves an ambiguous vitals rejection head" {
+    const config = sandbox_contracts.Config{
+        .namespace = 8_218,
+        .create_ground = false,
+        .npc_encounter = .{ .replacement_delay_ticks = 1 },
+    };
+    var world = try simulation.Simulation.init(std.testing.allocator, config);
+    defer world.deinit();
+    const candidate = npc_contract.NodeRef{
+        .coord = sandbox_contracts.navigation_west_coord,
+        .index = 0,
+    };
+    _ = try stageReadyNpcReplacement(&world, 0, 2, candidate);
+    var consumers = OperationalConsumers{};
+    try consumers.consume(&world);
+    try world.tick();
+    const spawned = world.peekNpcOutcome() orelse return error.NpcSpawnOutcomeMissing;
+    const npc_id = switch (spawned) {
+        .spawned => |value| value.id,
+        else => return error.NpcUnexpectedSpawnOutcome,
+    };
+    try world.submitVitals(.{ .remove = .{
+        .kind = .npc,
+        .id = npc_id,
+        .incarnation = .{ .value = 1 },
+    } });
+    try consumers.consume(&world);
+
+    try world.tick();
+    const unrelated_head = world.peekVitalsOutcome() orelse
+        return error.VitalsOutcomeMissing;
+    try std.testing.expectError(
+        error.UnownedHeadlessFeatureOutcome,
+        consumers.consume(&world),
+    );
+    try std.testing.expectEqualDeep(unrelated_head, world.peekVitalsOutcome().?);
+    try std.testing.expect(
+        consumers.npc_replacements[0].? == .awaiting_vitals,
+    );
+    try std.testing.expectEqual(@as(usize, 1), world.npcCount());
+    try std.testing.expect(world.currentVitals(.npc, npc_id) != null);
+}
+
+test "operational headless compensates a rejected vitals registration before deferral" {
+    const config = sandbox_contracts.Config{
+        .namespace = 8_216,
+        .create_ground = false,
+        .npc_encounter = .{
+            .replacement_delay_ticks = 1,
+            .replacement_retry_ticks = 30,
+        },
+    };
+    var world = try simulation.Simulation.init(std.testing.allocator, config);
+    defer world.deinit();
+
+    for (0..80) |index| {
+        try world.submitVitals(.{ .register = .{ .target = .{
+            .kind = .npc,
+            .id = .{ .namespace = config.namespace, .local = 40_000 + index },
+            .incarnation = .{ .value = 1 },
+        } } });
+    }
+    try world.tick();
+    for (0..80) |_| {
+        _ = world.pollVitalsOutcome() orelse return error.VitalsOutcomeMissing;
+    }
+
+    const candidate = npc_contract.NodeRef{
+        .coord = sandbox_contracts.navigation_west_coord,
+        .index = 0,
+    };
+    _ = try stageReadyNpcReplacement(&world, 0, 2, candidate);
+    var consumers = OperationalConsumers{};
+    try consumers.consume(&world);
+    try world.tick();
+    try consumers.consume(&world);
+    const draws = try world.npcPresentation(1);
+    try std.testing.expectEqual(@as(usize, 1), draws.len);
+    const npc_id = draws[0].persistent_id;
+    try std.testing.expect(
+        consumers.npc_replacements[0].? == .awaiting_vitals,
+    );
+
+    try world.tick();
+    try consumers.consume(&world);
+    try std.testing.expect(
+        consumers.npc_replacements[0].? == .awaiting_despawn,
+    );
+    try std.testing.expectEqual(@as(usize, 1), world.npcCount());
+    try std.testing.expect(world.currentVitals(.npc, npc_id) == null);
+    try std.testing.expectError(
+        error.HeadlessNpcReplacementTransactionPending,
+        consumers.ensureQuiescent(),
+    );
+
+    try world.tick();
+    try consumers.consume(&world);
+    try std.testing.expectEqual(@as(usize, 0), world.npcCount());
+    try std.testing.expect(world.currentVitals(.npc, npc_id) == null);
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        consumers.npc_replacement_transaction_count,
+    );
+    const deferred = world.npcReplacementDiagnostics();
+    try std.testing.expectEqual(@as(u16, 1), deferred.pending);
+    try std.testing.expectEqual(@as(u16, 0), deferred.awaiting_spawn);
+    try consumers.ensureQuiescent();
+}
+
+test "operational headless defers a rejected replacement spawn" {
+    const config = sandbox_contracts.Config{
+        .namespace = 8_217,
+        .create_ground = false,
+        .npc_encounter = .{
+            .replacement_delay_ticks = 1,
+            .replacement_retry_ticks = 30,
+        },
+    };
+    var world = try simulation.Simulation.init(std.testing.allocator, config);
+    defer world.deinit();
+    const candidate = npc_contract.NodeRef{
+        .coord = sandbox_contracts.navigation_west_coord,
+        .index = 0,
+    };
+    const ticket = try stageReadyNpcReplacement(&world, 0, 2, candidate);
+    var consumers = OperationalConsumers{};
+    try consumers.consume(&world);
+
+    try unloadDistrict(&world, 2, ticket);
+    try consumers.consume(&world);
+    try std.testing.expectEqual(@as(usize, 0), world.npcCount());
+    try std.testing.expectEqual(
+        @as(u8, 0),
+        consumers.npc_replacement_transaction_count,
+    );
+    const deferred = world.npcReplacementDiagnostics();
+    try std.testing.expectEqual(@as(u16, 1), deferred.pending);
+    try std.testing.expectEqual(@as(u16, 0), deferred.awaiting_spawn);
+    try consumers.ensureQuiescent();
+}
+
+test "operational headless resumes restored hostile combat and owns damage death pair" {
+    const allocator = std.testing.allocator;
+    const config = sandbox_contracts.Config{
+        .namespace = 8_219,
+        .create_ground = false,
+        .character = .{ .max_characters = 1 },
+        .npc_encounter = .{
+            .ambient_perception_interval_ticks = 1,
+            .engaged_perception_interval_ticks = 1,
+            .route_replan_interval_ticks = 1,
+            .attack_windup_ticks = 3,
+            .attack_recovery_ticks = 3,
+        },
+    };
+    var character_id: engine.PersistentId = undefined;
+    var saved: []u8 = undefined;
+
+    {
+        var world = try simulation.Simulation.init(allocator, config);
+        defer world.deinit();
+        const ticket = try requestDistrictAt(
+            &world,
+            1,
+            sandbox_contracts.navigation_west_coord,
+            district_test_assets,
+        );
+        try waitForDistrictActivation(&world, ticket);
+        try world.submitCharacter(.{ .spawn = .{
+            .request_id = 2,
+            .position = .{ -4, 0, 1 },
+            .facing_yaw = 0,
+        } });
+        try world.submitNpc(.{ .spawn = .{
+            .request_id = 3,
+            .node = .{
+                .coord = sandbox_contracts.navigation_west_coord,
+                .index = 0,
+            },
+            .goal = .hold,
+        } });
+        try world.tick();
+        character_id = switch (world.pollCharacterOutcome() orelse
+            return error.CharacterSpawnOutcomeMissing) {
+            .spawned => |spawned| spawned.id,
+            else => return error.UnexpectedCharacterOutcome,
+        };
+        const npc_id = switch (world.pollNpcOutcome() orelse
+            return error.NpcSpawnOutcomeMissing) {
+            .spawned => |spawned| spawned.id,
+            else => return error.UnexpectedNpcOutcome,
+        };
+        while (world.pollCharacterEvent() != null) {}
+        while (world.pollNpcEvent() != null) {}
+
+        const character_target = vitals_contract.Target{
+            .kind = .player,
+            .id = character_id,
+            .incarnation = .{ .value = 1 },
+        };
+        const npc_target = vitals_contract.Target{
+            .kind = .npc,
+            .id = npc_id,
+            .incarnation = .{ .value = 1 },
+        };
+        try world.submitVitals(.{ .register = .{
+            .target = character_target,
+            .current_health = config.npc_encounter.attack_damage,
+        } });
+        try world.submitVitals(.{ .register = .{ .target = npc_target } });
+        try world.tick();
+        var registrations: u8 = 0;
+        while (world.pollVitalsOutcome()) |outcome| switch (outcome) {
+            .registered => registrations += 1,
+            else => return error.UnexpectedVitalsOutcome,
+        };
+        try std.testing.expectEqual(@as(u8, 2), registrations);
+        while (world.pollNpcEncounterCue() != null) {}
+
+        var armed = false;
+        for (0..32) |_| {
+            try world.tick();
+            while (world.pollCharacterEvent() != null) {}
+            while (world.pollNpcEvent() != null) {}
+            while (world.pollNpcEncounterCue() != null) {}
+            if (world.peekVitalsOutcome() != null or world.peekVitalsEvent() != null) {
+                return error.HostileSnapshotArmedTooLate;
+            }
+            const encounter = world.npcEncounter(npc_target) orelse
+                return error.NpcEncounterMissing;
+            if (encounter.state == .attack_windup) {
+                armed = true;
+                break;
+            }
+        }
+        try std.testing.expect(armed);
+        saved = try world.save(allocator);
+    }
+    defer allocator.free(saved);
+
+    var restored = try simulation.Simulation.fromSnapshotForWorld(
+        allocator,
+        saved,
+        config,
+        district_test_assets,
+    );
+    defer restored.deinit();
+    var consumers = OperationalConsumers{};
+    try consumers.consume(&restored);
+
+    var player_died = false;
+    for (0..32) |_| {
+        try restored.tick();
+        try consumers.consume(&restored);
+        const current = restored.currentVitals(.player, character_id) orelse
+            return error.CharacterVitalsMissing;
+        if (current.life_state == .dead) {
+            player_died = true;
+            break;
+        }
+    }
+    try std.testing.expect(player_died);
+    try std.testing.expect(consumers.observational_events >= 2);
+    try std.testing.expect(restored.peekVitalsOutcome() == null);
+    try std.testing.expect(restored.peekVitalsEvent() == null);
+    try std.testing.expect(restored.firstFault() == null);
+    try std.testing.expect(restored.operationalQuiescenceReason() == null);
+    try consumers.ensureQuiescent();
+    const completed = try restored.save(allocator);
+    defer allocator.free(completed);
+}
+
+test "operational headless preserves unrelated damage and death FIFO heads" {
+    const namespace: u64 = 8_220;
+    var world = try simulation.Simulation.init(std.testing.allocator, .{
+        .namespace = namespace,
+        .create_ground = false,
+    });
+    defer world.deinit();
+    const target = vitals_contract.Target{
+        .kind = .player,
+        .id = .{ .namespace = namespace, .local = 1 },
+        .incarnation = .{ .value = 1 },
+    };
+    try world.submitVitals(.{ .register = .{
+        .target = target,
+        .current_health = 1,
+    } });
+    try world.tick();
+    const registered = world.pollVitalsOutcome() orelse
+        return error.VitalsRegistrationMissing;
+    try std.testing.expect(std.meta.activeTag(registered) == .registered);
+
+    const source_target = vitals_contract.Target{
+        .kind = .npc,
+        .id = .{ .namespace = namespace, .local = 2 },
+        .incarnation = .{ .value = 1 },
+    };
+    try world.submitVitals(.{ .damage = .{
+        .source = .{
+            .kind = .npc,
+            .id = source_target.id,
+            .incarnation = source_target.incarnation,
+            .action_sequence = 1,
+        },
+        .target = target,
+        .cause = .npc_melee,
+        .authority_tick = world.tickIndex() + 1,
+        .correlation = npc_encounter_contract.attackDamageCorrelation(source_target, 1),
+        .base_amount = 1,
+        .ordinal = 0,
+    } });
+    try world.tick();
+    const outcome_head = world.peekVitalsOutcome() orelse
+        return error.VitalsDamageOutcomeMissing;
+    const event_head = world.peekVitalsEvent() orelse
+        return error.VitalsDeathEventMissing;
+
+    var consumers = OperationalConsumers{};
+    try std.testing.expectError(
+        error.UnownedHeadlessFeatureOutcome,
+        consumers.consume(&world),
+    );
+    try std.testing.expectEqualDeep(outcome_head, world.peekVitalsOutcome().?);
+    try std.testing.expectEqualDeep(event_head, world.peekVitalsEvent().?);
+    try std.testing.expectEqual(@as(u64, 0), consumers.observational_events);
 }
 
 fn expectNpcOutputEmpty(world: *simulation.Simulation) !void {
@@ -2194,7 +3167,7 @@ test "S8 headless rejects hostile NPC restore and controller overflow before aut
     };
     const hostile = try std.json.Stringify.valueAlloc(
         allocator,
-        simulation_snapshot.SnapshotV7{
+        simulation_snapshot.SnapshotV11{
             .schema_version = sandbox_contracts.snapshot_schema,
             .completed_ticks = 0,
             .fixed_delta_seconds = 1.0 / 120.0,
@@ -2204,12 +3177,15 @@ test "S8 headless rejects hostile NPC restore and controller overflow before aut
             .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
             .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
             .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
+            .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
             .crates = &.{},
             .characters = &.{},
             .vehicles = &.{},
             .districts = &.{},
             .interactions = &.{},
             .npcs = &.{hostile_npc},
+            .npc_encounters = &.{},
+            .npc_replacements = &.{},
         },
         .{},
     );
@@ -2825,7 +3801,7 @@ test "CharacterVirtual leaves removed district support without stale ground stat
     try std.testing.expectEqual(@as(u32, 1), world.bodyCount());
 }
 
-test "active district Snapshot V7 restore is byte-stable and rebuilds logical ownership" {
+test "active district Snapshot V11 restore is byte-stable and rebuilds logical ownership" {
     const allocator = std.testing.allocator;
     var bytes: []u8 = undefined;
     {
@@ -2909,12 +3885,15 @@ fn makeS4cScenarioSnapshot(allocator: std.mem.Allocator) ![]u8 {
         .vehicle_config = vehicle_contract.VehicleConfigV1.fromConfig(.{}),
         .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &crate_records,
         .characters = &character_records,
         .vehicles = &vehicle_records,
         .districts = &district_records,
         .interactions = &.{},
         .npcs = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     }, .{});
 }
 

@@ -8,8 +8,12 @@
 
 **Implementation:** The MP1 character seam, MP2 cold-authority placement, and
 MP2.1/MP3 lifecycle, prediction, impairment, and accepted-ingress evidence were
-implemented and audited on 2026-07-13. Broader solo physical decomposition,
-listen placement, and MP4+ remain follow-up work.
+implemented and audited on 2026-07-13. MP4-MP6, M5/M6, S10, and S11 later
+completed the shared embedded/listen/dedicated authority boundary through
+vehicle/carry/NPC replication, cohesive local authority, transactional
+publication, room lifecycle, and authoritative combat.
+
+**Amended:** 2026-07-15 after the S11 corrective review
 
 ## Context
 

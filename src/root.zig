@@ -15,6 +15,9 @@ pub const rendering = contracts.rendering;
 pub const fixed_step = @import("engine/fixed_step.zig");
 pub const bounded_queue = @import("engine/bounded_queue.zig");
 pub const diagnostics = @import("engine/diagnostics.zig");
+pub const gameplay_invariants = @import("engine/gameplay_invariants.zig");
+pub const gameplay_scenario = @import("engine/gameplay_scenario.zig");
+pub const gameplay_trace = @import("engine/gameplay_trace.zig");
 pub const runtime = @import("engine/runtime.zig");
 
 pub const PersistentId = identity.PersistentId;
@@ -39,5 +42,8 @@ test "public engine surface remains coherent" {
     std.testing.refAllDecls(fixed_step);
     std.testing.refAllDecls(bounded_queue);
     std.testing.refAllDecls(diagnostics);
+    std.testing.refAllDecls(gameplay_invariants);
+    std.testing.refAllDecls(gameplay_scenario);
+    std.testing.refAllDecls(gameplay_trace);
     std.testing.refAllDecls(runtime);
 }

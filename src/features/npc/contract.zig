@@ -140,6 +140,24 @@ pub const State = enum(u8) {
     dormant,
 };
 
+/// Narrow authority port for encounter-owned movement intent. The NPC feature
+/// remains the sole owner of controller motion and semantic patrol routes.
+pub const EncounterLocomotion = union(enum) {
+    pursue_position: [3]f32,
+    face_and_hold: [3]f32,
+    hold,
+    resume_route,
+
+    pub fn validate(self: EncounterLocomotion) !void {
+        switch (self) {
+            .hold, .resume_route => {},
+            .pursue_position, .face_and_hold => |position| for (position) |component| {
+                if (!std.math.isFinite(component)) return error.InvalidNpcEncounterPosition;
+            },
+        }
+    }
+};
+
 pub const PatrolLeg = enum(u8) {
     none,
     toward_first,
@@ -176,15 +194,27 @@ pub const RouteCursor = struct {
     }
 };
 
+/// Canonical meaning of the compact persisted cursor. An exact prefix retains
+/// the next admitted edge and is verified byte-for-byte against active
+/// content. A deferred rebuild is an intentional owner-aligned one-node
+/// anchor used while encounter or streaming ownership prevents retaining that
+/// prefix; it must rebuild before route movement resumes.
+pub const PersistedRouteMode = enum(u8) {
+    exact_prefix,
+    deferred_rebuild,
+};
+
 /// Compact, canonical persistence cursor. Runtime route scratch and inactive
 /// controller state are deliberately excluded from snapshots. `current` and
-/// `next` retain the one admitted semantic edge across a save; the remainder
-/// is rebuilt at a semantic transition after its content is active again.
+/// `next` retain one admitted semantic edge for `exact_prefix`. A
+/// `deferred_rebuild` cursor intentionally retains only the owner-aligned
+/// current anchor and rebuilds after every required cohort is active again.
 pub const NpcRouteCursorV1 = struct {
     current: navigation.NodeRef,
     next: ?navigation.NodeRef = null,
     route_index: u8 = 0,
     patrol_leg: PatrolLeg = .none,
+    mode: PersistedRouteMode = .exact_prefix,
 };
 
 pub const SpawnNpc = struct {
@@ -298,6 +328,7 @@ pub const NpcView = struct {
     velocity: [3]f32,
     facing_yaw: f32,
     controller_present: bool,
+    encounter_locomotion: ?EncounterLocomotion,
 };
 
 pub const NpcDraw = struct {

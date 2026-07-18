@@ -333,6 +333,7 @@ fn verifyAcceptedIngressReplay(
     const welcome = takeOutbound(replay).?.message.welcome;
     var cursor: usize = 0;
     var last_snapshot: ?protocol.Snapshot = null;
+    var matching_snapshot: ?protocol.Snapshot = null;
     for (0..total_ticks) |_| {
         const tick = replay.diagnostics().tick;
         while (cursor < records.len and records[cursor].admitted_tick == tick) : (cursor += 1) {
@@ -398,6 +399,9 @@ fn verifyAcceptedIngressReplay(
                         snapshot,
                     ),
                 };
+                if (last_snapshot.?.server_tick == expected.server_tick) {
+                    matching_snapshot = last_snapshot;
+                }
                 try replay.ingest(connection, .{ .snapshot_ack = .{
                     .session = welcome.session,
                     .participant = welcome.participant,
@@ -407,6 +411,9 @@ fn verifyAcceptedIngressReplay(
             },
             .relevance_baseline => |baseline| {
                 last_snapshot = baseline.snapshot;
+                if (baseline.snapshot.server_tick == expected.server_tick) {
+                    matching_snapshot = baseline.snapshot;
+                }
                 try replay.ingest(connection, .{ .baseline_ack = .{
                     .session = welcome.session,
                     .participant = welcome.participant,
@@ -417,7 +424,8 @@ fn verifyAcceptedIngressReplay(
         };
     }
     if (cursor != records.len) return error.AcceptedIngressReplayDidNotConsumeJournal;
-    const actual = last_snapshot orelse return error.AcceptedIngressReplayMissingState;
+    const actual = matching_snapshot orelse
+        return error.AcceptedIngressReplayMissingExpectedTick;
     if (actual.character_count != expected.character_count or
         actual.vehicle_count != expected.vehicle_count or
         actual.npc_count != expected.npc_count)
@@ -451,6 +459,22 @@ fn verifyAcceptedIngressReplay(
             distance(expected_vehicle.angular_velocity, actual_vehicle.angular_velocity) > 0.0001 or
             quaternionDifference(expected_vehicle.rotation, actual_vehicle.rotation) > 0.0001)
         {
+            std.debug.print(
+                "MP4_REPLAY_VEHICLE_DIVERGENCE expected_tick={d} actual_tick={d} " ++
+                    "expected_position={any} actual_position={any} " ++
+                    "expected_linear={any} actual_linear={any} " ++
+                    "expected_angular={any} actual_angular={any}\n",
+                .{
+                    expected.server_tick,
+                    actual.server_tick,
+                    expected_vehicle.position,
+                    actual_vehicle.position,
+                    expected_vehicle.linear_velocity,
+                    actual_vehicle.linear_velocity,
+                    expected_vehicle.angular_velocity,
+                    actual_vehicle.angular_velocity,
+                },
+            );
             return error.AcceptedIngressVehicleDivergence;
         }
     }

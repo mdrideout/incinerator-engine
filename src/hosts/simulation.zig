@@ -16,6 +16,10 @@ const npc_implementation = @import("npc_feature");
 const npcs = @import("npc_contract");
 const vitals_implementation = @import("vitals_feature");
 const vitals_contract = @import("vitals_contract");
+const npc_encounter_implementation = @import("npc_encounter_feature");
+const npc_encounter_contract = @import("npc_encounter_contract");
+const npc_replacement = @import("sandbox_npc_replacement");
+const npc_replacement_contract = @import("sandbox_npc_replacement_contract");
 const district_contract = @import("district_contract");
 const sandbox_district_recipe = @import("sandbox_district_recipe");
 const district_worker_contract = @import("district_worker_contract");
@@ -74,6 +78,12 @@ const VitalsCommand = vitals_contract.Command;
 const VitalsOutcome = vitals_contract.Outcome;
 const VitalsEvent = vitals_contract.Event;
 const VitalsView = vitals_contract.View;
+const NpcEncounterCue = npc_encounter_contract.Cue;
+const NpcEncounterView = npc_encounter_contract.View;
+const NpcEncounterDiagnostics = npc_encounter_contract.Diagnostics;
+const NpcEncounterTransition = npc_encounter_contract.Transition;
+const NpcReplacementOutcome = npc_replacement_contract.Outcome;
+const NpcReplacementDiagnostics = npc_replacement_contract.Diagnostics;
 const NavigationNodeRef = npcs.NodeRef;
 const navigation_west_coord = sandbox_district_recipe.navigation_west_coord;
 const navigation_east_coord = sandbox_district_recipe.navigation_east_coord;
@@ -141,6 +151,36 @@ pub const ReplayResult = union(enum) {
     divergent: sandbox_replay.Divergence,
 };
 
+/// Consumable public output lanes drained only after their authoritative
+/// state has participated in the replay digest. Diagnostic transition rings
+/// and immutable views are retained and are therefore intentionally absent.
+pub const ReplayBoundaryDrain = struct {
+    crate_outcomes: u32 = 0,
+    character_outcomes: u32 = 0,
+    character_events: u32 = 0,
+    vehicle_outcomes: u32 = 0,
+    vehicle_events: u32 = 0,
+    district_outcomes: u32 = 0,
+    district_events: u32 = 0,
+    interaction_outcomes: u32 = 0,
+    npc_outcomes: u32 = 0,
+    npc_events: u32 = 0,
+    vitals_outcomes: u32 = 0,
+    vitals_events: u32 = 0,
+    npc_encounter_cues: u32 = 0,
+    npc_replacement_outcomes: u32 = 0,
+
+    pub fn total(self: ReplayBoundaryDrain) u32 {
+        return self.crate_outcomes +| self.character_outcomes +|
+            self.character_events +| self.vehicle_outcomes +|
+            self.vehicle_events +| self.district_outcomes +|
+            self.district_events +| self.interaction_outcomes +|
+            self.npc_outcomes +| self.npc_events +| self.vitals_outcomes +|
+            self.vitals_events +| self.npc_encounter_cues +|
+            self.npc_replacement_outcomes;
+    }
+};
+
 const ActiveCapture = struct {
     recorder: sandbox_replay.Recorder,
     scratch: DigestScratch,
@@ -173,6 +213,105 @@ const NpcFeature = npc_implementation.Feature(
     DistrictFeature.NavigationAccess,
 );
 const VitalsFeature = vitals_implementation.Feature();
+
+const NpcEncounterVisibility = struct {
+    controllers: *jolt.CharacterControllers,
+
+    pub fn lineClear(
+        self: *NpcEncounterVisibility,
+        source_position: [3]f32,
+        target_position: [3]f32,
+    ) !bool {
+        var start = source_position;
+        var end = target_position;
+        start[1] += 1.0;
+        end[1] += 1.0;
+        return self.controllers.lineUnobstructed(start, end);
+    }
+};
+
+const NpcEncounterFeature = npc_encounter_implementation.Feature(NpcEncounterVisibility);
+
+const NpcReplacementAccess = struct {
+    runtime: *engine.Runtime,
+    controllers: *jolt.CharacterControllers,
+    npc_controllers: *jolt.CharacterControllers,
+    character_feature: *CharacterFeature,
+    vehicle_feature: *VehicleFeature,
+    vitals_feature: *VitalsFeature,
+    navigation_access: *DistrictFeature.NavigationAccess,
+    npc_config: npcs.Config,
+
+    pub fn nodePosition(
+        self: *NpcReplacementAccess,
+        reference: npcs.NodeRef,
+    ) !?[3]f32 {
+        try self.runtime.ensureOwnerThread();
+        return switch (self.navigation_access.resolveNode(reference)) {
+            .ready => |resolved| resolved.node.position,
+            .district_inactive => null,
+            .invalid_reference => error.InvalidNpcReplacementNavigationReference,
+        };
+    }
+
+    pub fn spawnClear(self: *NpcReplacementAccess, position: [3]f32) !bool {
+        try self.runtime.ensureOwnerThread();
+        return self.npc_controllers.placementClear(.{
+            .position = position,
+            .radius = self.npc_config.radius,
+            .half_height = self.npc_config.half_height,
+            .max_slope_radians = self.npc_config.max_slope_radians,
+            .mass = self.npc_config.mass,
+            .max_strength = self.npc_config.max_strength,
+        }, 0.05);
+    }
+
+    pub fn playerConflict(
+        self: *NpcReplacementAccess,
+        position: [3]f32,
+        minimum_distance: f32,
+        visibility_radius: f32,
+    ) !?npc_replacement_contract.RetryReason {
+        try self.runtime.ensureOwnerThread();
+        var storage: [vitals_contract.max_records]CharacterView = undefined;
+        const characters_now = try self.character_feature.copyViews(&storage);
+        for (characters_now) |character_view| {
+            if (self.vitals_feature.viewCurrent(.player, character_view.id)) |vital| {
+                if (vital.life_state != .alive) continue;
+            }
+            const player_position = switch (character_view.driver_mode) {
+                .on_foot => character_view.position,
+                .driving => |vehicle_id| blk: {
+                    const vehicle_view = try self.vehicle_feature.view(vehicle_id);
+                    if (vehicle_view.driver_id == null or
+                        !std.meta.eql(vehicle_view.driver_id.?, character_view.id))
+                    {
+                        return error.NpcReplacementVehicleOccupancyInvariantBroken;
+                    }
+                    break :blk vehicle_view.state.chassis.pose.position;
+                },
+            };
+            const dx = position[0] - player_position[0];
+            const dz = position[2] - player_position[2];
+            const distance_squared = dx * dx + dz * dz;
+            if (distance_squared < minimum_distance * minimum_distance) {
+                return .too_close_to_player;
+            }
+            if (distance_squared <= visibility_radius * visibility_radius) {
+                var start = player_position;
+                var end = position;
+                start[1] += 1.0;
+                end[1] += 1.0;
+                if (try self.controllers.lineUnobstructed(start, end)) {
+                    return .visible_to_player;
+                }
+            }
+        }
+        return null;
+    }
+};
+
+const NpcReplacementPolicy = npc_replacement.Policy(NpcReplacementAccess);
 
 const Config = sandbox_host_contracts.Config;
 
@@ -216,6 +355,10 @@ const State = struct {
     vehicle_feature: VehicleFeature,
     npc_feature: NpcFeature,
     vitals_feature: VitalsFeature,
+    npc_encounter_visibility: NpcEncounterVisibility,
+    npc_encounter_feature: NpcEncounterFeature,
+    npc_replacement_access: NpcReplacementAccess,
+    npc_replacement_policy: NpcReplacementPolicy,
     ground: ?jolt.BodyId,
     block: ?jolt.BodyId,
     capture: ?*ActiveCapture,
@@ -319,7 +462,7 @@ pub const Simulation = struct {
 
     fn fromValidatedSnapshot(
         allocator: std.mem.Allocator,
-        snapshot: simulation_snapshot.SnapshotV7,
+        snapshot: simulation_snapshot.SnapshotV11,
         config: simulation_snapshot.RestoreConfig,
     ) !Simulation {
         try validateNpcLimit(config.npc.max_npcs);
@@ -333,6 +476,7 @@ pub const Simulation = struct {
         );
         const interaction_config = try snapshot.interaction_config.toConfig();
         const npc_config = try snapshot.npc_config.toConfig(config.npc.assets);
+        const npc_encounter_config = try snapshot.npc_encounter_config.toConfig();
 
         var simulation = try initOwnedUnfrozen(allocator, .{
             .namespace = snapshot.namespace,
@@ -344,6 +488,7 @@ pub const Simulation = struct {
             .vehicle = vehicle_config,
             .interaction = interaction_config,
             .npc = npc_config,
+            .npc_encounter = npc_encounter_config,
             .block = config.block,
         }, snapshot.next_local_id, snapshot.completed_ticks, .live);
         errdefer simulation.deinit();
@@ -357,6 +502,9 @@ pub const Simulation = struct {
         try simulation.state.vehicle_feature.restoreRecords(snapshot.vehicles);
         try simulation.state.npc_feature.restoreRecords(snapshot.npcs);
         try simulation.state.vitals_feature.restoreRecords(snapshot.vitals);
+        try simulation.state.npc_encounter_feature.restoreRecords(snapshot.npc_encounters);
+        try simulation.state.npc_replacement_policy.restoreRecords(snapshot.npc_replacements);
+        try simulation.restoreNpcEncounterLocomotion();
         simulation.state.runtime.finishRegistration();
         return simulation;
     }
@@ -373,6 +521,7 @@ pub const Simulation = struct {
         try config.vehicle.validate();
         try config.interaction.validate();
         try config.npc.validate();
+        try sandbox_host_contracts.validateCanonicalNavigationClearance(config.npc);
         try validateVirtualCharacterBudget(config.character.max_characters, npcs.max_npcs);
         try validatePhysicsBodyBudget(config);
         const state = try allocator.create(State);
@@ -460,6 +609,31 @@ pub const Simulation = struct {
         errdefer state.npc_feature.deinit();
         state.vitals_feature = VitalsFeature.init(&state.runtime);
         errdefer state.vitals_feature.deinit();
+        state.npc_encounter_visibility = .{ .controllers = &state.controllers };
+        state.npc_encounter_feature = try NpcEncounterFeature.init(
+            &state.npc_encounter_visibility,
+            config.npc_encounter,
+        );
+        errdefer state.npc_encounter_feature.deinit();
+        state.npc_replacement_access = .{
+            .runtime = &state.runtime,
+            .controllers = &state.controllers,
+            .npc_controllers = &state.npc_controllers,
+            .character_feature = &state.character_feature,
+            .vehicle_feature = &state.vehicle_feature,
+            .vitals_feature = &state.vitals_feature,
+            .navigation_access = &state.navigation_access,
+            .npc_config = config.npc,
+        };
+        state.npc_replacement_policy = try NpcReplacementPolicy.init(
+            &state.npc_replacement_access,
+            .{
+                .retry_ticks = config.npc_encounter.replacement_retry_ticks,
+                .minimum_player_distance = config.npc_encounter.replacement_min_player_distance,
+                .visibility_radius = config.npc_encounter.replacement_visibility_radius,
+            },
+        );
+        errdefer state.npc_replacement_policy.deinit();
 
         var registry = state.runtime.registry();
         try state.crate_feature.register(&registry);
@@ -494,6 +668,8 @@ pub const Simulation = struct {
             state.allocator.destroy(capture);
             state.capture = null;
         }
+        state.npc_replacement_policy.deinit();
+        state.npc_encounter_feature.deinit();
         state.vitals_feature.deinit();
         state.npc_feature.deinit();
         state.vehicle_feature.deinit();
@@ -575,6 +751,22 @@ pub const Simulation = struct {
         return bytes;
     }
 
+    /// Encode a stable prefix without closing the active recorder. Incident
+    /// capture uses this at a normal stopped tick boundary so later gameplay
+    /// can continue recording for a newer handoff.
+    pub fn snapshotFlightRecording(
+        self: *Simulation,
+        allocator: std.mem.Allocator,
+    ) ![]u8 {
+        try self.state.runtime.ensureSnapshotBoundary();
+        const capture = self.state.capture orelse return error.FlightRecordingNotActive;
+        if (self.hasPendingCommands()) return error.CommandsPendingAtReplaySnapshot;
+        if (self.state.district_loader.observation().issue != null) {
+            return error.LoaderIssueAtReplaySnapshot;
+        }
+        return capture.recorder.encode(allocator);
+    }
+
     pub fn flightRecordingIncompleteReason(
         self: *const Simulation,
     ) ?sandbox_replay.IncompleteReason {
@@ -623,8 +815,9 @@ pub const Simulation = struct {
             return .worker_not_idle;
         }
         if (!self.outputQueuesEmpty()) return .outputs_pending;
-        const expected_bodies: u32 = @intFromBool(self.state.config.create_ground) +
-            @intFromBool(self.state.config.block != null);
+        const expected_bodies: u32 =
+            @as(u32, @intFromBool(self.state.config.create_ground)) +
+            @as(u32, @intFromBool(self.state.config.block != null));
         if (self.state.bodies.bodyCount() != expected_bodies) {
             return .unexpected_physics_bodies;
         }
@@ -653,6 +846,8 @@ pub const Simulation = struct {
         const interaction_diagnostics = self.state.interaction_feature.diagnostics();
         const npc_diagnostics = self.state.npc_feature.diagnostics();
         const vitals_diagnostics = self.state.vitals_feature.diagnostics();
+        const encounter_diagnostics = self.state.npc_encounter_feature.diagnostics();
+        const replacement_diagnostics = self.state.npc_replacement_policy.diagnostics();
         return crate_diagnostics.outcomes.occupancy == 0 and
             character_diagnostics.outcomes.occupancy == 0 and
             character_diagnostics.events.occupancy == 0 and
@@ -664,7 +859,9 @@ pub const Simulation = struct {
             npc_diagnostics.outcomes.occupancy == 0 and
             npc_diagnostics.events.occupancy == 0 and
             vitals_diagnostics.outcomes == 0 and
-            vitals_diagnostics.events == 0;
+            vitals_diagnostics.events == 0 and
+            encounter_diagnostics.cues_pending == 0 and
+            replacement_diagnostics.outcomes_pending == 0;
     }
 
     pub fn operationalQuiescenceReason(
@@ -751,7 +948,12 @@ pub const Simulation = struct {
 
     pub fn submitVitals(self: *Simulation, command: VitalsCommand) !void {
         try self.state.runtime.ensureOwnerThread();
+        const eligible_tick = try self.state.runtime.commandTargetTick();
         try self.state.vitals_feature.enqueue(command);
+        self.recordAcceptedCommand(
+            eligible_tick,
+            sandbox_replay.NormalizedCommand.fromVitals(command),
+        );
     }
 
     pub fn tick(self: *Simulation) !void {
@@ -780,6 +982,8 @@ pub const Simulation = struct {
             }
             return err;
         };
+        try self.stepNpcEncounter();
+        try self.state.npc_replacement_policy.step(self.state.runtime.tickIndex());
         const consumed = self.state.district_loader.takeConsumedCompletion();
         if (self.state.capture) |capture| {
             if (consumed) |entry| {
@@ -796,6 +1000,108 @@ pub const Simulation = struct {
                 return;
             };
             _ = capture.recorder.recordTickDigests(digests);
+        }
+    }
+
+    fn stepNpcEncounter(self: *Simulation) !void {
+        var character_views: [vitals_contract.max_records]CharacterView = undefined;
+        const current_characters = try self.state.character_feature.copyViews(&character_views);
+        var player_observations: [vitals_contract.max_records]npc_encounter_contract.CombatantObservation = undefined;
+        var player_count: usize = 0;
+        for (current_characters) |character_view| {
+            const vital = self.state.vitals_feature.viewCurrent(.player, character_view.id) orelse continue;
+            const position_navigable = switch (self.state.navigation_access.nearestActiveNode(
+                character_view.position,
+            )) {
+                .ready => true,
+                .district_inactive, .unavailable => false,
+            };
+            player_observations[player_count] = .{
+                .target = vital.target,
+                .position = character_view.position,
+                .facing_yaw = character_view.facing_yaw,
+                .alive = vital.life_state == .alive,
+                .attackable = switch (character_view.driver_mode) {
+                    .on_foot => position_navigable,
+                    .driving => false,
+                },
+            };
+            player_count += 1;
+        }
+
+        var npc_views: [npcs.max_npcs]NpcView = undefined;
+        const current_npcs = try self.state.npc_feature.copyViews(&npc_views);
+        var npc_observations: [npcs.max_npcs]npc_encounter_contract.NpcObservation = undefined;
+        var npc_count: usize = 0;
+        for (current_npcs) |npc_view| {
+            const vital = self.state.vitals_feature.viewCurrent(.npc, npc_view.id) orelse continue;
+            npc_observations[npc_count] = .{
+                .target = vital.target,
+                .position = npc_view.position,
+                .facing_yaw = npc_view.facing_yaw,
+                .alive = vital.life_state == .alive,
+                .available = npc_view.state == .active and npc_view.controller_present,
+                .current_health = vital.current_health,
+            };
+            npc_count += 1;
+        }
+
+        var vitals_facts: [vitals_contract.max_pending_commands]vitals_contract.AppliedDamageFact = undefined;
+        const current_facts = try self.state.vitals_feature.copyAppliedDamage(&vitals_facts);
+        var encounter_facts: [vitals_contract.max_pending_commands]npc_encounter_contract.DamageFact = undefined;
+        for (current_facts, 0..) |fact, index| {
+            encounter_facts[index] = .{
+                .source = fact.source,
+                .target = fact.target,
+                .authority_tick = fact.authority_tick,
+                .applied_amount = fact.applied_amount,
+                .remaining_health = fact.remaining_health,
+                .killed = fact.killed,
+            };
+        }
+
+        try self.state.npc_encounter_feature.step(.{
+            .tick = self.state.runtime.tickIndex(),
+            .players = player_observations[0..player_count],
+            .npcs = npc_observations[0..npc_count],
+            .damage_facts = encounter_facts[0..current_facts.len],
+        });
+
+        var locomotion = self.state.npc_feature.encounterAccess();
+        while (self.state.npc_encounter_feature.pollDirective()) |directive| {
+            const mapped: npcs.EncounterLocomotion = switch (directive.locomotion) {
+                .hold => .hold,
+                .resume_route => .resume_route,
+                .pursue => |value| .{ .pursue_position = value.position },
+                .face_and_hold => |value| .{ .face_and_hold = value.position },
+            };
+            try locomotion.apply(directive.npc.id, mapped);
+        }
+        while (self.state.npc_encounter_feature.pollDamage()) |proposal| {
+            try self.state.vitals_feature.enqueue(.{ .damage = proposal });
+        }
+    }
+
+    fn restoreNpcEncounterLocomotion(self: *Simulation) !void {
+        var storage: [npc_encounter_contract.max_records]NpcEncounterView = undefined;
+        const views = try self.state.npc_encounter_feature.views(&storage);
+        var locomotion = self.state.npc_feature.encounterAccess();
+        for (views) |view| {
+            const restored: npcs.EncounterLocomotion = if (!view.alive)
+                .hold
+            else if (view.last_directive) |directive| switch (directive) {
+                .hold => .hold,
+                .resume_route => .resume_route,
+                .pursue => |value| .{ .pursue_position = value.position },
+                .face_and_hold => |value| .{ .face_and_hold = value.position },
+            } else switch (view.state) {
+                .patrolling, .returning => .resume_route,
+                .pursuing, .searching => .{ .pursue_position = view.last_seen_position },
+                .attack_windup, .attack_recovery => .{
+                    .face_and_hold = view.last_seen_position,
+                },
+            };
+            try locomotion.restore(view.npc.id, restored);
         }
     }
 
@@ -879,6 +1185,16 @@ pub const Simulation = struct {
         return self.state.npc_feature.pollOutcome();
     }
 
+    pub fn peekNpcOutcome(self: *const Simulation) ?NpcOutcome {
+        self.state.runtime.assertOwnerThread();
+        return self.state.npc_feature.peekOutcome();
+    }
+
+    pub fn commitNpcOutcome(self: *Simulation, expected: NpcOutcome) !void {
+        try self.state.runtime.ensureOwnerThread();
+        try self.state.npc_feature.commitOutcome(expected);
+    }
+
     pub fn pollNpcEvent(self: *Simulation) ?NpcEvent {
         self.state.runtime.assertOwnerThread();
         return self.state.npc_feature.pollEvent();
@@ -889,9 +1205,175 @@ pub const Simulation = struct {
         return self.state.vitals_feature.pollOutcome();
     }
 
+    pub fn peekVitalsOutcome(self: *const Simulation) ?VitalsOutcome {
+        self.state.runtime.assertOwnerThread();
+        return self.state.vitals_feature.peekOutcome();
+    }
+
+    pub fn commitVitalsOutcome(self: *Simulation, expected: VitalsOutcome) !void {
+        try self.state.runtime.ensureOwnerThread();
+        try self.state.vitals_feature.commitOutcome(expected);
+    }
+
     pub fn pollVitalsEvent(self: *Simulation) ?VitalsEvent {
         self.state.runtime.assertOwnerThread();
         return self.state.vitals_feature.pollEvent();
+    }
+
+    pub fn peekVitalsEvent(self: *const Simulation) ?VitalsEvent {
+        self.state.runtime.assertOwnerThread();
+        return self.state.vitals_feature.peekEvent();
+    }
+
+    pub fn commitVitalsEvent(self: *Simulation, expected: VitalsEvent) !void {
+        try self.state.runtime.ensureOwnerThread();
+        try self.state.vitals_feature.commitEvent(expected);
+    }
+
+    pub fn pollNpcEncounterCue(self: *Simulation) ?NpcEncounterCue {
+        self.state.runtime.assertOwnerThread();
+        return self.state.npc_encounter_feature.pollCue();
+    }
+
+    pub fn scheduleNpcReplacement(
+        self: *Simulation,
+        slot: u8,
+        generation: u16,
+        death_tick: u64,
+        candidates: []const npcs.NodeRef,
+    ) !void {
+        try self.state.runtime.ensureSnapshotBoundary();
+        const eligible_tick = try self.state.runtime.commandTargetTick();
+        const normalized = try sandbox_replay.NormalizedNpcReplacementCommand.fromSchedule(
+            slot,
+            generation,
+            death_tick,
+            candidates,
+        );
+        try self.state.npc_replacement_policy.schedule(.{
+            .slot = slot,
+            .generation = generation,
+            .available_tick = death_tick +|
+                self.state.config.npc_encounter.replacement_delay_ticks,
+            .candidates = candidates,
+        });
+        self.recordAcceptedCommand(
+            eligible_tick,
+            sandbox_replay.NormalizedCommand.fromNpcReplacement(normalized),
+        );
+    }
+
+    pub fn completeNpcReplacement(
+        self: *Simulation,
+        slot: u8,
+        generation: u16,
+    ) !void {
+        try self.state.runtime.ensureSnapshotBoundary();
+        const eligible_tick = try self.state.runtime.commandTargetTick();
+        const normalized = sandbox_replay.NormalizedNpcReplacementCommand.completeCommand(
+            slot,
+            generation,
+        );
+        try self.state.npc_replacement_policy.complete(slot, generation);
+        self.recordAcceptedCommand(
+            eligible_tick,
+            sandbox_replay.NormalizedCommand.fromNpcReplacement(normalized),
+        );
+    }
+
+    pub fn deferNpcReplacement(
+        self: *Simulation,
+        slot: u8,
+        generation: u16,
+    ) !void {
+        try self.state.runtime.ensureSnapshotBoundary();
+        const eligible_tick = try self.state.runtime.commandTargetTick();
+        const normalized = sandbox_replay.NormalizedNpcReplacementCommand.deferCommand(
+            slot,
+            generation,
+        );
+        try self.state.npc_replacement_policy.deferSpawn(
+            slot,
+            generation,
+            self.state.runtime.tickIndex(),
+        );
+        self.recordAcceptedCommand(
+            eligible_tick,
+            sandbox_replay.NormalizedCommand.fromNpcReplacement(normalized),
+        );
+    }
+
+    pub fn pollNpcReplacementOutcome(self: *Simulation) ?NpcReplacementOutcome {
+        self.state.runtime.assertOwnerThread();
+        return self.state.npc_replacement_policy.pollOutcome();
+    }
+
+    /// Close one replay tick's consumable output boundary. Every public
+    /// polling lane is listed explicitly so adding a lane requires updating
+    /// this contract and its focused test rather than failing a later replay.
+    pub fn drainReplayBoundaryOutputs(self: *Simulation) ReplayBoundaryDrain {
+        var drained = ReplayBoundaryDrain{};
+        while (self.pollOutcome() != null) drained.crate_outcomes +|= 1;
+        while (self.pollCharacterOutcome() != null) drained.character_outcomes +|= 1;
+        while (self.pollCharacterEvent() != null) drained.character_events +|= 1;
+        while (self.pollVehicleOutcome() != null) drained.vehicle_outcomes +|= 1;
+        while (self.pollVehicleEvent() != null) drained.vehicle_events +|= 1;
+        while (self.pollDistrictOutcome() != null) drained.district_outcomes +|= 1;
+        while (self.pollDistrictEvent() != null) drained.district_events +|= 1;
+        while (self.pollInteractionOutcome() != null) drained.interaction_outcomes +|= 1;
+        while (self.pollNpcOutcome() != null) drained.npc_outcomes +|= 1;
+        while (self.pollNpcEvent() != null) drained.npc_events +|= 1;
+        while (self.pollVitalsOutcome() != null) drained.vitals_outcomes +|= 1;
+        while (self.pollVitalsEvent() != null) drained.vitals_events +|= 1;
+        while (self.pollNpcEncounterCue() != null) drained.npc_encounter_cues +|= 1;
+        while (self.pollNpcReplacementOutcome() != null) {
+            drained.npc_replacement_outcomes +|= 1;
+        }
+        return drained;
+    }
+
+    pub fn peekNpcReplacementOutcome(self: *const Simulation) ?NpcReplacementOutcome {
+        self.state.runtime.assertOwnerThread();
+        return self.state.npc_replacement_policy.peekOutcome();
+    }
+
+    pub fn commitNpcReplacementOutcome(
+        self: *Simulation,
+        expected: NpcReplacementOutcome,
+    ) !void {
+        try self.state.runtime.ensureOwnerThread();
+        try self.state.npc_replacement_policy.commitOutcome(expected);
+    }
+
+    pub fn npcReplacementDiagnostics(self: *const Simulation) NpcReplacementDiagnostics {
+        self.state.runtime.assertOwnerThread();
+        return self.state.npc_replacement_policy.diagnostics();
+    }
+
+    pub fn npcEncounter(
+        self: *const Simulation,
+        target: vitals_contract.Target,
+    ) ?NpcEncounterView {
+        self.state.runtime.assertOwnerThread();
+        return self.state.npc_encounter_feature.view(target);
+    }
+
+    pub fn npcEncounterDiagnostics(self: *const Simulation) NpcEncounterDiagnostics {
+        self.state.runtime.assertOwnerThread();
+        return self.state.npc_encounter_feature.diagnostics();
+    }
+
+    pub fn npcDeathPresentationTicks(self: *const Simulation) u16 {
+        self.state.runtime.assertOwnerThread();
+        return self.state.npc_encounter_feature.deathPresentationTicks();
+    }
+
+    pub fn copyNpcEncounterTransitions(
+        self: *const Simulation,
+        storage: []NpcEncounterTransition,
+    ) ![]const NpcEncounterTransition {
+        self.state.runtime.assertOwnerThread();
+        return self.state.npc_encounter_feature.copyTransitions(storage);
     }
 
     pub fn presentation(
@@ -921,6 +1403,31 @@ pub const Simulation = struct {
             .mass = config.mass,
             .max_strength = config.max_strength,
         }, 0.05);
+    }
+
+    pub fn npcSpawnClear(self: *Simulation, position: [3]f32) !bool {
+        try self.state.runtime.ensureOwnerThread();
+        const config = self.state.config.npc;
+        return self.state.npc_controllers.placementClear(.{
+            .position = position,
+            .radius = config.radius,
+            .half_height = config.half_height,
+            .max_slope_radians = config.max_slope_radians,
+            .mass = config.mass,
+            .max_strength = config.max_strength,
+        }, 0.05);
+    }
+
+    pub fn navigationNodePosition(
+        self: *Simulation,
+        reference: NavigationNodeRef,
+    ) !?[3]f32 {
+        try self.state.runtime.ensureOwnerThread();
+        return switch (self.state.navigation_access.resolveNode(reference)) {
+            .ready => |resolved| resolved.node.position,
+            .district_inactive => null,
+            .invalid_reference => error.InvalidNavigationReference,
+        };
     }
 
     pub fn meleeLineClear(
@@ -959,9 +1466,9 @@ pub const Simulation = struct {
         return self.state.npc_feature.extract(alpha);
     }
 
-    /// Extract backend-neutral debug geometry only at a completed healthy tick
-    /// boundary. Storage is caller-owned and bounded; extraction cannot mutate
-    /// simulation state or allocate.
+    /// Extract backend-neutral physics and encounter debug geometry only at a
+    /// completed healthy tick boundary. Storage is caller-owned and bounded;
+    /// extraction cannot mutate simulation state or allocate.
     pub fn extractPhysicsDebug(
         self: *Simulation,
         config: PhysicsDebugConfig,
@@ -970,7 +1477,100 @@ pub const Simulation = struct {
         try self.state.runtime.ensureSnapshotBoundary();
         const completed_tick = self.state.runtime.tickIndex();
         if (completed_tick == 0) return error.PhysicsDebugBeforeFirstTick;
-        return self.state.physics.extractDebug(config, completed_tick, storage);
+        _ = self.state.physics.extractDebug(config, completed_tick, storage);
+        if (config.bounds) try self.appendNpcEncounterDebug(storage);
+        return storage.batch() orelse error.PhysicsDebugBatchMissing;
+    }
+
+    fn appendNpcEncounterDebug(
+        self: *Simulation,
+        storage: *engine.physics_debug.Storage,
+    ) !void {
+        var encounter_views: [npc_encounter_contract.max_records]NpcEncounterView = undefined;
+        const encounters = try self.state.npc_encounter_feature.views(&encounter_views);
+        const config = self.state.npc_encounter_feature.config;
+        for (encounters) |encounter| {
+            if (!encounter.alive) continue;
+            const npc_view = self.state.npc_feature.view(encounter.npc.id) catch continue;
+            const object = engine.physics_debug.ObjectRef{
+                .kind = 0x533131,
+                .serial = encounter.npc.id.local,
+            };
+            const center = debugRaised(npc_view.position, 0.05);
+            appendDebugCircle(
+                storage,
+                center,
+                config.sight_radius,
+                24,
+                .{ 0.15, 0.85, 1.0, 1.0 },
+                object,
+            );
+            appendDebugCircle(
+                storage,
+                center,
+                config.combat_standoff_distance,
+                16,
+                .{ 1.0, 0.55, 0.1, 1.0 },
+                object,
+            );
+            appendDebugCircle(
+                storage,
+                center,
+                config.melee_range,
+                16,
+                .{ 1.0, 0.2, 0.15, 1.0 },
+                object,
+            );
+            appendDebugCircle(
+                storage,
+                debugRaised(encounter.encounter_origin, 0.08),
+                config.pursuit_leash,
+                32,
+                .{ 1.0, 0.75, 0.1, 1.0 },
+                object,
+            );
+            appendDebugSightCone(
+                storage,
+                center,
+                npc_view.facing_yaw,
+                config.sight_facing_cos,
+                config.sight_radius,
+                object,
+            );
+            if (encounter.last_seen_tick != 0) {
+                const last_seen = debugRaised(encounter.last_seen_position, 0.12);
+                appendDebugLine(
+                    storage,
+                    center,
+                    last_seen,
+                    .{ 0.9, 0.25, 1.0, 1.0 },
+                    object,
+                );
+                appendDebugCross(
+                    storage,
+                    last_seen,
+                    0.35,
+                    .{ 0.9, 0.25, 1.0, 1.0 },
+                    object,
+                );
+            }
+
+            var route_start = center;
+            const route_nodes = npc_view.route.plan.slice();
+            const route_index = @min(@as(usize, npc_view.route.index) + 1, route_nodes.len);
+            for (route_nodes[route_index..]) |reference| {
+                const resolved = try self.navigationNodePosition(reference) orelse continue;
+                const route_end = debugRaised(resolved, 0.16);
+                appendDebugLine(
+                    storage,
+                    route_start,
+                    route_end,
+                    .{ 0.2, 1.0, 0.35, 1.0 },
+                    object,
+                );
+                route_start = route_end;
+            }
+        }
     }
 
     pub fn crate(self: *Simulation, id: engine.PersistentId) !CrateView {
@@ -998,13 +1598,13 @@ pub const Simulation = struct {
         return self.state.npc_feature.view(id);
     }
 
-    pub fn vitals(self: *Simulation, target: vitals_contract.Target) ?VitalsView {
+    pub fn vitals(self: *const Simulation, target: vitals_contract.Target) ?VitalsView {
         self.state.runtime.assertOwnerThread();
         return self.state.vitals_feature.view(target);
     }
 
     pub fn currentVitals(
-        self: *Simulation,
+        self: *const Simulation,
         kind: vitals_contract.TargetKind,
         id: engine.PersistentId,
     ) ?VitalsView {
@@ -1029,6 +1629,14 @@ pub const Simulation = struct {
         defer allocator.free(npc_records);
         const vitals_records = try self.state.vitals_feature.snapshotRecords(allocator);
         defer allocator.free(vitals_records);
+        const npc_encounter_records = try self.state.npc_encounter_feature.snapshotRecords(
+            allocator,
+        );
+        defer allocator.free(npc_encounter_records);
+        const npc_replacement_records = try self.state.npc_replacement_policy.snapshotRecords(
+            allocator,
+        );
+        defer allocator.free(npc_replacement_records);
         return simulation_snapshot.encode(allocator, .{
             .schema_version = simulation_snapshot.schema_version,
             .completed_ticks = self.state.runtime.tickIndex(),
@@ -1045,12 +1653,17 @@ pub const Simulation = struct {
                 self.state.interaction_feature.config,
             ),
             .npc_config = npcs.NpcConfigV1.fromConfig(self.state.npc_feature.config),
+            .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(
+                self.state.npc_encounter_feature.config,
+            ),
             .crates = crate_records,
             .characters = character_records,
             .vehicles = vehicle_records,
             .districts = district_records,
             .interactions = interaction_records,
             .npcs = npc_records,
+            .npc_encounters = npc_encounter_records,
+            .npc_replacements = npc_replacement_records,
             .vitals = vitals_records,
         }, .{
             .max_crates = self.state.config.max_crates,
@@ -1200,6 +1813,9 @@ pub const Simulation = struct {
         try self.state.interaction_feature.writeLogicalState(&interaction_writer);
         var npc_writer = engine.contracts.replay.Writer.init();
         try self.state.npc_feature.writeLogicalState(&npc_writer);
+        var npc_encounter_writer = engine.contracts.replay.Writer.init();
+        try self.state.npc_encounter_feature.writeLogicalState(&npc_encounter_writer);
+        self.state.npc_replacement_policy.writeLogicalState(&npc_encounter_writer);
 
         return .{
             .tick_index = self.state.runtime.tickIndex(),
@@ -1210,6 +1826,7 @@ pub const Simulation = struct {
             .district = district_writer.final(),
             .interaction = interaction_writer.final(),
             .npc = npc_writer.final(),
+            .npc_encounter = npc_encounter_writer.final(),
         };
     }
 
@@ -1238,6 +1855,8 @@ pub const Simulation = struct {
             .district = self.state.district_feature.diagnostics(),
             .interaction = self.state.interaction_feature.diagnostics(),
             .npc = npc_diagnostics,
+            .npc_encounter = self.state.npc_encounter_feature.diagnostics(),
+            .npc_replacement = self.state.npc_replacement_policy.diagnostics(),
             .district_worker = self.state.district_loader.diagnostics(),
         });
     }
@@ -1346,7 +1965,7 @@ pub fn replayCapture(
         if (sandbox_replay.firstDivergence(batch.expected_digests, actual)) |divergence| {
             return .{ .divergent = divergence };
         }
-        drainReplayOutputs(&simulation);
+        _ = simulation.drainReplayBoundaryOutputs();
     }
 
     return .{ .matched = .{ .completed_ticks = simulation.tickIndex() } };
@@ -1363,20 +1982,24 @@ fn submitNormalized(
         .district => |value| try simulation.submitDistrict(value.toFeature(.{})),
         .interaction => |value| try simulation.submitInteraction(value),
         .npc => |value| try simulation.submitNpc(value),
+        .vitals => |value| try simulation.submitVitals(value),
+        .npc_replacement => |value| switch (value) {
+            .schedule => |schedule| try simulation.scheduleNpcReplacement(
+                schedule.slot,
+                schedule.generation,
+                schedule.death_tick,
+                schedule.candidates[0..schedule.candidate_count],
+            ),
+            .complete => |correlation| try simulation.completeNpcReplacement(
+                correlation.slot,
+                correlation.generation,
+            ),
+            .defer_spawn => |correlation| try simulation.deferNpcReplacement(
+                correlation.slot,
+                correlation.generation,
+            ),
+        },
     }
-}
-
-fn drainReplayOutputs(simulation: *Simulation) void {
-    while (simulation.pollOutcome() != null) {}
-    while (simulation.pollCharacterOutcome() != null) {}
-    while (simulation.pollCharacterEvent() != null) {}
-    while (simulation.pollVehicleOutcome() != null) {}
-    while (simulation.pollVehicleEvent() != null) {}
-    while (simulation.pollDistrictOutcome() != null) {}
-    while (simulation.pollDistrictEvent() != null) {}
-    while (simulation.pollInteractionOutcome() != null) {}
-    while (simulation.pollNpcOutcome() != null) {}
-    while (simulation.pollNpcEvent() != null) {}
 }
 
 fn validateNpcLimit(max_npcs: usize) !void {
@@ -1420,6 +2043,107 @@ fn stepPhysics(
 ) !void {
     const stepper: *jolt.PhysicsStepper = @ptrCast(@alignCast(raw));
     try stepper.step(tick.delta_seconds);
+}
+
+fn debugRaised(position: [3]f32, amount: f32) [3]f32 {
+    return .{ position[0], position[1] + amount, position[2] };
+}
+
+fn appendDebugLine(
+    storage: *engine.physics_debug.Storage,
+    start: [3]f32,
+    end: [3]f32,
+    color: engine.physics_debug.Color,
+    object: engine.physics_debug.ObjectRef,
+) void {
+    _ = storage.addLine(.{
+        .category = .bounds,
+        .start = start,
+        .end = end,
+        .color = color,
+        .object = object,
+    });
+}
+
+fn appendDebugCircle(
+    storage: *engine.physics_debug.Storage,
+    center: [3]f32,
+    radius: f32,
+    segments: u8,
+    color: engine.physics_debug.Color,
+    object: engine.physics_debug.ObjectRef,
+) void {
+    std.debug.assert(segments >= 3);
+    var index: u8 = 0;
+    while (index < segments) : (index += 1) {
+        const first_angle = 2.0 * std.math.pi *
+            (@as(f32, @floatFromInt(index)) / @as(f32, @floatFromInt(segments)));
+        const second_angle = 2.0 * std.math.pi *
+            (@as(f32, @floatFromInt(index + 1)) / @as(f32, @floatFromInt(segments)));
+        appendDebugLine(
+            storage,
+            .{
+                center[0] + @sin(first_angle) * radius,
+                center[1],
+                center[2] - @cos(first_angle) * radius,
+            },
+            .{
+                center[0] + @sin(second_angle) * radius,
+                center[1],
+                center[2] - @cos(second_angle) * radius,
+            },
+            color,
+            object,
+        );
+    }
+}
+
+fn appendDebugSightCone(
+    storage: *engine.physics_debug.Storage,
+    center: [3]f32,
+    facing_yaw: f32,
+    minimum_cos: f32,
+    radius: f32,
+    object: engine.physics_debug.ObjectRef,
+) void {
+    const half_angle = std.math.acos(minimum_cos);
+    inline for (.{ -1.0, 1.0 }) |sign| {
+        const angle = facing_yaw + sign * half_angle;
+        appendDebugLine(
+            storage,
+            center,
+            .{
+                center[0] + @sin(angle) * radius,
+                center[1],
+                center[2] - @cos(angle) * radius,
+            },
+            .{ 0.15, 0.85, 1.0, 1.0 },
+            object,
+        );
+    }
+}
+
+fn appendDebugCross(
+    storage: *engine.physics_debug.Storage,
+    center: [3]f32,
+    radius: f32,
+    color: engine.physics_debug.Color,
+    object: engine.physics_debug.ObjectRef,
+) void {
+    appendDebugLine(
+        storage,
+        .{ center[0] - radius, center[1], center[2] },
+        .{ center[0] + radius, center[1], center[2] },
+        color,
+        object,
+    );
+    appendDebugLine(
+        storage,
+        .{ center[0], center[1], center[2] - radius },
+        .{ center[0], center[1], center[2] + radius },
+        color,
+        object,
+    );
 }
 
 test "simulation type composes crate and character features with Jolt" {
@@ -1527,6 +2251,22 @@ test "simulation diagnostics compose typed feature queues and adapter counts" {
     try std.testing.expect(simulation.disarmDiagnosticFreeze());
     try std.testing.expect(!simulation.diagnosticJournal().stats().trigger_armed);
     try std.testing.expect(simulation.firstFault() == null);
+}
+
+test "replay boundary explicitly drains every consumable output lane" {
+    var simulation = try Simulation.init(std.testing.allocator, .{
+        .namespace = 0x5242_4401,
+        .max_crates = 1,
+        .create_ground = false,
+    });
+    defer simulation.deinit();
+
+    try simulation.submit(.{ .spawn = .{ .request_id = 1, .pose = .{} } });
+    try simulation.tick();
+    const drained = simulation.drainReplayBoundaryOutputs();
+    try std.testing.expectEqual(@as(u32, 1), drained.crate_outcomes);
+    try std.testing.expectEqual(@as(u32, 1), drained.total());
+    try std.testing.expectEqual(@as(u32, 0), simulation.drainReplayBoundaryOutputs().total());
 }
 
 fn testContentCohort(
@@ -2198,6 +2938,108 @@ test "real Jolt vehicle enter drive collision exit and teardown share one world"
     try std.testing.expectEqual(@as(u32, 1), simulation.bodyCount());
 }
 
+test "NPC replacement evaluates a living driver at the occupied chassis" {
+    var simulation = try Simulation.init(std.testing.allocator, .{ .namespace = 9_111 });
+    defer simulation.deinit();
+    try simulation.submitCharacter(.{ .spawn = .{
+        .request_id = 1,
+        .position = .{ 0, 0, 2 },
+    } });
+    try simulation.submitVehicle(.{ .spawn = .{
+        .request_id = 2,
+        .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
+    } });
+    try simulation.tick();
+    const character_id = simulation.pollCharacterOutcome().?.spawned.id;
+    const vehicle_id = simulation.pollVehicleOutcome().?.spawned.id;
+    try simulation.submitVitals(.{ .register = .{ .target = .{
+        .kind = .player,
+        .id = character_id,
+        .incarnation = .{ .value = 1 },
+    } } });
+    try simulation.tick();
+    _ = simulation.pollVitalsOutcome() orelse return error.VitalsRegistrationMissing;
+    for (0..240) |_| try simulation.tick();
+
+    try simulation.submitVehicle(.{ .enter = .{
+        .vehicle_id = vehicle_id,
+        .driver_id = character_id,
+    } });
+    try simulation.tick();
+    _ = simulation.pollVehicleOutcome() orelse return error.VehicleEnterOutcomeMissing;
+    for (0..240) |_| {
+        try simulation.submitVehicle(.{ .drive = .{
+            .vehicle_id = vehicle_id,
+            .driver_id = character_id,
+            .input = .{ .throttle = 1 },
+        } });
+        try simulation.tick();
+        _ = simulation.pollVehicleOutcome();
+    }
+
+    const character_position = (try simulation.character(character_id)).position;
+    const chassis_position = (try simulation.vehicle(vehicle_id)).state.chassis.pose.position;
+    const dx = chassis_position[0] - character_position[0];
+    const dz = chassis_position[2] - character_position[2];
+    try std.testing.expect(dx * dx + dz * dz > 1);
+    try std.testing.expectEqual(
+        npc_replacement_contract.RetryReason.too_close_to_player,
+        (try simulation.state.npc_replacement_access.playerConflict(
+            chassis_position,
+            1,
+            0,
+        )).?,
+    );
+}
+
+test "NPC replacement treats initial and respawn vitals handoffs as occupied" {
+    var simulation = try Simulation.init(std.testing.allocator, .{ .namespace = 9_112 });
+    defer simulation.deinit();
+    const position = [3]f32{ 4, 0, 0 };
+    try simulation.submitCharacter(.{ .spawn = .{
+        .request_id = 1,
+        .position = position,
+    } });
+    try simulation.tick();
+    const initial = simulation.pollCharacterOutcome().?.spawned.id;
+    try std.testing.expect(
+        simulation.state.vitals_feature.viewCurrent(.player, initial) == null,
+    );
+    try std.testing.expectEqual(
+        npc_replacement_contract.RetryReason.too_close_to_player,
+        (try simulation.state.npc_replacement_access.playerConflict(position, 1, 0)).?,
+    );
+
+    const initial_target = vitals_contract.Target{
+        .kind = .player,
+        .id = initial,
+        .incarnation = .{ .value = 1 },
+    };
+    try simulation.submitVitals(.{ .register = .{ .target = initial_target } });
+    try simulation.tick();
+    _ = simulation.pollVitalsOutcome() orelse return error.VitalsRegistrationMissing;
+    try simulation.submitCharacter(.{ .despawn = .{ .id = initial } });
+    try simulation.submitVitals(.{ .remove = initial_target });
+    try simulation.tick();
+    _ = simulation.pollCharacterOutcome() orelse return error.CharacterDespawnOutcomeMissing;
+    _ = simulation.pollVitalsOutcome() orelse return error.VitalsRemovalOutcomeMissing;
+
+    try simulation.submitCharacter(.{ .spawn = .{
+        .request_id = 2,
+        .position = position,
+    } });
+    try simulation.tick();
+    const respawned = simulation.pollCharacterOutcome().?.spawned.id;
+    try std.testing.expect(!std.meta.eql(initial, respawned));
+    try std.testing.expect(
+        simulation.state.vitals_feature.viewCurrent(.player, respawned) == null,
+    );
+    try std.testing.expectEqual(
+        npc_replacement_contract.RetryReason.too_close_to_player,
+        (try simulation.state.npc_replacement_access.playerConflict(position, 1, 0)).?,
+    );
+}
+
 test "same-tick character commands and vehicle authority follow declared registration order" {
     var simulation = try Simulation.init(std.testing.allocator, .{ .namespace = 911 });
     defer simulation.deinit();
@@ -2262,7 +3104,7 @@ test "same-tick character commands and vehicle authority follow declared registr
     }
 }
 
-test "Snapshot V7 restores occupied and unoccupied real vehicles logically" {
+test "Snapshot V11 restores occupied and unoccupied real vehicles logically" {
     const allocator = std.testing.allocator;
     var original = try Simulation.init(allocator, .{ .namespace = 92 });
     var original_live = true;
@@ -2423,12 +3265,15 @@ test "snapshot owns character tuning and preserves canonical yaw bytes" {
         .vehicle_config = VehicleConfigV1.fromConfig(.{}),
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &.{},
         .characters = &records,
         .vehicles = &.{},
         .districts = &.{},
         .interactions = &.{},
         .npcs = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     }, .{ .max_characters = 2 });
     defer allocator.free(initial);
 
@@ -2544,7 +3389,7 @@ test "snapshot tuning and host character capacity fail before world construction
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
     }};
-    var snapshot = simulation_snapshot.SnapshotV7{
+    var snapshot = simulation_snapshot.SnapshotV11{
         .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -2554,12 +3399,15 @@ test "snapshot tuning and host character capacity fail before world construction
         .vehicle_config = VehicleConfigV1.fromConfig(.{}),
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &.{},
         .characters = &records,
         .vehicles = &.{},
         .districts = &.{},
         .interactions = &.{},
         .npcs = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     };
     snapshot.character_config.gravity = 0;
     const invalid = try std.json.Stringify.valueAlloc(allocator, snapshot, .{});
@@ -2769,7 +3617,7 @@ test "character climbs a physical step within configured height" {
     try std.testing.expect(state.position[2] < -2.5);
 }
 
-test "V7 validation owns schema cursor and cross-feature identity policy" {
+test "V11 validation owns schema cursor and cross-feature identity policy" {
     const crate_records = [_]CrateV1{.{
         .id = .{ .namespace = 73, .local = 1 },
         .half_extents = .{ 0.5, 0.5, 0.5 },
@@ -2783,7 +3631,7 @@ test "V7 validation owns schema cursor and cross-feature identity policy" {
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
     }};
-    const snapshot = simulation_snapshot.SnapshotV7{
+    const snapshot = simulation_snapshot.SnapshotV11{
         .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -2793,12 +3641,15 @@ test "V7 validation owns schema cursor and cross-feature identity policy" {
         .vehicle_config = VehicleConfigV1.fromConfig(.{}),
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &crate_records,
         .characters = &character_records,
         .vehicles = &.{},
         .districts = &.{},
         .interactions = &.{},
         .npcs = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     };
     try std.testing.expectError(
         error.DuplicatePersistentId,
@@ -2837,7 +3688,7 @@ test "V7 validation owns schema cursor and cross-feature identity policy" {
     );
 }
 
-test "V7 validation rejects missing and multiply assigned vehicle drivers" {
+test "V11 validation rejects missing and multiply assigned vehicle drivers" {
     const character_records = [_]CharacterV1{
         .{
             .id = .{ .namespace = 731, .local = 1 },
@@ -2878,7 +3729,7 @@ test "V7 validation rejects missing and multiply assigned vehicle drivers" {
             .driver_id = .{ .namespace = 731, .local = 1 },
         },
     };
-    const snapshot = simulation_snapshot.SnapshotV7{
+    const snapshot = simulation_snapshot.SnapshotV11{
         .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -2888,12 +3739,15 @@ test "V7 validation rejects missing and multiply assigned vehicle drivers" {
         .vehicle_config = VehicleConfigV1.fromConfig(.{}),
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &.{},
         .characters = &character_records,
         .vehicles = &vehicle_records,
         .districts = &.{},
         .interactions = &.{},
         .npcs = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     };
 
     try std.testing.expectError(
@@ -2943,7 +3797,7 @@ test "V7 interaction preflight rejects holder conflicts before acquiring authori
         .linear_velocity = .{ 0, 0, 0 },
         .angular_velocity = .{ 0, 0, 0 },
     }};
-    const snapshot = simulation_snapshot.SnapshotV7{
+    const snapshot = simulation_snapshot.SnapshotV11{
         .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -2953,12 +3807,15 @@ test "V7 interaction preflight rejects holder conflicts before acquiring authori
         .vehicle_config = VehicleConfigV1.fromConfig(.{}),
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &.{},
         .characters = &character_records,
         .vehicles = &vehicle_records,
         .districts = &.{},
         .interactions = &interaction_records,
         .npcs = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     };
 
     try std.testing.expectError(
@@ -3033,12 +3890,15 @@ test "interaction composes real Jolt drop collect and held restore transactional
         .vehicle_config = VehicleConfigV1.fromConfig(.{}),
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &.{},
         .characters = &character_records,
         .vehicles = &.{},
         .districts = &district_records,
         .interactions = &interaction_records,
         .npcs = &.{},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     }, .{});
     defer allocator.free(initial);
 
@@ -3155,6 +4015,13 @@ fn unloadNpcTestDistrict(
         else => return error.UnexpectedDistrictOutcome,
     }
     while (simulation.pollDistrictEvent() != null) {}
+}
+
+fn drainNpcPersistenceTestOutputs(simulation: *Simulation) void {
+    while (simulation.pollNpcEncounterCue() != null) {}
+    while (simulation.pollNpcEvent() != null) {}
+    while (simulation.pollVitalsOutcome() != null) {}
+    while (simulation.pollVitalsEvent() != null) {}
 }
 
 test "real Jolt NPC patrol waits crosses generations suspends and restores once" {
@@ -3286,7 +4153,353 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
     try std.testing.expectEqualSlices(u8, saved, resaved);
 }
 
-test "NPC capacity and hostile V7 snapshots fail before world authority" {
+test "completed-tick encounter authority chases and damages through vitals" {
+    const allocator = std.testing.allocator;
+    var simulation = try Simulation.init(allocator, .{
+        .namespace = 8_109,
+        .create_ground = false,
+        .character = .{ .max_characters = 1 },
+    });
+    defer simulation.deinit();
+
+    _ = try activateNpcTestDistrict(&simulation, 1, navigation_west_coord);
+    try simulation.submitCharacter(.{ .spawn = .{
+        .request_id = 2,
+        .position = .{ -4, 0, -2 },
+        .facing_yaw = 0,
+    } });
+    try simulation.submitNpc(.{ .spawn = .{
+        .request_id = 3,
+        .node = .{ .coord = navigation_west_coord, .index = 0 },
+        .goal = .hold,
+    } });
+    try simulation.tick();
+    const character_id = (simulation.pollCharacterOutcome() orelse
+        return error.CharacterSpawnOutcomeMissing).spawned.id;
+    const npc_id = (simulation.pollNpcOutcome() orelse
+        return error.NpcSpawnOutcomeMissing).spawned.id;
+
+    const character_target = vitals_contract.Target{
+        .kind = .player,
+        .id = character_id,
+        .incarnation = .{ .value = 1 },
+    };
+    const npc_target = vitals_contract.Target{
+        .kind = .npc,
+        .id = npc_id,
+        .incarnation = .{ .value = 1 },
+    };
+    try simulation.submitVitals(.{ .register = .{ .target = character_target } });
+    try simulation.submitVitals(.{ .register = .{ .target = npc_target } });
+    try simulation.tick();
+    _ = simulation.pollVitalsOutcome() orelse return error.VitalsRegistrationMissing;
+    _ = simulation.pollVitalsOutcome() orelse return error.VitalsRegistrationMissing;
+
+    var observed_pursuit = false;
+    var observed_damage = false;
+    for (0..240) |_| {
+        try simulation.tick();
+        while (simulation.pollNpcEncounterCue()) |_| {}
+        while (simulation.pollNpcEvent()) |_| {}
+        while (simulation.pollVitalsOutcome()) |outcome| switch (outcome) {
+            .damage => |damage| if (std.meta.eql(damage.proposal.target, character_target) and
+                damage.disposition == .applied)
+            {
+                observed_damage = true;
+            },
+            else => {},
+        };
+        const encounter = simulation.npcEncounter(npc_target) orelse
+            return error.NpcEncounterMissing;
+        observed_pursuit = observed_pursuit or encounter.state != .patrolling;
+        if (observed_damage) break;
+    }
+
+    try std.testing.expect(observed_pursuit);
+    try std.testing.expect(observed_damage);
+    const player_vitals = simulation.vitals(character_target) orelse
+        return error.CharacterVitalsMissing;
+    try std.testing.expect(player_vitals.current_health < player_vitals.maximum_health);
+
+    var debug_lines: [256]engine.physics_debug.Line = undefined;
+    var debug_triangles: [1]engine.physics_debug.Triangle = undefined;
+    var debug_storage = engine.physics_debug.Storage.init(&debug_lines, &debug_triangles);
+    const debug_batch = try simulation.extractPhysicsDebug(.{
+        .shapes = false,
+        .bounds = true,
+        .contacts = false,
+        .centers_of_mass = false,
+        .velocities = false,
+    }, &debug_storage);
+    var encounter_lines: usize = 0;
+    for (debug_batch.lines) |line| {
+        if (line.object) |object| {
+            if (object.kind == 0x533131 and object.serial == npc_id.local) {
+                encounter_lines += 1;
+            }
+        }
+    }
+    try std.testing.expect(encounter_lines >= 76);
+}
+
+test "encounter pursuit save restore defers target and owner residency canonically" {
+    const allocator = std.testing.allocator;
+    const namespace: u64 = 8_109_1;
+    const west_start = NavigationNodeRef{ .coord = navigation_west_coord, .index = 0 };
+    const east_end = NavigationNodeRef{ .coord = navigation_east_coord, .index = 2 };
+    const encounter_config = npc_encounter_contract.Config{
+        .sight_facing_cos = -1,
+        .ambient_perception_interval_ticks = 1,
+        .engaged_perception_interval_ticks = 1,
+    };
+    const restore_config = simulation_snapshot.RestoreConfig{
+        .district_assets = npc_test_district_assets,
+    };
+    var character_id: engine.PersistentId = undefined;
+    var npc_id: engine.PersistentId = undefined;
+    var active_pursuit_save: []u8 = undefined;
+    var target_inactive_save: []u8 = undefined;
+
+    {
+        var simulation = try Simulation.init(allocator, .{
+            .namespace = namespace,
+            .npc_encounter = encounter_config,
+        });
+        defer simulation.deinit();
+        _ = try activateNpcTestDistrict(&simulation, 1, navigation_west_coord);
+        _ = try activateNpcTestDistrict(
+            &simulation,
+            2,
+            navigation_east_coord,
+        );
+        try simulation.submitCharacter(.{ .spawn = .{
+            .request_id = 3,
+            .position = .{ 14, 0, 3 },
+            .facing_yaw = -@as(f32, std.math.pi) / 2.0,
+        } });
+        try simulation.submitNpc(.{ .spawn = .{
+            .request_id = 4,
+            .node = west_start,
+            .goal = .{ .patrol_between = .{
+                .first = west_start,
+                .second = east_end,
+            } },
+        } });
+        try simulation.tick();
+        character_id = (simulation.pollCharacterOutcome() orelse
+            return error.CharacterSpawnOutcomeMissing).spawned.id;
+        npc_id = (simulation.pollNpcOutcome() orelse
+            return error.NpcSpawnOutcomeMissing).spawned.id;
+        const character_target = vitals_contract.Target{
+            .kind = .player,
+            .id = character_id,
+            .incarnation = .{ .value = 1 },
+        };
+        const npc_target = vitals_contract.Target{
+            .kind = .npc,
+            .id = npc_id,
+            .incarnation = .{ .value = 1 },
+        };
+        try simulation.submitVitals(.{ .register = .{ .target = character_target } });
+        try simulation.submitVitals(.{ .register = .{ .target = npc_target } });
+        try simulation.tick();
+        drainNpcPersistenceTestOutputs(&simulation);
+
+        var pursuing = false;
+        for (0..120) |_| {
+            try simulation.tick();
+            drainNpcPersistenceTestOutputs(&simulation);
+            if (simulation.npcEncounter(npc_target)) |encounter| {
+                if (encounter.state == .pursuing and
+                    (try simulation.npc(npc_id)).encounter_locomotion != null)
+                {
+                    pursuing = true;
+                    break;
+                }
+            }
+        }
+        try std.testing.expect(pursuing);
+        try std.testing.expect(ChunkCoord.eql(
+            navigation_west_coord,
+            (try simulation.npc(npc_id)).owner,
+        ));
+        drainNpcPersistenceTestOutputs(&simulation);
+        active_pursuit_save = try simulation.save(allocator);
+        var parsed = try simulation_snapshot.parse(
+            allocator,
+            active_pursuit_save,
+            restore_config.max_crates,
+            restore_config.character.max_characters,
+            restore_config.vehicle.max_vehicles,
+            restore_config.npc.max_npcs,
+        );
+        defer parsed.deinit();
+        const west_district = for (parsed.value.districts) |district_record| {
+            if (ChunkCoord.eql(district_record.coord, navigation_west_coord)) {
+                break district_record;
+            }
+        } else return error.WestDistrictRecordMissing;
+        const resident_districts = [_]DistrictV1{west_district};
+        var target_inactive = parsed.value;
+        target_inactive.districts = &resident_districts;
+        target_inactive_save = try simulation_snapshot.encode(
+            allocator,
+            target_inactive,
+            .{},
+        );
+    }
+    defer allocator.free(active_pursuit_save);
+    defer allocator.free(target_inactive_save);
+
+    {
+        var restored = try Simulation.fromSnapshot(
+            allocator,
+            target_inactive_save,
+            restore_config,
+        );
+        defer restored.deinit();
+        const held = try restored.npc(npc_id);
+        try std.testing.expectEqual(NpcState.active, held.state);
+        try std.testing.expect(std.meta.activeTag(held.encounter_locomotion.?) == .hold);
+        try restored.tick();
+        drainNpcPersistenceTestOutputs(&restored);
+    }
+
+    var transferred_save: []u8 = undefined;
+    {
+        var restored = try Simulation.fromSnapshot(
+            allocator,
+            active_pursuit_save,
+            restore_config,
+        );
+        defer restored.deinit();
+        var held = try restored.npc(npc_id);
+        try std.testing.expectEqual(NpcState.active, held.state);
+        try std.testing.expect(
+            std.meta.activeTag(held.encounter_locomotion.?) == .pursue_position,
+        );
+        var crossed = false;
+        for (0..400) |_| {
+            try restored.tick();
+            drainNpcPersistenceTestOutputs(&restored);
+            held = try restored.npc(npc_id);
+            if (ChunkCoord.eql(held.owner, navigation_east_coord)) {
+                crossed = true;
+                break;
+            }
+        }
+        try std.testing.expect(crossed);
+        try std.testing.expect(
+            std.meta.activeTag(held.encounter_locomotion.?) == .pursue_position,
+        );
+        transferred_save = try restored.save(allocator);
+
+        var parsed = try simulation_snapshot.parse(
+            allocator,
+            transferred_save,
+            restore_config.max_crates,
+            restore_config.character.max_characters,
+            restore_config.vehicle.max_vehicles,
+            restore_config.npc.max_npcs,
+        );
+        defer parsed.deinit();
+        try std.testing.expectEqual(@as(usize, 1), parsed.value.npcs.len);
+        try std.testing.expectEqual(
+            npcs.PersistedRouteMode.deferred_rebuild,
+            parsed.value.npcs[0].route.mode,
+        );
+        try std.testing.expect(ChunkCoord.eql(
+            parsed.value.npcs[0].owner,
+            parsed.value.npcs[0].route.current.coord,
+        ));
+    }
+    defer allocator.free(transferred_save);
+
+    var dormant_save: []u8 = undefined;
+    {
+        var restored = try Simulation.fromSnapshot(
+            allocator,
+            transferred_save,
+            restore_config,
+        );
+        defer restored.deinit();
+        var pursued = try restored.npc(npc_id);
+        try std.testing.expectEqual(NpcState.active, pursued.state);
+        try std.testing.expect(
+            std.meta.activeTag(pursued.encounter_locomotion.?) == .pursue_position,
+        );
+        const east_ticket = restored.state.district_feature.activeTicketFor(
+            navigation_east_coord,
+        ) orelse return error.DistrictTicketMissing;
+        try unloadNpcTestDistrict(&restored, 7, east_ticket);
+        drainNpcPersistenceTestOutputs(&restored);
+        pursued = try restored.npc(npc_id);
+        try std.testing.expectEqual(NpcState.dormant, pursued.state);
+        try std.testing.expect(!pursued.controller_present);
+        dormant_save = try restored.save(allocator);
+    }
+    defer allocator.free(dormant_save);
+
+    {
+        var restored = try Simulation.fromSnapshot(
+            allocator,
+            dormant_save,
+            restore_config,
+        );
+        defer restored.deinit();
+        var dormant = try restored.npc(npc_id);
+        try std.testing.expectEqual(NpcState.dormant, dormant.state);
+        try std.testing.expect(!dormant.controller_present);
+        _ = try activateNpcTestDistrict(&restored, 8, navigation_east_coord);
+        drainNpcPersistenceTestOutputs(&restored);
+        for (0..8) |_| {
+            try restored.tick();
+            drainNpcPersistenceTestOutputs(&restored);
+            dormant = try restored.npc(npc_id);
+            if (dormant.state != .dormant) break;
+        }
+        try std.testing.expect(dormant.state != .dormant);
+        try std.testing.expect(dormant.controller_present);
+    }
+}
+
+test "pending NPC replacement survives cold restore and exact resave" {
+    const allocator = std.testing.allocator;
+    var saved: []u8 = undefined;
+    {
+        var simulation = try Simulation.init(allocator, .{
+            .namespace = 8_110,
+            .create_ground = false,
+        });
+        defer simulation.deinit();
+        const candidates = [_]NavigationNodeRef{
+            .{ .coord = navigation_west_coord, .index = 0 },
+            .{ .coord = navigation_west_coord, .index = 1 },
+            .{ .coord = navigation_west_coord, .index = 2 },
+        };
+        try simulation.scheduleNpcReplacement(0, 2, 1, &candidates);
+        try std.testing.expectEqual(
+            @as(u16, 1),
+            simulation.npcReplacementDiagnostics().pending,
+        );
+        saved = try simulation.save(allocator);
+    }
+    defer allocator.free(saved);
+
+    var restored = try Simulation.fromSnapshot(allocator, saved, .{
+        .create_ground = false,
+    });
+    defer restored.deinit();
+    try std.testing.expectEqual(
+        @as(u16, 1),
+        restored.npcReplacementDiagnostics().pending,
+    );
+    const resaved = try restored.save(allocator);
+    defer allocator.free(resaved);
+    try std.testing.expectEqualSlices(u8, saved, resaved);
+}
+
+test "NPC capacity and hostile V11 snapshots fail before world authority" {
     const allocator = std.testing.allocator;
     try std.testing.expectError(
         error.VirtualCharacterCapacityExceeded,
@@ -3307,7 +4520,7 @@ test "NPC capacity and hostile V7 snapshots fail before world authority" {
     };
     var hostile_npc = valid_npc;
     hostile_npc.position = .{ 9, 0, 3 };
-    var snapshot = simulation_snapshot.SnapshotV7{
+    var snapshot = simulation_snapshot.SnapshotV11{
         .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -3317,12 +4530,15 @@ test "NPC capacity and hostile V7 snapshots fail before world authority" {
         .vehicle_config = VehicleConfigV1.fromConfig(.{}),
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
+        .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
         .crates = &.{},
         .characters = &.{},
         .vehicles = &.{},
         .districts = &.{},
         .interactions = &.{},
         .npcs = &.{hostile_npc},
+        .npc_encounters = &.{},
+        .npc_replacements = &.{},
     };
     const hostile_bytes = try std.json.Stringify.valueAlloc(allocator, snapshot, .{});
     defer allocator.free(hostile_bytes);
@@ -3405,6 +4621,43 @@ test "NPC command capture replays with the NPC category digest" {
     try std.testing.expectEqual(@as(u64, 1), result.matched.completed_ticks);
 }
 
+test "NPC replacement orchestration is retained in the replay command spine" {
+    const allocator = std.testing.allocator;
+    const content = try testContentCohort(
+        [_]u8{0x8b} ** 32,
+        [_]u8{0xb8} ** 32,
+    );
+    var encoded: []u8 = undefined;
+    {
+        var simulation = try Simulation.init(allocator, .{
+            .namespace = 8_121,
+            .create_ground = false,
+        });
+        defer simulation.deinit();
+        try std.testing.expect(
+            (try simulation.beginFlightRecording(content, .{})) == .admitted,
+        );
+        const candidates = [_]NavigationNodeRef{
+            .{ .coord = navigation_west_coord, .index = 0 },
+            .{ .coord = navigation_west_coord, .index = 1 },
+            .{ .coord = navigation_east_coord, .index = 2 },
+        };
+        try simulation.scheduleNpcReplacement(0, 2, 1, &candidates);
+        try simulation.tick();
+        encoded = try simulation.finishFlightRecording(allocator);
+    }
+    defer allocator.free(encoded);
+
+    var parsed = try sandbox_replay.parse(allocator, encoded);
+    defer parsed.deinit();
+    try parsed.validateCompatible(content);
+    try std.testing.expectEqual(@as(usize, 1), parsed.bootstrap_commands.len);
+    try std.testing.expect(parsed.bootstrap_commands[0].command == .npc_replacement);
+    const result = try replayCapture(allocator, parsed.view(), content);
+    try std.testing.expect(result == .matched);
+    try std.testing.expectEqual(@as(u64, 1), result.matched.completed_ticks);
+}
+
 test "vitals and dead incarnation survive canonical save restart" {
     const allocator = std.testing.allocator;
     var saved: []u8 = undefined;
@@ -3435,7 +4688,7 @@ test "vitals and dead incarnation survive canonical save restart" {
                 .action_sequence = 1,
             },
             .target = target,
-            .cause = .scripted_npc,
+            .cause = .npc_melee,
             .authority_tick = simulation.tickIndex() +| 1,
             .correlation = 1,
             .base_amount = 100,

@@ -9,7 +9,12 @@ platform remains deferred
 
 **Implementation:** Open-source GameNetworkingSockets 1.5.1 is exact-pinned,
 built from source, and proven through direct loopback with two clients and one
-cold authority as of 2026-07-13. Steamworks/P2P/SDR remain absent and deferred.
+cold authority as of 2026-07-13. MP6 later adds constrained graphical listen
+and ticketed dedicated lifecycle proofs over the same local/direct-GNS split.
+Steamworks/P2P/SDR remain absent and deferred.
+
+**Amended:** 2026-07-15 after MP6/S11 documentation reconciliation and the
+post-IV graphical catch-up audit
 
 ## Context
 
@@ -147,6 +152,16 @@ loading. It copies validated bounded envelopes into authority/client queues.
 Transport callbacks never access Flecs, Jolt, features, persistence, renderer,
 editor, or client prediction directly. Queue capacity, overflow, disconnect,
 and shutdown behavior are explicit and observable.
+
+Graphical catch-up may place several tick-addressed input samples in GNS while
+an authority process is temporarily starved. Listen and dedicated adapters
+therefore share one authority-tick ingress budget: after admitting the declared
+per-connection input allowance they leave later GNS messages queued until the
+next authority tick. They do not drop those samples, increase the quota, or
+reinterpret their target ticks. The authority independently enforces the same
+quota and remains the untrusted-ingress safety boundary. This separates
+transport backlog pacing from semantic admission and prevents an ordinary host
+stall from being misclassified as a malicious quota violation.
 
 ### Initial lane contract
 

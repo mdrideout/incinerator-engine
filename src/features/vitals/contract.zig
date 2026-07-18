@@ -34,7 +34,7 @@ pub const TargetKind = enum(u8) {
 
 pub const Cause = enum(u8) {
     melee = 1,
-    scripted_npc = 2,
+    npc_melee = 2,
 
     pub fn priority(self: Cause) u8 {
         return @intFromEnum(self);
@@ -110,6 +110,18 @@ pub const DamageOutcome = struct {
     applied_amount: u16 = 0,
     remaining_health: u16 = 0,
     killed: bool = false,
+};
+
+/// Immutable completed-tick fact retained separately from host-consumed
+/// outcomes so authority composition can react without stealing a public
+/// result from the session owner.
+pub const AppliedDamageFact = struct {
+    source: Source,
+    target: Target,
+    authority_tick: u64,
+    applied_amount: u16,
+    remaining_health: u16,
+    killed: bool,
 };
 
 pub const RejectionReason = enum(u8) {

@@ -26,6 +26,7 @@ const SpawnCarryable = feature_contract.SpawnCarryable;
 const DespawnCarryable = feature_contract.DespawnCarryable;
 const Collect = feature_contract.Collect;
 const Drop = feature_contract.Drop;
+const DropPlacement = feature_contract.DropPlacement;
 const Command = feature_contract.Command;
 const CommandKind = feature_contract.CommandKind;
 const RejectionReason = feature_contract.RejectionReason;
@@ -703,11 +704,10 @@ pub fn Feature(
                 },
             }
 
-            const drop_pose = try deriveDropPose(carrier.pose, self.config.drop_offset);
-            const destination = try district_contract.chunkCoordForWorldPosition(
-                drop_pose.position,
-            );
-            if (!self.isDistrictActive(destination)) {
+            const placement = (try self.resolveDropPlacement(
+                carrier.pose,
+                logical.state.pose,
+            )) orelse {
                 return rejectionFor(
                     .drop,
                     .destination_district_inactive,
@@ -715,7 +715,9 @@ pub fn Feature(
                     drop.carrier_id,
                     drop.carryable_id,
                 );
-            }
+            };
+            const drop_pose = placement.pose;
+            const destination = placement.destination;
             const body_component = self.runtime.getMut(runtime_id, RuntimeBody) orelse
                 return error.InteractionBodyStateInvariantBroken;
             if (body_component.handle != null) return error.HeldInteractionHasBody;
@@ -744,7 +746,64 @@ pub fn Feature(
                 .carryable_id = drop.carryable_id,
                 .owner = destination,
                 .pose = drop_pose,
+                .placement = placement.kind,
             } };
+        }
+
+        const ResolvedDropPlacement = struct {
+            pose: engine.physics.Pose,
+            destination: district_contract.ChunkCoord,
+            kind: DropPlacement,
+        };
+
+        fn resolveDropPlacement(
+            self: *Self,
+            raw_carrier_pose: engine.physics.Pose,
+            raw_previous_pose: engine.physics.Pose,
+        ) !?ResolvedDropPlacement {
+            const carrier_pose = try raw_carrier_pose.normalized();
+            const carrier_owner = try district_contract.chunkCoordForWorldPosition(
+                carrier_pose.position,
+            );
+            if (self.isDistrictActive(carrier_owner)) {
+                const configured = self.config.drop_offset;
+                const offsets = [_][3]f32{
+                    configured,
+                    .{ -configured[2], configured[1], configured[0] },
+                    .{ configured[2], configured[1], -configured[0] },
+                    .{ -configured[0], configured[1], -configured[2] },
+                };
+                for (offsets, 0..) |offset, index| {
+                    const pose = try deriveDropPose(carrier_pose, offset);
+                    const destination = try district_contract.chunkCoordForWorldPosition(
+                        pose.position,
+                    );
+                    if (!self.isDistrictActive(destination)) continue;
+                    return .{
+                        .pose = pose,
+                        .destination = destination,
+                        .kind = if (index == 0)
+                            .configured_offset
+                        else
+                            .alternate_offset,
+                    };
+                }
+            }
+
+            // A carried object must not make participant teardown fatal. Its
+            // durable state already retains the last district-owned pose from
+            // collection, so an active prior owner is the deterministic final
+            // release point when the carrier is outside loaded residency.
+            const previous_pose = try raw_previous_pose.normalized();
+            const previous_owner = try district_contract.chunkCoordForWorldPosition(
+                previous_pose.position,
+            );
+            if (!self.isDistrictActive(previous_owner)) return null;
+            return .{
+                .pose = previous_pose,
+                .destination = previous_owner,
+                .kind = .previous_active_pose,
+            };
         }
 
         fn reconcileResidency(self: *Self) !void {
@@ -1385,6 +1444,10 @@ test "collect carry across half-open boundary and drop commits one identity" {
         district_contract.ChunkCoord{ .x = 1, .z = 0 },
         dropped.dropped.owner,
     );
+    try std.testing.expectEqual(
+        DropPlacement.configured_offset,
+        dropped.dropped.placement,
+    );
     try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
     try std.testing.expectEqual(interaction_contract.CarryMode.empty, world.carriers.state.carry_mode);
     const view_value = try world.feature.view(id);
@@ -1394,6 +1457,108 @@ test "collect carry across half-open boundary and drop commits one identity" {
     );
     try std.testing.expect(view_value.body_present);
     try std.testing.expectEqual(@as(usize, 1), world.runtime.persistentCount());
+}
+
+test "held presentation and drop offsets follow semantic carrier facing" {
+    var world: TestWorld = undefined;
+    try world.init(.{});
+    defer world.deinit();
+
+    const id = try spawnTestCarryable(&world, .{ 0, 0.5, 0 });
+    const carrier_rotation = try engine.transform.rotationFromFacingYaw(
+        std.math.pi / 2.0,
+    );
+    world.carriers.state.pose = .{
+        .position = .{ 0, 0, 0 },
+        .rotation = carrier_rotation,
+    };
+    _ = try runCommand(&world, .{ .collect = .{
+        .transaction_id = 30,
+        .carrier_id = test_carrier_id,
+        .carryable_id = id,
+    } });
+
+    const held = try world.feature.extract();
+    try std.testing.expectEqual(@as(usize, 1), held.len);
+    const expected_held_position = [3]f32{ 0.6, 1, 0 };
+    for (held[0].pose.position, expected_held_position) |actual, expected| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
+    for (held[0].pose.rotation, carrier_rotation) |actual, expected| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
+
+    _ = try runCommand(&world, .{ .drop = .{
+        .transaction_id = 31,
+        .carrier_id = test_carrier_id,
+        .carryable_id = id,
+    } });
+    const dropped = try world.feature.view(id);
+    const expected_drop_position = [3]f32{ 1.5, 0.75, 0 };
+    for (dropped.state.pose.position, expected_drop_position) |actual, expected| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
+    for (dropped.state.pose.rotation, carrier_rotation) |actual, expected| {
+        try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
+    }
+
+    _ = try runCommand(&world, .{ .despawn = .{ .id = id } });
+}
+
+test "drop remains beside a carrier when configured offset crosses an inactive boundary" {
+    var world: TestWorld = undefined;
+    try world.init(.{});
+    defer world.deinit();
+
+    const id = try spawnTestCarryable(&world, .{ 0, 0.5, 0 });
+    _ = try runCommand(&world, .{ .collect = .{
+        .transaction_id = 40,
+        .carrier_id = test_carrier_id,
+        .carryable_id = id,
+    } });
+    world.carriers.state.pose.position = .{ 0, 0, -7.75 };
+    const outcome = try runCommand(&world, .{ .drop = .{
+        .transaction_id = 41,
+        .carrier_id = test_carrier_id,
+        .carryable_id = id,
+    } });
+    try std.testing.expectEqual(
+        DropPlacement.alternate_offset,
+        outcome.dropped.placement,
+    );
+    try std.testing.expectEqualDeep(
+        district_contract.ChunkCoord{ .x = 0, .z = 0 },
+        outcome.dropped.owner,
+    );
+    try std.testing.expect(outcome.dropped.pose.position[2] >= -8.0);
+    try std.testing.expectEqual(interaction_contract.CarryMode.empty, world.carriers.state.carry_mode);
+    try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
+}
+
+test "drop outside loaded residency returns to the previous active world pose" {
+    var world: TestWorld = undefined;
+    try world.init(.{});
+    defer world.deinit();
+
+    const initial_position = [3]f32{ 0, 0.5, 0 };
+    const id = try spawnTestCarryable(&world, initial_position);
+    _ = try runCommand(&world, .{ .collect = .{
+        .transaction_id = 50,
+        .carrier_id = test_carrier_id,
+        .carryable_id = id,
+    } });
+    world.carriers.state.pose.position = .{ 40, 0, 40 };
+    const outcome = try runCommand(&world, .{ .drop = .{
+        .transaction_id = 51,
+        .carrier_id = test_carrier_id,
+        .carryable_id = id,
+    } });
+    try std.testing.expectEqual(
+        DropPlacement.previous_active_pose,
+        outcome.dropped.placement,
+    );
+    try std.testing.expectEqualDeep(initial_position, outcome.dropped.pose.position);
+    try std.testing.expectEqual(interaction_contract.CarryMode.empty, world.carriers.state.carry_mode);
 }
 
 test "expected stale range holder residency and capacity failures are typed" {
@@ -1533,6 +1698,7 @@ test "expected stale range holder residency and capacity failures are typed" {
     );
     world.carriers.state.carry_mode = .{ .holding = id };
     world.carriers.state.pose.position = .{ 8, 0, 0 };
+    world.districts.west_active = false;
     world.districts.east_active = false;
     try expectRejection(
         try runCommand(&world, .{ .drop = .{

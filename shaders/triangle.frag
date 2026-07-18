@@ -16,6 +16,12 @@
 // So a pixel in the middle of a red-green-blue triangle gets a blended color.
 layout(location = 0) in vec3 frag_color;
 
+// Primitive meshes retain their authored vertex-color detail while accepting
+// the same material tint promised by Renderer.drawMeshWithMaterial.
+layout(set = 3, binding = 0) uniform PrimitiveFragmentSettings {
+    vec4 base_color;
+} settings;
+
 // ---------------------------------------------------------------------------
 // OUTPUT: Final pixel color
 // ---------------------------------------------------------------------------
@@ -25,6 +31,5 @@ layout(location = 0) out vec4 out_color;
 // Main entry point - runs once per pixel
 // ---------------------------------------------------------------------------
 void main() {
-    // Output the interpolated color with full opacity (alpha = 1.0)
-    out_color = vec4(frag_color, 1.0);
+    out_color = vec4(frag_color * settings.base_color.rgb, settings.base_color.a);
 }
