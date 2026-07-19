@@ -3602,15 +3602,16 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     const same = try testContentCohort();
     try std.testing.expectEqual(try content.fingerprint(), try same.fingerprint());
 
-    // Recipe V4 adds the collision-backed visible route perimeter,
-    // intentionally advancing the renderer-free content cohort.
-    var recipe_v4_expected: Digest = undefined;
+    // Recipe V5 removes the temporary route-containment perimeter while
+    // retaining the two authored obstacles, intentionally advancing the
+    // renderer-free content cohort.
+    var recipe_v5_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
-        &recipe_v4_expected,
-        "2512994579149f472bcfa468a8ef50176f4d217da2dc484bc11d7929d03e9d6f",
+        &recipe_v5_expected,
+        "67df0ed6cae36ffc19175bb0253ab8b73fdfd80ba58bdba36143ee092cb31bfb",
     );
-    const recipe_v4_actual = try content.fingerprint();
-    try std.testing.expectEqualSlices(u8, &recipe_v4_expected, &recipe_v4_actual);
+    const recipe_v5_actual = try content.fingerprint();
+    try std.testing.expectEqualSlices(u8, &recipe_v5_expected, &recipe_v5_actual);
 
     const catalog = try ContentCohort.init(
         "district/catalog",
@@ -3622,7 +3623,7 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     );
     try catalog.validate();
     const catalog_fingerprint = try catalog.fingerprint();
-    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v4_actual));
+    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v5_actual));
 
     var catalog_fixture = try testCapture();
     catalog_fixture.content = catalog;

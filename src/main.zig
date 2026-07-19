@@ -52,6 +52,7 @@ const developer_diagnostics = @import("developer_diagnostics");
 const developer_profile = @import("developer_profile");
 const authority_diagnostics = @import("session_authority_diagnostics");
 const sandbox_developer_host = @import("hosts/sandbox_developer_host.zig");
+const incident_capture = @import("hosts/incident_capture.zig");
 const incident_input_replay = @import("hosts/incident_input_replay.zig");
 const sandbox_invocation = @import("sandbox_invocation");
 const sandbox_authoring = @import("sandbox_authoring");
@@ -1730,7 +1731,7 @@ const App = struct {
         comptime profile: BootstrapProfile,
         content_root: ?content.ContentRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, false, false, null, null);
+        return initWithOptions(io, profile, content_root, null, false, false, null, null, .none);
     }
 
     pub fn initWithSaveRoot(
@@ -1739,7 +1740,7 @@ const App = struct {
         content_root: ?content.ContentRootPath,
         save_root: SaveRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, false, false, save_root, null);
+        return initWithOptions(io, profile, content_root, null, false, false, save_root, null, .none);
     }
 
     pub fn initProduct(
@@ -1747,6 +1748,7 @@ const App = struct {
         content_root: ?content.ContentRootPath,
         save_root: ?SaveRootPath,
         incident_runs_root: ?[]const u8,
+        incident_hardening_profile: incident_capture.HardeningProfile,
     ) !App {
         return initWithOptions(
             io,
@@ -1757,6 +1759,7 @@ const App = struct {
             false,
             save_root,
             incident_runs_root,
+            incident_hardening_profile,
         );
     }
 
@@ -1766,7 +1769,7 @@ const App = struct {
         content_root: ?content.ContentRootPath,
         save_root: ?SaveRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, false, true, save_root, null);
+        return initWithOptions(io, profile, content_root, null, false, true, save_root, null, .none);
     }
 
     fn initWithFailurePoint(
@@ -1775,7 +1778,7 @@ const App = struct {
         content_root: ?content.ContentRootPath,
         comptime failure_point: AppInitFailurePoint,
     ) !App {
-        return initWithOptions(io, profile, content_root, failure_point, false, false, null, null);
+        return initWithOptions(io, profile, content_root, failure_point, false, false, null, null, .none);
     }
 
     fn initWithoutPhysicsDebugPipelinesForTest(
@@ -1783,7 +1786,7 @@ const App = struct {
         comptime profile: BootstrapProfile,
         content_root: ?content.ContentRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, true, false, null, null);
+        return initWithOptions(io, profile, content_root, null, true, false, null, null, .none);
     }
 
     fn initWithOptions(
@@ -1795,6 +1798,7 @@ const App = struct {
         comptime diagnostic_fault_probe: bool,
         save_root: ?SaveRootPath,
         incident_runs_root: ?[]const u8,
+        incident_hardening_profile: incident_capture.HardeningProfile,
     ) !App {
         // Initialize SDL3 with video subsystem
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
@@ -1852,6 +1856,7 @@ const App = struct {
             window,
             &gpu_renderer,
             if (build_options.incident_capture_enabled) incident_runs_root else null,
+            incident_hardening_profile,
         );
         errdefer developer.deinit();
 
@@ -2158,6 +2163,17 @@ const App = struct {
     pub fn runIncidentCaptureWindowJourney(self: *App) !void {
         if (!build_options.incident_capture_enabled) return error.IncidentCaptureDisabled;
         return self.runProductLoop(.journey_window, null);
+    }
+
+    pub fn runIncidentCaptureHardening(
+        self: *App,
+        profile: incident_capture.HardeningProfile,
+    ) !sandbox_developer_host.Owner.IncidentHardeningSnapshot {
+        if (!build_options.incident_capture_enabled) return error.IncidentCaptureDisabled;
+        try self.runProductLoop(.journey, null);
+        const snapshot = self.developer.incidentHardeningSnapshot();
+        try validateIncidentHardening(profile, snapshot);
+        return snapshot;
     }
 
     pub fn runIncidentReplay(
@@ -2645,12 +2661,14 @@ const App = struct {
             progress.restore_size_tick = tick;
         }
         // Allow the restored drawable generation to accumulate the full
-        // two-second screenshot pre-roll before applying overlapping flags.
+        // five-second screenshot pre-roll before applying overlapping flags.
+        // The extra one-second capture interval leaves six completed history
+        // samples even when the next sample is in flight.
         // Flagging on the same frame as a resize honestly produces partial
         // evidence, but that belongs in an explicit pressure case rather than
         // making the zero-loss reference journey timing-dependent.
         if (progress.restored_size and !progress.rapid_flags_completed and
-            tick >= progress.restore_size_tick +| 120)
+            tick >= progress.restore_size_tick +| 360)
         {
             if (!self.developer.queueIncidentHotkeyForAcceptance() or
                 !self.developer.queueIncidentHotkeyForAcceptance())
@@ -4655,7 +4673,13 @@ const App = struct {
             return error.S3StreamingSmokeAuthoredSceneInvariant;
         }
         const stats = try self.district_streaming.gpuUsage();
-        if (stats.resident_scenes != 1 or stats.resident_gpu_bytes != 116) {
+        // The adjacent district may already be visually prefetched while its
+        // logical authority remains inactive. Validate the exact resident
+        // scene accounting instead of assuming worker completion order.
+        if (stats.resident_scenes == 0 or stats.resident_scenes > 2 or
+            stats.live_scenes != stats.resident_scenes or
+            stats.resident_gpu_bytes != @as(u64, stats.resident_scenes) * 116)
+        {
             return error.S3StreamingSmokeGpuInvariant;
         }
     }
@@ -4668,8 +4692,10 @@ const App = struct {
         const gpu = snapshot.gpu orelse
             return error.S3StreamingSmokeDiagnosticGpuMissing;
         if (stream.state != .active or !stream.desired_inside or
-            gpu.current.live_scenes != 1 or gpu.current.resident_scenes != 1 or
-            gpu.current.active_batches != 0 or gpu.current.resident_gpu_bytes != 116 or
+            gpu.current.resident_scenes == 0 or gpu.current.resident_scenes > 2 or
+            gpu.current.live_scenes != gpu.current.resident_scenes or
+            gpu.current.active_batches != 0 or
+            gpu.current.resident_gpu_bytes != @as(u64, gpu.current.resident_scenes) * 116 or
             gpu.high_water.active_batches != 1)
         {
             std.debug.print(
@@ -8357,6 +8383,67 @@ const App = struct {
     }
 };
 
+fn validateIncidentHardening(
+    profile: incident_capture.HardeningProfile,
+    snapshot: sandbox_developer_host.Owner.IncidentHardeningSnapshot,
+) !void {
+    if (profile == .none or snapshot.clipboard_publications == 0) {
+        return error.IncidentHardeningClipboardMissing;
+    }
+    switch (profile) {
+        .none => unreachable,
+        .queue_pressure => {
+            if (snapshot.queue_high_water != incident_capture.writer_queue_capacity or
+                snapshot.dropped_records == 0 or snapshot.writer_failed or
+                !snapshot.handoff_persisted)
+            {
+                return error.IncidentQueuePressureContractFailed;
+            }
+        },
+        .visual_budget => {
+            if (!snapshot.visual_budget_exhausted or
+                snapshot.visual_budget_rejections == 0 or
+                snapshot.writer_failed or !snapshot.handoff_persisted)
+            {
+                return error.IncidentVisualBudgetContractFailed;
+            }
+        },
+        .writer_budget => {
+            if (!snapshot.writer_failed or snapshot.handoff_persisted) {
+                return error.IncidentWriterBudgetContractFailed;
+            }
+        },
+        .screenshot_submission => {
+            if (snapshot.screenshot_misses == 0 or
+                snapshot.screenshot_fence_failures != 0 or
+                snapshot.writer_failed or !snapshot.handoff_persisted)
+            {
+                return error.IncidentScreenshotSubmissionContractFailed;
+            }
+        },
+        .screenshot_fence => {
+            if (snapshot.screenshot_misses == 0 or
+                snapshot.screenshot_fence_failures == 0 or
+                snapshot.writer_failed or !snapshot.handoff_persisted)
+            {
+                return error.IncidentScreenshotFenceContractFailed;
+            }
+        },
+    }
+}
+
+fn captureHardeningProfile(
+    profile: sandbox_invocation.IncidentHardeningProfile,
+) incident_capture.HardeningProfile {
+    return switch (profile) {
+        .queue_pressure => .queue_pressure,
+        .visual_budget => .visual_budget,
+        .writer_budget => .writer_budget,
+        .screenshot_submission => .screenshot_submission,
+        .screenshot_fence => .screenshot_fence,
+    };
+}
+
 // ============================================================================
 // Entry Point
 // ============================================================================
@@ -8468,6 +8555,10 @@ fn productMain(init: std.process.Init, args: anytype) !void {
     }
 
     const configured_save_root = try parseSaveRootOverride(args);
+    const hardening_profile: incident_capture.HardeningProfile = switch (mode) {
+        .incident_hardening => |profile| captureHardeningProfile(profile),
+        else => .none,
+    };
     const incident_runs_root = if (build_options.incident_capture_enabled) root: {
         if (init.environ_map.get("INCINERATOR_INCIDENT_ROOT")) |override| {
             break :root override;
@@ -8484,6 +8575,7 @@ fn productMain(init: std.process.Init, args: anytype) !void {
         resolved_content_root,
         configured_save_root,
         incident_runs_root,
+        hardening_profile,
     );
     var app_deinitialized = false;
     defer if (!app_deinitialized) app.deinit();
@@ -8527,6 +8619,29 @@ fn productMain(init: std.process.Init, args: anytype) !void {
             std.debug.print(
                 "INCIDENT_CAPTURE_WINDOW_JOURNEY_RESULT run={s}\n",
                 .{app.developer.incidentRunPath() orelse "unavailable"},
+            );
+        },
+        .incident_hardening => {
+            const snapshot = try app.runIncidentCaptureHardening(hardening_profile);
+            std.debug.print(
+                "INCIDENT_HARDENING_RESULT profile={s} run={s} " ++
+                    "writer_failed={} visual_budget_exhausted={} " ++
+                    "handoff_persisted={} queue_high_water={d} dropped={d} " ++
+                    "visual_rejections={d} screenshot_misses={d} " ++
+                    "fence_failures={d} clipboard_publications={d}\n",
+                .{
+                    @tagName(hardening_profile),
+                    app.developer.incidentRunPath() orelse "unavailable",
+                    snapshot.writer_failed,
+                    snapshot.visual_budget_exhausted,
+                    snapshot.handoff_persisted,
+                    snapshot.queue_high_water,
+                    snapshot.dropped_records,
+                    snapshot.visual_budget_rejections,
+                    snapshot.screenshot_misses,
+                    snapshot.screenshot_fence_failures,
+                    snapshot.clipboard_publications,
+                },
             );
         },
         .incident_replay => |run_path| try app.runIncidentReplay(run_path),

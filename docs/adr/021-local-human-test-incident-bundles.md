@@ -3,7 +3,8 @@
 **Status:** Accepted
 
 **Date:** Accepted 2026-07-16; evidence-capability amendment 2026-07-17;
-budget and handoff amendment 2026-07-18
+budget, handoff, and deterministic-failure amendments 2026-07-18; schema-3
+visual-window amendment 2026-07-19
 
 ## Context
 
@@ -33,9 +34,9 @@ stages so a macOS delivery failure is distinguishable from a routing failure.
 Four line-oriented streams separate causal events, periodic state, semantic
 input, and metrics.
 
-Schema 2 retains a 15 FPS 480x270 product-only trail from approximately four
-seconds before through three seconds after the flag, five human-visible
-anchors at -2/-1/0/+1/+3 seconds stored at no more than 1280x720 while
+Schema 3 retains a 15 FPS 480x270 product-only trail from approximately five
+seconds before through two seconds after the flag, eight human-visible anchors
+at every whole second from -5 through +2 stored at no more than 1280x720 while
 retaining source dimensions in the index, a product-only flag frame, and a
 320x180 semantic-ID image with a stable identity/color map. The swapchain is
 copied into a stable composition-owned texture before product capture; no
@@ -67,12 +68,28 @@ chassis and wheels share one stable entity identity. Chronological visual
 reports are derived outside the immutable run folder from indexed actual
 capture times.
 
-`inspect-incident` strictly validates schema 2 and indexes a bundle.
+`inspect-incident` strictly validates schema 3 and indexes a bundle.
 `replay-incident` performs same-cohort semantic replay through one explicit
 public-output boundary. `--replay-incident=<absolute-run-folder>` drives
 captured controls through the normal graphical composition, but is explicitly
 best effort and cannot replace deterministic replay or a promoted regression
 scenario.
+
+The installed debug product exposes five explicit IC5-G hardening profiles,
+never implicit environment fallbacks: queue pressure, visual-budget
+exhaustion, late writer-budget failure, screenshot submission failure, and
+post-submission fence failure. Their manifests name the profile and exact
+health counters. Any evidence loss makes the run `partial`; the strict
+inspector validates the profile-specific expected loss. The late writer case
+is ordered after marker/window/replay persistence so it proves that clipboard
+publication is independent of `LLM_HANDOFF.md` durability without destroying
+the evidence needed to diagnose the failure.
+
+Schema 3 is an intentional greenfield break from schema 2. It replaces the
+five-anchor marker with eight required UI-inclusive anchors and changes the
+visual window from -4/+3 to -5/+2 seconds. Producer, inspector, handoff,
+documentation, and diagnostics skill advance as one cohort; no schema-2
+fallback parser is retained.
 
 The local evidence is developer-only. It captures no arbitrary text, global
 input, credentials, signed admission material, upload, analytics, or remote

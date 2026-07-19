@@ -157,7 +157,7 @@ const valid_config =
     \\{
     \\  "schema_version": 1,
     \\  "world": {"namespace": 9, "max_crates": 128, "max_characters": 1, "max_vehicles": 1, "max_npcs": 64},
-    \\  "expected_content_cohort": "11ac400758045c5c93550a972c4487a099e4009bb475c074e086ec6da4043238",
+    \\  "expected_content_cohort": "53a65a03bee9d6b09edeb9fd8e8b9c781128c84aed84c77e45dcbf0b9910ac21",
     \\  "save_root": "/tmp/incinerator-headless-test",
     \\  "save_slot": "world-1",
     \\  "start_policy": "fresh_or_restore",
@@ -174,8 +174,8 @@ test "valid V1 configuration is exact and owns parsed strings" {
     try std.testing.expectEqual(ClockMode.virtual, parsed.value.clock.mode);
     try std.testing.expectEqual(@as(u16, 64), parsed.value.world.max_npcs);
     const digest = try parsed.value.contentDigest();
-    try std.testing.expectEqual(@as(u8, 0x83), digest[0]);
-    try std.testing.expectEqual(@as(u8, 0xf0), digest[digest.len - 1]);
+    try std.testing.expectEqual(@as(u8, 0x53), digest[0]);
+    try std.testing.expectEqual(@as(u8, 0x21), digest[digest.len - 1]);
 }
 
 test "configuration rejects unknown fields and every incompatible boundary" {

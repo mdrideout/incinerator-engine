@@ -6,7 +6,7 @@
 
 const std = @import("std");
 
-pub const schema_version: u16 = 2;
+pub const schema_version: u16 = 3;
 pub const max_anomalies: usize = 32;
 pub const max_path_bytes: usize = 768;
 pub const max_note_bytes: usize = 240;

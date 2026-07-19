@@ -369,6 +369,7 @@ const State = struct {
     pending_shortcuts: PendingShortcutQueue = .{},
     window_id: c.SDL_WindowID,
     incident_clipboard: [incident_contract.max_handoff_bytes]u8 = undefined,
+    incident_clipboard_publications: u64 = 0,
 };
 
 fn ownerState(owner: *Owner) *State {
@@ -511,6 +512,7 @@ pub const Owner = opaque {
         window: *c.SDL_Window,
         gpu_renderer: *renderer.Renderer,
         incident_runs_root: ?[]const u8,
+        incident_hardening_profile: incident_capture.HardeningProfile,
     ) !*Owner {
         const state = try allocator.create(State);
         errdefer allocator.destroy(state);
@@ -550,6 +552,10 @@ pub const Owner = opaque {
                 break :unavailable null;
             };
             if (state.incident) |capture| {
+                capture.configureHardening(incident_hardening_profile);
+                if (incident_hardening_profile == .queue_pressure) {
+                    capture.injectQueuePressure();
+                }
                 capture.start() catch |err| {
                     std.debug.print("Incident writer unavailable: {s}\n", .{@errorName(err)});
                     capture.destroy();
@@ -557,7 +563,10 @@ pub const Owner = opaque {
                 };
                 if (state.incident != null) {
                     std.debug.print("Incident run: {s}\n", .{capture.runPath()});
-                    state.incident_screenshots = incident_screenshot.Owner.init(gpu_renderer) catch |err| unavailable: {
+                    state.incident_screenshots = incident_screenshot.Owner.init(
+                        gpu_renderer,
+                        incident_hardening_profile,
+                    ) catch |err| unavailable: {
                         std.debug.print("Incident screenshots unavailable: {s}\n", .{@errorName(err)});
                         break :unavailable null;
                     };
@@ -655,6 +664,40 @@ pub const Owner = opaque {
         fence_latency_total_ns: u64 = 0,
         fence_latency_max_ns: u64 = 0,
     };
+
+    pub const IncidentHardeningSnapshot = struct {
+        writer_failed: bool = false,
+        visual_budget_exhausted: bool = false,
+        handoff_persisted: bool = false,
+        queue_high_water: u16 = 0,
+        dropped_records: u64 = 0,
+        visual_budget_rejections: u64 = 0,
+        screenshot_misses: u64 = 0,
+        screenshot_fence_failures: u64 = 0,
+        clipboard_publications: u64 = 0,
+    };
+
+    pub fn incidentHardeningSnapshot(
+        self: *const Owner,
+    ) IncidentHardeningSnapshot {
+        const state = ownerStateConst(self);
+        const capture = state.incident orelse return .{};
+        const view = capture.snapshot(state.incident_requests.rejected);
+        return .{
+            .writer_failed = view.health.writer_failed,
+            .visual_budget_exhausted = view.health.visual_budget_exhausted,
+            .handoff_persisted = view.health.handoff_persisted,
+            .queue_high_water = view.health.queue_high_water,
+            .dropped_records = view.health.dropped_records,
+            .visual_budget_rejections = view.health.visual_budget_rejections,
+            .screenshot_misses = view.health.screenshot_misses,
+            .screenshot_fence_failures = if (state.incident_screenshots) |*screenshots|
+                screenshots.health().stats.fence_failures
+            else
+                0,
+            .clipboard_publications = state.incident_clipboard_publications,
+        };
+    }
 
     /// Read-only measurement seam for the installed capture A/B. It exposes
     /// bounded health counters, never the recorder, files, or GPU resources.
@@ -1166,6 +1209,8 @@ pub const Owner = opaque {
             capture.observe(
                 authority.gameplayTrace(),
                 authority.journal().borrowedChronological(),
+                diagnostics_snapshot.simulation.first_fault,
+                authority.sessionDiagnostics().first_cycle_fault,
                 frame.gameplay_view,
                 frame.incident_input,
                 frame.camera.yaw,
@@ -1298,6 +1343,8 @@ pub const Owner = opaque {
                 clipboard[handoff.len] = 0;
                 if (!c.SDL_SetClipboardText(clipboard[0..handoff.len :0].ptr)) {
                     std.debug.print("Incident clipboard publication failed: {s}\n", .{c.SDL_GetError()});
+                } else {
+                    state.incident_clipboard_publications +|= 1;
                 }
             }
         }

@@ -1,11 +1,11 @@
 # Incident Evidence Reliability And Boundary Corrections
 
 **Status:** IC5-A through IC5-I implemented and software-validated; the IC5-G
-long gameplay, window lifecycle, graphical/semantic replay, and bounded A/B
-performance gates pass; controlled destructive/failure hardening and the
-physical macOS/human visual checkpoint remain open
+long gameplay, window lifecycle, graphical/semantic replay, bounded A/B
+performance, and deterministic failure-hardening gates pass; only the physical
+macOS/human visual checkpoint remains open
 
-**Date:** 2026-07-18
+**Date:** 2026-07-19
 
 **Platform:** Apple Silicon macOS developer product; Linux and Windows remain
 deferred
@@ -78,11 +78,10 @@ discoverable without asking the tester to estimate reaction latency.
 
 ### Use a greenfield schema cohort
 
-The corrected bundle is schema 2. The inspector, replay adapter, repository
-skill source, and documentation advance as one cohort. No schema-1 reader,
+The current bundle is schema 3. The inspector, replay adapter, repository skill
+source, and documentation advance as one cohort. No schema-1/schema-2 reader,
 fallback parser, legacy screenshot-mask interpretation, or compatibility shim
-is retained. The reference schema-1 run has already served as evidence and is
-preserved only as a local historical artifact.
+is retained. Earlier bundles remain historical evidence and are never mutated.
 
 ### Preserve semantic, product, and human-visible evidence separately
 
@@ -116,9 +115,9 @@ F9 remains an optional convenience because macOS may consume the function row.
 The graphical composition may coordinate these immutable projections. It may
 not become a second owner of their mutable state.
 
-## Schema-2 Bundle Contract
+## Schema-3 Bundle Contract
 
-The implemented schema-2 anomaly layout is:
+The implemented schema-3 anomaly layout is:
 
 ```text
 <run>/
@@ -140,11 +139,14 @@ The implemented schema-2 anomaly layout is:
 │       ├── input-window.ndjson
 │       ├── metrics-window.ndjson
 │       ├── visual-index.ndjson
+│       ├── screenshot-human-m5000ms.ppm
+│       ├── screenshot-human-m4000ms.ppm
+│       ├── screenshot-human-m3000ms.ppm
 │       ├── screenshot-human-m2000ms.ppm
 │       ├── screenshot-human-m1000ms.ppm
 │       ├── screenshot-human-flag.ppm
 │       ├── screenshot-human-p1000ms.ppm
-│       ├── screenshot-human-p3000ms.ppm
+│       ├── screenshot-human-p2000ms.ppm
 │       ├── screenshot-product-flag.ppm
 │       ├── semantic-id-flag.ppm
 │       └── semantic-id-map.json
@@ -228,8 +230,8 @@ readable event names in addition to stable numeric codes.
 ### Continuous trailing lane
 
 The accepted target is a 15 FPS, 480x270, product-only circular lane covering
-four seconds before the flag and three seconds after it. This is 64 retained
-RGBA slots, approximately 32 MiB before transfer/fence overhead. It is
+five seconds before the flag and two seconds after it. This is 80 retained
+RGBA slots, approximately 40 MiB before transfer/fence overhead. It is
 developer-only, bounded, and allowed to report loss rather than stall the
 renderer.
 
@@ -241,12 +243,16 @@ future measured optimization, not an entry requirement.
 
 ### Bounded human-visible anchors
 
-The final human-visible drawable retains four bounded source samples at 1 Hz
-so it can select the closest completed frames to -2 and -1 seconds. It also
-captures flag, +1 second, and +3 seconds. Each anchor retains source dimensions
+The final human-visible drawable uses seven history-only source slots at 1 Hz,
+leaving six completed samples available while one may be in flight. Two
+separate event slots capture exact flag frames without consuming history when
+incidents overlap. The history ring supplies the closest completed frames to
+-5, -4, -3, -2, -1, +1, and +2 seconds. Each anchor retains source dimensions
 but is stored at no more than 1280x720. The 15 Hz product lane owns transient
 continuity; the sparse human lane owns product-plus-UI context. Actual timing
-is always recorded; the implementation does not claim exact milliseconds.
+is always recorded; the implementation does not claim exact milliseconds. A
+2560x1440 drawable plus the 80-slot product trail remains below the explicit
+176 MiB diagnostic download-memory ceiling.
 
 The product-only flag frame is captured before developer UI. A semantic-ID
 flag frame and mapping are captured through the existing validation semantics
@@ -350,8 +356,8 @@ tester’s physical keyboard; button and shortcut produce the same typed request
 
 ### IC5-C - Trailing visual evidence
 
-- [x] Add the bounded 15 FPS product-only trailing lane and five bounded
-  human-visible anchors.
+- [x] Add the bounded 15 FPS product-only trailing lane and eight bounded
+  human-visible anchors from -5 through +2 seconds.
 - [x] Store target and actual time, tick, frame, source, drawable generation,
   fence timing, and digest for every frame.
 - [x] Deduplicate frames shared by rapid or overlapping flags.
@@ -498,7 +504,7 @@ owning boundary plus an ordinary installed Metal journey.
   drops, enters/drives/exits, crosses both district boundaries, approaches and
   fights an NPC, dies, respawns, flags multiple anomalies, and creates a live
   handoff before shutdown.
-- [ ] Run the journey in normal, deterministic-fault, graphical replay, resize,
+- [x] Run the journey in normal, deterministic-fault, graphical replay, resize,
   minimize/restore, rapid-flag, queue-pressure, unwritable-root, disk-budget,
   screenshot-failure, and unclean-exit conditions.
 - [x] Compare recorder disabled/enabled p50/p95/p99 frame behavior, memory,
@@ -512,10 +518,17 @@ owning boundary plus an ordinary installed Metal journey.
 
 The normal, resize, rapid-overlapping-flag, real minimize/restore, semantic
 replay, best-effort graphical replay, capture-on/off A/B, unusable-root, and
-forced unclean-exit cases are complete. The second checkbox remains open for
-the explicit deterministic disk/queue/GPU/screenshot pressure cases; narrow
-queue, root, budget, and visual-integrity contracts do not substitute for
-those installed-product journeys.
+forced unclean-exit cases are complete. `zig build verify-incident-hardening`
+also runs the full installed Metal gameplay journey under five explicit
+developer-only profiles: queue pressure, a 16 MiB visual lane, a late writer
+budget failure, screenshot submission failure, and post-submission fence
+failure. Every profile completes the 2,148-tick accepted-ingress replay and
+the strict inspector accepts its deliberately partial bundle. The writer case
+arms only after anomaly materialization and replay: all four markers and replay
+remain durable, `LLM_HANDOFF.md` is honestly absent, and the main-thread
+clipboard publication still succeeds once. A real host-volume ENOSPC is not
+manufactured because consuming the developer's filesystem is unsafe; the
+writer-owned exact byte ceiling exercises the same fail-closed write boundary.
 
 **Human checkpoint:** The tester confirms the physical shortcut, district
 transition, NPC continuity, and usefulness of the trailing evidence. This is
@@ -591,7 +604,7 @@ unexplained absence before replacement.
 - [x] Partition the run cap into a 384 MiB visual lane and 128 MiB nonvisual
   reserve; reserve visual bytes before enqueue and report visual exhaustion
   separately from writer failure.
-- [x] Reduce the product trail to 15 FPS/64 retained slots and store
+- [x] Bound the product trail at 15 FPS and store
   human-visible anchors at no more than 1280x720 while indexing original and
   stored dimensions.
 - [x] Publish the in-memory LLM handoff for main-thread clipboard use before
@@ -604,8 +617,10 @@ unexplained absence before replacement.
 - [x] Pin both current route districts only in the ordinary two-district
   sandbox product; retain real streaming lifecycle in validation profiles.
 - [x] Advance the canonical district recipe to version 4 with collision-backed
-  perimeter walls just outside the authored route, so the infinite diagnostic
-  checkerboard no longer promises unsupported playable space.
+  perimeter walls just outside the authored route. This historical IC5-I
+  implementation was rejected by the subsequent physical checkpoint and is
+  superseded by recipe 5's open traversal in
+  [`playable-boundary-and-vehicle-npc-collision-correction.md`](playable-boundary-and-vehicle-npc-collision-correction.md).
 - [x] Retain the noninteractive NPC death proxy until replacement spawn and
   vitals registration complete, and name the pending interval in product
   feedback.

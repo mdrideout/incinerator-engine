@@ -2,7 +2,7 @@
 
 **Status:** Accepted, implemented, and validated in S6
 **Date:** 2026-07-13
-**Amended:** 2026-07-18 after the human-test district-pop and camera review
+**Amended:** 2026-07-19 after the physical traversal and vehicle–NPC collision review
 
 ## Context
 
@@ -102,7 +102,7 @@ produce a bounded overlap band in which both logical districts and both scenes
 may be resident. The S6 host admits at most one new transition per fixed-tick
 reconcile pass in canonical catalog order.
 
-### Current sandbox route is wholly resident and visibly bounded
+### Current sandbox route is wholly resident without a containment perimeter
 
 The current product contains exactly the two catalogued route districts. The
 normal sandbox composition therefore pins both logical and GPU route slots
@@ -111,13 +111,18 @@ real load, overlap, cancellation, unload, and reload lifecycle; the playable
 product does not expose that lifecycle as unexplained block pop inside its
 entire authored route.
 
-District recipe version 4 adds simple collision-backed perimeter walls just
-outside the two-district half-open route bounds. The infinite checkerboard is a
-renderer diagnostic, not a promise that space beyond the route is playable.
-The perimeter makes the current content boundary truthful and keeps players,
-vehicles, carryables, and drop placement inside authored navigation and
-district ownership. This is a bounded product decision, not a general
-open-world residency policy.
+Recipe version 4 briefly added collision-backed perimeter walls around those
+two districts. Physical testing showed that this was the wrong response to a
+distance/presentation defect: it prevented the tester from reaching the
+condition instead of validating and repairing it. Recipe version 5 removes
+those walls from both collision and proxy presentation. The two original
+obstacle boxes remain canonical visible blockers.
+
+The infinite checkerboard is renderer-diagnostic terrain, not completed game
+content, but characters and vehicles may traverse it. Content-owned actions in
+sparse space may reject explicitly until more districts exist. Expanding
+content and streaming—not containment geometry—is the accepted path toward the
+open sandbox.
 
 The graphical host resolves third-person camera obstruction against the same
 live physics world and keeps the camera on the target side of the first hit.
@@ -135,7 +140,7 @@ full-screen surface merely because the orbit camera crossed behind it.
 - Save, replay, live streaming, and restore share one admitted content truth.
 - Two-district overlap is proven with fixed capacities and one worker.
 - The complete current route does not visually enter or leave while it is
-  being played, and unsupported checkerboard space is visibly inaccessible.
+  being played, while traversal remains available beyond current content.
 - Follow-camera placement respects the same collision-backed boundary exposed
   to players and vehicles.
 - Existing GPU registry and one-district presentation coordinator remain
@@ -147,6 +152,8 @@ full-screen surface merely because the orbit camera crossed behind it.
   cohort changes.
 - East depends on west for the conformance seam, so a west change deliberately
   invalidates both bundles.
+- Diagnostic space beyond the authored route is sparse and may reject
+  district-owned interactions until subsequent content slices expand coverage.
 - One worker serializes preparation; S6 measures this before considering more
   concurrency.
 

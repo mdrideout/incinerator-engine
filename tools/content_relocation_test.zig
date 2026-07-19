@@ -19,7 +19,7 @@ pub fn main(init: std.process.Init) !void {
             defer scene.deinit();
             const view = scene.view();
             if (view.nodes.len != 2 or view.nodes[0].mesh != 0 or view.nodes[1].mesh != 0 or
-                view.textures.len != 1 or view.static_boxes.len != 6)
+                view.textures.len != 1 or view.static_boxes.len != 3)
             {
                 return error.InstalledContentSemanticsInvalid;
             }

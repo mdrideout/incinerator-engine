@@ -1,8 +1,8 @@
-//! SDL/GPU-free schema-2 validator and concise incident-bundle index.
+//! SDL/GPU-free schema-3 validator and concise incident-bundle index.
 
 const std = @import("std");
 
-const schema_version: u16 = 2;
+const schema_version: u16 = 3;
 const maximum_manifest_bytes = 64 * 1024;
 const maximum_segment_bytes = 8 * 1024 * 1024;
 const maximum_anomalies = 64;
@@ -27,18 +27,20 @@ const Manifest = struct {
     source_dirty_fingerprint: []const u8,
     zig_version: []const u8,
     optimize: []const u8,
-    evidence_capabilities: ?EvidenceCapabilities = null,
+    evidence_capabilities: EvidenceCapabilities,
+    hardening_profile: []const u8,
+    hardening_write_failure_after_bytes: ?u64 = null,
     started_wall_unix_ms: i64,
     updated_wall_unix_ms: i64,
     updated_monotonic_ns: u64,
     stream_rotation_bytes: u64,
     run_budget_bytes: u64,
-    visual_budget_bytes: ?u64 = null,
-    non_visual_reserve_bytes: ?u64 = null,
-    visual_bytes_reserved: ?u64 = null,
-    visual_budget_exhausted: ?bool = null,
-    visual_budget_rejections: ?u64 = null,
-    handoff_persisted: ?bool = null,
+    visual_budget_bytes: u64,
+    non_visual_reserve_bytes: u64,
+    visual_bytes_reserved: u64,
+    visual_budget_exhausted: bool,
+    visual_budget_rejections: u64,
+    handoff_persisted: bool,
     writer_queue_capacity: usize,
     writer_queue: usize,
     queue_high_water: usize,
@@ -54,6 +56,7 @@ const Manifest = struct {
         metadata: u64,
     },
     screenshot_misses: u64,
+    screenshot_fence_failures: u64,
     anomaly_count: usize,
     replay_status: []const u8,
     privacy: struct {
@@ -106,11 +109,14 @@ const Marker = struct {
     artifacts: struct {
         count: u32,
         failures: u32,
+        human_m5000ms: bool,
+        human_m4000ms: bool,
+        human_m3000ms: bool,
         human_m2000ms: bool,
         human_m1000ms: bool,
         human_flag: bool,
         human_p1000ms: bool,
-        human_p3000ms: bool,
+        human_p2000ms: bool,
         product_flag: bool,
         semantic_id_flag: bool,
     },
@@ -176,12 +182,47 @@ const DiagnosticCount = struct {
     count: u32,
 };
 
+const RetainedFaultText = struct {
+    bytes: [128]u8 = @splat(0),
+    len: u8 = 0,
+
+    fn copy(value: []const u8) !RetainedFaultText {
+        if (value.len > 128) return error.InvalidRetainedFaultText;
+        var result = RetainedFaultText{ .len = @intCast(value.len) };
+        @memcpy(result.bytes[0..value.len], value);
+        return result;
+    }
+
+    fn slice(self: *const RetainedFaultText) []const u8 {
+        return self.bytes[0..self.len];
+    }
+};
+
+const RuntimeFaultSummary = struct {
+    phase: RetainedFaultText,
+    tick: u64,
+    system: RetainedFaultText,
+    error_name: RetainedFaultText,
+    error_code: u64,
+    diagnostic_sequence: u64,
+};
+
+const AuthorityFaultSummary = struct {
+    stage: RetainedFaultText,
+    target_tick: u64,
+    completed_tick: u64,
+    error_name: RetainedFaultText,
+    error_code: u64,
+};
+
 const DiagnosticSummary = struct {
     const capacity: usize = 32;
 
     items: [capacity]DiagnosticCount = undefined,
     len: u8 = 0,
     overflow: u32 = 0,
+    runtime_fault: ?RuntimeFaultSummary = null,
+    authority_fault: ?AuthorityFaultSummary = null,
 
     fn note(self: *DiagnosticSummary, code: u32) void {
         for (self.items[0..self.len]) |*item| {
@@ -225,8 +266,8 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
     });
     defer parsed_manifest.deinit();
     const manifest = parsed_manifest.value;
-    if (manifest.schema != schema_version or
-        !std.mem.eql(u8, manifest.kind, "incinerator_incident_run") or
+    if (manifest.schema != schema_version) return error.UnsupportedIncidentSchema;
+    if (!std.mem.eql(u8, manifest.kind, "incinerator_incident_run") or
         !manifest.privacy.local_only or manifest.privacy.captures_text_input or
         manifest.privacy.captures_credentials or
         !manifest.privacy.captures_reserved_shortcut_candidates)
@@ -252,28 +293,13 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
     {
         return error.InvalidIncidentByteAccounting;
     }
-    const has_visual_partition = manifest.visual_budget_bytes != null;
-    if (has_visual_partition != (manifest.non_visual_reserve_bytes != null) or
-        has_visual_partition != (manifest.visual_bytes_reserved != null) or
-        has_visual_partition != (manifest.visual_budget_exhausted != null) or
-        has_visual_partition != (manifest.visual_budget_rejections != null) or
-        has_visual_partition != (manifest.handoff_persisted != null))
+    if (manifest.visual_budget_bytes +| manifest.non_visual_reserve_bytes !=
+        manifest.run_budget_bytes or
+        manifest.visual_bytes_reserved > manifest.visual_budget_bytes or
+        manifest.bytes_by_class.visual > manifest.visual_bytes_reserved or
+        (manifest.visual_budget_exhausted != (manifest.visual_budget_rejections != 0)))
     {
-        return error.IncompleteIncidentBudgetPartition;
-    }
-    if (has_visual_partition) {
-        const visual_budget = manifest.visual_budget_bytes.?;
-        const non_visual_reserve = manifest.non_visual_reserve_bytes.?;
-        const visual_reserved = manifest.visual_bytes_reserved.?;
-        const visual_exhausted = manifest.visual_budget_exhausted.?;
-        const visual_rejections = manifest.visual_budget_rejections.?;
-        if (visual_budget +| non_visual_reserve != manifest.run_budget_bytes or
-            visual_reserved > visual_budget or
-            manifest.bytes_by_class.visual > visual_reserved or
-            (visual_exhausted != (visual_rejections != 0)))
-        {
-            return error.InvalidIncidentBudgetPartition;
-        }
+        return error.InvalidIncidentBudgetPartition;
     }
 
     var counts = Counts{};
@@ -297,34 +323,27 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
             .{ manifest.writer_failed, manifest.dropped_records, manifest.screenshot_misses },
         );
     }
-    if (manifest.visual_budget_exhausted orelse false) {
+    if (manifest.visual_budget_exhausted) {
         counts.warnings += 1;
         std.debug.print(
             "WARN visual_budget: reserved={d}/{d} rejected={d}; non-visual evidence remains protected\n",
-            .{ manifest.visual_bytes_reserved.?, manifest.visual_budget_bytes.?, manifest.visual_budget_rejections.? },
+            .{ manifest.visual_bytes_reserved, manifest.visual_budget_bytes, manifest.visual_budget_rejections },
         );
     }
-    if (manifest.evidence_capabilities) |capabilities| {
-        if (!std.mem.eql(u8, capabilities.characters, "full_boundary") or
-            !std.mem.eql(u8, capabilities.npcs, "full_boundary") or
-            !std.mem.eql(u8, capabilities.vehicles, "full_boundary") or
-            !std.mem.eql(u8, capabilities.carryables, "full_boundary") or
-            !capabilities.semantic_vehicle_parts or
-            !capabilities.atomic_note_handoff)
-        {
-            return error.InvalidEvidenceCapabilities;
-        }
-        std.debug.print(
-            "  capabilities characters={s} npcs={s} vehicles={s} carryables={s} vehicle_parts={} atomic_note={}\n",
-            .{ capabilities.characters, capabilities.npcs, capabilities.vehicles, capabilities.carryables, capabilities.semantic_vehicle_parts, capabilities.atomic_note_handoff },
-        );
-    } else {
-        counts.warnings += 1;
-        std.debug.print(
-            "WARN capability_matrix: bundle predates explicit per-entity evidence coverage\n",
-            .{},
-        );
+    const capabilities = manifest.evidence_capabilities;
+    if (!std.mem.eql(u8, capabilities.characters, "full_boundary") or
+        !std.mem.eql(u8, capabilities.npcs, "full_boundary") or
+        !std.mem.eql(u8, capabilities.vehicles, "full_boundary") or
+        !std.mem.eql(u8, capabilities.carryables, "full_boundary") or
+        !capabilities.semantic_vehicle_parts or
+        !capabilities.atomic_note_handoff)
+    {
+        return error.InvalidEvidenceCapabilities;
     }
+    std.debug.print(
+        "  capabilities characters={s} npcs={s} vehicles={s} carryables={s} vehicle_parts={} atomic_note={}\n",
+        .{ capabilities.characters, capabilities.npcs, capabilities.vehicles, capabilities.carryables, capabilities.semantic_vehicle_parts, capabilities.atomic_note_handoff },
+    );
 
     var anomalies: [maximum_anomalies]AnomalySummary = @splat(.{});
     const anomaly_path = try join(init, &.{ run_path, "anomalies.ndjson" });
@@ -365,16 +384,23 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
         return error.InvalidReplayAttachmentStatus;
     }
     const handoff_present = exists(init, run_path, "LLM_HANDOFF.md");
+    try validateHardening(
+        manifest,
+        anomaly_total,
+        replay_present,
+        handoff_present,
+    );
 
     std.debug.print(
         "INCIDENT_BUNDLE_VALID run={s}\n" ++
-            "  status={s} source={s} dirty={} build={s}/{s}\n" ++
+            "  status={s} hardening={s} source={s} dirty={} build={s}/{s}\n" ++
             "  records={d} segments={d} anomalies={d} windows={d} visuals={d} suspicious={d}\n" ++
             "  queue={d} high_water={d}/{d} durable={d}/{d} bytes={d}/{d}\n" ++
             "  visual_reserved={d}/{d} rejected={d} replay={} handoff={} persisted={} warnings={d}\n",
         .{
             run_path,
             manifest.status,
+            manifest.hardening_profile,
             manifest.source_revision,
             manifest.source_dirty,
             manifest.zig_version,
@@ -392,15 +418,78 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
             manifest.last_admitted_sequence,
             manifest.bytes_written,
             manifest.run_budget_bytes,
-            manifest.visual_bytes_reserved orelse 0,
-            manifest.visual_budget_bytes orelse 0,
-            manifest.visual_budget_rejections orelse 0,
+            manifest.visual_bytes_reserved,
+            manifest.visual_budget_bytes,
+            manifest.visual_budget_rejections,
             replay_present,
             handoff_present,
-            manifest.handoff_persisted orelse false,
+            manifest.handoff_persisted,
             counts.warnings,
         },
     );
+}
+
+fn validateHardening(
+    manifest: Manifest,
+    anomaly_total: usize,
+    replay_present: bool,
+    handoff_present: bool,
+) !void {
+    const profile = manifest.hardening_profile;
+    const fence_failures = manifest.screenshot_fence_failures;
+    if (std.mem.eql(u8, profile, "none")) {
+        if (manifest.hardening_write_failure_after_bytes != null) {
+            return error.InvalidIncidentHardeningProfile;
+        }
+        return;
+    }
+    if (!std.mem.eql(u8, manifest.status, "partial") or anomaly_total != 4) {
+        return error.InvalidIncidentHardeningStatus;
+    }
+    const handoff_persisted = manifest.handoff_persisted;
+    if (std.mem.eql(u8, profile, "queue_pressure")) {
+        if (manifest.queue_high_water != manifest.writer_queue_capacity or
+            manifest.dropped_records == 0 or manifest.writer_failed or
+            !replay_present or !handoff_present or !handoff_persisted or
+            manifest.visual_budget_exhausted or fence_failures != 0)
+        {
+            return error.InvalidIncidentQueuePressureEvidence;
+        }
+    } else if (std.mem.eql(u8, profile, "visual_budget")) {
+        if (!manifest.visual_budget_exhausted or
+            manifest.visual_budget_rejections == 0 or
+            manifest.writer_failed or !replay_present or !handoff_present or
+            !handoff_persisted or fence_failures != 0)
+        {
+            return error.InvalidIncidentVisualBudgetEvidence;
+        }
+    } else if (std.mem.eql(u8, profile, "writer_budget")) {
+        const limit = manifest.hardening_write_failure_after_bytes orelse
+            return error.MissingIncidentWriterBudgetEvidence;
+        if (!manifest.writer_failed or limit != manifest.bytes_written or
+            manifest.last_durable_sequence >= manifest.last_admitted_sequence or
+            !replay_present or handoff_present or handoff_persisted or
+            manifest.dropped_records != 0 or fence_failures != 0)
+        {
+            return error.InvalidIncidentWriterBudgetEvidence;
+        }
+    } else if (std.mem.eql(u8, profile, "screenshot_submission")) {
+        if (manifest.screenshot_misses == 0 or fence_failures != 0 or
+            manifest.writer_failed or !replay_present or !handoff_present or
+            !handoff_persisted or manifest.dropped_records != 0)
+        {
+            return error.InvalidIncidentScreenshotSubmissionEvidence;
+        }
+    } else if (std.mem.eql(u8, profile, "screenshot_fence")) {
+        if (manifest.screenshot_misses == 0 or fence_failures == 0 or
+            manifest.writer_failed or !replay_present or !handoff_present or
+            !handoff_persisted or manifest.dropped_records != 0)
+        {
+            return error.InvalidIncidentScreenshotFenceEvidence;
+        }
+    } else {
+        return error.InvalidIncidentHardeningProfile;
+    }
 }
 
 fn reduceAnomalies(
@@ -573,6 +662,33 @@ fn inspectAnomaly(
     if (diagnostics.overflow != 0) {
         std.debug.print("    diagnostic overflow count={d}\n", .{diagnostics.overflow});
     }
+    if (diagnostics.runtime_fault) |fault| {
+        std.debug.print(
+            "    runtime_fault phase={s} tick={d} system={s} error={s} " ++
+                "code={d} diagnostic_sequence={d}\n",
+            .{
+                fault.phase.slice(),
+                fault.tick,
+                fault.system.slice(),
+                fault.error_name.slice(),
+                fault.error_code,
+                fault.diagnostic_sequence,
+            },
+        );
+    }
+    if (diagnostics.authority_fault) |fault| {
+        std.debug.print(
+            "    authority_cycle_fault stage={s} target_tick={d} " ++
+                "completed_tick={d} error={s} code={d}\n",
+            .{
+                fault.stage.slice(),
+                fault.target_tick,
+                fault.completed_tick,
+                fault.error_name.slice(),
+                fault.error_code,
+            },
+        );
+    }
 }
 
 fn validateSemanticMap(
@@ -626,7 +742,7 @@ fn inspectVisualIndex(
     const bytes = try read(init, path, maximum_segment_bytes);
     defer init.gpa.free(bytes);
     var record_count: u32 = 0;
-    var human_mask: u5 = 0;
+    var human_mask: u8 = 0;
     var product_flag = false;
     var semantic_id = false;
     var lines = std.mem.splitScalar(u8, bytes, '\n');
@@ -664,11 +780,14 @@ fn inspectVisualIndex(
             const requested = visual.requested_offset_ms orelse
                 return error.MissingVisualRequestedOffset;
             human_mask |= switch (requested) {
-                -2000 => 1,
-                -1000 => 2,
-                0 => 4,
-                1000 => 8,
-                3000 => 16,
+                -5000 => 1,
+                -4000 => 2,
+                -3000 => 4,
+                -2000 => 8,
+                -1000 => 16,
+                0 => 32,
+                1000 => 64,
+                2000 => 128,
                 else => return error.InvalidHumanVisualOffset,
             };
         } else if (std.mem.eql(u8, visual.source, "product_flag")) {
@@ -685,11 +804,14 @@ fn inspectVisualIndex(
         counts.visual_records += 1;
         record_count += 1;
     }
-    const expected_human_mask: u5 = @as(u5, @intFromBool(marker.artifacts.human_m2000ms)) |
-        (@as(u5, @intFromBool(marker.artifacts.human_m1000ms)) << 1) |
-        (@as(u5, @intFromBool(marker.artifacts.human_flag)) << 2) |
-        (@as(u5, @intFromBool(marker.artifacts.human_p1000ms)) << 3) |
-        (@as(u5, @intFromBool(marker.artifacts.human_p3000ms)) << 4);
+    const expected_human_mask: u8 = @as(u8, @intFromBool(marker.artifacts.human_m5000ms)) |
+        (@as(u8, @intFromBool(marker.artifacts.human_m4000ms)) << 1) |
+        (@as(u8, @intFromBool(marker.artifacts.human_m3000ms)) << 2) |
+        (@as(u8, @intFromBool(marker.artifacts.human_m2000ms)) << 3) |
+        (@as(u8, @intFromBool(marker.artifacts.human_m1000ms)) << 4) |
+        (@as(u8, @intFromBool(marker.artifacts.human_flag)) << 5) |
+        (@as(u8, @intFromBool(marker.artifacts.human_p1000ms)) << 6) |
+        (@as(u8, @intFromBool(marker.artifacts.human_p2000ms)) << 7);
     if (human_mask != expected_human_mask or
         product_flag != marker.artifacts.product_flag or
         semantic_id != marker.artifacts.semantic_id_flag)
@@ -778,10 +900,50 @@ fn validateNdjson(
                     continue;
                 }
                 summary.note(@intCast(code.integer));
+            } else if (std.mem.eql(u8, kind.string, "runtime_fault")) {
+                if (summary.runtime_fault != null) return error.DuplicateRuntimeFaultRecord;
+                summary.runtime_fault = .{
+                    .phase = try RetainedFaultText.copy(try requiredString(object, "phase")),
+                    .tick = try requiredU64(object, "authority_tick"),
+                    .system = try RetainedFaultText.copy(try requiredString(object, "system")),
+                    .error_name = try RetainedFaultText.copy(try requiredString(object, "error")),
+                    .error_code = try requiredU64(object, "error_code"),
+                    .diagnostic_sequence = try requiredU64(object, "diagnostic_sequence"),
+                };
+            } else if (std.mem.eql(u8, kind.string, "authority_cycle_fault")) {
+                if (summary.authority_fault != null) {
+                    return error.DuplicateAuthorityCycleFaultRecord;
+                }
+                summary.authority_fault = .{
+                    .stage = try RetainedFaultText.copy(try requiredString(object, "stage")),
+                    .target_tick = try requiredU64(object, "target_tick"),
+                    .completed_tick = try requiredU64(object, "completed_tick"),
+                    .error_name = try RetainedFaultText.copy(try requiredString(object, "error")),
+                    .error_code = try requiredU64(object, "error_code"),
+                };
             }
         }
         counts.records += 1;
     }
+}
+
+fn requiredString(object: anytype, key: []const u8) ![]const u8 {
+    const value = object.get(key) orelse return error.MissingRetainedFaultField;
+    return switch (value) {
+        .string => |text| text,
+        else => error.InvalidRetainedFaultField,
+    };
+}
+
+fn requiredU64(object: anytype, key: []const u8) !u64 {
+    const value = object.get(key) orelse return error.MissingRetainedFaultField;
+    return switch (value) {
+        .integer => |integer| if (integer >= 0)
+            @intCast(integer)
+        else
+            error.InvalidRetainedFaultField,
+        else => error.InvalidRetainedFaultField,
+    };
 }
 
 fn diagnosticName(code: u32) []const u8 {

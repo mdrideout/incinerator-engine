@@ -1,14 +1,15 @@
 # Human Test Incident Capture And LLM Diagnostic Handoff
 
-**Status:** Schema-2 IC5-A through IC5-F, IC5-H bounded-object evidence, IC5-I
+**Status:** Schema-3 visual capture succeeds the completed schema-2 IC5-A
+through IC5-F, IC5-H bounded-object evidence, IC5-I
 budget/playable-boundary correction, and the IC5-G long gameplay/replay, real
-window lifecycle, and bounded capture-cost gates are complete for the Apple
-Silicon macOS solo developer product. Controlled destructive/failure hardening
-and the physical shortcut/drop/district/NPC/vehicle human checkpoint remain
-open under the
+window lifecycle, bounded capture-cost, and deterministic failure-hardening
+gates are complete for the Apple Silicon macOS solo developer product. Only
+the physical shortcut/drop/district/NPC/vehicle human checkpoint remains open
+under the
 [IC5 corrective plan](incident-evidence-reliability-and-boundary-corrections.md)
 
-**Date:** 2026-07-18
+**Date:** 2026-07-19
 
 **Platform:** Apple Silicon macOS; secondary platforms remain deferred
 
@@ -278,9 +279,10 @@ When the tester uses either shortcut or clicks **Flag anomaly**:
    recorder sequence, topology/session, local entity, and selected entity;
 3. bind the preceding 15 seconds and following 5 seconds of data as its
    diagnostic window;
-4. bind the bounded 15 FPS product-only trail from approximately four seconds
-   before through three seconds after the flag;
-5. request human-visible anchors at -2, -1, 0, +1, and +3 seconds;
+4. bind the bounded 15 FPS product-only trail from approximately five seconds
+   before through two seconds after the flag;
+5. request UI-inclusive human-visible anchors at every whole second from -5
+   through +2;
 6. capture one product-only flag-adjacent image;
 7. request one semantic object-ID image and stable identity/color map at time
    zero;
@@ -295,12 +297,12 @@ ranges, but one flag never overwrites another flag's metadata or images.
 
 Visual evidence uses two asynchronous lanes because the human may react
 several seconds after a transient. A 15 FPS, 480x270 product-only circular
-trail retains approximately four seconds before the flag and continues three
-seconds after it. A human-visible lane captures -2, -1, 0, +1, and +3 second
-anchors after product and developer UI rendering, retaining source dimensions
-but storing at no more than 1280x720. A separate product-only flag image and
-320x180 semantic-ID image/map distinguish product, developer-composition, and
-identity evidence.
+trail retains approximately five seconds before the flag and continues two
+seconds after it. A human-visible lane captures every whole-second anchor from
+-5 through +2 after product and developer UI rendering, retaining source
+dimensions but storing at no more than 1280x720. A separate product-only flag
+image and 320x180 semantic-ID image/map distinguish product,
+developer-composition, and identity evidence.
 
 The swapchain is first copied into a composition-owned stable texture with
 color-target and sampler usage. Product captures blit from that texture; the
@@ -605,9 +607,10 @@ authority, physics, session, presentation, input, or render boundary.
 - [x] Add automated schema-2 bundle capture to the current solo graphical
   product without creating a remote telemetry service. Listen and dedicated
   human-test orchestration remain deferred with those product priorities.
-- [ ] Exercise disk full, unwritable root, queue saturation, rapid flags,
-  minimized/closed window, GPU capture failure, unclean exit, and stale-run
-  recovery.
+- [x] Exercise deterministic writer-budget exhaustion, unwritable root, queue
+  saturation, rapid flags, minimized/closed window, GPU submission/fence
+  failure, unclean exit, and stale-run recovery. Do not fill the real host
+  volume merely to manufacture ENOSPC.
 - [x] Compare recorder-disabled and recorder-enabled p95/p99 frame behavior and
   long-run disk growth.
 - [x] Perform schema-2 rendered Metal smoke acceptance plus ownership, dead-code,
@@ -624,10 +627,10 @@ could not retain absent membership, the live manifest was stale, and long
 semantic replay left an NPC encounter cue pending. IC5-A through IC5-H in the
 [corrective plan](incident-evidence-reliability-and-boundary-corrections.md)
 supersede the remaining broad checklist above. Schema-2 IC5-A through IC5-F,
-the IC5-G normal/resize/minimize/rapid-flag/replay journey plus paired
-capture-cost measurement, and the IC5-H bounded-object/evidence correction are
-implemented and measured; controlled destructive fault cases and the real
-macOS human checkpoint remain open. Historical IC0-IC4 acceptance remains
+the IC5-G normal/resize/minimize/rapid-flag/replay journey, paired capture-cost
+measurement, five-profile installed failure matrix, and the IC5-H
+bounded-object/evidence correction are implemented and measured; only the real
+macOS human checkpoint remains open. Historical IC0-IC4 acceptance remains
 recorded rather than rewritten.
 
 ## Phase Review Protocol

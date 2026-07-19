@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and summarize an Incinerator schema-2 incident bundle."""
+"""Validate and summarize an Incinerator schema-3 incident bundle."""
 
 from __future__ import annotations
 
@@ -8,8 +8,18 @@ import json
 from pathlib import Path
 import sys
 
-SCHEMA = 2
+SCHEMA = 3
 TERMINAL = {"complete", "partial"}
+HUMAN_ANCHORS = {
+    -5000: "human_m5000ms",
+    -4000: "human_m4000ms",
+    -3000: "human_m3000ms",
+    -2000: "human_m2000ms",
+    -1000: "human_m1000ms",
+    0: "human_flag",
+    1000: "human_p1000ms",
+    2000: "human_p2000ms",
+}
 
 
 def read_json(path: Path) -> dict:
@@ -36,7 +46,7 @@ def read_ndjson(path: Path) -> list[dict]:
         except json.JSONDecodeError as exc:
             raise ValueError(f"invalid NDJSON {path}:{number}: {exc}") from exc
         if not isinstance(value, dict) or value.get("schema") != SCHEMA or not value.get("kind"):
-            raise ValueError(f"invalid schema-2 record {path}:{number}")
+            raise ValueError(f"invalid schema-3 record {path}:{number}")
         records.append(value)
     return records
 
@@ -74,6 +84,80 @@ def signed_delta_ms(value: int, origin: int) -> int:
     return sign * (abs(value - origin) // 1_000_000)
 
 
+def validate_hardening(
+    manifest: dict,
+    anomaly_count: int,
+    replay_present: bool,
+    handoff_present: bool,
+) -> None:
+    profile = manifest.get("hardening_profile")
+    if not isinstance(profile, str):
+        raise ValueError("schema-3 manifest lacks a hardening profile")
+    if "screenshot_fence_failures" not in manifest:
+        raise ValueError("hardening manifest lacks screenshot fence health")
+    fence_failures = int(manifest["screenshot_fence_failures"])
+    if profile == "none":
+        if manifest.get("hardening_write_failure_after_bytes") is not None:
+            raise ValueError("ordinary run declares a hardening writer cutoff")
+        return
+    if manifest.get("status") != "partial" or anomaly_count != 4:
+        raise ValueError(f"invalid {profile} hardening lifecycle")
+    writer_failed = bool(manifest.get("writer_failed"))
+    handoff_persisted = bool(manifest.get("handoff_persisted"))
+    if profile == "queue_pressure":
+        valid = (
+            int(manifest["queue_high_water"]) == int(manifest["writer_queue_capacity"])
+            and int(manifest["dropped_records"]) > 0
+            and not writer_failed
+            and replay_present
+            and handoff_present
+            and handoff_persisted
+            and fence_failures == 0
+        )
+    elif profile == "visual_budget":
+        valid = (
+            bool(manifest.get("visual_budget_exhausted"))
+            and int(manifest.get("visual_budget_rejections", 0)) > 0
+            and not writer_failed
+            and replay_present
+            and handoff_present
+            and handoff_persisted
+            and fence_failures == 0
+        )
+    elif profile == "writer_budget":
+        valid = (
+            manifest.get("hardening_write_failure_after_bytes") == manifest.get("bytes_written")
+            and writer_failed
+            and int(manifest["last_durable_sequence"]) < int(manifest["last_admitted_sequence"])
+            and replay_present
+            and not handoff_present
+            and not handoff_persisted
+            and fence_failures == 0
+        )
+    elif profile == "screenshot_submission":
+        valid = (
+            int(manifest["screenshot_misses"]) > 0
+            and fence_failures == 0
+            and not writer_failed
+            and replay_present
+            and handoff_present
+            and handoff_persisted
+        )
+    elif profile == "screenshot_fence":
+        valid = (
+            int(manifest["screenshot_misses"]) > 0
+            and fence_failures > 0
+            and not writer_failed
+            and replay_present
+            and handoff_present
+            and handoff_persisted
+        )
+    else:
+        raise ValueError(f"unknown hardening profile: {profile!r}")
+    if not valid:
+        raise ValueError(f"invalid evidence contract for hardening profile {profile}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("run_folder", type=Path)
@@ -84,7 +168,7 @@ def main() -> int:
 
     manifest = read_json(root / "manifest.json")
     if manifest.get("schema") != SCHEMA or manifest.get("kind") != "incinerator_incident_run":
-        raise ValueError("unsupported incident manifest; schema 2 is required")
+        raise ValueError("unsupported incident manifest; schema 3 is required")
     classes = manifest.get("bytes_by_class", {})
     if sum(int(classes.get(key, 0)) for key in ("streams", "visual", "replay", "metadata")) != int(manifest["bytes_written"]):
         raise ValueError("manifest byte classes do not equal bytes_written")
@@ -97,20 +181,19 @@ def main() -> int:
         "handoff_persisted",
     )
     partition_fields = sum(key in manifest for key in partition_keys)
-    if partition_fields not in (0, len(partition_keys)):
+    if partition_fields != len(partition_keys):
         raise ValueError("incomplete visual/non-visual budget partition")
     visual_budget = int(manifest.get("visual_budget_bytes", 0))
     non_visual_reserve = int(manifest.get("non_visual_reserve_bytes", 0))
     visual_reserved = int(manifest.get("visual_bytes_reserved", classes.get("visual", 0)))
     visual_rejections = int(manifest.get("visual_budget_rejections", 0))
     visual_exhausted = bool(manifest.get("visual_budget_exhausted", False))
-    if partition_fields:
-        if visual_budget + non_visual_reserve != int(manifest["run_budget_bytes"]):
-            raise ValueError("visual budget and non-visual reserve do not partition the run budget")
-        if visual_reserved > visual_budget or int(classes.get("visual", 0)) > visual_reserved:
-            raise ValueError("visual byte accounting exceeds its reserved budget")
-        if visual_exhausted != (visual_rejections != 0):
-            raise ValueError("visual budget exhaustion and rejection count disagree")
+    if visual_budget + non_visual_reserve != int(manifest["run_budget_bytes"]):
+        raise ValueError("visual budget and non-visual reserve do not partition the run budget")
+    if visual_reserved > visual_budget or int(classes.get("visual", 0)) > visual_reserved:
+        raise ValueError("visual byte accounting exceeds its reserved budget")
+    if visual_exhausted != (visual_rejections != 0):
+        raise ValueError("visual budget exhaustion and rejection count disagree")
     if int(manifest["last_durable_sequence"]) > int(manifest["last_admitted_sequence"]):
         raise ValueError("durable sequence exceeds admitted sequence")
 
@@ -122,6 +205,9 @@ def main() -> int:
         anomalies = {}
     else:
         raise ValueError(f"missing anomaly index: {anomaly_index}")
+    replay = root / "replay" / "accepted-ingress.icrp"
+    handoff = root / "LLM_HANDOFF.md"
+    validate_hardening(manifest, len(anomalies), replay.is_file(), handoff.is_file())
     stream_counts: dict[str, int] = {}
     kinds: dict[str, int] = {}
     for path in sorted((root / "streams").glob("*.ndjson")):
@@ -134,23 +220,22 @@ def main() -> int:
     print(f"run: {root}")
     print(
         "health: "
-        f"status={manifest.get('status')} source={manifest.get('source_revision')} "
+        f"status={manifest.get('status')} hardening={manifest.get('hardening_profile')} "
+        f"source={manifest.get('source_revision')} "
         f"dirty={manifest.get('source_dirty')} bytes={manifest.get('bytes_written')}/{manifest.get('run_budget_bytes')} "
         f"queue={manifest.get('writer_queue')} high={manifest.get('queue_high_water')}/{manifest.get('writer_queue_capacity')} "
         f"durable={manifest.get('last_durable_sequence')}/{manifest.get('last_admitted_sequence')} "
         f"dropped={manifest.get('dropped_records')} writer_failed={manifest.get('writer_failed')} "
         f"screenshot_misses={manifest.get('screenshot_misses')} "
-        f"visual_reserved={visual_reserved}/{visual_budget if partition_fields else 'unpartitioned'} "
+        f"fence_failures={manifest.get('screenshot_fence_failures')} "
+        f"visual_reserved={visual_reserved}/{visual_budget} "
         f"visual_rejected={visual_rejections} "
         f"handoff_persisted={manifest.get('handoff_persisted')}"
     )
     capabilities = manifest.get("evidence_capabilities")
-    if capabilities is None:
-        print("capabilities: missing (bundle predates explicit per-entity coverage)")
-    elif not isinstance(capabilities, dict):
+    if not isinstance(capabilities, dict):
         raise ValueError("invalid evidence capability matrix")
-    else:
-        print("capabilities: " + json.dumps(capabilities, sort_keys=True))
+    print("capabilities: " + json.dumps(capabilities, sort_keys=True))
     print("streams: " + ", ".join(f"{name}={count}" for name, count in stream_counts.items()))
     print("record kinds: " + ", ".join(f"{name}={count}" for name, count in sorted(kinds.items())))
     print("anomalies:")
@@ -167,6 +252,8 @@ def main() -> int:
                 continue
             raise ValueError(f"missing anomaly marker: {marker_path}")
         marker = read_json(marker_path)
+        if marker.get("schema") != SCHEMA or marker.get("kind") != "incident_marker":
+            raise ValueError(f"invalid schema-3 marker for anomaly {anomaly_id}")
         if marker.get("lifecycle_status") != reduced.get("lifecycle_status"):
             raise ValueError(f"marker lifecycle mismatch for anomaly {anomaly_id}")
         windows = {}
@@ -174,10 +261,24 @@ def main() -> int:
         removals_by_kind: dict[str, int] = {}
         relevance: dict[str, int] = {}
         entity_kinds: dict[str, int] = {}
+        retained_faults: list[str] = []
         for stream in ("timeline", "state", "input", "metrics"):
             records = read_ndjson(folder / f"{stream}-window.ndjson")
             windows[stream] = len(records)
             for record in records:
+                if record.get("kind") == "runtime_fault":
+                    retained_faults.append(
+                        "runtime:"
+                        f"{record.get('phase')}/"
+                        f"{record.get('system')}/"
+                        f"{record.get('error')}@{record.get('authority_tick')}"
+                    )
+                elif record.get("kind") == "authority_cycle_fault":
+                    retained_faults.append(
+                        "authority:"
+                        f"{record.get('stage')}/"
+                        f"{record.get('error')}@{record.get('target_tick')}"
+                    )
                 reason = record.get("removal_reason")
                 if reason and reason != "none":
                     removals[str(reason)] = removals.get(str(reason), 0) + 1
@@ -194,6 +295,7 @@ def main() -> int:
         suspicious = 0
         offsets: list[int] = []
         sources: dict[str, int] = {}
+        human_requested: set[int] = set()
         for visual in visuals:
             actual = signed_delta_ms(int(visual["captured_monotonic_ns"]), int(marker["flag_monotonic_ns"]))
             if actual != int(visual["actual_offset_ms"]):
@@ -204,10 +306,18 @@ def main() -> int:
             offsets.append(actual)
             source = str(visual["source"])
             sources[source] = sources.get(source, 0) + 1
+            if source == "human_visible":
+                requested = int(visual["requested_offset_ms"])
+                if requested not in HUMAN_ANCHORS or requested in human_requested:
+                    raise ValueError(f"invalid human anchor offset for anomaly {anomaly_id}: {requested}")
+                human_requested.add(requested)
             suspicious += int(bool(visual.get("suspicious")))
         artifacts = marker.get("artifacts", {})
         if len(visuals) != int(artifacts.get("count", 0)):
             raise ValueError(f"artifact count mismatch for anomaly {anomaly_id}")
+        marker_human = {offset for offset, field in HUMAN_ANCHORS.items() if artifacts.get(field) is True}
+        if human_requested != marker_human:
+            raise ValueError(f"human anchor marker mismatch for anomaly {anomaly_id}")
         print(
             f"  #{anomaly_id} lifecycle={reduced.get('lifecycle_status')} tick={reduced.get('authority_tick')} "
             f"frame={reduced.get('presentation_frame')} updates={reduced.get('updates')} note={reduced.get('note')!r} "
@@ -215,11 +325,11 @@ def main() -> int:
             f"actual_span_ms={min(offsets) if offsets else None}..{max(offsets) if offsets else None} "
             f"suspicious={suspicious} failures={artifacts.get('failures')} "
             f"entity_kinds={entity_kinds} removals={removals} "
-            f"removals_by_kind={removals_by_kind} relevance={relevance}"
+            f"removals_by_kind={removals_by_kind} relevance={relevance} "
+            f"retained_faults={retained_faults}"
         )
-    replay = root / "replay" / "accepted-ingress.icrp"
     print(f"replay: {'present' if replay.is_file() else 'missing'}")
-    print(f"handoff: {'present' if (root / 'LLM_HANDOFF.md').is_file() else 'missing'}")
+    print(f"handoff: {'present' if handoff.is_file() else 'missing'}")
     print("next:")
     print(f"  rg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{root}'")
     print(f"  rg '\"kind\":\"developer_shortcut\"' '{root / 'streams'}'")

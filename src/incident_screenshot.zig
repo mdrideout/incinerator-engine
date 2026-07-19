@@ -1,8 +1,9 @@
 //! Bounded, asynchronous incident visual capture for the macOS product.
 //!
-//! A low-resolution product-only lane retains four seconds at 15 Hz. A
-//! full-resolution human-visible lane retains three seconds at 1 Hz and owns
-//! the -2/-1/flag/+1/+3 anchors. Both copy through stable diagnostic textures;
+//! A low-resolution product-only lane retains five seconds before and two
+//! seconds after a flag at 15 Hz. A full-resolution human-visible lane retains
+//! five seconds at 1 Hz and owns the -5/-4/-3/-2/-1/flag/+1/+2 anchors. Both
+//! copy through stable diagnostic textures;
 //! neither waits for a GPU fence in the render loop.
 
 const std = @import("std");
@@ -15,16 +16,17 @@ const c = sdl.c;
 pub const pixel_bytes: usize = 4;
 pub const trail_width: u32 = 480;
 pub const trail_height: u32 = 270;
-pub const trail_slot_count: usize = 64;
+pub const trail_slot_count: usize = 80;
 pub const trail_cadence_ns: u64 = std.time.ns_per_s / 15;
-pub const trail_pre_roll_ns: u64 = 4 * std.time.ns_per_s;
-pub const trail_post_roll_ns: u64 = 3 * std.time.ns_per_s;
-// Four one-second full-drawable anchors retain the required -2s/-1s lookup
-// window while the 15 Hz product lane owns transient continuity. Keeping this
-// lane sparse holds a Retina 2560x1440 window plus the product trail below the
-// declared 128 MiB diagnostic download-memory budget.
-pub const anchor_slot_count: usize = 4;
+pub const trail_pre_roll_ns: u64 = 5 * std.time.ns_per_s;
+pub const trail_post_roll_ns: u64 = 2 * std.time.ns_per_s;
+// Seven one-second full-drawable slots retain six completed frames while one
+// capture may still be in flight. Two separate event slots keep exact flag
+// captures from consuming history when incidents overlap.
+pub const anchor_slot_count: usize = 7;
+pub const event_slot_count: usize = 2;
 pub const anchor_cadence_ns: u64 = std.time.ns_per_s;
+const anchor_selection_delay_ns: u64 = anchor_cadence_ns / 2;
 pub const maximum_dimension: u32 = 4096;
 pub const maximum_schedules: usize = 32;
 const exported_sequence_capacity: usize = 4096;
@@ -57,8 +59,8 @@ const Schedule = struct {
     anomaly_id: u32,
     flagged_ns: u64,
     t0_submitted: bool = false,
-    p1_submitted: bool = false,
-    p3_submitted: bool = false,
+    p1_attached: bool = false,
+    p2_attached: bool = false,
 };
 
 pub const Stats = struct {
@@ -94,8 +96,10 @@ pub const Owner = struct {
     anchor_texture: ?*c.SDL_GPUTexture = null,
     trail_slots: [trail_slot_count]Slot = @splat(.{}),
     anchor_slots: [anchor_slot_count]Slot = @splat(.{}),
+    event_slots: [event_slot_count]Slot = @splat(.{}),
     pending_trail: ?u8 = null,
     pending_anchor: ?u8 = null,
+    pending_event: ?u8 = null,
     schedules: [maximum_schedules]Schedule = undefined,
     schedule_count: u8 = 0,
     exported_sequences: [exported_sequence_capacity]u64 = undefined,
@@ -108,14 +112,19 @@ pub const Owner = struct {
     anchor_transfer_bytes: u32 = 0,
     drawable_generation: u32 = 1,
     stats: Stats = .{},
+    hardening_profile: incident_capture.HardeningProfile = .none,
 
-    pub fn init(gpu: *renderer.Renderer) !Owner {
+    pub fn init(
+        gpu: *renderer.Renderer,
+        hardening_profile: incident_capture.HardeningProfile,
+    ) !Owner {
         const format = gpu.getSwapchainFormat();
         var result = Owner{
             .device = gpu.getDevice(),
             .format = format,
             .bgra = format == c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM or
                 format == c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM_SRGB,
+            .hardening_profile = hardening_profile,
         };
         errdefer result.releaseTrailResources();
         result.trail_texture = try createCaptureTexture(
@@ -154,9 +163,10 @@ pub const Owner = struct {
             .trail_bytes_per_slot = trail_bytes,
             .anchor_bytes_per_slot = self.anchor_transfer_bytes,
             .trail_slots = trail_slot_count,
-            .anchor_slots = anchor_slot_count,
+            .anchor_slots = anchor_slot_count + event_slot_count,
             .bounded_download_bytes = @as(u64, trail_bytes) * trail_slot_count +
-                @as(u64, self.anchor_transfer_bytes) * anchor_slot_count,
+                @as(u64, self.anchor_transfer_bytes) *
+                    (anchor_slot_count + event_slot_count),
         };
     }
 
@@ -183,8 +193,9 @@ pub const Owner = struct {
                 slot.captured_ns < flagged_ns -| trail_pre_roll_ns) continue;
             slot.pin_mask |= bit;
         }
-        self.attachNearestAnchor(capture, schedule_index, -2000);
-        self.attachNearestAnchor(capture, schedule_index, -1000);
+        inline for ([_]i16{ -5000, -4000, -3000, -2000, -1000 }) |offset_ms| {
+            self.attachNearestAnchor(capture, schedule_index, offset_ms);
+        }
         self.attachProductFlag(capture, schedule_index);
     }
 
@@ -246,44 +257,56 @@ pub const Owner = struct {
     ) void {
         self.poll(capture, now_ns);
         _ = self.exportPinnedTrail(capture, exports_per_prepare);
-        if (self.pending_anchor != null) return;
         const extent = gpu.getSwapchainExtent() orelse return;
         if (!self.ensureAnchorResources(extent.width, extent.height)) {
             self.stats.missed +|= 1;
             return;
         }
 
-        var tag: ?AnchorTag = null;
         for (self.schedules[0..self.schedule_count], 0..) |*schedule, schedule_index| {
-            if (!schedule.t0_submitted) {
+            if (!schedule.t0_submitted and self.pending_event == null) {
+                const event_index = reusableSlot(&self.event_slots) orelse {
+                    self.stats.missed +|= 1;
+                    capture.noteVisualFailure(schedule.anomaly_id);
+                    continue;
+                };
                 schedule.t0_submitted = true;
-                tag = .{
+                const event_slot = &self.event_slots[event_index];
+                if (!self.submitCapture(
+                    gpu,
+                    event_slot,
+                    self.anchor_texture.?,
+                    extent.width,
+                    extent.height,
+                    now_ns,
+                    authority_tick,
+                    presentation_frame,
+                )) {
+                    capture.noteVisualFailure(schedule.anomaly_id);
+                    continue;
+                }
+                event_slot.anchor_tag = .{
                     .schedule_index = @intCast(schedule_index),
                     .requested_offset_ms = 0,
                     .target_ns = schedule.flagged_ns,
                 };
-                break;
+                self.pending_event = @intCast(event_index);
+                self.stats.anchor_submitted +|= 1;
             }
-            if (!schedule.p1_submitted and now_ns >= schedule.flagged_ns +| std.time.ns_per_s) {
-                schedule.p1_submitted = true;
-                tag = .{
-                    .schedule_index = @intCast(schedule_index),
-                    .requested_offset_ms = 1000,
-                    .target_ns = schedule.flagged_ns +| std.time.ns_per_s,
-                };
-                break;
+            if (!schedule.p1_attached and
+                now_ns >= schedule.flagged_ns +| std.time.ns_per_s +| anchor_selection_delay_ns)
+            {
+                schedule.p1_attached = true;
+                self.attachNearestAnchor(capture, @intCast(schedule_index), 1000);
             }
-            if (!schedule.p3_submitted and now_ns >= schedule.flagged_ns +| 3 * std.time.ns_per_s) {
-                schedule.p3_submitted = true;
-                tag = .{
-                    .schedule_index = @intCast(schedule_index),
-                    .requested_offset_ms = 3000,
-                    .target_ns = schedule.flagged_ns +| 3 * std.time.ns_per_s,
-                };
-                break;
+            if (!schedule.p2_attached and
+                now_ns >= schedule.flagged_ns +| 2 * std.time.ns_per_s +| anchor_selection_delay_ns)
+            {
+                schedule.p2_attached = true;
+                self.attachNearestAnchor(capture, @intCast(schedule_index), 2000);
             }
         }
-        if (tag == null and now_ns -| self.last_anchor_ns < anchor_cadence_ns) return;
+        if (self.pending_anchor != null or now_ns -| self.last_anchor_ns < anchor_cadence_ns) return;
         const index = reusableSlot(&self.anchor_slots) orelse {
             self.stats.missed +|= 1;
             return;
@@ -299,7 +322,6 @@ pub const Owner = struct {
             authority_tick,
             presentation_frame,
         )) return;
-        slot.anchor_tag = tag;
         self.pending_anchor = @intCast(index);
         self.last_anchor_ns = now_ns;
         self.stats.anchor_submitted +|= 1;
@@ -315,14 +337,27 @@ pub const Owner = struct {
             self.pending_anchor = null;
             self.assignFence(gpu, &self.anchor_slots[index]);
         }
+        if (self.pending_event) |index| {
+            self.pending_event = null;
+            self.assignFence(gpu, &self.event_slots[index]);
+        }
     }
 
     fn assignFence(self: *Owner, gpu: *renderer.Renderer, slot: *Slot) void {
+        if (self.hardening_profile == .screenshot_fence) {
+            slot.status = .free;
+            slot.anchor_tag = null;
+            slot.pin_mask = 0;
+            self.stats.fence_failures +|= 1;
+            self.stats.missed +|= 1;
+            return;
+        }
         const fence = gpu.acquirePostSubmissionFence() catch {
             slot.status = .free;
             slot.anchor_tag = null;
             slot.pin_mask = 0;
             self.stats.fence_failures +|= 1;
+            self.stats.missed +|= 1;
             return;
         };
         slot.fence = fence;
@@ -339,6 +374,10 @@ pub const Owner = struct {
         authority_tick: u64,
         presentation_frame: u64,
     ) bool {
+        if (self.hardening_profile == .screenshot_submission) {
+            self.stats.missed +|= 1;
+            return false;
+        }
         const cmd = gpu.getCurrentCommandBuffer() orelse return false;
         const swapchain = gpu.getSwapchainTexture() orelse return false;
         const extent = gpu.getSwapchainExtent() orelse return false;
@@ -442,6 +481,7 @@ pub const Owner = struct {
     ) void {
         self.pollLane(capture, &self.trail_slots, now_ns, .product_trail);
         self.pollLane(capture, &self.anchor_slots, now_ns, .human_visible);
+        self.pollLane(capture, &self.event_slots, now_ns, .human_visible);
     }
 
     fn pollLane(
@@ -671,6 +711,7 @@ pub const Owner = struct {
             return false;
         }
         for (self.anchor_slots) |slot| if (slot.status == .submitted) return false;
+        for (self.event_slots) |slot| if (slot.status == .submitted) return false;
         self.releaseAnchorResources();
         const bytes = std.math.mul(u32, width, height) catch return false;
         self.anchor_transfer_bytes = std.math.mul(u32, bytes, pixel_bytes) catch return false;
@@ -679,6 +720,12 @@ pub const Owner = struct {
             return false;
         };
         for (&self.anchor_slots) |*slot| {
+            slot.transfer = createDownloadBuffer(self.device, self.anchor_transfer_bytes) orelse {
+                self.releaseAnchorResources();
+                return false;
+            };
+        }
+        for (&self.event_slots) |*slot| {
             slot.transfer = createDownloadBuffer(self.device, self.anchor_transfer_bytes) orelse {
                 self.releaseAnchorResources();
                 return false;
@@ -699,12 +746,14 @@ pub const Owner = struct {
 
     fn releaseAnchorResources(self: *Owner) void {
         for (&self.anchor_slots) |*slot| releaseSlot(self.device, slot);
+        for (&self.event_slots) |*slot| releaseSlot(self.device, slot);
         if (self.anchor_texture) |texture| c.SDL_ReleaseGPUTexture(self.device, texture);
         self.anchor_texture = null;
         self.anchor_width = 0;
         self.anchor_height = 0;
         self.anchor_transfer_bytes = 0;
         self.pending_anchor = null;
+        self.pending_event = null;
     }
 
     fn wasExported(self: *const Owner, sequence: u64) bool {
@@ -908,10 +957,10 @@ test "visual integrity warning detects a dominant nonzero surface" {
 
 test "Retina capture policy stays within the declared download memory budget" {
     const retina_anchor_bytes = @as(u64, 2560) * 1440 * pixel_bytes *
-        anchor_slot_count;
+        (anchor_slot_count + event_slot_count);
     const trail_bytes = @as(u64, trailTransferBytes()) * trail_slot_count;
-    try std.testing.expect(retina_anchor_bytes + trail_bytes <= 128 * 1024 * 1024);
-    try std.testing.expect(anchor_slot_count >= 3);
+    try std.testing.expect(retina_anchor_bytes + trail_bytes <= 176 * 1024 * 1024);
+    try std.testing.expect(anchor_slot_count >= 7);
     try std.testing.expect(anchor_cadence_ns * (anchor_slot_count - 1) >=
-        2 * std.time.ns_per_s);
+        5 * std.time.ns_per_s);
 }

@@ -44,7 +44,25 @@ pub const ProductMode = union(enum) {
     incident_benchmark,
     incident_journey,
     incident_journey_window,
+    incident_hardening: IncidentHardeningProfile,
     incident_replay: []const u8,
+};
+
+/// Explicit developer-only evidence failures exercised by the installed
+/// graphical product. These profiles never alter ordinary interactive play.
+pub const IncidentHardeningProfile = enum {
+    queue_pressure,
+    visual_budget,
+    writer_budget,
+    screenshot_submission,
+    screenshot_fence,
+
+    pub fn parse(text: []const u8) !IncidentHardeningProfile {
+        inline for (std.meta.tags(IncidentHardeningProfile)) |candidate| {
+            if (std.mem.eql(u8, text, @tagName(candidate))) return candidate;
+        }
+        return error.InvalidIncidentHardeningProfile;
+    }
 };
 
 pub const BootstrapProfile = enum { sandbox, s0_smoke, s1_smoke, s2_smoke, s3_smoke };
@@ -278,6 +296,7 @@ pub fn parseProductMode(args: anytype) !ProductMode {
     var incident_benchmark = false;
     var incident_journey = false;
     var incident_journey_window = false;
+    var incident_hardening: ?IncidentHardeningProfile = null;
     var incident_replay: ?[]const u8 = null;
     var content_root_seen = false;
     var save_root_seen = false;
@@ -298,6 +317,11 @@ pub fn parseProductMode(args: anytype) !ProductMode {
         } else if (std.mem.eql(u8, arg, "--incident-journey-window")) {
             if (incident_journey_window) return error.DuplicateArgument;
             incident_journey_window = true;
+        } else if (std.mem.startsWith(u8, arg, "--incident-hardening=")) {
+            if (incident_hardening != null) return error.DuplicateArgument;
+            incident_hardening = try IncidentHardeningProfile.parse(
+                arg["--incident-hardening=".len..],
+            );
         } else if (std.mem.startsWith(u8, arg, "--replay-incident=")) {
             if (incident_replay != null) return error.DuplicateArgument;
             const path = arg["--replay-incident=".len..];
@@ -318,14 +342,16 @@ pub fn parseProductMode(args: anytype) !ProductMode {
         }
     }
     if ((verify_install and (save_root_seen or incident_smoke or incident_benchmark or incident_journey or
-        incident_journey_window or incident_replay != null)) or
+        incident_journey_window or incident_hardening != null or incident_replay != null)) or
         (incident_smoke and (save_root_seen or incident_benchmark or incident_journey or
-            incident_journey_window or incident_replay != null)) or
+            incident_journey_window or incident_hardening != null or incident_replay != null)) or
         (incident_benchmark and (save_root_seen or incident_journey or
-            incident_journey_window or incident_replay != null)) or
+            incident_journey_window or incident_hardening != null or incident_replay != null)) or
         (incident_journey and (save_root_seen or incident_journey_window or
+            incident_hardening != null or incident_replay != null)) or
+        (incident_journey_window and (save_root_seen or incident_hardening != null or
             incident_replay != null)) or
-        (incident_journey_window and (save_root_seen or incident_replay != null)) or
+        (incident_hardening != null and (save_root_seen or incident_replay != null)) or
         (incident_replay != null and save_root_seen)) return error.ConflictingProgramModes;
     return if (verify_install)
         .verify_install
@@ -337,6 +363,8 @@ pub fn parseProductMode(args: anytype) !ProductMode {
         .incident_journey
     else if (incident_journey_window)
         .incident_journey_window
+    else if (incident_hardening) |profile|
+        .{ .incident_hardening = profile }
     else if (incident_replay) |path|
         .{ .incident_replay = path }
     else
@@ -427,6 +455,14 @@ test "product mode accepts only product invocation options" {
         "incinerator",
         "--incident-journey-window",
     })) == .incident_journey_window);
+    const hardening = try parseProductMode(&[_][]const u8{
+        "incinerator",
+        "--incident-hardening=writer_budget",
+    });
+    try std.testing.expectEqual(
+        IncidentHardeningProfile.writer_budget,
+        hardening.incident_hardening,
+    );
     const replay = try parseProductMode(&[_][]const u8{
         "incinerator",
         "--replay-incident=/tmp/incinerator-run",
@@ -443,6 +479,21 @@ test "product mode accepts only product invocation options" {
             "incinerator",
             "--verify-install",
             "--save-root=/tmp/incinerator-saves",
+        }),
+    );
+    try std.testing.expectError(
+        error.InvalidIncidentHardeningProfile,
+        parseProductMode(&[_][]const u8{
+            "incinerator",
+            "--incident-hardening=unknown",
+        }),
+    );
+    try std.testing.expectError(
+        error.ConflictingProgramModes,
+        parseProductMode(&[_][]const u8{
+            "incinerator",
+            "--incident-hardening=queue_pressure",
+            "--incident-journey",
         }),
     );
     try std.testing.expectError(

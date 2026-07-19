@@ -1890,6 +1890,27 @@ pub fn build(b: *std.Build) void {
     );
     inspect_incident_step.dependOn(&run_incident_inspect.step);
 
+    const verify_incident_hardening = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tools/verify_incident_hardening.sh"),
+    });
+    verify_incident_hardening.addFileArg(exe.getEmittedBin());
+    verify_incident_hardening.addFileArg(incident_inspect_exe.getEmittedBin());
+    verify_incident_hardening.addFileArg(replay_tool_exe.getEmittedBin());
+    verify_incident_hardening.addArg(
+        b.getInstallPath(.prefix, "share/incinerator/content"),
+    );
+    verify_incident_hardening.step.dependOn(&install_cooked_fixture.step);
+    verify_incident_hardening.step.dependOn(&install_fixture_provenance.step);
+    verify_incident_hardening.step.dependOn(&install_cooked_east.step);
+    verify_incident_hardening.step.dependOn(&install_east_provenance.step);
+    verify_incident_hardening.step.dependOn(&install_cooked_catalog.step);
+    const verify_incident_hardening_step = b.step(
+        "verify-incident-hardening",
+        "Run the five installed Metal IC5-G evidence-failure journeys",
+    );
+    verify_incident_hardening_step.dependOn(&verify_incident_hardening.step);
+
     const incident_visual_report = b.addSystemCommand(&.{
         "python3",
         b.pathFromRoot("tools/incident_visual_report.py"),

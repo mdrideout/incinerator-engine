@@ -1,7 +1,8 @@
-# Incident bundle schema 2
+# Incident bundle schema 3
 
 All paths are relative to the run folder. Every NDJSON line is one complete
-schema-2 JSON object. The inspector rejects schema 1; there is no fallback.
+schema-3 JSON object. The inspector rejects earlier schemas; there is no
+fallback.
 
 ## Manifest and health
 
@@ -13,6 +14,8 @@ partial-in-time evidence—not a stale startup zero. Check:
   cohorts;
 - `last_durable_sequence <= last_admitted_sequence`;
 - queue/current/high-water/capacity, drops, writer failure, screenshot misses;
+- `hardening_profile`, its optional exact writer cutoff, and screenshot fence
+  failures for current bundles;
 - total bytes equal `bytes_by_class` and stay under `run_budget_bytes`;
 - `visual_budget_bytes + non_visual_reserve_bytes == run_budget_bytes`, visual
   reservations never exceed their lane, and rejection/exhaustion agree; and
@@ -23,8 +26,25 @@ the visual lane is full, new images are rejected and counted while typed
 streams, markers, notes, replay, and handoff persistence retain a 128 MiB
 reserve. `handoff_persisted=false` means clipboard text may still be available
 in the running process but `LLM_HANDOFF.md` is not yet durable.
-These fields were added atomically within schema 2. Their collective absence
-identifies an earlier preserved schema-2 run; a partial field set is invalid.
+These fields are required in schema 3; a partial field set is invalid.
+
+`hardening_profile=none` is an ordinary run. The five developer-only IC5-G
+profiles deliberately finalize the run as `partial`:
+
+- `queue_pressure`: queue reaches capacity, at least one probe is rejected,
+  then replay and handoff persist after recovery;
+- `visual_budget`: visual admission exhausts its configured lane while typed
+  evidence, replay, and handoff retain their reserve;
+- `writer_budget`: the writer cutoff is armed after all markers/windows and
+  replay, so only the durable handoff and later records fail while clipboard
+  publication remains available;
+- `screenshot_submission`: capture submission is rejected before a fence; and
+- `screenshot_fence`: submitted captures manufacture post-submission fence
+  failure.
+
+The strict inspector validates these exact combinations. They are acceptance
+fixtures, not gameplay incidents. A real host volume is never filled merely to
+manufacture ENOSPC.
 
 Read `evidence_capabilities` before assigning a boundary. Current bundles
 declare `full_boundary` separately for characters, NPCs, vehicles, and
@@ -53,10 +73,10 @@ format, fence latency, digest, suspicious flag, and relative path.
 Sources:
 
 - `product_trail`: 15 FPS 480x270 product-only circular lane, approximately
-  four seconds before through three seconds after the flag; overlapping flags
+  five seconds before through two seconds after the flag; overlapping flags
   reference the same run-level `visual/frame-*.ppm`.
-- `human_visible`: anchors requested at -2000, -1000, 0, +1000, and +3000 ms,
-  including developer UI. Retina sources are stored aspect-fit within
+- `human_visible`: anchors requested every whole second from -5000 through
+  +2000 ms, including developer UI. Retina sources are stored aspect-fit within
   1280x720; `source_width`/`source_height` preserve the drawable size while
   `width`/`height` describe the PPM artifact.
 - `product_flag`: product-only flag-adjacent frame.
@@ -70,8 +90,13 @@ the latter catches cameras embedded in bright world surfaces.
 
 ## Typed streams
 
-`timeline`: gameplay/action traces, diagnostics, anomaly flags, district
-lifecycle. District diagnostic code family `0x00090001..0x00090025` covers
+`timeline`: gameplay/action traces, diagnostics, retained faults, anomaly
+flags, and district lifecycle. `runtime_fault` records the immutable runtime
+phase, authority tick, system/error name with explicit truncation, error code,
+and linked diagnostic sequence. `authority_cycle_fault` records the immutable
+cycle stage, target/completed ticks, and error name/code. Each appears at most
+once per run and is materialized into every overlapping anomaly window.
+District diagnostic code family `0x00090001..0x00090025` covers
 content request/cancel/ready/failure, logical submit/admit/activate/cancel/
 unload/failure, and GPU reserve/stage/submit/resident/release/drain.
 

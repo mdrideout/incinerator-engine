@@ -136,7 +136,7 @@ grep -q '"restored":true' "$work/recovered.out"
 # before world construction and cannot replace the last committed save.
 before=$(shasum -a 256 "$virtual_root/world.isav" | awk '{print $1}')
 bad_manifest="$work/content.bad.json"
-sed 's/11ac40075804/21ac40075804/' "$manifest" > "$bad_manifest"
+sed 's/53a65a03bee9/63a65a03bee9/' "$manifest" > "$bad_manifest"
 expect_failure \
     "mismatched compiled logical content" \
     "$work/rejected.out" \
@@ -149,7 +149,7 @@ test "$before" = "$after"
 # configured cohort digest differs. This exercises config-to-manifest
 # admission, rather than the compiled-manifest check above.
 cohort_mismatch_config="$work/cohort-mismatch.json"
-sed 's/11ac40075804/21ac40075804/' "$virtual_config" > "$cohort_mismatch_config"
+sed 's/53a65a03bee9/63a65a03bee9/' "$virtual_config" > "$cohort_mismatch_config"
 expect_failure \
     "config-to-manifest cohort mismatch" \
     "$work/cohort-mismatch.out" \

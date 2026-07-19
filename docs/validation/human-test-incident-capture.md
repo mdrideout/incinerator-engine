@@ -1,14 +1,15 @@
 # Human-Test Incident Capture Validation Record
 
-**Status:** Schema-2 IC5-A through IC5-F, IC5-H bounded-object evidence, and
+**Status:** Schema-3 visual capture succeeds the validated schema-2 IC5-A
+through IC5-F, IC5-H bounded-object evidence, and
 IC5-I budget-safe handoff/playable-boundary correction are validated for the
 Apple Silicon macOS solo developer product. IC5-G long gameplay/replay, real
-window lifecycle, and capture-cost gates remain valid. Controlled
-destructive/failure hardening and the physical shortcut/drop/district/NPC/
-vehicle human checkpoint remain open in the
+window lifecycle, capture-cost, and five-profile deterministic failure gates
+pass. Only the physical shortcut/drop/district/NPC/vehicle human checkpoint
+remains open in the
 [corrective implementation plan](../design/incident-evidence-reliability-and-boundary-corrections.md)
 
-**Date:** 2026-07-18
+**Date:** 2026-07-19
 
 **Decision:** [ADR-021](../adr/021-local-human-test-incident-bundles.md)
 
@@ -130,8 +131,9 @@ compilation also pass.
   Capture controls, main-thread clipboard, and Finder folder opening.
 - Atomic live manifests expose current source/cohort, durable/admitted
   sequence, per-class bytes, queue, loss, writer, replay, and visual health.
-- A 15 FPS 480x270 product-only trail, -2/-1/0/+1/+3 human-visible anchors
-  stored at no more than 1280x720, a product-only flag frame, and 320x180
+- A 15 FPS 480x270 product-only trail from -5 through +2 seconds, UI-inclusive
+  human-visible anchors at every whole second in that window stored at no more
+  than 1280x720, a product-only flag frame, and 320x180
   semantic-ID frame/map use nonblocking Metal fences and explicit
   partial-evidence paths. Source and stored dimensions are both indexed.
 - Tri-state authority/replication/presentation/draw membership, five-second
@@ -528,6 +530,138 @@ occluded replacement. The journey now stops at a reachable, policy-valid
 point. A fresh chronological report is readable and the final run has zero
 visual-integrity warnings.
 
+## IC5-G deterministic failure-hardening matrix
+
+The installed debug product now owns one explicit gate:
+
+```sh
+zig build verify-incident-hardening -Deditor=true --summary all
+```
+
+The 2026-07-18 gate passed 49/49 build steps and ran the complete gameplay
+journey once under each developer-only failure profile. Every run reached all
+four flags, finalized 16 typed windows, published clipboard text exactly once,
+and semantically replayed all 2,148 accepted-ingress ticks. The strict
+inspector required `status=partial` and validated the loss expected for that
+specific manifest profile.
+
+| Profile | Measured result | Durable outcome |
+|---|---|---|
+| `queue_pressure` | high-water 1,024/1,024; one rejected probe; 380 visuals | replay and handoff persisted; writer recovered |
+| `visual_budget` | 16,633,600/16,777,216 bytes reserved; 354 visual rejections; 25 visuals | nonvisual replay, windows, and handoff persisted |
+| `writer_budget` | late writer failure; 379 visuals; durable sequence 1,101/1,125 | four markers/windows and replay persisted; handoff file absent; clipboard succeeded |
+| `screenshot_submission` | 8,821 misses; zero fence failures; four semantic visuals | typed evidence, replay, and handoff persisted |
+| `screenshot_fence` | 567 misses; 555 injected fence failures; four semantic visuals | typed evidence, replay, and handoff persisted |
+
+Evidence is retained under `/tmp/incinerator-ic5g-final`. A real host-volume
+ENOSPC was deliberately not manufactured; the writer-owned byte ceiling
+injects the same fail-closed write result without consuming or mounting an
+unsafe filesystem. The implementation also changed final run status so any
+writer failure, queue loss, screenshot miss, or visual-lane exhaustion is
+reported as `partial` rather than allowing a healthy-looking `complete` run.
+A fault-free companion run under `/tmp/incinerator-ic5g-normal-final` remains
+`complete`: four complete anomalies, 16 windows, 402 visuals, zero suspicious
+frames/loss/failures, durable replay and handoff, and a matching 2,148-tick
+semantic replay.
+
+After the hardening changes, the full editor-disabled repository graph passed
+255/255 steps with 932/932 tests. The filtered source-package gate included
+the new runner, rebuilt the extracted tree, and passed its 182/182-step,
+410/410-test broad graph plus the 32/32-step, 62/62-test cold graph. This keeps
+the hardening workflow usable from the distributed source package rather than
+only from this checkout.
+
+## Schema-3 -5/+2 visual-window amendment
+
+The 2026-07-19 visual contract intentionally advances the incident schema to
+3. The 15 FPS product-only ring now uses 80 slots for five seconds before
+through two seconds after a flag. Eight UI-inclusive anchors are required at
+every whole second from -5 through +2. Seven history-only one-Hz slots retain
+six completed frames while one may be in flight; two separate event slots
+capture flag frames without allowing rapid incidents to consume history. The
+combined 2560x1440 download allocation remains below 176 MiB.
+
+The first Metal trial caught history slots being reused by scheduled flag/post
+captures: a later rapid incident had only 2.46 seconds of UI prehistory. The
+accepted design separates those owners and delays +1/+2 selection by half a
+capture interval so the nearest completed one-Hz frame is chosen. The final
+installed journey is:
+
+```text
+/tmp/incinerator-schema3-visual-window-v3-20260719/
+  2026-07-19T16-53-46.113Z_solo_aaa71ff2
+```
+
+It completed 2,214 gameplay ticks with four complete anomalies, 16 typed
+windows, 387 visuals, eight human-visible anchors per anomaly, zero suspicious
+images, misses, drops, writer failures, or budget rejections, durable replay
+and handoff, and queue high-water 55/1,024. The three mature/overlapping
+incidents retained distinct UI frames spanning approximately -5.205 through
++2.309 seconds; the startup incident truthfully had only the history available
+since process launch. The strict inspector and repository skill accepted the
+bundle, and semantic replay matched all 2,154 attached ticks.
+
+The complete five-profile installed Metal failure matrix then passed 49/49
+steps under schema 3. Queue, visual-budget, writer-budget, screenshot
+submission, and fence failures each retained their expected honest partial
+contract.
+
+The final editor-disabled repository graph passed 255/255 steps with 934/934
+tests. The extracted source-package gate passed its 182/182-step, 410/410-test
+broad graph and its 32/32-step, 62/62-test cold graph, confirming that schema 3
+and its diagnostics remain reproducible outside this checkout.
+
+## Physical-checkpoint perimeter and vehicle–NPC correction
+
+The 2026-07-19 human bundle
+`2026-07-19T17-40-08.000Z_solo_9b38ce58` captured a cornflower fault frame
+after sustained vehicle contact with the NPC. The strict inspector accepted the
+complete run and honest partial anomaly: 4,240 records, 23 segments, 60 visuals,
+zero recorder loss/failure/warnings, and a generic fatal runtime diagnostic at
+committed tick 2,381. Authority state immediately before failure placed the
+eastbound vehicle and NPC at the `x=8` district seam. Code-level reproduction
+then failed deterministically in `npc.publish_and_transfer` with
+`NpcUnexpectedOwnerTransfer`.
+
+The correction deliberately supersedes recipe 4's perimeter strategy. Recipe
+5 retains the support surfaces and two real obstacles but removes all four
+containment planes from collision and proxy presentation. Ordinary product
+residency remains pinned for the two currently authored districts; traversal
+is not used to hide finite content or relevance behavior.
+
+NPC publish now treats physical position as spatial ownership and the route as
+rebuildable intent. A displaced live controller rebinds to the positional
+owner's current ticket, rebases base and encounter routes from the nearest
+active owner node, and emits one typed transfer. Inactive/unavailable
+destinations relocate to the last owner-valid pose; a blocked relocation
+suspends and reconstructs only that NPC on the next reconciliation tick.
+
+Incident capture now emits immutable `runtime_fault` and
+`authority_cycle_fault` timeline records containing exact phase/stage,
+system/error name, error code, and tick ownership. The inspector, repository
+diagnostic skill, schema reference, and LLM handoff search hints consume those
+records. The old source bundle cannot acquire evidence it never recorded, but
+a future equivalent fault will identify the responsible system directly.
+
+Focused automated results are recorded in
+[the correction plan](../design/playable-boundary-and-vehicle-npc-collision-correction.md).
+The full editor-disabled graph passes 255/255 steps with 942/942 tests. The
+extracted package passes 182/182 broad steps with 414/414 tests and 32/32 cold
+steps with 62/62 tests. The installed S4 Metal fault gate passes 59/59 steps
+after its validation accepted exact one-or-two-scene accounting for the
+intentional adjacent visual prefetch while still requiring one authoritative
+district.
+
+The installed recipe-5 product journey completed 2,209 authority ticks and
+semantic replay matched all 2,149 captured ticks. The strict inspector accepted
+four complete anomalies, 16 typed windows, 387 visuals, zero recorder loss,
+and durable replay/handoff. It also truthfully reported 207 suspicious
+dominant-green frames during scripted close-range NPC combat. That is a dynamic
+camera-occlusion warning rather than the original cornflower fault frame, but
+the run is not treated as visual acceptance. Direct human acceptance remains
+required for all former perimeter directions and sustained vehicle contact
+through the seam.
+
 ## Explicit remaining limits
 
 - Command+Option+I still requires one focused physical macOS run from SDL
@@ -535,11 +669,10 @@ visual-integrity warnings.
   to be absent when macOS consumes the function row.
 - Current human workflow acceptance is solo macOS. Listen/dedicated bundle
   parent/child orchestration is deferred with those human-test products.
-- Long-run retention cleanup, deterministic fault, forced disk-full,
-  rapid-flag GPU saturation, and explicit screenshot-failure remain hardening
-  gates before calling IC5 fully closed. Capture-on/off performance, real
-  minimized-window automation, unusable-root, and forced unclean-exit behavior
-  now pass.
+- Capture-on/off performance, real minimized-window automation, unusable-root,
+  forced unclean-exit behavior, queue/visual/writer pressure, and explicit GPU
+  submission/fence failures pass. The physical workflow checkpoint remains
+  required before calling IC5 fully closed.
 - The full west-to-east/east-to-west scripted walk/drive journey now passes;
   direct human continuity confirmation remains open.
 - The full evidence-truth, trailing visual, shortcut delivery, causal

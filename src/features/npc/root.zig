@@ -97,6 +97,11 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             handle: ?Controllers.Handle = null,
             owner_ticket: ?navigation.LoadTicket = null,
         };
+        const PreparedEncounterOwnerTransfer = struct {
+            locomotion: ?EncounterLocomotion = null,
+            route: ?RouteCursor = null,
+            pending: ?EncounterLocomotion = null,
+        };
         const TransformHistory = struct {
             previous: engine.physics.Pose,
             current: engine.physics.Pose,
@@ -721,6 +726,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                     return error.NpcControllerInvariantBroken;
                 const handle = runtime_controller.handle orelse
                     return error.NpcControllerInvariantBroken;
+                const previous_position = logical.position;
                 const state = try self.controllers.characterState(handle);
                 try state.validate();
                 logical.position = canonicalVector(state.position);
@@ -728,30 +734,34 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
 
                 const next_owner = try navigation.ownerForPosition(logical.position);
                 if (!navigation.ChunkCoord.eql(next_owner, logical.owner)) {
-                    const next_ref = encounterNextNode(logical.*) orelse
-                        return error.NpcUnexpectedOwnerTransfer;
-                    if (!navigation.ChunkCoord.eql(next_ref.coord, next_owner)) {
-                        return error.NpcUnexpectedOwnerTransfer;
+                    switch (self.navigation_access.nearestActiveNode(logical.position)) {
+                        .ready => |destination| self.adoptPositionalOwner(
+                            runtime_id,
+                            logical,
+                            runtime_controller,
+                            next_owner,
+                            destination,
+                        ) catch |err| switch (err) {
+                            error.NpcDisplacedGoalUnreachable,
+                            error.NpcEncounterTargetNodeUnavailable,
+                            error.NpcEncounterRouteUnavailable,
+                            => try self.recoverExternalDisplacement(
+                                runtime_id,
+                                logical,
+                                runtime_controller,
+                                handle,
+                                previous_position,
+                            ),
+                            else => return err,
+                        },
+                        .district_inactive, .unavailable => try self.recoverExternalDisplacement(
+                            runtime_id,
+                            logical,
+                            runtime_controller,
+                            handle,
+                            previous_position,
+                        ),
                     }
-                    const destination = switch (self.navigation_access.resolveNode(next_ref)) {
-                        .ready => |resolved| resolved,
-                        .district_inactive => return error.NpcEnteredInactiveDistrict,
-                        .invalid_reference => return error.NpcRouteReferenceInvalid,
-                    };
-                    const previous_owner = logical.owner;
-                    // CharacterVirtual is world-global rather than owned by a
-                    // district backend. Transfer atomically rebinds the same
-                    // live handle to the already-resolved destination cohort;
-                    // destructive reconstruction is reserved for generation
-                    // changes and dormancy.
-                    logical.owner = next_owner;
-                    runtime_controller.owner_ticket = destination.ticket;
-                    self.transfers +|= 1;
-                    try self.emitEvent(.{ .owner_transferred = .{
-                        .id = try self.runtime.identity(runtime_id),
-                        .previous = previous_owner,
-                        .current = next_owner,
-                    } });
                 }
 
                 if (logical.encounter_route != null) {
@@ -765,6 +775,170 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 history.current = try poseFor(logical.position, logical.facing_yaw);
                 history.current_tick = tick.tick_index;
             }
+        }
+
+        fn adoptPositionalOwner(
+            self: *Self,
+            runtime_id: engine.RuntimeId,
+            logical: *LogicalState,
+            runtime_controller: *RuntimeController,
+            next_owner: navigation.ChunkCoord,
+            destination: navigation.ResolvedNode,
+        ) !void {
+            if (!navigation.ChunkCoord.eql(destination.reference.coord, next_owner) or
+                !navigation.ChunkCoord.eql(destination.ticket.coord, next_owner))
+            {
+                return error.NpcPositionalOwnerResolutionMismatch;
+            }
+
+            // Prepare every fallible route decision before changing owner or
+            // ticket. Physical position determines spatial ownership; the
+            // retained goal and encounter route are movement intent rebuilt
+            // from an owner-aligned navigation anchor.
+            const rebased_route = try self.prepareGoalAfterOwnerTransfer(
+                logical.*,
+                destination.reference,
+            );
+            const rebased_encounter = try self.prepareEncounterAfterOwnerTransfer(
+                logical.*,
+                destination.reference,
+            );
+            const id = try self.runtime.identity(runtime_id);
+            const previous_owner = logical.owner;
+
+            // CharacterVirtual is world-global rather than district-owned.
+            // Rebind the same live controller; reconstruction remains reserved
+            // for generation changes, inactive content, and dormancy.
+            logical.owner = next_owner;
+            logical.route = rebased_route;
+            logical.encounter_locomotion = rebased_encounter.locomotion;
+            logical.encounter_route = rebased_encounter.route;
+            logical.pending_encounter_locomotion = rebased_encounter.pending;
+            runtime_controller.owner_ticket = destination.ticket;
+            self.transfers +|= 1;
+            try self.emitEvent(.{ .owner_transferred = .{
+                .id = id,
+                .previous = previous_owner,
+                .current = next_owner,
+            } });
+        }
+
+        fn prepareGoalAfterOwnerTransfer(
+            self: *Self,
+            logical: LogicalState,
+            anchor: navigation.NodeRef,
+        ) !RouteCursor {
+            return switch (try self.buildRestoredGoalRoute(
+                anchor,
+                logical.goal,
+                logical.route.patrol_leg,
+                null,
+                logical.position,
+            )) {
+                .ready => |route| route,
+                .inactive => routeAwaitingRebuild(
+                    anchor,
+                    logical.route.patrol_leg,
+                    logical.position,
+                ),
+                .invalid_content => error.NpcDisplacedGoalInvalid,
+                .no_path => error.NpcDisplacedGoalUnreachable,
+            };
+        }
+
+        fn prepareEncounterAfterOwnerTransfer(
+            self: *Self,
+            logical: LogicalState,
+            anchor: navigation.NodeRef,
+        ) !PreparedEncounterOwnerTransfer {
+            const desired = logical.pending_encounter_locomotion orelse
+                logical.encounter_locomotion orelse return .{};
+            return switch (desired) {
+                .resume_route => error.NpcEncounterLocomotionInvariantBroken,
+                .hold, .face_and_hold => .{
+                    .locomotion = desired,
+                    .route = .{
+                        .plan = planWithOne(anchor),
+                        .segment_start = logical.position,
+                    },
+                },
+                .pursue_position => |target_position| blk: {
+                    const target = switch (self.navigation_access.nearestActiveNode(
+                        target_position,
+                    )) {
+                        .ready => |resolved| resolved.reference,
+                        .district_inactive => break :blk deferredEncounterTransfer(
+                            anchor,
+                            desired,
+                            logical.position,
+                        ),
+                        .unavailable => return error.NpcEncounterTargetNodeUnavailable,
+                    };
+                    const plan = switch (try self.buildRoute(anchor, target)) {
+                        .ready => |value| value,
+                        .inactive => break :blk deferredEncounterTransfer(
+                            anchor,
+                            desired,
+                            logical.position,
+                        ),
+                        .invalid_content => return error.NpcEncounterRouteInvalid,
+                        .no_path => return error.NpcEncounterRouteUnavailable,
+                    };
+                    break :blk .{
+                        .locomotion = .{ .pursue_position = target_position },
+                        .route = .{
+                            .plan = plan,
+                            .segment_start = logical.position,
+                        },
+                    };
+                },
+            };
+        }
+
+        fn deferredEncounterTransfer(
+            anchor: navigation.NodeRef,
+            desired: EncounterLocomotion,
+            position: [3]f32,
+        ) PreparedEncounterOwnerTransfer {
+            return .{
+                .locomotion = .hold,
+                .route = .{
+                    .plan = planWithOne(anchor),
+                    .segment_start = position,
+                },
+                .pending = desired,
+            };
+        }
+
+        fn recoverExternalDisplacement(
+            self: *Self,
+            runtime_id: engine.RuntimeId,
+            logical: *LogicalState,
+            runtime_controller: *RuntimeController,
+            handle: Controllers.Handle,
+            previous_position: [3]f32,
+        ) !void {
+            const recovered = try self.controllers.tryRelocateCharacter(handle, .{
+                .position = previous_position,
+                .velocity = .{ 0, 0, 0 },
+            });
+            if (recovered) |state| {
+                try state.validate();
+                logical.position = canonicalVector(state.position);
+                logical.velocity = canonicalVector(state.velocity);
+                return;
+            }
+
+            // A body may occupy the last committed pose. Suspend this NPC
+            // locally and let ordinary residency reconciliation reconstruct it
+            // from its still-valid owner on the next tick. This is preferable
+            // to mismatched owner/ticket state or a process-wide runtime fault.
+            try self.controllers.destroyCharacter(handle);
+            runtime_controller.* = .{};
+            logical.position = canonicalVector(previous_position);
+            logical.velocity = .{ 0, 0, 0 };
+            self.controllers_suspended +|= 1;
+            try self.transition(runtime_id, logical, .dormant);
         }
 
         fn applyCommand(self: *Self, command: Command) !Outcome {
@@ -2207,6 +2381,7 @@ const FakeControllers = struct {
     destroy_calls: usize = 0,
     update_calls: usize = 0,
     fail_create_call: ?usize = null,
+    reject_relocation: bool = false,
 
     pub fn createCharacter(
         self: *FakeControllers,
@@ -2276,10 +2451,25 @@ const FakeControllers = struct {
         relocation: engine.physics.CharacterRelocation,
     ) !?engine.physics.CharacterState {
         try relocation.validate();
+        if (self.reject_relocation) return null;
         const slot = try self.slotFor(handle);
         slot.state = groundedState(relocation.position);
         slot.state.velocity = relocation.velocity;
         return slot.state;
+    }
+
+    fn forceOnlyCharacterPosition(
+        self: *FakeControllers,
+        position: [3]f32,
+    ) !void {
+        if (self.live_count != 1) return error.ExpectedOneFakeController;
+        for (&self.slots) |*slot| {
+            if (!slot.live) continue;
+            slot.state.position = position;
+            slot.state.velocity = .{ 0, 0, 0 };
+            return;
+        }
+        return error.ExpectedOneFakeController;
     }
 
     fn slotFor(self: *FakeControllers, handle: Handle) !*Slot {
@@ -2710,6 +2900,166 @@ test "NPC waits crosses half-open boundary binds generations and becomes dormant
     view_value = try world.feature.view(id);
     try std.testing.expect(view_value.state != .dormant);
     try std.testing.expect(view_value.controller_present);
+}
+
+test "externally displaced NPC adopts positional owner and rebases hold intent" {
+    var world: TestWorld = undefined;
+    try world.init();
+    defer world.deinit();
+
+    try world.feature.enqueue(.{ .spawn = .{
+        .request_id = 1,
+        .node = westNode(2),
+        .goal = .hold,
+    } });
+    try world.runtime.tick();
+    const spawned = switch (world.feature.pollOutcome() orelse
+        return error.MissingNpcOutcome) {
+        .spawned => |value| value,
+        else => return error.UnexpectedNpcOutcome,
+    };
+    const create_calls = world.controllers.create_calls;
+
+    // Model a vehicle or other physical body pushing the CharacterVirtual in
+    // the opposite direction from its semantic intent. Position owns spatial
+    // authority; a hold route is not a collision barrier.
+    try world.controllers.forceOnlyCharacterPosition(.{ 8.1, 0, 3 });
+    try world.runtime.tick();
+
+    const displaced = try world.feature.view(spawned.id);
+    try std.testing.expect(navigation.ChunkCoord.eql(east_coord, displaced.owner));
+    try std.testing.expect(navigation.ChunkCoord.eql(
+        east_coord,
+        (try currentRouteNode(displaced.route)).coord,
+    ));
+    try std.testing.expectEqual(create_calls, world.controllers.create_calls);
+    try std.testing.expectEqual(@as(usize, 1), world.controllers.live_count);
+    try std.testing.expect(world.runtime.firstFault() == null);
+
+    const transferred = world.feature.pollEvent() orelse
+        return error.NpcOwnerTransferEventMissing;
+    switch (transferred) {
+        .owner_transferred => |value| {
+            try std.testing.expectEqual(spawned.id, value.id);
+            try std.testing.expect(navigation.ChunkCoord.eql(west_coord, value.previous));
+            try std.testing.expect(navigation.ChunkCoord.eql(east_coord, value.current));
+        },
+        else => return error.UnexpectedNpcEvent,
+    }
+    try std.testing.expect(world.feature.pollEvent() == null);
+}
+
+test "external displacement into unavailable navigation recovers locally" {
+    for ([_]struct {
+        position: [3]f32,
+        deactivate_east: bool,
+    }{
+        .{ .position = .{ 8.1, 0, 3 }, .deactivate_east = true },
+        .{ .position = .{ 7, 0, 8.1 }, .deactivate_east = false },
+    }) |scenario| {
+        var world: TestWorld = undefined;
+        try world.init();
+        defer world.deinit();
+
+        try world.feature.enqueue(.{ .spawn = .{
+            .request_id = 1,
+            .node = westNode(2),
+            .goal = .hold,
+        } });
+        try world.runtime.tick();
+        const spawned = switch (world.feature.pollOutcome() orelse
+            return error.MissingNpcOutcome) {
+            .spawned => |value| value,
+            else => return error.UnexpectedNpcOutcome,
+        };
+        if (scenario.deactivate_east) world.navigation_access.east_active = false;
+
+        try world.controllers.forceOnlyCharacterPosition(scenario.position);
+        try world.runtime.tick();
+
+        const recovered = try world.feature.view(spawned.id);
+        try std.testing.expect(navigation.ChunkCoord.eql(west_coord, recovered.owner));
+        try std.testing.expectEqualDeep(nodePosition(westNode(2)), recovered.position);
+        try std.testing.expect(recovered.controller_present);
+        try std.testing.expectEqual(@as(usize, 1), world.controllers.live_count);
+        try std.testing.expect(world.runtime.firstFault() == null);
+        try std.testing.expect(world.feature.pollEvent() == null);
+    }
+}
+
+test "external displacement without a route recovers locally" {
+    var world: TestWorld = undefined;
+    try world.init();
+    defer world.deinit();
+    world.navigation_access.seam_connected = false;
+
+    try world.feature.enqueue(.{ .spawn = .{
+        .request_id = 1,
+        .node = westNode(2),
+        .goal = .{ .navigate_to = westNode(0) },
+    } });
+    try world.runtime.tick();
+    const spawned = switch (world.feature.pollOutcome() orelse
+        return error.MissingNpcOutcome) {
+        .spawned => |value| value,
+        else => return error.UnexpectedNpcOutcome,
+    };
+    const before = try world.feature.view(spawned.id);
+
+    // The destination district is active, but the retained semantic goal has
+    // no route from it. Reject only this physical displacement and preserve
+    // the process, owner, controller, and original goal.
+    try world.controllers.forceOnlyCharacterPosition(.{ 9.1, 0, 3 });
+    try world.runtime.tick();
+    const recovered = try world.feature.view(spawned.id);
+    try std.testing.expect(navigation.ChunkCoord.eql(west_coord, recovered.owner));
+    try std.testing.expectEqualDeep(before.position, recovered.position);
+    try std.testing.expectEqualDeep(Goal{ .navigate_to = westNode(0) }, recovered.goal);
+    try std.testing.expect(recovered.controller_present);
+    try std.testing.expectEqual(@as(usize, 1), world.controllers.live_count);
+    try std.testing.expect(world.runtime.firstFault() == null);
+    try std.testing.expect(world.feature.pollEvent() == null);
+}
+
+test "blocked displacement recovery suspends and reconstructs locally" {
+    var world: TestWorld = undefined;
+    try world.init();
+    defer world.deinit();
+
+    try world.feature.enqueue(.{ .spawn = .{
+        .request_id = 1,
+        .node = westNode(2),
+        .goal = .hold,
+    } });
+    try world.runtime.tick();
+    const spawned = switch (world.feature.pollOutcome() orelse
+        return error.MissingNpcOutcome) {
+        .spawned => |value| value,
+        else => return error.UnexpectedNpcOutcome,
+    };
+
+    world.navigation_access.east_active = false;
+    world.controllers.reject_relocation = true;
+    try world.controllers.forceOnlyCharacterPosition(.{ 8.1, 0, 3 });
+    try world.runtime.tick();
+
+    var recovered = try world.feature.view(spawned.id);
+    try std.testing.expectEqual(State.dormant, recovered.state);
+    try std.testing.expect(!recovered.controller_present);
+    try std.testing.expect(navigation.ChunkCoord.eql(west_coord, recovered.owner));
+    try std.testing.expectEqual(@as(usize, 0), world.controllers.live_count);
+    try std.testing.expect(world.runtime.firstFault() == null);
+
+    // Reconciliation owns reconstruction on the following tick. The failure
+    // remains scoped to this NPC instead of poisoning the authority cycle.
+    world.controllers.reject_relocation = false;
+    try world.runtime.tick();
+    recovered = try world.feature.view(spawned.id);
+    try std.testing.expect(recovered.state != .dormant);
+    try std.testing.expect(recovered.controller_present);
+    try std.testing.expect(navigation.ChunkCoord.eql(west_coord, recovered.owner));
+    try std.testing.expectEqual(@as(usize, 1), world.controllers.live_count);
+    try std.testing.expect(world.runtime.firstFault() == null);
 }
 
 test "encounter pursuit crosses ownership and resumes an owner-aligned route" {

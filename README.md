@@ -479,15 +479,17 @@ plain-language health, damage, attack, cooldown, death, respawn, and rejected
 action feedback. A dead player remains visible in red until respawn, rather
 than disappearing as an implicit representation of authority teardown.
 
-Every Debug product run records a bounded schema-2 diagnostic bundle under
+Every Debug product run records a bounded schema-3 diagnostic bundle under
 `~/Library/Logs/Incinerator/runs`. Press Command+Option+I near an anomaly (or
 use F9/Fn+F9 when macOS actually delivers it), then open **Tools → Incident
 Capture**, add a note, and click **Save note + Copy for LLM**. The note is
 persisted before the handoff is refreshed and copied. The clipboard contains the
 run path, current health, anomaly index, and evidence limits—not a giant JSON
 payload. Each finalized anomaly has a 15-second typed pre-roll, four typed
-materialized windows, a 15 FPS product-only trail, five human-visible anchors
-stored at no more than 1280x720, a product-only flag frame, and a semantic-ID
+materialized windows, a 15 FPS product-only trail from five seconds before
+through two seconds after the flag, eight human-visible anchors at every whole
+second in that window stored at no more than 1280x720, a product-only flag
+frame, and a semantic-ID
 image/map. Source and stored dimensions are indexed separately. A reserved
 128 MiB nonvisual lane keeps notes, replay, manifests, and LLM handoff working
 even after the bounded visual lane is exhausted; the UI reports whether the
@@ -519,6 +521,11 @@ INCINERATOR_INCIDENT_ROOT=/tmp/incinerator-window-journey \
 INCINERATOR_INCIDENT_ROOT=/tmp/incinerator-capture-benchmark \
   zig build run -- --incident-benchmark
 zig build run -Dincident-capture=false -- --incident-benchmark
+
+# Five full installed-content Metal journeys with deterministic queue,
+# visual-budget, writer-budget, screenshot-submission, and fence failures.
+# Each bundle must be honestly partial, inspect cleanly, and semantically replay.
+zig build verify-incident-hardening -Deditor=true --summary all
 
 zig build inspect-incident -- /absolute/path/to/run
 zig build replay-incident -- /absolute/path/to/run \

@@ -1,6 +1,6 @@
 ---
 name: incinerator-incident-diagnostics
-description: Inspect and diagnose schema-2 Incinerator Engine human-test incident folders containing live manifests, anomaly lifecycle events, materialized NDJSON windows, product and human-visible trailing images, semantic-ID evidence, shortcut delivery records, and accepted-ingress replay captures. Use when a tester supplies an incident folder or LLM handoff, flags a visual/gameplay/input anomaly, asks what happened near a timestamp, or asks to reproduce and verify a repair.
+description: Inspect and diagnose schema-3 Incinerator Engine human-test incident folders containing live manifests, anomaly lifecycle events, materialized NDJSON windows, product and human-visible trailing images, semantic-ID evidence, shortcut delivery records, and accepted-ingress replay captures. Use when a tester supplies an incident folder or LLM handoff, flags a visual/gameplay/input anomaly, asks what happened near a timestamp, or asks to reproduce and verify a repair.
 ---
 
 # Incinerator Incident Diagnostics
@@ -11,8 +11,10 @@ confirmation as separate claims. Never mutate the supplied run folder.
 
 ## Start
 
-1. Resolve the absolute run folder and read `LLM_HANDOFF.md`, `manifest.json`,
-   and `anomalies.ndjson`.
+1. Resolve the absolute run folder and read `manifest.json`,
+   `anomalies.ndjson`, and `LLM_HANDOFF.md` when present. A
+   `hardening_profile=writer_budget` bundle intentionally proves that the
+   clipboard can succeed while the durable handoff file is absent.
 2. Run `python3 scripts/summarize_incident.py <run-folder>` from this skill
    directory. A running/partial manifest, loss, writer failure, suspicious
    image, missing artifact, or missing replay limits the conclusion.
@@ -46,7 +48,7 @@ Do not select the last anomaly row blindly. Reduce `event` in order:
 `marker.json` must agree with the reduced lifecycle. Use its
 `flag_monotonic_ns`, window bounds, authority tick, presentation frame, and
 selected identity. A human flag is a reaction time, not necessarily symptom
-time; inspect the entire -4/+3 second visual window and -15/+5 second typed
+time; inspect the entire -5/+2 second visual window and -15/+5 second typed
 window.
 
 ## Correlate the anomaly
@@ -57,7 +59,8 @@ and monotonic time for same-process cross-stream correlation. Wall time is for
 the human handoff only.
 
 - `timeline-window.ndjson`: action disposition, lifecycle, district streaming,
-  diagnostic code, correlation, spawn/despawn, and anomaly flag.
+  diagnostic code, immutable `runtime_fault`/`authority_cycle_fault` ownership,
+  correlation, spawn/despawn, and anomaly flag.
 - `state-window.ndjson`: tri-state authority/replication/presentation/draw
   membership, tombstones, relevance reason/facts, transforms, vitals,
   encounter state, and separation.
@@ -92,7 +95,14 @@ vehicle being investigated.
 - Reserved key `received` absent: macOS-to-SDL delivery; received but not
   matched/queued/applied: route stage named by the record.
 - Loss, writer failure, suspicious/truncated image, or missing window: evidence
-  failure; do not assign gameplay root cause from that gap.
+  failure; do not assign gameplay root cause from that gap. When
+  `hardening_profile` is not `none`, first confirm the strict inspector accepts
+  that exact manufactured loss; do not mistake an acceptance fixture for a
+  user incident.
+- A generic fatal diagnostic followed by a retained fault record: use the
+  retained phase/system/error or authority stage as the owning failure
+  boundary. If the retained record is absent, report the exact diagnostic
+  limitation and request terminal evidence instead of guessing.
 
 State observed facts, boundary inference, and remaining uncertainty separately.
 
@@ -111,3 +121,12 @@ and inherited tests, rerun semantic replay, perform graphical re-execution,
 capture a new Metal bundle, inspect actual visual timing and semantic mapping,
 and request human confirmation when readability or visual continuity was the
 complaint.
+
+Maintainers can re-run the complete installed failure matrix with:
+
+```sh
+zig build verify-incident-hardening -Deditor=true --summary all
+```
+
+It runs queue, visual-budget, writer-budget, screenshot-submission, and
+screenshot-fence profiles through the same full Metal gameplay journey.

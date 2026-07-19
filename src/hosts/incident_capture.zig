@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const engine = @import("incinerator_engine");
 const sandbox_replay = @import("sandbox_replay");
+const authority_diagnostics = @import("session_authority_diagnostics");
 const editor_contract = @import("../editor/tool.zig");
 
 const incident = @import("../engine/incident.zig");
@@ -27,6 +28,20 @@ pub const max_line_bytes: usize = 2048;
 pub const pre_roll_ns: u64 = 15 * std.time.ns_per_s;
 pub const post_roll_ns: u64 = 5 * std.time.ns_per_s;
 pub const retained_unflagged_runs: usize = 20;
+pub const hardening_visual_budget_bytes: u64 = 16 * 1024 * 1024;
+const complete_human_anchor_mask: u8 = 0xff;
+
+/// Explicit installed-product fault profiles used only by the IC5-G
+/// acceptance journey. The default profile leaves every production boundary
+/// unchanged.
+pub const HardeningProfile = enum {
+    none,
+    queue_pressure,
+    visual_budget,
+    writer_budget,
+    screenshot_submission,
+    screenshot_fence,
+};
 
 const Stream = enum { timeline, state, input, metrics, anomalies };
 const ByteClass = enum { stream, visual, replay, metadata };
@@ -152,7 +167,7 @@ const Marker = struct {
     lifecycle_status: incident.AnomalyStatus,
     artifact_count: u16,
     artifact_failures: u16,
-    human_anchor_mask: u5,
+    human_anchor_mask: u8,
     product_flag_present: bool,
     semantic_id_present: bool,
     selected: ?engine.gameplay_trace.EntityRef,
@@ -168,6 +183,8 @@ const Job = union(enum) {
     marker: Marker,
     checkpoint,
     flush,
+    pressure_probe,
+    arm_writer_budget,
     shutdown,
 };
 
@@ -189,8 +206,10 @@ const Queue = struct {
     replay_bytes_written: u64 = 0,
     metadata_bytes_written: u64 = 0,
     visual_bytes_reserved: u64 = 0,
+    visual_budget_bytes: u64 = visual_budget_bytes,
     visual_budget_rejections: u64 = 0,
     screenshot_misses: u64 = 0,
+    screenshot_fence_failures: u64 = 0,
     replay_attached: bool = false,
     anomaly_count: u8 = 0,
     last_admitted_sequence: u64 = 0,
@@ -202,8 +221,8 @@ const Queue = struct {
     fn reserveVisual(self: *Queue, amount: u64) bool {
         self.lock();
         defer self.unlock();
-        if (amount > visual_budget_bytes or
-            self.visual_bytes_reserved > visual_budget_bytes - amount)
+        if (amount > self.visual_budget_bytes or
+            self.visual_bytes_reserved > self.visual_budget_bytes - amount)
         {
             self.visual_budget_exhausted = true;
             self.visual_budget_rejections +|= 1;
@@ -282,6 +301,8 @@ const Writer = struct {
     run_path: []const u8,
     started_wall_unix_ms: i64,
     budget_bytes: u64 = run_budget_bytes,
+    hardening_profile: HardeningProfile = .none,
+    write_failure_after_bytes: ?u64 = null,
     streams: [5]StreamFile = .{
         .{ .stream = .timeline },
         .{ .stream = .state },
@@ -335,12 +356,18 @@ const Writer = struct {
                     self.writeManifest("running") catch self.fail();
                 },
                 .flush => self.flushAll() catch self.fail(),
+                .pressure_probe => {},
+                .arm_writer_budget => {
+                    self.queue.lock();
+                    self.write_failure_after_bytes = self.queue.bytes_written;
+                    self.queue.unlock();
+                },
                 .shutdown => break,
             }
         }
         self.flushAll() catch self.fail();
         for (&self.streams) |*stream| stream.close(self.io);
-        self.writeManifest(if (self.failed()) "partial" else "complete") catch self.fail();
+        self.writeManifest(if (self.partial()) "partial" else "complete") catch self.fail();
         self.queue.lock();
         self.queue.stopped = true;
         self.queue.unlock();
@@ -352,10 +379,12 @@ const Writer = struct {
         self.queue.unlock();
     }
 
-    fn failed(self: *Writer) bool {
+    fn partial(self: *Writer) bool {
         self.queue.lock();
         defer self.queue.unlock();
-        return self.queue.writer_failed;
+        return self.queue.writer_failed or self.queue.dropped != 0 or
+            self.queue.screenshot_misses != 0 or
+            self.queue.visual_budget_exhausted;
     }
 
     fn setReady(self: *Writer) void {
@@ -478,8 +507,8 @@ const Writer = struct {
         var buffer: [1536]u8 = undefined;
         const json = try std.fmt.bufPrint(
             &buffer,
-            "{{\"schema\":{d},\"kind\":\"incident_marker\",\"anomaly_id\":{d},\"lifecycle_status\":\"{s}\",\"authority_tick\":{d},\"presentation_frame\":{d},\"wall_unix_ms\":{d},\"flag_monotonic_ns\":{d},\"window_start_ns\":{d},\"window_end_ns\":{d},\"artifacts\":{{\"count\":{d},\"failures\":{d},\"human_m2000ms\":{},\"human_m1000ms\":{},\"human_flag\":{},\"human_p1000ms\":{},\"human_p3000ms\":{},\"product_flag\":{},\"semantic_id_flag\":{}}},\"selected_entity\":{s},\"semantic_id_status\":\"{s}\",\"note\":\"{s}\"}}\n",
-            .{ incident.schema_version, marker.anomaly_id, @tagName(marker.lifecycle_status), marker.authority_tick, marker.presentation_frame, marker.wall_unix_ms, marker.monotonic_ns, marker.monotonic_ns -| pre_roll_ns, marker.monotonic_ns +| post_roll_ns, marker.artifact_count, marker.artifact_failures, marker.human_anchor_mask & 1 != 0, marker.human_anchor_mask & 2 != 0, marker.human_anchor_mask & 4 != 0, marker.human_anchor_mask & 8 != 0, marker.human_anchor_mask & 16 != 0, marker.product_flag_present, marker.semantic_id_present, selected, if (marker.semantic_id_present) "available" else "missing", note },
+            "{{\"schema\":{d},\"kind\":\"incident_marker\",\"anomaly_id\":{d},\"lifecycle_status\":\"{s}\",\"authority_tick\":{d},\"presentation_frame\":{d},\"wall_unix_ms\":{d},\"flag_monotonic_ns\":{d},\"window_start_ns\":{d},\"window_end_ns\":{d},\"artifacts\":{{\"count\":{d},\"failures\":{d},\"human_m5000ms\":{},\"human_m4000ms\":{},\"human_m3000ms\":{},\"human_m2000ms\":{},\"human_m1000ms\":{},\"human_flag\":{},\"human_p1000ms\":{},\"human_p2000ms\":{},\"product_flag\":{},\"semantic_id_flag\":{}}},\"selected_entity\":{s},\"semantic_id_status\":\"{s}\",\"note\":\"{s}\"}}\n",
+            .{ incident.schema_version, marker.anomaly_id, @tagName(marker.lifecycle_status), marker.authority_tick, marker.presentation_frame, marker.wall_unix_ms, marker.monotonic_ns, marker.monotonic_ns -| pre_roll_ns, marker.monotonic_ns +| post_roll_ns, marker.artifact_count, marker.artifact_failures, marker.human_anchor_mask & 1 != 0, marker.human_anchor_mask & 2 != 0, marker.human_anchor_mask & 4 != 0, marker.human_anchor_mask & 8 != 0, marker.human_anchor_mask & 16 != 0, marker.human_anchor_mask & 32 != 0, marker.human_anchor_mask & 64 != 0, marker.human_anchor_mask & 128 != 0, marker.product_flag_present, marker.semantic_id_present, selected, if (marker.semantic_id_present) "available" else "missing", note },
         );
         try self.ensureBudget(json.len);
         var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, path, .{
@@ -745,21 +774,23 @@ const Writer = struct {
         const replay_bytes = self.queue.replay_bytes_written;
         const metadata_bytes = self.queue.metadata_bytes_written;
         const visual_reserved = self.queue.visual_bytes_reserved;
+        const configured_visual_budget = self.queue.visual_budget_bytes;
         const visual_exhausted = self.queue.visual_budget_exhausted;
         const visual_rejections = self.queue.visual_budget_rejections;
         const handoff_persisted = self.queue.handoff_persisted;
         const screenshot_misses = self.queue.screenshot_misses;
+        const screenshot_fence_failures = self.queue.screenshot_fence_failures;
         const replay_attached = self.queue.replay_attached;
         const anomaly_count = self.queue.anomaly_count;
         self.queue.unlock();
         var manifest_writer = std.Io.Writer.fixed(&manifest_buffer);
         try manifest_writer.print(
-            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.12\",\"jolt\":\"5.5.0\",\"protocol\":12,\"replay\":{d},\"snapshot\":11}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true}},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
-            .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), sandbox_replay.schema_cohort, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, visual_budget_bytes, non_visual_reserve_bytes, visual_reserved, visual_exhausted, visual_rejections },
+            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.12\",\"jolt\":\"5.5.0\",\"protocol\":12,\"replay\":{d},\"snapshot\":11}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
+            .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), sandbox_replay.schema_cohort, @tagName(self.hardening_profile), self.write_failure_after_bytes, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, configured_visual_budget, self.budget_bytes - configured_visual_budget, visual_reserved, visual_exhausted, visual_rejections },
         );
         try manifest_writer.print(
-            "\"writer_queue_capacity\":{d},\"writer_queue\":{d},\"queue_high_water\":{d},\"dropped_records\":{d},\"writer_failed\":{},\"handoff_persisted\":{},\"last_admitted_sequence\":{d},\"last_durable_sequence\":{d},\"bytes_written\":{d},\"bytes_by_class\":{{\"streams\":{d},\"visual\":{d},\"replay\":{d},\"metadata\":{d}}},\"screenshot_misses\":{d},\"anomaly_count\":{d},\"replay_status\":\"{s}\",\"screenshot_format\":\"ppm-p6\",\"privacy\":{{\"local_only\":true,\"captures_text_input\":false,\"captures_credentials\":false,\"captures_reserved_shortcut_candidates\":true}}}}\n",
-            .{ writer_queue_capacity, queued, high_water, dropped, writer_failed, handoff_persisted, last_admitted, last_durable, bytes, stream_bytes, visual_bytes, replay_bytes, metadata_bytes, screenshot_misses, anomaly_count, if (replay_attached) "attached" else "not_attached" },
+            "\"writer_queue_capacity\":{d},\"writer_queue\":{d},\"queue_high_water\":{d},\"dropped_records\":{d},\"writer_failed\":{},\"handoff_persisted\":{},\"last_admitted_sequence\":{d},\"last_durable_sequence\":{d},\"bytes_written\":{d},\"bytes_by_class\":{{\"streams\":{d},\"visual\":{d},\"replay\":{d},\"metadata\":{d}}},\"screenshot_misses\":{d},\"screenshot_fence_failures\":{d},\"anomaly_count\":{d},\"replay_status\":\"{s}\",\"screenshot_format\":\"ppm-p6\",\"privacy\":{{\"local_only\":true,\"captures_text_input\":false,\"captures_credentials\":false,\"captures_reserved_shortcut_candidates\":true}}}}\n",
+            .{ writer_queue_capacity, queued, high_water, dropped, writer_failed, handoff_persisted, last_admitted, last_durable, bytes, stream_bytes, visual_bytes, replay_bytes, metadata_bytes, screenshot_misses, screenshot_fence_failures, anomaly_count, if (replay_attached) "attached" else "not_attached" },
         );
         const manifest = manifest_buffer[0..manifest_writer.end];
         var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, path, .{
@@ -795,6 +826,14 @@ const Writer = struct {
     fn ensureBudget(self: *Writer, amount: usize) !void {
         self.queue.lock();
         defer self.queue.unlock();
+        if (self.write_failure_after_bytes) |limit| {
+            if (amount > limit or
+                self.queue.bytes_written > limit - @as(u64, @intCast(amount)))
+            {
+                self.queue.writer_failed = true;
+                return error.IncidentInjectedWriterBudgetExceeded;
+            }
+        }
         if (amount > self.budget_bytes or
             self.queue.bytes_written > self.budget_bytes - @as(u64, @intCast(amount)))
         {
@@ -809,7 +848,7 @@ const ActiveAnomaly = struct {
     monotonic_ns: u64,
     post_roll_deadline_ns: u64,
     selected: ?engine.gameplay_trace.EntityRef,
-    human_anchor_mask: u5 = 0,
+    human_anchor_mask: u8 = 0,
     product_flag_present: bool = false,
     semantic_id_present: bool = false,
 };
@@ -828,6 +867,8 @@ pub const Capture = struct {
     anomaly_count: u8 = 0,
     last_gameplay_sequence: u64 = 0,
     last_diagnostic_sequence: u64 = 0,
+    runtime_fault_recorded: bool = false,
+    authority_cycle_fault_recorded: bool = false,
     last_state_sample_ns: u64 = 0,
     last_input_sample_ns: u64 = 0,
     last_metrics_sample_ns: u64 = 0,
@@ -837,6 +878,7 @@ pub const Capture = struct {
     screenshot_misses: u64 = 0,
     last_screenshot_metrics_ns: u64 = 0,
     handoff_pending_post_roll: bool = false,
+    writer_budget_armed: bool = false,
     shortcuts: incident.ShortcutView = .{},
 
     pub fn create(
@@ -900,6 +942,31 @@ pub const Capture = struct {
         self.setStatus("Incident recording active (Cmd+Option+I; F9 optional)");
     }
 
+    /// Configure one explicit IC5-G profile before the writer starts. This is
+    /// a required pre-start operation so ordinary live capture cannot mutate
+    /// its evidence contract mid-run.
+    pub fn configureHardening(
+        self: *Capture,
+        profile: HardeningProfile,
+    ) void {
+        std.debug.assert(self.thread == null);
+        self.writer.hardening_profile = profile;
+        switch (profile) {
+            .visual_budget => self.queue.visual_budget_bytes = hardening_visual_budget_bytes,
+            else => {},
+        }
+    }
+
+    /// Fill the pre-start queue and reject one additional probe. Starting the
+    /// writer then proves bounded recovery without scheduling races or sleeps.
+    pub fn injectQueuePressure(self: *Capture) void {
+        std.debug.assert(self.thread == null);
+        for (0..writer_queue_capacity) |_| {
+            std.debug.assert(self.queue.push(.pressure_probe));
+        }
+        std.debug.assert(!self.queue.push(.pressure_probe));
+    }
+
     pub fn deinit(self: *Capture) void {
         if (self.thread != null) {
             for (self.anomalies[0..self.anomaly_count]) |*anomaly| {
@@ -961,6 +1028,8 @@ pub const Capture = struct {
         self: *Capture,
         gameplay: engine.gameplay_trace.BorrowedView,
         diagnostics: engine.runtime.DiagnosticJournal.BorrowedView,
+        runtime_fault: ?engine.runtime.RuntimeFault,
+        authority_cycle_fault: ?authority_diagnostics.CycleFault,
         view: *const editor_contract.GameplayView,
         input_sample: incident.InputSample,
         camera_yaw: f32,
@@ -970,6 +1039,7 @@ pub const Capture = struct {
         const now = monotonicNowNs(self.io);
         self.drainGameplay(gameplay, now);
         self.drainDiagnostics(diagnostics, now);
+        self.recordRetainedFaults(runtime_fault, authority_cycle_fault, now);
         if (now -| self.last_state_sample_ns >= 250 * std.time.ns_per_ms) {
             self.last_state_sample_ns = now;
             self.recordState(view, camera_yaw, camera_pitch, now);
@@ -1077,6 +1147,7 @@ pub const Capture = struct {
         self.screenshot_misses = missed;
         self.queue.lock();
         self.queue.screenshot_misses = missed;
+        self.queue.screenshot_fence_failures = fence_failures;
         self.queue.unlock();
         const now = monotonicNowNs(self.io);
         if (now -| self.last_screenshot_metrics_ns < std.time.ns_per_s) return;
@@ -1142,8 +1213,8 @@ pub const Capture = struct {
             writer.writeAll("\n") catch return false;
         }
         writer.print(
-            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; five human-visible anchors when admitted; a product-only flag frame; a continuous product trail; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheel draws under one stable identity.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
-            .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
+            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; eight human-visible anchors from -5 through +2 seconds when admitted; a product-only flag frame; a continuous product trail over the same visual window; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times. Timeline windows include immutable runtime phase/system/error and authority-cycle fault ownership when the engine retains a fault.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheel draws under one stable identity.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"kind\":\"(runtime_fault|authority_cycle_fault)\"' '{s}/streams'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
+            .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
         ) catch return false;
         const handoff_bytes = buffer[0..writer.end];
         self.queue.publishHandoff(handoff_bytes);
@@ -1152,6 +1223,16 @@ pub const Capture = struct {
             self.setStatus("LLM handoff ready for clipboard; durable copy allocation failed");
             return true;
         };
+        if (self.writer.hardening_profile == .writer_budget and
+            !self.writer_budget_armed)
+        {
+            if (!self.queue.push(.arm_writer_budget)) {
+                std.heap.page_allocator.free(owned);
+                self.setStatus("LLM handoff ready for clipboard; writer-budget arm rejected");
+                return true;
+            }
+            self.writer_budget_armed = true;
+        }
         if (!self.queue.push(.{ .handoff = .{ .bytes = owned } })) {
             std.heap.page_allocator.free(owned);
             self.setStatus("LLM handoff ready for clipboard; durable writer queue rejected it");
@@ -1202,14 +1283,7 @@ pub const Capture = struct {
                 anomaly.view.artifact_count +|= 1;
                 switch (metadata.source) {
                     .human_visible => if (metadata.requested_offset_ms) |offset| {
-                        anomaly.human_anchor_mask |= switch (offset) {
-                            -2000 => 1,
-                            -1000 => 2,
-                            0 => 4,
-                            1000 => 8,
-                            3000 => 16,
-                            else => 0,
-                        };
+                        anomaly.human_anchor_mask |= humanAnchorBit(offset);
                     },
                     .product_flag => anomaly.product_flag_present = true,
                     .semantic_id => anomaly.semantic_id_present = true,
@@ -1303,7 +1377,7 @@ pub const Capture = struct {
             .visual_budget_rejections = self.queue.visual_budget_rejections,
             .bytes_written = self.queue.bytes_written,
             .visual_bytes_reserved = self.queue.visual_bytes_reserved,
-            .visual_budget_bytes = visual_budget_bytes,
+            .visual_budget_bytes = self.queue.visual_budget_bytes,
             .screenshot_misses = self.screenshot_misses,
             .last_durable_sequence = self.queue.last_durable_sequence,
             .last_admitted_sequence = self.queue.last_admitted_sequence,
@@ -1331,6 +1405,24 @@ pub const Capture = struct {
             if (entry.sequence <= self.last_diagnostic_sequence) continue;
             self.last_diagnostic_sequence = entry.sequence;
             self.recordFormatted(.timeline, "{{\"schema\":{d},\"kind\":\"diagnostic\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"diagnostic_sequence\":{d},\"severity\":\"{s}\",\"category\":\"{s}\",\"code\":{d},\"authority_tick\":{?d},\"presentation_frame\":{?d},\"thread_role\":\"{s}\",\"thread_id\":{?d},\"correlation_id\":{d}}}", .{ incident.schema_version, self.takeSequence(), now, entry.sequence, @tagName(entry.severity), @tagName(entry.category), entry.code, entry.tick_index, entry.frame_index, @tagName(entry.thread_role), entry.thread_id, entry.correlation_id });
+        }
+    }
+
+    fn recordRetainedFaults(
+        self: *Capture,
+        runtime_fault: ?engine.runtime.RuntimeFault,
+        authority_cycle_fault: ?authority_diagnostics.CycleFault,
+        now: u64,
+    ) void {
+        if (!self.runtime_fault_recorded) {
+            if (runtime_fault) |fault| {
+                self.runtime_fault_recorded = self.recordFormattedAdmitted(.timeline, "{{\"schema\":{d},\"kind\":\"runtime_fault\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"phase\":\"{s}\",\"authority_tick\":{d},\"system\":\"{s}\",\"system_truncated\":{},\"error\":\"{s}\",\"error_truncated\":{},\"error_code\":{d},\"diagnostic_sequence\":{d}}}", .{ incident.schema_version, self.takeSequence(), now, @tagName(fault.phase), fault.tick_index, fault.system_name.slice(), fault.system_name.truncated, fault.error_name.slice(), fault.error_name.truncated, fault.error_code, fault.journal_sequence });
+            }
+        }
+        if (!self.authority_cycle_fault_recorded) {
+            if (authority_cycle_fault) |fault| {
+                self.authority_cycle_fault_recorded = self.recordFormattedAdmitted(.timeline, "{{\"schema\":{d},\"kind\":\"authority_cycle_fault\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"stage\":\"{s}\",\"target_tick\":{d},\"completed_tick\":{d},\"error\":\"{s}\",\"error_truncated\":{},\"error_code\":{d}}}", .{ incident.schema_version, self.takeSequence(), now, @tagName(fault.stage), fault.target_tick, fault.completed_tick, fault.error_name.slice(), fault.error_name.truncated, fault.error_code });
+            }
         }
     }
 
@@ -1373,7 +1465,7 @@ pub const Capture = struct {
             "\"relevance_included\":{s},\"relevance_reason\":\"{s}\",\"relevance_evaluated_tick\":{d},\"relevance_baseline_id\":{d},\"relevance_snapshot_sequence\":{d},\"relevance_grace_until_tick\":{d},\"relevance_observer_position\":[{d},{d},{d}],\"relevance_observer_district\":[{d},{d}],\"relevance_owner_district\":[{d},{d}],\"relevance_distance_squared_xz\":{d},\"relevance_encounter\":{}}}",
             .{ relevance_included, @tagName(entity.relevance_reason), entity.relevance_evaluated_tick, entity.relevance_baseline_id, entity.relevance_snapshot_sequence, entity.relevance_grace_until_tick, entity.relevance_observer_position[0], entity.relevance_observer_position[1], entity.relevance_observer_position[2], entity.relevance_observer_district[0], entity.relevance_observer_district[1], entity.relevance_owner_district[0], entity.relevance_owner_district[1], entity.relevance_distance_squared_xz, entity.relevance_encounter },
         ) catch return self.noteDropped();
-        self.enqueueLine(.state, sequence, buffer[0..writer.end]);
+        _ = self.enqueueLine(.state, sequence, buffer[0..writer.end]);
     }
 
     fn recordInput(self: *Capture, view: *const editor_contract.GameplayView, value: incident.InputSample, now: u64) void {
@@ -1393,7 +1485,7 @@ pub const Capture = struct {
     fn finishPostRoll(self: *Capture, now: u64) void {
         for (self.anomalies[0..self.anomaly_count]) |*anomaly| {
             if (anomaly.view.status != .capturing or now < anomaly.post_roll_deadline_ns) continue;
-            anomaly.view.status = if (anomaly.human_anchor_mask != 0b1_1111 or
+            anomaly.view.status = if (anomaly.human_anchor_mask != complete_human_anchor_mask or
                 !anomaly.product_flag_present or !anomaly.semantic_id_present or
                 anomaly.view.artifact_failures != 0) .partial else .complete;
             self.queueMarker(anomaly);
@@ -1446,12 +1538,24 @@ pub const Capture = struct {
     }
 
     fn recordFormatted(self: *Capture, stream: Stream, comptime format: []const u8, args: anytype) void {
-        var buffer: [max_line_bytes]u8 = undefined;
-        const bytes = std.fmt.bufPrint(&buffer, format, args) catch return self.noteDropped();
-        self.enqueueLine(stream, self.next_sequence -| 1, bytes);
+        _ = self.recordFormattedAdmitted(stream, format, args);
     }
 
-    fn enqueueLine(self: *Capture, stream: Stream, sequence: u64, bytes: []const u8) void {
+    fn recordFormattedAdmitted(
+        self: *Capture,
+        stream: Stream,
+        comptime format: []const u8,
+        args: anytype,
+    ) bool {
+        var buffer: [max_line_bytes]u8 = undefined;
+        const bytes = std.fmt.bufPrint(&buffer, format, args) catch {
+            self.noteDropped();
+            return false;
+        };
+        return self.enqueueLine(stream, self.next_sequence -| 1, bytes);
+    }
+
+    fn enqueueLine(self: *Capture, stream: Stream, sequence: u64, bytes: []const u8) bool {
         var line = Line{
             .stream = stream,
             .sequence = sequence,
@@ -1466,7 +1570,9 @@ pub const Capture = struct {
                 line.sequence,
             );
             self.queue.unlock();
+            return true;
         }
+        return false;
     }
 
     fn noteDropped(self: *Capture) void {
@@ -1585,12 +1691,29 @@ fn jsonU64(line: []const u8, key: []const u8) ?u64 {
 
 fn visualOffsetLabel(offset_ms: i16) []const u8 {
     return switch (offset_ms) {
+        -5000 => "m5000ms",
+        -4000 => "m4000ms",
+        -3000 => "m3000ms",
         -2000 => "m2000ms",
         -1000 => "m1000ms",
         0 => "flag",
         1000 => "p1000ms",
-        3000 => "p3000ms",
+        2000 => "p2000ms",
         else => "unclassified",
+    };
+}
+
+fn humanAnchorBit(offset_ms: i16) u8 {
+    return switch (offset_ms) {
+        -5000 => 1,
+        -4000 => 2,
+        -3000 => 4,
+        -2000 => 8,
+        -1000 => 16,
+        0 => 32,
+        1000 => 64,
+        2000 => 128,
+        else => 0,
     };
 }
 
@@ -1660,6 +1783,16 @@ test "JSON note escaping is bounded" {
 test "UTC filename is stable and path safe" {
     const value = utcFilename(0);
     try std.testing.expectEqualStrings("1970-01-01T00-00-00.000Z", value.slice());
+}
+
+test "human visual anchors cover every whole second from minus five through plus two" {
+    var mask: u8 = 0;
+    inline for ([_]i16{ -5000, -4000, -3000, -2000, -1000, 0, 1000, 2000 }) |offset_ms| {
+        mask |= humanAnchorBit(offset_ms);
+        try std.testing.expect(!std.mem.eql(u8, visualOffsetLabel(offset_ms), "unclassified"));
+    }
+    try std.testing.expectEqual(complete_human_anchor_mask, mask);
+    try std.testing.expectEqual(@as(u8, 0), humanAnchorBit(3000));
 }
 
 test "NDJSON monotonic timestamp extraction is exact" {
@@ -1752,6 +1885,80 @@ test "handoff is available to clipboard before durable writer completion" {
     try std.testing.expect(queue.handoff_ready);
     try std.testing.expect(!queue.handoff_persisted);
     try std.testing.expectEqualStrings("bounded handoff", queue.handoff.slice());
+}
+
+test "retained fault records name runtime system and authority stage once" {
+    var capture = Capture{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .writer = undefined,
+    };
+    const runtime_fault = engine.runtime.RuntimeFault{
+        .phase = .post_physics,
+        .tick_index = 2382,
+        .journal_sequence = 23,
+        .error_code = @intFromError(error.NpcUnexpectedOwnerTransfer),
+        .system_name = engine.runtime.FaultText.copy("npc.publish_and_transfer"),
+        .error_name = engine.runtime.FaultText.copy("NpcUnexpectedOwnerTransfer"),
+    };
+    const cycle_fault = authority_diagnostics.CycleFault{
+        .stage = .simulation,
+        .target_tick = 2382,
+        .completed_tick = 2381,
+        .error_code = @intFromError(error.NpcUnexpectedOwnerTransfer),
+        .error_name = engine.runtime.FaultText.copy("NpcUnexpectedOwnerTransfer"),
+    };
+
+    // Queue pressure cannot make the immutable first fault appear recorded.
+    // Observe retries on the next frame until both exact records are admitted.
+    capture.queue.stopped = true;
+    capture.recordRetainedFaults(runtime_fault, cycle_fault, 98);
+    try std.testing.expect(!capture.runtime_fault_recorded);
+    try std.testing.expect(!capture.authority_cycle_fault_recorded);
+    try std.testing.expect(capture.queue.pop() == null);
+    capture.queue.stopped = false;
+
+    capture.recordRetainedFaults(runtime_fault, cycle_fault, 99);
+    const runtime_job = capture.queue.pop() orelse return error.RuntimeFaultRecordMissing;
+    const runtime_line = switch (runtime_job) {
+        .line => |line| line,
+        else => return error.UnexpectedIncidentJob,
+    };
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        runtime_line.slice(),
+        "\"kind\":\"runtime_fault\"",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        runtime_line.slice(),
+        "\"system\":\"npc.publish_and_transfer\"",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        runtime_line.slice(),
+        "\"error\":\"NpcUnexpectedOwnerTransfer\"",
+    ) != null);
+
+    const authority_job = capture.queue.pop() orelse
+        return error.AuthorityFaultRecordMissing;
+    const authority_line = switch (authority_job) {
+        .line => |line| line,
+        else => return error.UnexpectedIncidentJob,
+    };
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        authority_line.slice(),
+        "\"kind\":\"authority_cycle_fault\"",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        authority_line.slice(),
+        "\"stage\":\"simulation\"",
+    ) != null);
+
+    capture.recordRetainedFaults(runtime_fault, cycle_fault, 100);
+    try std.testing.expect(capture.queue.pop() == null);
 }
 
 test "capture creation rejects an unusable root without a compatibility fallback" {

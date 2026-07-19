@@ -23,10 +23,13 @@
 - Follow stable namespace/local/incarnation through tombstones.
 - Check the manifest capability matrix before assuming a kind is covered.
 - Require a terminal action disposition and explicit boundary memberships.
+- For a retained engine fault, require the structured runtime
+  phase/system/error and authority-cycle stage before assigning the owner; a
+  generic `runtime_system_fault` code alone is not an exact root cause.
 - For NPC disappearance, inspect interest reason, observer/entity districts,
   distance, encounter retention, and grace deadline.
 - For input shortcuts, require received -> matched -> queued -> applied.
-- Inspect the continuous product trail and all five human anchors using actual
+- Inspect the continuous product trail and all eight human anchors using actual
   timing. Compare semantic-ID, product-only, and human-visible evidence.
 - For a vehicle/carryable seam, require uninterrupted authority inclusion with
   `bounded_world`, `controlled`, or `held`, monotonic baseline/snapshot
@@ -43,4 +46,4 @@ Semantic replay does not reproduce exact SDL delivery, Metal scheduling,
 worker completion, frame pacing, or public-network behavior. Graphical
 re-execution does not prove authority determinism. A semantic-ID frame maps
 drawn identities but does not prove human readability. Missing evidence stays
-partial; never coerce a schema-1 bundle or invent absent values.
+partial; never coerce an earlier-schema bundle or invent absent values.

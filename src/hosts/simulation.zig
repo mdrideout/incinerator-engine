@@ -4187,6 +4187,195 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
     try std.testing.expectEqualSlices(u8, saved, resaved);
 }
 
+test "former recipe perimeter does not block real Jolt character or vehicle" {
+    var simulation = try Simulation.init(std.testing.allocator, .{
+        .namespace = 8_107,
+        .create_ground = true,
+        .character = .{ .max_characters = 1 },
+    });
+    defer simulation.deinit();
+
+    _ = try activateNpcTestDistrict(&simulation, 1, navigation_west_coord);
+    _ = try activateNpcTestDistrict(&simulation, 2, navigation_east_coord);
+    try simulation.submitCharacter(.{ .spawn = .{
+        .request_id = 3,
+        .position = .{ 10, 0, 6 },
+    } });
+    try simulation.submitVehicle(.{ .spawn = .{
+        .request_id = 4,
+        .chassis = .{ .pose = .{
+            .position = .{ 10, 2, 10 },
+            .rotation = .{ 0, -0.70710677, 0, 0.70710677 },
+        } },
+    } });
+    try simulation.tick();
+    const character_id = (simulation.pollCharacterOutcome() orelse
+        return error.CharacterSpawnOutcomeMissing).spawned.id;
+    const vehicle_id = (simulation.pollVehicleOutcome() orelse
+        return error.VehicleSpawnOutcomeMissing).spawned.id;
+    while (simulation.pollCharacterEvent() != null) {}
+    while (simulation.pollVehicleEvent() != null) {}
+
+    for (0..360) |_| {
+        try simulation.submitCharacter(.{ .actions = .{
+            .id = character_id,
+            .move = .{ 0, -1 },
+            .facing_yaw = 0,
+        } });
+        try simulation.tick();
+        _ = simulation.pollCharacterOutcome();
+        while (simulation.pollCharacterEvent() != null) {}
+    }
+    const perimeter_character = try simulation.character(character_id);
+    // Recipe 4's north wall occupied z=[8, 8.5]. Reaching the vehicle beyond
+    // its outer face proves that logical collision no longer contains the
+    // character; the vehicle then provides the intentional stop.
+    try std.testing.expect(perimeter_character.position[2] > 8.6);
+
+    for (0..240) |_| try simulation.tick();
+    try simulation.submitVehicle(.{ .enter = .{
+        .vehicle_id = vehicle_id,
+        .driver_id = character_id,
+    } });
+    try simulation.tick();
+    const entered = simulation.pollVehicleOutcome() orelse
+        return error.VehicleEnterOutcomeMissing;
+    try std.testing.expect(entered == .entered);
+    for (0..360) |_| {
+        try simulation.submitVehicle(.{ .drive = .{
+            .vehicle_id = vehicle_id,
+            .driver_id = character_id,
+            .input = .{ .throttle = 1 },
+        } });
+        try simulation.tick();
+        const applied = simulation.pollVehicleOutcome() orelse
+            return error.VehicleDriveOutcomeMissing;
+        try std.testing.expect(applied == .drive_applied);
+    }
+    try std.testing.expect(
+        (try simulation.vehicle(vehicle_id)).state.chassis.pose.position[0] > 25,
+    );
+    try std.testing.expect(simulation.firstFault() == null);
+}
+
+test "sustained real Jolt vehicle contact can displace NPC across district seam" {
+    var simulation = try Simulation.init(std.testing.allocator, .{
+        .namespace = 8_108,
+        .create_ground = true,
+        .character = .{ .max_characters = 1 },
+        .vehicle = .{ .max_entry_distance = 100 },
+    });
+    defer simulation.deinit();
+
+    _ = try activateNpcTestDistrict(&simulation, 1, navigation_west_coord);
+    _ = try activateNpcTestDistrict(&simulation, 2, navigation_east_coord);
+    try simulation.submitCharacter(.{ .spawn = .{
+        .request_id = 3,
+        .position = .{ 3.5, 0, 5 },
+    } });
+    try simulation.submitVehicle(.{
+        .spawn = .{
+            .request_id = 4,
+            .chassis = .{
+                .pose = .{
+                    .position = .{ 3.5, 2, 3 },
+                    // The canonical vehicle faces -Z. Rotate it toward +X so contact
+                    // pushes the west-district NPC across the x=8 ownership seam.
+                    .rotation = .{ 0, -0.70710677, 0, 0.70710677 },
+                },
+            },
+        },
+    });
+    try simulation.submitNpc(.{ .spawn = .{
+        .request_id = 5,
+        .node = .{ .coord = navigation_west_coord, .index = 2 },
+        .goal = .hold,
+    } });
+    try simulation.tick();
+    const character_id = (simulation.pollCharacterOutcome() orelse
+        return error.CharacterSpawnOutcomeMissing).spawned.id;
+    const vehicle_id = (simulation.pollVehicleOutcome() orelse
+        return error.VehicleSpawnOutcomeMissing).spawned.id;
+    const npc_id = (simulation.pollNpcOutcome() orelse
+        return error.NpcSpawnOutcomeMissing).spawned.id;
+    while (simulation.pollCharacterEvent() != null) {}
+    while (simulation.pollVehicleEvent() != null) {}
+    while (simulation.pollNpcEvent() != null) {}
+
+    for (0..240) |_| try simulation.tick();
+    try simulation.submitVehicle(.{ .enter = .{
+        .vehicle_id = vehicle_id,
+        .driver_id = character_id,
+    } });
+    try simulation.tick();
+    const entered = simulation.pollVehicleOutcome() orelse
+        return error.VehicleEnterOutcomeMissing;
+    try std.testing.expect(entered == .entered);
+
+    var owner_transfer_observed = false;
+    var greatest_npc_x = (try simulation.npc(npc_id)).position[0];
+    for (0..1_200) |_| {
+        const current_vehicle = try simulation.vehicle(vehicle_id);
+        const current_npc = try simulation.npc(npc_id);
+        const dx = current_npc.position[0] - current_vehicle.state.chassis.pose.position[0];
+        const dz = current_npc.position[2] - current_vehicle.state.chassis.pose.position[2];
+        const desired_yaw = try engine.transform.normalizeFacingYaw(std.math.atan2(dx, -dz));
+        const current_yaw = try engine.transform.facingYawFromRotation(
+            current_vehicle.state.chassis.pose.rotation,
+        );
+        const heading_error = try engine.transform.normalizeFacingYaw(
+            desired_yaw - current_yaw,
+        );
+        try simulation.submitVehicle(.{ .drive = .{
+            .vehicle_id = vehicle_id,
+            .driver_id = character_id,
+            .input = .{
+                .throttle = 0.45,
+                .steering = std.math.clamp(heading_error * 0.8, -0.5, 0.5),
+            },
+        } });
+        try simulation.tick();
+        const applied = simulation.pollVehicleOutcome() orelse
+            return error.VehicleDriveOutcomeMissing;
+        try std.testing.expect(applied == .drive_applied);
+        while (simulation.pollNpcEvent()) |event| switch (event) {
+            .owner_transferred => |transfer| {
+                if (std.meta.eql(transfer.id, npc_id) and
+                    ChunkCoord.eql(transfer.current, navigation_east_coord))
+                {
+                    owner_transfer_observed = true;
+                }
+            },
+            else => {},
+        };
+        greatest_npc_x = @max(greatest_npc_x, (try simulation.npc(npc_id)).position[0]);
+        if (owner_transfer_observed and greatest_npc_x > 8.05) break;
+    }
+
+    const npc_view = try simulation.npc(npc_id);
+    try std.testing.expect(owner_transfer_observed);
+    try std.testing.expect(greatest_npc_x > 8.05);
+    try std.testing.expect(ChunkCoord.eql(navigation_east_coord, npc_view.owner));
+    try std.testing.expect(npc_view.controller_present);
+    try std.testing.expect(simulation.firstFault() == null);
+    try std.testing.expectEqual(@as(u32, 1), simulation.diagnostics().npc.controller_count);
+
+    // Continue applying contact pressure after the seam transition. The
+    // original defect faulted the first attempted post-contact tick.
+    for (0..120) |_| {
+        try simulation.submitVehicle(.{ .drive = .{
+            .vehicle_id = vehicle_id,
+            .driver_id = character_id,
+            .input = .{ .throttle = 1 },
+        } });
+        try simulation.tick();
+        _ = simulation.pollVehicleOutcome() orelse
+            return error.VehicleDriveOutcomeMissing;
+        while (simulation.pollNpcEvent() != null) {}
+    }
+    try std.testing.expect(simulation.firstFault() == null);
+}
+
 test "completed-tick encounter authority chases and damages through vitals" {
     const allocator = std.testing.allocator;
     var simulation = try Simulation.init(allocator, .{
@@ -4438,8 +4627,11 @@ test "encounter pursuit save restore defers target and owner residency canonical
         );
         defer parsed.deinit();
         try std.testing.expectEqual(@as(usize, 1), parsed.value.npcs.len);
+        // Positional transfer now rebases the base route before persistence,
+        // so the active owner-aligned prefix is durable rather than requiring
+        // a restore-time deferred rebuild.
         try std.testing.expectEqual(
-            npcs.PersistedRouteMode.deferred_rebuild,
+            npcs.PersistedRouteMode.exact_prefix,
             parsed.value.npcs[0].route.mode,
         );
         try std.testing.expect(ChunkCoord.eql(
