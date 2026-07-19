@@ -642,6 +642,14 @@ const State = struct {
         return null;
     }
 
+    fn presentationLineHitFraction(
+        self: *State,
+        start: [3]f32,
+        end: [3]f32,
+    ) !?f32 {
+        return self.authority.presentationQueries().lineHitFraction(start, end);
+    }
+
     fn authoritativeFocusPosition(self: *State) !?[3]f32 {
         return self.authority.residency().authoritativeFocusPosition(
             self.client.participant,
@@ -1175,6 +1183,14 @@ pub const PresentationRole = struct {
 
     pub fn combatHud(self: PresentationRole) LocalCombatHud {
         return stateFrom(self.context).combatHud();
+    }
+
+    pub fn lineHitFraction(
+        self: PresentationRole,
+        start: [3]f32,
+        end: [3]f32,
+    ) !?f32 {
+        return stateFrom(self.context).presentationLineHitFraction(start, end);
     }
 };
 

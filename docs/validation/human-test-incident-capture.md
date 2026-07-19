@@ -1,13 +1,14 @@
 # Human-Test Incident Capture Validation Record
 
-**Status:** Schema-2 IC5-A through IC5-F and the IC5-H bounded-object evidence
-correction plus the IC5-G long gameplay/replay, real window lifecycle, and
-capture-cost gates are validated for the Apple Silicon macOS solo developer
-product. Controlled destructive/failure hardening and the physical
-shortcut/district/NPC/vehicle human checkpoint remain open in the
+**Status:** Schema-2 IC5-A through IC5-F, IC5-H bounded-object evidence, and
+IC5-I budget-safe handoff/playable-boundary correction are validated for the
+Apple Silicon macOS solo developer product. IC5-G long gameplay/replay, real
+window lifecycle, and capture-cost gates remain valid. Controlled
+destructive/failure hardening and the physical shortcut/drop/district/NPC/
+vehicle human checkpoint remain open in the
 [corrective implementation plan](../design/incident-evidence-reliability-and-boundary-corrections.md)
 
-**Date:** 2026-07-17
+**Date:** 2026-07-18
 
 **Decision:** [ADR-021](../adr/021-local-human-test-incident-bundles.md)
 
@@ -120,17 +121,19 @@ compilation also pass.
 - Heap-stable developer-host recorder with fixed typed requests and immutable
   inspector view.
 - Single writer thread and 1,024-job queue; 2,048-byte record ceiling, 4 MiB
-  stream rotation, 512 MiB total run budget, explicit high-water/drop/failure state,
-  atomic manifest/handoff/replay/marker updates, and 0700/0600 local paths.
+  stream rotation, a 384 MiB visual lane plus 128 MiB nonvisual reserve,
+  explicit high-water/drop/failure state, atomic manifest/handoff/replay/marker
+  updates, and 0700/0600 local paths.
 - Event timeline, 4 Hz camera/entity state, semantic input, one-second runtime
   and visual metrics, reduced anomaly lifecycle, four materialized typed
   windows, editable notes, reserved shortcut-stage evidence, separate Incident
   Capture controls, main-thread clipboard, and Finder folder opening.
 - Atomic live manifests expose current source/cohort, durable/admitted
   sequence, per-class bytes, queue, loss, writer, replay, and visual health.
-- A 30 FPS 480x270 product-only trail, full-resolution -2/-1/0/+1/+3
-  human-visible anchors, product-only flag frame, and 320x180 semantic-ID
-  frame/map use nonblocking Metal fences and explicit partial-evidence paths.
+- A 15 FPS 480x270 product-only trail, -2/-1/0/+1/+3 human-visible anchors
+  stored at no more than 1280x720, a product-only flag frame, and 320x180
+  semantic-ID frame/map use nonblocking Metal fences and explicit
+  partial-evidence paths. Source and stored dimensions are both indexed.
 - Tri-state authority/replication/presentation/draw membership, five-second
   tombstones, stable incarnation identity, relevance facts, and shared
   Gameplay Inspector terms preserve causal evidence after an entity vanishes.
@@ -298,11 +301,13 @@ paired p95 and p99 deltas were approximately +2.36% and +1.52%. This is one
 controlled local pair, not a universal hardware claim.
 
 The first benchmark exposed 239,155,200 bytes of Retina download buffers,
-which violated the declared 128 MiB bound. Four 1 Hz full-drawable slots now
-own human/UI context while the existing 30 Hz product lane owns transient
-continuity. A fresh flag smoke at 2560x1440 retained all five requested anchors
-at actual -1928, -925, +75, +1000, and +3008 ms with zero warnings; the final
-full journey above validates the same bounded policy.
+which violated the declared 128 MiB live bound. Four 1 Hz source slots own
+human/UI context while the product lane owns transient continuity. A fresh flag
+smoke at 2560x1440 retained all five requested anchors at actual -1928, -925,
++75, +1000, and +3008 ms with zero warnings. IC5-I subsequently reduced the
+product lane from 30 to 15 FPS and bounds stored human anchors at 1280x720 to
+protect the total-run evidence partition; that later cohort requires its own
+fresh installed evidence below.
 
 ## IC5-G unclean-exit and unusable-root evidence
 
@@ -406,7 +411,7 @@ zig build replay-incident -- <run-folder> <absolute-content-root>
 
 Unit coverage includes bounded request/queue rejection, path-safe UTC identity,
 JSON escaping/timestamp extraction, unusable-root rejection, product-mode
-parsing, explicit captured-input edge preservation, replay v10 round trips/integrity,
+parsing, explicit captured-input edge preservation, replay v11 round trips/integrity,
 and inherited architecture/source/binary gates.
 
 After schema-2 capture, relevance, prefetch, replay-boundary, semantic-ID,
@@ -434,6 +439,94 @@ modifier rejection, and key-up rejection. Schema 2 adds Command+Option+I as the
 recommended route and tests keycode, scancode, fields, focus, disabled state,
 repeat, key-up, one-request-per-press, and bounded queue saturation. Synthetic
 events prove routing only; the physical macOS gate remains open.
+
+## IC5-I budget and playable-boundary correction
+
+The human run
+`/Users/matt/Library/Logs/Incinerator/runs/2026-07-18T23-30-25.799Z_solo_c6b42031`
+stopped at 536,870,814 of 536,870,912 bytes. Only 98 bytes remained when the
+writer faulted: anomaly #5 was incomplete, anomaly #6 remained memory-only,
+and the pre-write ordered handoff never reached clipboard publication. Visual
+evidence accounted for 525,063,676 bytes. This was a recorder priority defect,
+not an SDL clipboard diagnosis.
+
+The same run correlated four product defects with authoritative evidence:
+
+- all four Jolt wheel angular velocities had the opposite sign from the
+  engine's right-handed +X wheel model during forward drive;
+- player-requested drop outside active district ownership returned the item to
+  an earlier pose instead of rejecting and retaining it;
+- logical route districts activated/deactivated while an infinite diagnostic
+  checkerboard made their unsupported exterior appear playable; and
+- the NPC death proxy expired after 90 ticks, leaving an empty replacement
+  delay/retry interval.
+
+The corrective cohort adds visual-budget admission and a protected nonvisual
+reserve, immediate in-memory handoff publication plus separately observed
+durability, 15 FPS/64-slot product capture, bounded stored human anchors,
+explicit wheel sign conversion, required drop purpose/replay cohort 11,
+ordinary-product two-route residency with recipe-4 perimeter collision, and a
+death proxy cleared only after replacement spawn plus vitals registration.
+
+Focused gates completed before the aggregate pass:
+
+| Gate | Result |
+|---|---|
+| Developer-host incident contracts | 45/45 tests passed |
+| Physics | 44/44 tests passed, including forward wheel direction |
+| Interaction feature | 15/15 tests passed, including requested rejection and forced cleanup |
+| Accepted-ingress replay | 20/20 tests passed for cohort 11 |
+| District streaming host | 37/37 tests passed with normal-product pin isolated from validation profiles |
+| Sandbox navigation | 1/1 test passed against recipe 4 |
+| Session contracts | 151/151 tests passed after placing the perimeter outside existing spawn/vehicle candidates |
+| Product NPC encounter host | 1/1 test passed with replacement-owned proxy retirement |
+| Default editor build graph | 53/53 steps passed |
+
+Aggregate, S11, installed Metal journey, fresh-bundle inspection, and direct
+human visual acceptance are recorded after they run; focused success does not
+substitute for them.
+
+The completed correction then passed the broad editor-disabled graph at
+255/255 steps with 932/932 tests, the inherited MP4 network/fault matrix at
+83/83 steps with 154/154 tests, and the full S11 source/package, solo, listen,
+dedicated, fault, replay, reconnect, player lifecycle, NPC replacement, and
+headless matrix at 182/182 steps with 249/249 outer tests. Its extracted broad
+and cold subgates additionally passed 182/182 with 410/410 tests and 32/32 with
+62/62 tests. The editor-enabled install graph passed 53/53 steps.
+
+The final ordinary-product Metal journey used:
+
+```sh
+INCINERATOR_INCIDENT_ROOT=/tmp/incinerator-ic5i-final-v3 \
+  zig build run -Deditor=true -- --incident-journey
+```
+
+It completed carry/drop, vehicle entry/drive/exit, both route crossings,
+player death/respawn, NPC death/transactional replacement, resize/restore,
+four overlapping anomaly lifecycles, handoff, and replay in:
+
+```text
+/tmp/incinerator-ic5i-final-v3/2026-07-19T01-13-27.875Z_solo_4b1a019d
+```
+
+The strict inspector and repository skill independently report four complete
+anomalies, 16 materialized windows, 403 visuals, zero suspicious frames, zero
+artifact failures, zero screenshot misses, zero dropped records, writer queue
+high-water 41/1,024, durable sequence 1,148/1,148, and 159,492,640 bytes under
+the 512 MiB cap. The visual lane reserved 155,926,784 of 402,653,184 bytes;
+replay and handoff are present and the handoff is durable. Semantic replay
+matches all 2,148 accepted-ingress ticks.
+
+Visual review of the first corrected journey found a genuine secondary issue:
+collision-backed perimeter walls could sit between the third-person camera and
+its target, while the integrity heuristic recognized only black corruption.
+The final cohort keeps the camera on the target side of live collision and
+marks a frame suspicious when one quantized nonzero color occupies at least
+75 percent of it. That stricter check then exposed a validation-script flaw:
+after NPC death the script continued pushing into a blocker to force an
+occluded replacement. The journey now stops at a reachable, policy-valid
+point. A fresh chronological report is readable and the final run has zero
+visual-integrity warnings.
 
 ## Explicit remaining limits
 

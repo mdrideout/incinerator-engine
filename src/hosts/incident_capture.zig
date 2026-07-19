@@ -14,6 +14,14 @@ const incident = @import("../engine/incident.zig");
 
 pub const stream_rotation_bytes: u64 = 4 * 1024 * 1024;
 pub const run_budget_bytes: u64 = 512 * 1024 * 1024;
+/// Raw visual evidence has an explicit admission ceiling. The remaining run
+/// budget is reserved for streams, anomaly lifecycle, materialized windows,
+/// replay, manifests, and the LLM handoff. A visual rejection degrades only
+/// that anomaly; it must never prevent the tester from copying the handoff.
+pub const visual_budget_bytes: u64 = 384 * 1024 * 1024;
+pub const non_visual_reserve_bytes: u64 = run_budget_bytes - visual_budget_bytes;
+pub const maximum_stored_anchor_width: u16 = 1280;
+pub const maximum_stored_anchor_height: u16 = 720;
 pub const writer_queue_capacity: usize = 1024;
 pub const max_line_bytes: usize = 2048;
 pub const pre_roll_ns: u64 = 15 * std.time.ns_per_s;
@@ -73,6 +81,45 @@ pub const VisualFrameMetadata = struct {
     pixel_digest: u64,
     suspicious: bool,
 };
+
+const StoredVisualExtent = struct {
+    width: u16,
+    height: u16,
+};
+
+fn storedVisualExtent(metadata: VisualFrameMetadata) StoredVisualExtent {
+    if (metadata.source != .human_visible or
+        (metadata.width <= maximum_stored_anchor_width and
+            metadata.height <= maximum_stored_anchor_height))
+    {
+        return .{ .width = metadata.width, .height = metadata.height };
+    }
+    const source_width: u64 = metadata.width;
+    const source_height: u64 = metadata.height;
+    const max_width: u64 = maximum_stored_anchor_width;
+    const max_height: u64 = maximum_stored_anchor_height;
+    if (source_width * max_height >= source_height * max_width) {
+        return .{
+            .width = maximum_stored_anchor_width,
+            .height = @intCast(@max(@as(u64, 1), @divFloor(
+                source_height * max_width,
+                source_width,
+            ))),
+        };
+    }
+    return .{
+        .width = @intCast(@max(@as(u64, 1), @divFloor(
+            source_width * max_height,
+            source_height,
+        ))),
+        .height = maximum_stored_anchor_height,
+    };
+}
+
+fn visualStorageBytes(metadata: VisualFrameMetadata) u64 {
+    const extent = storedVisualExtent(metadata);
+    return @as(u64, extent.width) * extent.height * 3 + 64;
+}
 
 /// Complete live semantic cohort including chassis plus four wheels for every
 /// bounded vehicle. Keep aligned with the renderer semantic oracle ceiling.
@@ -134,11 +181,15 @@ const Queue = struct {
     stopped: bool = false,
     writer_ready: bool = false,
     writer_failed: bool = false,
+    visual_budget_exhausted: bool = false,
+    handoff_persisted: bool = false,
     bytes_written: u64 = 0,
     stream_bytes_written: u64 = 0,
     visual_bytes_written: u64 = 0,
     replay_bytes_written: u64 = 0,
     metadata_bytes_written: u64 = 0,
+    visual_bytes_reserved: u64 = 0,
+    visual_budget_rejections: u64 = 0,
     screenshot_misses: u64 = 0,
     replay_attached: bool = false,
     anomaly_count: u8 = 0,
@@ -147,6 +198,37 @@ const Queue = struct {
     last_written_sequence: u64 = 0,
     handoff_ready: bool = false,
     handoff: Handoff = undefined,
+
+    fn reserveVisual(self: *Queue, amount: u64) bool {
+        self.lock();
+        defer self.unlock();
+        if (amount > visual_budget_bytes or
+            self.visual_bytes_reserved > visual_budget_bytes - amount)
+        {
+            self.visual_budget_exhausted = true;
+            self.visual_budget_rejections +|= 1;
+            return false;
+        }
+        self.visual_bytes_reserved += amount;
+        return true;
+    }
+
+    fn releaseVisual(self: *Queue, amount: u64) void {
+        self.lock();
+        defer self.unlock();
+        self.visual_bytes_reserved -|= amount;
+    }
+
+    fn publishHandoff(self: *Queue, bytes: []const u8) void {
+        std.debug.assert(bytes.len <= incident.max_handoff_bytes);
+        var handoff = Handoff{ .len = @intCast(bytes.len), .bytes = @splat(0) };
+        @memcpy(handoff.bytes[0..bytes.len], bytes);
+        self.lock();
+        defer self.unlock();
+        self.handoff = handoff;
+        self.handoff_ready = true;
+        self.handoff_persisted = false;
+    }
 
     fn lock(self: *Queue) void {
         while (!self.mutex.tryLock()) std.atomic.spinLoopHint();
@@ -343,11 +425,8 @@ const Writer = struct {
         try atomic.file.sync(self.io);
         try atomic.replace(self.io);
         self.noteBytes(.metadata, bytes.len);
-        var handoff = Handoff{ .len = @intCast(bytes.len), .bytes = @splat(0) };
-        @memcpy(handoff.bytes[0..bytes.len], bytes);
         self.queue.lock();
-        self.queue.handoff = handoff;
-        self.queue.handoff_ready = true;
+        self.queue.handoff_persisted = true;
         self.queue.unlock();
     }
 
@@ -534,8 +613,9 @@ const Writer = struct {
                 .{image.anomaly_id},
             ),
         };
+        const stored_extent = storedVisualExtent(image.metadata);
         if (image.pixels) |pixels| {
-            const visual_bytes = @as(usize, image.metadata.width) * image.metadata.height * 3 + 64;
+            const visual_bytes = @as(usize, stored_extent.width) * stored_extent.height * 3 + 64;
             try self.ensureBudget(visual_bytes);
             var absolute_buffer: [incident.max_path_bytes]u8 = undefined;
             const absolute_path = try std.fmt.bufPrint(
@@ -552,14 +632,22 @@ const Writer = struct {
             const header_text = try std.fmt.bufPrint(
                 &header,
                 "P6\n{d} {d}\n255\n",
-                .{ image.metadata.width, image.metadata.height },
+                .{ stored_extent.width, stored_extent.height },
             );
             try file.writeStreamingAll(self.io, header_text);
             var row: [4096 * 3]u8 = undefined;
-            if (image.metadata.width > 4096) return error.ImageWidthUnsupported;
-            for (0..image.metadata.height) |y| {
-                for (0..image.metadata.width) |x| {
-                    const source = (y * image.metadata.width + x) * 4;
+            if (stored_extent.width > 4096) return error.ImageWidthUnsupported;
+            for (0..stored_extent.height) |y| {
+                const source_y = @divFloor(
+                    @as(usize, y) * image.metadata.height,
+                    stored_extent.height,
+                );
+                for (0..stored_extent.width) |x| {
+                    const source_x = @divFloor(
+                        @as(usize, x) * image.metadata.width,
+                        stored_extent.width,
+                    );
+                    const source = (source_y * image.metadata.width + source_x) * 4;
                     const destination = x * 3;
                     const red_offset: usize = if (image.metadata.bgra) 2 else 0;
                     const blue_offset: usize = if (image.metadata.bgra) 0 else 2;
@@ -567,12 +655,12 @@ const Writer = struct {
                     row[destination + 1] = pixels[source + 1];
                     row[destination + 2] = pixels[source + blue_offset];
                 }
-                try file.writeStreamingAll(self.io, row[0 .. image.metadata.width * 3]);
+                try file.writeStreamingAll(self.io, row[0 .. stored_extent.width * 3]);
             }
             try file.sync(self.io);
             self.noteBytes(
                 .visual,
-                header_text.len + @as(usize, image.metadata.width) * image.metadata.height * 3,
+                header_text.len + @as(usize, stored_extent.width) * stored_extent.height * 3,
             );
         }
 
@@ -589,8 +677,8 @@ const Writer = struct {
         );
         const index_line = try std.fmt.bufPrint(
             &index_line_buffer,
-            "{{\"schema\":{d},\"kind\":\"visual_frame\",\"anomaly_id\":{d},\"capture_sequence\":{d},\"source\":\"{s}\",\"requested_offset_ms\":{?d},\"target_monotonic_ns\":{d},\"captured_monotonic_ns\":{d},\"actual_offset_ms\":{d},\"submitted_monotonic_ns\":{d},\"completed_monotonic_ns\":{d},\"writer_observed_monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"drawable_generation\":{d},\"width\":{d},\"height\":{d},\"pixel_format\":\"{s}\",\"fence_latency_ns\":{d},\"pixel_digest\":\"{x:0>16}\",\"suspicious\":{},\"path\":\"{s}\"}}\n",
-            .{ incident.schema_version, image.anomaly_id, image.metadata.capture_sequence, @tagName(image.metadata.source), image.metadata.requested_offset_ms, image.metadata.target_monotonic_ns, image.metadata.captured_monotonic_ns, actual_delta_ms, image.metadata.submitted_monotonic_ns, image.metadata.completed_monotonic_ns, monotonicNowNs(self.io), image.metadata.authority_tick, image.metadata.presentation_frame, image.metadata.drawable_generation, image.metadata.width, image.metadata.height, if (image.metadata.bgra) "bgra8" else "rgba8", image.metadata.fence_latency_ns, image.metadata.pixel_digest, image.metadata.suspicious, relative_path },
+            "{{\"schema\":{d},\"kind\":\"visual_frame\",\"anomaly_id\":{d},\"capture_sequence\":{d},\"source\":\"{s}\",\"requested_offset_ms\":{?d},\"target_monotonic_ns\":{d},\"captured_monotonic_ns\":{d},\"actual_offset_ms\":{d},\"submitted_monotonic_ns\":{d},\"completed_monotonic_ns\":{d},\"writer_observed_monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"drawable_generation\":{d},\"source_width\":{d},\"source_height\":{d},\"width\":{d},\"height\":{d},\"pixel_format\":\"{s}\",\"fence_latency_ns\":{d},\"pixel_digest\":\"{x:0>16}\",\"suspicious\":{},\"path\":\"{s}\"}}\n",
+            .{ incident.schema_version, image.anomaly_id, image.metadata.capture_sequence, @tagName(image.metadata.source), image.metadata.requested_offset_ms, image.metadata.target_monotonic_ns, image.metadata.captured_monotonic_ns, actual_delta_ms, image.metadata.submitted_monotonic_ns, image.metadata.completed_monotonic_ns, monotonicNowNs(self.io), image.metadata.authority_tick, image.metadata.presentation_frame, image.metadata.drawable_generation, image.metadata.width, image.metadata.height, stored_extent.width, stored_extent.height, if (image.metadata.bgra) "bgra8" else "rgba8", image.metadata.fence_latency_ns, image.metadata.pixel_digest, image.metadata.suspicious, relative_path },
         );
         try self.ensureBudget(index_line.len);
         const index_file = try std.Io.Dir.cwd().createFile(self.io, index_path, .{
@@ -656,15 +744,24 @@ const Writer = struct {
         const visual_bytes = self.queue.visual_bytes_written;
         const replay_bytes = self.queue.replay_bytes_written;
         const metadata_bytes = self.queue.metadata_bytes_written;
+        const visual_reserved = self.queue.visual_bytes_reserved;
+        const visual_exhausted = self.queue.visual_budget_exhausted;
+        const visual_rejections = self.queue.visual_budget_rejections;
+        const handoff_persisted = self.queue.handoff_persisted;
         const screenshot_misses = self.queue.screenshot_misses;
         const replay_attached = self.queue.replay_attached;
         const anomaly_count = self.queue.anomaly_count;
         self.queue.unlock();
-        const manifest = try std.fmt.bufPrint(
-            &manifest_buffer,
-            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.12\",\"jolt\":\"5.5.0\",\"protocol\":12,\"replay\":{d},\"snapshot\":11}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true}},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"writer_queue_capacity\":{d},\"writer_queue\":{d},\"queue_high_water\":{d},\"dropped_records\":{d},\"writer_failed\":{},\"last_admitted_sequence\":{d},\"last_durable_sequence\":{d},\"bytes_written\":{d},\"bytes_by_class\":{{\"streams\":{d},\"visual\":{d},\"replay\":{d},\"metadata\":{d}}},\"screenshot_misses\":{d},\"anomaly_count\":{d},\"replay_status\":\"{s}\",\"screenshot_format\":\"ppm-p6\",\"privacy\":{{\"local_only\":true,\"captures_text_input\":false,\"captures_credentials\":false,\"captures_reserved_shortcut_candidates\":true}}}}\n",
-            .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), sandbox_replay.schema_cohort, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, writer_queue_capacity, queued, high_water, dropped, writer_failed, last_admitted, last_durable, bytes, stream_bytes, visual_bytes, replay_bytes, metadata_bytes, screenshot_misses, anomaly_count, if (replay_attached) "attached" else "not_attached" },
+        var manifest_writer = std.Io.Writer.fixed(&manifest_buffer);
+        try manifest_writer.print(
+            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.12\",\"jolt\":\"5.5.0\",\"protocol\":12,\"replay\":{d},\"snapshot\":11}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true}},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
+            .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), sandbox_replay.schema_cohort, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, visual_budget_bytes, non_visual_reserve_bytes, visual_reserved, visual_exhausted, visual_rejections },
         );
+        try manifest_writer.print(
+            "\"writer_queue_capacity\":{d},\"writer_queue\":{d},\"queue_high_water\":{d},\"dropped_records\":{d},\"writer_failed\":{},\"handoff_persisted\":{},\"last_admitted_sequence\":{d},\"last_durable_sequence\":{d},\"bytes_written\":{d},\"bytes_by_class\":{{\"streams\":{d},\"visual\":{d},\"replay\":{d},\"metadata\":{d}}},\"screenshot_misses\":{d},\"anomaly_count\":{d},\"replay_status\":\"{s}\",\"screenshot_format\":\"ppm-p6\",\"privacy\":{{\"local_only\":true,\"captures_text_input\":false,\"captures_credentials\":false,\"captures_reserved_shortcut_candidates\":true}}}}\n",
+            .{ writer_queue_capacity, queued, high_water, dropped, writer_failed, handoff_persisted, last_admitted, last_durable, bytes, stream_bytes, visual_bytes, replay_bytes, metadata_bytes, screenshot_misses, anomaly_count, if (replay_attached) "attached" else "not_attached" },
+        );
+        const manifest = manifest_buffer[0..manifest_writer.end];
         var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, path, .{
             .replace = true,
             .permissions = std.Io.File.Permissions.fromMode(0o600),
@@ -1048,13 +1145,20 @@ pub const Capture = struct {
             "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; five human-visible anchors when admitted; a product-only flag frame; a continuous product trail; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheel draws under one stable identity.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
             .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
         ) catch return false;
-        const owned = std.heap.page_allocator.dupe(u8, buffer[0..writer.end]) catch return false;
+        const handoff_bytes = buffer[0..writer.end];
+        self.queue.publishHandoff(handoff_bytes);
+
+        const owned = std.heap.page_allocator.dupe(u8, handoff_bytes) catch {
+            self.setStatus("LLM handoff ready for clipboard; durable copy allocation failed");
+            return true;
+        };
         if (!self.queue.push(.{ .handoff = .{ .bytes = owned } })) {
             std.heap.page_allocator.free(owned);
-            return false;
+            self.setStatus("LLM handoff ready for clipboard; durable writer queue rejected it");
+            return true;
         }
         _ = self.queue.push(.flush);
-        self.setStatus("Preparing LLM handoff and clipboard text...");
+        self.setStatus("LLM handoff ready for clipboard; durable persistence queued");
         return true;
     }
 
@@ -1081,6 +1185,13 @@ pub const Capture = struct {
         metadata: VisualFrameMetadata,
         owned_rgba: ?[]u8,
     ) bool {
+        const reservation = if (owned_rgba != null) visualStorageBytes(metadata) else 0;
+        if (reservation != 0 and !self.queue.reserveVisual(reservation)) {
+            if (owned_rgba) |pixels| std.heap.page_allocator.free(pixels);
+            self.noteVisualFailure(anomaly_id);
+            self.setStatus("Visual evidence budget exhausted; anomaly will finalize partial");
+            return false;
+        }
         if (self.queue.push(.{ .image = .{
             .anomaly_id = anomaly_id,
             .metadata = metadata,
@@ -1111,6 +1222,7 @@ pub const Capture = struct {
         self.queue.lock();
         self.queue.screenshot_misses = self.screenshot_misses;
         self.queue.unlock();
+        if (reservation != 0) self.queue.releaseVisual(reservation);
         if (owned_rgba) |pixels| std.heap.page_allocator.free(pixels);
         return false;
     }
@@ -1136,7 +1248,15 @@ pub const Capture = struct {
             .semantic_entry_count = @intCast(entries.len),
         };
         @memcpy(image.semantic_entries[0..entries.len], entries);
+        const reservation = visualStorageBytes(metadata);
+        if (!self.queue.reserveVisual(reservation)) {
+            std.heap.page_allocator.free(owned_rgba);
+            self.noteVisualFailure(anomaly_id);
+            self.setStatus("Visual evidence budget exhausted; anomaly will finalize partial");
+            return false;
+        }
         if (!self.queue.push(.{ .image = image })) {
+            self.queue.releaseVisual(reservation);
             std.heap.page_allocator.free(owned_rgba);
             self.noteVisualFailure(anomaly_id);
             return false;
@@ -1175,10 +1295,15 @@ pub const Capture = struct {
             .enabled = true,
             .writer_ready = self.queue.writer_ready,
             .writer_failed = self.queue.writer_failed,
+            .visual_budget_exhausted = self.queue.visual_budget_exhausted,
+            .handoff_persisted = self.queue.handoff_persisted,
             .queued = @intCast(@min(self.queue.count, std.math.maxInt(u16))),
             .queue_high_water = @intCast(@min(self.queue.high_water, std.math.maxInt(u16))),
             .dropped_records = self.queue.dropped,
+            .visual_budget_rejections = self.queue.visual_budget_rejections,
             .bytes_written = self.queue.bytes_written,
+            .visual_bytes_reserved = self.queue.visual_bytes_reserved,
+            .visual_budget_bytes = visual_budget_bytes,
             .screenshot_misses = self.screenshot_misses,
             .last_durable_sequence = self.queue.last_durable_sequence,
             .last_admitted_sequence = self.queue.last_admitted_sequence,
@@ -1575,6 +1700,58 @@ test "writer run budget fails closed with exact byte accounting" {
     queue = .{};
     try std.testing.expectError(error.IncidentRunBudgetExceeded, writer.ensureBudget(17));
     try std.testing.expect(queue.writer_failed);
+}
+
+test "visual admission preserves non-visual evidence reserve" {
+    var queue = Queue{};
+    queue.visual_bytes_reserved = visual_budget_bytes - 16;
+    try std.testing.expect(queue.reserveVisual(16));
+    try std.testing.expectEqual(visual_budget_bytes, queue.visual_bytes_reserved);
+    try std.testing.expect(!queue.reserveVisual(1));
+    try std.testing.expect(queue.visual_budget_exhausted);
+    try std.testing.expectEqual(@as(u64, 1), queue.visual_budget_rejections);
+    try std.testing.expect(!queue.writer_failed);
+    queue.releaseVisual(16);
+    try std.testing.expectEqual(visual_budget_bytes - 16, queue.visual_bytes_reserved);
+}
+
+test "Retina human anchors have a bounded stored extent" {
+    const metadata = VisualFrameMetadata{
+        .capture_sequence = 1,
+        .source = .human_visible,
+        .requested_offset_ms = 0,
+        .flag_monotonic_ns = 1,
+        .target_monotonic_ns = 1,
+        .captured_monotonic_ns = 1,
+        .submitted_monotonic_ns = 1,
+        .completed_monotonic_ns = 1,
+        .authority_tick = 1,
+        .presentation_frame = 1,
+        .drawable_generation = 1,
+        .width = 2560,
+        .height = 1440,
+        .bgra = true,
+        .fence_latency_ns = 0,
+        .pixel_digest = 0,
+        .suspicious = false,
+    };
+    try std.testing.expectEqual(
+        StoredVisualExtent{ .width = 1280, .height = 720 },
+        storedVisualExtent(metadata),
+    );
+    try std.testing.expectEqual(
+        @as(u64, 1280 * 720 * 3 + 64),
+        visualStorageBytes(metadata),
+    );
+}
+
+test "handoff is available to clipboard before durable writer completion" {
+    var queue = Queue{};
+    queue.handoff_persisted = true;
+    queue.publishHandoff("bounded handoff");
+    try std.testing.expect(queue.handoff_ready);
+    try std.testing.expect(!queue.handoff_persisted);
+    try std.testing.expectEqualStrings("bounded handoff", queue.handoff.slice());
 }
 
 test "capture creation rejects an unusable root without a compatibility fallback" {

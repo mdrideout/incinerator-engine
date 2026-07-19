@@ -482,7 +482,7 @@ pub fn main(init: std.process.Init) !void {
     std.debug.print(
         "MP4_LOOPBACK_PASS tick={d} participants={d} reconnects={d} " ++
             "snapshots={d} vehicle_actions={d}/{d} interaction_actions={d}/{d} " ++
-            "baselines={d}/{d} transfers={d} npcs={d} npc_updates={d} vehicle_moved_z={d:.3} " ++
+            "baselines={d}/{d} transfers={d} npcs={d} npc_updates={d} vehicle_moved_m={d:.3} " ++
             "character_moved_x={d:.3} dropped_events={d}\n",
         .{
             diagnostics.tick,
@@ -498,7 +498,10 @@ pub fn main(init: std.process.Init) !void {
             diagnostics.relevance_transfers,
             diagnostics.active_npcs,
             diagnostics.npc_state_updates,
-            driven_vehicle_position[2] - initial_vehicle_position[2],
+            @sqrt(
+                std.math.pow(f32, driven_vehicle_position[0] - initial_vehicle_position[0], 2) +
+                    std.math.pow(f32, driven_vehicle_position[2] - initial_vehicle_position[2], 2),
+            ),
             moved_position[0] - initial_position[0],
             harness.network.droppedEvents(),
         },

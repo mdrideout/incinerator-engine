@@ -561,6 +561,7 @@ fn drop(
         .transaction_id = transaction_id,
         .carrier_id = character_id,
         .carryable_id = carryable_id,
+        .purpose = .player_requested,
     } });
     try tick(world, metrics);
     const outcome = world.pollInteractionOutcome() orelse

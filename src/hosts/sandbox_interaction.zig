@@ -68,6 +68,7 @@ test "interaction request mailbox is bounded and visibly rejects overflow" {
         .transaction_id = 99,
         .carrier_id = id,
         .carryable_id = id,
+        .purpose = .player_requested,
     } }));
     try std.testing.expectEqual(@as(u64, 1), buffer.rejected);
     try std.testing.expectEqual(request_capacity, buffer.slice().len);

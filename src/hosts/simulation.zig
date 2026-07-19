@@ -1443,6 +1443,18 @@ pub const Simulation = struct {
         return self.state.controllers.lineUnobstructed(start, end);
     }
 
+    /// Read-only world obstruction query for presentation placement. This
+    /// exposes only a normalized segment fraction; backend body identities and
+    /// collision ownership remain inside the simulation composition.
+    pub fn presentationLineHitFraction(
+        self: *Simulation,
+        start: [3]f32,
+        end: [3]f32,
+    ) !?f32 {
+        try self.state.runtime.ensureOwnerThread();
+        return self.state.controllers.lineHitFraction(start, end);
+    }
+
     pub fn vehiclePresentation(
         self: *Simulation,
         alpha: f32,
@@ -3915,6 +3927,7 @@ test "interaction composes real Jolt drop collect and held restore transactional
         .transaction_id = 10,
         .carrier_id = character_id,
         .carryable_id = carryable_id,
+        .purpose = .player_requested,
     } });
     try simulation.tick();
     try std.testing.expectEqual(
@@ -4044,7 +4057,10 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
             2,
             navigation_east_coord,
         );
-        try std.testing.expectEqual(@as(u32, 6), simulation.bodyCount());
+        try std.testing.expectEqual(
+            @as(u32, sandbox_district_recipe.static_box_count) * 2,
+            simulation.bodyCount(),
+        );
 
         try simulation.submitNpc(.{ .spawn = .{
             .request_id = 10,
@@ -4062,7 +4078,10 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
         };
         try std.testing.expectEqual(@as(usize, 1), simulation.npcCount());
         try std.testing.expectEqual(@as(u32, 1), simulation.diagnostics().npc.controller_count);
-        try std.testing.expectEqual(@as(u32, 6), simulation.bodyCount());
+        try std.testing.expectEqual(
+            @as(u32, sandbox_district_recipe.static_box_count) * 2,
+            simulation.bodyCount(),
+        );
         try std.testing.expectEqual(@as(usize, 1), (try simulation.npcPresentation(0)).len);
 
         // The route was admitted while both exact content cohorts were active.
@@ -4082,7 +4101,10 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
             }
         }
         try std.testing.expect(observed_waiting);
-        try std.testing.expectEqual(@as(u32, 3), simulation.bodyCount());
+        try std.testing.expectEqual(
+            @as(u32, sandbox_district_recipe.static_box_count),
+            simulation.bodyCount(),
+        );
         try std.testing.expectEqual(@as(u32, 1), simulation.diagnostics().npc.controller_count);
 
         const second_east_ticket = try activateNpcTestDistrict(
@@ -4110,7 +4132,10 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
             }
         }
         try std.testing.expect(observed_transfer);
-        try std.testing.expectEqual(@as(u32, 6), simulation.bodyCount());
+        try std.testing.expectEqual(
+            @as(u32, sandbox_district_recipe.static_box_count) * 2,
+            simulation.bodyCount(),
+        );
         try std.testing.expectEqual(@as(u32, 1), simulation.diagnostics().npc.controller_count);
 
         // Owner unload destroys only CharacterVirtual state. Reloading the
@@ -4121,7 +4146,10 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
         try std.testing.expectEqual(NpcState.dormant, dormant.state);
         try std.testing.expect(!dormant.controller_present);
         try std.testing.expectEqual(@as(u32, 0), simulation.diagnostics().npc.controller_count);
-        try std.testing.expectEqual(@as(u32, 3), simulation.bodyCount());
+        try std.testing.expectEqual(
+            @as(u32, sandbox_district_recipe.static_box_count),
+            simulation.bodyCount(),
+        );
 
         const third_east_ticket = try activateNpcTestDistrict(
             &simulation,
@@ -4133,7 +4161,10 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
         try std.testing.expect(resumed.state != .dormant);
         try std.testing.expect(resumed.controller_present);
         try std.testing.expectEqual(@as(u32, 1), simulation.diagnostics().npc.controller_count);
-        try std.testing.expectEqual(@as(u32, 6), simulation.bodyCount());
+        try std.testing.expectEqual(
+            @as(u32, sandbox_district_recipe.static_box_count) * 2,
+            simulation.bodyCount(),
+        );
         saved = try simulation.save(allocator);
     }
     defer allocator.free(saved);
@@ -4145,7 +4176,10 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
     defer restored.deinit();
     try std.testing.expectEqual(@as(usize, 1), restored.npcCount());
     try std.testing.expectEqual(@as(usize, 3), restored.entityCount());
-    try std.testing.expectEqual(@as(u32, 6), restored.bodyCount());
+    try std.testing.expectEqual(
+        @as(u32, sandbox_district_recipe.static_box_count) * 2,
+        restored.bodyCount(),
+    );
     try std.testing.expectEqual(@as(u32, 1), restored.diagnostics().npc.controller_count);
     try std.testing.expect((try restored.npc(npc_id)).controller_present);
     const resaved = try restored.save(allocator);

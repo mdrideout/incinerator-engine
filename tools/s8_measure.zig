@@ -1096,6 +1096,7 @@ fn drop(
         .transaction_id = transaction_id,
         .carrier_id = identities.character,
         .carryable_id = identities.carryable,
+        .purpose = .player_requested,
     } });
     try harness.metrics.observe(harness.world);
     try harness.tick(measured);

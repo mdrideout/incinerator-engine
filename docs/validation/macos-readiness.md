@@ -417,10 +417,10 @@ were true for those runs:
 
 | Artifact or semantic cohort | Current SHA-256 |
 |---|---|
-| West `s3_fixture.icdb` | `0396ed142f96fd2d6d19d92a55ee62a703d187d09c1e175a1affb22463317f2b` |
-| East `s6_east.icdb` | `fbf82af3f08570f1f503ae955aa282dd5c03f02a32a4ac52f1ddce810a1b4215` |
-| Canonical `catalog.icat` | `8d957755631a97a195a04e3475e2803be79e962b751bc2d2c81addf60a4de56b` |
-| Admitted `ContentCohort` | `05d57d84c108c9dc813207d363761f669bf78dd4f63c22c479a160f15df98761` |
+| West `s3_fixture.icdb` | `98cb967d40501f2f3c1c1803fc49df8fe3d0132120b12b0c52698188affa3d25` |
+| East `s6_east.icdb` | `98b02e5c353c5487b4a325cc8aef5aad62b7e7a94212c9d091f21ee46d2e0112` |
+| Canonical `catalog.icat` | `79059a3efa6d7b260b4bd749c677e6cfb237d5d691caa7da12b420e5f9793762` |
+| Admitted `ContentCohort` | `11ac400758045c5c93550a972c4487a099e4009bb475c074e086ec6da4043238` |
 
 ## Automated Baseline
 

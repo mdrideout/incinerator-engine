@@ -1,13 +1,14 @@
 # Human Test Incident Capture And LLM Diagnostic Handoff
 
-**Status:** Schema-2 IC5-A through IC5-F and the IC5-H bounded-object evidence
-correction plus the IC5-G long gameplay/replay, real window lifecycle, and
-bounded capture-cost gates are complete for the Apple Silicon macOS solo
-developer product. Controlled destructive/failure hardening and the physical
-shortcut/district/NPC/vehicle human checkpoint remain open under the
+**Status:** Schema-2 IC5-A through IC5-F, IC5-H bounded-object evidence, IC5-I
+budget/playable-boundary correction, and the IC5-G long gameplay/replay, real
+window lifecycle, and bounded capture-cost gates are complete for the Apple
+Silicon macOS solo developer product. Controlled destructive/failure hardening
+and the physical shortcut/drop/district/NPC/vehicle human checkpoint remain
+open under the
 [IC5 corrective plan](incident-evidence-reliability-and-boundary-corrections.md)
 
-**Date:** 2026-07-17
+**Date:** 2026-07-18
 
 **Platform:** Apple Silicon macOS; secondary platforms remain deferred
 
@@ -277,7 +278,7 @@ When the tester uses either shortcut or clicks **Flag anomaly**:
    recorder sequence, topology/session, local entity, and selected entity;
 3. bind the preceding 15 seconds and following 5 seconds of data as its
    diagnostic window;
-4. bind the bounded 30 FPS product-only trail from approximately four seconds
+4. bind the bounded 15 FPS product-only trail from approximately four seconds
    before through three seconds after the flag;
 5. request human-visible anchors at -2, -1, 0, +1, and +3 seconds;
 6. capture one product-only flag-adjacent image;
@@ -293,12 +294,13 @@ ranges, but one flag never overwrites another flag's metadata or images.
 ## Screenshot Strategy
 
 Visual evidence uses two asynchronous lanes because the human may react
-several seconds after a transient. A 30 FPS, 480x270 product-only circular
+several seconds after a transient. A 15 FPS, 480x270 product-only circular
 trail retains approximately four seconds before the flag and continues three
-seconds after it. A full-resolution human-visible lane captures -2, -1, 0, +1,
-and +3 second anchors after product and developer UI rendering. A separate
-product-only flag image and 320x180 semantic-ID image/map distinguish product,
-developer-composition, and identity evidence.
+seconds after it. A human-visible lane captures -2, -1, 0, +1, and +3 second
+anchors after product and developer UI rendering, retaining source dimensions
+but storing at no more than 1280x720. A separate product-only flag image and
+320x180 semantic-ID image/map distinguish product, developer-composition, and
+identity evidence.
 
 The swapchain is first copied into a composition-owned stable texture with
 color-target and sampler usage. Product captures blit from that texture; the
@@ -307,6 +309,14 @@ fence polling, and filesystem work stays on the writer thread. Every visual
 index entry stores requested and actual time, tick, frame, source, drawable
 generation, fence timing, digest, pixel format, suspicious-image state, and
 relative path. Filenames are labels, never timing evidence.
+
+The 512 MiB run budget reserves 128 MiB for nonvisual evidence and admits at
+most 384 MiB of visual writes. Visual bytes are reserved before writer enqueue.
+Exhaustion makes affected anomalies explicitly partial without consuming the
+space required by typed streams, markers, notes, replay, manifests, and LLM
+handoff. The handoff is published to the main-thread clipboard from the
+in-memory snapshot before its durable file is queued; the UI reports durable
+handoff completion separately.
 
 The actual screenshot remains unmodified. Labels and semantic mappings live in
 metadata or a separate ID image so diagnostic overlays cannot obscure the

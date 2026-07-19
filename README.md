@@ -55,6 +55,11 @@ the corpse; primitive material tints are enforced by the real product shader;
 carried objects are visibly released; drop placement stays within an active
 district; and gameplay trace schema 2 preserves typed rejection reasons and
 semantic presentation membership transitions.
+The current correction also reserves incident capacity for notes/replay/
+handoff, rejects unsupported player drops without moving the object, keeps the
+two-district sandbox route resident behind visible collision, retains NPC
+death presentation until replacement registration, and clamps the follow
+camera to the target side of world blockers.
 
 ## Toolchain Cohort
 
@@ -481,8 +486,12 @@ Capture**, add a note, and click **Save note + Copy for LLM**. The note is
 persisted before the handoff is refreshed and copied. The clipboard contains the
 run path, current health, anomaly index, and evidence limits—not a giant JSON
 payload. Each finalized anomaly has a 15-second typed pre-roll, four typed
-materialized windows, a 30 FPS product-only trail, five full-resolution
-human-visible anchors, a product-only flag frame, and a semantic-ID image/map.
+materialized windows, a 15 FPS product-only trail, five human-visible anchors
+stored at no more than 1280x720, a product-only flag frame, and a semantic-ID
+image/map. Source and stored dimensions are indexed separately. A reserved
+128 MiB nonvisual lane keeps notes, replay, manifests, and LLM handoff working
+even after the bounded visual lane is exhausted; the UI reports whether the
+durable handoff has landed.
 Use `visual-index.ndjson` actual timestamps rather than filenames to order
 images. To review a long trail chronologically without mutating the bundle:
 

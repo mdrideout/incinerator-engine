@@ -86,10 +86,16 @@ pub const Collect = struct {
     carryable_id: engine.PersistentId,
 };
 
+pub const DropPurpose = enum(u8) {
+    player_requested = 1,
+    forced_cleanup = 2,
+};
+
 pub const Drop = struct {
     transaction_id: u64,
     carrier_id: engine.PersistentId,
     carryable_id: engine.PersistentId,
+    purpose: DropPurpose,
 };
 
 pub const Command = union(enum) {
@@ -150,9 +156,9 @@ pub const Dropped = struct {
 
 /// Explains the deterministic placement choice without changing the action's
 /// terminal success semantics. The normal configured pose wins; an adjacent
-/// orientation keeps a boundary drop beside the carrier; the last active
-/// world pose is the final invariant-preserving release when the carrier has
-/// already escaped loaded residency.
+/// orientation keeps a boundary drop beside the carrier; forced participant
+/// cleanup may use the last active world pose after the carrier has already
+/// escaped loaded residency.
 pub const DropPlacement = enum {
     configured_offset,
     alternate_offset,

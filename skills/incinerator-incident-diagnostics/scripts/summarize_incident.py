@@ -88,6 +88,29 @@ def main() -> int:
     classes = manifest.get("bytes_by_class", {})
     if sum(int(classes.get(key, 0)) for key in ("streams", "visual", "replay", "metadata")) != int(manifest["bytes_written"]):
         raise ValueError("manifest byte classes do not equal bytes_written")
+    partition_keys = (
+        "visual_budget_bytes",
+        "non_visual_reserve_bytes",
+        "visual_bytes_reserved",
+        "visual_budget_rejections",
+        "visual_budget_exhausted",
+        "handoff_persisted",
+    )
+    partition_fields = sum(key in manifest for key in partition_keys)
+    if partition_fields not in (0, len(partition_keys)):
+        raise ValueError("incomplete visual/non-visual budget partition")
+    visual_budget = int(manifest.get("visual_budget_bytes", 0))
+    non_visual_reserve = int(manifest.get("non_visual_reserve_bytes", 0))
+    visual_reserved = int(manifest.get("visual_bytes_reserved", classes.get("visual", 0)))
+    visual_rejections = int(manifest.get("visual_budget_rejections", 0))
+    visual_exhausted = bool(manifest.get("visual_budget_exhausted", False))
+    if partition_fields:
+        if visual_budget + non_visual_reserve != int(manifest["run_budget_bytes"]):
+            raise ValueError("visual budget and non-visual reserve do not partition the run budget")
+        if visual_reserved > visual_budget or int(classes.get("visual", 0)) > visual_reserved:
+            raise ValueError("visual byte accounting exceeds its reserved budget")
+        if visual_exhausted != (visual_rejections != 0):
+            raise ValueError("visual budget exhaustion and rejection count disagree")
     if int(manifest["last_durable_sequence"]) > int(manifest["last_admitted_sequence"]):
         raise ValueError("durable sequence exceeds admitted sequence")
 
@@ -116,7 +139,10 @@ def main() -> int:
         f"queue={manifest.get('writer_queue')} high={manifest.get('queue_high_water')}/{manifest.get('writer_queue_capacity')} "
         f"durable={manifest.get('last_durable_sequence')}/{manifest.get('last_admitted_sequence')} "
         f"dropped={manifest.get('dropped_records')} writer_failed={manifest.get('writer_failed')} "
-        f"screenshot_misses={manifest.get('screenshot_misses')}"
+        f"screenshot_misses={manifest.get('screenshot_misses')} "
+        f"visual_reserved={visual_reserved}/{visual_budget if partition_fields else 'unpartitioned'} "
+        f"visual_rejected={visual_rejections} "
+        f"handoff_persisted={manifest.get('handoff_persisted')}"
     )
     capabilities = manifest.get("evidence_capabilities")
     if capabilities is None:

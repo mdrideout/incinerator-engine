@@ -33,6 +33,12 @@ const Manifest = struct {
     updated_monotonic_ns: u64,
     stream_rotation_bytes: u64,
     run_budget_bytes: u64,
+    visual_budget_bytes: ?u64 = null,
+    non_visual_reserve_bytes: ?u64 = null,
+    visual_bytes_reserved: ?u64 = null,
+    visual_budget_exhausted: ?bool = null,
+    visual_budget_rejections: ?u64 = null,
+    handoff_persisted: ?bool = null,
     writer_queue_capacity: usize,
     writer_queue: usize,
     queue_high_water: usize,
@@ -246,6 +252,29 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
     {
         return error.InvalidIncidentByteAccounting;
     }
+    const has_visual_partition = manifest.visual_budget_bytes != null;
+    if (has_visual_partition != (manifest.non_visual_reserve_bytes != null) or
+        has_visual_partition != (manifest.visual_bytes_reserved != null) or
+        has_visual_partition != (manifest.visual_budget_exhausted != null) or
+        has_visual_partition != (manifest.visual_budget_rejections != null) or
+        has_visual_partition != (manifest.handoff_persisted != null))
+    {
+        return error.IncompleteIncidentBudgetPartition;
+    }
+    if (has_visual_partition) {
+        const visual_budget = manifest.visual_budget_bytes.?;
+        const non_visual_reserve = manifest.non_visual_reserve_bytes.?;
+        const visual_reserved = manifest.visual_bytes_reserved.?;
+        const visual_exhausted = manifest.visual_budget_exhausted.?;
+        const visual_rejections = manifest.visual_budget_rejections.?;
+        if (visual_budget +| non_visual_reserve != manifest.run_budget_bytes or
+            visual_reserved > visual_budget or
+            manifest.bytes_by_class.visual > visual_reserved or
+            (visual_exhausted != (visual_rejections != 0)))
+        {
+            return error.InvalidIncidentBudgetPartition;
+        }
+    }
 
     var counts = Counts{};
     if (std.mem.eql(u8, manifest.status, "running")) {
@@ -266,6 +295,13 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
         std.debug.print(
             "WARN evidence_health: writer_failed={} dropped={d} screenshot_misses={d}\n",
             .{ manifest.writer_failed, manifest.dropped_records, manifest.screenshot_misses },
+        );
+    }
+    if (manifest.visual_budget_exhausted orelse false) {
+        counts.warnings += 1;
+        std.debug.print(
+            "WARN visual_budget: reserved={d}/{d} rejected={d}; non-visual evidence remains protected\n",
+            .{ manifest.visual_bytes_reserved.?, manifest.visual_budget_bytes.?, manifest.visual_budget_rejections.? },
         );
     }
     if (manifest.evidence_capabilities) |capabilities| {
@@ -335,7 +371,7 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
             "  status={s} source={s} dirty={} build={s}/{s}\n" ++
             "  records={d} segments={d} anomalies={d} windows={d} visuals={d} suspicious={d}\n" ++
             "  queue={d} high_water={d}/{d} durable={d}/{d} bytes={d}/{d}\n" ++
-            "  replay={} handoff={} warnings={d}\n",
+            "  visual_reserved={d}/{d} rejected={d} replay={} handoff={} persisted={} warnings={d}\n",
         .{
             run_path,
             manifest.status,
@@ -356,8 +392,12 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
             manifest.last_admitted_sequence,
             manifest.bytes_written,
             manifest.run_budget_bytes,
+            manifest.visual_bytes_reserved orelse 0,
+            manifest.visual_budget_bytes orelse 0,
+            manifest.visual_budget_rejections orelse 0,
             replay_present,
             handoff_present,
+            manifest.handoff_persisted orelse false,
             counts.warnings,
         },
     );

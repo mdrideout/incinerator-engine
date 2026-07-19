@@ -516,7 +516,6 @@ const NpcSlot = struct {
 const NpcDeathProxy = struct {
     owner: district_contract.ChunkCoord,
     state: protocol.NpcState,
-    until_tick: u64,
 };
 
 const melee_damage: u16 = 34;
@@ -1193,10 +1192,18 @@ const AuthorityCore = struct {
                     .generation = 1,
                 },
             };
-            try authority.simulation.submitVehicle(.{ .spawn = .{
-                .request_id = vehicleSpawnRequestId(0, 1),
-                .chassis = .{ .pose = .{ .position = .{ -1.5, 2, -4 } } },
-            } });
+            try authority.simulation.submitVehicle(.{
+                .spawn = .{
+                    .request_id = vehicleSpawnRequestId(0, 1),
+                    // Face the fixture down the authored west-to-east route. The
+                    // identity rotation drove directly out of the route's south
+                    // edge after only four metres.
+                    .chassis = .{ .pose = .{
+                        .position = .{ -1.5, 2, -4 },
+                        .rotation = .{ 0, -0.70710677, 0, 0.70710677 },
+                    } },
+                },
+            });
             authority.carryables[0] = .{
                 .generation = 1,
                 .replicated = .{
@@ -1896,14 +1903,6 @@ const AuthorityCore = struct {
     fn prepareSimulationTick(self: *AuthorityCore) !void {
         self.replenishReplicationBudgets();
         const current_tick = self.simulation.tickIndex();
-        for (&self.npcs) |*npc| {
-            if (npc.death_proxy) |proxy| {
-                if (current_tick >= proxy.until_tick) {
-                    npc.death_proxy = null;
-                    self.force_snapshot = true;
-                }
-            }
-        }
         try self.expireConnections(current_tick);
         try self.expireReconnects();
         try self.applyHeldInputs(self.simulation.tickIndex());
@@ -2805,6 +2804,7 @@ const AuthorityCore = struct {
                 ),
                 .carrier_id = character,
                 .carryable_id = persistent,
+                .purpose = .player_requested,
             } }),
         }
         self.ingress.append(.{
@@ -3475,6 +3475,7 @@ const AuthorityCore = struct {
                     ),
                     .carrier_id = character,
                     .carryable_id = persistent,
+                    .purpose = .forced_cleanup,
                 } });
                 participant.interaction_cleanup_pending = true;
                 return;
@@ -4170,6 +4171,10 @@ const AuthorityCore = struct {
                         );
                         npc.replacement_spawn_pending = false;
                     }
+                    // Keep the red death proxy through all safe-spawn delay
+                    // and retry states. The registered replacement is the
+                    // explicit lifecycle edge that removes it.
+                    npc.death_proxy = null;
                     self.force_snapshot = true;
                 },
             },
@@ -4328,8 +4333,6 @@ const AuthorityCore = struct {
                         .attack_impact_tick = 0,
                         .attack_ready_tick = 0,
                     },
-                    .until_tick = died.authority_tick +|
-                        self.simulation.npcDeathPresentationTicks(),
                 };
                 npc.despawn_pending = true;
                 const candidates = npcReplacementCandidates(npc_index);
@@ -4723,7 +4726,7 @@ const AuthorityCore = struct {
             if (npc.active) continue;
             const proxy = npc.death_proxy orelse continue;
             const interest_origin = observer_position orelse continue;
-            if (snapshot.server_tick >= proxy.until_tick or !evaluateNpcInterest(
+            if (!evaluateNpcInterest(
                 &replication.npc_interest[npc_index],
                 snapshot.server_tick,
                 interest_origin,
@@ -5964,12 +5967,31 @@ pub const EmbeddedAuthority = opaque {
         return .{ .context = embeddedAuthorityCore(self) };
     }
 
+    pub fn presentationQueries(self: *EmbeddedAuthority) EmbeddedPresentationQueryRole {
+        return .{ .context = embeddedAuthorityCore(self) };
+    }
+
     pub fn inspection(self: *const EmbeddedAuthority) EmbeddedInspectionRole {
         return .{ .context = embeddedAuthorityCoreConst(self) };
     }
 
     pub fn residency(self: *EmbeddedAuthority) EmbeddedResidencyRole {
         return .{ .context = embeddedAuthorityCore(self) };
+    }
+};
+
+/// Read-only scene queries needed by the embedded graphical presentation host.
+/// The role exposes value results only and keeps Simulation/Jolt ownership
+/// inside the authority placement.
+pub const EmbeddedPresentationQueryRole = struct {
+    context: *anyopaque,
+
+    pub fn lineHitFraction(
+        self: EmbeddedPresentationQueryRole,
+        start: [3]f32,
+        end: [3]f32,
+    ) !?f32 {
+        return authorityCore(self.context).simulation.presentationLineHitFraction(start, end);
     }
 };
 
@@ -9199,7 +9221,6 @@ test "NPC death schedules one durable safe replacement with a new incarnation" {
         return error.MissingNpcDeathPresentation;
     try std.testing.expectEqual(protocol.AvatarLifeState.dead, death_proxy.state.life_state);
     try std.testing.expectEqual(@as(u16, 0), death_proxy.state.health);
-    try std.testing.expect(death_proxy.until_tick > authority.state().simulation.tickIndex());
     try std.testing.expectEqual(
         @as(u16, 1),
         authority.state().simulation.npcReplacementDiagnostics().pending,
@@ -9208,7 +9229,7 @@ test "NPC death schedules one durable safe replacement with a new incarnation" {
     var replaced = false;
     var observed_spawn_vitals_handoff = false;
     var observed_proxy_after_despawn = false;
-    var observed_proxy_expiry = false;
+    var observed_proxy_until_replacement = false;
     for (0..500) |_| {
         try authority.tick();
         while (takeOutboundForTest(authority) != null) {}
@@ -9219,13 +9240,12 @@ test "NPC death schedules one durable safe replacement with a new incarnation" {
             const handoff = authority.state().simulation.npcReplacementDiagnostics();
             try std.testing.expect(current.replacement_spawn_pending);
             try std.testing.expectEqual(@as(u16, 1), handoff.awaiting_spawn);
+            try std.testing.expect(current.death_proxy != null);
+            observed_proxy_until_replacement = true;
             observed_spawn_vitals_handoff = true;
         }
         if (!current.active and current.death_proxy != null) {
             observed_proxy_after_despawn = true;
-        }
-        if (observed_proxy_after_despawn and current.death_proxy == null) {
-            observed_proxy_expiry = true;
         }
         if (current.active and !current.vitals_pending and current.persistent != null and
             !std.meta.eql(current.persistent.?, victim_id))
@@ -9234,6 +9254,7 @@ test "NPC death schedules one durable safe replacement with a new incarnation" {
                 nextGeneration(victim_before.generation),
                 current.generation,
             );
+            try std.testing.expect(current.death_proxy == null);
             replaced = true;
             break;
         }
@@ -9241,7 +9262,7 @@ test "NPC death schedules one durable safe replacement with a new incarnation" {
     try std.testing.expect(replaced);
     try std.testing.expect(observed_spawn_vitals_handoff);
     try std.testing.expect(observed_proxy_after_despawn);
-    try std.testing.expect(observed_proxy_expiry);
+    try std.testing.expect(observed_proxy_until_replacement);
     const replacement_diagnostics = authority.state().simulation.npcReplacementDiagnostics();
     try std.testing.expectEqual(@as(u16, 0), replacement_diagnostics.pending);
     try std.testing.expectEqual(@as(u16, 0), replacement_diagnostics.awaiting_spawn);
@@ -9912,8 +9933,10 @@ test "authority owns vehicle enter drive exit and dynamic seat projection" {
         };
     }
     try std.testing.expect(last_snapshot.vehicles[0].driver != null);
-    try std.testing.expect(last_snapshot.vehicles[0].position[2] <
-        initial.vehicles[0].position[2] - 1);
+    try std.testing.expect(horizontalDistanceSquared(
+        initial.vehicles[0].position,
+        last_snapshot.vehicles[0].position,
+    ) > 1);
     const core = authority.state();
     const participant_index = @as(usize, welcome.participant.index) - 1;
     const character_position = (try core.simulation.character(

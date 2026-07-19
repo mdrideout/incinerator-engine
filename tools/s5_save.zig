@@ -308,6 +308,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
         .transaction_id = 23,
         .carrier_id = character_id,
         .carryable_id = carryable_id,
+        .purpose = .player_requested,
     } });
     try world.tick();
     switch (world.pollInteractionOutcome() orelse return error.MissingDropOutcome) {

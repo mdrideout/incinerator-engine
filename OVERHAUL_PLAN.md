@@ -10,13 +10,15 @@ IC0-IC4 local human-test incident capture is accepted for the macOS solo
 developer product; schema-2 IC5-A through IC5-F, the IC5-G long
 gameplay/replay, real window lifecycle, and capture-cost gates, and the IC5-H
 bounded-object/evidence correction are implemented and validated; controlled
-destructive/failure hardening and the physical macOS/human visual checkpoint
-remain open;
+destructive/failure hardening remains open; IC5-I budget-safe handoff and
+truthful playable-boundary corrections have passed focused, aggregate,
+network/fault, replay, and installed Metal validation; the physical macOS/
+human visual checkpoint remains open;
 secondary platforms are deferred
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-07-17
+**Last reviewed:** 2026-07-18
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -35,7 +37,7 @@ secondary platforms are deferred
 → [`post-S11 automated closeout passed; manual acceptance exposed validation gaps`](docs/validation/post-s11-runtime-corrective-audit.md)
 → [`IV0-IV5 interaction validation and observability accepted`](docs/validation/gameplay-interaction-validation-and-observability.md)
 → [`IC0-IC4 incident capture accepted; IC5 reopened`](docs/validation/human-test-incident-capture.md)
-→ [`IC5-A-IC5-H corrective work implemented; destructive/human closeout remains`](docs/design/incident-evidence-reliability-and-boundary-corrections.md)
+→ [`IC5-A-IC5-I corrective work implemented; destructive/human closeout remains`](docs/design/incident-evidence-reliability-and-boundary-corrections.md)
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
 
@@ -354,9 +356,10 @@ logical authority and operational lifecycle:
   catalogs, cross-district carry ownership, cooked-route NPC authority,
   Snapshot V7/replay cohort 5, and a measured 64-NPC/65-controller scale
   contract. S10/S11 and the post-S11 streamed-route correction advance the
-  current durable state to Snapshot V11. Incident replay schema 10 additionally
+  current durable state to Snapshot V11. Incident replay schema 11 additionally
   records authority-owned vitals and NPC-replacement orchestration so lethal
-  encounter/repopulation cycles remain inside the exact replay boundary. The
+  encounter/repopulation cycles and explicit drop purpose remain inside the
+  exact replay boundary. The
   `world-config-v5` domain remains unchanged.
 - Automatic listen/dedicated bootstrap uses six NPCs, one per authored route
   node. The 64-NPC value remains the synthetic scale and saturation ceiling;
@@ -435,7 +438,7 @@ logical authority and operational lifecycle:
 | D-019 | Network identity/protocol/replication are explicit and feature-owned; durable saves, replication snapshots, prediction history, and accepted-ingress replay remain distinct | Accepted in [ADR-017](docs/adr/017-network-identity-protocol-and-replication.md) | MP2 protocol implementation |
 | D-020 | Use open-source GameNetworkingSockets through its flat C API, prove direct IP first, keep dedicated authority canonical, and preserve optional non-vendored Steamworks P2P/SDR compatibility | Accepted in [ADR-018](docs/adr/018-gamenetworkingsockets-and-steam-compatible-routing.md) | MP2 transport implementation |
 | D-021 | Validate gameplay as one causal temporal journey through typed scenarios, bounded interaction traces, continuous invariants, readable product feedback, semantic Metal visibility, and shared topology/fault execution | Accepted in [ADR-020](docs/adr/020-gameplay-interaction-validation-and-observability.md); IV0-IV5 complete | Additional gameplay slices |
-| D-022 | Persist human-test evidence as bounded per-run incident bundles with anomaly bookmarks, grep-friendly streams, trailing real-swapchain screenshots, concise LLM handoff, and replay attachments | Accepted in [ADR-021](docs/adr/021-local-human-test-incident-bundles.md); schema-2 IC5-A through IC5-F, the normal/resize/minimize/rapid-flag/replay plus capture-cost IC5-G gates, and IC5-H bounded vehicle/carry evidence are implemented and validated for macOS solo under the [corrective plan](docs/design/incident-evidence-reliability-and-boundary-corrections.md) | Controlled IC5-G destructive/failure hardening and physical/human checkpoint |
+| D-022 | Persist human-test evidence as bounded per-run incident bundles with anomaly bookmarks, grep-friendly streams, trailing real-swapchain screenshots, concise LLM handoff, and replay attachments | Accepted in [ADR-021](docs/adr/021-local-human-test-incident-bundles.md); schema-2 IC5-A through IC5-I, including long gameplay/window/replay/cost and bounded-object/budget/playable-boundary corrections, are implemented and validated for macOS solo under the [corrective plan](docs/design/incident-evidence-reliability-and-boundary-corrections.md) | Controlled IC5-G destructive/failure hardening and physical/human checkpoint |
 
 ### Decision notes
 
@@ -513,7 +516,8 @@ before dependency resolution.
 | MP6 | Graphical create/join/ready/connect/reconnect/close works through solo, constrained listen/LAN, and dedicated direct-IP placements | Complete, independently reviewed, and accepted on Apple Silicon macOS |
 | S10 | Players and NPCs use authoritative vitals, death cleanup, and generational avatar respawn | Complete, independently reviewed, and accepted on Apple Silicon macOS |
 | S11 | A hostile NPC perceives, selects, chases, attacks, disengages, dies, and is safely replaced with visible authoritative feedback | Complete, independently reviewed, and accepted on Apple Silicon macOS |
-| Post-S11 correction | Repair playable movement/facing/blockers/wheels, close discovered route/delivery/headless/product-bootstrap/lifecycle seams, and repeat the macOS evidence matrix | Initial automated matrix complete; human trace follow-up repaired death visibility, carry/drop placement, rejection diagnostics, and causal trace retention; final aggregate and rendered revalidation in progress |
+| Post-S11 correction | Repair playable movement/facing/blockers/wheels, close discovered route/delivery/headless/product-bootstrap/lifecycle seams, and repeat the macOS evidence matrix | Complete and accepted; later IC5-H/IC5-I evidence and boundary corrections are separately recorded |
+| IC5-I | Protect incident handoff under visual saturation and make the current playable route/drop/death boundaries truthful | Focused, aggregate, MP4, S11, replay, fresh-bundle, and installed Metal validation complete; direct human visual acceptance remains open |
 
 M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
 slices. M3 is a narrow pre-network readiness gate, not a speculative server
@@ -1755,7 +1759,7 @@ Record evidence rather than relying only on target numbers:
     then prove perception/pursuit, NPC melee through vitals, death/replacement,
     presentation/debugging, replay/reconnect/faults/scale, and installed
     solo/listen/dedicated graphical acceptance before independent review.
-43. [ ] Close the post-S11 runtime corrective pass: unify semantic facing,
+43. [x] Close the post-S11 runtime corrective pass: unify semantic facing,
     restore authoritative wheel presentation, make blocker visibility and
     collision share one recipe, validate spawn/navigation clearance, repair
     graphical multiplayer input and projection-lane timing, preserve streamed
@@ -1770,12 +1774,12 @@ Record evidence rather than relying only on target numbers:
     ceiling, and then repeat the independent audit plus full macOS evidence
     matrix. Implementation is complete; check this item only after the final
     evidence table is populated.
-44. [ ] Close IC5-G after implementing IC5-A through IC5-H from
+44. [ ] Close IC5-G after implementing IC5-A through IC5-I from
     `docs/design/incident-evidence-reliability-and-boundary-corrections.md`:
     schema-2 evidence truth, trailing visual capture, cross-boundary causal
     state, replay/inspector/skill reliability, district prefetch, and NPC
     relevance repairs, bounded vehicle/carry continuity and capability evidence,
-    and the long human-style
+    budget-safe handoff, truthful drop/route/death presentation, and the long human-style
     normal/resize/minimize/rapid-flag/replay journey plus paired capture-cost
     measurement are implemented and measured. Complete the remaining
     destructive/failure matrix, then obtain the physical macOS shortcut,
@@ -1853,3 +1857,4 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-15 | Completed and accepted IV0-IV5 gameplay interaction validation and observability | Manual acceptance findings converted into typed shared solo/listen/dedicated scenarios, continuous invariants, bounded causal traces, Gameplay Inspector and normal-product feedback, validation-only semantic Metal ID readback, deterministic clean/nominal/adverse/blackout/reconnect matrix, seeded fuzz, and 8,192/32,768-tick soaks. The matrix found and corrected cross-lane avatar lifecycle resurrection through authority-ticked life events and exact protocol revision 13. ADR/design/evidence ownership and an executable documentation/source-package audit preserve the rationale. |
 | 2026-07-15 | Accepted the post-IV human-trace corrective and rendered closeout | The real-window JSON trace isolated unsafe district-edge drop placement, loss of the dead local projection, reason-domain collapse, and movement-trace flooding. The correction adds a retained noninteractive death proxy, safe deterministic drop/release placement, schema-2 typed reasons, semantic presentation traces, paced GNS ingress, causal rather than bitwise clean-repeat semantics, and bounded listen completion. A second rendered audit found the attacking NPC could occlude a dead proxy and the primitive product shader ignored combat material tint while the independent oracle accepted it; dead-avatar presentation separation, a reflected primitive tint uniform, and a 64-pixel death threshold close that gap. Final evidence is 198/198 aggregate steps with 246/246 tests, 58/58 two-rate installed Metal S11 steps, 148/148 focused session tests, and direct rendered collect/drop/melee/red-death/clean-shutdown acceptance. |
 | 2026-07-17 | Completed IC5-H bounded-object continuity and evidence capability correction | Human evidence isolated an authority-live vehicle omitted by exact district projection until observer relevance changed. The current four-vehicle/four-carryable cohort is continuously projected with typed bounded/controlled/held/dormant reasons, stable identities and tombstones; vehicle chassis/wheels share semantic identity; manifests declare evidence capabilities; note+handoff is atomic; immutable chronological visual reports use indexed actual times; accepted-ingress replay compares the recorded server tick; focused, real-GNS/fault, semantic replay, best-effort Metal replay, and a fresh 2,166-tick installed journey pass. Controlled IC5-G failure hardening and the physical human checkpoint remain open. |
+| 2026-07-18 | Completed IC5-I automated and installed correction | Partitioned the 512 MiB recorder into a 384 MiB visual lane plus 128 MiB nonvisual reserve; immediate clipboard handoff with separate durable state; 15 FPS/64-slot trail and bounded Retina storage; corrected Jolt wheel sign, explicit player/cleanup drop purpose and replay cohort 11, ordinary-product route residency plus recipe-4 perimeter collision, replacement-owned NPC death presentation, collision-clamped follow camera, and dominant-color visual warnings. The final 2,148-tick Metal journey produced four complete incidents, 403 visuals, zero suspicious/failures/loss, durable replay/handoff, and exact semantic replay. Focused, 255-step aggregate, 83-step MP4, 182-step S11, and 53-step editor-install gates pass; destructive failure injection and direct human acceptance remain open. |

@@ -1,11 +1,11 @@
 # Incident Evidence Reliability And Boundary Corrections
 
-**Status:** IC5-A through IC5-F and IC5-H implemented and software-validated;
-the IC5-G long gameplay, window lifecycle, graphical/semantic replay, and
-bounded A/B performance gates pass; controlled destructive/failure hardening
-and the physical macOS/human visual checkpoint remain open
+**Status:** IC5-A through IC5-I implemented and software-validated; the IC5-G
+long gameplay, window lifecycle, graphical/semantic replay, and bounded A/B
+performance gates pass; controlled destructive/failure hardening and the
+physical macOS/human visual checkpoint remain open
 
-**Date:** 2026-07-17
+**Date:** 2026-07-18
 
 **Platform:** Apple Silicon macOS developer product; Linux and Windows remain
 deferred
@@ -227,27 +227,26 @@ readable event names in addition to stable numeric codes.
 
 ### Continuous trailing lane
 
-The initial measured target is a 30 FPS, 480x270, product-only circular lane
-covering four seconds before the flag and three seconds after it. This is 120
-pre-roll RGBA slots, approximately 60 MiB before transfer/fence overhead. It is
+The accepted target is a 15 FPS, 480x270, product-only circular lane covering
+four seconds before the flag and three seconds after it. This is 64 retained
+RGBA slots, approximately 32 MiB before transfer/fence overhead. It is
 developer-only, bounded, and allowed to report loss rather than stall the
 renderer.
 
 Frames pinned by one or more anomalies are written once as lossless P6 PPM
 artifacts and indexed from each anomaly. At 480x270 the seven-second window is
-about 78 MiB as RGB PPM before filesystem overhead. The format stays directly
+about 39 MiB as RGB PPM before filesystem overhead. The format stays directly
 inspectable without adding a new encoder dependency. Compression or video is a
 future measured optimization, not an entry requirement.
 
-### Full-resolution anchors
+### Bounded human-visible anchors
 
-The final human-visible drawable retains four bounded full-drawable samples at
-1 Hz so it can select the closest completed frames to -2 and -1 seconds. It
-also captures flag, +1 second, and +3 seconds. The 30 Hz product lane owns
-transient continuity; the sparse human lane owns product-plus-UI context. This
-keeps a Retina 2560x1440 window below the declared 128 MiB combined download
-memory budget. Actual timing is always recorded; the implementation does not
-claim exact milliseconds.
+The final human-visible drawable retains four bounded source samples at 1 Hz
+so it can select the closest completed frames to -2 and -1 seconds. It also
+captures flag, +1 second, and +3 seconds. Each anchor retains source dimensions
+but is stored at no more than 1280x720. The 15 Hz product lane owns transient
+continuity; the sparse human lane owns product-plus-UI context. Actual timing
+is always recorded; the implementation does not claim exact milliseconds.
 
 The product-only flag frame is captured before developer UI. A semantic-ID
 flag frame and mapping are captured through the existing validation semantics
@@ -271,10 +270,11 @@ render failure.
 Starting budgets to measure rather than silently exceed:
 
 - at most 128 MiB live GPU/CPU trailing-capture memory at 1280x720;
-- at most 512 MiB total run artifacts including pinned visual windows;
+- at most 512 MiB total run artifacts, partitioned into a 384 MiB visual lane
+  and a 128 MiB nonvisual reserve;
 - one stored copy for frames shared by overlapping flags;
 - no render-thread fence wait or image encoding;
-- explicit gaps when the target cadence or full-resolution anchor is missed;
+- explicit gaps when the target cadence or human-visible anchor is missed;
   and
 - recorder-disabled versus enabled p95/p99 frame comparison on Apple Silicon.
 
@@ -293,6 +293,7 @@ following order; do not mark parent IC5 complete from partial progress.
 | IC5-F | District-pop and NPC-relevance gameplay repairs | IC5-D, IC5-E |
 | IC5-G | Long-run, fault, graphical, and human closeout | IC5-B through IC5-F |
 | IC5-H | Bounded vehicle/carry continuity and evidence capability correction | IC5-D through IC5-G human evidence |
+| IC5-I | Budget-safe handoff and truthful playable-boundary correction | IC5-H human evidence |
 
 ### IC5-A - Evidence truth and schema-2 lifecycle
 
@@ -349,8 +350,8 @@ tester’s physical keyboard; button and shortcut produce the same typed request
 
 ### IC5-C - Trailing visual evidence
 
-- [x] Add the bounded 30 FPS product-only trailing lane and five
-  human-visible full-resolution anchors.
+- [x] Add the bounded 15 FPS product-only trailing lane and five bounded
+  human-visible anchors.
 - [x] Store target and actual time, tick, frame, source, drawable generation,
   fence timing, and digest for every frame.
 - [x] Deduplicate frames shared by rapid or overlapping flags.
@@ -573,6 +574,63 @@ equality is not an acceptable replacement.
 present through the west/east observer relevance transfer in focused,
 real-GNS, accepted-ingress replay, and installed Metal journeys; a fresh
 schema-2 bundle declares and contains full vehicle/carry evidence.
+
+### IC5-I - Budget-safe handoff and truthful playable boundaries
+
+The 2026-07-18 human bundle
+`2026-07-18T23-30-25.799Z_solo_c6b42031` reached 536,870,814 of its
+536,870,912-byte run cap. Retina human-visible anchors and the product trail
+consumed the budget until an unrelated 98-byte write failed. Anomaly #5 was
+left incomplete, anomaly #6 existed only in memory, and the ordered handoff
+never reached clipboard publication. The same run also exposed reversed wheel
+spin, a user drop that silently returned the carryable to an earlier valid
+pose, logical district visuals entering/leaving inside apparently playable
+checkerboard space, and an intentionally timed NPC death proxy becoming an
+unexplained absence before replacement.
+
+- [x] Partition the run cap into a 384 MiB visual lane and 128 MiB nonvisual
+  reserve; reserve visual bytes before enqueue and report visual exhaustion
+  separately from writer failure.
+- [x] Reduce the product trail to 15 FPS/64 retained slots and store
+  human-visible anchors at no more than 1280x720 while indexing original and
+  stored dimensions.
+- [x] Publish the in-memory LLM handoff for main-thread clipboard use before
+  its durable write and expose durable handoff state independently.
+- [x] Correct the explicit engine/Jolt wheel angular-velocity and phase sign
+  boundary and assert forward-drive wheel direction.
+- [x] Add explicit `player_requested` and `forced_cleanup` drop purpose;
+  rejected user placement remains held while teardown alone may use the last
+  valid world pose. Advance accepted-ingress replay to cohort 11.
+- [x] Pin both current route districts only in the ordinary two-district
+  sandbox product; retain real streaming lifecycle in validation profiles.
+- [x] Advance the canonical district recipe to version 4 with collision-backed
+  perimeter walls just outside the authored route, so the infinite diagnostic
+  checkerboard no longer promises unsupported playable space.
+- [x] Retain the noninteractive NPC death proxy until replacement spawn and
+  vitals registration complete, and name the pending interval in product
+  feedback.
+- [x] Keep the third-person follow camera on the target side of live world
+  collision through a read-only value query; dominant solid-color captures
+  are now integrity warnings instead of silently passing inspection.
+- [x] Stop the human-style journey at a reachable, replacement-safe position
+  instead of continuing to push into a blocker to manufacture occlusion.
+- [x] Run the aggregate, S11, replay, interaction, physics, content, and
+  installed Metal journey gates against this exact cohort.
+- [ ] Obtain a fresh human pass for wheel motion, explicit rejected drop,
+  route continuity, NPC death/replacement readability, and UI/shortcut copy.
+
+The route pin is deliberately product-specific. It does not weaken the
+streaming owner or introduce a speculative open-world policy. The death proxy
+remains bounded by the fixed NPC population and is cleared by a transactional
+replacement lifecycle rather than a presentation timer. The drop purpose is a
+required command field, not a compatibility default.
+
+**Exit:** visual saturation cannot disable notes/replay/handoff; all player
+actions either commit where shown or visibly reject; current-route content does
+not pop; wheel motion follows the engine coordinate convention; and NPC death
+remains visually explained until its replacement is authoritative. Camera
+obstruction and visual-integrity warnings prevent collision surfaces from
+masquerading as a healthy diagnostic capture.
 
 ## Required Validation Matrix
 

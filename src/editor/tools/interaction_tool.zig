@@ -46,6 +46,7 @@ fn proposedCommand(
                 .transaction_id = transaction_id,
                 .carrier_id = carrier.id,
                 .carryable_id = carryable.id,
+                .purpose = .player_requested,
             } }
         else
             null,

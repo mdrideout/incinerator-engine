@@ -76,6 +76,8 @@ pub fn draw(state: *State, ctx: *const tool_module.IncidentInput) void {
         zgui.textColored(
             if (view.health.writer_failed)
                 .{ 1, 0.25, 0.2, 1 }
+            else if (view.health.visual_budget_exhausted)
+                .{ 1, 0.75, 0.15, 1 }
             else
                 .{ 0.25, 0.9, 0.35, 1 },
             "writer ready={} failed={} queue={d} peak={d} dropped={d} images-missed={d}",
@@ -86,6 +88,15 @@ pub fn draw(state: *State, ctx: *const tool_module.IncidentInput) void {
                 view.health.queue_high_water,
                 view.health.dropped_records,
                 view.health.screenshot_misses,
+            },
+        );
+        zgui.textDisabled(
+            "visual budget={d}/{d} rejected={d} handoff-persisted={}",
+            .{
+                view.health.visual_bytes_reserved,
+                view.health.visual_budget_bytes,
+                view.health.visual_budget_rejections,
+                view.health.handoff_persisted,
             },
         );
         if (view.status_len != 0) zgui.textWrapped("{s}", .{view.statusText()});

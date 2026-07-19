@@ -30,7 +30,7 @@ pub const DigestCategory = replay.Category;
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'R', 'P', 'L', 'A', 'Y' };
 pub const format_version: u16 = 1;
-pub const schema_cohort: u16 = 10;
+pub const schema_cohort: u16 = 11;
 pub const header_size: usize = 64;
 pub const integrity_size: usize = @sizeOf(Digest);
 pub const max_envelope_bytes: usize = 8 * 1024 * 1024;
@@ -1493,6 +1493,7 @@ fn encodeInteractionCommand(sink: anytype, command: interactions.Command) !void 
             try sink.writeU64(drop.transaction_id);
             try encodePersistentId(sink, drop.carrier_id);
             try encodePersistentId(sink, drop.carryable_id);
+            try sink.writeU8(@intFromEnum(drop.purpose));
         },
     }
 }
@@ -2588,6 +2589,8 @@ fn decodeInteractionCommand(reader: *Reader) !interactions.Command {
             .transaction_id = try reader.readU64(),
             .carrier_id = try decodePersistentId(reader),
             .carryable_id = try decodePersistentId(reader),
+            .purpose = std.enums.fromInt(interactions.DropPurpose, try reader.readU8()) orelse
+                return error.InvalidInteractionDropPurpose,
         } },
     };
 }
@@ -3114,6 +3117,7 @@ fn testCapture() !TestCapture {
                 .transaction_id = 11,
                 .carrier_id = first_id,
                 .carryable_id = second_id,
+                .purpose = .player_requested,
             } } } },
             .{ .eligible_tick = 4, .command = .{ .interaction = .{
                 .despawn = .{ .id = second_id },
@@ -3205,7 +3209,7 @@ fn refreshIntegrity(bytes: []u8) void {
 
 test "current simulation cohort pins the exact Jolt worker and capacity configuration" {
     try current_simulation_cohort.validate();
-    try std.testing.expectEqual(@as(u16, 10), current_simulation_cohort.replay_schema);
+    try std.testing.expectEqual(@as(u16, 11), current_simulation_cohort.replay_schema);
     try std.testing.expectEqual(@as(u16, 5), current_simulation_cohort.engine_schedule_cohort);
     try std.testing.expectEqual(
         sandbox_host_contracts.snapshot_schema,
@@ -3598,16 +3602,15 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     const same = try testContentCohort();
     try std.testing.expectEqual(try content.fingerprint(), try same.fingerprint());
 
-    // Recipe V3 adds distinct adjacent visual-prefetch and authority-residency
-    // policy, intentionally advancing the renderer-free content cohort even
-    // when the synthetic bundle/catalog digests remain the same.
-    var recipe_v3_expected: Digest = undefined;
+    // Recipe V4 adds the collision-backed visible route perimeter,
+    // intentionally advancing the renderer-free content cohort.
+    var recipe_v4_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
-        &recipe_v3_expected,
-        "a7490d06339fa0a5fb7897b914490d0356bd2b1ef3c5881a6a9790d3ce9731e8",
+        &recipe_v4_expected,
+        "2512994579149f472bcfa468a8ef50176f4d217da2dc484bc11d7929d03e9d6f",
     );
-    const recipe_v3_actual = try content.fingerprint();
-    try std.testing.expectEqualSlices(u8, &recipe_v3_expected, &recipe_v3_actual);
+    const recipe_v4_actual = try content.fingerprint();
+    try std.testing.expectEqualSlices(u8, &recipe_v4_expected, &recipe_v4_actual);
 
     const catalog = try ContentCohort.init(
         "district/catalog",
@@ -3619,7 +3622,7 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     );
     try catalog.validate();
     const catalog_fingerprint = try catalog.fingerprint();
-    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v3_actual));
+    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v4_actual));
 
     var catalog_fixture = try testCapture();
     catalog_fixture.content = catalog;

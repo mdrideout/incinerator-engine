@@ -2,7 +2,8 @@
 
 **Status:** Accepted
 
-**Date:** Accepted 2026-07-16; evidence-capability amendment 2026-07-17
+**Date:** Accepted 2026-07-16; evidence-capability amendment 2026-07-17;
+budget and handoff amendment 2026-07-18
 
 ## Context
 
@@ -32,19 +33,26 @@ stages so a macOS delivery failure is distinguishable from a routing failure.
 Four line-oriented streams separate causal events, periodic state, semantic
 input, and metrics.
 
-Schema 2 retains a 30 FPS 480x270 product-only trail from approximately four
-seconds before through three seconds after the flag, five full-resolution
-human-visible anchors at -2/-1/0/+1/+3 seconds, a product-only flag frame, and
-a 320x180 semantic-ID image with a stable identity/color map. The swapchain is
+Schema 2 retains a 15 FPS 480x270 product-only trail from approximately four
+seconds before through three seconds after the flag, five human-visible
+anchors at -2/-1/0/+1/+3 seconds stored at no more than 1280x720 while
+retaining source dimensions in the index, a product-only flag frame, and a
+320x180 semantic-ID image with a stable identity/color map. The swapchain is
 copied into a stable composition-owned texture before product capture; no
 adapter samples the swapchain directly. Every PPM has indexed actual timing,
 tick/frame, source, generation, fence, digest, format, and integrity metadata.
+Integrity checks flag both large zero-filled regions and frames dominated by
+one quantized color; a camera embedded in a bright collision proxy is
+diagnostic evidence, not a healthy screenshot merely because its bytes are
+nonzero.
 
-**Save note + Copy for LLM** is one ordered request: it persists the current
-note, attaches the active accepted-ingress replay, flushes a concise handoff,
-and publishes only that handoff through SDL's main-thread clipboard. The giant
-gameplay-trace terminal export is removed rather than retained as a
-compatibility path.
+**Save note + Copy for LLM** is one ordered request: it updates the in-memory
+note, attaches the active accepted-ingress replay, publishes a concise handoff
+to the main-thread clipboard immediately, and queues the durable handoff. The
+UI reports durable handoff state separately. Clipboard availability therefore
+does not depend on unrelated visual evidence consuming the remaining disk
+budget. The giant gameplay-trace terminal export is removed rather than
+retained as a compatibility path.
 
 `manifest.json` is an atomic live health snapshot. Anomaly lifecycle is an
 event reduction, not a mutable last-row status. Finalization materializes
@@ -70,6 +78,13 @@ The local evidence is developer-only. It captures no arbitrary text, global
 input, credentials, signed admission material, upload, analytics, or remote
 service.
 
+The 512 MiB run cap is partitioned into a 384 MiB visual lane and a 128 MiB
+nonvisual reserve. Visual reservation is accounted before work enters the
+writer. Once exhausted, new images are rejected with explicit counters and the
+anomaly becomes partial; typed streams, lifecycle markers, notes, replay,
+manifest refresh, and LLM handoff retain their reserve. Visual exhaustion is
+not reported as a writer failure.
+
 ## Consequences
 
 - A human report now identifies exact process, anomaly, clocks, ticks, frames,
@@ -79,7 +94,8 @@ service.
 - Queue, disk, line, anomaly, image-slot, replay-envelope, and memory bounds
   are explicit. Missing evidence remains visible.
 - Replay schema cohorts 9 and 10 add vitals and authority-owned NPC replacement
-  ingress discovered by the first real and first full combat incident replays.
+  ingress discovered by the first real and first full combat incident replays;
+  cohort 11 adds explicit player-requested versus forced-cleanup drop purpose.
   These are intentional greenfield breaking cohort changes; digested authority
   state is not allowed to mutate outside the recorded command spine.
 - The normal product now supplies bounded asynchronous semantic-ID evidence;

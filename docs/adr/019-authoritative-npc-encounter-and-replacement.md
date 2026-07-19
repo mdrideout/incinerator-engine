@@ -4,7 +4,8 @@
 
 **Date:** 2026-07-14
 
-**Amended:** 2026-07-15 after the playable-runtime corrective review
+**Amended:** 2026-07-15 after the playable-runtime corrective review;
+2026-07-18 after the human-test replacement-gap review
 
 **Platform:** Apple Silicon macOS; Linux/SteamOS and Windows remain deferred
 
@@ -77,14 +78,21 @@ authority.
 
 On NPC death, encounter attack production stops, the NPC feature receives
 `hold`, and the live controller is removed at its ordinary lifecycle boundary.
-Session projection may retain a noninteractive, nonpersistent death proxy for
-90 ticks. It is presentation state only and cannot participate in gameplay.
+Session projection retains a noninteractive, nonpersistent death proxy until
+the matching replacement transaction has spawned and registered vitals for
+the new NPC incarnation. It is presentation state only and cannot participate
+in gameplay. This lifecycle boundary supersedes the earlier 90-tick visual
+timer: a safe-spawn delay or retry must never turn an intentional death into an
+unexplained empty gap.
 
 `sandbox_npc_replacement` separately owns durable pending replacement records,
 the 300-tick initial delay, stable authored spawn candidates, collision/player
 distance/player-visibility checks, typed retry reasons, and spawn handoff. It
 owns no NPC entity or health. A successful spawn receives a new generation and
 persistent identity; an unsafe or rejected spawn remains pending and retries.
+The product labels the interval as `DEAD - REPLACEMENT PENDING`; once the old
+proxy is no longer in the client projection, a remaining pending replacement
+is still named explicitly rather than represented as ordinary absence.
 
 ### Persistence and compatibility cohorts are intentionally broken
 

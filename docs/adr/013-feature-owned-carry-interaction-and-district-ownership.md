@@ -2,6 +2,7 @@
 
 **Status:** Accepted, implemented, and validated in S7
 **Date:** 2026-07-13
+**Amended:** 2026-07-18 after the human-test drop-placement review
 
 ## Context
 
@@ -79,6 +80,14 @@ destination district to be active, creates the body, detaches through
 staged body and leaves the held relation unchanged. There is no best-effort
 partial transfer.
 
+Drop purpose is an explicit command contract. `player_requested` drop accepts
+only a placement in a currently active destination district; if no candidate
+is valid, the item remains visibly held and the request is rejected. It never
+teleports to an earlier pose. `forced_cleanup` is reserved for authority-owned
+participant teardown and may restore the last valid world pose so cleanup
+cannot strand a held relationship. Input, editor, replay, and network ingress
+must declare the purpose rather than inferring it from call site or failure.
+
 At the 16-unit district seam, bounds are half-open: west owns `[-8, 8)` and
 east owns `[8, 24)`. Therefore a drop at `x == 8` belongs to east `(1,0)`.
 The shared helper rejects non-finite or unrepresentable positions.
@@ -95,6 +104,11 @@ construction. Restore order is crate, character, district, interaction,
 vehicle so carrier and residency ports exist before the relationship/body is
 reconstructed. Replay records semantic interaction commands and compares a
 separate interaction logical-digest category.
+
+The 2026-07-18 explicit drop-purpose amendment advances accepted-ingress replay
+to schema cohort 11. It is an intentional greenfield break: prior capture
+commands cannot honestly answer whether a failed placement was user intent or
+authority cleanup.
 
 ## Consequences
 

@@ -707,6 +707,7 @@ pub fn Feature(
             const placement = (try self.resolveDropPlacement(
                 carrier.pose,
                 logical.state.pose,
+                drop.purpose,
             )) orelse {
                 return rejectionFor(
                     .drop,
@@ -760,6 +761,7 @@ pub fn Feature(
             self: *Self,
             raw_carrier_pose: engine.physics.Pose,
             raw_previous_pose: engine.physics.Pose,
+            purpose: feature_contract.DropPurpose,
         ) !?ResolvedDropPlacement {
             const carrier_pose = try raw_carrier_pose.normalized();
             const carrier_owner = try district_contract.chunkCoordForWorldPosition(
@@ -789,6 +791,8 @@ pub fn Feature(
                     };
                 }
             }
+
+            if (purpose == .player_requested) return null;
 
             // A carried object must not make participant teardown fatal. Its
             // durable state already retains the last district-owned pose from
@@ -1436,6 +1440,7 @@ test "collect carry across half-open boundary and drop commits one identity" {
         .transaction_id = 21,
         .carrier_id = test_carrier_id,
         .carryable_id = id,
+        .purpose = .player_requested,
     } });
     try world.runtime.tick();
     const dropped = world.feature.pollOutcome().?;
@@ -1492,6 +1497,7 @@ test "held presentation and drop offsets follow semantic carrier facing" {
         .transaction_id = 31,
         .carrier_id = test_carrier_id,
         .carryable_id = id,
+        .purpose = .player_requested,
     } });
     const dropped = try world.feature.view(id);
     const expected_drop_position = [3]f32{ 1.5, 0.75, 0 };
@@ -1521,6 +1527,7 @@ test "drop remains beside a carrier when configured offset crosses an inactive b
         .transaction_id = 41,
         .carrier_id = test_carrier_id,
         .carryable_id = id,
+        .purpose = .player_requested,
     } });
     try std.testing.expectEqual(
         DropPlacement.alternate_offset,
@@ -1535,7 +1542,7 @@ test "drop remains beside a carrier when configured offset crosses an inactive b
     try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
 }
 
-test "drop outside loaded residency returns to the previous active world pose" {
+test "player drop outside residency rejects while forced cleanup preserves the item" {
     var world: TestWorld = undefined;
     try world.init(.{});
     defer world.deinit();
@@ -1548,10 +1555,19 @@ test "drop outside loaded residency returns to the previous active world pose" {
         .carryable_id = id,
     } });
     world.carriers.state.pose.position = .{ 40, 0, 40 };
-    const outcome = try runCommand(&world, .{ .drop = .{
+    try expectRejection(try runCommand(&world, .{ .drop = .{
         .transaction_id = 51,
         .carrier_id = test_carrier_id,
         .carryable_id = id,
+        .purpose = .player_requested,
+    } }), .drop, .destination_district_inactive);
+    try std.testing.expectEqual(id, world.carriers.state.carry_mode.holding);
+
+    const outcome = try runCommand(&world, .{ .drop = .{
+        .transaction_id = 52,
+        .carrier_id = test_carrier_id,
+        .carryable_id = id,
+        .purpose = .forced_cleanup,
     } });
     try std.testing.expectEqual(
         DropPlacement.previous_active_pose,
@@ -1681,6 +1697,7 @@ test "expected stale range holder residency and capacity failures are typed" {
             .transaction_id = 11,
             .carrier_id = other_carrier_id,
             .carryable_id = id,
+            .purpose = .player_requested,
         } }),
         .drop,
         .wrong_holder,
@@ -1692,6 +1709,7 @@ test "expected stale range holder residency and capacity failures are typed" {
             .transaction_id = 12,
             .carrier_id = test_carrier_id,
             .carryable_id = id,
+            .purpose = .player_requested,
         } }),
         .drop,
         .carrier_not_holding,
@@ -1705,6 +1723,7 @@ test "expected stale range holder residency and capacity failures are typed" {
             .transaction_id = 13,
             .carrier_id = test_carrier_id,
             .carryable_id = id,
+            .purpose = .player_requested,
         } }),
         .drop,
         .destination_district_inactive,
@@ -1714,12 +1733,14 @@ test "expected stale range holder residency and capacity failures are typed" {
         .transaction_id = 14,
         .carrier_id = test_carrier_id,
         .carryable_id = id,
+        .purpose = .player_requested,
     } });
     try expectRejection(
         try runCommand(&world, .{ .drop = .{
             .transaction_id = 15,
             .carrier_id = test_carrier_id,
             .carryable_id = id,
+            .purpose = .player_requested,
         } }),
         .drop,
         .carrier_not_holding,
@@ -1800,6 +1821,7 @@ test "drop candidate creation and carrier detach failures roll back" {
             .transaction_id = 41,
             .carrier_id = test_carrier_id,
             .carryable_id = id,
+            .purpose = .player_requested,
         } });
         try std.testing.expectError(
             error.InjectedBodyCreateFailure,
@@ -1825,6 +1847,7 @@ test "drop candidate creation and carrier detach failures roll back" {
             .transaction_id = 43,
             .carrier_id = test_carrier_id,
             .carryable_id = id,
+            .purpose = .player_requested,
         } });
         try std.testing.expectError(
             error.InjectedEndCarryFailure,
@@ -2141,6 +2164,7 @@ test "repeated collect boundary drop cycles return queues bodies and entity to b
             .transaction_id = 101 + cycle * 2,
             .carrier_id = test_carrier_id,
             .carryable_id = id,
+            .purpose = .player_requested,
         } });
         try std.testing.expectEqual(id, dropped.dropped.carryable_id);
         try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);

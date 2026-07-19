@@ -157,7 +157,7 @@ const valid_config =
     \\{
     \\  "schema_version": 1,
     \\  "world": {"namespace": 9, "max_crates": 128, "max_characters": 1, "max_vehicles": 1, "max_npcs": 64},
-    \\  "expected_content_cohort": "05d57d84c108c9dc813207d363761f669bf78dd4f63c22c479a160f15df98761",
+    \\  "expected_content_cohort": "11ac400758045c5c93550a972c4487a099e4009bb475c074e086ec6da4043238",
     \\  "save_root": "/tmp/incinerator-headless-test",
     \\  "save_slot": "world-1",
     \\  "start_policy": "fresh_or_restore",

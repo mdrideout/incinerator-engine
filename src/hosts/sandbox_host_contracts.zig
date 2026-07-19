@@ -35,6 +35,8 @@ pub const VehicleCommandRejected = vehicles.CommandRejected;
 pub const VehicleConfig = vehicles.Config;
 
 pub const district_presentation_policies = sandbox_district_recipe.presentation_policies;
+pub const district_static_box_count: u32 = sandbox_district_recipe.static_box_count;
+pub const district_blocking_proxy_count: u8 = sandbox_district_recipe.blocking_proxy_count;
 pub const navigation_east_coord = sandbox_district_recipe.navigation_east_coord;
 pub const navigation_west_coord = sandbox_district_recipe.navigation_west_coord;
 pub const npc_capacity = npcs.max_npcs;
@@ -201,6 +203,6 @@ test "default playable spawn and initial traversal clear canonical blockers" {
     const west = try proceduralDistrictBuild(navigation_west_coord);
     const staged = try districtPresentationPlan(&west, false);
     const resident = try districtPresentationPlan(&west, true);
-    try std.testing.expectEqual(@as(u8, 2), staged.proxy_box_count);
+    try std.testing.expectEqual(district_blocking_proxy_count, staged.proxy_box_count);
     try std.testing.expectEqualSlices(u8, staged.proxyBoxIndices(), resident.proxyBoxIndices());
 }

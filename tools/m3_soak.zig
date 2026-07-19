@@ -870,6 +870,7 @@ fn setupIntegratedSlices(
         .transaction_id = 301,
         .carrier_id = character,
         .carryable_id = carryable,
+        .purpose = .player_requested,
     } });
     try tickWithoutCrateWork(authority);
     switch (authority.world.pollInteractionOutcome() orelse

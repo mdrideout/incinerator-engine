@@ -1908,6 +1908,7 @@ const App = struct {
                 .stream_content = streams_districts,
                 .admit_catalog = needs_catalog,
                 .content_root = content_root,
+                .pin_route_resident = profile == .sandbox,
             },
         );
         errdefer district_streaming.abortInit();
@@ -2423,12 +2424,13 @@ const App = struct {
             .fight_npc => {
                 if (progress.saw_npc_dead) {
                     if (self.simulation.player().focusPosition()) |position| {
-                        // The west blocker occludes both local replacement
-                        // candidates from this point while keeping the player
-                        // more than the configured eight-metre safety radius
-                        // away. This exercises the ordinary safe-replacement
-                        // admission policy instead of bypassing it.
-                        const safe = [2]f32{ -8, -7 };
+                        // This reachable point keeps the player outside the
+                        // configured eight-metre safety radius while the
+                        // parked vehicle occludes the first west replacement
+                        // candidate. Do not keep driving into a boundary to
+                        // manufacture occlusion: that makes the camera spend
+                        // the evidence window pressed against collision.
+                        const safe = [2]f32{ 1, -4 };
                         const delta = [2]f32{
                             safe[0] - position[0],
                             safe[1] - position[2],
@@ -7147,14 +7149,19 @@ const App = struct {
                 observeS2WheelPresentation(&self.validation.s2_smoke, vehicle_draws);
             }
         }
+        var follow_target: ?[3]f32 = null;
+        var follow_distance: f32 = 0;
         if (self.controlled_vehicle_id) |controlled_id| {
             for (vehicle_draws) |draw| {
                 if (std.meta.eql(draw.entity, controlled_id)) {
-                    self.game_camera.followTarget(.{
+                    const target = [3]f32{
                         draw.chassis_pose.position[0],
                         draw.chassis_pose.position[1] + 1,
                         draw.chassis_pose.position[2],
-                    }, 8.0);
+                    };
+                    follow_target = target;
+                    follow_distance = 8.0;
+                    self.game_camera.followTarget(target, follow_distance);
                     break;
                 }
             }
@@ -7164,13 +7171,33 @@ const App = struct {
         } else {
             for (character_draws) |draw| {
                 if (draw.local_player) {
-                    self.game_camera.followTarget(draw.camera_target, 6.0);
+                    follow_target = draw.camera_target;
+                    follow_distance = 6.0;
+                    self.game_camera.followTarget(draw.camera_target, follow_distance);
                     break;
                 }
             }
             // Initial admission/admin outcomes may precede the first client
             // projection. Keep the previous target until presentation catches
             // up; validation scenarios require eventual evidence separately.
+        }
+        if (follow_target) |target| {
+            const desired_position = [3]f32{
+                self.game_camera.position[0],
+                self.game_camera.position[1],
+                self.game_camera.position[2],
+            };
+            if (try self.simulation.presentation().lineHitFraction(
+                target,
+                desired_position,
+            )) |hit_fraction| {
+                self.game_camera.clampFollowObstruction(
+                    target,
+                    follow_distance,
+                    hit_fraction,
+                    0.2,
+                );
+            }
         }
 
         // Get view-projection matrix from camera
@@ -8179,12 +8206,24 @@ const App = struct {
         var npc_maximum_health: u16 = 0;
         var attack_remaining: u64 = 0;
         for (npc_draws) |draw| {
+            if (draw.life_state == .dead) {
+                npc_state = "DEAD - REPLACEMENT PENDING";
+                npc_health = draw.health;
+                npc_maximum_health = draw.maximum_health;
+                break;
+            }
             if (draw.encounter_state == .patrolling and draw.life_state == .alive) continue;
             npc_state = @tagName(draw.encounter_state);
             npc_health = draw.health;
             npc_maximum_health = draw.maximum_health;
             attack_remaining = draw.attack_impact_tick -| hud.authority_tick;
             break;
+        }
+        if (std.mem.eql(u8, npc_state, "none")) {
+            const replacement = self.simulation.developer().diagnostics().npc_replacement;
+            if (replacement.pending != 0 or replacement.awaiting_spawn != 0) {
+                npc_state = "REPLACEMENT PENDING";
+            }
         }
         const feedback = self.product_feedback.current(hud.authority_tick);
         const action = if (feedback) |value| @tagName(value.kind) else "none";

@@ -144,6 +144,28 @@ pub const Camera = struct {
             1.0,
         );
     }
+
+    /// Pull an already-positioned follow camera toward its target so it stays
+    /// in front of the first world obstruction. `hit_fraction` is measured
+    /// along target -> desired camera and is supplied by the simulation host.
+    pub fn clampFollowObstruction(
+        self: *Camera,
+        target: [3]f32,
+        desired_distance: f32,
+        hit_fraction: f32,
+        surface_clearance: f32,
+    ) void {
+        std.debug.assert(std.math.isFinite(desired_distance) and desired_distance > 0);
+        std.debug.assert(std.math.isFinite(hit_fraction) and
+            hit_fraction >= 0 and hit_fraction <= 1);
+        std.debug.assert(std.math.isFinite(surface_clearance) and surface_clearance >= 0);
+        const minimum_distance = self.near + 0.05;
+        const clear_distance = @max(
+            minimum_distance,
+            desired_distance * hit_fraction - surface_clearance,
+        );
+        self.followTarget(target, @min(desired_distance, clear_distance));
+    }
 };
 
 /// Shared right-button drag policy for graphical products. SDL event decoding
@@ -218,4 +240,14 @@ test "follow camera orbits behind and above its target" {
     try std.testing.expectApproxEqAbs(@as(f32, 2), target[0], 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, 1), target[1], 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, -3), target[2], 0.0001);
+}
+
+test "follow camera stays on target side of an obstruction" {
+    var cam = Camera{ .yaw = 0, .pitch = 0 };
+    const target = [3]f32{ 2, 1, -3 };
+    cam.followTarget(target, 6);
+    cam.clampFollowObstruction(target, 6, 0.5, 0.2);
+    try std.testing.expectApproxEqAbs(@as(f32, 2), cam.position[0], 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, 1), cam.position[1], 0.0001);
+    try std.testing.expectApproxEqAbs(@as(f32, -0.2), cam.position[2], 0.0001);
 }

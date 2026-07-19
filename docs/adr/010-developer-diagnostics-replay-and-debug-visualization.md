@@ -107,7 +107,7 @@ Jolt solver/contact/vehicle caches, world construction parameters, pending
 commands, and active asynchronous generations. A mid-run capture request at a
 non-replayable boundary returns a structured `not_replayable_boundary` result.
 
-The current same-cohort contract uses `SnapshotV11`, replay schema cohort 10,
+The current same-cohort contract uses `SnapshotV11`, replay schema cohort 11,
 `world-config-v5`, and the canonical catalog content cohort. Snapshot V11 adds
 explicit exact-prefix/deferred-rebuild NPC route meaning so inactive streamed
 content cannot manufacture goal completion. Replay cohorts 9 and 10 add the

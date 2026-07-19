@@ -13,8 +13,18 @@ partial-in-time evidence—not a stale startup zero. Check:
   cohorts;
 - `last_durable_sequence <= last_admitted_sequence`;
 - queue/current/high-water/capacity, drops, writer failure, screenshot misses;
-- total bytes equal `bytes_by_class` and stay under `run_budget_bytes`; and
+- total bytes equal `bytes_by_class` and stay under `run_budget_bytes`;
+- `visual_budget_bytes + non_visual_reserve_bytes == run_budget_bytes`, visual
+  reservations never exceed their lane, and rejection/exhaustion agree; and
 - `replay_status` agrees with `replay/accepted-ingress.icrp`.
+
+Visual admission pressure is intentionally distinct from writer failure. Once
+the visual lane is full, new images are rejected and counted while typed
+streams, markers, notes, replay, and handoff persistence retain a 128 MiB
+reserve. `handoff_persisted=false` means clipboard text may still be available
+in the running process but `LLM_HANDOFF.md` is not yet durable.
+These fields were added atomically within schema 2. Their collective absence
+identifies an earlier preserved schema-2 run; a partial field set is invalid.
 
 Read `evidence_capabilities` before assigning a boundary. Current bundles
 declare `full_boundary` separately for characters, NPCs, vehicles, and
@@ -42,17 +52,21 @@ format, fence latency, digest, suspicious flag, and relative path.
 
 Sources:
 
-- `product_trail`: 30 FPS 480x270 product-only circular lane, approximately
+- `product_trail`: 15 FPS 480x270 product-only circular lane, approximately
   four seconds before through three seconds after the flag; overlapping flags
   reference the same run-level `visual/frame-*.ppm`.
-- `human_visible`: full-resolution anchors requested at -2000, -1000, 0,
-  +1000, and +3000 ms, including developer UI.
+- `human_visible`: anchors requested at -2000, -1000, 0, +1000, and +3000 ms,
+  including developer UI. Retina sources are stored aspect-fit within
+  1280x720; `source_width`/`source_height` preserve the drawable size while
+  `width`/`height` describe the PPM artifact.
 - `product_flag`: product-only flag-adjacent frame.
 - `semantic_id`: object-ID frame paired with `semantic-id-map.json`.
 
 Filenames express requested anchors. Only index timestamps express actual
 capture. `suspicious=true` means evidence needs comparison; it is not itself a
-gameplay render diagnosis.
+gameplay render diagnosis. The current producer marks large zero-filled
+regions or a single quantized color occupying at least 75 percent of the frame;
+the latter catches cameras embedded in bright world surfaces.
 
 ## Typed streams
 

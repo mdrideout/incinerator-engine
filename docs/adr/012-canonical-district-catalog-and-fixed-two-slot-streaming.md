@@ -2,6 +2,7 @@
 
 **Status:** Accepted, implemented, and validated in S6
 **Date:** 2026-07-13
+**Amended:** 2026-07-18 after the human-test district-pop and camera review
 
 ## Context
 
@@ -101,6 +102,29 @@ produce a bounded overlap band in which both logical districts and both scenes
 may be resident. The S6 host admits at most one new transition per fixed-tick
 reconcile pass in canonical catalog order.
 
+### Current sandbox route is wholly resident and visibly bounded
+
+The current product contains exactly the two catalogued route districts. The
+normal sandbox composition therefore pins both logical and GPU route slots
+resident after admission. Streaming validation profiles still exercise the
+real load, overlap, cancellation, unload, and reload lifecycle; the playable
+product does not expose that lifecycle as unexplained block pop inside its
+entire authored route.
+
+District recipe version 4 adds simple collision-backed perimeter walls just
+outside the two-district half-open route bounds. The infinite checkerboard is a
+renderer diagnostic, not a promise that space beyond the route is playable.
+The perimeter makes the current content boundary truthful and keeps players,
+vehicles, carryables, and drop placement inside authored navigation and
+district ownership. This is a bounded product decision, not a general
+open-world residency policy.
+
+The graphical host resolves third-person camera obstruction against the same
+live physics world and keeps the camera on the target side of the first hit.
+This is a read-only value query: district/Jolt identities remain owned by the
+simulation placement. Visible route collision must not turn into an opaque
+full-screen surface merely because the orbit camera crossed behind it.
+
 ## Consequences
 
 ### Positive
@@ -110,6 +134,10 @@ reconcile pass in canonical catalog order.
 - Source changes rebuild a real declared closure without a general asset graph.
 - Save, replay, live streaming, and restore share one admitted content truth.
 - Two-district overlap is proven with fixed capacities and one worker.
+- The complete current route does not visually enter or leave while it is
+  being played, and unsupported checkerboard space is visibly inaccessible.
+- Follow-camera placement respects the same collision-backed boundary exposed
+  to players and vehicles.
 - Existing GPU registry and one-district presentation coordinator remain
   reusable rather than being replaced.
 

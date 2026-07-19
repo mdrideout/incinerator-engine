@@ -48,10 +48,11 @@ contracts:
   and extracted-source gates must prove this independently of the client graph.
 
 The later IC5 incident-reliability work advances the current replay cohort to
-10 without changing `SnapshotV11` or `world-config-v5`: cohort 9 records vitals
-commands, and cohort 10 records authority-owned NPC replacement
-schedule/defer/complete ingress. This closes the exact death/repopulation
-replay boundary exposed by the long graphical incident journey.
+11 without changing `SnapshotV11` or `world-config-v5`: cohort 9 records vitals
+commands, cohort 10 records authority-owned NPC replacement
+schedule/defer/complete ingress, and cohort 11 records explicit player-requested
+versus forced-cleanup drop purpose. This closes the exact death/repopulation
+and interaction-intent replay boundaries exposed by graphical incident journeys.
 
 ## Outcome
 

@@ -1,6 +1,6 @@
 //! Bounded, asynchronous incident visual capture for the macOS product.
 //!
-//! A low-resolution product-only lane retains four seconds at 30 Hz. A
+//! A low-resolution product-only lane retains four seconds at 15 Hz. A
 //! full-resolution human-visible lane retains three seconds at 1 Hz and owns
 //! the -2/-1/flag/+1/+3 anchors. Both copy through stable diagnostic textures;
 //! neither waits for a GPU fence in the render loop.
@@ -15,12 +15,12 @@ const c = sdl.c;
 pub const pixel_bytes: usize = 4;
 pub const trail_width: u32 = 480;
 pub const trail_height: u32 = 270;
-pub const trail_slot_count: usize = 120;
-pub const trail_cadence_ns: u64 = std.time.ns_per_s / 30;
+pub const trail_slot_count: usize = 64;
+pub const trail_cadence_ns: u64 = std.time.ns_per_s / 15;
 pub const trail_pre_roll_ns: u64 = 4 * std.time.ns_per_s;
 pub const trail_post_roll_ns: u64 = 3 * std.time.ns_per_s;
 // Four one-second full-drawable anchors retain the required -2s/-1s lookup
-// window while the 30 Hz product lane owns transient continuity. Keeping this
+// window while the 15 Hz product lane owns transient continuity. Keeping this
 // lane sparse holds a Retina 2560x1440 window plus the product trail below the
 // declared 128 MiB diagnostic download-memory budget.
 pub const anchor_slot_count: usize = 4;
@@ -834,6 +834,8 @@ fn suspiciousPixels(pixels: []const u8, width: u32, height: u32) bool {
     var zero_pixels: usize = 0;
     var block_rows: u32 = 0;
     var maximum_block_rows: u32 = 0;
+    var quantized_colors: [4096]u32 = @splat(0);
+    var dominant_color_pixels: u32 = 0;
     for (0..height) |y| {
         var run: u32 = 0;
         var maximum_run: u32 = 0;
@@ -841,6 +843,14 @@ fn suspiciousPixels(pixels: []const u8, width: u32, height: u32) bool {
             const offset = (@as(usize, y) * width + x) * pixel_bytes;
             const zero = pixels[offset] == 0 and pixels[offset + 1] == 0 and
                 pixels[offset + 2] == 0;
+            const color_index = (@as(usize, pixels[offset] >> 4) << 8) |
+                (@as(usize, pixels[offset + 1] >> 4) << 4) |
+                @as(usize, pixels[offset + 2] >> 4);
+            quantized_colors[color_index] += 1;
+            dominant_color_pixels = @max(
+                dominant_color_pixels,
+                quantized_colors[color_index],
+            );
             if (zero) {
                 zero_pixels += 1;
                 run += 1;
@@ -857,7 +867,9 @@ fn suspiciousPixels(pixels: []const u8, width: u32, height: u32) bool {
         }
     }
     const total: usize = @as(usize, width) * height;
-    return zero_pixels * 2 >= total or maximum_block_rows >= @max(1, height / 4);
+    return zero_pixels * 2 >= total or
+        maximum_block_rows >= @max(1, height / 4) or
+        @as(usize, dominant_color_pixels) * 4 >= total * 3;
 }
 
 test "visual integrity warning detects a large zero rectangle" {
@@ -879,6 +891,19 @@ test "visual integrity warning accepts a varied frame" {
     var pixels: [width * height * pixel_bytes]u8 = undefined;
     for (&pixels, 0..) |*byte, index| byte.* = @truncate(index * 17 + 3);
     try std.testing.expect(!suspiciousPixels(&pixels, width, height));
+}
+
+test "visual integrity warning detects a dominant nonzero surface" {
+    const width: u32 = 12;
+    const height: u32 = 8;
+    var pixels: [width * height * pixel_bytes]u8 = @splat(255);
+    for (0..height) |y| for (0..10) |x| {
+        const offset = (y * width + x) * pixel_bytes;
+        pixels[offset + 0] = 230;
+        pixels[offset + 1] = 10;
+        pixels[offset + 2] = 10;
+    };
+    try std.testing.expect(suspiciousPixels(&pixels, width, height));
 }
 
 test "Retina capture policy stays within the declared download memory budget" {

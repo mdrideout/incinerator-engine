@@ -37,6 +37,11 @@ pub const InitOptions = struct {
     stream_content: bool,
     admit_catalog: bool,
     content_root: ?content.ContentRootPath,
+    /// The current product route contains only two small districts. Keep both
+    /// authoritative collision and presentation cohorts resident so ordinary
+    /// play cannot outrun asynchronous activation. Validation profiles leave
+    /// this false and continue exercising the streaming lifecycle.
+    pin_route_resident: bool = false,
 };
 
 /// The authority-facing seam contains semantic district work and immutable
@@ -242,6 +247,7 @@ const State = struct {
     next_content_generation: u64 = 1,
     next_request_id: u64 = 1,
     next_correlation: u64 = 1,
+    pin_route_resident: bool = false,
     teardown_prepared: bool = false,
 
     fn ensureOperational(self: *const State) !void {
@@ -1192,6 +1198,7 @@ pub const Owner = opaque {
                 .{},
             ),
             .slots = undefined,
+            .pin_route_resident = options.pin_route_resident,
         };
         errdefer state.registry.deinit();
 
@@ -1290,7 +1297,11 @@ pub const Owner = opaque {
     ) !void {
         try ownerState(self).ensureOperational();
         for (&ownerState(self).slots, 0..) |*stream_slot, slot_index| {
-            switch (try stream_slot.prefetch_proximity.observe(position_xz)) {
+            switch (try observeRouteProximity(
+                &stream_slot.prefetch_proximity,
+                position_xz,
+                ownerState(self).pin_route_resident,
+            )) {
                 .none, .enter => {},
                 .exit => if (!stream_slot.authority_proximity.inside) {
                     try ownerState(self).requestDeparture(
@@ -1313,7 +1324,11 @@ pub const Owner = opaque {
     ) !void {
         try ownerState(self).ensureOperational();
         for (&ownerState(self).slots, 0..) |*stream_slot, slot_index| {
-            switch (try stream_slot.authority_proximity.observe(position_xz)) {
+            switch (try observeRouteProximity(
+                &stream_slot.authority_proximity,
+                position_xz,
+                ownerState(self).pin_route_resident,
+            )) {
                 .none, .enter => {},
                 .exit => try ownerState(self).requestAuthorityDeparture(
                     authority,
@@ -1682,6 +1697,20 @@ fn takeMonotonicId(next: *u64) !u64 {
     return result;
 }
 
+fn observeRouteProximity(
+    proximity: *district_presentation.ProximityHysteresis,
+    position_xz: [2]f32,
+    pin_route_resident: bool,
+) !district_presentation.ProximityAction {
+    if (!pin_route_resident) return proximity.observe(position_xz);
+    if (!std.math.isFinite(position_xz[0]) or !std.math.isFinite(position_xz[1])) {
+        return error.InvalidDistrictFocusPosition;
+    }
+    if (proximity.inside) return .none;
+    proximity.inside = true;
+    return .enter;
+}
+
 pub fn validateCatalogEntries(entries: anytype) !void {
     if (entries.len != slot_count) return error.DistrictCatalogSlotMismatch;
     var present: [slot_count]bool = @splat(false);
@@ -1736,6 +1765,29 @@ test "adjacent visual prefetch enters before authority residency" {
     );
     try std.testing.expect(prefetch.inside);
     try std.testing.expect(!authority.inside);
+}
+
+test "pinned product route does not unload at a distant focus" {
+    const west = sandbox_recipe.presentation_policies[west_slot_index];
+    var proximity = try district_presentation.ProximityHysteresis.init(.{
+        .center_xz = west.center_xz,
+        .half_extent_xz = west.half_extent_xz,
+        .load_margin = west.authority_load_margin,
+        .unload_margin = west.authority_unload_margin,
+    });
+    try std.testing.expectEqual(
+        district_presentation.ProximityAction.enter,
+        try observeRouteProximity(&proximity, .{ 10_000, 10_000 }, true),
+    );
+    try std.testing.expectEqual(
+        district_presentation.ProximityAction.none,
+        try observeRouteProximity(&proximity, .{ -10_000, -10_000 }, true),
+    );
+    try std.testing.expect(proximity.inside);
+    try std.testing.expectError(
+        error.InvalidDistrictFocusPosition,
+        observeRouteProximity(&proximity, .{ std.math.nan(f32), 0 }, true),
+    );
 }
 
 test "only bounded GPU pressure is a retryable district stage failure" {

@@ -7,7 +7,9 @@
 const std = @import("std");
 const district = @import("district_contract");
 
-pub const current_recipe_version: u32 = 3;
+pub const current_recipe_version: u32 = 4;
+pub const static_box_count: u8 = 6;
+pub const blocking_proxy_count: u8 = static_box_count - 1;
 pub const navigation_west_coord = district.ChunkCoord{ .x = 0, .z = 0 };
 pub const navigation_east_coord = district.ChunkCoord{ .x = 1, .z = 0 };
 
@@ -166,7 +168,7 @@ pub fn capsuleTraversalClear(
 fn staticBoxPresentation(box_index: usize) ?StaticBoxPresentation {
     return switch (box_index) {
         0 => .host_support_surface,
-        1, 2 => .blocking_proxy,
+        1, 2, 3, 4, 5 => .blocking_proxy,
         else => null,
     };
 }
@@ -218,8 +220,8 @@ pub fn build(
         .coord = coord,
         .recipe_version = recipe_version,
         .checksum = 0,
-        .decoded_bytes = district.decodedByteCount(3, 0, 0),
-        .static_box_count = 3,
+        .decoded_bytes = district.decodedByteCount(static_box_count, 0, 0),
+        .static_box_count = static_box_count,
     };
     result.static_boxes[0] = .{
         .pose = .{ .position = .{ origin_x, -0.5, origin_z } },
@@ -232,6 +234,24 @@ pub fn build(
     result.static_boxes[2] = .{
         .pose = .{ .position = .{ origin_x + 3.0, 0.75, origin_z + 4.5 } },
         .half_extents = .{ 2.5, 0.75, 0.75 },
+    };
+    // The self-authored route is intentionally finite. These visible
+    // collision walls make that ownership truthful to a human tester and keep
+    // character, vehicle, and carry/drop authority inside installed content.
+    result.static_boxes[3] = .{
+        .pose = .{ .position = .{ origin_x, 1.5, origin_z - 8.25 } },
+        .half_extents = .{ 8.25, 1.5, 0.25 },
+    };
+    result.static_boxes[4] = .{
+        .pose = .{ .position = .{ origin_x, 1.5, origin_z + 8.25 } },
+        .half_extents = .{ 8.25, 1.5, 0.25 },
+    };
+    result.static_boxes[5] = if (district.ChunkCoord.eql(coord, navigation_west_coord)) .{
+        .pose = .{ .position = .{ origin_x - 8.25, 1.5, origin_z } },
+        .half_extents = .{ 0.25, 1.5, 8.25 },
+    } else .{
+        .pose = .{ .position = .{ origin_x + 8.25, 1.5, origin_z } },
+        .half_extents = .{ 0.25, 1.5, 8.25 },
     };
     if (district.ChunkCoord.eql(coord, navigation_west_coord)) {
         populateWestNavigation(&result);

@@ -2084,8 +2084,14 @@ test "two real Jolt districts restore canonically and unload independently" {
 
         try std.testing.expectEqual(@as(usize, 2), world.districtCount());
         try std.testing.expectEqual(@as(usize, 2), world.entityCount());
-        try std.testing.expectEqual(@as(u32, 6), world.bodyCount());
-        try std.testing.expectEqual(@as(usize, 6), world.districtBodyCount());
+        try std.testing.expectEqual(
+            sandbox_contracts.district_static_box_count * 2,
+            world.bodyCount(),
+        );
+        try std.testing.expectEqual(
+            @as(usize, sandbox_contracts.district_static_box_count) * 2,
+            world.districtBodyCount(),
+        );
         try std.testing.expectEqual(west_ticket, world.activeDistrictTicketFor(west).?);
         try std.testing.expectEqual(east_ticket, world.activeDistrictTicketFor(east).?);
         const draws = try world.districtPresentation();
@@ -2100,7 +2106,10 @@ test "two real Jolt districts restore canonically and unload independently" {
 
         try unloadDistrict(&world, 3, west_ticket);
         try std.testing.expectEqual(@as(usize, 1), world.districtCount());
-        try std.testing.expectEqual(@as(u32, 3), world.bodyCount());
+        try std.testing.expectEqual(
+            sandbox_contracts.district_static_box_count,
+            world.bodyCount(),
+        );
         try std.testing.expect(world.activeDistrictTicketFor(west) == null);
         try std.testing.expectEqual(east_ticket, world.activeDistrictTicketFor(east).?);
 
@@ -2127,7 +2136,10 @@ test "two real Jolt districts restore canonically and unload independently" {
     defer restored.deinit();
     try std.testing.expectEqual(@as(usize, 2), restored.districtCount());
     try std.testing.expectEqual(@as(usize, 2), restored.entityCount());
-    try std.testing.expectEqual(@as(u32, 6), restored.bodyCount());
+    try std.testing.expectEqual(
+        sandbox_contracts.district_static_box_count * 2,
+        restored.bodyCount(),
+    );
     const restored_draws = try restored.districtPresentation();
     try std.testing.expectEqual(west, restored_draws[0].build.coord);
     try std.testing.expectEqual(east, restored_draws[1].build.coord);
@@ -2941,7 +2953,10 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
             district_test_assets,
         );
         try waitForDistrictActivation(&world, first_east_ticket);
-        try std.testing.expectEqual(@as(u32, 6), world.bodyCount());
+        try std.testing.expectEqual(
+            sandbox_contracts.district_static_box_count * 2,
+            world.bodyCount(),
+        );
 
         try world.submitNpc(.{ .spawn = .{
             .request_id = 10,
@@ -2970,7 +2985,10 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
             active_diagnostics.character_controllers.feature_owned,
         );
         try std.testing.expect(active_diagnostics.character_controllers.authority_consistent);
-        try std.testing.expectEqual(@as(u32, 6), world.bodyCount());
+        try std.testing.expectEqual(
+            sandbox_contracts.district_static_box_count * 2,
+            world.bodyCount(),
+        );
         try expectNpcOutputEmpty(&world);
 
         try unloadDistrict(&world, 11, first_east_ticket);
@@ -2986,7 +3004,10 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         const waiting = try world.npc(npc_id);
         try std.testing.expectEqual(sandbox_contracts.navigation_west_coord, waiting.owner);
         try std.testing.expect(waiting.controller_present);
-        try std.testing.expectEqual(@as(u32, 3), world.bodyCount());
+        try std.testing.expectEqual(
+            sandbox_contracts.district_static_box_count,
+            world.bodyCount(),
+        );
         try std.testing.expectEqual(@as(u8, 0), event_sequence);
         try expectNpcStateChanged(
             &world,
@@ -3018,7 +3039,10 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
             (try world.npc(npc_id)).state,
         );
         try std.testing.expectEqual(@as(u32, 1), world.diagnostics().npc.controller_count);
-        try std.testing.expectEqual(@as(u32, 3), world.bodyCount());
+        try std.testing.expectEqual(
+            sandbox_contracts.district_static_box_count,
+            world.bodyCount(),
+        );
         try expectNpcOutputEmpty(&world);
 
         const second_east_ticket = try requestDistrictAt(
@@ -3051,7 +3075,10 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
             }
         }
         try std.testing.expect(observed_transfer);
-        try std.testing.expectEqual(@as(u32, 6), world.bodyCount());
+        try std.testing.expectEqual(
+            sandbox_contracts.district_static_box_count * 2,
+            world.bodyCount(),
+        );
         try std.testing.expectEqual(@as(u32, 1), world.diagnostics().npc.controller_count);
         try std.testing.expectEqual(@as(u8, 2), event_sequence);
         try expectNpcOwnerTransferred(
@@ -3077,7 +3104,10 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
             dormant_diagnostics.character_controllers.feature_owned,
         );
         try std.testing.expect(dormant_diagnostics.character_controllers.authority_consistent);
-        try std.testing.expectEqual(@as(u32, 3), world.bodyCount());
+        try std.testing.expectEqual(
+            sandbox_contracts.district_static_box_count,
+            world.bodyCount(),
+        );
         try std.testing.expectEqual(@as(u8, 3), event_sequence);
         try expectNpcStateChanged(&world, npc_id, .active, .dormant);
         event_sequence += 1;
@@ -3094,7 +3124,10 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         try std.testing.expect(resumed.state != .dormant);
         try std.testing.expect(resumed.controller_present);
         try std.testing.expectEqual(@as(u32, 1), world.diagnostics().npc.controller_count);
-        try std.testing.expectEqual(@as(u32, 6), world.bodyCount());
+        try std.testing.expectEqual(
+            sandbox_contracts.district_static_box_count * 2,
+            world.bodyCount(),
+        );
         try std.testing.expectEqual(@as(usize, 1), (try world.npcPresentation(0)).len);
         try std.testing.expectEqual(@as(u8, 4), event_sequence);
         try expectNpcStateChanged(&world, npc_id, .dormant, .active);
@@ -3123,7 +3156,10 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
     defer restored.deinit();
     try std.testing.expectEqual(@as(usize, 1), restored.npcCount());
     try std.testing.expectEqual(@as(usize, 3), restored.entityCount());
-    try std.testing.expectEqual(@as(u32, 6), restored.bodyCount());
+    try std.testing.expectEqual(
+        sandbox_contracts.district_static_box_count * 2,
+        restored.bodyCount(),
+    );
     const restored_diagnostics = restored.diagnostics();
     try std.testing.expectEqual(@as(u32, 1), restored_diagnostics.npc.controller_count);
     try std.testing.expectEqual(
@@ -3387,6 +3423,7 @@ fn dropS7Carryable(
         .transaction_id = transaction_id,
         .carrier_id = character_id,
         .carryable_id = carryable_id,
+        .purpose = .player_requested,
     } });
     try world.tick();
     const outcome = world.pollInteractionOutcome() orelse
@@ -3422,7 +3459,10 @@ fn runS7RepeatedCycle(
         carryable_id,
         source,
     );
-    try std.testing.expectEqual(@as(u32, 4), world.bodyCount());
+    try std.testing.expectEqual(
+        1 + sandbox_contracts.district_static_box_count,
+        world.bodyCount(),
+    );
     try std.testing.expectEqual(@as(usize, 3), world.entityCount());
 
     try unloadS7District(world, request_base + 1, source_ticket);
@@ -3434,7 +3474,10 @@ fn runS7RepeatedCycle(
         request_base + 2,
         destination,
     );
-    try std.testing.expectEqual(@as(u32, 4), world.bodyCount());
+    try std.testing.expectEqual(
+        1 + sandbox_contracts.district_static_box_count,
+        world.bodyCount(),
+    );
     try std.testing.expectEqual(@as(usize, 3), world.entityCount());
     try moveS7CharacterToX(world, character_id, destination_x);
     try dropS7Carryable(
@@ -3444,7 +3487,10 @@ fn runS7RepeatedCycle(
         carryable_id,
         destination,
     );
-    try std.testing.expectEqual(@as(u32, 5), world.bodyCount());
+    try std.testing.expectEqual(
+        2 + sandbox_contracts.district_static_box_count,
+        world.bodyCount(),
+    );
     try std.testing.expectEqual(@as(usize, 3), world.entityCount());
 
     try unloadS7District(world, request_base + 4, destination_ticket);
@@ -3458,7 +3504,10 @@ fn runS7RepeatedCycle(
         request_base + 5,
         destination,
     );
-    try std.testing.expectEqual(@as(u32, 5), world.bodyCount());
+    try std.testing.expectEqual(
+        2 + sandbox_contracts.district_static_box_count,
+        world.bodyCount(),
+    );
     try std.testing.expectEqual(@as(usize, 3), world.entityCount());
     try expectS7InteractionDraw(
         world,
@@ -3491,7 +3540,10 @@ fn cleanupS7World(
         else => return error.UnexpectedInteractionOutcome,
     }
     try drainS7Ambient(world);
-    try std.testing.expectEqual(@as(u32, 4), world.bodyCount());
+    try std.testing.expectEqual(
+        1 + sandbox_contracts.district_static_box_count,
+        world.bodyCount(),
+    );
     try std.testing.expectEqual(@as(usize, 1), world.entityCount());
     try unloadS7District(world, request_id, district_ticket);
     try std.testing.expectEqual(@as(u32, 1), world.bodyCount());
@@ -3530,7 +3582,10 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
 
         const west_ticket = try activateS7District(&world, 1, s7_west);
         const east_ticket = try activateS7District(&world, 2, s7_east);
-        try std.testing.expectEqual(@as(u32, 7), world.bodyCount());
+        try std.testing.expectEqual(
+            1 + sandbox_contracts.district_static_box_count * 2,
+            world.bodyCount(),
+        );
         try std.testing.expectEqual(@as(usize, 2), world.entityCount());
 
         try world.submitCharacter(.{ .spawn = .{
@@ -3553,7 +3608,10 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
             else => return error.UnexpectedInteractionOutcome,
         };
         try drainS7Ambient(&world);
-        try std.testing.expectEqual(@as(u32, 8), world.bodyCount());
+        try std.testing.expectEqual(
+            2 + sandbox_contracts.district_static_box_count * 2,
+            world.bodyCount(),
+        );
         try std.testing.expectEqual(@as(usize, 4), world.entityCount());
         try expectS7InteractionDraw(
             &world,
@@ -3568,9 +3626,15 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
             carryable_id,
             s7_west,
         );
-        try std.testing.expectEqual(@as(u32, 7), world.bodyCount());
+        try std.testing.expectEqual(
+            1 + sandbox_contracts.district_static_box_count * 2,
+            world.bodyCount(),
+        );
         try unloadS7District(&world, 11, west_ticket);
-        try std.testing.expectEqual(@as(u32, 4), world.bodyCount());
+        try std.testing.expectEqual(
+            1 + sandbox_contracts.district_static_box_count,
+            world.bodyCount(),
+        );
         try std.testing.expectEqual(@as(usize, 3), world.entityCount());
 
         try moveS7CharacterToX(&world, spawned_character, s7_east_x);
@@ -3581,7 +3645,10 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
             carryable_id,
             s7_east,
         );
-        try std.testing.expectEqual(@as(u32, 5), world.bodyCount());
+        try std.testing.expectEqual(
+            2 + sandbox_contracts.district_static_box_count,
+            world.bodyCount(),
+        );
         try std.testing.expectEqual(@as(usize, 3), world.entityCount());
         try unloadS7District(&world, 13, east_ticket);
         try std.testing.expectEqual(@as(u32, 1), world.bodyCount());
@@ -3598,7 +3665,10 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
         var active_coord = s7_east;
         var active_x = s7_east_x;
         var active_ticket = try activateS7District(&world, 14, active_coord);
-        try std.testing.expectEqual(@as(u32, 5), world.bodyCount());
+        try std.testing.expectEqual(
+            2 + sandbox_contracts.district_static_box_count,
+            world.bodyCount(),
+        );
         try std.testing.expectEqual(@as(usize, 3), world.entityCount());
 
         for (0..4) |cycle| {
@@ -3670,7 +3740,10 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
     try std.testing.expectEqual(@as(u32, 1), restored_item.dormant_count);
 
     const reloaded = try activateS7District(&restored, 2_000, s7_east);
-    try std.testing.expectEqual(@as(u32, 5), restored.bodyCount());
+    try std.testing.expectEqual(
+        2 + sandbox_contracts.district_static_box_count,
+        restored.bodyCount(),
+    );
     try std.testing.expectEqual(@as(usize, 3), restored.entityCount());
     const restored_draws = try restored.interactionPresentation();
     try std.testing.expectEqual(@as(usize, 1), restored_draws.len);
@@ -3723,12 +3796,21 @@ test "real district worker cancels activates collides unloads and repeats cleanl
         world.districtStateFor(district_test_coord).?,
     );
     try std.testing.expectEqual(@as(usize, 1), world.districtCount());
-    try std.testing.expectEqual(@as(usize, 3), world.districtBodyCount());
+    try std.testing.expectEqual(
+        @as(usize, sandbox_contracts.district_static_box_count),
+        world.districtBodyCount(),
+    );
     try std.testing.expectEqual(@as(usize, 1), world.entityCount());
-    try std.testing.expectEqual(@as(u32, 4), world.bodyCount());
+    try std.testing.expectEqual(
+        1 + sandbox_contracts.district_static_box_count,
+        world.bodyCount(),
+    );
     const district_draws = try world.districtPresentation();
     try std.testing.expectEqual(@as(usize, 1), district_draws.len);
-    try std.testing.expectEqual(@as(u8, 3), district_draws[0].build.static_box_count);
+    try std.testing.expectEqual(
+        @as(u8, @intCast(sandbox_contracts.district_static_box_count)),
+        district_draws[0].build.static_box_count,
+    );
     try std.testing.expectEqual(district_test_assets.scene, district_draws[0].assets.scene);
 
     // The crate settles on the raised district obstacle, not the district floor.
@@ -3759,7 +3841,10 @@ test "real district worker cancels activates collides unloads and repeats cleanl
         const ticket = try requestDistrict(&world, 10 + cycle * 2);
         try waitForDistrictActivation(&world, ticket);
         try std.testing.expectEqual(@as(usize, 1), world.entityCount());
-        try std.testing.expectEqual(@as(u32, 4), world.bodyCount());
+        try std.testing.expectEqual(
+            1 + sandbox_contracts.district_static_box_count,
+            world.bodyCount(),
+        );
         try unloadDistrict(&world, 11 + cycle * 2, ticket);
         try std.testing.expectEqual(@as(usize, 0), world.entityCount());
         try std.testing.expectEqual(@as(u32, 1), world.bodyCount());
@@ -3826,7 +3911,10 @@ test "active district Snapshot V11 restore is byte-stable and rebuilds logical o
     defer restored.deinit();
     try std.testing.expectEqual(@as(usize, 1), restored.districtCount());
     try std.testing.expectEqual(@as(usize, 1), restored.entityCount());
-    try std.testing.expectEqual(@as(u32, 3), restored.bodyCount());
+    try std.testing.expectEqual(
+        sandbox_contracts.district_static_box_count,
+        restored.bodyCount(),
+    );
     const draw = (try restored.districtPresentation())[0];
     try std.testing.expectEqual(district_test_assets.scene, draw.assets.scene);
     const resaved = try restored.save(allocator);
@@ -4239,9 +4327,15 @@ test "S4-C headless debug extraction and profile observation preserve authority"
     );
     try std.testing.expect(observed.state.district_ticket != null);
     try std.testing.expectEqual(@as(usize, 1), observed.state.district_count);
-    try std.testing.expectEqual(@as(usize, 3), observed.state.district_body_count);
+    try std.testing.expectEqual(
+        @as(usize, sandbox_contracts.district_static_box_count),
+        observed.state.district_body_count,
+    );
     try std.testing.expectEqual(@as(usize, 4), observed.state.entity_count);
-    try std.testing.expectEqual(@as(u32, 6), observed.state.body_count);
+    try std.testing.expectEqual(
+        3 + sandbox_contracts.district_static_box_count,
+        observed.state.body_count,
+    );
 }
 
 test "S5 crate authoring edit undo redo and cold restore are coherent" {

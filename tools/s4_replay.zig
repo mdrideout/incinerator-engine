@@ -731,6 +731,7 @@ fn runSmokeScenario(
         .transaction_id = Transaction.drop,
         .carrier_id = state.character_id.?,
         .carryable_id = carryable_id,
+        .purpose = .player_requested,
     } });
     try tickAndDrain(simulation, state);
     if (!state.carryable_dropped) return error.MissingDropOutcome;

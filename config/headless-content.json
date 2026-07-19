@@ -2,22 +2,22 @@
   "schema_version": 1,
   "catalog_semantic_id": "incinerator.s6.two-district",
   "catalog_wire_schema": 1,
-  "content_cohort_fingerprint": "05d57d84c108c9dc813207d363761f669bf78dd4f63c22c479a160f15df98761",
-  "catalog_file_sha256": "3954810fc498ecd1ee7e4b1dc5c0c34d74a98b29a8deddac088f884d7f281bef",
+  "content_cohort_fingerprint": "11ac400758045c5c93550a972c4487a099e4009bb475c074e086ec6da4043238",
+  "catalog_file_sha256": "79059a3efa6d7b260b4bd749c677e6cfb237d5d691caa7da12b420e5f9793762",
   "districts": [
     {
       "semantic_id": "district.west",
       "coord_x": 0,
       "coord_z": 0,
-      "recipe_version": 3,
-      "bundle_file_sha256": "0396ed142f96fd2d6d19d92a55ee62a703d187d09c1e175a1affb22463317f2b"
+      "recipe_version": 4,
+      "bundle_file_sha256": "98cb967d40501f2f3c1c1803fc49df8fe3d0132120b12b0c52698188affa3d25"
     },
     {
       "semantic_id": "district.east",
       "coord_x": 1,
       "coord_z": 0,
-      "recipe_version": 3,
-      "bundle_file_sha256": "fbf82af3f08570f1f503ae955aa282dd5c03f02a32a4ac52f1ddce810a1b4215"
+      "recipe_version": 4,
+      "bundle_file_sha256": "98b02e5c353c5487b4a325cc8aef5aad62b7e7a94212c9d091f21ee46d2e0112"
     }
   ]
 }

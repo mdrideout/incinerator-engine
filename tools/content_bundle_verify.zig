@@ -1,8 +1,8 @@
 const std = @import("std");
 const content = @import("content");
 
-const expected_west_file_bytes: usize = 1008;
-const expected_east_file_bytes: usize = 1016;
+const expected_west_file_bytes: usize = 1128;
+const expected_east_file_bytes: usize = 1136;
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -67,7 +67,7 @@ fn verifyCommon(scene: content.bundle.BundleView) !void {
     if (std.mem.allEqual(u8, &scene.source_digest, 0)) return error.MissingSourceDigest;
     if (scene.nodes.len != 2 or scene.meshes.len != 1 or scene.primitives.len != 1 or
         scene.materials.len != 1 or scene.textures.len != 1 or scene.vertices.len != 3 or
-        scene.indices.len != 3 or scene.static_boxes.len != 3 or
+        scene.indices.len != 3 or scene.static_boxes.len != 6 or
         scene.navigation_nodes.len != 3 or scene.navigation_edges.len != 5)
     {
         return error.InvalidFixtureCounts;
@@ -99,8 +99,11 @@ fn verifyWest(scene: content.bundle.BundleView) !void {
         .{ .position = .{ 0, -0.5, 0 }, .half_extents = .{ 7.5, 0.5, 7.5 } },
         .{ .position = .{ -5.5, 1, -2 }, .half_extents = .{ 1, 1, 3 } },
         .{ .position = .{ 3, 0.75, 4.5 }, .half_extents = .{ 2.5, 0.75, 0.75 } },
+        .{ .position = .{ 0, 1.5, -8.25 }, .half_extents = .{ 8.25, 1.5, 0.25 } },
+        .{ .position = .{ 0, 1.5, 8.25 }, .half_extents = .{ 8.25, 1.5, 0.25 } },
+        .{ .position = .{ -8.25, 1.5, 0 }, .half_extents = .{ 0.25, 1.5, 8.25 } },
     };
-    if (!std.meta.eql(expected_boxes, scene.static_boxes[0..3].*)) return error.StaticBoxesDiverged;
+    if (!std.meta.eql(expected_boxes, scene.static_boxes[0..6].*)) return error.StaticBoxesDiverged;
     const expected_nodes = [_]content.bundle.NavigationNode{
         .{ .position = .{ -4, 0, 3 }, .first_edge = 0, .edge_count = 1, .flags = content.bundle.navigation_node_terminal },
         .{ .position = .{ 2, 0, 3 }, .first_edge = 1, .edge_count = 2 },
@@ -144,8 +147,11 @@ fn verifyEast(scene: content.bundle.BundleView) !void {
         .{ .position = .{ 16, -0.5, 0 }, .half_extents = .{ 7.5, 0.5, 7.5 } },
         .{ .position = .{ 10.5, 1, -2 }, .half_extents = .{ 1, 1, 3 } },
         .{ .position = .{ 19, 0.75, 4.5 }, .half_extents = .{ 2.5, 0.75, 0.75 } },
+        .{ .position = .{ 16, 1.5, -8.25 }, .half_extents = .{ 8.25, 1.5, 0.25 } },
+        .{ .position = .{ 16, 1.5, 8.25 }, .half_extents = .{ 8.25, 1.5, 0.25 } },
+        .{ .position = .{ 24.25, 1.5, 0 }, .half_extents = .{ 0.25, 1.5, 8.25 } },
     };
-    if (!std.meta.eql(expected_boxes, scene.static_boxes[0..3].*)) {
+    if (!std.meta.eql(expected_boxes, scene.static_boxes[0..6].*)) {
         return error.StaticBoxesDiverged;
     }
     const expected_nodes = [_]content.bundle.NavigationNode{

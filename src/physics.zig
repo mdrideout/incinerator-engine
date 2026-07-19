@@ -1056,7 +1056,7 @@ pub const Physics = struct {
         return !query.blocked;
     }
 
-    fn lineUnobstructed(self: *Physics, start: [3]f32, end: [3]f32) !bool {
+    fn lineHitFraction(self: *Physics, start: [3]f32, end: [3]f32) !?f32 {
         self.assertOwnerThread();
         for (start ++ end) |component| {
             if (!std.math.isFinite(component)) return error.InvalidLineQuery;
@@ -1073,7 +1073,7 @@ pub const Physics = struct {
             .bodyID = std.math.maxInt(c.JPH_BodyID),
             .fraction = 1.0 + std.math.floatEps(f32),
         };
-        return !c.JPH_NarrowPhaseQuery_CastRay(
+        if (!c.JPH_NarrowPhaseQuery_CastRay(
             narrow_phase,
             &origin,
             &direction,
@@ -1081,7 +1081,15 @@ pub const Physics = struct {
             null,
             null,
             null,
-        );
+        )) return null;
+        if (!std.math.isFinite(hit.fraction) or hit.fraction < 0 or hit.fraction > 1) {
+            return error.LineQueryInvariantBroken;
+        }
+        return hit.fraction;
+    }
+
+    fn lineUnobstructed(self: *Physics, start: [3]f32, end: [3]f32) !bool {
+        return try self.lineHitFraction(start, end) == null;
     }
 
     fn vehicleRecord(
@@ -1305,8 +1313,14 @@ pub const Physics = struct {
                 constraint,
                 @intCast(index),
             ) orelse return error.VehicleWheelInvariantBroken;
-            c.JPH_Wheel_SetRotationAngle(wheel, dynamics.rotation_angle);
-            c.JPH_Wheel_SetAngularVelocity(wheel, dynamics.angular_velocity);
+            c.JPH_Wheel_SetRotationAngle(
+                wheel,
+                try wheelRotationToJolt(dynamics.rotation_angle),
+            );
+            c.JPH_Wheel_SetAngularVelocity(
+                wheel,
+                wheelAngularVelocityToJolt(dynamics.angular_velocity),
+            );
         }
         if (failure_point != null) {
             try injectVehicleCreateFailure(failure_point, .after_constraint);
@@ -1436,8 +1450,10 @@ pub const Physics = struct {
             );
             result.* = .{
                 .pose = try poseFromJoltMatrix(world_transform),
-                .angular_velocity = c.JPH_Wheel_GetAngularVelocity(wheel),
-                .rotation_angle = try engine.physics.canonicalVehicleWheelRotation(
+                .angular_velocity = wheelAngularVelocityFromJolt(
+                    c.JPH_Wheel_GetAngularVelocity(wheel),
+                ),
+                .rotation_angle = try wheelRotationFromJolt(
                     c.JPH_Wheel_GetRotationAngle(wheel),
                 ),
                 // Jolt's positive wheel angle turns left for this -Z-forward
@@ -2768,6 +2784,18 @@ pub const CharacterControllers = struct {
     ) !bool {
         return self.physics.lineUnobstructed(start, end);
     }
+
+    /// Fraction along `start` -> `end` occupied by the nearest physics hit.
+    /// Null means the entire segment is clear. Presentation hosts use this
+    /// narrow query to keep third-person cameras on the target side of world
+    /// blockers without gaining ownership of Jolt identifiers.
+    pub fn lineHitFraction(
+        self: *CharacterControllers,
+        start: [3]f32,
+        end: [3]f32,
+    ) !?f32 {
+        return self.physics.lineHitFraction(start, end);
+    }
 };
 
 /// Compile-time capability consumed by the first four-wheel vehicle slice.
@@ -2893,6 +2921,26 @@ fn toRVec3(value: [3]f32) c.JPH_RVec3 {
 
 fn toJoltQuat(value: [4]f32) c.JPH_Quat {
     return .{ .x = value[0], .y = value[1], .z = value[2], .w = value[3] };
+}
+
+/// The engine exposes conventional right-handed wheel motion about model +X.
+/// A chassis moving along local -Z therefore has negative wheel angular
+/// velocity. Jolt's wheel scalar uses the opposite sign for this vehicle-axis
+/// setup, so this adapter owns the conversion in both directions.
+fn wheelAngularVelocityToJolt(value: f32) f32 {
+    return -value;
+}
+
+fn wheelAngularVelocityFromJolt(value: f32) f32 {
+    return -value;
+}
+
+fn wheelRotationToJolt(value: f32) !f32 {
+    return engine.physics.canonicalVehicleWheelRotation(-value);
+}
+
+fn wheelRotationFromJolt(value: f32) !f32 {
+    return engine.physics.canonicalVehicleWheelRotation(-value);
 }
 
 fn fromVec3(value: c.JPH_Vec3) [3]f32 {
@@ -3077,6 +3125,15 @@ test "character spawn capsule query accepts support and rejects blocking geometr
     }, 0.05));
     try std.testing.expect(try controllers.lineUnobstructed(.{ 0, 1, 0 }, .{ 0, 1, 3 }));
     try std.testing.expect(!try controllers.lineUnobstructed(.{ 0, 1, 0 }, .{ 6, 1, 0 }));
+    try std.testing.expectEqual(
+        @as(?f32, null),
+        try controllers.lineHitFraction(.{ 0, 1, 0 }, .{ 0, 1, 3 }),
+    );
+    const hit_fraction = (try controllers.lineHitFraction(
+        .{ 0, 1, 0 },
+        .{ 6, 1, 0 },
+    )).?;
+    try std.testing.expect(hit_fraction > 0.35 and hit_fraction < 0.4);
     try std.testing.expect(physics.removeBody(blocker));
     try std.testing.expect(physics.removeBody(ground));
 }
@@ -3186,6 +3243,9 @@ test "Jolt 5.5 four-wheel vehicle settles drives toward minus Z and brakes" {
     var wheel_spinning = false;
     for (driven.wheels) |wheel| {
         wheel_spinning = wheel_spinning or @abs(wheel.angular_velocity) > 0.1;
+        if (wheel.has_contact) {
+            try std.testing.expect(wheel.angular_velocity < -0.1);
+        }
     }
     try std.testing.expect(wheel_spinning);
 
