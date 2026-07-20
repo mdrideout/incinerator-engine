@@ -299,6 +299,20 @@ pub fn draw(
                 "controller radius {d:.3} half-height {d:.3} | nearest {?d:.3}",
                 .{ entity.radius, entity.half_height, entity.nearest_actor_separation },
             );
+            if (entity.kind == .npc) {
+                zgui.text(
+                    "navigation {s} | no-progress {d} ticks | last progress {d}",
+                    .{
+                        @tagName(entity.navigation_progress),
+                        entity.navigation_no_progress_ticks,
+                        entity.navigation_last_progress_tick,
+                    },
+                );
+                if (entity.navigation_target) |target| zgui.text(
+                    "navigation target ({d:.3}, {d:.3}, {d:.3})",
+                    .{ target[0], target[1], target[2] },
+                );
+            }
             if (entity.target) |target| {
                 zgui.text(
                     "target {d}:{d}:{d}",

@@ -66,8 +66,8 @@ const Report = struct {
     persistence_snapshots: u64,
     active_persistence_min_bytes: usize,
     active_persistence_max_bytes: usize,
-    dormant_persistence_min_bytes: usize,
-    dormant_persistence_max_bytes: usize,
+    unloaded_persistence_min_bytes: usize,
+    unloaded_persistence_max_bytes: usize,
     persistence_bytes_total: u64,
     final_entities: u32,
     final_bodies: u32,
@@ -91,8 +91,8 @@ const Metrics = struct {
     persistence_snapshots: u64 = 0,
     active_persistence_min_bytes: usize = std.math.maxInt(usize),
     active_persistence_max_bytes: usize = 0,
-    dormant_persistence_min_bytes: usize = std.math.maxInt(usize),
-    dormant_persistence_max_bytes: usize = 0,
+    unloaded_persistence_min_bytes: usize = std.math.maxInt(usize),
+    unloaded_persistence_max_bytes: usize = 0,
     persistence_bytes_total: u64 = 0,
 
     fn observe(self: *Metrics, world: *simulation.Simulation) void {
@@ -137,20 +137,20 @@ const Metrics = struct {
         self.queue_rejections = queueRejections(value);
     }
 
-    fn recordPersistence(self: *Metrics, dormant: bool, byte_count: usize) !void {
+    fn recordPersistence(self: *Metrics, unloaded_content: bool, byte_count: usize) !void {
         self.persistence_snapshots += 1;
         self.persistence_bytes_total = try std.math.add(
             u64,
             self.persistence_bytes_total,
             byte_count,
         );
-        if (dormant) {
-            self.dormant_persistence_min_bytes = @min(
-                self.dormant_persistence_min_bytes,
+        if (unloaded_content) {
+            self.unloaded_persistence_min_bytes = @min(
+                self.unloaded_persistence_min_bytes,
                 byte_count,
             );
-            self.dormant_persistence_max_bytes = @max(
-                self.dormant_persistence_max_bytes,
+            self.unloaded_persistence_max_bytes = @max(
+                self.unloaded_persistence_max_bytes,
                 byte_count,
             );
         } else {
@@ -221,7 +221,7 @@ pub fn main(init: std.process.Init) !void {
     try requireCounts(&world, 3, 1, 5);
     try recordCanonicalPersistence(init.gpa, &world, &metrics, false);
     try unloadDistrict(&world, &metrics, 15, east_ticket);
-    try requireCounts(&world, 2, 0, 1);
+    try requireCounts(&world, 2, 0, 2);
     try recordCanonicalPersistence(init.gpa, &world, &metrics, true);
     var active_ticket = try activateDistrict(&world, &metrics, 16, east);
     try requireCounts(&world, 3, 1, 5);
@@ -272,7 +272,7 @@ pub fn main(init: std.process.Init) !void {
         );
         try recordCanonicalPersistence(init.gpa, &world, &metrics, false);
         try unloadDistrict(&world, &metrics, request_base + 4, active_ticket);
-        try requireCounts(&world, 2, 0, 1);
+        try requireCounts(&world, 2, 0, 2);
         try recordCanonicalPersistence(init.gpa, &world, &metrics, true);
         active_ticket = try activateDistrict(
             &world,
@@ -303,7 +303,7 @@ pub fn main(init: std.process.Init) !void {
         final_outcome_occupancy != 0 or final_event_occupancy != 0 or
         metrics.queue_rejections != 0 or
         metrics.active_persistence_min_bytes == std.math.maxInt(usize) or
-        metrics.dormant_persistence_min_bytes == std.math.maxInt(usize))
+        metrics.unloaded_persistence_min_bytes == std.math.maxInt(usize))
     {
         return error.FinalMeasurementInvariantFailed;
     }
@@ -311,7 +311,7 @@ pub fn main(init: std.process.Init) !void {
     const resolution = std.Io.Clock.resolution(.awake, init.io) catch
         std.Io.Duration.zero;
     const report = Report{
-        .schema_version = 1,
+        .schema_version = 2,
         .benchmark = "s7_interaction_cross_district_ownership",
         .zig_version = builtin.zig_version_string,
         .optimize = @tagName(builtin.mode),
@@ -322,7 +322,7 @@ pub fn main(init: std.process.Init) !void {
         .clock = "awake",
         .clock_resolution_ns = durationNs(resolution),
         .fixed_delta_seconds = fixed_delta_seconds,
-        .workload = "one_world_two_districts_one_character_one_carryable_real_jolt_collect_cross_drop_unload_cancel_reload",
+        .workload = "one_world_two_districts_one_character_one_spatial_carryable_real_jolt_collect_cross_drop_content_unload_cancel_reload",
         .cycles_requested = config.cycles,
         .cycles_completed = config.cycles,
         .cycle_wall = summarize(cycle_samples),
@@ -342,8 +342,8 @@ pub fn main(init: std.process.Init) !void {
         .persistence_snapshots = metrics.persistence_snapshots,
         .active_persistence_min_bytes = metrics.active_persistence_min_bytes,
         .active_persistence_max_bytes = metrics.active_persistence_max_bytes,
-        .dormant_persistence_min_bytes = metrics.dormant_persistence_min_bytes,
-        .dormant_persistence_max_bytes = metrics.dormant_persistence_max_bytes,
+        .unloaded_persistence_min_bytes = metrics.unloaded_persistence_min_bytes,
+        .unloaded_persistence_max_bytes = metrics.unloaded_persistence_max_bytes,
         .persistence_bytes_total = metrics.persistence_bytes_total,
         .final_entities = final.entity_count,
         .final_bodies = final.body_count,
@@ -582,7 +582,7 @@ fn drop(
     try drainAmbient(world, metrics);
     const view = try world.carryable(carryable_id);
     if (!view.body_present or !std.meta.eql(view.ownership, .{
-        .district_owned = owner,
+        .spatially_owned = owner,
     })) return error.DropOwnershipMismatch;
 }
 
@@ -621,15 +621,15 @@ fn recordCanonicalPersistence(
     allocator: std.mem.Allocator,
     world: *simulation.Simulation,
     metrics: *Metrics,
-    dormant: bool,
+    unloaded_content: bool,
 ) !void {
     const first = try world.save(allocator);
     defer allocator.free(first);
     const second = try world.save(allocator);
     defer allocator.free(second);
     if (!std.mem.eql(u8, first, second)) return error.NonCanonicalPersistence;
-    try metrics.recordPersistence(dormant, first.len);
-    try metrics.recordPersistence(dormant, second.len);
+    try metrics.recordPersistence(unloaded_content, first.len);
+    try metrics.recordPersistence(unloaded_content, second.len);
 }
 
 fn cleanup(

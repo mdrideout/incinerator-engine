@@ -6,7 +6,7 @@ const contract = @import("vehicle_contract");
 const driver_contract = @import("driver_contract");
 
 const logical_state_domain = "incinerator.vehicle.logical";
-const logical_state_schema: u16 = 1;
+const logical_state_schema: u16 = 2;
 
 const max_pending_commands = contract.max_pending_commands;
 const max_outcomes = contract.max_outcomes;

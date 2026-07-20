@@ -1116,7 +1116,7 @@ fn drop(
     try harness.drainAmbient();
     const view = try harness.world.carryable(identities.carryable);
     if (!view.body_present or !std.meta.eql(view.ownership, .{
-        .district_owned = owner,
+        .spatially_owned = owner,
     })) return error.DropOwnershipMismatch;
 }
 

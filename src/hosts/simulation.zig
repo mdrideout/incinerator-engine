@@ -206,7 +206,6 @@ const DistrictFeature = district_implementation.Feature(
 const InteractionFeature = interaction_implementation.Feature(
     jolt.CrateBodies,
     CharacterFeature.CarrierAccess,
-    DistrictFeature.DistrictAccess,
 );
 const NpcFeature = npc_implementation.Feature(
     jolt.CharacterControllers,
@@ -349,7 +348,6 @@ const State = struct {
     district_bodies: jolt.DistrictBodies,
     district_loader: district_replay_loader.Loader,
     district_feature: DistrictFeature,
-    district_access: DistrictFeature.DistrictAccess,
     navigation_access: DistrictFeature.NavigationAccess,
     interaction_feature: InteractionFeature,
     vehicle_feature: VehicleFeature,
@@ -582,13 +580,11 @@ pub const Simulation = struct {
             &state.district_loader,
         );
         errdefer state.district_feature.deinit();
-        state.district_access = state.district_feature.districtAccess();
         state.navigation_access = state.district_feature.navigationAccess();
         state.interaction_feature = try InteractionFeature.init(
             &state.runtime,
             &state.bodies,
             &state.carrier_access,
-            &state.district_access,
             config.interaction,
         );
         errdefer state.interaction_feature.deinit();
@@ -1490,8 +1486,41 @@ pub const Simulation = struct {
         const completed_tick = self.state.runtime.tickIndex();
         if (completed_tick == 0) return error.PhysicsDebugBeforeFirstTick;
         _ = self.state.physics.extractDebug(config, completed_tick, storage);
-        if (config.bounds) try self.appendNpcEncounterDebug(storage);
+        if (config.bounds) {
+            try self.appendDistrictOwnershipDebug(storage);
+            try self.appendNpcEncounterDebug(storage);
+        }
         return storage.batch() orelse error.PhysicsDebugBatchMissing;
+    }
+
+    fn appendDistrictOwnershipDebug(
+        self: *Simulation,
+        storage: *engine.physics_debug.Storage,
+    ) !void {
+        const draws = try self.state.district_feature.extract();
+        for (draws) |draw| {
+            const coord = draw.ticket.coord;
+            const center_x = @as(f32, @floatFromInt(coord.x)) * district_contract.chunk_span;
+            const center_z = @as(f32, @floatFromInt(coord.z)) * district_contract.chunk_span;
+            const min_x = center_x - district_contract.chunk_half_span;
+            const max_x = center_x + district_contract.chunk_half_span;
+            const min_z = center_z - district_contract.chunk_half_span;
+            const max_z = center_z + district_contract.chunk_half_span;
+            const y: f32 = 0.08;
+            const object = engine.physics_debug.ObjectRef{
+                .kind = 0x44495354,
+                .serial = draw.persistent_id.local,
+            };
+            const color: engine.physics_debug.Color = if ((coord.x + coord.z) & 1 == 0)
+                .{ 0.1, 0.85, 1.0, 1.0 }
+            else
+                .{ 1.0, 0.8, 0.15, 1.0 };
+            appendDebugLine(storage, .{ min_x, y, min_z }, .{ max_x, y, min_z }, color, object);
+            appendDebugLine(storage, .{ max_x, y, min_z }, .{ max_x, y, max_z }, color, object);
+            appendDebugLine(storage, .{ max_x, y, max_z }, .{ min_x, y, max_z }, color, object);
+            appendDebugLine(storage, .{ min_x, y, max_z }, .{ min_x, y, min_z }, color, object);
+            appendDebugCross(storage, .{ center_x, y + 0.04, center_z }, 0.45, color, object);
+        }
     }
 
     fn appendNpcEncounterDebug(
@@ -1509,6 +1538,16 @@ pub const Simulation = struct {
                 .serial = encounter.npc.id.local,
             };
             const center = debugRaised(npc_view.position, 0.05);
+            if (npc_view.navigation_progress.target) |target| {
+                const raised_target = debugRaised(target, 0.18);
+                const progress_color: engine.physics_debug.Color =
+                    if (npc_view.navigation_progress.state == .potentially_stalled)
+                        .{ 1.0, 0.05, 0.05, 1.0 }
+                    else
+                        .{ 0.2, 1.0, 0.35, 1.0 };
+                appendDebugLine(storage, center, raised_target, progress_color, object);
+                appendDebugCross(storage, raised_target, 0.3, progress_color, object);
+            }
             appendDebugCircle(
                 storage,
                 center,

@@ -204,7 +204,7 @@ The normal product uses readable screen-space text/geometry for:
 
 Authority rejections retain their action-specific protocol disposition through
 the product projection. The always-visible HUD therefore reports concrete text
-such as `destination_unavailable`, rather than collapsing a rejected action to
+such as `too_far`, rather than collapsing a rejected action to
 `none`.
 
 Debug details remain in the inspector. The product HUD consumes immutable

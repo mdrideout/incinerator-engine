@@ -418,8 +418,7 @@ pub const InteractionActionDisposition = enum(u8) {
     carryable_not_found = 3,
     unavailable = 4,
     too_far = 5,
-    destination_unavailable = 6,
-    invalid_state = 7,
+    invalid_state = 6,
 };
 
 pub const InteractionActionResult = struct {
@@ -1119,7 +1118,6 @@ fn validateInteractionActionResult(value: InteractionActionResult) !void {
             .carryable_not_found,
             .unavailable,
             .too_far,
-            .destination_unavailable,
             .invalid_state,
             => true,
             .dropped => false,
@@ -1128,7 +1126,6 @@ fn validateInteractionActionResult(value: InteractionActionResult) !void {
             .dropped,
             .carryable_not_found,
             .unavailable,
-            .destination_unavailable,
             .invalid_state,
             => true,
             .collected, .too_far => false,

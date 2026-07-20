@@ -2079,6 +2079,34 @@ pub fn build(b: *std.Build) void {
     );
     s11_measure_test_step.dependOn(&run_s11_measure_tests.step);
 
+    const vehicle_dynamics_module = b.createModule(.{
+        .root_source_file = b.path("tools/vehicle_dynamics.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts_module },
+            .{ .name = "jolt_physics", .module = jolt_physics_module },
+            .{ .name = "vehicle_contract", .module = vehicle_contract_module },
+        },
+    });
+    const vehicle_dynamics_exe = b.addExecutable(.{
+        .name = "incinerator_vehicle_dynamics",
+        .root_module = vehicle_dynamics_module,
+    });
+    const run_vehicle_dynamics = b.addRunArtifact(vehicle_dynamics_exe);
+    const vehicle_dynamics_step = b.step(
+        "vehicle-dynamics-report",
+        "Measure the legacy and current vehicle handling cohorts on real Jolt",
+    );
+    vehicle_dynamics_step.dependOn(&run_vehicle_dynamics.step);
+    const vehicle_dynamics_tests = b.addTest(.{ .root_module = vehicle_dynamics_module });
+    const run_vehicle_dynamics_tests = b.addRunArtifact(vehicle_dynamics_tests);
+    const vehicle_dynamics_test_step = b.step(
+        "test-vehicle-dynamics",
+        "Run deterministic vehicle dynamics methodology tests",
+    );
+    vehicle_dynamics_test_step.dependOn(&run_vehicle_dynamics_tests.step);
+
     const headless_tests = b.addTest(.{ .root_module = headless_root_module });
     const run_headless_tests = b.addRunArtifact(headless_tests);
     const external_producers_tests = b.addTest(.{ .root_module = external_producers_module });
@@ -3682,6 +3710,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_s8_measure_tests.step);
     test_step.dependOn(&s11_measure_exe.step);
     test_step.dependOn(&run_s11_measure_tests.step);
+    test_step.dependOn(&vehicle_dynamics_exe.step);
+    test_step.dependOn(&run_vehicle_dynamics_tests.step);
     test_step.dependOn(&m3_soak_exe.step);
     test_step.dependOn(&run_m3_soak_tests.step);
 

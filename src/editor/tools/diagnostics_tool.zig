@@ -259,15 +259,12 @@ pub fn draw(ctx: *const DeveloperInput) void {
             }
         }
         zgui.text(
-            "Interaction active={d}, district={d}, held={d}, bodies={d}, dormant={d}, suspended={d}, resumed={d}",
+            "Interaction active={d}, spatial={d}, held={d}, bodies={d}",
             .{
                 simulation.interaction.active_count,
-                simulation.interaction.district_owned_count,
+                simulation.interaction.spatially_owned_count,
                 simulation.interaction.held_count,
                 simulation.interaction.dynamic_body_count,
-                simulation.interaction.dormant_count,
-                simulation.interaction.bodies_suspended,
-                simulation.interaction.bodies_resumed,
             },
         );
         const npc = simulation.npc;

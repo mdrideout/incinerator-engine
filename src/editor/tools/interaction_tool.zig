@@ -36,7 +36,7 @@ fn proposedCommand(
         .driving => return null,
     }
     return switch (carryable.ownership) {
-        .district_owned => .{ .collect = .{
+        .spatially_owned => .{ .collect = .{
             .transaction_id = transaction_id,
             .carrier_id = carrier.id,
             .carryable_id = carryable.id,
@@ -121,8 +121,8 @@ pub fn draw(ctx: *const InteractionInput) void {
         if (view.carryable) |carryable| {
             drawIdentity("Carryable", carryable.id);
             switch (carryable.ownership) {
-                .district_owned => |coord| zgui.text(
-                    "District owned: ({d}, {d})",
+                .spatially_owned => |coord| zgui.text(
+                    "Spatial cell: ({d}, {d})",
                     .{ coord.x, coord.z },
                 ),
                 .inventory_held => |holder| {

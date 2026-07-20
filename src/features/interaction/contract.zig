@@ -19,10 +19,8 @@ pub const declared_budget = Budget{};
 
 pub const Config = struct {
     collect_range: f32 = 2.5,
-    /// Preferred local-space offset from the carrier pose. Boundary placement
-    /// tries deterministic quarter-turn alternatives before using the last
-    /// active district-owned pose, so a held object remains releasable without
-    /// making residency ownership implicit.
+    /// One deterministic local-space offset from the authoritative carrier
+    /// pose. Spatial ownership is independent of streamed district residency.
     drop_offset: [3]f32 = .{ 0, 0.75, -1.5 },
 
     pub fn validate(self: Config) !void {
@@ -63,11 +61,11 @@ pub const InteractionConfigV1 = struct {
     }
 };
 
-/// Durable ownership is intentionally closed over the two states proven by
-/// S7. A held object remains an InteractionFeature entity; it is never moved
-/// into a second inventory registry or replaced with another identity.
+/// Durable ownership is closed over a live spatial world object and an
+/// inventory-held object. The coordinate indexes the world object; authored
+/// district residency never controls whether it exists or may be dropped.
 pub const Ownership = union(enum) {
-    district_owned: district_contract.ChunkCoord,
+    spatially_owned: district_contract.ChunkCoord,
     inventory_held: engine.PersistentId,
 };
 
@@ -118,8 +116,6 @@ pub const RejectionReason = enum {
     carrier_not_empty,
     carrier_not_holding,
     wrong_holder,
-    owner_district_inactive,
-    destination_district_inactive,
     too_far,
 };
 
@@ -155,14 +151,9 @@ pub const Dropped = struct {
 };
 
 /// Explains the deterministic placement choice without changing the action's
-/// terminal success semantics. The normal configured pose wins; an adjacent
-/// orientation keeps a boundary drop beside the carrier; forced participant
-/// cleanup may use the last active world pose after the carrier has already
-/// escaped loaded residency.
+/// terminal success semantics.
 pub const DropPlacement = enum {
     configured_offset,
-    alternate_offset,
-    previous_active_pose,
 };
 
 pub const Outcome = union(enum) {
@@ -181,10 +172,9 @@ pub const CarryableView = struct {
     body_present: bool,
 };
 
-/// Renderer-neutral extraction. District-dormant objects are omitted. For a
-/// held object, `pose` follows the carrier at a fixed cohort-local attachment
-/// offset while `CarryableView.state` continues to expose the durable last
-/// world-body state used by save/replay.
+/// Renderer-neutral extraction. For a held object, `pose` follows the carrier
+/// at a fixed cohort-local attachment offset while `CarryableView.state`
+/// continues to expose the durable last world-body state used by save/replay.
 pub const CarryableDraw = struct {
     persistent_id: engine.PersistentId,
     pose: engine.physics.Pose,
@@ -194,12 +184,9 @@ pub const CarryableDraw = struct {
 
 pub const Diagnostics = struct {
     active_count: u32,
-    district_owned_count: u32,
+    spatially_owned_count: u32,
     held_count: u32,
     dynamic_body_count: u32,
-    dormant_count: u32,
-    bodies_suspended: u64,
-    bodies_resumed: u64,
     commands: engine.diagnostics.QueueStats,
     outcomes: engine.diagnostics.QueueStats,
 };
@@ -220,7 +207,7 @@ pub fn validateRecords(records: []const InteractionV1) !void {
     for (records) |record| {
         try record.id.validate();
         switch (record.ownership) {
-            .district_owned => {},
+            .spatially_owned => {},
             .inventory_held => |holder| try holder.validate(),
         }
         try (engine.physics.DynamicBoxDesc{

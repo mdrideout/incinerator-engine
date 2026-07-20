@@ -696,3 +696,13 @@ and the direct rendered acceptance above confirmed the actual swapchain color
 and separation rather than relying only on the offscreen oracle. Its nested
 source-package execution passed `182/182` steps and `406/406` tests, followed
 by the independent cold product's `32/32` steps and `62/62` tests.
+
+## 2026-07-19 open-world amendment
+
+The disposition-6 trace above remains historical evidence of the defect. The
+residency-gated drop policy and `destination_unavailable` protocol value no
+longer exist. ADR-022 makes a carryable's district coordinate spatial metadata,
+not a body/presentation lease; drop at an unauthored coordinate is now a tested
+valid action. The intentional greenfield wire change advances to protocol revision 14
+with no compatibility decoder. Snapshot and replay cohorts advance
+to 12 for the corresponding ownership and vehicle-tuning semantics.

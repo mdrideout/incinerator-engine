@@ -136,7 +136,7 @@ The same acceptance pass established two additional diagnostic contracts:
 - every rejection reason records its namespace as well as its numeric value.
   Gameplay trace JSON schema 2 distinguishes runtime errors, protocol
   dispositions, and validation codes, while the product HUD preserves the
-  concrete action disposition (for example `destination_unavailable`).
+  concrete action disposition (for example `too_far`).
 
 Normal graphical composition also records semantic presentation membership,
 health, life, and disappearance transitions. It deliberately does not record

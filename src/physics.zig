@@ -1254,6 +1254,41 @@ pub const Physics = struct {
                 settings_wv,
                 if (index < 2) 0 else normalized.max_hand_brake_torque,
             );
+            const longitudinal = c.JPH_LinearCurve_Create() orelse
+                return error.VehicleTireCurveCreationFailed;
+            defer c.JPH_LinearCurve_Destroy(longitudinal);
+            c.JPH_LinearCurve_Reserve(longitudinal, 3);
+            c.JPH_LinearCurve_AddPoint(longitudinal, 0, 0);
+            c.JPH_LinearCurve_AddPoint(
+                longitudinal,
+                normalized.tire_friction.longitudinal_peak_slip,
+                normalized.tire_friction.longitudinal_peak_friction,
+            );
+            c.JPH_LinearCurve_AddPoint(
+                longitudinal,
+                normalized.tire_friction.longitudinal_slide_slip,
+                normalized.tire_friction.longitudinal_slide_friction,
+            );
+            c.JPH_LinearCurve_Sort(longitudinal);
+            c.JPH_WheelSettingsWV_SetLongitudinalFriction(settings_wv, longitudinal);
+
+            const lateral = c.JPH_LinearCurve_Create() orelse
+                return error.VehicleTireCurveCreationFailed;
+            defer c.JPH_LinearCurve_Destroy(lateral);
+            c.JPH_LinearCurve_Reserve(lateral, 3);
+            c.JPH_LinearCurve_AddPoint(lateral, 0, 0);
+            c.JPH_LinearCurve_AddPoint(
+                lateral,
+                normalized.tire_friction.lateral_peak_angle_radians,
+                normalized.tire_friction.lateral_peak_friction,
+            );
+            c.JPH_LinearCurve_AddPoint(
+                lateral,
+                normalized.tire_friction.lateral_slide_angle_radians,
+                normalized.tire_friction.lateral_slide_friction,
+            );
+            c.JPH_LinearCurve_Sort(lateral);
+            c.JPH_WheelSettingsWV_SetLateralFriction(settings_wv, lateral);
         }
 
         const controller_settings =

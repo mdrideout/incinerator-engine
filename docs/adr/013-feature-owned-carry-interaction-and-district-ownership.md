@@ -1,140 +1,56 @@
-# ADR-013: Feature-Owned Carry Interaction and District Ownership
+# ADR-013: Feature-Owned Carry Interaction
 
-**Status:** Accepted, implemented, and validated in S7
+**Status:** Accepted feature ownership; spatial-residency portion superseded by [ADR-022](022-open-world-spatial-objects-and-handling-characterization.md)
 **Date:** 2026-07-13
-**Amended:** 2026-07-18 after the human-test drop-placement review
+**Amended:** 2026-07-19
 
 ## Context
 
-S6 proves two exact streamed districts, but every current persistent gameplay
-object is owned by one feature for its whole lifetime. A future authoritative
-game needs a concrete answer to a smaller question before networking: what
-happens when one persistent object leaves district ownership, is held by a
-character while its source district unloads, and is committed under the
-destination district after crossing the half-open boundary?
+S7 needed one explicit owner for a persistent carryable crossing character,
+physics, persistence, replay, and streamed-world boundaries. Folding the
+behavior into the crate, character, or district feature would mix unrelated
+lifetimes. A general inventory or ownership framework was not justified.
 
-Retrofitting this behavior into `CrateFeature` would mix the existing physics
-and authoring conformance slice with inventory and district authority. A
-generic entity registry, inventory framework, ownership graph, or migration
-service would be speculation: S7 has one character and one carryable object.
+The original S7 implementation also made a spatial carryable's physics body
+conditional on exact district residency. Human testing later proved that was
+the wrong open-world boundary: it rejected ordinary drops outside the two
+authored districts. ADR-022 removes that policy without changing feature
+ownership.
 
-## Decision
+## Decision retained
 
-### A dedicated InteractionFeature owns the complete object lifetime
+One bounded `InteractionFeature` owns the carryable's complete lifetime,
+persistent identity, logical state, physics body, typed commands/outcomes,
+diagnostics, presentation, replay digest, and persistence record.
 
-S7 adds one bounded `InteractionFeature`. It owns the carryable's persistent
-entity, logical state, optional dynamic body, commands, outcomes, diagnostics,
-presentation record, replay digest, and persistence record. Neither the
-character nor district feature owns or migrates that entity.
+The ownership value is:
 
-The authoritative ownership value is exactly one of:
+- `spatially_owned: ChunkCoord`; or
+- `inventory_held: PersistentId`.
 
-- `district_owned: ChunkCoord`; or
-- `inventory_held: PersistentId`, naming the character.
+`CharacterFeature` exposes the narrow transactional `CarrierAccess` port.
+Begin/end/cancel operations keep character mode consistent while
+`InteractionFeature` remains the persistence owner of the relationship.
 
-The persistent entity exists in both states. A district-owned object owns a
-dynamic body only while its exact owner district is active. A held object owns
-no body. An object whose owner district is unloaded remains a dormant logical
-entity with its last validated body state and no presentation. District unload
-therefore cannot delete or duplicate the persistent object, and holding an
-object never pins district residency.
+Collect validates identities, on-foot/empty carrier state, range, and body
+presence; it attaches the relationship, removes the body, and commits held
+ownership transactionally. Drop derives one deterministic pose from the
+authoritative carrier, creates the body, detaches the relationship, and commits
+spatial ownership transactionally. Failure leaves the prior relationship and
+world state intact.
 
-### Narrow ports, not feature imports
-
-`CharacterFeature` exposes a `CarrierAccess` capability analogous to its
-existing `DriverAccess`. The port exposes only a validated carrier pose/mode,
-the optional held item identity, and transactional begin/end/cancel operations.
-The character stores a runtime `CarryState` so driving or despawning cannot
-silently violate the relationship. `CharacterV1` does not persist the
-relationship; `InteractionV1` is its sole persistence owner.
-
-`DistrictFeature` exposes a read-only `DistrictAccess` capability for exact
-coordinate residency/ticket state. `InteractionFeature` imports neither
-feature implementation and receives only the two ports plus the existing
-dynamic-box body capability.
-
-Systems are composed in this order:
-
-```text
-crate -> character -> district -> interaction -> vehicle -> physics
-```
-
-This lets interaction reconcile body residency after district commands while
-retaining the established character-before-vehicle authority ordering.
-
-### Typed transactional commands
-
-The bounded semantic command set is `spawn`, `despawn`, `collect`, and `drop`.
-Input, editor, replay, tests, and a future transport produce the same commands;
-none may mutate the carrier, entity, or body directly.
-
-Collect validates both identities, on-foot/empty carrier state, exact owner
-district residency, and configured proximity before changing anything. It
-attaches through `CarrierAccess`, destroys the body, then commits held
-ownership; body-removal failure cancels the carrier attachment.
-
-Drop derives a deterministic pose from the authoritative carrier pose, maps
-that position through the shared half-open coordinate rule, requires the exact
-destination district to be active, creates the body, detaches through
-`CarrierAccess`, then commits district ownership. Any failure destroys the
-staged body and leaves the held relation unchanged. There is no best-effort
-partial transfer.
-
-Drop purpose is an explicit command contract. `player_requested` drop accepts
-only a placement in a currently active destination district; if no candidate
-is valid, the item remains visibly held and the request is rejected. It never
-teleports to an earlier pose. `forced_cleanup` is reserved for authority-owned
-participant teardown and may restore the last valid world pose so cleanup
-cannot strand a held relationship. Input, editor, replay, and network ingress
-must declare the purpose rather than inferring it from call site or failure.
-
-At the 16-unit district seam, bounds are half-open: west owns `[-8, 8)` and
-east owns `[8, 24)`. Therefore a drop at `x == 8` belongs to east `(1,0)`.
-The shared helper rejects non-finite or unrepresentable positions.
-
-### Honest schema and replay cohort changes
-
-S7 introduces `InteractionV1`, `SnapshotV6`, replay schema cohort 4, and engine
-schedule cohort 4. The interaction record stores backend-neutral dimensions,
-last world body state, and the ownership union; it never stores a Jolt handle,
-runtime entity value, or character component.
-
-Cold restore validates all records and cross-feature identities before
-construction. Restore order is crate, character, district, interaction,
-vehicle so carrier and residency ports exist before the relationship/body is
-reconstructed. Replay records semantic interaction commands and compares a
-separate interaction logical-digest category.
-
-The 2026-07-18 explicit drop-purpose amendment advances accepted-ingress replay
-to schema cohort 11. It is an intentional greenfield break: prior capture
-commands cannot honestly answer whether a failed placement was user intent or
-authority cleanup.
+The spatial coordinate uses the canonical finite half-open 16 m mapping. It is
+indexing metadata, not a district-residency lease. A spatial object remains
+physical and present when cooked district content unloads. There is no inactive
+district rejection, dormant carryable state, alternate placement, or previous-
+pose cleanup fallback.
 
 ## Consequences
 
-### Positive
-
-- One representative cross-feature ownership transfer is explicit, bounded,
-  transactional, persistent, and testable without networking.
-- Character, district, and interaction remain separate vertical slices joined
-  through narrow ports.
-- Source-district unload, destination load, save/restart, and replay all use
-  one authoritative relationship.
-- The same typed command can be produced by gameplay input and the optional
-  editor without a privileged mutation path.
-
-### Negative
-
-- Snapshot, replay, diagnostics, and host composition cohorts change again.
-- Character runtime state now contains one cross-feature guard even though the
-  relationship is persisted by InteractionFeature.
-- The object is a deliberately simple dynamic box; more general item shapes or
-  inventory slots require later evidence.
-
-## Explicit Nonclaims
-
-S7 does not introduce a general inventory, item database, equipment system,
-entity migration framework, ownership registry, arbitrary parent hierarchy,
-stacking, throwing, replication, prediction, MMO authority, multiple holders,
-or secondary-platform support. It proves one persistent carryable and one
-character across exactly the two S6 districts.
+- Carry behavior remains a cohesive vertical slice joined to character through
+  one narrow port.
+- Streaming content cannot delete, suspend, or strand an object owned by the
+  interaction slice.
+- Persistence/replay encode backend-neutral state and never Jolt handles.
+- This remains one simple carryable/holder cohort, not a general inventory,
+  equipment, stacking, throwing, migration, or MMO ownership system.

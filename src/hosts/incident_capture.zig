@@ -1454,9 +1454,17 @@ pub const Capture = struct {
             .{ incident.schema_version, sequence, now, view.authority_tick, view.presentation_frame, entity.entity.namespace, entity.entity.local, entity.entity.incarnation, persistent_json, @tagName(entity.kind), @tagName(entity.authority_presence), @tagName(entity.replication_presence), @tagName(entity.presentation_presence), @tagName(entity.draw_presence), @tagName(entity.removal_reason), entity.removed_tick, entity.removed_frame },
         ) catch return self.noteDropped();
         writer.print(
-            "\"authority_position\":[{d},{d},{d}],\"presentation_position\":[{d},{d},{d}],\"velocity\":[{d},{d},{d}],\"facing_yaw\":{d},\"radius\":{d},\"half_height\":{d},\"health\":{d},\"maximum_health\":{d},\"life_state\":\"{s}\",\"encounter_state\":{d},\"attack_windup\":{},\"deadline_tick\":{d},\"nearest_actor_separation\":{?d},",
-            .{ entity.authority_position[0], entity.authority_position[1], entity.authority_position[2], entity.presentation_position[0], entity.presentation_position[1], entity.presentation_position[2], entity.velocity[0], entity.velocity[1], entity.velocity[2], entity.facing_yaw, entity.radius, entity.half_height, entity.health, entity.maximum_health, @tagName(entity.life_state), entity.encounter_state, entity.attack_windup, entity.deadline_tick, entity.nearest_actor_separation },
+            "\"authority_position\":[{d},{d},{d}],\"presentation_position\":[{d},{d},{d}],\"velocity\":[{d},{d},{d}],\"facing_yaw\":{d},\"radius\":{d},\"half_height\":{d},\"health\":{d},\"maximum_health\":{d},\"life_state\":\"{s}\",\"encounter_state\":{d},\"attack_windup\":{},\"deadline_tick\":{d},\"nearest_actor_separation\":{?d},\"navigation_progress\":\"{s}\",\"navigation_no_progress_ticks\":{d},\"navigation_last_progress_tick\":{d},",
+            .{ entity.authority_position[0], entity.authority_position[1], entity.authority_position[2], entity.presentation_position[0], entity.presentation_position[1], entity.presentation_position[2], entity.velocity[0], entity.velocity[1], entity.velocity[2], entity.facing_yaw, entity.radius, entity.half_height, entity.health, entity.maximum_health, @tagName(entity.life_state), entity.encounter_state, entity.attack_windup, entity.deadline_tick, entity.nearest_actor_separation, @tagName(entity.navigation_progress), entity.navigation_no_progress_ticks, entity.navigation_last_progress_tick },
         ) catch return self.noteDropped();
+        if (entity.navigation_target) |target| {
+            writer.print(
+                "\"navigation_target\":[{d},{d},{d}],",
+                .{ target[0], target[1], target[2] },
+            ) catch return self.noteDropped();
+        } else {
+            writer.writeAll("\"navigation_target\":null,") catch return self.noteDropped();
+        }
         const relevance_included = if (entity.relevance_included) |included|
             if (included) "true" else "false"
         else

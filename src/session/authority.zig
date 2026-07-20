@@ -4629,7 +4629,7 @@ const AuthorityCore = struct {
                 return error.UnknownInteractionPresentation;
             const view = try self.simulation.carryable(draw.persistent_id);
             const holder_index = switch (draw.ownership) {
-                .district_owned => null,
+                .spatially_owned => null,
                 .inventory_held => |carrier| self.findParticipantByCharacter(carrier) orelse
                     return error.UnknownInteractionCarrier,
             };
@@ -6964,7 +6964,6 @@ fn interactionRejectionDisposition(
         .carryable_not_found, .not_owned => .carryable_not_found,
         .carryable_already_held, .carryable_held, .carrier_not_empty => .unavailable,
         .too_far => .too_far,
-        .destination_district_inactive, .owner_district_inactive => .destination_unavailable,
         .capacity_reached,
         .carrier_not_found,
         .carrier_not_on_foot,

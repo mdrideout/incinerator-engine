@@ -888,7 +888,7 @@ fn setupIntegratedSlices(
     }
     const dropped = try authority.world.carryable(carryable);
     if (!dropped.body_present or !std.meta.eql(dropped.ownership, .{
-        .district_owned = west,
+        .spatially_owned = west,
     })) return error.M3DropOwnershipMismatch;
     try drainAmbientEvents(&authority.world, metrics);
     try requireNoTypedOutcomes(authority);
@@ -1531,7 +1531,7 @@ fn requireIntegratedState(
     _ = try world.vehicle(state.vehicle);
     const carryable = try world.carryable(state.carryable);
     if (!carryable.body_present or !std.meta.eql(carryable.ownership, .{
-        .district_owned = west,
+        .spatially_owned = west,
     })) return error.M3IntegratedCarryableOwnershipMismatch;
     for (state.npcs) |id| _ = try world.npc(id);
     if (diagnostics.characters.events.rejected != 0 or

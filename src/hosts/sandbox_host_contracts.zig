@@ -40,12 +40,14 @@ pub const district_blocking_proxy_count: u8 = sandbox_district_recipe.blocking_p
 pub const navigation_east_coord = sandbox_district_recipe.navigation_east_coord;
 pub const navigation_west_coord = sandbox_district_recipe.navigation_west_coord;
 pub const npc_capacity = npcs.max_npcs;
-pub const snapshot_schema: u16 = 11;
+pub const snapshot_schema: u16 = 12;
 pub const DistrictPresentationPlan = sandbox_district_recipe.PresentationPlan;
 
 /// Default playable product spawn and the local movement envelope guaranteed
 /// clear before the asynchronous west district is admitted to authority.
-pub const default_character_spawn_position = [3]f32{ -2, 0, 4 };
+pub const default_character_spawn_position = [3]f32{ -5, 0, 5 };
+pub const default_vehicle_spawn_position = [3]f32{ -1, 2, -3 };
+pub const default_carryable_spawn_position = [3]f32{ -1, 0.5, 6 };
 pub const default_character_spawn_clearance: f32 = 0.5;
 pub const default_character_initial_traversal: f32 = 1.0;
 
@@ -193,7 +195,7 @@ test "graphical sandbox contracts publish values without mutable authority" {
 
     const config = Config{ .namespace = 42 };
     try std.testing.expectEqual(@as(u64, 42), config.namespace);
-    try std.testing.expectEqual(snapshot_schema, @as(u16, 11));
+    try std.testing.expectEqual(snapshot_schema, @as(u16, 12));
 }
 
 test "default playable spawn and initial traversal clear canonical blockers" {

@@ -30,7 +30,7 @@ pub const DigestCategory = replay.Category;
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'R', 'P', 'L', 'A', 'Y' };
 pub const format_version: u16 = 1;
-pub const schema_cohort: u16 = 11;
+pub const schema_cohort: u16 = 12;
 pub const header_size: usize = 64;
 pub const integrity_size: usize = @sizeOf(Digest);
 pub const max_envelope_bytes: usize = 8 * 1024 * 1024;
@@ -1325,6 +1325,14 @@ fn encodeVehicleConfig(sink: anytype, value: vehicles.VehicleConfigV1) !void {
     try sink.writeF32(tuning.max_steer_radians);
     try sink.writeF32(tuning.max_brake_torque);
     try sink.writeF32(tuning.max_hand_brake_torque);
+    try sink.writeF32(tuning.tire_friction.longitudinal_peak_slip);
+    try sink.writeF32(tuning.tire_friction.longitudinal_peak_friction);
+    try sink.writeF32(tuning.tire_friction.longitudinal_slide_slip);
+    try sink.writeF32(tuning.tire_friction.longitudinal_slide_friction);
+    try sink.writeF32(tuning.tire_friction.lateral_peak_angle_radians);
+    try sink.writeF32(tuning.tire_friction.lateral_peak_friction);
+    try sink.writeF32(tuning.tire_friction.lateral_slide_angle_radians);
+    try sink.writeF32(tuning.tire_friction.lateral_slide_friction);
     try sink.writeF32(tuning.front_differential_ratio);
     try sink.writeF32(tuning.front_limited_slip_ratio);
     try sink.writeF32(tuning.max_pitch_roll_radians);
@@ -2398,6 +2406,16 @@ fn decodeVehicleConfig(reader: *Reader) !vehicles.VehicleConfigV1 {
             .max_steer_radians = try reader.readF32(),
             .max_brake_torque = try reader.readF32(),
             .max_hand_brake_torque = try reader.readF32(),
+            .tire_friction = .{
+                .longitudinal_peak_slip = try reader.readF32(),
+                .longitudinal_peak_friction = try reader.readF32(),
+                .longitudinal_slide_slip = try reader.readF32(),
+                .longitudinal_slide_friction = try reader.readF32(),
+                .lateral_peak_angle_radians = try reader.readF32(),
+                .lateral_peak_friction = try reader.readF32(),
+                .lateral_slide_angle_radians = try reader.readF32(),
+                .lateral_slide_friction = try reader.readF32(),
+            },
             .front_differential_ratio = try reader.readF32(),
             .front_limited_slip_ratio = try reader.readF32(),
             .max_pitch_roll_radians = try reader.readF32(),
@@ -3209,7 +3227,7 @@ fn refreshIntegrity(bytes: []u8) void {
 
 test "current simulation cohort pins the exact Jolt worker and capacity configuration" {
     try current_simulation_cohort.validate();
-    try std.testing.expectEqual(@as(u16, 11), current_simulation_cohort.replay_schema);
+    try std.testing.expectEqual(@as(u16, 12), current_simulation_cohort.replay_schema);
     try std.testing.expectEqual(@as(u16, 5), current_simulation_cohort.engine_schedule_cohort);
     try std.testing.expectEqual(
         sandbox_host_contracts.snapshot_schema,
@@ -3534,12 +3552,12 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     try std.testing.expect(!@hasField(WorldConfig, "assets"));
     var world_v5_sizer = SizeSink{};
     try encodeWorldConfig(&world_v5_sizer, world);
-    try std.testing.expectEqual(@as(usize, 403), world_v5_sizer.size);
+    try std.testing.expectEqual(@as(usize, 435), world_v5_sizer.size);
     try std.testing.expectEqual(@as(usize, 264), encodedTickDigestsSize());
     var world_v5_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
         &world_v5_expected,
-        "1333462c77d94fa48e767c1523ff41bd0e463215beebf446bc3a1870babaa316",
+        "c21de90591ec2858b06dfc5899680aa0e63a251cdbcae95689960b2b34fc5bfc",
     );
     try std.testing.expectEqual(world_v5_expected, try world.fingerprint());
 

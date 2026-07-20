@@ -129,12 +129,9 @@ fn testInputs() Inputs {
         },
         .interaction = .{
             .active_count = 1,
-            .district_owned_count = 1,
+            .spatially_owned_count = 1,
             .held_count = 0,
             .dynamic_body_count = 1,
-            .dormant_count = 0,
-            .bodies_suspended = 0,
-            .bodies_resumed = 0,
             .commands = .{},
             .outcomes = .{},
         },

@@ -89,11 +89,11 @@ pub const Owner = struct {
 fn initialSpawnCommand() npc.Command {
     const first = npc.NodeRef{
         .coord = district_recipe.navigation_west_coord,
-        .index = 1,
+        .index = 2,
     };
     const second = npc.NodeRef{
         .coord = district_recipe.navigation_west_coord,
-        .index = 2,
+        .index = 0,
     };
     return .{ .spawn = .{
         .request_id = initial_request_id,

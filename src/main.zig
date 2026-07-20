@@ -123,8 +123,8 @@ fn interactiveVehicleRejectionExpected(
 // ============================================================================
 
 const WINDOW_TITLE = "Incinerator Engine";
-const INITIAL_WINDOW_WIDTH = 1280;
-const INITIAL_WINDOW_HEIGHT = 720;
+const INITIAL_WINDOW_WIDTH = 1600;
+const INITIAL_WINDOW_HEIGHT = 900;
 
 const diagnostic_interactive_vehicle_rejected: engine.diagnostic_contracts.Code = 0x000b_0003;
 
@@ -370,8 +370,8 @@ const S7SmokeStage = enum {
     collected,
     crossed_east,
     dropped,
-    east_unloaded,
-    east_reloaded,
+    east_content_unloaded,
+    east_content_reloaded,
     carryable_despawned,
     character_despawned,
     final_drain,
@@ -389,8 +389,8 @@ const S7InteractionSmokeSummary = struct {
     crossed_east: bool = false,
     dropped_east: bool = false,
     source_unloaded_while_held: bool = false,
-    dormant_after_unload: bool = false,
-    resumed_after_reload: bool = false,
+    physical_after_content_unload: bool = false,
+    stable_after_content_reload: bool = false,
     final_entities: u32 = 0,
     final_bodies: u32 = 0,
 };
@@ -2012,7 +2012,7 @@ const App = struct {
             try simulation.vehicles().submit(.{ .spawn = .{
                 .request_id = 1,
                 .chassis = .{ .pose = .{ .position = switch (profile) {
-                    .sandbox => .{ 0, 2, 2 },
+                    .sandbox => sandbox_contracts.default_vehicle_spawn_position,
                     .s2_smoke => .{ 0, 2, 0 },
                     .s0_smoke, .s1_smoke, .s3_smoke => unreachable,
                 } } },
@@ -4344,6 +4344,23 @@ const App = struct {
             self.simulation.inspection().entityCount() != entities or
             self.simulation.inspection().bodyCount() != bodies)
         {
+            std.debug.print(
+                "S7_COMPOSITION_MISMATCH expected={d}/{d}/{d}/{d}/{d}/{d} actual={d}/{d}/{d}/{d}/{d}/{d}\n",
+                .{
+                    districts,
+                    district_bodies,
+                    characters,
+                    carryables,
+                    entities,
+                    bodies,
+                    self.simulation.districts().count(),
+                    self.simulation.districts().bodyCount(),
+                    self.simulation.characters().count(),
+                    self.simulation.interactions().count(),
+                    self.simulation.inspection().entityCount(),
+                    self.simulation.inspection().bodyCount(),
+                },
+            );
             return error.S7InteractionSmokeCompositionMismatch;
         }
     }
@@ -4403,7 +4420,7 @@ const App = struct {
                 summary.carryable_draw_frames += 1;
                 const view = try self.simulation.interactions().view(persistent_id);
                 switch (view.ownership) {
-                    .district_owned => {},
+                    .spatially_owned => {},
                     .inventory_held => summary.held_draw_frames += 1,
                 }
             } else if (presentation.carryable_id != null) {
@@ -4411,9 +4428,9 @@ const App = struct {
             }
 
             switch (stage) {
-                .west_resident => if (try self.districtSlotResident(
-                    district_west_slot_index,
-                ) and self.districtSlotIdle(district_east_slot_index) and
+                .west_resident => if (self.simulation.districts().activeTicket(
+                    district_west_coord,
+                ) != null and self.simulation.districts().activeTicket(district_east_coord) == null and
                     self.initial_character_id != null)
                 {
                     stage = .carryable_spawned;
@@ -4421,7 +4438,7 @@ const App = struct {
                 .carryable_spawned => if (self.initial_carryable_id) |id| {
                     const view = try self.simulation.interactions().view(id);
                     switch (view.ownership) {
-                        .district_owned => |owner| {
+                        .spatially_owned => |owner| {
                             if (!std.meta.eql(owner, district_west_coord) or
                                 !view.body_present or
                                 presentation.carryable_count != 1 or
@@ -4433,10 +4450,9 @@ const App = struct {
                             try self.requireS7Counts(1, 3, 1, 1, 3, 5);
                             const diagnostics = self.simulation.developer().diagnostics().interaction;
                             if (diagnostics.active_count != 1 or
-                                diagnostics.district_owned_count != 1 or
+                                diagnostics.spatially_owned_count != 1 or
                                 diagnostics.held_count != 0 or
-                                diagnostics.dynamic_body_count != 1 or
-                                diagnostics.dormant_count != 0)
+                                diagnostics.dynamic_body_count != 1)
                             {
                                 return error.S7InteractionSmokeSpawnDiagnosticsMismatch;
                             }
@@ -4451,7 +4467,7 @@ const App = struct {
                         return error.S7InteractionSmokeCarryableMissing;
                     const view = try self.simulation.interactions().view(id);
                     switch (view.ownership) {
-                        .district_owned => {},
+                        .spatially_owned => {},
                         .inventory_held => |holder| {
                             if (!std.meta.eql(holder, self.initial_character_id orelse
                                 return error.S7InteractionSmokeCarrierMissing) or
@@ -4464,8 +4480,7 @@ const App = struct {
                             try self.requireS7Counts(1, 3, 1, 1, 3, 4);
                             const diagnostics = self.simulation.developer().diagnostics().interaction;
                             if (diagnostics.held_count != 1 or
-                                diagnostics.dynamic_body_count != 0 or
-                                diagnostics.dormant_count != 0)
+                                diagnostics.dynamic_body_count != 0)
                             {
                                 return error.S7InteractionSmokeCollectDiagnosticsMismatch;
                             }
@@ -4481,10 +4496,10 @@ const App = struct {
                         return error.S7InteractionSmokeCarryableMissing;
                     const view = try self.simulation.interactions().view(id);
                     switch (view.ownership) {
-                        .district_owned => return error.S7InteractionSmokeOwnershipRegressed,
+                        .spatially_owned => return error.S7InteractionSmokeOwnershipRegressed,
                         .inventory_held => {},
                     }
-                    if (self.districtSlotIdle(district_west_slot_index)) {
+                    if (self.simulation.districts().activeTicket(district_west_coord) == null) {
                         summary.source_unloaded_while_held = true;
                     }
                     const character = try self.simulation.characters().view(
@@ -4495,8 +4510,8 @@ const App = struct {
                         self.validation.s7_scripted_move = .{ 0, 0 };
                     }
                     if (character.position[0] >= s7_east_relevance_drop_x and
-                        self.districtSlotIdle(district_west_slot_index) and
-                        try self.districtSlotResident(district_east_slot_index))
+                        self.simulation.districts().activeTicket(district_west_coord) == null and
+                        self.simulation.districts().activeTicket(district_east_coord) != null)
                     {
                         try self.requireS7Counts(1, 3, 1, 1, 3, 4);
                         summary.crossed_east = true;
@@ -4510,7 +4525,7 @@ const App = struct {
                     const view = try self.simulation.interactions().view(id);
                     switch (view.ownership) {
                         .inventory_held => {},
-                        .district_owned => |owner| {
+                        .spatially_owned => |owner| {
                             if (!std.meta.eql(owner, district_east_coord) or
                                 !view.body_present or presentation.carryable_count != 1 or
                                 (self.interaction_last_player_result orelse
@@ -4521,39 +4536,38 @@ const App = struct {
                             try self.requireS7Counts(1, 3, 1, 1, 3, 5);
                             summary.dropped_east = true;
                             self.district_focus_override = s6_fully_outside;
-                            stage = .east_unloaded;
+                            stage = .east_content_unloaded;
                         },
                     }
                 },
-                .east_unloaded => if (self.districtSlotIdle(district_west_slot_index) and
-                    self.districtSlotIdle(district_east_slot_index))
+                .east_content_unloaded => if (self.simulation.districts().count() == 0 and
+                    self.district_streaming.workerIdle())
                 {
                     const id = self.initial_carryable_id orelse
                         return error.S7InteractionSmokeCarryableMissing;
                     const view = try self.simulation.interactions().view(id);
-                    if (view.body_present) {
-                        return error.S7InteractionSmokeDormantDrawInvariant;
+                    if (!view.body_present) {
+                        return error.S7InteractionSmokeSpatialBodyMissing;
                     }
-                    try self.requireS7Counts(0, 0, 1, 1, 2, 1);
+                    try self.requireS7Counts(0, 0, 1, 1, 2, 2);
                     const diagnostics = self.simulation.developer().diagnostics().interaction;
-                    if (diagnostics.dormant_count != 1 or
-                        diagnostics.dynamic_body_count != 0 or
-                        diagnostics.bodies_suspended == 0)
+                    if (diagnostics.spatially_owned_count != 1 or
+                        diagnostics.dynamic_body_count != 1)
                     {
-                        return error.S7InteractionSmokeDormantDiagnosticsMismatch;
+                        return error.S7InteractionSmokeSpatialDiagnosticsMismatch;
                     }
                     if (!try s7ReplicaConverged(
                         self.simulation.inspection().tickIndex(),
                         &replica_wait_started_tick,
-                        presentation.carryable_count == 0,
+                        presentation.carryable_count == 1,
                     )) continue;
-                    summary.dormant_after_unload = true;
+                    summary.physical_after_content_unload = true;
                     self.district_focus_override = s6_east_only;
-                    stage = .east_reloaded;
+                    stage = .east_content_reloaded;
                 },
-                .east_reloaded => if (self.districtSlotIdle(district_west_slot_index) and
-                    try self.districtSlotResident(district_east_slot_index))
-                {
+                .east_content_reloaded => if (self.simulation.districts().activeTicket(
+                    district_west_coord,
+                ) == null and self.simulation.districts().activeTicket(district_east_coord) != null) {
                     const id = self.initial_carryable_id orelse
                         return error.S7InteractionSmokeCarryableMissing;
                     const view = try self.simulation.interactions().view(id);
@@ -4562,9 +4576,8 @@ const App = struct {
                     }
                     try self.requireS7Counts(1, 3, 1, 1, 3, 5);
                     const diagnostics = self.simulation.developer().diagnostics().interaction;
-                    if (diagnostics.dormant_count != 0 or
-                        diagnostics.dynamic_body_count != 1 or
-                        diagnostics.bodies_resumed == 0)
+                    if (diagnostics.spatially_owned_count != 1 or
+                        diagnostics.dynamic_body_count != 1)
                     {
                         return error.S7InteractionSmokeReloadDiagnosticsMismatch;
                     }
@@ -4573,7 +4586,7 @@ const App = struct {
                         &replica_wait_started_tick,
                         presentation.carryable_count == 1,
                     )) continue;
-                    summary.resumed_after_reload = true;
+                    summary.stable_after_content_reload = true;
                     try self.simulation.interactions().submit(.{ .despawn = .{ .id = id } });
                     stage = .carryable_despawned;
                 },
@@ -4632,8 +4645,8 @@ const App = struct {
         if (stage != .final_drain or self.district_streaming.contentOwnerActive() or
             !self.district_streaming.workerIdle() or
             !summary.collected or !summary.crossed_east or !summary.dropped_east or
-            !summary.source_unloaded_while_held or !summary.dormant_after_unload or
-            !summary.resumed_after_reload or summary.carryable_draw_frames == 0 or
+            !summary.source_unloaded_while_held or !summary.physical_after_content_unload or
+            !summary.stable_after_content_reload or summary.carryable_draw_frames == 0 or
             summary.held_draw_frames == 0 or summary.district_draw_frames == 0 or
             summary.final_entities != 0 or summary.final_bodies != 1 or
             self.interaction_submission_failures != 0 or
@@ -4643,6 +4656,32 @@ const App = struct {
             (config.virtual_render_hz < timing.TICK_RATE and
                 (summary.multi_tick_frames == 0 or summary.zero_tick_frames != 0)))
         {
+            const west_slot = try self.district_streaming.slot(district_west_slot_index);
+            const east_slot = try self.district_streaming.slot(district_east_slot_index);
+            std.debug.print(
+                "S7_INTERACTION_SMOKE_INCOMPLETE stage={s} west={s}/{} east={s}/{} character={} carryable={} content_owner_active={} worker_idle={} collected={} crossed={} dropped={} source_unloaded={} physical_unloaded={} stable_reloaded={} entities={d} bodies={d} interaction_failures={d} request_rejections={d}\n",
+                .{
+                    @tagName(stage),
+                    @tagName(west_slot.phase),
+                    try self.districtSlotResident(district_west_slot_index),
+                    @tagName(east_slot.phase),
+                    try self.districtSlotResident(district_east_slot_index),
+                    self.initial_character_id != null,
+                    self.initial_carryable_id != null,
+                    self.district_streaming.contentOwnerActive(),
+                    self.district_streaming.workerIdle(),
+                    summary.collected,
+                    summary.crossed_east,
+                    summary.dropped_east,
+                    summary.source_unloaded_while_held,
+                    summary.physical_after_content_unload,
+                    summary.stable_after_content_reload,
+                    summary.final_entities,
+                    summary.final_bodies,
+                    self.interaction_submission_failures,
+                    self.interaction_requests.rejected,
+                },
+            );
             return error.S7InteractionSmokeEvidenceMissing;
         }
         return summary;
@@ -6421,7 +6460,7 @@ const App = struct {
                 scenario == .s7_interaction)
                 .{ 1, 0.5, 0 }
             else
-                .{ 0, 0.5, 3 } },
+                sandbox_contracts.default_carryable_spawn_position },
         } });
         self.interaction_spawn_submitted = true;
     }
@@ -7186,7 +7225,7 @@ const App = struct {
                         draw.chassis_pose.position[2],
                     };
                     follow_target = target;
-                    follow_distance = 8.0;
+                    follow_distance = 12.0;
                     self.game_camera.followTarget(target, follow_distance);
                     break;
                 }
@@ -7198,7 +7237,7 @@ const App = struct {
             for (character_draws) |draw| {
                 if (draw.local_player) {
                     follow_target = draw.camera_target;
-                    follow_distance = 6.0;
+                    follow_distance = 9.0;
                     self.game_camera.followTarget(draw.camera_target, follow_distance);
                     break;
                 }
@@ -7936,6 +7975,10 @@ const App = struct {
             var authority_position = draw.pose.position;
             var velocity: [3]f32 = .{ 0, 0, 0 };
             var facing_yaw: f32 = 0;
+            var navigation_progress: editor_contract.GameplayNavigationProgress = .unavailable;
+            var navigation_target: ?[3]f32 = null;
+            var navigation_no_progress_ticks: u16 = 0;
+            var navigation_last_progress_tick: u64 = 0;
             const radius = draw.radius;
             const half_height = draw.half_height;
             if (persistent) |id| {
@@ -7944,6 +7987,16 @@ const App = struct {
                     authority_position = view.position;
                     velocity = view.velocity;
                     facing_yaw = view.facing_yaw;
+                    navigation_progress = switch (view.navigation_progress.state) {
+                        .idle => .idle,
+                        .moving => .moving,
+                        .waiting_for_content => .waiting_for_content,
+                        .dormant => .dormant,
+                        .potentially_stalled => .potentially_stalled,
+                    };
+                    navigation_target = view.navigation_progress.target;
+                    navigation_no_progress_ticks = view.navigation_progress.no_progress_ticks;
+                    navigation_last_progress_tick = view.navigation_progress.last_progress_tick;
                 }
             }
             var projected = editor_contract.GameplayEntityView{
@@ -7969,6 +8022,10 @@ const App = struct {
                     draw.attack_impact_tick
                 else
                     draw.attack_ready_tick,
+                .navigation_progress = navigation_progress,
+                .navigation_target = navigation_target,
+                .navigation_no_progress_ticks = navigation_no_progress_ticks,
+                .navigation_last_progress_tick = navigation_last_progress_tick,
             };
             applyNpcInterestEvidence(&projected, inspection.npcInterest(draw.entity));
             result.entities[result.entity_count] = projected;
@@ -9037,7 +9094,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                     "carryable_draw_frames={d} held_draw_frames={d} " ++
                     "district_draw_frames={d} collected={} crossed_east={} " ++
                     "dropped_east={} source_unloaded_while_held={} " ++
-                    "dormant_after_unload={} resumed_after_reload={} " ++
+                    "physical_after_content_unload={} stable_after_content_reload={} " ++
                     "final_entities={d} final_bodies={d} final_draws=0 " ++
                     "virtual_render_hz={d} gpu_driver={s}\n",
                 .{
@@ -9052,8 +9109,8 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                     summary.crossed_east,
                     summary.dropped_east,
                     summary.source_unloaded_while_held,
-                    summary.dormant_after_unload,
-                    summary.resumed_after_reload,
+                    summary.physical_after_content_unload,
+                    summary.stable_after_content_reload,
                     summary.final_entities,
                     summary.final_bodies,
                     config.virtual_render_hz,

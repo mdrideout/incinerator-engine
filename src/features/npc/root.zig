@@ -26,6 +26,7 @@ const Config = feature_contract.Config;
 const NpcConfigV1 = feature_contract.NpcConfigV1;
 const Goal = feature_contract.Goal;
 const State = feature_contract.State;
+const NavigationProgress = feature_contract.NavigationProgress;
 const EncounterLocomotion = feature_contract.EncounterLocomotion;
 const PatrolLeg = feature_contract.PatrolLeg;
 const PersistedRouteMode = feature_contract.PersistedRouteMode;
@@ -48,6 +49,43 @@ const NpcV1 = feature_contract.NpcV1;
 const validateCommand = feature_contract.validateCommand;
 
 const FixedQueue = engine.BoundedQueue;
+
+const navigation_progress_epsilon: f32 = 0.002;
+const potential_stall_ticks: u16 = 120;
+
+fn updateNavigationProgress(
+    progress: *NavigationProgress,
+    state: State,
+    previous: [3]f32,
+    current: [3]f32,
+    tick_index: u64,
+) void {
+    if (state == .dormant) {
+        progress.* = .{ .state = .dormant };
+        return;
+    }
+    if (state == .waiting_at_boundary) {
+        progress.* = .{ .state = .waiting_for_content };
+        return;
+    }
+    if (progress.target == null) {
+        progress.* = .{ .state = .idle, .last_progress_tick = progress.last_progress_tick };
+        return;
+    }
+    const dx = current[0] - previous[0];
+    const dz = current[2] - previous[2];
+    if (dx * dx + dz * dz >= navigation_progress_epsilon * navigation_progress_epsilon) {
+        progress.no_progress_ticks = 0;
+        progress.last_progress_tick = tick_index;
+        progress.state = .moving;
+        return;
+    }
+    progress.no_progress_ticks +|= 1;
+    progress.state = if (progress.no_progress_ticks >= potential_stall_ticks)
+        .potentially_stalled
+    else
+        .moving;
+}
 
 const RouteBuild = union(enum) {
     ready: RoutePlan,
@@ -90,6 +128,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             /// yet be resolved through active content. `encounter_locomotion`
             /// remains `.hold` until this typed intent can be installed.
             pending_encounter_locomotion: ?EncounterLocomotion = null,
+            navigation_progress: NavigationProgress = .{},
         };
         /// The controller is valid only for the exact owner content cohort.
         /// Tickets are runtime-only and are never persisted.
@@ -271,6 +310,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 .facing_yaw = logical.facing_yaw,
                 .controller_present = controller.handle != null,
                 .encounter_locomotion = logical.encounter_locomotion,
+                .navigation_progress = logical.navigation_progress,
             };
         }
 
@@ -616,6 +656,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 }
 
                 const before = try self.controllers.prepareCharacter(handle);
+                logical.navigation_progress.target = null;
                 var horizontal = [2]f32{ 0, 0 };
                 if (logical.state == .active) {
                     if (logical.encounter_locomotion) |locomotion| switch (locomotion) {
@@ -646,6 +687,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                             const dz = movement_target[2] - before.position[2];
                             const distance = @sqrt(dx * dx + dz * dz);
                             if (distance > self.config.arrival_distance) {
+                                logical.navigation_progress.target = movement_target;
                                 const speed = @min(
                                     self.config.move_speed,
                                     distance / tick.delta_seconds,
@@ -670,6 +712,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                             const dz = resolved.node.position[2] - before.position[2];
                             const distance = @sqrt(dx * dx + dz * dz);
                             if (distance > self.config.arrival_distance) {
+                                logical.navigation_progress.target = resolved.node.position;
                                 const speed = @min(
                                     self.config.move_speed,
                                     distance / tick.delta_seconds,
@@ -731,6 +774,13 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 try state.validate();
                 logical.position = canonicalVector(state.position);
                 logical.velocity = canonicalVector(state.velocity);
+                updateNavigationProgress(
+                    &logical.navigation_progress,
+                    logical.state,
+                    previous_position,
+                    logical.position,
+                    tick.tick_index,
+                );
 
                 const next_owner = try navigation.ownerForPosition(logical.position);
                 if (!navigation.ChunkCoord.eql(next_owner, logical.owner)) {
@@ -1702,6 +1752,15 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             if (logical.state == desired) return;
             const previous = logical.state;
             logical.state = desired;
+            if (desired == .dormant or desired == .waiting_at_boundary) {
+                updateNavigationProgress(
+                    &logical.navigation_progress,
+                    desired,
+                    logical.position,
+                    logical.position,
+                    self.runtime.tickIndex(),
+                );
+            }
             try self.emitEvent(.{ .state_changed = .{
                 .id = try self.runtime.identity(runtime_id),
                 .previous = previous,
@@ -1762,6 +1821,34 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             };
         }
     };
+}
+
+test "navigation progress marks a stationary mover without changing gameplay state" {
+    var progress = NavigationProgress{ .target = .{ 10, 0, 0 } };
+    for (1..potential_stall_ticks + 1) |tick| {
+        updateNavigationProgress(
+            &progress,
+            .active,
+            .{ 0, 0, 0 },
+            .{ 0, 0, 0 },
+            tick,
+        );
+    }
+    try std.testing.expectEqual(
+        feature_contract.NavigationProgressState.potentially_stalled,
+        progress.state,
+    );
+    try std.testing.expectEqual(potential_stall_ticks, progress.no_progress_ticks);
+
+    updateNavigationProgress(
+        &progress,
+        .active,
+        .{ 0, 0, 0 },
+        .{ navigation_progress_epsilon, 0, 0 },
+        potential_stall_ticks + 1,
+    );
+    try std.testing.expectEqual(feature_contract.NavigationProgressState.moving, progress.state);
+    try std.testing.expectEqual(@as(u16, 0), progress.no_progress_ticks);
 }
 
 fn planWithOne(reference: navigation.NodeRef) RoutePlan {

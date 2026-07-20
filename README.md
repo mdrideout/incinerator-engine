@@ -52,12 +52,11 @@ Human acceptance further tightened that contract: physical controller teardown
 on death now leaves a red, noninteractive replicated death proxy until
 respawn; the hostile presentation separates from that proxy so it cannot hide
 the corpse; primitive material tints are enforced by the real product shader;
-carried objects are visibly released; drop placement stays within an active
-district; and gameplay trace schema 2 preserves typed rejection reasons and
+carried objects are visibly released; drop placement stays within a valid
+world coordinate; and gameplay trace schema 2 preserves typed rejection reasons and
 semantic presentation membership transitions.
 The current correction also reserves incident capacity for notes/replay/
-handoff, rejects unsupported player drops without moving the object, keeps the
-two-district sandbox route resident behind visible collision, retains NPC
+handoff, keeps spatial objects independent of streamed-content residency, retains NPC
 death presentation until replacement registration, and clamps the follow
 camera to the target side of world blockers.
 
@@ -442,12 +441,15 @@ diagnostics, both render cadences, and complete two-slot drain from `/tmp`.
 
 ## Controls
 
+The normal macOS sandbox opens at 1600×900. Character and vehicle follow
+distances are 9 m and 12 m respectively.
+
 | Key | Action |
 |---|---|
 | ESC | Quit |
 | W / A / S / D | Move the character, or throttle/reverse and steer while driving |
 | E | Enter or exit the sandbox vehicle |
-| F | Collect the nearby carryable, or drop the held carryable into the current district |
+| F | Collect the nearby carryable, or drop it beside the character at any valid world position |
 | Q | Request authoritative melee against the nearest valid target |
 | R | Request authoritative respawn after death and cooldown |
 | Space | Jump on foot; service brake while driving |
@@ -467,6 +469,10 @@ upload/draw state, visible capacity loss, fixed phase spans, and per-frame
 draw/upload/stream/resource counts. These are host-only typed controls; they do
 not mutate simulation state. Use Instruments and Metal capture for deeper
 platform profiling.
+
+The **bounds** category also draws active 16 m streamed district cells and NPC
+navigation targets/routes. A red NPC target reports 120 ticks of potential
+no-progress; it is diagnostic telemetry and does not alter authority.
 
 **Tools → Gameplay Inspector** explains the selected local player or NPC across
 its durable/replicated identity, authority and presentation pose, health/life,
@@ -605,6 +611,9 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`S6 Validation Record`](docs/validation/s6-acceptance.md)
 - [`S6 Two-District Streaming Baseline`](docs/performance/s6-baseline.md)
 - [`ADR-013: Feature-Owned Carry Interaction and District Ownership`](docs/adr/013-feature-owned-carry-interaction-and-district-ownership.md)
+- [`ADR-022: Open-World Spatial Objects and Handling Characterization`](docs/adr/022-open-world-spatial-objects-and-handling-characterization.md)
+- [`Open-World Spatial Diagnostics and Playability Correction`](docs/design/open-world-spatial-diagnostics-and-playability.md)
+- [`Vehicle Dynamics Characterization`](docs/validation/vehicle-dynamics.md)
 - [`S7 Interaction and Cross-District Ownership Design`](docs/design/s7-interaction-ownership.md)
 - [`S7 Validation Record`](docs/validation/s7-acceptance.md)
 - [`S7 Interaction and Ownership Baseline`](docs/performance/s7-baseline.md)
@@ -693,9 +702,10 @@ proximity policy in the host while exercising the complete lifecycle:
   outcomes/events, and renderer-neutral extraction through loader/static-body
   ports; the real worker publishes only fixed plain data and never touches
   Runtime, Flecs, Jolt, SDL, or renderer state;
-- `InteractionFeature` owns the one carryable's district/held/dormant logical
-  state and transactional collect/drop lifecycle through narrow carrier and
-  district ports;
+- `InteractionFeature` owns the one carryable's spatial/held logical state,
+  physical lifetime, and transactional collect/drop lifecycle through a narrow
+  carrier port; streamed district residency does not gate dynamic-object
+  existence or dropping;
 - `NpcFeature` owns bounded autonomous-character authority, semantic goals,
   district-aware navigation state, persistence, diagnostics, and presentation;
   a separate fixed population planner is only a producer;

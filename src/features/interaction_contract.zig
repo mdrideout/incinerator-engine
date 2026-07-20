@@ -1,9 +1,8 @@
 //! Narrow capability contracts used by InteractionFeature.
 //!
 //! The interaction slice may observe and transition only the carrier state
-//! exported by CharacterFeature and the exact active residency exported by
-//! DistrictFeature. Neither private ECS components nor backend handles cross
-//! these boundaries.
+//! exported by CharacterFeature. Spatial district coordinates are indexing
+//! metadata, never a residency prerequisite for a live world object.
 
 const std = @import("std");
 const engine = @import("incinerator_engine");
@@ -82,9 +81,9 @@ pub fn assertCarrierImplementation(comptime CarrierAccess: type) void {
     }
 }
 
-/// Validate the exact-residency capability consumed by InteractionFeature.
-/// A non-null result means this precise coordinate is authoritative and
-/// active at the time of the owner-thread query.
+/// Validate the exact-residency query exposed by DistrictFeature to its host.
+/// InteractionFeature deliberately does not consume this port: an object's
+/// spatial coordinate is not a residency prerequisite for its existence.
 pub fn assertDistrictImplementation(comptime DistrictAccess: type) void {
     comptime {
         assertInfallibleMethod(

@@ -736,7 +736,7 @@ fn runSmokeScenario(
     try tickAndDrain(simulation, state);
     if (!state.carryable_dropped) return error.MissingDropOutcome;
     const dropped = try simulation.carryable(carryable_id);
-    if (!std.meta.eql(dropped.ownership, .{ .district_owned = destination }) or
+    if (!std.meta.eql(dropped.ownership, .{ .spatially_owned = destination }) or
         !dropped.body_present)
     {
         return error.DroppedCarryableOwnershipMismatch;
@@ -752,11 +752,11 @@ fn runSmokeScenario(
     } });
     try tickAndDrain(simulation, state);
     if (!state.destination_unloaded) return error.MissingDestinationUnloadOutcome;
-    const dormant = try simulation.carryable(carryable_id);
-    if (!std.meta.eql(dormant.ownership, .{ .district_owned = destination }) or
-        dormant.body_present)
+    const content_unloaded = try simulation.carryable(carryable_id);
+    if (!std.meta.eql(content_unloaded.ownership, .{ .spatially_owned = destination }) or
+        !content_unloaded.body_present)
     {
-        return error.DormantCarryableOwnershipMismatch;
+        return error.ContentUnloadedCarryableOwnershipMismatch;
     }
 
     try simulation.submitDistrict(.{ .request_load = .{
@@ -769,11 +769,11 @@ fn runSmokeScenario(
         return error.MissingDestinationReloadOutcome;
     }
     try progressWorkerUntil(io, simulation, state, .destination_reactivated);
-    const resumed = try simulation.carryable(carryable_id);
-    if (!std.meta.eql(resumed.ownership, .{ .district_owned = destination }) or
-        !resumed.body_present)
+    const content_reloaded = try simulation.carryable(carryable_id);
+    if (!std.meta.eql(content_reloaded.ownership, .{ .spatially_owned = destination }) or
+        !content_reloaded.body_present)
     {
-        return error.ResumedCarryableOwnershipMismatch;
+        return error.ContentReloadedCarryableOwnershipMismatch;
     }
     if (simulation.districtCount() != 2 or simulation.districtBodyCount() != 6) {
         return error.MultiDistrictAuthorityMissingAfterInteraction;

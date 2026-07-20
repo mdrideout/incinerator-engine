@@ -3439,7 +3439,7 @@ fn dropS7Carryable(
     }
     try drainS7Ambient(world);
     try std.testing.expect((try world.carryable(carryable_id)).body_present);
-    try expectS7InteractionDraw(world, carryable_id, .{ .district_owned = owner });
+    try expectS7InteractionDraw(world, carryable_id, .{ .spatially_owned = owner });
 }
 
 fn runS7RepeatedCycle(
@@ -3494,10 +3494,10 @@ fn runS7RepeatedCycle(
     try std.testing.expectEqual(@as(usize, 3), world.entityCount());
 
     try unloadS7District(world, request_base + 4, destination_ticket);
-    try std.testing.expectEqual(@as(u32, 1), world.bodyCount());
+    try std.testing.expectEqual(@as(u32, 2), world.bodyCount());
     try std.testing.expectEqual(@as(usize, 2), world.entityCount());
-    try std.testing.expectEqual(@as(usize, 0), (try world.interactionPresentation()).len);
-    try std.testing.expect(!(try world.carryable(carryable_id)).body_present);
+    try std.testing.expectEqual(@as(usize, 1), (try world.interactionPresentation()).len);
+    try std.testing.expect((try world.carryable(carryable_id)).body_present);
 
     const reloaded = try activateS7District(
         world,
@@ -3512,7 +3512,7 @@ fn runS7RepeatedCycle(
     try expectS7InteractionDraw(
         world,
         carryable_id,
-        .{ .district_owned = destination },
+        .{ .spatially_owned = destination },
     );
     return reloaded;
 }
@@ -3567,7 +3567,7 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
         [_]u8{0x17} ** 32,
     );
     var capture_bytes: []u8 = undefined;
-    var dormant_save: []u8 = undefined;
+    var spatial_save: []u8 = undefined;
     var completed_ticks: u64 = 0;
     const character_id: engine.PersistentId = blk: {
         var world = try simulation.Simulation.init(allocator, .{
@@ -3616,7 +3616,7 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
         try expectS7InteractionDraw(
             &world,
             carryable_id,
-            .{ .district_owned = s7_west },
+            .{ .spatially_owned = s7_west },
         );
 
         try collectS7Carryable(
@@ -3651,16 +3651,16 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
         );
         try std.testing.expectEqual(@as(usize, 3), world.entityCount());
         try unloadS7District(&world, 13, east_ticket);
-        try std.testing.expectEqual(@as(u32, 1), world.bodyCount());
+        try std.testing.expectEqual(@as(u32, 2), world.bodyCount());
         try std.testing.expectEqual(@as(usize, 2), world.entityCount());
         try std.testing.expectEqual(
-            @as(usize, 0),
+            @as(usize, 1),
             (try world.interactionPresentation()).len,
         );
-        dormant_save = try world.save(allocator);
-        const repeated_dormant = try world.save(allocator);
-        defer allocator.free(repeated_dormant);
-        try std.testing.expectEqualSlices(u8, dormant_save, repeated_dormant);
+        spatial_save = try world.save(allocator);
+        const repeated_spatial = try world.save(allocator);
+        defer allocator.free(repeated_spatial);
+        try std.testing.expectEqualSlices(u8, spatial_save, repeated_spatial);
 
         var active_coord = s7_east;
         var active_x = s7_east_x;
@@ -3710,7 +3710,7 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
         break :blk spawned_character;
     };
     defer allocator.free(capture_bytes);
-    defer allocator.free(dormant_save);
+    defer allocator.free(spatial_save);
 
     var parsed_capture = try sandbox_replay.parseCompatible(
         allocator,
@@ -3730,14 +3730,15 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
         .divergent => return error.S7CaptureDiverged,
     }
 
-    var restored = try simulation.Simulation.fromSnapshot(allocator, dormant_save, .{});
+    var restored = try simulation.Simulation.fromSnapshot(allocator, spatial_save, .{});
     defer restored.deinit();
-    try std.testing.expectEqual(@as(u32, 1), restored.bodyCount());
+    try std.testing.expectEqual(@as(u32, 2), restored.bodyCount());
     try std.testing.expectEqual(@as(usize, 2), restored.entityCount());
     try std.testing.expectEqual(@as(usize, 1), restored.interactionCount());
-    try std.testing.expectEqual(@as(usize, 0), (try restored.interactionPresentation()).len);
+    try std.testing.expectEqual(@as(usize, 1), (try restored.interactionPresentation()).len);
     const restored_item = restored.diagnostics().interaction;
-    try std.testing.expectEqual(@as(u32, 1), restored_item.dormant_count);
+    try std.testing.expectEqual(@as(u32, 1), restored_item.spatially_owned_count);
+    try std.testing.expectEqual(@as(u32, 1), restored_item.dynamic_body_count);
 
     const reloaded = try activateS7District(&restored, 2_000, s7_east);
     try std.testing.expectEqual(
@@ -3751,7 +3752,7 @@ test "S7 captured real Jolt cross-district ownership lifecycle is exact and repe
     try expectS7InteractionDraw(
         &restored,
         restored_carryable_id,
-        .{ .district_owned = s7_east },
+        .{ .spatially_owned = s7_east },
     );
     const resaved = try restored.save(allocator);
     defer allocator.free(resaved);

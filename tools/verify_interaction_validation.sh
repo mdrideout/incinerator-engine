@@ -45,7 +45,7 @@ grep -Fq "primitive pipeline ignored the \`base_color\`" "$evidence" ||
   fail "product/oracle renderer mismatch is not recorded"
 grep -Fq 'at least 64 depth-tested' "$evidence" ||
   fail "meaningful death-visibility threshold is not recorded"
-grep -Fq 'protocol revision 13' "$evidence" ||
+grep -Fq 'protocol revision 14' "$evidence" ||
   fail "lifecycle ordering protocol change is not recorded"
 grep -Fq 'zig build verify-interactions' "$evidence" ||
   fail "aggregate gate is not recorded"
@@ -56,11 +56,11 @@ grep -Fq 'const gameplay_scenarios = @import("sandbox_gameplay_scenarios");' \
   "$root/src/hosts/mp2_client.zig" || fail "network client does not use the shared scenario catalog"
 grep -Fq 'const gameplay_scenarios = @import("sandbox_gameplay_scenarios");' \
   "$root/src/hosts/mp6_listen_client.zig" || fail "listen client does not use the shared scenario catalog"
-grep -Fq 'network_options.addOption(u16, "protocol_revision", 13);' \
+grep -Fq 'network_options.addOption(u16, "protocol_revision", 14);' \
   "$root/tools/build/simulation_graph.zig" || fail "wire cohort was not bumped for lifecycle ordering"
 grep -Fq 'PrimitiveFragmentSettings' "$root/shaders/triangle.frag" ||
   fail "primitive material tint shader contract is missing"
 grep -Fq 'minimum_meaningful_pixels: u32 = 64' "$root/src/visibility_oracle.zig" ||
   fail "meaningful visibility threshold is missing"
 
-echo "INTERACTION_VALIDATION_AUDIT_PASS phases=6 human_trace=accepted docs=why-design-evidence scenario_catalog=shared fault_runner=seeded protocol=13 renderer_tint=reflected"
+echo "INTERACTION_VALIDATION_AUDIT_PASS phases=6 human_trace=accepted docs=why-design-evidence scenario_catalog=shared fault_runner=seeded protocol=14 renderer_tint=reflected"

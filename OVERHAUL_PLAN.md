@@ -1785,13 +1785,21 @@ Record evidence rather than relying only on target numbers:
     measurement and deterministic destructive/failure matrix are implemented
     and measured. Obtain the physical macOS shortcut,
     district continuity, NPC/vehicle continuity, and evidence-usability checkpoint.
-45. [ ] Complete the physical-checkpoint correction in
+45. [x] Complete the physical-checkpoint correction in
     `docs/design/playable-boundary-and-vehicle-npc-collision-correction.md`:
     remove the recipe perimeter that hid distance conditions, preserve valid
     residency/relevance repairs, make collision-driven NPC owner transfer
     rebase route intent instead of faulting authority, persist exact retained
     fault ownership in incident streams, and obtain a fresh open-traversal plus
     sustained vehicle-contact Metal pass.
+46. [x] Correct the open-world interaction boundary and complete the first
+    measured handling/diagnostic cohort: make carryable spatial coordinates
+    independent of district residency, remove dead placement fallbacks and
+    protocol reasons, add district/NPC intent visualization plus non-fatal
+    progress telemetry, adopt 1600x900 and wider/spaced sandbox presentation,
+    express tire friction explicitly, and preserve deterministic real-Jolt
+    stopping/turn/slip/slalom/skid/rollover characterization in a report and
+    reusable tuning skill.
 
 ---
 
@@ -1869,3 +1877,4 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-18 | Completed autonomous IC5-G failure hardening | Added five explicit installed-product profiles for deterministic queue pressure, a 16 MiB visual lane, late writer-budget failure, screenshot submission failure, and screenshot fence failure. Every full gameplay journey publishes clipboard text once, creates an honestly partial bundle, passes strict profile-aware inspection, and semantically replays 2,148 ticks. The writer failure preserves all four anomaly markers/windows and replay while leaving only `LLM_HANDOFF.md` non-durable. `verify-incident-hardening` passes 49/49 steps; the full graph passes 255/255 with 932/932 tests and the extracted source-package graphs pass 182/182 with 410/410 plus 32/32 with 62/62. Only physical macOS acceptance remains. |
 | 2026-07-19 | Expanded and validated the schema-3 human visual evidence window | The continuous 15 FPS product trail now covers five seconds before through two seconds after a flag using 80 bounded slots. Eight UI-inclusive anchors cover every whole second from -5 through +2 using seven history-only one-Hz slots and two flag-only slots, preventing rapid flags from consuming prehistory. The combined Retina download allocation remains below 176 MiB; actual indexed timestamps remain authoritative. A 2,214-tick Metal journey produced four complete incidents, eight anchors each, 387 visuals, zero loss/warnings, and a matching 2,154-tick replay; the five-profile failure gate passes 49/49. |
 | 2026-07-19 | Implemented the recipe-5 open-boundary and vehicle–NPC authority correction | Removed the temporary collision/proxy perimeter and advanced every cooked/headless/replay cohort; made positional NPC ownership rebase route/encounter intent with local inactive/disconnected-content recovery; added exact retained runtime/authority fault records and consumers. Deterministic feature and real-Jolt contact regressions pass, as do 255/255 aggregate steps with 942/942 tests, extracted 182/182 broad plus 32/32 cold gates, and the 59-step Metal fault smoke. The product journey completed and replayed but retained dominant-green close-combat camera warnings, so targeted physical open-traversal/contact acceptance remains open. |
+| 2026-07-19 | Accepted the physical open-boundary/contact checkpoint and completed the spatial-interaction, diagnostics, and vehicle-dynamics correction | Human testing confirmed open traversal and sustained vehicle/NPC contact. The follow-up removes carryable residency gating and obsolete fallbacks, proves drops at unauthored coordinates, adds active district/NPC target/progress evidence, uses a 1600x900 window with wider follow distances and spaced default actors, and records real-Jolt legacy/current stopping, turn, slip, slalom, skid, and rollover results in `docs/validation/vehicle-dynamics.md` plus the `incinerator-vehicle-tuning` skill. Snapshot/replay/protocol advance to 12/12/14 without compatibility decoders. |

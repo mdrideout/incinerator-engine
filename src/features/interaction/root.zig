@@ -1,10 +1,10 @@
-//! InteractionFeature: one persistent carryable crossing streamed ownership.
+//! InteractionFeature: one persistent carryable crossing spatial ownership.
 //!
 //! This slice deliberately proves the ownership transaction without becoming
 //! a general inventory or entity-registry subsystem. The feature owns one
 //! logical object, CharacterFeature exposes a narrow carrier capability, and
-//! DistrictFeature exposes exact active residency. Physics bodies exist only
-//! while a district-owned object belongs to an active district.
+//! Spatial district coordinates index world state but do not gate whether a
+//! live carryable has a physics body or can be dropped.
 
 const std = @import("std");
 const engine = @import("incinerator_engine");
@@ -13,7 +13,7 @@ const district_contract = @import("district_contract");
 const interaction_contract = @import("interaction_contract");
 
 const logical_state_domain = "incinerator.interaction.logical";
-const logical_state_schema: u16 = 1;
+const logical_state_schema: u16 = 2;
 
 const max_carryables = feature_contract.max_carryables;
 const max_pending_commands = feature_contract.max_pending_commands;
@@ -44,11 +44,9 @@ const FixedQueue = engine.BoundedQueue;
 pub fn Feature(
     comptime Bodies: type,
     comptime CarrierAccess: type,
-    comptime DistrictAccess: type,
 ) type {
     engine.physics.assertImplementation(Bodies);
     interaction_contract.assertCarrierImplementation(CarrierAccess);
-    interaction_contract.assertDistrictImplementation(DistrictAccess);
 
     return struct {
         const Self = @This();
@@ -67,7 +65,6 @@ pub fn Feature(
         runtime: *engine.Runtime,
         bodies: *Bodies,
         carriers: *CarrierAccess,
-        districts: *DistrictAccess,
         config: Config,
         active: ?engine.RuntimeId = null,
         commands: FixedQueue(QueuedCommand, max_pending_commands) = .{},
@@ -75,8 +72,6 @@ pub fn Feature(
         commands_high_water: u32 = 0,
         outcomes_high_water: u32 = 0,
         commands_rejected: u64 = 0,
-        bodies_suspended: u64 = 0,
-        bodies_resumed: u64 = 0,
         presentation: [max_carryables]CarryableDraw = undefined,
         presentation_count: usize = 0,
 
@@ -84,7 +79,6 @@ pub fn Feature(
             runtime: *engine.Runtime,
             bodies: *Bodies,
             carriers: *CarrierAccess,
-            districts: *DistrictAccess,
             config: Config,
         ) !Self {
             try config.validate();
@@ -92,7 +86,6 @@ pub fn Feature(
                 .runtime = runtime,
                 .bodies = bodies,
                 .carriers = carriers,
-                .districts = districts,
                 .config = config,
             };
         }
@@ -123,7 +116,7 @@ pub fn Feature(
                 const logical = self.runtime.get(runtime_id, LogicalState) orelse
                     @panic("interaction logical cleanup invariant failed");
                 switch (logical.ownership) {
-                    .district_owned => {},
+                    .spatially_owned => {},
                     .inventory_held => |holder| {
                         // A faulted runtime is terminal and rejects mutable
                         // carrier access. Character teardown immediately
@@ -178,30 +171,25 @@ pub fn Feature(
         }
 
         pub fn diagnostics(self: *const Self) Diagnostics {
-            var district_owned: u32 = 0;
+            var spatially_owned: u32 = 0;
             var held: u32 = 0;
             var bodies: u32 = 0;
-            var dormant: u32 = 0;
             if (self.active) |runtime_id| {
                 if (self.runtime.get(runtime_id, LogicalState)) |logical| {
                     switch (logical.ownership) {
-                        .district_owned => district_owned = 1,
+                        .spatially_owned => spatially_owned = 1,
                         .inventory_held => held = 1,
                     }
                 }
                 if (self.runtime.get(runtime_id, RuntimeBody)) |body| {
                     if (body.handle != null) bodies = 1;
                 }
-                if (district_owned == 1 and bodies == 0) dormant = 1;
             }
             return .{
                 .active_count = if (self.active == null) 0 else 1,
-                .district_owned_count = district_owned,
+                .spatially_owned_count = spatially_owned,
                 .held_count = held,
                 .dynamic_body_count = bodies,
-                .dormant_count = dormant,
-                .bodies_suspended = self.bodies_suspended,
-                .bodies_resumed = self.bodies_resumed,
                 .commands = .{
                     .occupancy = @intCast(self.commands.len),
                     .high_water = self.commands_high_water,
@@ -244,7 +232,7 @@ pub fn Feature(
             const id = try self.runtime.identity(runtime_id);
             const view_value = try self.view(id);
             const pose = switch (view_value.ownership) {
-                .district_owned => if (view_value.body_present)
+                .spatially_owned => if (view_value.body_present)
                     view_value.state.pose
                 else
                     return self.presentation[0..0],
@@ -295,10 +283,9 @@ pub fn Feature(
             return records;
         }
 
-        /// Restore into an empty, registering feature. District-owned records
-        /// are recreated dormant when their exact district is not active;
-        /// inventory-held records rebuild the character relationship without
-        /// ever creating a physics body.
+        /// Restore into an empty, registering feature. Spatial world objects
+        /// always recreate their body; inventory-held records rebuild the
+        /// character relationship without creating a physics body.
         pub fn restoreRecords(self: *Self, records: []const InteractionV1) !void {
             try validateRecords(records);
             if (self.active != null or self.hasPendingCommands() or self.outcomes.len != 0) {
@@ -316,16 +303,13 @@ pub fn Feature(
             }).normalized();
 
             switch (record.ownership) {
-                .district_owned => |coord| {
-                    const body = if (self.isDistrictActive(coord))
-                        try self.bodies.createDynamicBox(.{
-                            .pose = state.pose,
-                            .velocity = state.velocity,
-                            .half_extents = record.half_extents,
-                        })
-                    else
-                        null;
-                    errdefer if (body) |handle| self.destroyBodyOrPanic(handle);
+                .spatially_owned => {
+                    const body = try self.bodies.createDynamicBox(.{
+                        .pose = state.pose,
+                        .velocity = state.velocity,
+                        .half_extents = record.half_extents,
+                    });
+                    errdefer self.destroyBodyOrPanic(body);
                     const runtime_id = try self.createRuntimeRecord(
                         record.id,
                         record.half_extents,
@@ -399,8 +383,6 @@ pub fn Feature(
         ) !void {
             const self: *Self = @ptrCast(@alignCast(raw));
             defer self.observeQueueHighWater();
-            try self.reconcileResidency();
-
             const command_count = self.commands.len;
             for (0..command_count) |_| {
                 const queued = self.commands.pop() orelse
@@ -428,7 +410,7 @@ pub fn Feature(
             const logical = self.runtime.getMut(runtime_id, LogicalState) orelse
                 return error.InteractionLogicalStateInvariantBroken;
             switch (logical.ownership) {
-                .district_owned => {},
+                .spatially_owned => {},
                 .inventory_held => return error.HeldInteractionHasBody,
             }
             logical.state = try (try self.bodies.bodyState(handle)).normalized();
@@ -455,12 +437,6 @@ pub fn Feature(
                 .half_extents = spawn.half_extents,
             }).normalized();
             const coord = try district_contract.chunkCoordForWorldPosition(desc.pose.position);
-            if (!self.isDistrictActive(coord)) return .{ .rejected = .{
-                .command = .spawn,
-                .reason = .destination_district_inactive,
-                .request_id = spawn.request_id,
-            } };
-
             const runtime_id = try self.runtime.create();
             errdefer self.destroyRuntimeOrPanic(runtime_id);
             const id = try self.runtime.identity(runtime_id);
@@ -469,7 +445,7 @@ pub fn Feature(
             try self.installRuntimeComponents(
                 runtime_id,
                 desc.half_extents,
-                .{ .district_owned = coord },
+                .{ .spatially_owned = coord },
                 .{ .pose = desc.pose, .velocity = desc.velocity },
                 body,
             );
@@ -492,7 +468,7 @@ pub fn Feature(
             const logical = self.runtime.get(runtime_id, LogicalState) orelse
                 return error.InteractionLogicalStateInvariantBroken;
             switch (logical.ownership) {
-                .district_owned => {},
+                .spatially_owned => {},
                 .inventory_held => return rejectionFor(
                     .despawn,
                     .carryable_held,
@@ -532,7 +508,7 @@ pub fn Feature(
             const logical = self.runtime.get(runtime_id, LogicalState) orelse
                 return error.InteractionLogicalStateInvariantBroken;
             const previous_owner = switch (logical.ownership) {
-                .district_owned => |coord| coord,
+                .spatially_owned => |coord| coord,
                 .inventory_held => return rejectionFor(
                     .collect,
                     .carryable_already_held,
@@ -541,16 +517,6 @@ pub fn Feature(
                     collect.carryable_id,
                 ),
             };
-            if (!self.isDistrictActive(previous_owner)) {
-                return rejectionFor(
-                    .collect,
-                    .owner_district_inactive,
-                    collect.transaction_id,
-                    collect.carrier_id,
-                    collect.carryable_id,
-                );
-            }
-
             const carrier = (try self.carriers.carryState(collect.carrier_id)) orelse
                 return rejectionFor(
                     .collect,
@@ -583,7 +549,7 @@ pub fn Feature(
             const body = self.runtime.getMut(runtime_id, RuntimeBody) orelse
                 return error.InteractionBodyStateInvariantBroken;
             const handle = body.handle orelse
-                return error.ActiveDistrictInteractionMissingBody;
+                return error.SpatialInteractionMissingBody;
             const state = try (try self.bodies.bodyState(handle)).normalized();
             if (!withinRange(
                 carrier.pose.position,
@@ -648,7 +614,7 @@ pub fn Feature(
             const logical = self.runtime.get(runtime_id, LogicalState) orelse
                 return error.InteractionLogicalStateInvariantBroken;
             const holder = switch (logical.ownership) {
-                .district_owned => return rejectionFor(
+                .spatially_owned => return rejectionFor(
                     .drop,
                     .carrier_not_holding,
                     drop.transaction_id,
@@ -704,19 +670,7 @@ pub fn Feature(
                 },
             }
 
-            const placement = (try self.resolveDropPlacement(
-                carrier.pose,
-                logical.state.pose,
-                drop.purpose,
-            )) orelse {
-                return rejectionFor(
-                    .drop,
-                    .destination_district_inactive,
-                    drop.transaction_id,
-                    drop.carrier_id,
-                    drop.carryable_id,
-                );
-            };
+            const placement = try self.resolveDropPlacement(carrier.pose);
             const drop_pose = placement.pose;
             const destination = placement.destination;
             const body_component = self.runtime.getMut(runtime_id, RuntimeBody) orelse
@@ -739,7 +693,7 @@ pub fn Feature(
             const logical_mut = self.runtime.getMut(runtime_id, LogicalState) orelse
                 @panic("interaction logical state disappeared during drop commit");
             logical_mut.state = state;
-            logical_mut.ownership = .{ .district_owned = destination };
+            logical_mut.ownership = .{ .spatially_owned = destination };
             body_component.handle = candidate;
             return .{ .dropped = .{
                 .transaction_id = drop.transaction_id,
@@ -760,96 +714,14 @@ pub fn Feature(
         fn resolveDropPlacement(
             self: *Self,
             raw_carrier_pose: engine.physics.Pose,
-            raw_previous_pose: engine.physics.Pose,
-            purpose: feature_contract.DropPurpose,
-        ) !?ResolvedDropPlacement {
+        ) !ResolvedDropPlacement {
             const carrier_pose = try raw_carrier_pose.normalized();
-            const carrier_owner = try district_contract.chunkCoordForWorldPosition(
-                carrier_pose.position,
-            );
-            if (self.isDistrictActive(carrier_owner)) {
-                const configured = self.config.drop_offset;
-                const offsets = [_][3]f32{
-                    configured,
-                    .{ -configured[2], configured[1], configured[0] },
-                    .{ configured[2], configured[1], -configured[0] },
-                    .{ -configured[0], configured[1], -configured[2] },
-                };
-                for (offsets, 0..) |offset, index| {
-                    const pose = try deriveDropPose(carrier_pose, offset);
-                    const destination = try district_contract.chunkCoordForWorldPosition(
-                        pose.position,
-                    );
-                    if (!self.isDistrictActive(destination)) continue;
-                    return .{
-                        .pose = pose,
-                        .destination = destination,
-                        .kind = if (index == 0)
-                            .configured_offset
-                        else
-                            .alternate_offset,
-                    };
-                }
-            }
-
-            if (purpose == .player_requested) return null;
-
-            // A carried object must not make participant teardown fatal. Its
-            // durable state already retains the last district-owned pose from
-            // collection, so an active prior owner is the deterministic final
-            // release point when the carrier is outside loaded residency.
-            const previous_pose = try raw_previous_pose.normalized();
-            const previous_owner = try district_contract.chunkCoordForWorldPosition(
-                previous_pose.position,
-            );
-            if (!self.isDistrictActive(previous_owner)) return null;
+            const pose = try deriveDropPose(carrier_pose, self.config.drop_offset);
             return .{
-                .pose = previous_pose,
-                .destination = previous_owner,
-                .kind = .previous_active_pose,
+                .pose = pose,
+                .destination = try district_contract.chunkCoordForWorldPosition(pose.position),
+                .kind = .configured_offset,
             };
-        }
-
-        fn reconcileResidency(self: *Self) !void {
-            const runtime_id = self.active orelse return;
-            const carryable = self.runtime.get(runtime_id, Carryable) orelse
-                return error.InteractionCarryableInvariantBroken;
-            const logical = self.runtime.getMut(runtime_id, LogicalState) orelse
-                return error.InteractionLogicalStateInvariantBroken;
-            const body = self.runtime.getMut(runtime_id, RuntimeBody) orelse
-                return error.InteractionBodyStateInvariantBroken;
-            switch (logical.ownership) {
-                .inventory_held => {
-                    if (body.handle != null) return error.HeldInteractionHasBody;
-                },
-                .district_owned => |coord| {
-                    const active_now = self.isDistrictActive(coord);
-                    if (active_now and body.handle == null) {
-                        const handle = try self.bodies.createDynamicBox(.{
-                            .pose = logical.state.pose,
-                            .velocity = logical.state.velocity,
-                            .half_extents = carryable.half_extents,
-                        });
-                        body.handle = handle;
-                        self.bodies_resumed +|= 1;
-                    } else if (!active_now and body.handle != null) {
-                        const handle = body.handle.?;
-                        const state = try (try self.bodies.bodyState(handle)).normalized();
-                        try self.bodies.destroyBody(handle);
-                        logical.state = state;
-                        body.handle = null;
-                        self.bodies_suspended +|= 1;
-                    }
-                },
-            }
-        }
-
-        fn isDistrictActive(
-            self: *Self,
-            coord: district_contract.ChunkCoord,
-        ) bool {
-            const ticket = self.districts.activeTicketFor(coord) orelse return false;
-            return ticket.isValid() and district_contract.ChunkCoord.eql(ticket.coord, coord);
         }
 
         fn createRuntimeRecord(
@@ -1049,7 +921,7 @@ fn writeOwnership(
     ownership: Ownership,
 ) !void {
     switch (ownership) {
-        .district_owned => |coord| {
+        .spatially_owned => |coord| {
             writer.writeU8(1);
             writer.writeI32(coord.x);
             writer.writeI32(coord.z);
@@ -1274,35 +1146,12 @@ const FakeCarrierAccess = struct {
     }
 };
 
-const FakeDistrictAccess = struct {
-    west_active: bool = true,
-    east_active: bool = true,
-    west_generation: u64 = 1,
-    east_generation: u64 = 2,
-
-    pub fn activeTicketFor(
-        self: *FakeDistrictAccess,
-        coord: district_contract.ChunkCoord,
-    ) ?district_contract.LoadTicket {
-        if (district_contract.ChunkCoord.eql(coord, .{ .x = 0, .z = 0 })) {
-            if (!self.west_active) return null;
-            return .{ .coord = coord, .generation = self.west_generation };
-        }
-        if (district_contract.ChunkCoord.eql(coord, .{ .x = 1, .z = 0 })) {
-            if (!self.east_active) return null;
-            return .{ .coord = coord, .generation = self.east_generation };
-        }
-        return null;
-    }
-};
-
-const TestFeature = Feature(FakeBodies, FakeCarrierAccess, FakeDistrictAccess);
+const TestFeature = Feature(FakeBodies, FakeCarrierAccess);
 
 const TestWorld = struct {
     runtime: engine.Runtime,
     bodies: FakeBodies = .{},
     carriers: FakeCarrierAccess = .{},
-    districts: FakeDistrictAccess = .{},
     feature: TestFeature,
 
     fn init(self: *TestWorld, config: Config) !void {
@@ -1318,7 +1167,6 @@ const TestWorld = struct {
             &self.runtime,
             &self.bodies,
             &self.carriers,
-            &self.districts,
             config,
         );
         var registry = self.runtime.registry();
@@ -1392,7 +1240,7 @@ test "interaction configuration records and declared budgets are bounded" {
     const valid = [_]InteractionV1{.{
         .id = .{ .namespace = test_namespace, .local = 1 },
         .half_extents = .{ 0.25, 0.25, 0.25 },
-        .ownership = .{ .district_owned = .{ .x = 0, .z = 0 } },
+        .ownership = .{ .spatially_owned = .{ .x = 0, .z = 0 } },
         .pose = .{},
         .linear_velocity = .{ 0, 0, 0 },
         .angular_velocity = .{ 0, 0, 0 },
@@ -1427,12 +1275,6 @@ test "collect carry across half-open boundary and drop commits one identity" {
     try std.testing.expectEqual(@as(u32, 1), world.feature.diagnostics().held_count);
     try std.testing.expectEqual(@as(usize, 1), (try world.feature.extract()).len);
 
-    // Unloading the source cannot affect the held entity or relationship.
-    world.districts.west_active = false;
-    try world.runtime.tick();
-    try std.testing.expectEqual(@as(usize, 0), world.bodies.live_count);
-    try std.testing.expectEqual(id, world.carriers.state.carry_mode.holding);
-
     // Exactly X=8 belongs to the east half-open cell. The default drop offset
     // changes Z only, so this also exercises canonical boundary ownership.
     world.carriers.state.pose.position = .{ 8.0, 0, 0 };
@@ -1457,7 +1299,7 @@ test "collect carry across half-open boundary and drop commits one identity" {
     try std.testing.expectEqual(interaction_contract.CarryMode.empty, world.carriers.state.carry_mode);
     const view_value = try world.feature.view(id);
     try std.testing.expectEqualDeep(
-        Ownership{ .district_owned = .{ .x = 1, .z = 0 } },
+        Ownership{ .spatially_owned = .{ .x = 1, .z = 0 } },
         view_value.ownership,
     );
     try std.testing.expect(view_value.body_present);
@@ -1511,7 +1353,7 @@ test "held presentation and drop offsets follow semantic carrier facing" {
     _ = try runCommand(&world, .{ .despawn = .{ .id = id } });
 }
 
-test "drop remains beside a carrier when configured offset crosses an inactive boundary" {
+test "drop remains beside a carrier when configured offset crosses a spatial boundary" {
     var world: TestWorld = undefined;
     try world.init(.{});
     defer world.deinit();
@@ -1530,68 +1372,54 @@ test "drop remains beside a carrier when configured offset crosses an inactive b
         .purpose = .player_requested,
     } });
     try std.testing.expectEqual(
-        DropPlacement.alternate_offset,
+        DropPlacement.configured_offset,
         outcome.dropped.placement,
     );
     try std.testing.expectEqualDeep(
-        district_contract.ChunkCoord{ .x = 0, .z = 0 },
+        district_contract.ChunkCoord{ .x = 0, .z = -1 },
         outcome.dropped.owner,
     );
-    try std.testing.expect(outcome.dropped.pose.position[2] >= -8.0);
+    try std.testing.expect(outcome.dropped.pose.position[2] < -8.0);
     try std.testing.expectEqual(interaction_contract.CarryMode.empty, world.carriers.state.carry_mode);
     try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
 }
 
-test "player drop outside residency rejects while forced cleanup preserves the item" {
+test "drop outside authored districts preserves the item beside its carrier" {
     var world: TestWorld = undefined;
     try world.init(.{});
     defer world.deinit();
 
-    const initial_position = [3]f32{ 0, 0.5, 0 };
-    const id = try spawnTestCarryable(&world, initial_position);
+    const id = try spawnTestCarryable(&world, .{ 0, 0.5, 0 });
     _ = try runCommand(&world, .{ .collect = .{
         .transaction_id = 50,
         .carrier_id = test_carrier_id,
         .carryable_id = id,
     } });
     world.carriers.state.pose.position = .{ 40, 0, 40 };
-    try expectRejection(try runCommand(&world, .{ .drop = .{
+    const outcome = try runCommand(&world, .{ .drop = .{
         .transaction_id = 51,
         .carrier_id = test_carrier_id,
         .carryable_id = id,
         .purpose = .player_requested,
-    } }), .drop, .destination_district_inactive);
-    try std.testing.expectEqual(id, world.carriers.state.carry_mode.holding);
-
-    const outcome = try runCommand(&world, .{ .drop = .{
-        .transaction_id = 52,
-        .carrier_id = test_carrier_id,
-        .carryable_id = id,
-        .purpose = .forced_cleanup,
     } });
     try std.testing.expectEqual(
-        DropPlacement.previous_active_pose,
+        DropPlacement.configured_offset,
         outcome.dropped.placement,
     );
-    try std.testing.expectEqualDeep(initial_position, outcome.dropped.pose.position);
+    try std.testing.expectEqualDeep(
+        district_contract.ChunkCoord{ .x = 3, .z = 2 },
+        outcome.dropped.owner,
+    );
+    try std.testing.expectEqualDeep([3]f32{ 40, 0.75, 38.5 }, outcome.dropped.pose.position);
     try std.testing.expectEqual(interaction_contract.CarryMode.empty, world.carriers.state.carry_mode);
+    try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
 }
 
-test "expected stale range holder residency and capacity failures are typed" {
+test "expected stale range holder and capacity failures are typed" {
     var world: TestWorld = undefined;
     try world.init(.{});
     defer world.deinit();
 
-    world.districts.west_active = false;
-    try expectRejection(
-        try runCommand(&world, .{ .spawn = .{
-            .request_id = 1,
-            .pose = .{ .position = .{ 0, 1, 0 } },
-        } }),
-        .spawn,
-        .destination_district_inactive,
-    );
-    world.districts.west_active = true;
     const id = try spawnTestCarryable(&world, .{ 0, 0.5, 0 });
     try expectRejection(
         try runCommand(&world, .{ .spawn = .{
@@ -1658,21 +1486,6 @@ test "expected stale range holder residency and capacity failures are typed" {
     );
     world.carriers.state.carry_mode = .empty;
 
-    world.districts.west_active = false;
-    try expectRejection(
-        try runCommand(&world, .{ .collect = .{
-            .transaction_id = 8,
-            .carrier_id = test_carrier_id,
-            .carryable_id = id,
-        } }),
-        .collect,
-        .owner_district_inactive,
-    );
-    try std.testing.expectEqual(@as(usize, 0), world.bodies.live_count);
-    world.districts.west_active = true;
-    try world.runtime.tick();
-    try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
-
     _ = try runCommand(&world, .{ .collect = .{
         .transaction_id = 9,
         .carrier_id = test_carrier_id,
@@ -1716,28 +1529,15 @@ test "expected stale range holder residency and capacity failures are typed" {
     );
     world.carriers.state.carry_mode = .{ .holding = id };
     world.carriers.state.pose.position = .{ 8, 0, 0 };
-    world.districts.west_active = false;
-    world.districts.east_active = false;
-    try expectRejection(
-        try runCommand(&world, .{ .drop = .{
-            .transaction_id = 13,
-            .carrier_id = test_carrier_id,
-            .carryable_id = id,
-            .purpose = .player_requested,
-        } }),
-        .drop,
-        .destination_district_inactive,
-    );
-    world.districts.east_active = true;
     _ = try runCommand(&world, .{ .drop = .{
-        .transaction_id = 14,
+        .transaction_id = 13,
         .carrier_id = test_carrier_id,
         .carryable_id = id,
         .purpose = .player_requested,
     } });
     try expectRejection(
         try runCommand(&world, .{ .drop = .{
-            .transaction_id = 15,
+            .transaction_id = 14,
             .carrier_id = test_carrier_id,
             .carryable_id = id,
             .purpose = .player_requested,
@@ -1775,7 +1575,7 @@ test "collect carrier and body failures preserve the exact world state" {
         try std.testing.expectEqual(@as(u64, 0), world.carriers.cancellations);
         try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
         const diagnostics = world.feature.diagnostics();
-        try std.testing.expectEqual(@as(u32, 1), diagnostics.district_owned_count);
+        try std.testing.expectEqual(@as(u32, 1), diagnostics.spatially_owned_count);
         try std.testing.expectEqual(@as(u32, 1), diagnostics.dynamic_body_count);
     }
     {
@@ -1800,7 +1600,7 @@ test "collect carrier and body failures preserve the exact world state" {
         try std.testing.expectEqual(@as(u64, 1), world.carriers.cancellations);
         try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
         const diagnostics = world.feature.diagnostics();
-        try std.testing.expectEqual(@as(u32, 1), diagnostics.district_owned_count);
+        try std.testing.expectEqual(@as(u32, 1), diagnostics.spatially_owned_count);
         try std.testing.expectEqual(@as(u32, 1), diagnostics.dynamic_body_count);
     }
 }
@@ -1862,90 +1662,11 @@ test "drop candidate creation and carrier detach failures roll back" {
     }
 }
 
-test "district unload and reload reconcile body state without touching neighbor" {
-    var world: TestWorld = undefined;
-    try world.init(.{});
-    defer world.deinit();
-    const id = try spawnTestCarryable(&world, .{ 1, 0.5, 0 });
-    const initial_handle = world.bodies.onlyLiveHandle().?;
-    world.bodies.states[initial_handle] = .{
-        .pose = .{ .position = .{ 2, 3, 4 } },
-        .velocity = .{
-            .linear = .{ 1, 2, 3 },
-            .angular = .{ 0.1, 0.2, 0.3 },
-        },
-    };
-
-    world.districts.west_active = false;
-    try world.runtime.tick();
-    try std.testing.expect(world.districts.east_active);
-    try std.testing.expectEqual(@as(usize, 0), world.bodies.live_count);
-    try std.testing.expectEqual(@as(usize, 0), (try world.feature.extract()).len);
-    var diagnostics = world.feature.diagnostics();
-    try std.testing.expectEqual(@as(u32, 1), diagnostics.dormant_count);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.bodies_suspended);
-    const dormant = try world.feature.view(id);
-    try std.testing.expectEqualDeep(
-        engine.physics.BodyState{
-            .pose = .{ .position = .{ 2, 3, 4 } },
-            .velocity = .{
-                .linear = .{ 1, 2, 3 },
-                .angular = .{ 0.1, 0.2, 0.3 },
-            },
-        },
-        dormant.state,
-    );
-
-    world.districts.west_active = true;
-    try world.runtime.tick();
-    try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
-    diagnostics = world.feature.diagnostics();
-    try std.testing.expectEqual(@as(u32, 0), diagnostics.dormant_count);
-    try std.testing.expectEqual(@as(u64, 1), diagnostics.bodies_resumed);
-    const reloaded_handle = world.bodies.onlyLiveHandle().?;
-    try std.testing.expect(reloaded_handle != initial_handle);
-    try std.testing.expectEqualDeep(dormant.state, world.bodies.states[reloaded_handle]);
-}
-
-test "district reconciliation failures leave residency state unchanged" {
-    {
-        var world: TestWorld = undefined;
-        try world.init(.{});
-        defer world.deinit();
-        _ = try spawnTestCarryable(&world, .{ 0, 0.5, 0 });
-        world.districts.west_active = false;
-        world.bodies.fail_next_destroy = true;
-        try std.testing.expectError(
-            error.InjectedBodyDestroyFailure,
-            world.runtime.tick(),
-        );
-        try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
-        try std.testing.expectEqual(@as(u64, 0), world.feature.diagnostics().bodies_suspended);
-    }
-    {
-        var world: TestWorld = undefined;
-        try world.init(.{});
-        defer world.deinit();
-        _ = try spawnTestCarryable(&world, .{ 0, 0.5, 0 });
-        world.districts.west_active = false;
-        try world.runtime.tick();
-        world.districts.west_active = true;
-        world.bodies.fail_next_create = true;
-        try std.testing.expectError(
-            error.InjectedBodyCreateFailure,
-            world.runtime.tick(),
-        );
-        try std.testing.expectEqual(@as(usize, 0), world.bodies.live_count);
-        try std.testing.expectEqual(@as(u32, 1), world.feature.diagnostics().dormant_count);
-        try std.testing.expectEqual(@as(u64, 0), world.feature.diagnostics().bodies_resumed);
-    }
-}
-
-test "restore rebuilds active dormant and held ownership exactly" {
+test "restore rebuilds spatial and held ownership exactly" {
     const district_record = InteractionV1{
         .id = .{ .namespace = test_namespace, .local = 50 },
         .half_extents = .{ 0.2, 0.3, 0.4 },
-        .ownership = .{ .district_owned = .{ .x = 0, .z = 0 } },
+        .ownership = .{ .spatially_owned = .{ .x = 0, .z = 0 } },
         .pose = .{ .position = .{ 2, 1, 3 } },
         .linear_velocity = .{ 1, 0, 0 },
         .angular_velocity = .{ 0, 0.25, 0 },
@@ -1964,29 +1685,6 @@ test "restore rebuilds active dormant and held ownership exactly" {
         defer std.testing.allocator.free(records);
         try std.testing.expectEqual(@as(usize, 1), records.len);
         try std.testing.expectEqualDeep(district_record, records[0]);
-    }
-    {
-        var world: TestWorld = undefined;
-        try world.init(.{});
-        defer world.deinit();
-        world.districts.west_active = false;
-        try world.feature.restoreRecords(&.{district_record});
-        try std.testing.expectEqual(@as(usize, 0), world.bodies.live_count);
-        try std.testing.expectEqual(@as(u32, 1), world.feature.diagnostics().dormant_count);
-        try std.testing.expectEqual(@as(usize, 0), (try world.feature.extract()).len);
-        world.districts.west_active = true;
-        try world.runtime.tick();
-        try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
-        try std.testing.expectEqualDeep(
-            engine.physics.BodyState{
-                .pose = district_record.pose,
-                .velocity = .{
-                    .linear = district_record.linear_velocity,
-                    .angular = district_record.angular_velocity,
-                },
-            },
-            world.bodies.states[world.bodies.onlyLiveHandle().?],
-        );
     }
     {
         var world: TestWorld = undefined;
@@ -2041,7 +1739,7 @@ test "restore relationship and body failures leave no candidate entity" {
         defer world.deinit();
         world.bodies.fail_next_create = true;
         var district_record = held_record;
-        district_record.ownership = .{ .district_owned = .{ .x = 0, .z = 0 } };
+        district_record.ownership = .{ .spatially_owned = .{ .x = 0, .z = 0 } };
         try std.testing.expectError(
             error.InjectedBodyCreateFailure,
             world.feature.restoreRecords(&.{district_record}),
@@ -2056,7 +1754,6 @@ fn logicalDigestFor(record: InteractionV1) !engine.contracts.replay.Digest {
     var world: TestWorld = undefined;
     try world.init(.{});
     defer world.deinit();
-    world.districts.west_active = false;
     try world.feature.restoreRecords(&.{record});
     var writer = engine.contracts.replay.Writer.init();
     try world.feature.writeLogicalState(&writer);
@@ -2067,7 +1764,7 @@ test "logical state canonicalizes pose aliases and covers ownership" {
     const positive = InteractionV1{
         .id = .{ .namespace = test_namespace, .local = 70 },
         .half_extents = .{ 0.25, 0.25, 0.25 },
-        .ownership = .{ .district_owned = .{ .x = 0, .z = 0 } },
+        .ownership = .{ .spatially_owned = .{ .x = 0, .z = 0 } },
         .pose = .{
             .position = .{ 0, 1, 2 },
             .rotation = .{ 0, 0, 0, 1 },
@@ -2084,7 +1781,7 @@ test "logical state canonicalizes pose aliases and covers ownership" {
     );
 
     var different_owner = positive;
-    different_owner.ownership = .{ .district_owned = .{ .x = 1, .z = 0 } };
+    different_owner.ownership = .{ .spatially_owned = .{ .x = 1, .z = 0 } };
     try std.testing.expect(!std.mem.eql(
         u8,
         &(try logicalDigestFor(positive)),

@@ -62,9 +62,8 @@ pub const Disposition = enum {
 };
 
 /// Numeric reasons come from deliberately separate closed domains. Keeping
-/// the domain beside the value prevents a protocol disposition such as
-/// `destination_unavailable = 6` from being misread as Zig error number 6 by
-/// the inspector or an exported trace consumer.
+/// the domain beside the value prevents a protocol disposition from being
+/// misread as a Zig error number by the inspector or an exported consumer.
 pub const ReasonDomain = enum {
     none,
     error_code,

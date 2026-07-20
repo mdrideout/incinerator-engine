@@ -372,7 +372,7 @@ pub fn validate(
         }
 
         switch (record.ownership) {
-            .district_owned => {},
+            .spatially_owned => {},
             .inventory_held => |holder| {
                 try validateIdentity(holder, snapshot);
                 var holder_found = false;
@@ -392,7 +392,7 @@ pub fn validate(
                 }
                 for (snapshot.interactions[0..index]) |earlier| {
                     switch (earlier.ownership) {
-                        .district_owned => {},
+                        .spatially_owned => {},
                         .inventory_held => |earlier_holder| {
                             if (std.meta.eql(earlier_holder, holder)) {
                                 return error.DuplicateInteractionHolder;

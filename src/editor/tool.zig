@@ -166,6 +166,15 @@ pub const GameplayRelevanceReason = enum {
     district_dormant,
 };
 
+pub const GameplayNavigationProgress = enum {
+    unavailable,
+    idle,
+    moving,
+    waiting_for_content,
+    dormant,
+    potentially_stalled,
+};
+
 pub const GameplayEntityView = struct {
     entity: engine.gameplay_trace.EntityRef,
     persistent_id: ?engine.PersistentId = null,
@@ -202,6 +211,10 @@ pub const GameplayEntityView = struct {
     target: ?engine.gameplay_trace.EntityRef = null,
     deadline_tick: u64 = 0,
     nearest_actor_separation: ?f32 = null,
+    navigation_progress: GameplayNavigationProgress = .unavailable,
+    navigation_target: ?[3]f32 = null,
+    navigation_no_progress_ticks: u16 = 0,
+    navigation_last_progress_tick: u64 = 0,
 };
 
 pub const GameplayActionFeedback = struct {

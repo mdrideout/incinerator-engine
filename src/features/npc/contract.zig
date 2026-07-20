@@ -140,6 +140,23 @@ pub const State = enum(u8) {
     dormant,
 };
 
+/// Read-only movement health. A potential stall is diagnostic evidence, not a
+/// gameplay exception: authority continues pursuing the same semantic goal.
+pub const NavigationProgressState = enum(u8) {
+    idle,
+    moving,
+    waiting_for_content,
+    dormant,
+    potentially_stalled,
+};
+
+pub const NavigationProgress = struct {
+    state: NavigationProgressState = .idle,
+    target: ?[3]f32 = null,
+    no_progress_ticks: u16 = 0,
+    last_progress_tick: u64 = 0,
+};
+
 /// Narrow authority port for encounter-owned movement intent. The NPC feature
 /// remains the sole owner of controller motion and semantic patrol routes.
 pub const EncounterLocomotion = union(enum) {
@@ -329,6 +346,7 @@ pub const NpcView = struct {
     facing_yaw: f32,
     controller_present: bool,
     encounter_locomotion: ?EncounterLocomotion,
+    navigation_progress: NavigationProgress,
 };
 
 pub const NpcDraw = struct {

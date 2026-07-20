@@ -1,12 +1,11 @@
 # S7 Interaction and Ownership Baseline
 
-> **Historical phase baseline.** Measurements and limits below are preserved as
-> recorded for this slice; they are not measurements of the current tree. See
-> the [current macOS readiness record](../validation/macos-readiness.md) and
-> [cleanup plan](../../CLEANUP_PLAN.md).
+> **Current semantic recharacterization.** The S7 phase originally coupled a
+> dropped carryable's body to district residency. ADR-022 removed that invalid
+> open-world policy. This record now measures the corrected ownership contract.
 
-**Recorded:** 2026-07-13
-**Status:** Complete S7 characterization
+**Recorded:** 2026-07-19
+**Status:** Recharacterized after ADR-022
 **Platform:** Native Apple Silicon macOS
 **Mode:** SDL-free `ReleaseFast`, editor excluded
 
@@ -17,12 +16,12 @@ authorities, one CharacterVirtual, and one persistent carryable. The first
 cycle loads both districts, collects the west-owned carryable, unloads the
 source while it is held, cancels a new source-district load without changing
 the held relationship, crosses through the procedural clear corridor, drops
-under east ownership, unloads to a dormant record, and reconstructs the body
-from the exact retained state.
+under east spatial ownership, unloads the east content cohort while preserving
+the carryable body, and reloads that content without reconstructing the object.
 
 The workload then alternates the same authoritative path between east and west
-for 127 more cycles. Every cycle serializes each active and dormant state twice
-and requires byte-identical repeated snapshots. Final cleanup destroys the
+for 127 more cycles. Every cycle serializes the object with loaded and unloaded
+nearby content twice and requires byte-identical repeated snapshots. Final cleanup destroys the
 character and carryable, unloads the last district, drains every feature queue,
 and requires exactly zero entities and the sandbox ground as the sole body.
 
@@ -45,9 +44,9 @@ readable result is [s7-baseline.json](s7-baseline.json).
 | Metric | Result |
 |---|---:|
 | Completed ownership cycles | 128 / 128 |
-| Fixed ticks | 11,615 |
-| Total measured wall time | 46.951 ms |
-| Cycle wall p50 / p95 / p99 / max | 0.347 / 0.381 / 0.420 / 0.430 ms |
+| Fixed ticks | 11,656 |
+| Total measured wall time | 56.166 ms |
+| Cycle wall p50 / p95 / p99 / max | 0.421 / 0.485 / 0.566 / 0.640 ms |
 | Semantic commands submitted | 11,033 |
 | Typed outcomes / events observed | 1,034 / 774 |
 | Held-owner cancellation episode | complete |
@@ -55,9 +54,9 @@ readable result is [s7-baseline.json](s7-baseline.json).
 | Peak command / outcome / event occupancy | 2 / 2 / 1 |
 | Queue rejections | 0 |
 | Canonical persistence snapshots | 512 |
-| Active snapshot bytes | 2,055–2,064 |
-| Dormant snapshot bytes | 1,947–1,954 |
-| Total serialized persistence bytes | 1,026,770 |
+| Loaded-content snapshot bytes | 3,526–3,534 |
+| Unloaded-content snapshot bytes | 3,417–3,424 |
+| Total serialized persistence bytes | 1,779,414 |
 | Final entities / bodies / active bodies | 0 / 1 / 0 |
 | Final command / outcome / event occupancy | 0 / 0 / 0 |
 
@@ -72,7 +71,8 @@ The installed Metal smoke separately proves presentation and cadence. At 240
 Hz it completed in 364 frames / 182 ticks with 182 zero-tick and zero
 multi-tick frames. At 80 Hz it completed in 124 frames / 186 ticks with zero
 zero-tick and 62 multi-tick frames. Both observed world-owned and held draws,
-source unload while held, destination drop, dormant unload, reload/resume, and
+source unload while held, destination drop, content unload with continuous
+carryable authority/body ownership, content reload, and
 clean final `entities=0`, `bodies=1`, `draws=0` shutdown.
 
 Timing values are characterization, not portable pass/fail thresholds. Exact

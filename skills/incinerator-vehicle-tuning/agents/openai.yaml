@@ -1,0 +1,4 @@
+interface:
+  display_name: "Incinerator Vehicle Tuning"
+  short_description: "Measure and tune Incinerator vehicle dynamics"
+  default_prompt: "Use $incinerator-vehicle-tuning to measure and tune the sandbox vehicle without regressing handling."

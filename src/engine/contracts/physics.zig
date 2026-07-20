@@ -250,6 +250,34 @@ pub fn canonicalVehicleWheelRotation(angle: f32) !f32 {
 /// Engine-neutral construction data for one conventional four-wheel car.
 /// Jolt settings, constraints, collision testers, and body identifiers never
 /// cross this boundary.
+pub const VehicleTireFriction = struct {
+    longitudinal_peak_slip: f32 = 0.06,
+    longitudinal_peak_friction: f32 = 1.4,
+    longitudinal_slide_slip: f32 = 0.2,
+    longitudinal_slide_friction: f32 = 1.15,
+    lateral_peak_angle_radians: f32 = std.math.degreesToRadians(3.0),
+    lateral_peak_friction: f32 = 1.65,
+    lateral_slide_angle_radians: f32 = std.math.degreesToRadians(20.0),
+    lateral_slide_friction: f32 = 1.4,
+
+    pub fn validate(self: VehicleTireFriction) !void {
+        if (!positiveFinite(self.longitudinal_peak_slip) or
+            !positiveFinite(self.longitudinal_peak_friction) or
+            !positiveFinite(self.longitudinal_slide_slip) or
+            !positiveFinite(self.longitudinal_slide_friction) or
+            !positiveFinite(self.lateral_peak_angle_radians) or
+            !positiveFinite(self.lateral_peak_friction) or
+            !positiveFinite(self.lateral_slide_angle_radians) or
+            !positiveFinite(self.lateral_slide_friction) or
+            self.longitudinal_slide_slip <= self.longitudinal_peak_slip or
+            self.lateral_slide_angle_radians <= self.lateral_peak_angle_radians or
+            self.lateral_slide_angle_radians >= std.math.pi / 2.0)
+        {
+            return error.InvalidVehicleTireFriction;
+        }
+    }
+};
+
 pub const VehicleDesc = struct {
     chassis: BodyState = .{},
     chassis_half_extents: [3]f32 = .{ 0.9, 0.25, 2.0 },
@@ -273,6 +301,7 @@ pub const VehicleDesc = struct {
     max_steer_radians: f32 = std.math.degreesToRadians(30.0),
     max_brake_torque: f32 = 1_500,
     max_hand_brake_torque: f32 = 4_000,
+    tire_friction: VehicleTireFriction = .{},
     /// S2 deliberately supports one front-wheel-drive profile rather than a
     /// generic drivetrain graph. These values remain authoritative config.
     front_differential_ratio: f32 = 3.42,
@@ -329,6 +358,7 @@ pub const VehicleDesc = struct {
         {
             return error.InvalidVehicleBrakeTorque;
         }
+        try self.tire_friction.validate();
         if (!positiveFinite(self.front_differential_ratio) or
             !std.math.isFinite(self.front_limited_slip_ratio) or
             self.front_limited_slip_ratio <= 1)

@@ -3,7 +3,9 @@
 > **Historical slice design.** This was the delivery contract for the slice at
 > closure. Detailed file layout, cohorts, and limitations below may have been
 > consolidated later. See [ADR-013](../adr/013-feature-owned-carry-interaction-and-district-ownership.md)
-> and the [cleanup plan](../../CLEANUP_PLAN.md) for current architecture.
+> and [ADR-022](../adr/022-open-world-spatial-objects-and-handling-characterization.md)
+> for current architecture. In particular, carryables are no longer gated or
+> suspended by district residency.
 
 **Status:** Complete
 **Platform:** Apple Silicon macOS only

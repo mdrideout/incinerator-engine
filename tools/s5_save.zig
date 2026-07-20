@@ -17,7 +17,7 @@ const sandbox_contracts = @import("sandbox_host_contracts");
 const fixture_coord = sandbox_contracts.ChunkCoord{ .x = 0, .z = 0 };
 const smoke_slot_id = "s5-smoke";
 const smoke_boundary_slot_id = "s8-npc-waiting";
-const smoke_dormant_slot_id = "s7-dormant";
+const smoke_content_unloaded_slot_id = "s7-content-unloaded";
 const app_slot_id = "sandbox";
 const smoke_namespace: u64 = 0x5335_5341_5645;
 const smoke_target_pose = engine.physics.Pose{
@@ -107,12 +107,12 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     const metadata = try metadataFor(content_cohort, smokeConfig());
     const slot = try slots.SlotId.parse(smoke_slot_id);
     const boundary_slot = try slots.SlotId.parse(smoke_boundary_slot_id);
-    const dormant_slot = try slots.SlotId.parse(smoke_dormant_slot_id);
+    const content_unloaded_slot = try slots.SlotId.parse(smoke_content_unloaded_slot_id);
     var store = try slots.SaveSlots.open(init.io, try slots.RootPath.parse(raw_save_root));
     defer store.deinit(init.io);
     try recoverSlot(init.io, &store, slot);
     try recoverSlot(init.io, &store, boundary_slot);
-    try recoverSlot(init.io, &store, dormant_slot);
+    try recoverSlot(init.io, &store, content_unloaded_slot);
 
     var world = try sandbox.Simulation.init(init.gpa, smokeConfig());
     defer world.deinit();
@@ -338,32 +338,32 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     {
         return error.DormantNpcStateMismatch;
     }
-    const dormant = try world.carryable(carryable_id);
-    if (!std.meta.eql(dormant.ownership, .{ .district_owned = fixture_coord }) or
-        dormant.body_present)
+    const content_unloaded = try world.carryable(carryable_id);
+    if (!std.meta.eql(content_unloaded.ownership, .{ .spatially_owned = fixture_coord }) or
+        !content_unloaded.body_present)
     {
-        return error.DormantCarryableStateMismatch;
+        return error.ContentUnloadedCarryableStateMismatch;
     }
 
-    const pre_dormant_save = try world.crate(id);
+    const pre_content_unloaded_save = try world.crate(id);
     try applyAuthoring(&world, &controller, try controller.beginEdit(.{
         .id = id,
         .target_pose = smoke_target_pose,
         .velocity = .zero,
-    }, pre_dormant_save.authoring_revision));
-    const dormant_final = try world.crate(id);
+    }, pre_content_unloaded_save.authoring_revision));
+    const content_unloaded_final = try world.crate(id);
 
-    const dormant_payload = try world.save(init.gpa);
-    defer init.gpa.free(dormant_payload);
-    const dormant_envelope = try save.encode(init.gpa, metadata, dormant_payload);
-    defer init.gpa.free(dormant_envelope);
-    try requireEnvelopeBudgets(dormant_payload, dormant_envelope);
-    try commitSlot(init.io, &store, dormant_slot, dormant_envelope);
+    const content_unloaded_payload = try world.save(init.gpa);
+    defer init.gpa.free(content_unloaded_payload);
+    const content_unloaded_envelope = try save.encode(init.gpa, metadata, content_unloaded_payload);
+    defer init.gpa.free(content_unloaded_envelope);
+    try requireEnvelopeBudgets(content_unloaded_payload, content_unloaded_envelope);
+    try commitSlot(init.io, &store, content_unloaded_slot, content_unloaded_envelope);
     std.debug.print(
         "S5_SAVE_WRITTEN id={d}:{d} character={d}:{d} carryable={d}:{d} " ++
             "npc={d}:{d} tick={d} held_payload={d} held_envelope={d} " ++
-            "waiting_payload={d} waiting_envelope={d} dormant_payload={d} " ++
-            "dormant_envelope={d} revision={d}\n",
+            "waiting_payload={d} waiting_envelope={d} content_unloaded_payload={d} " ++
+            "content_unloaded_envelope={d} revision={d}\n",
         .{
             id.namespace,
             id.local,
@@ -378,9 +378,9 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
             held_envelope.len,
             boundary_payload.len,
             boundary_envelope.len,
-            dormant_payload.len,
-            dormant_envelope.len,
-            dormant_final.authoring_revision,
+            content_unloaded_payload.len,
+            content_unloaded_envelope.len,
+            content_unloaded_final.authoring_revision,
         },
     );
 }
@@ -390,7 +390,7 @@ fn verifySmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_ro
     const metadata = try metadataFor(content_cohort, smokeConfig());
     const slot = try slots.SlotId.parse(smoke_slot_id);
     const boundary_slot = try slots.SlotId.parse(smoke_boundary_slot_id);
-    const dormant_slot = try slots.SlotId.parse(smoke_dormant_slot_id);
+    const content_unloaded_slot = try slots.SlotId.parse(smoke_content_unloaded_slot_id);
     var store = try slots.SaveSlots.open(init.io, try slots.RootPath.parse(raw_save_root));
     defer store.deinit(init.io);
     const held = try verifySmokeOwnershipSlot(
@@ -409,21 +409,21 @@ fn verifySmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_ro
         metadata,
         .held_waiting,
     );
-    const dormant = try verifySmokeOwnershipSlot(
+    const content_unloaded = try verifySmokeOwnershipSlot(
         init,
         &store,
-        dormant_slot,
+        content_unloaded_slot,
         raw_content_root,
         metadata,
-        .dormant,
+        .content_unloaded,
     );
 
     std.debug.print(
         "S5_SAVE_VERIFIED id={d}:{d} held_tick={d} held_payload={d} " ++
             "held_envelope={d} waiting_tick={d} waiting_payload={d} " ++
-            "waiting_envelope={d} dormant_tick={d} dormant_payload={d} " ++
-            "dormant_envelope={d} canonical=true active_restart=true " ++
-            "waiting_restart=true dormant_restart=true\n",
+            "waiting_envelope={d} content_unloaded_tick={d} content_unloaded_payload={d} " ++
+            "content_unloaded_envelope={d} canonical=true active_restart=true " ++
+            "waiting_restart=true content_unloaded_restart=true\n",
         .{
             smoke_namespace,
             1,
@@ -433,14 +433,14 @@ fn verifySmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_ro
             waiting.tick,
             waiting.payload_bytes,
             waiting.envelope_bytes,
-            dormant.tick,
-            dormant.payload_bytes,
-            dormant.envelope_bytes,
+            content_unloaded.tick,
+            content_unloaded.payload_bytes,
+            content_unloaded.envelope_bytes,
         },
     );
 }
 
-const SmokeOwnership = enum { held_active, held_waiting, dormant };
+const SmokeOwnership = enum { held_active, held_waiting, content_unloaded };
 
 const SmokeVerification = struct {
     tick: u64,
@@ -529,25 +529,25 @@ fn verifySmokeOwnershipSlot(
                 return error.RestoredWaitingNpcStateMismatch;
             }
         },
-        .dormant => {
-            if (!std.meta.eql(carryable.ownership, .{ .district_owned = fixture_coord }) or
-                carryable.body_present or
+        .content_unloaded => {
+            if (!std.meta.eql(carryable.ownership, .{ .spatially_owned = fixture_coord }) or
+                !carryable.body_present or
                 npc.state != .dormant or
                 npc.controller_present or
                 world.districtCount() != 1 or
                 world.districtBodyCount() != 3 or
                 world.entityCount() != 5 or
-                world.bodyCount() != 5)
+                world.bodyCount() != 6)
             {
-                return error.RestoredDormantInteractionStateMismatch;
+                return error.RestoredContentUnloadedInteractionStateMismatch;
             }
         },
     }
-    const expected_controller_count: u32 = if (expected == .dormant) 0 else 1;
+    const expected_controller_count: u32 = if (expected == .content_unloaded) 0 else 1;
     const npc_diagnostics = world.diagnostics().npc;
     const expected_active_count: u32 = if (expected == .held_active) 1 else 0;
     const expected_waiting_count: u32 = if (expected == .held_waiting) 1 else 0;
-    const expected_dormant_count: u32 = if (expected == .dormant) 1 else 0;
+    const expected_dormant_count: u32 = if (expected == .content_unloaded) 1 else 0;
     if (npc_diagnostics.active_count != expected_active_count or
         npc_diagnostics.waiting_count != expected_waiting_count or
         npc_diagnostics.dormant_count != expected_dormant_count or
@@ -754,7 +754,7 @@ fn verifyCompactNpcSnapshot(
                 return error.UnexpectedNpcSnapshotRecord;
             }
         },
-        .held_waiting, .dormant => {
+        .held_waiting, .content_unloaded => {
             const target = switch (record.goal) {
                 .navigate_to => |value| value,
                 else => return error.UnexpectedNpcSnapshotRecord,
@@ -927,7 +927,7 @@ fn preflightSnapshotCatalog(
     defer admission.deinit();
     try admission.validateLogicalRecords(parsed.value.districts);
     for (parsed.value.interactions) |record| switch (record.ownership) {
-        .district_owned => |coord| if (admission.entryForCoordinate(coord) == null) {
+        .spatially_owned => |coord| if (admission.entryForCoordinate(coord) == null) {
             return error.InteractionDistrictCoordinateNotInCatalog;
         },
         .inventory_held => {},
