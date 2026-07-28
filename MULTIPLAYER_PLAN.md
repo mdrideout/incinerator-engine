@@ -506,6 +506,14 @@ remains in MP1 and is not reclassified as complete by this network gate.
 **Outcome:** New gameplay slices can be multiplayer-aware by default without
 depending on unfinished online-service infrastructure.
 
+Current evaluation-policy note: MP4 proved bounded NPC interest, but the
+current six-NPC sandbox is intentionally too small to justify live culling.
+Solo, listen, and dedicated placements now select explicit `full_world` NPC
+publication so testing cannot confuse interest removal with gameplay
+disappearance. The bounded algorithm remains available and tested for a future
+population/scale phase; selecting it again requires measured entity/bandwidth
+pressure and a reviewed visibility policy.
+
 - [x] Solo runs through embedded authority and the client/session boundary.
 - [x] Two clients use one authoritative server under the accepted impairment
   envelope.

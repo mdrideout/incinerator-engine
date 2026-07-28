@@ -156,6 +156,7 @@ pub const GameplayRemovalReason = enum {
 pub const GameplayRelevanceReason = enum {
     unavailable,
     excluded,
+    full_world,
     same_district,
     encounter,
     proximity_enter,

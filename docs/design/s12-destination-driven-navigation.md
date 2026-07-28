@@ -31,6 +31,13 @@ destination while routes are derived, invalidated, and rebuilt around:
 - save/restore, replay, reconnect, and network impairment; and
 - installed Metal presentation plus human incident capture.
 
+The current evaluation world is a bounded cohort, not a city-scale population.
+Solo, listen, and dedicated placements therefore publish every sandbox NPC
+regardless of observer distance. The existing 20/24 m hysteretic interest
+algorithm remains available only as an explicitly selected future scale
+policy; it is not the current product default and must not masquerade as NPC
+disappearance during S12 testing.
+
 The player or tester must be able to answer:
 
 ```text
@@ -754,7 +761,7 @@ does not duplicate their implementations.
 | Persistence | Restore derives route scratch from semantic destination and current topology |
 | Replay | Navigation transition digest matches or identifies exact first divergence |
 | Multiplayer | Solo/listen/dedicated authority decisions match; network faults affect observation only |
-| Presentation | Living NPC has no unexplained projection/draw/semantic-ID gap |
+| Presentation | Every sandbox-cohort NPC uses typed `full_world` relevance; a living NPC has no unexplained projection/draw/semantic-ID gap |
 | World | Two readable corridors, named landmarks, visible blockers, and coherent collision |
 | Debugging | Inspector/overlay/bundle explain destination, route, trigger, result, and status |
 | Evidence | Manifest cohorts are live constants and schema tools advance together |

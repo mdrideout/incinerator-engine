@@ -115,9 +115,12 @@ durable `persistent_id` identity. `replication_removed` means the entity still
 exists in authority but is absent from the local client projection; inspect
 the typed relevance evidence before deciding whether this was intentional.
 NPC relevance includes included flag,
-reason (`same_district`, `encounter`, `proximity_enter`,
+reason (`full_world`, `same_district`, `encounter`, `proximity_enter`,
 `proximity_retained`, `grace`, `excluded`), evaluation/grace tick, observer and
 owner districts, observer position, distance squared, and encounter fact.
+`full_world` is the deliberate current sandbox policy: every NPC in the
+bounded evaluation cohort is published regardless of distance. The bounded
+reasons remain available for a future explicitly selected scale policy.
 Schema-4 NPC records also retain destination ID/name, navigation status and
 reason, last plan trigger/result, route/topology revision, route digest,
 cost/length/active prefix/index, replan count, optional arrival tick, temporary

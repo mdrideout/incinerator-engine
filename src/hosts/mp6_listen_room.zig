@@ -674,6 +674,7 @@ fn embeddedCoreConfig() authority_module.CoreConfig {
         .world_bootstrap = .dedicated_fixture,
         .participant_spawn = .automatic,
         .observation = .disabled,
+        .npc_interest = .full_world,
     };
 }
 

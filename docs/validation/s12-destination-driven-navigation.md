@@ -32,6 +32,8 @@ S12 now provides:
 - selected-NPC route/status inspection, an independent navigation overlay, and
   a Navigation Lab window;
 - transition-only schema-4 navigation incident evidence and strict tooling;
+- explicit `full_world` NPC publication for the current bounded sandbox cohort,
+  shared by solo, listen, and dedicated placements;
 - snapshot 13, replay 14, protocol 14, content recipe 6, and configuration
   cohort 3 with no compatibility decoders; and
 - shared solo/listen/dedicated, fault, reconnect, replay, restore, scale, and
@@ -126,6 +128,62 @@ replays.
 This `/tmp` bundle is disposable automated evidence. S12 final human acceptance
 still requires two preserved ordinary run folders: one flagged during a gate
 topology replan and one flagged during physical displacement/block recovery.
+
+### Human incident: premature NPC projection removal
+
+The preserved run
+`/Users/matt/Library/Logs/Incinerator/runs/2026-07-28T15-04-08.142Z_solo_905c53ab`
+is healthy schema-4 evidence: complete lifecycle, 100 visuals, zero suspicious
+artifacts, zero writer/queue loss, strict inspection, and a matching 7,353-tick
+semantic replay.
+
+NPC persistent ID `1:7` remained alive and present in authority. At authority
+tick 1,629 it changed from replicated/presented/drawn to excluded while roughly
+29.5 m from the observer. The owning cause was the MP4-era 20 m enter, 24 m
+retain, 30-tick grace interest policy—not navigation, camera, frustum, or draw
+submission.
+
+The correction makes NPC interest policy explicit in authority construction.
+All current solo/listen/dedicated sandbox placements select `full_world`;
+bounded hysteresis remains directly tested but opt-in. Incident state and the
+Gameplay Inspector report `relevance_reason="full_world"` and retain measured
+distance/district facts. Focused evidence after the correction:
+
+```text
+zig build test-session-contracts -Deditor=false --summary all
+46/46 steps; 151/151 tests passed
+
+zig build test-s12-navigation -Deditor=false --summary all
+101/101 steps; 292/292 tests passed
+
+zig build -Deditor=true --summary all
+59/59 steps passed
+
+zig build check-validation -Deditor=true --summary all
+33/33 steps passed
+
+zig build verify-s12 -Deditor=true -j1 --summary failures
+passed, including all inherited headless, network-fault, source-package,
+solo/listen/dedicated Metal, and five incident-hardening profiles
+```
+
+The deterministic regression proves both deliberate modes: explicitly bounded
+interest retains its existing hysteresis behavior, while `full_world` includes
+an NPC 14 km away with no grace deadline.
+
+Best-effort graphical re-execution of the exact incident completed all 7,500
+ticks and shut down cleanly. Its new unflagged run stream is:
+
+```text
+/Users/matt/Library/Logs/Incinerator/runs/2026-07-28T15-37-54.118Z_solo_4151f7da
+```
+
+Across 490 recorded NPC state samples—including and well beyond the original
+tick-1,629 cutoff—the NPC remained authority-present, replicated, presented,
+and drawn. Every sample reported `full_world`, zero samples reported
+`excluded` or relevance removal, and the maximum observer distance was
+67.9 m. This is presentation evidence, not a replacement for deterministic
+semantic replay or the remaining human perception check.
 
 ## Remaining Human Acceptance
 

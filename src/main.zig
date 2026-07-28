@@ -8033,6 +8033,7 @@ const App = struct {
         target.relevance_included = value.included;
         target.relevance_reason = switch (value.reason) {
             .excluded => .excluded,
+            .full_world => .full_world,
             .same_district => .same_district,
             .encounter => .encounter,
             .proximity_enter => .proximity_enter,

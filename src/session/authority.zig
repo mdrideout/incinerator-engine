@@ -555,6 +555,15 @@ pub const ObservationMode = enum {
     bounded,
 };
 
+/// Per-client NPC publication policy. The current bounded sandbox cohort is
+/// deliberately projected in full so human tests never mistake interest
+/// culling for gameplay disappearance. Bounded interest remains an explicit
+/// future scale policy rather than an implicit product default.
+pub const NpcInterestMode = enum {
+    full_world,
+    bounded,
+};
+
 /// Placement-neutral construction policy for the concrete sandbox authority.
 /// The simulation remains authority-owned; callers provide value configuration
 /// and select explicit bootstrap/capability behavior only.
@@ -563,6 +572,7 @@ pub const CoreConfig = struct {
     world_bootstrap: WorldBootstrap,
     participant_spawn: ParticipantSpawn,
     observation: ObservationMode,
+    npc_interest: NpcInterestMode,
 };
 
 pub const PersistenceCohort = struct {
@@ -582,6 +592,7 @@ pub const npc_interest_exit_grace_ticks: u64 = 30;
 
 pub const NpcInterestReason = enum {
     excluded,
+    full_world,
     same_district,
     encounter,
     proximity_enter,
@@ -1029,6 +1040,7 @@ const AuthorityCore = struct {
     world_bootstrap: WorldBootstrap,
     participant_spawn: ParticipantSpawn,
     observation_mode: ObservationMode,
+    npc_interest_mode: NpcInterestMode,
     observations: HostObservations = .{},
     snapshot_source_issued: bool = false,
     durable_requests: DurableRequestQueue = .{},
@@ -1175,6 +1187,7 @@ const AuthorityCore = struct {
             .world_bootstrap = core_config.world_bootstrap,
             .participant_spawn = core_config.participant_spawn,
             .observation_mode = core_config.observation,
+            .npc_interest_mode = core_config.npc_interest,
             .persistence_cohort = persistence_cohort,
             .credential_issuer = credential_issuer,
             .session = session,
@@ -4697,6 +4710,7 @@ const AuthorityCore = struct {
             else
                 false else false;
             if (!evaluateNpcInterest(
+                self.npc_interest_mode,
                 &replication.npc_interest[npc_index],
                 snapshot.server_tick,
                 interest_origin,
@@ -4737,6 +4751,7 @@ const AuthorityCore = struct {
             const proxy = npc.death_proxy orelse continue;
             const interest_origin = observer_position orelse continue;
             if (!evaluateNpcInterest(
+                self.npc_interest_mode,
                 &replication.npc_interest[npc_index],
                 snapshot.server_tick,
                 interest_origin,
@@ -5740,6 +5755,7 @@ fn dedicatedCoreConfig() CoreConfig {
         .world_bootstrap = .dedicated_fixture,
         .participant_spawn = .automatic,
         .observation = .disabled,
+        .npc_interest = .full_world,
     };
 }
 
@@ -6673,6 +6689,7 @@ fn persistentLessThan(lhs: engine.PersistentId, rhs: engine.PersistentId) bool {
 }
 
 fn evaluateNpcInterest(
+    mode: NpcInterestMode,
     state: *NpcInterestState,
     authority_tick: u64,
     observer_position: [3]f32,
@@ -6690,7 +6707,10 @@ fn evaluateNpcInterest(
 
     var included = false;
     var reason: NpcInterestReason = .excluded;
-    if (same_district) {
+    if (mode == .full_world) {
+        included = true;
+        reason = .full_world;
+    } else if (same_district) {
         included = true;
         reason = .same_district;
     } else if (encounter_relevant) {
@@ -6707,7 +6727,9 @@ fn evaluateNpcInterest(
         reason = .grace;
     }
 
-    if (included and reason != .grace) {
+    if (mode == .full_world) {
+        state.grace_until_tick = 0;
+    } else if (included and reason != .grace) {
         state.grace_until_tick = authority_tick +| npc_interest_exit_grace_ticks;
     } else if (!included) {
         state.grace_until_tick = 0;
@@ -7020,6 +7042,7 @@ fn testEmbeddedCoreConfig(
         .world_bootstrap = .host_managed,
         .participant_spawn = participant_spawn,
         .observation = .bounded,
+        .npc_interest = .full_world,
     };
 }
 
@@ -8619,6 +8642,7 @@ test "npc interest retains nearby and engaged actors across district boundaries"
     var state = NpcInterestState{};
 
     try std.testing.expect(evaluateNpcInterest(
+        .bounded,
         &state,
         10,
         .{ 0, 0, 0 },
@@ -8631,6 +8655,7 @@ test "npc interest retains nearby and engaged actors across district boundaries"
 
     state = .{};
     try std.testing.expect(evaluateNpcInterest(
+        .bounded,
         &state,
         20,
         .{ 0, 0, 0 },
@@ -8643,6 +8668,7 @@ test "npc interest retains nearby and engaged actors across district boundaries"
     try std.testing.expectEqual(@as(u64, 50), state.grace_until_tick);
 
     try std.testing.expect(evaluateNpcInterest(
+        .bounded,
         &state,
         21,
         .{ 0, 0, 0 },
@@ -8655,6 +8681,7 @@ test "npc interest retains nearby and engaged actors across district boundaries"
     try std.testing.expectEqual(@as(u64, 51), state.grace_until_tick);
 
     try std.testing.expect(evaluateNpcInterest(
+        .bounded,
         &state,
         51,
         .{ 0, 0, 0 },
@@ -8665,6 +8692,7 @@ test "npc interest retains nearby and engaged actors across district boundaries"
     ));
     try std.testing.expectEqual(NpcInterestReason.grace, state.reason);
     try std.testing.expect(!evaluateNpcInterest(
+        .bounded,
         &state,
         52,
         .{ 0, 0, 0 },
@@ -8676,6 +8704,7 @@ test "npc interest retains nearby and engaged actors across district boundaries"
     try std.testing.expectEqual(NpcInterestReason.excluded, state.reason);
 
     try std.testing.expect(evaluateNpcInterest(
+        .bounded,
         &state,
         60,
         .{ 0, 0, 0 },
@@ -8686,6 +8715,7 @@ test "npc interest retains nearby and engaged actors across district boundaries"
     ));
     try std.testing.expectEqual(NpcInterestReason.encounter, state.reason);
     try std.testing.expect(evaluateNpcInterest(
+        .bounded,
         &state,
         61,
         .{ 0, 0, 0 },
@@ -8695,9 +8725,24 @@ test "npc interest retains nearby and engaged actors across district boundaries"
         false,
     ));
     try std.testing.expectEqual(NpcInterestReason.grace, state.reason);
+
+    state = .{};
+    try std.testing.expect(evaluateNpcInterest(
+        .full_world,
+        &state,
+        70,
+        .{ 0, 0, 0 },
+        west,
+        .{ 10_000, 0, 10_000 },
+        east,
+        false,
+    ));
+    try std.testing.expectEqual(NpcInterestReason.full_world, state.reason);
+    try std.testing.expectEqual(@as(u64, 0), state.grace_until_tick);
+    try std.testing.expectEqual(@as(f32, 200_000_000), state.distance_squared_xz);
 }
 
-test "relevant snapshot keeps a nearby NPC across the district seam" {
+test "full-world NPC policy projects the sandbox cohort across district seams" {
     const authority = try DedicatedAuthority.init(std.testing.allocator);
     defer authority.deinit();
     const transport = TransportConnection{ .value = 0x4e50_4301 };
@@ -8731,18 +8776,10 @@ test "relevant snapshot keeps a nearby NPC across the district seam" {
     for (draws) |draw| {
         if (!std.meta.eql(draw.owner, sandbox_district_recipe.navigation_west_coord)) continue;
         const index = core.findNpcByPersistent(draw.persistent_id) orelse continue;
-        const observer = (try core.participantAvatarWorldPosition(participant_index)).?;
-        const view = try core.simulation.npc(draw.persistent_id);
-        const dx = view.position[0] - observer[0];
-        const dz = view.position[2] - observer[2];
-        if (dx * dx + dz * dz <=
-            npc_interest_enter_distance * npc_interest_enter_distance)
-        {
-            west_npc = index;
-            break;
-        }
+        west_npc = index;
+        break;
     }
-    const npc_index = west_npc orelse return error.MissingNearbyCrossDistrictNpc;
+    const npc_index = west_npc orelse return error.MissingCrossDistrictNpc;
     const snapshot = try core.buildRelevantSnapshot(participant_index);
     var found = false;
     for (snapshot.npcs[0..snapshot.npc_count]) |npc| {
@@ -8754,7 +8791,7 @@ test "relevant snapshot keeps a nearby NPC across the district seam" {
     try std.testing.expect(found);
     const interest = core.replication[participant_index].npc_interest[npc_index];
     try std.testing.expect(interest.included);
-    try std.testing.expect(interest.reason != .excluded);
+    try std.testing.expectEqual(NpcInterestReason.full_world, interest.reason);
     try std.testing.expect(!std.meta.eql(
         interest.observer_district,
         interest.owner_district,

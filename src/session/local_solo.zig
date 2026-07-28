@@ -1062,6 +1062,7 @@ fn initOwned(
         .world_bootstrap = .host_managed,
         .participant_spawn = .host_managed,
         .observation = .bounded,
+        .npc_interest = .full_world,
     };
     var authority = if (diagnostic_fault_probe)
         try session_authority.EmbeddedAuthority.initWithDiagnosticFaultProbe(

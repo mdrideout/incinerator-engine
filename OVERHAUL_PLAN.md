@@ -1816,7 +1816,12 @@ recommendations.
     recorded in
     [the S12 validation ledger](docs/validation/s12-destination-driven-navigation.md);
     its human walkthrough and two incident captures are the remaining phase
-    checkpoint.
+    checkpoint. A first human incident found the historical 20/24 m NPC
+    interest cutoff was still active in the small evaluation world. The
+    authority now selects typed `full_world` NPC publication consistently for
+    solo/listen/dedicated sandbox placements while retaining bounded interest
+    only as an explicit future scale policy; fresh human continuity
+    confirmation remains open.
 48. [ ] **S13 — Authored population and sandbox activity.** Introduce explicit
     pedestrian roles, destination/activity producers, sufficient spawn and
     navigation slots, bounded population replacement, and readable activity
@@ -1921,3 +1926,4 @@ recommendations.
 | 2026-07-27 | Reconciled the accepted macOS baseline and proposed the next product sequence | Current human testing reports the game functioning well; IC5 and the playable-boundary checkpoint are closed in current-status records. S12 destination-driven navigation is the recommended next slice, followed by authored population, ranged combat, richer districts, the separate game-package proof, and only then broader network productization. |
 | 2026-07-27 | Completed the repository-grounded S12 planning contract | Proposed ADR-023, a seven-phase implementation/acceptance plan, and a bounded higher-fidelity two-district urban evaluation world. The plan preserves existing authority owners, separates semantic destination from transient route, requires truthful waiting/blocked/unreachable evidence, replaces displacement snap-back with re-anchoring, and makes inspector/overlay/incident/replay proof part of acceptance. |
 | 2026-07-28 | Implemented S12 destination-driven navigation and completed automated acceptance | Accepted ADR-023; added six semantic destinations, a deterministic weighted planner, lineage/status/recovery, two transactional seam gates, an installed two-district urban test world, Navigation Lab and overlays, schema-4 incident evidence, snapshot 13/replay 14/protocol 14, persistence/replay/fault/placement coverage, separated planner/real-Jolt measurement, and two-rate Metal acceptance. The focused gate passes 104/104 steps with 293/293 tests; the full `verify-s12` aggregate, source package/headless lifecycle, and all five installed incident-hardening profiles pass. The final human walkthrough and two preserved incident captures remain. |
+| 2026-07-28 | Corrected premature NPC projection removal found by the first S12 human incident | Healthy schema-4 evidence and matching 7,353-tick replay proved a live NPC was intentionally omitted at roughly 29.5 m by the historical 20/24 m cross-district interest policy. Current solo/listen/dedicated sandbox placements now select explicit `full_world` NPC publication with typed diagnostic reason; bounded hysteresis remains opt-in and tested for a later measured scale phase. Focused session/S12, serialized full `verify-s12`, editor product, and validation gates pass. Exact graphical re-execution completed 7,500 ticks with 490/490 NPC samples authority-present/replicated/presented/drawn through 67.9 m; fresh human continuity confirmation remains. |

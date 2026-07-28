@@ -27,7 +27,9 @@
   phase/system/error and authority-cycle stage before assigning the owner; a
   generic `runtime_system_fault` code alone is not an exact root cause.
 - For NPC disappearance, inspect interest reason, observer/entity districts,
-  distance, encounter retention, and grace deadline.
+  distance, encounter retention, and grace deadline. Current sandbox
+  solo/listen/dedicated runs should report included `full_world`; any
+  `relevance` removal in that policy is a defect, not expected distance culling.
 - For NPC navigation, compare semantic destination and route revision before
   and after the report. Require a typed trigger/result for every change,
   distinguish inactive-content waiting from gate/physical blockage, and prove

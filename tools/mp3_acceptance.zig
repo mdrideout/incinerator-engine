@@ -30,6 +30,7 @@ fn deterministicCoreConfig() authority_module.CoreConfig {
         .world_bootstrap = .host_managed,
         .participant_spawn = .automatic,
         .observation = .disabled,
+        .npc_interest = .full_world,
     };
 }
 
