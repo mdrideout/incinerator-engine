@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and summarize an Incinerator schema-3 incident bundle."""
+"""Validate and summarize an Incinerator schema-4 incident bundle."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import sys
 
-SCHEMA = 3
+SCHEMA = 4
 TERMINAL = {"complete", "partial"}
 HUMAN_ANCHORS = {
     -5000: "human_m5000ms",
@@ -46,7 +46,7 @@ def read_ndjson(path: Path) -> list[dict]:
         except json.JSONDecodeError as exc:
             raise ValueError(f"invalid NDJSON {path}:{number}: {exc}") from exc
         if not isinstance(value, dict) or value.get("schema") != SCHEMA or not value.get("kind"):
-            raise ValueError(f"invalid schema-3 record {path}:{number}")
+            raise ValueError(f"invalid schema-{SCHEMA} record {path}:{number}")
         records.append(value)
     return records
 
@@ -92,7 +92,7 @@ def validate_hardening(
 ) -> None:
     profile = manifest.get("hardening_profile")
     if not isinstance(profile, str):
-        raise ValueError("schema-3 manifest lacks a hardening profile")
+        raise ValueError(f"schema-{SCHEMA} manifest lacks a hardening profile")
     if "screenshot_fence_failures" not in manifest:
         raise ValueError("hardening manifest lacks screenshot fence health")
     fence_failures = int(manifest["screenshot_fence_failures"])
@@ -168,7 +168,7 @@ def main() -> int:
 
     manifest = read_json(root / "manifest.json")
     if manifest.get("schema") != SCHEMA or manifest.get("kind") != "incinerator_incident_run":
-        raise ValueError("unsupported incident manifest; schema 3 is required")
+        raise ValueError(f"unsupported incident manifest; schema {SCHEMA} is required")
     classes = manifest.get("bytes_by_class", {})
     if sum(int(classes.get(key, 0)) for key in ("streams", "visual", "replay", "metadata")) != int(manifest["bytes_written"]):
         raise ValueError("manifest byte classes do not equal bytes_written")
@@ -235,6 +235,8 @@ def main() -> int:
     capabilities = manifest.get("evidence_capabilities")
     if not isinstance(capabilities, dict):
         raise ValueError("invalid evidence capability matrix")
+    if capabilities.get("navigation_lineage") is not True:
+        raise ValueError("schema-4 evidence lacks exact navigation lineage")
     print("capabilities: " + json.dumps(capabilities, sort_keys=True))
     print("streams: " + ", ".join(f"{name}={count}" for name, count in stream_counts.items()))
     print("record kinds: " + ", ".join(f"{name}={count}" for name, count in sorted(kinds.items())))
@@ -253,7 +255,7 @@ def main() -> int:
             raise ValueError(f"missing anomaly marker: {marker_path}")
         marker = read_json(marker_path)
         if marker.get("schema") != SCHEMA or marker.get("kind") != "incident_marker":
-            raise ValueError(f"invalid schema-3 marker for anomaly {anomaly_id}")
+            raise ValueError(f"invalid schema-{SCHEMA} marker for anomaly {anomaly_id}")
         if marker.get("lifecycle_status") != reduced.get("lifecycle_status"):
             raise ValueError(f"marker lifecycle mismatch for anomaly {anomaly_id}")
         windows = {}
@@ -262,6 +264,16 @@ def main() -> int:
         relevance: dict[str, int] = {}
         entity_kinds: dict[str, int] = {}
         retained_faults: list[str] = []
+        navigation_statuses: dict[str, int] = {}
+        navigation_reasons: dict[str, int] = {}
+        navigation_triggers: dict[str, int] = {}
+        navigation_results: dict[str, int] = {}
+        navigation_destinations: set[int] = set()
+        navigation_route_revisions: set[int] = set()
+        navigation_topology_revisions: set[int] = set()
+        navigation_transition_count = 0
+        navigation_max_replans = 0
+        navigation_max_exclusions = 0
         for stream in ("timeline", "state", "input", "metrics"):
             records = read_ndjson(folder / f"{stream}-window.ndjson")
             windows[stream] = len(records)
@@ -291,6 +303,49 @@ def main() -> int:
                 entity_kind = record.get("entity_kind")
                 if entity_kind:
                     entity_kinds[str(entity_kind)] = entity_kinds.get(str(entity_kind), 0) + 1
+                if record.get("action") == "navigation":
+                    navigation_transition_count += 1
+                    navigation = record.get("navigation")
+                    if isinstance(navigation, dict):
+                        destination = navigation.get("destination_id")
+                        if destination is not None:
+                            navigation_destinations.add(int(destination))
+                        navigation_route_revisions.add(
+                            int(navigation.get("route_revision", 0))
+                        )
+                        navigation_topology_revisions.add(
+                            int(navigation.get("topology_revision", 0))
+                        )
+                if entity_kind == "npc":
+                    status = str(record.get("navigation_status", "unavailable"))
+                    reason = str(record.get("navigation_reason", "unavailable"))
+                    trigger = str(record.get("navigation_trigger", "unavailable"))
+                    result = str(record.get("navigation_result", "unavailable"))
+                    if status != "unavailable":
+                        navigation_statuses[status] = navigation_statuses.get(status, 0) + 1
+                    if reason != "unavailable":
+                        navigation_reasons[reason] = navigation_reasons.get(reason, 0) + 1
+                    if trigger != "unavailable":
+                        navigation_triggers[trigger] = navigation_triggers.get(trigger, 0) + 1
+                    if result != "unavailable":
+                        navigation_results[result] = navigation_results.get(result, 0) + 1
+                    destination = record.get("navigation_destination")
+                    if destination is not None:
+                        navigation_destinations.add(int(destination))
+                    navigation_route_revisions.add(
+                        int(record.get("navigation_route_revision", 0))
+                    )
+                    navigation_topology_revisions.add(
+                        int(record.get("navigation_topology_revision", 0))
+                    )
+                    navigation_max_replans = max(
+                        navigation_max_replans,
+                        int(record.get("navigation_replan_count", 0)),
+                    )
+                    navigation_max_exclusions = max(
+                        navigation_max_exclusions,
+                        int(record.get("navigation_physical_exclusion_count", 0)),
+                    )
         visuals = read_ndjson(folder / "visual-index.ndjson") if (folder / "visual-index.ndjson").exists() else []
         suspicious = 0
         offsets: list[int] = []
@@ -326,7 +381,15 @@ def main() -> int:
             f"suspicious={suspicious} failures={artifacts.get('failures')} "
             f"entity_kinds={entity_kinds} removals={removals} "
             f"removals_by_kind={removals_by_kind} relevance={relevance} "
-            f"retained_faults={retained_faults}"
+            f"retained_faults={retained_faults} "
+            f"navigation={{'transitions': {navigation_transition_count}, "
+            f"'destinations': {sorted(navigation_destinations)}, "
+            f"'route_revisions': {sorted(navigation_route_revisions)}, "
+            f"'topology_revisions': {sorted(navigation_topology_revisions)}, "
+            f"'statuses': {navigation_statuses}, 'reasons': {navigation_reasons}, "
+            f"'triggers': {navigation_triggers}, 'results': {navigation_results}, "
+            f"'max_replans': {navigation_max_replans}, "
+            f"'max_exclusions': {navigation_max_exclusions}}}"
         )
     print(f"replay: {'present' if replay.is_file() else 'missing'}")
     print(f"handoff: {'present' if handoff.is_file() else 'missing'}")

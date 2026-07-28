@@ -1,8 +1,8 @@
-//! SDL/GPU-free schema-3 validator and concise incident-bundle index.
+//! SDL/GPU-free schema-4 validator and concise incident-bundle index.
 
 const std = @import("std");
 
-const schema_version: u16 = 3;
+const schema_version: u16 = 4;
 const maximum_manifest_bytes = 64 * 1024;
 const maximum_segment_bytes = 8 * 1024 * 1024;
 const maximum_anomalies = 64;
@@ -14,6 +14,7 @@ const EvidenceCapabilities = struct {
     carryables: []const u8,
     semantic_vehicle_parts: bool,
     atomic_note_handoff: bool,
+    navigation_lineage: bool,
 };
 
 const Manifest = struct {
@@ -336,13 +337,14 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
         !std.mem.eql(u8, capabilities.vehicles, "full_boundary") or
         !std.mem.eql(u8, capabilities.carryables, "full_boundary") or
         !capabilities.semantic_vehicle_parts or
-        !capabilities.atomic_note_handoff)
+        !capabilities.atomic_note_handoff or
+        !capabilities.navigation_lineage)
     {
         return error.InvalidEvidenceCapabilities;
     }
     std.debug.print(
-        "  capabilities characters={s} npcs={s} vehicles={s} carryables={s} vehicle_parts={} atomic_note={}\n",
-        .{ capabilities.characters, capabilities.npcs, capabilities.vehicles, capabilities.carryables, capabilities.semantic_vehicle_parts, capabilities.atomic_note_handoff },
+        "  capabilities characters={s} npcs={s} vehicles={s} carryables={s} vehicle_parts={} atomic_note={} navigation_lineage={}\n",
+        .{ capabilities.characters, capabilities.npcs, capabilities.vehicles, capabilities.carryables, capabilities.semantic_vehicle_parts, capabilities.atomic_note_handoff, capabilities.navigation_lineage },
     );
 
     var anomalies: [maximum_anomalies]AnomalySummary = @splat(.{});
@@ -859,6 +861,7 @@ fn validateNdjson(
             counts.invalid += 1;
             continue;
         }
+        try validateNavigationEvidence(object, kind.string);
         const sequence = object.get("recorder_sequence") orelse {
             counts.invalid += 1;
             continue;
@@ -927,6 +930,116 @@ fn validateNdjson(
     }
 }
 
+fn validateNavigationEvidence(object: anytype, kind: []const u8) !void {
+    if (std.mem.eql(u8, kind, "recorder_metrics")) {
+        const value = object.get("navigation") orelse
+            return error.MissingNavigationEvidence;
+        const navigation = switch (value) {
+            .object => |map| map,
+            else => return error.InvalidNavigationEvidence,
+        };
+        inline for ([_][]const u8{
+            "npc_count",
+            "following",
+            "waiting_for_content",
+            "blocked",
+            "arrived",
+            "structurally_unreachable",
+            "total_replans",
+            "physical_exclusions",
+            "maximum_route_length",
+            "maximum_route_cost",
+        }) |key| {
+            _ = try requiredJsonU64(navigation, key);
+        }
+        return;
+    }
+    if (std.mem.eql(u8, kind, "gameplay_trace")) {
+        if (!std.mem.eql(u8, try requiredString(object, "action"), "navigation")) return;
+        if (!std.mem.eql(
+            u8,
+            try requiredString(object, "reason_domain"),
+            "navigation_reason",
+        )) return error.InvalidNavigationEvidence;
+        const value = object.get("navigation") orelse
+            return error.MissingNavigationEvidence;
+        const navigation = switch (value) {
+            .object => |map| map,
+            else => return error.InvalidNavigationEvidence,
+        };
+        const route_length = try requiredJsonU64(navigation, "route_length");
+        if (route_length > 16) return error.InvalidNavigationEvidence;
+        _ = try requiredJsonU64(navigation, "route_revision");
+        _ = try requiredJsonU64(navigation, "topology_revision");
+        _ = try requiredJsonU64(navigation, "route_digest");
+        _ = try requiredJsonU64(navigation, "route_cost");
+        _ = try requiredJsonU64(navigation, "active_prefix_length");
+        _ = try requiredJsonU64(navigation, "route_index");
+        const nodes_value = navigation.get("nodes") orelse
+            return error.MissingNavigationEvidence;
+        const nodes = switch (nodes_value) {
+            .array => |array| array,
+            else => return error.InvalidNavigationEvidence,
+        };
+        if (nodes.items.len != @as(usize, @intCast(route_length))) {
+            return error.InvalidNavigationEvidence;
+        }
+        for (nodes.items) |node_value| {
+            const node = switch (node_value) {
+                .object => |map| map,
+                else => return error.InvalidNavigationEvidence,
+            };
+            _ = try requiredJsonU64(node, "index");
+            const district_value = node.get("district") orelse
+                return error.MissingNavigationEvidence;
+            const district = switch (district_value) {
+                .array => |array| array,
+                else => return error.InvalidNavigationEvidence,
+            };
+            if (district.items.len != 2) return error.InvalidNavigationEvidence;
+            for (district.items) |coordinate| switch (coordinate) {
+                .integer => {},
+                else => return error.InvalidNavigationEvidence,
+            };
+        }
+        return;
+    }
+    if (!std.mem.eql(u8, kind, "entity_state") or
+        !std.mem.eql(u8, try requiredString(object, "entity_kind"), "npc"))
+    {
+        return;
+    }
+    inline for ([_][]const u8{
+        "navigation_status",
+        "navigation_reason",
+        "navigation_trigger",
+        "navigation_result",
+    }) |key| {
+        _ = try requiredString(object, key);
+    }
+    inline for ([_][]const u8{
+        "navigation_route_revision",
+        "navigation_topology_revision",
+        "navigation_route_digest",
+        "navigation_route_cost",
+        "navigation_route_length",
+        "navigation_active_prefix_length",
+        "navigation_route_index",
+        "navigation_replan_count",
+        "navigation_physical_exclusion_count",
+        "navigation_physical_block_retry_tick",
+    }) |key| {
+        _ = try requiredJsonU64(object, key);
+    }
+    inline for ([_][]const u8{
+        "navigation_destination",
+        "navigation_destination_name",
+        "navigation_arrival_tick",
+    }) |key| {
+        if (object.get(key) == null) return error.MissingNavigationEvidence;
+    }
+}
+
 fn requiredString(object: anytype, key: []const u8) ![]const u8 {
     const value = object.get(key) orelse return error.MissingRetainedFaultField;
     return switch (value) {
@@ -943,6 +1056,19 @@ fn requiredU64(object: anytype, key: []const u8) !u64 {
         else
             error.InvalidRetainedFaultField,
         else => error.InvalidRetainedFaultField,
+    };
+}
+
+fn requiredJsonU64(object: anytype, key: []const u8) !u64 {
+    const value = object.get(key) orelse return error.MissingNavigationEvidence;
+    return switch (value) {
+        .integer => |integer| if (integer >= 0)
+            @intCast(integer)
+        else
+            error.InvalidNavigationEvidence,
+        .number_string => |text| std.fmt.parseInt(u64, text, 10) catch
+            error.InvalidNavigationEvidence,
+        else => error.InvalidNavigationEvidence,
     };
 }
 

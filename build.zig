@@ -220,6 +220,7 @@ pub fn build(b: *std.Build) void {
     const district_contract_module = graph.district_contract;
     const sandbox_district_recipe_module = graph.sandbox_district_recipe;
     const navigation_contract_module = graph.navigation_contract;
+    const navigation_planner_module = graph.navigation_planner;
     const sandbox_navigation_module = graph.sandbox_navigation;
     const interaction_contract_module = graph.interaction_contract;
     const character_contract_module = graph.character_contract;
@@ -321,12 +322,22 @@ pub fn build(b: *std.Build) void {
         .optimize = .ReleaseSafe,
         .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
     });
+    const navigation_contract_host_module = b.createModule(.{
+        .root_source_file = b.path("src/features/navigation_contract.zig"),
+        .target = b.graph.host,
+        .optimize = .ReleaseSafe,
+        .imports = &.{.{
+            .name = "district_contract",
+            .module = district_contract_host_module,
+        }},
+    });
     const sandbox_district_recipe_host_module = b.createModule(.{
         .root_source_file = b.path("src/sandbox/district_recipe.zig"),
         .target = b.graph.host,
         .optimize = .ReleaseSafe,
         .imports = &.{
             .{ .name = "district_contract", .module = district_contract_host_module },
+            .{ .name = "navigation_contract", .module = navigation_contract_host_module },
         },
     });
 
@@ -409,6 +420,7 @@ pub fn build(b: *std.Build) void {
     });
     addClientImport(exe, validation_exe, "content", content_module);
     addClientImport(exe, validation_exe, "engine_contracts", contracts_module);
+    addClientImport(exe, validation_exe, "session_protocol", session_protocol_module);
     const sandbox_host_contracts_module = graph.sandbox_host_contracts;
     addClientImport(
         exe,
@@ -615,6 +627,56 @@ pub fn build(b: *std.Build) void {
             .bundle = cooked_fixture_repeat.output,
         }},
     );
+    const cooked_s12_west = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s12_world_west/district.gltf",
+        "fixtures/s12_world_west/PROVENANCE.md",
+        "s12_world_west.icdb",
+        "district/s12_world_west",
+        0,
+        0,
+        &.{},
+    );
+    const cooked_s12_east = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s12_world_east/district.gltf",
+        "fixtures/s12_world_east/PROVENANCE.md",
+        "s12_world_east.icdb",
+        "district/s12_world_east",
+        1,
+        0,
+        &.{.{
+            .semantic_id = "district.west",
+            .bundle = cooked_s12_west.output,
+        }},
+    );
+    const cooked_s12_west_repeat = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s12_world_west/district.gltf",
+        "fixtures/s12_world_west/PROVENANCE.md",
+        "s12_world_west_repeat.icdb",
+        "district/s12_world_west",
+        0,
+        0,
+        &.{},
+    );
+    const cooked_s12_east_repeat = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s12_world_east/district.gltf",
+        "fixtures/s12_world_east/PROVENANCE.md",
+        "s12_world_east_repeat.icdb",
+        "district/s12_world_east",
+        1,
+        0,
+        &.{.{
+            .semantic_id = "district.west",
+            .bundle = cooked_s12_west_repeat.output,
+        }},
+    );
     const content_catalog_cooker = b.addExecutable(.{
         .name = "incinerator_content_catalog_cooker",
         .root_module = b.createModule(.{
@@ -628,25 +690,25 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    const cooked_catalog = runContentCatalogCooker(
+    const cooked_s12_catalog = runContentCatalogCooker(
         b,
         content_catalog_cooker,
-        "fixtures/s6_catalog/catalog.txt",
-        "catalog.icat",
-        &.{ cooked_fixture.output, cooked_east.output },
+        "fixtures/s12_world_catalog/catalog.txt",
+        "s12_catalog.icat",
+        &.{ cooked_s12_west.output, cooked_s12_east.output },
     );
-    const cooked_catalog_repeat = runContentCatalogCooker(
+    const cooked_s12_catalog_repeat = runContentCatalogCooker(
         b,
         content_catalog_cooker,
-        "fixtures/s6_catalog/catalog.txt",
-        "catalog_repeat.icat",
-        &.{ cooked_fixture_repeat.output, cooked_east_repeat.output },
+        "fixtures/s12_world_catalog/catalog.txt",
+        "s12_catalog_repeat.icat",
+        &.{ cooked_s12_west_repeat.output, cooked_s12_east_repeat.output },
     );
     const cook_content_step = b.step(
         "cook-content",
         "Cook the two self-authored district fixtures and declared dependency closure",
     );
-    cook_content_step.dependOn(cooked_catalog.step);
+    cook_content_step.dependOn(cooked_s12_catalog.step);
     const install_cooked_fixture = b.addInstallFile(
         cooked_fixture.output,
         "share/incinerator/content/district/s3_fixture.icdb",
@@ -659,18 +721,38 @@ pub fn build(b: *std.Build) void {
         cooked_east.output,
         "share/incinerator/content/district/s6_east.icdb",
     );
+    const install_cooked_s12_west = b.addInstallFile(
+        cooked_s12_west.output,
+        "share/incinerator/content/district/s12_world_west.icdb",
+    );
+    const install_s12_west_provenance = b.addInstallFile(
+        b.path("fixtures/s12_world_west/PROVENANCE.md"),
+        "share/incinerator/content/district/s12_world_west.PROVENANCE.md",
+    );
+    const install_cooked_s12_east = b.addInstallFile(
+        cooked_s12_east.output,
+        "share/incinerator/content/district/s12_world_east.icdb",
+    );
+    const install_s12_east_provenance = b.addInstallFile(
+        b.path("fixtures/s12_world_east/PROVENANCE.md"),
+        "share/incinerator/content/district/s12_world_east.PROVENANCE.md",
+    );
     const install_east_provenance = b.addInstallFile(
         b.path("fixtures/s6_east/PROVENANCE.md"),
         "share/incinerator/content/district/s6_east.PROVENANCE.md",
     );
     const install_cooked_catalog = b.addInstallFile(
-        cooked_catalog.output,
+        cooked_s12_catalog.output,
         "share/incinerator/content/district/catalog.icat",
     );
     b.getInstallStep().dependOn(&install_cooked_fixture.step);
     b.getInstallStep().dependOn(&install_fixture_provenance.step);
     b.getInstallStep().dependOn(&install_cooked_east.step);
     b.getInstallStep().dependOn(&install_east_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_s12_west.step);
+    b.getInstallStep().dependOn(&install_s12_west_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_s12_east.step);
+    b.getInstallStep().dependOn(&install_s12_east_provenance.step);
     b.getInstallStep().dependOn(&install_cooked_catalog.step);
 
     const content_tests = b.addTest(.{ .root_module = content_host_module });
@@ -687,7 +769,11 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("tools/content_bundle_verify.zig"),
             .target = b.graph.host,
             .optimize = optimize,
-            .imports = &.{.{ .name = "content", .module = content_host_module }},
+            .imports = &.{
+                .{ .name = "content", .module = content_host_module },
+                .{ .name = "district_contract", .module = district_contract_module },
+                .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
+            },
         }),
     });
     const verify_cooked_bundle = b.addRunArtifact(content_bundle_verify);
@@ -725,10 +811,10 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const verify_cooked_catalog = b.addRunArtifact(content_catalog_verify);
-    verify_cooked_catalog.addFileArg(cooked_catalog.output);
-    verify_cooked_catalog.addFileArg(cooked_catalog_repeat.output);
-    verify_cooked_catalog.addFileArg(cooked_fixture.output);
-    verify_cooked_catalog.addFileArg(cooked_east.output);
+    verify_cooked_catalog.addFileArg(cooked_s12_catalog.output);
+    verify_cooked_catalog.addFileArg(cooked_s12_catalog_repeat.output);
+    verify_cooked_catalog.addFileArg(cooked_s12_west.output);
+    verify_cooked_catalog.addFileArg(cooked_s12_east.output);
     verify_cooked_catalog.addFileArg(b.path("config/headless-content.json"));
     verify_cooked_catalog.addFileArg(b.path("config/headless.example.json"));
     content_cooker_test_step.dependOn(&verify_cooked_catalog.step);
@@ -991,6 +1077,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "developer_profile", .module = developer_profile_module },
             .{ .name = "developer_visualization", .module = developer_visualization_module },
             .{ .name = "session_authority_diagnostics", .module = session_authority_diagnostics_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
         },
@@ -1834,6 +1921,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "npc_contract", .module = npc_contract_module },
             .{ .name = "interaction_feature", .module = interaction_feature_module },
         },
     });
@@ -2382,7 +2470,7 @@ pub fn build(b: *std.Build) void {
         const installed_s8_smoke_above = addValidationCommand(b, install_validation_step, &.{
             installed_validation_path,
             "--s8-population-smoke",
-            "--frames=1200",
+            "--frames=1920",
             "--virtual-render-hz=240",
         });
         installed_s8_smoke_above.setCwd(.{ .cwd_relative = "/tmp" });
@@ -2393,7 +2481,7 @@ pub fn build(b: *std.Build) void {
         const installed_s8_smoke_below = b.addSystemCommand(&.{
             installed_validation_path,
             "--s8-population-smoke",
-            "--frames=400",
+            "--frames=640",
             "--virtual-render-hz=80",
         });
         installed_s8_smoke_below.setCwd(.{ .cwd_relative = "/tmp" });
@@ -2697,7 +2785,7 @@ pub fn build(b: *std.Build) void {
         const readiness_s8_above = b.addSystemCommand(&.{
             installed_validation_path,
             "--s8-population-smoke",
-            "--frames=1200",
+            "--frames=1920",
             "--virtual-render-hz=240",
         });
         readiness_s8_above.setCwd(.{ .cwd_relative = "/tmp" });
@@ -2708,7 +2796,7 @@ pub fn build(b: *std.Build) void {
         const readiness_s8_below = b.addSystemCommand(&.{
             installed_validation_path,
             "--s8-population-smoke",
-            "--frames=400",
+            "--frames=640",
             "--virtual-render-hz=80",
         });
         readiness_s8_below.setCwd(.{ .cwd_relative = "/tmp" });
@@ -3128,6 +3216,18 @@ pub fn build(b: *std.Build) void {
     navigation_contract_test_step.dependOn(
         &run_navigation_contract_tests.step,
     );
+
+    const navigation_planner_tests = b.addTest(.{
+        .root_module = navigation_planner_module,
+    });
+    const run_navigation_planner_tests = b.addRunArtifact(
+        navigation_planner_tests,
+    );
+    const navigation_planner_test_step = b.step(
+        "test-navigation-planner",
+        "Run deterministic semantic-destination route planner tests",
+    );
+    navigation_planner_test_step.dependOn(&run_navigation_planner_tests.step);
 
     const sandbox_navigation_tests = b.addTest(.{
         .root_module = sandbox_navigation_module,
@@ -3635,6 +3735,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_vehicle_feature_tests.step);
     test_step.dependOn(&run_district_contract_tests.step);
     test_step.dependOn(&run_navigation_contract_tests.step);
+    test_step.dependOn(&run_navigation_planner_tests.step);
     test_step.dependOn(&run_sandbox_navigation_tests.step);
     test_step.dependOn(&run_district_worker_tests.step);
     test_step.dependOn(&run_district_replay_loader_tests.step);
@@ -3777,6 +3878,68 @@ pub fn build(b: *std.Build) void {
     );
     verify_source_package_step.dependOn(&verify_source_package_command.step);
 
+    const test_s12_navigation_step = b.step(
+        "test-s12-navigation",
+        "Run S12 destination, planner, world, recovery, persistence, replay, and placement contracts",
+    );
+    test_s12_navigation_step.dependOn(content_cooker_test_step);
+    test_s12_navigation_step.dependOn(district_content_catalog_test_step);
+    test_s12_navigation_step.dependOn(navigation_contract_test_step);
+    test_s12_navigation_step.dependOn(navigation_planner_test_step);
+    test_s12_navigation_step.dependOn(sandbox_navigation_test_step);
+    test_s12_navigation_step.dependOn(district_feature_test_step);
+    test_s12_navigation_step.dependOn(npc_feature_test_step);
+    test_s12_navigation_step.dependOn(simulation_snapshot_test_step);
+    test_s12_navigation_step.dependOn(sandbox_simulation_test_step);
+    test_s12_navigation_step.dependOn(sandbox_replay_test_step);
+    test_s12_navigation_step.dependOn(developer_diagnostics_test_step);
+    test_s12_navigation_step.dependOn(session_contract_test_step);
+
+    const s12_measure_root_module = b.createModule(.{
+        .root_source_file = b.path("tools/s12_measure.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "content", .module = content_module },
+            .{ .name = "district_content_catalog", .module = district_content_catalog_module },
+            .{ .name = "navigation_contract", .module = navigation_contract_module },
+            .{ .name = "navigation_planner", .module = navigation_planner_module },
+            .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
+            .{ .name = "sandbox_navigation", .module = sandbox_navigation_module },
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+        },
+    });
+    const s12_measure_exe = b.addExecutable(.{
+        .name = "incinerator_s12_measure",
+        .root_module = s12_measure_root_module,
+    });
+    const run_s12_measure = b.addRunArtifact(s12_measure_exe);
+    run_s12_measure.addArg(b.getInstallPath(
+        .prefix,
+        "share/incinerator/content",
+    ));
+    run_s12_measure.step.dependOn(b.getInstallStep());
+    const s12_measure_tests = b.addTest(.{ .root_module = s12_measure_root_module });
+    const run_s12_measure_tests = b.addRunArtifact(s12_measure_tests);
+    const s12_measure_test_step = b.step(
+        "test-s12-measure",
+        "Run S12 navigation measurement methodology tests",
+    );
+    s12_measure_test_step.dependOn(&run_s12_measure_tests.step);
+
+    const measure_s12_step = b.step(
+        "measure-s12",
+        "Run separated S12 planner-wave and representative Jolt movement measurement",
+    );
+    measure_s12_step.dependOn(&run_s12_measure.step);
+
+    const installed_s12_smoke_step = b.step(
+        "smoke-installed-s12-macos",
+        "Run installed S12 navigation/world and inherited combat Metal smokes",
+    );
+    installed_s12_smoke_step.dependOn(installed_s8_smoke_step);
+    installed_s12_smoke_step.dependOn(installed_s11_smoke_step);
+
     const verify_s11_step = b.step(
         "verify-s11",
         "Run authoritative NPC encounter, durability, network, and graphical acceptance",
@@ -3799,6 +3962,19 @@ pub fn build(b: *std.Build) void {
     verify_s11_step.dependOn(verify_s11_dedicated_step);
     verify_s11_step.dependOn(installed_s11_smoke_step);
     verify_s11_step.dependOn(sandbox_product_encounter_host_test_step);
+
+    const verify_s12_step = b.step(
+        "verify-s12",
+        "Run complete S12 destination navigation, evidence, inherited gameplay, and macOS acceptance",
+    );
+    verify_s12_step.dependOn(test_s12_navigation_step);
+    verify_s12_step.dependOn(s8_measure_test_step);
+    verify_s12_step.dependOn(s12_measure_test_step);
+    verify_s12_step.dependOn(verify_s11_step);
+    verify_s12_step.dependOn(verify_incident_hardening_step);
+    verify_s12_step.dependOn(check_validation_step);
+    verify_s12_step.dependOn(verify_source_package_step);
+    verify_s12_step.dependOn(installed_s12_smoke_step);
 
     const interaction_validation_audit_command = b.addSystemCommand(&.{
         "bash",

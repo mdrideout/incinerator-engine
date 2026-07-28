@@ -257,7 +257,7 @@ test "catalog shape admission compares the complete logical navigation fragment"
             .target_coord = .{ edge.target.coord.x, edge.target.coord.z },
             .target_node = edge.target.index,
             .flags = edge.flags,
-            .reserved = edge.reserved,
+            .cost = edge.cost,
         };
     }
     var view = content.bundle.BundleView{
@@ -278,9 +278,9 @@ test "catalog shape admission compares the complete logical navigation fragment"
     };
     try std.testing.expect(sandbox_recipe.logicalShapeMatches(view, &build));
 
-    edges[4].target_node = 1;
+    edges[4].cost += 1;
     try std.testing.expect(!sandbox_recipe.logicalShapeMatches(view, &build));
-    edges[4].target_node = 0;
+    edges[4].cost -= 1;
     nodes[0].flags = 0;
     try std.testing.expect(!sandbox_recipe.logicalShapeMatches(view, &build));
     nodes[0].flags = content.bundle.navigation_node_terminal;

@@ -8,6 +8,8 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const engine = @import("incinerator_engine");
 const sandbox_replay = @import("sandbox_replay");
+const sandbox_host_contracts = @import("sandbox_host_contracts");
+const session_protocol = @import("session_protocol");
 const authority_diagnostics = @import("session_authority_diagnostics");
 const editor_contract = @import("../editor/tool.zig");
 
@@ -29,6 +31,8 @@ pub const pre_roll_ns: u64 = 15 * std.time.ns_per_s;
 pub const post_roll_ns: u64 = 5 * std.time.ns_per_s;
 pub const retained_unflagged_runs: usize = 20;
 pub const hardening_visual_budget_bytes: u64 = 16 * 1024 * 1024;
+pub const manifest_protocol_cohort: u16 = session_protocol.wire_version;
+pub const manifest_snapshot_cohort: u16 = sandbox_host_contracts.snapshot_schema;
 const complete_human_anchor_mask: u8 = 0xff;
 
 /// Explicit installed-product fault profiles used only by the IC5-G
@@ -785,8 +789,8 @@ const Writer = struct {
         self.queue.unlock();
         var manifest_writer = std.Io.Writer.fixed(&manifest_buffer);
         try manifest_writer.print(
-            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.12\",\"jolt\":\"5.5.0\",\"protocol\":12,\"replay\":{d},\"snapshot\":11}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
-            .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), sandbox_replay.schema_cohort, @tagName(self.hardening_profile), self.write_failure_after_bytes, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, configured_visual_budget, self.budget_bytes - configured_visual_budget, visual_reserved, visual_exhausted, visual_rejections },
+            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.12\",\"jolt\":\"5.5.0\",\"protocol\":{d},\"replay\":{d},\"snapshot\":{d}}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true,\"navigation_lineage\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
+            .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), manifest_protocol_cohort, sandbox_replay.schema_cohort, manifest_snapshot_cohort, @tagName(self.hardening_profile), self.write_failure_after_bytes, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, configured_visual_budget, self.budget_bytes - configured_visual_budget, visual_reserved, visual_exhausted, visual_rejections },
         );
         try manifest_writer.print(
             "\"writer_queue_capacity\":{d},\"writer_queue\":{d},\"queue_high_water\":{d},\"dropped_records\":{d},\"writer_failed\":{},\"handoff_persisted\":{},\"last_admitted_sequence\":{d},\"last_durable_sequence\":{d},\"bytes_written\":{d},\"bytes_by_class\":{{\"streams\":{d},\"visual\":{d},\"replay\":{d},\"metadata\":{d}}},\"screenshot_misses\":{d},\"screenshot_fence_failures\":{d},\"anomaly_count\":{d},\"replay_status\":\"{s}\",\"screenshot_format\":\"ppm-p6\",\"privacy\":{{\"local_only\":true,\"captures_text_input\":false,\"captures_credentials\":false,\"captures_reserved_shortcut_candidates\":true}}}}\n",
@@ -1213,8 +1217,8 @@ pub const Capture = struct {
             writer.writeAll("\n") catch return false;
         }
         writer.print(
-            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; eight human-visible anchors from -5 through +2 seconds when admitted; a product-only flag frame; a continuous product trail over the same visual window; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times. Timeline windows include immutable runtime phase/system/error and authority-cycle fault ownership when the engine retains a fault.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheel draws under one stable identity.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"kind\":\"(runtime_fault|authority_cycle_fault)\"' '{s}/streams'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
-            .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
+            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; eight human-visible anchors from -5 through +2 seconds when admitted; a product-only flag frame; a continuous product trail over the same visual window; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times. Timeline windows include immutable runtime phase/system/error and authority-cycle fault ownership when the engine retains a fault.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheel draws under one stable identity. NPC state and navigation transition records include semantic destination, status/reason, exact route revision/digest/nodes, topology revision, physical exclusions, and retry timing.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"action\":\"navigation\"|\"navigation_status\":\"(blocked|waiting_for_content|structurally_unreachable)\"|\"navigation_reason\":\"physical_obstruction\"' '{s}/streams'\nrg '\"kind\":\"(runtime_fault|authority_cycle_fault)\"' '{s}/streams'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
+            .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
         ) catch return false;
         const handoff_bytes = buffer[0..writer.end];
         self.queue.publishHandoff(handoff_bytes);
@@ -1395,8 +1399,46 @@ pub const Capture = struct {
             var target_buffer: [128]u8 = undefined;
             const actor = entityJson(&actor_buffer, record.actor);
             const target = entityJson(&target_buffer, record.target);
-            self.recordFormatted(.timeline, "{{\"schema\":{d},\"kind\":\"gameplay_trace\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"trace_sequence\":{d},\"authority_tick\":{d},\"presentation_frame\":{?d},\"source\":\"{s}\",\"stage\":\"{s}\",\"action\":\"{s}\",\"disposition\":\"{s}\",\"reason_domain\":\"{s}\",\"reason\":{d},\"correlation_id\":{d},\"actor\":{s},\"target\":{s},\"position\":[{d},{d},{d}],\"health\":{d},\"maximum_health\":{d},\"state\":{d},\"deadline_tick\":{d},\"visible_pixels\":{d}}}", .{ incident.schema_version, self.takeSequence(), now, record.sequence, record.authority_tick, record.presentation_frame, @tagName(record.source), @tagName(record.stage), @tagName(record.kind), @tagName(record.disposition), @tagName(record.reason_domain), record.reason, record.correlation_id, actor, target, record.position[0], record.position[1], record.position[2], record.health, record.maximum_health, record.state, record.deadline_tick, record.visible_pixels });
+            self.recordGameplayTrace(record, actor, target, now);
         }
+    }
+
+    fn recordGameplayTrace(
+        self: *Capture,
+        record: engine.gameplay_trace.Record,
+        actor: []const u8,
+        target: []const u8,
+        now: u64,
+    ) void {
+        const sequence = self.takeSequence();
+        var buffer: [max_line_bytes]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&buffer);
+        writer.print(
+            "{{\"schema\":{d},\"kind\":\"gameplay_trace\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"trace_sequence\":{d},\"authority_tick\":{d},\"presentation_frame\":{?d},\"source\":\"{s}\",\"stage\":\"{s}\",\"action\":\"{s}\",\"disposition\":\"{s}\",\"reason_domain\":\"{s}\",\"reason\":{d},\"topology_id\":{d},\"correlation_id\":{d},\"actor\":{s},\"target\":{s},\"position\":[{d},{d},{d}],\"health\":{d},\"maximum_health\":{d},\"state\":{d},\"deadline_tick\":{d},\"visible_pixels\":{d},\"navigation\":",
+            .{ incident.schema_version, sequence, now, record.sequence, record.authority_tick, record.presentation_frame, @tagName(record.source), @tagName(record.stage), @tagName(record.kind), @tagName(record.disposition), @tagName(record.reason_domain), record.reason, record.topology_id, record.correlation_id, actor, target, record.position[0], record.position[1], record.position[2], record.health, record.maximum_health, record.state, record.deadline_tick, record.visible_pixels },
+        ) catch return self.noteDropped();
+        if (record.navigation) |navigation_evidence| {
+            writer.print(
+                "{{\"destination_id\":{?d},\"route_revision\":{d},\"topology_revision\":{d},\"route_digest\":{d},\"route_cost\":{d},\"route_length\":{d},\"active_prefix_length\":{d},\"route_index\":{d},\"nodes\":[",
+                .{ navigation_evidence.destination_id, navigation_evidence.route_revision, navigation_evidence.topology_revision, navigation_evidence.route_digest, navigation_evidence.route_cost, navigation_evidence.route_length, navigation_evidence.active_prefix_length, navigation_evidence.route_index },
+            ) catch return self.noteDropped();
+            const route_length = @min(
+                @as(usize, navigation_evidence.route_length),
+                navigation_evidence.nodes.len,
+            );
+            for (navigation_evidence.nodes[0..route_length], 0..) |node, index| {
+                if (index != 0) writer.writeAll(",") catch return self.noteDropped();
+                writer.print(
+                    "{{\"district\":[{d},{d}],\"index\":{d}}}",
+                    .{ node.district_x, node.district_z, node.index },
+                ) catch return self.noteDropped();
+            }
+            writer.writeAll("]}") catch return self.noteDropped();
+        } else {
+            writer.writeAll("null") catch return self.noteDropped();
+        }
+        writer.writeAll("}") catch return self.noteDropped();
+        _ = self.enqueueLine(.timeline, sequence, buffer[0..writer.end]);
     }
 
     fn drainDiagnostics(self: *Capture, view: engine.runtime.DiagnosticJournal.BorrowedView, now: u64) void {
@@ -1465,6 +1507,39 @@ pub const Capture = struct {
         } else {
             writer.writeAll("\"navigation_target\":null,") catch return self.noteDropped();
         }
+        if (entity.navigation_destination) |destination| {
+            writer.print(
+                "\"navigation_destination\":{d},\"navigation_destination_name\":\"{s}\",",
+                .{
+                    destination.value,
+                    sandbox_host_contracts.destinationName(destination) orelse "unknown",
+                },
+            ) catch return self.noteDropped();
+        } else {
+            writer.writeAll(
+                "\"navigation_destination\":null,\"navigation_destination_name\":null,",
+            ) catch return self.noteDropped();
+        }
+        writer.print(
+            "\"navigation_status\":\"{s}\",\"navigation_reason\":\"{s}\",\"navigation_trigger\":\"{s}\",\"navigation_result\":\"{s}\",\"navigation_route_revision\":{d},\"navigation_topology_revision\":{d},\"navigation_route_digest\":{d},\"navigation_route_cost\":{d},\"navigation_route_length\":{d},\"navigation_active_prefix_length\":{d},\"navigation_route_index\":{d},\"navigation_replan_count\":{d},\"navigation_arrival_tick\":{?d},\"navigation_physical_exclusion_count\":{d},\"navigation_physical_block_retry_tick\":{d},",
+            .{
+                if (entity.navigation_status) |value| @tagName(value) else "unavailable",
+                if (entity.navigation_reason) |value| @tagName(value) else "unavailable",
+                if (entity.navigation_trigger) |value| @tagName(value) else "unavailable",
+                if (entity.navigation_result) |value| @tagName(value) else "unavailable",
+                entity.navigation_route_revision,
+                entity.navigation_topology_revision,
+                entity.navigation_route_digest,
+                entity.navigation_route_cost,
+                entity.navigation_route_length,
+                entity.navigation_active_prefix_length,
+                entity.navigation_route_index,
+                entity.navigation_replan_count,
+                entity.navigation_arrival_tick,
+                entity.navigation_physical_exclusion_count,
+                entity.navigation_physical_block_retry_tick,
+            },
+        ) catch return self.noteDropped();
         const relevance_included = if (entity.relevance_included) |included|
             if (included) "true" else "false"
         else
@@ -1487,7 +1562,36 @@ pub const Capture = struct {
         const dropped = self.queue.dropped;
         const bytes = self.queue.bytes_written;
         self.queue.unlock();
-        self.recordFormatted(.metrics, "{{\"schema\":{d},\"kind\":\"recorder_metrics\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"frame_time_ms\":{d},\"writer_queue\":{d},\"writer_queue_high_water\":{d},\"dropped_records\":{d},\"bytes_written\":{d},\"screenshot_misses\":{d}}}", .{ incident.schema_version, self.takeSequence(), now, view.authority_tick, view.presentation_frame, frame_time_ms, queued, high_water, dropped, bytes, self.screenshot_misses });
+        var npc_count: u32 = 0;
+        var following_count: u32 = 0;
+        var waiting_count: u32 = 0;
+        var blocked_count: u32 = 0;
+        var arrived_count: u32 = 0;
+        var unreachable_count: u32 = 0;
+        var total_replans: u64 = 0;
+        var physical_exclusions: u32 = 0;
+        var maximum_route_length: u8 = 0;
+        var maximum_route_cost: u32 = 0;
+        for (view.entitySlice()) |entity| {
+            if (entity.kind != .npc) continue;
+            npc_count += 1;
+            if (entity.navigation_status) |status| switch (status) {
+                .following => following_count += 1,
+                .waiting_for_content => waiting_count += 1,
+                .blocked => blocked_count += 1,
+                .arrived => arrived_count += 1,
+                .structurally_unreachable => unreachable_count += 1,
+                .idle, .resolving => {},
+            };
+            total_replans +|= entity.navigation_replan_count;
+            physical_exclusions +|= entity.navigation_physical_exclusion_count;
+            maximum_route_length = @max(
+                maximum_route_length,
+                entity.navigation_route_length,
+            );
+            maximum_route_cost = @max(maximum_route_cost, entity.navigation_route_cost);
+        }
+        self.recordFormatted(.metrics, "{{\"schema\":{d},\"kind\":\"recorder_metrics\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"frame_time_ms\":{d},\"writer_queue\":{d},\"writer_queue_high_water\":{d},\"dropped_records\":{d},\"bytes_written\":{d},\"screenshot_misses\":{d},\"navigation\":{{\"npc_count\":{d},\"following\":{d},\"waiting_for_content\":{d},\"blocked\":{d},\"arrived\":{d},\"structurally_unreachable\":{d},\"total_replans\":{d},\"physical_exclusions\":{d},\"maximum_route_length\":{d},\"maximum_route_cost\":{d}}}}}", .{ incident.schema_version, self.takeSequence(), now, view.authority_tick, view.presentation_frame, frame_time_ms, queued, high_water, dropped, bytes, self.screenshot_misses, npc_count, following_count, waiting_count, blocked_count, arrived_count, unreachable_count, total_replans, physical_exclusions, maximum_route_length, maximum_route_cost });
     }
 
     fn finishPostRoll(self: *Capture, now: u64) void {
@@ -1884,6 +1988,17 @@ test "Retina human anchors have a bounded stored extent" {
         @as(u64, 1280 * 720 * 3 + 64),
         visualStorageBytes(metadata),
     );
+}
+
+test "incident manifest cohorts source the live protocol and snapshot owners" {
+    try std.testing.expectEqual(@as(u16, 4), incident.schema_version);
+    try std.testing.expectEqual(session_protocol.wire_version, manifest_protocol_cohort);
+    try std.testing.expectEqual(
+        sandbox_host_contracts.snapshot_schema,
+        manifest_snapshot_cohort,
+    );
+    try std.testing.expectEqual(@as(u16, 14), manifest_protocol_cohort);
+    try std.testing.expectEqual(@as(u16, 13), manifest_snapshot_cohort);
 }
 
 test "handoff is available to clipboard before durable writer completion" {

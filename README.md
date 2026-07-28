@@ -59,6 +59,22 @@ The current correction also reserves incident capacity for notes/replay/
 handoff, keeps spatial objects independent of streamed-content residency, retains NPC
 death presentation until replacement registration, and clamps the follow
 camera to the target side of world blockers.
+Human testing now accepts the recipe-5 open traversal, sustained vehicle/NPC
+contact, carry/drop continuity, and schema-4 incident workflow. The default
+product uses a 1600×900 window, wider follow cameras, separated sandbox spawns,
+district/navigation intent overlays, and the measured vehicle profile recorded
+in [`docs/validation/vehicle-dynamics.md`](docs/validation/vehicle-dynamics.md).
+S12 destination-driven NPC navigation and replanning is now implemented. Its
+accepted architecture, implementation record, bounded higher-fidelity map,
+and automated evidence are recorded in
+[`ADR-023`](docs/adr/023-semantic-destinations-and-navigation-recovery.md),
+the [`S12 plan`](docs/design/s12-destination-driven-navigation.md), and the
+[`S12 evaluation world`](docs/design/s12-navigation-evaluation-world.md), with
+executed results in the
+[`S12 validation ledger`](docs/validation/s12-destination-driven-navigation.md).
+The final human Navigation Lab walkthrough and two preserved incident captures
+remain before S13 population work.
+Broader Steam/public-service infrastructure remains deferred.
 
 ## Toolchain Cohort
 
@@ -359,6 +375,14 @@ zig build smoke-installed-s8-macos \
   -Doptimize=ReleaseFast -Deditor=false
 zig build smoke-installed-s11-macos \
   -Doptimize=ReleaseFast -Deditor=false
+zig build test-s12-navigation \
+  -Doptimize=Debug -Deditor=false
+zig build measure-s12 \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s12-macos \
+  -Doptimize=ReleaseFast -Deditor=true
+zig build verify-s12 \
+  -Doptimize=ReleaseFast -Deditor=true
 zig build smoke-installed-s4-diagnostics-macos \
   -Doptimize=ReleaseFast -Deditor=false
 zig build smoke-installed-s4-replay-macos \
@@ -485,7 +509,7 @@ plain-language health, damage, attack, cooldown, death, respawn, and rejected
 action feedback. A dead player remains visible in red until respawn, rather
 than disappearing as an implicit representation of authority teardown.
 
-Every Debug product run records a bounded schema-3 diagnostic bundle under
+Every Debug product run records a bounded schema-4 diagnostic bundle under
 `~/Library/Logs/Incinerator/runs`. Press Command+Option+I near an anomaly (or
 use F9/Fn+F9 when macOS actually delivers it), then open **Tools → Incident
 Capture**, add a note, and click **Save note + Copy for LLM**. The note is

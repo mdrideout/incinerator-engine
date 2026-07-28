@@ -69,8 +69,8 @@ pub fn main(init: std.process.Init) !void {
     try verifyEntry(view.entries[west_index], .{ .x = 0, .z = 0 }, west.bundleIdentity());
     if (view.lookupCoordinate(.{ .x = 1, .z = 0 }) != east_index or
         view.lookupCoordinate(.{ .x = 0, .z = 0 }) != west_index or
-        view.lookupBundleKey("district/s6_east") != east_index or
-        view.lookupBundleKey("district/s3_fixture") != west_index)
+        view.lookupBundleKey("district/s12_world_east") != east_index or
+        view.lookupBundleKey("district/s12_world_west") != west_index)
     {
         return error.CatalogLookupDiverged;
     }
@@ -119,8 +119,9 @@ fn verifyHeadlessCohort(
     );
     defer manifest.deinit();
     const value = manifest.value;
-    if (value.schema_version != 1 or value.catalog_wire_schema != 1 or
-        !std.mem.eql(u8, value.catalog_semantic_id, "incinerator.s6.two-district") or
+    if (value.schema_version != 1 or
+        value.catalog_wire_schema != sandbox_recipe.catalog_wire_schema or
+        !std.mem.eql(u8, value.catalog_semantic_id, sandbox_recipe.catalog_semantic_id) or
         value.districts.len != 2)
     {
         return error.HeadlessContentManifestShapeDiverged;

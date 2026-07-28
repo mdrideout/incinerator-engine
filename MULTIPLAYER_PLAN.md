@@ -1,12 +1,11 @@
 # Incinerator Multiplayer-First Architecture and Delivery Plan
 
-**Status:** MP0-MP6, the M4 Apple Silicon macOS foundation, M5 client/authority
-cohesion, M6 transactional authority, S10 damage/death/respawn, and S11 NPC
-encounter/combat response are implemented and accepted; post-S11 corrective
-implementation, manual findings, and IV0-IV5 interaction validation and
-causal-observability closure are accepted
+**Status:** MP0-MP6, M4-M6, S10-S11, IV0-IV5, IC5, the open-world
+corrective, and S12 automated destination-navigation acceptance are
+implemented on Apple Silicon macOS. The S12 human walkthrough remains before
+S13; public Internet, Steamworks, hosting, and MMO services remain deferred.
 
-**Last reviewed:** 2026-07-15
+**Last reviewed:** 2026-07-28
 
 **Current platform:** Apple Silicon macOS only
 
@@ -21,6 +20,9 @@ causal-observability closure are accepted
 → [`S11 accepted`](docs/validation/s11-npc-encounter-combat-response.md)
 → [`post-S11 manual findings`](docs/validation/post-s11-runtime-corrective-audit.md)
 → [`IV0-IV5 accepted`](docs/validation/gameplay-interaction-validation-and-observability.md)
+→ [`IC5 accepted`](docs/validation/human-test-incident-capture.md)
+→ [`open-world corrective complete`](docs/design/open-world-spatial-diagnostics-and-playability.md)
+→ [`S12 automated acceptance complete; human walkthrough pending`](docs/validation/s12-destination-driven-navigation.md)
 
 **Accepted decisions:**
 [ADR-016](docs/adr/016-authority-session-topology.md),
@@ -631,6 +633,16 @@ enter a derived 172-publication-per-participant cycle budget and a two-cycle
 per-connection wire ceiling; an exhausted consumer is retired without faulting
 the room.
 
+The post-S11 IC5/open-world corrective is also complete and human-accepted.
+Incident evidence now survives ordinary and destructive workflows, recipe-5
+traversal remains open, dynamic carryables do not depend on district residency,
+NPC displacement retains its current route intent through collision rebasing,
+and vehicle handling has an objective real-Jolt characterization surface. S12
+now proves semantic destinations, bounded replanning, topology gates,
+displacement recovery, persistence/replay/fault placement, and schema-4
+evidence through the same authority model. Its human walkthrough is next, not
+additional transport or service infrastructure.
+
 ## Transport and Service Decision
 
 ADR-018 selects the open-source GameNetworkingSockets flat C API and direct IP
@@ -758,6 +770,21 @@ hardening remain later programs.
    long soaks exercise the same authority and client owners. The matrix also
    found and closed cross-lane lifecycle ordering through exact protocol
    revision 13 rather than a client-side timing fallback.
+7. **IC5/open-world physical closeout — complete and human-accepted.** Schema-3
+   incident bundles, failure hardening, open traversal, vehicle/NPC contact,
+   carry/drop continuity, navigation intent diagnostics, and measured vehicle
+   tuning close the current macOS baseline.
+8. **S12 destination-driven navigation — implemented; human acceptance
+   pending.** The existing authority/session/replication model now owns dynamic
+   destination resolution and replanning without expanding Steam/NAT/service
+   scope. Use
+   [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md),
+   the [phased implementation plan](docs/design/s12-destination-driven-navigation.md),
+   and the [evaluation-world specification](docs/design/s12-navigation-evaluation-world.md)
+   with the
+   [validation ledger](docs/validation/s12-destination-driven-navigation.md)
+   for review. Follow its human checkpoint with authored population, ranged
+   combat, and richer districts as separate gameplay slices.
 
 No post-M4 phase silently broadens platform, public-service, Steamworks, public
 Internet listen-host, or MMO scope. MP6's explicit listen scope is limited to

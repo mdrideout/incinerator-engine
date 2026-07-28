@@ -12,6 +12,66 @@ pub const Node = district.NavigationNode;
 pub const Edge = district.NavigationEdge;
 pub const LoadTicket = district.LoadTicket;
 pub const ChunkCoord = district.ChunkCoord;
+pub const max_destination_anchors: usize = 2;
+pub const max_route_nodes: usize = 16;
+pub const max_route_edges: usize = max_route_nodes - 1;
+
+/// Stable game-content identity. A destination survives route invalidation,
+/// residency changes, and physical displacement; node references do not.
+pub const DestinationId = struct {
+    value: u16 = 0,
+
+    pub fn validate(self: DestinationId) !void {
+        if (self.value == 0) return error.InvalidNavigationDestinationId;
+    }
+
+    pub fn eql(a: DestinationId, b: DestinationId) bool {
+        return a.value == b.value;
+    }
+};
+
+pub const Destination = struct {
+    id: DestinationId,
+    position: [3]f32,
+    arrival_radius: f32,
+    anchors: [max_destination_anchors]NodeRef =
+        [_]NodeRef{.{}} ** max_destination_anchors,
+    anchor_count: u8,
+
+    pub fn anchorSlice(self: *const Destination) []const NodeRef {
+        return self.anchors[0..@min(
+            @as(usize, self.anchor_count),
+            max_destination_anchors,
+        )];
+    }
+
+    pub fn validate(self: Destination) !void {
+        try self.id.validate();
+        for (self.position) |component| {
+            if (!@import("std").math.isFinite(component)) {
+                return error.InvalidNavigationDestinationPosition;
+            }
+        }
+        if (!@import("std").math.isFinite(self.arrival_radius) or
+            self.arrival_radius <= 0 or self.anchor_count == 0 or
+            self.anchor_count > max_destination_anchors)
+        {
+            return error.InvalidNavigationDestination;
+        }
+        for (self.anchorSlice(), 0..) |anchor, index| {
+            for (self.anchorSlice()[0..index]) |earlier| {
+                if (NodeRef.eql(anchor, earlier)) {
+                    return error.DuplicateNavigationDestinationAnchor;
+                }
+            }
+        }
+    }
+};
+
+pub const DestinationResolution = union(enum) {
+    ready: Destination,
+    invalid_destination,
+};
 
 /// Canonical finite half-open world ownership rule shared by district and NPC
 /// authority. This is pure value logic; it does not grant residency access.
@@ -28,6 +88,33 @@ pub const ResolvedEdge = struct {
     source: NodeRef,
     ordinal: u8,
     edge: Edge,
+};
+
+pub const CatalogNode = struct {
+    reference: NodeRef,
+    node: Node,
+};
+
+pub const CatalogEdge = struct {
+    source: NodeRef,
+    ordinal: u8,
+    edge: Edge,
+};
+
+pub const CatalogNodeResolution = union(enum) {
+    ready: CatalogNode,
+    invalid_reference,
+};
+
+pub const CatalogEdgeResolution = union(enum) {
+    ready: CatalogEdge,
+    invalid_reference,
+    invalid_ordinal,
+};
+
+pub const EdgeAvailability = enum {
+    open,
+    closed,
 };
 
 pub const NodeResolution = union(enum) {
@@ -98,6 +185,42 @@ pub fn assertImplementation(comptime NavigationAccess: type) void {
             .{ *NavigationAccess, [3]f32 },
             NearestNodeResolution,
         );
+        assertMethod(
+            NavigationAccess,
+            "resolveDestination",
+            .{ *NavigationAccess, DestinationId },
+            DestinationResolution,
+        );
+        assertMethod(
+            NavigationAccess,
+            "resolveCatalogNode",
+            .{ *NavigationAccess, NodeRef },
+            CatalogNodeResolution,
+        );
+        assertMethod(
+            NavigationAccess,
+            "resolveCatalogEdge",
+            .{ *NavigationAccess, NodeRef, u8 },
+            CatalogEdgeResolution,
+        );
+        assertMethod(
+            NavigationAccess,
+            "activeTicketFor",
+            .{ *NavigationAccess, ChunkCoord },
+            ?LoadTicket,
+        );
+        assertMethod(
+            NavigationAccess,
+            "topologyRevision",
+            .{*NavigationAccess},
+            u64,
+        );
+        assertMethod(
+            NavigationAccess,
+            "edgeAvailability",
+            .{ *NavigationAccess, NodeRef, NodeRef },
+            EdgeAvailability,
+        );
     }
 }
 
@@ -150,6 +273,44 @@ const Example = struct {
     pub fn nearestActiveNode(_: *Example, _: [3]f32) NearestNodeResolution {
         return .district_inactive;
     }
+
+    pub fn resolveDestination(
+        _: *Example,
+        _: DestinationId,
+    ) DestinationResolution {
+        return .invalid_destination;
+    }
+
+    pub fn resolveCatalogNode(
+        _: *Example,
+        _: NodeRef,
+    ) CatalogNodeResolution {
+        return .invalid_reference;
+    }
+
+    pub fn resolveCatalogEdge(
+        _: *Example,
+        _: NodeRef,
+        _: u8,
+    ) CatalogEdgeResolution {
+        return .invalid_reference;
+    }
+
+    pub fn activeTicketFor(_: *Example, _: ChunkCoord) ?LoadTicket {
+        return null;
+    }
+
+    pub fn topologyRevision(_: *Example) u64 {
+        return 1;
+    }
+
+    pub fn edgeAvailability(
+        _: *Example,
+        _: NodeRef,
+        _: NodeRef,
+    ) EdgeAvailability {
+        return .open;
+    }
 };
 
 test "navigation access example satisfies the generation-aware value port" {
@@ -157,5 +318,23 @@ test "navigation access example satisfies the generation-aware value port" {
     try @import("std").testing.expectEqualDeep(
         ChunkCoord{ .x = 1, .z = 0 },
         try ownerForPosition(.{ 8, 0, 3 }),
+    );
+}
+
+test "semantic destination rejects zero identity and duplicate anchors" {
+    const std = @import("std");
+    try std.testing.expectError(
+        error.InvalidNavigationDestinationId,
+        (DestinationId{}).validate(),
+    );
+    try std.testing.expectError(
+        error.DuplicateNavigationDestinationAnchor,
+        (Destination{
+            .id = .{ .value = 1 },
+            .position = .{ 0, 0, 0 },
+            .arrival_radius = 0.25,
+            .anchors = .{ .{}, .{} },
+            .anchor_count = 2,
+        }).validate(),
     );
 }

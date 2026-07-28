@@ -50,6 +50,7 @@ pub const Graph = struct {
     district_contract: *std.Build.Module,
     sandbox_district_recipe: *std.Build.Module,
     navigation_contract: *std.Build.Module,
+    navigation_planner: *std.Build.Module,
     sandbox_navigation: *std.Build.Module,
     interaction_contract: *std.Build.Module,
     character_contract: *std.Build.Module,
@@ -343,17 +344,29 @@ pub fn create(
         .optimize = optimize,
         .imports = &.{.{ .name = "engine_contracts", .module = contracts }},
     });
-    const sandbox_district_recipe = b.createModule(.{
-        .root_source_file = b.path("src/sandbox/district_recipe.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "district_contract", .module = district_contract }},
-    });
     const navigation_contract = b.createModule(.{
         .root_source_file = b.path("src/features/navigation_contract.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "district_contract", .module = district_contract }},
+    });
+    const sandbox_district_recipe = b.createModule(.{
+        .root_source_file = b.path("src/sandbox/district_recipe.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "district_contract", .module = district_contract },
+            .{ .name = "navigation_contract", .module = navigation_contract },
+        },
+    });
+    const navigation_planner = b.createModule(.{
+        .root_source_file = b.path("src/features/navigation_planner.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{
+            .name = "navigation_contract",
+            .module = navigation_contract,
+        }},
     });
     const sandbox_navigation = b.createModule(.{
         .root_source_file = b.path("src/hosts/sandbox_navigation.zig"),
@@ -464,6 +477,7 @@ pub fn create(
         .imports = &.{
             .{ .name = "engine_contracts", .module = contracts },
             .{ .name = "navigation_contract", .module = navigation_contract },
+            .{ .name = "navigation_planner", .module = navigation_planner },
         },
     });
     const npc_snapshot_validation = b.createModule(.{
@@ -473,6 +487,7 @@ pub fn create(
         .imports = &.{
             .{ .name = "engine_contracts", .module = contracts },
             .{ .name = "navigation_contract", .module = navigation_contract },
+            .{ .name = "navigation_planner", .module = navigation_planner },
             .{ .name = "npc_contract", .module = npc_contract },
         },
     });
@@ -484,6 +499,7 @@ pub fn create(
             .{ .name = "incinerator_engine", .module = engine },
             .{ .name = "npc_contract", .module = npc_contract },
             .{ .name = "navigation_contract", .module = navigation_contract },
+            .{ .name = "navigation_planner", .module = navigation_planner },
             .{ .name = "npc_snapshot_validation", .module = npc_snapshot_validation },
         },
     });
@@ -708,6 +724,7 @@ pub fn create(
             .{ .name = "district_contract", .module = district_contract },
             .{ .name = "district_feature_contract", .module = district_feature_contract },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
+            .{ .name = "sandbox_navigation", .module = sandbox_navigation },
             .{ .name = "district_feature", .module = district },
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "interaction_feature", .module = interaction },
@@ -928,6 +945,7 @@ pub fn create(
         .district_contract = district_contract,
         .sandbox_district_recipe = sandbox_district_recipe,
         .navigation_contract = navigation_contract,
+        .navigation_planner = navigation_planner,
         .sandbox_navigation = sandbox_navigation,
         .interaction_contract = interaction_contract,
         .character_contract = character_contract,

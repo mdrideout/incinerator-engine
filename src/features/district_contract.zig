@@ -13,6 +13,7 @@ pub const max_static_boxes: usize = 8;
 pub const decoded_bytes_per_static_box: u32 = 40;
 pub const max_navigation_nodes: usize = 8;
 pub const max_navigation_edges: usize = 16;
+pub const max_navigation_outgoing_edges: usize = 3;
 pub const decoded_bytes_per_navigation_node: u32 = 16;
 pub const decoded_bytes_per_navigation_edge: u32 = 12;
 pub const max_navigation_decoded_bytes: u32 =
@@ -111,11 +112,11 @@ pub const NavigationNode = struct {
 };
 
 /// One directed graph edge. The explicit cooked representation is exactly 12
-/// bytes: target X/Z, target node, flags, and two zero reserved bytes.
+/// bytes: target X/Z, target node, flags, and a positive integer travel cost.
 pub const NavigationEdge = struct {
     target: NavigationNodeRef = .{},
     flags: u8 = 0,
-    reserved: u16 = 0,
+    cost: u16 = 1,
 };
 
 pub const BuildValidationFailure = enum {
@@ -136,7 +137,7 @@ pub const BuildValidationFailure = enum {
     invalid_navigation_node_degree,
     invalid_navigation_edge_target,
     invalid_navigation_edge_flags,
-    invalid_navigation_edge_reserved,
+    invalid_navigation_edge_cost,
     duplicate_navigation_edge,
     non_canonical_navigation_edge_order,
     decoded_byte_count_mismatch,
@@ -220,7 +221,9 @@ pub const DistrictBuild = struct {
                 return .invalid_navigation_node_flags;
             }
             if (node.reserved != 0) return .invalid_navigation_node_reserved;
-            if (node.edge_count == 0 or node.edge_count > 2) {
+            if (node.edge_count == 0 or
+                node.edge_count > max_navigation_outgoing_edges)
+            {
                 return .invalid_navigation_node_degree;
             }
             if (node.first_edge != expected_first_edge) {
@@ -238,7 +241,7 @@ pub const DistrictBuild = struct {
             var previous_target: ?NavigationNodeRef = null;
             for (self.navigationEdges()[expected_first_edge..edge_end]) |edge| {
                 if (edge.flags != 0) return .invalid_navigation_edge_flags;
-                if (edge.reserved != 0) return .invalid_navigation_edge_reserved;
+                if (edge.cost == 0) return .invalid_navigation_edge_cost;
                 if (edge.target.index >= max_navigation_nodes) {
                     return .invalid_navigation_edge_target;
                 }
@@ -298,7 +301,7 @@ pub const DistrictBuild = struct {
             .invalid_navigation_node_degree => error.InvalidDistrictNavigationNodeDegree,
             .invalid_navigation_edge_target => error.InvalidDistrictNavigationEdgeTarget,
             .invalid_navigation_edge_flags => error.InvalidDistrictNavigationEdgeFlags,
-            .invalid_navigation_edge_reserved => error.InvalidDistrictNavigationEdgeReserved,
+            .invalid_navigation_edge_cost => error.InvalidDistrictNavigationEdgeCost,
             .duplicate_navigation_edge => error.DuplicateDistrictNavigationEdge,
             .non_canonical_navigation_edge_order => error.NonCanonicalDistrictNavigationEdgeOrder,
             .decoded_byte_count_mismatch => error.DistrictDecodedByteCountMismatch,
@@ -473,7 +476,7 @@ fn checksumUnchecked(build: *const DistrictBuild) u64 {
         hashU32(&hash, @bitCast(edge.target.coord.z));
         hashByte(&hash, edge.target.index);
         hashByte(&hash, edge.flags);
-        hashU16(&hash, edge.reserved);
+        hashU16(&hash, edge.cost);
     }
     return hash;
 }

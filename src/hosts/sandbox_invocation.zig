@@ -72,6 +72,7 @@ pub const ScriptedScenario = enum {
     s1_character,
     s2_vehicle,
     s3_streaming,
+    s8_population,
     s4_physics_debug,
     s7_interaction,
     s11_combat,

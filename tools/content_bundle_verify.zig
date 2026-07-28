@@ -1,8 +1,10 @@
 const std = @import("std");
 const content = @import("content");
+const district = @import("district_contract");
+const sandbox_recipe = @import("sandbox_district_recipe");
 
-const expected_west_file_bytes: usize = 1008;
-const expected_east_file_bytes: usize = 1016;
+const expected_west_file_bytes: usize = 1220;
+const expected_east_file_bytes: usize = 1228;
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -48,7 +50,7 @@ pub fn main(init: std.process.Init) !void {
 fn verifyIdentity(identity: content.bundle.BundleIdentity) !void {
     if (identity.format_version != content.bundle.format_version or
         identity.schema_cohort != content.bundle.schema_cohort or
-        identity.format_version != 2 or identity.schema_cohort != 2)
+        identity.format_version != 2 or identity.schema_cohort != 3)
     {
         return error.InvalidCookedBundleCohort;
     }
@@ -68,7 +70,7 @@ fn verifyCommon(scene: content.bundle.BundleView) !void {
     if (scene.nodes.len != 2 or scene.meshes.len != 1 or scene.primitives.len != 1 or
         scene.materials.len != 1 or scene.textures.len != 1 or scene.vertices.len != 3 or
         scene.indices.len != 3 or scene.static_boxes.len != 3 or
-        scene.navigation_nodes.len != 3 or scene.navigation_edges.len != 5)
+        scene.navigation_nodes.len != 8 or scene.navigation_edges.len != 16)
     {
         return error.InvalidFixtureCounts;
     }
@@ -95,29 +97,7 @@ fn verifyWest(scene: content.bundle.BundleView) !void {
         return error.BaseColorFactorWasNotPreserved;
     }
 
-    const expected_boxes = [_]content.bundle.StaticBox{
-        .{ .position = .{ 0, -0.5, 0 }, .half_extents = .{ 7.5, 0.5, 7.5 } },
-        .{ .position = .{ -5.5, 1, -2 }, .half_extents = .{ 1, 1, 3 } },
-        .{ .position = .{ 3, 0.75, 4.5 }, .half_extents = .{ 2.5, 0.75, 0.75 } },
-    };
-    if (!std.meta.eql(expected_boxes, scene.static_boxes[0..3].*)) return error.StaticBoxesDiverged;
-    const expected_nodes = [_]content.bundle.NavigationNode{
-        .{ .position = .{ -4, 0, 3 }, .first_edge = 0, .edge_count = 1, .flags = content.bundle.navigation_node_terminal },
-        .{ .position = .{ 2, 0, 3 }, .first_edge = 1, .edge_count = 2 },
-        .{ .position = .{ 7, 0, 3 }, .first_edge = 3, .edge_count = 2 },
-    };
-    const expected_edges = [_]content.bundle.NavigationEdge{
-        .{ .target_coord = .{ 0, 0 }, .target_node = 1 },
-        .{ .target_coord = .{ 0, 0 }, .target_node = 0 },
-        .{ .target_coord = .{ 0, 0 }, .target_node = 2 },
-        .{ .target_coord = .{ 0, 0 }, .target_node = 1 },
-        .{ .target_coord = .{ 1, 0 }, .target_node = 0 },
-    };
-    if (!std.meta.eql(expected_nodes, scene.navigation_nodes[0..3].*) or
-        !std.meta.eql(expected_edges, scene.navigation_edges[0..5].*))
-    {
-        return error.NavigationFragmentDiverged;
-    }
+    try verifyLogicalRecipe(scene, .{ .x = 0, .z = 0 });
 }
 
 fn verifyEast(scene: content.bundle.BundleView) !void {
@@ -140,29 +120,51 @@ fn verifyEast(scene: content.bundle.BundleView) !void {
     if (!std.meta.eql(scene.materials[0].base_color, [4]f32{ 0.2, 0.55, 1.0, 1.0 })) {
         return error.BaseColorFactorWasNotPreserved;
     }
-    const expected_boxes = [_]content.bundle.StaticBox{
-        .{ .position = .{ 16, -0.5, 0 }, .half_extents = .{ 7.5, 0.5, 7.5 } },
-        .{ .position = .{ 10.5, 1, -2 }, .half_extents = .{ 1, 1, 3 } },
-        .{ .position = .{ 19, 0.75, 4.5 }, .half_extents = .{ 2.5, 0.75, 0.75 } },
+    try verifyLogicalRecipe(scene, .{ .x = 1, .z = 0 });
+}
+
+fn verifyLogicalRecipe(
+    scene: content.bundle.BundleView,
+    coord: district.ChunkCoord,
+) !void {
+    const logical = switch (sandbox_recipe.build(
+        .{ .x = coord.x, .z = coord.z },
+        sandbox_recipe.current_recipe_version,
+    )) {
+        .ready => |value| value,
+        .failed => return error.LogicalRecipeUnavailable,
     };
-    if (!std.meta.eql(expected_boxes, scene.static_boxes[0..3].*)) {
-        return error.StaticBoxesDiverged;
-    }
-    const expected_nodes = [_]content.bundle.NavigationNode{
-        .{ .position = .{ 9, 0, 3 }, .first_edge = 0, .edge_count = 2 },
-        .{ .position = .{ 14, 0, 3 }, .first_edge = 2, .edge_count = 2 },
-        .{ .position = .{ 20, 0, 3 }, .first_edge = 4, .edge_count = 1, .flags = content.bundle.navigation_node_terminal },
-    };
-    const expected_edges = [_]content.bundle.NavigationEdge{
-        .{ .target_coord = .{ 0, 0 }, .target_node = 2 },
-        .{ .target_coord = .{ 1, 0 }, .target_node = 1 },
-        .{ .target_coord = .{ 1, 0 }, .target_node = 0 },
-        .{ .target_coord = .{ 1, 0 }, .target_node = 2 },
-        .{ .target_coord = .{ 1, 0 }, .target_node = 1 },
-    };
-    if (!std.meta.eql(expected_nodes, scene.navigation_nodes[0..3].*) or
-        !std.meta.eql(expected_edges, scene.navigation_edges[0..5].*))
+    if (scene.static_boxes.len != logical.boxes().len or
+        scene.navigation_nodes.len != logical.navigationNodes().len or
+        scene.navigation_edges.len != logical.navigationEdges().len)
     {
-        return error.NavigationFragmentDiverged;
+        return error.LogicalRecipeCountDiverged;
+    }
+    for (scene.static_boxes, logical.boxes()) |actual, expected| {
+        if (!std.meta.eql(actual.position, expected.pose.position) or
+            !std.meta.eql(actual.rotation, expected.pose.rotation) or
+            !std.meta.eql(actual.half_extents, expected.half_extents))
+        {
+            return error.StaticBoxesDiverged;
+        }
+    }
+    for (scene.navigation_nodes, logical.navigationNodes()) |actual, expected| {
+        if (!std.meta.eql(actual.position, expected.position) or
+            actual.first_edge != expected.first_edge or
+            actual.edge_count != expected.edge_count or
+            actual.flags != expected.flags or
+            actual.reserved != expected.reserved)
+        {
+            return error.NavigationFragmentDiverged;
+        }
+    }
+    for (scene.navigation_edges, logical.navigationEdges()) |actual, expected| {
+        if (actual.target_coord[0] != expected.target.coord.x or
+            actual.target_coord[1] != expected.target.coord.z or
+            actual.target_node != expected.target.index or
+            actual.cost != expected.cost)
+        {
+            return error.NavigationFragmentDiverged;
+        }
     }
 }

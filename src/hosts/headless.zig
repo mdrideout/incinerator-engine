@@ -1544,7 +1544,7 @@ fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
         .linear_velocity = .{ 0.5, 0.25, -0.25 },
         .angular_velocity = .{ 0.1, 0.2, 0.3 },
     }};
-    const initial = simulation_snapshot.SnapshotV11{
+    const initial = simulation_snapshot.SnapshotV13{
         .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 10,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -1555,6 +1555,7 @@ fn runTimeline(allocator: std.mem.Allocator) ![4]TimelineSample {
         .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &crate_records,
         .characters = &.{},
         .vehicles = &.{},
@@ -1785,7 +1786,7 @@ test "multi-record V7 save is sorted and byte-stable across fresh restore" {
             .angular_velocity = .{ -0.3, 0.4, -0.2 },
         },
     };
-    const snapshot = simulation_snapshot.SnapshotV11{
+    const snapshot = simulation_snapshot.SnapshotV13{
         .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 17,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -1796,6 +1797,7 @@ test "multi-record V7 save is sorted and byte-stable across fresh restore" {
         .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &crate_records,
         .characters = &.{},
         .vehicles = &.{},
@@ -1892,7 +1894,7 @@ test "failed fresh loads do not mutate a live simulation" {
         error.SnapshotTooLarge,
         simulation.Simulation.fromSnapshot(allocator, oversized, .{}),
     );
-    const empty_snapshot = simulation_snapshot.SnapshotV11{
+    const empty_snapshot = simulation_snapshot.SnapshotV13{
         .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -1903,6 +1905,7 @@ test "failed fresh loads do not mutate a live simulation" {
         .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &.{},
         .characters = &.{},
         .vehicles = &.{},
@@ -1950,7 +1953,7 @@ fn restoreAllocationCase(allocator: std.mem.Allocator) !void {
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0.25,
     }};
-    const logical_snapshot = simulation_snapshot.SnapshotV11{
+    const logical_snapshot = simulation_snapshot.SnapshotV13{
         .schema_version = sandbox_contracts.snapshot_schema,
         .completed_ticks = 3,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -1961,6 +1964,7 @@ fn restoreAllocationCase(allocator: std.mem.Allocator) !void {
         .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &crate_records,
         .characters = &character_records,
         .vehicles = &.{},
@@ -2703,7 +2707,7 @@ test "operational headless resumes restored hostile combat and owns damage death
         try waitForDistrictActivation(&world, ticket);
         try world.submitCharacter(.{ .spawn = .{
             .request_id = 2,
-            .position = .{ -4, 0, 1 },
+            .position = .{ -4, 0, 4 },
             .facing_yaw = 0,
         } });
         try world.submitNpc(.{ .spawn = .{
@@ -2905,13 +2909,13 @@ fn expectNpcOwnerTransferred(
 fn expectNpcGoalReached(
     world: *simulation.Simulation,
     id: engine.PersistentId,
-    node: npc_contract.NodeRef,
+    destination: npc_contract.DestinationId,
 ) !void {
     const event = world.pollNpcEvent() orelse return error.NpcGoalEventMissing;
     switch (event) {
         .goal_reached => |value| {
             try std.testing.expectEqual(id, value.id);
-            try std.testing.expectEqual(node, value.node);
+            try std.testing.expectEqual(destination, value.destination);
         },
         else => return error.UnexpectedNpcEvent,
     }
@@ -2923,10 +2927,6 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
     const west_start = npc_contract.NodeRef{
         .coord = sandbox_contracts.navigation_west_coord,
         .index = 0,
-    };
-    const east_end = npc_contract.NodeRef{
-        .coord = sandbox_contracts.navigation_east_coord,
-        .index = 2,
     };
     var saved: []u8 = undefined;
     var npc_id: engine.PersistentId = undefined;
@@ -2962,8 +2962,8 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
             .request_id = 10,
             .node = west_start,
             .goal = .{ .patrol_between = .{
-                .first = west_start,
-                .second = east_end,
+                .first = sandbox_contracts.player_plaza_destination,
+                .second = sandbox_contracts.market_terminal_destination,
             } },
         } });
         try world.tick();
@@ -3143,7 +3143,11 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         }
         try std.testing.expect(observed_goal);
         try std.testing.expectEqual(@as(u8, 5), event_sequence);
-        try expectNpcGoalReached(&world, npc_id, east_end);
+        try expectNpcGoalReached(
+            &world,
+            npc_id,
+            sandbox_contracts.market_terminal_destination,
+        );
         event_sequence += 1;
         saved = try world.save(allocator);
     }
@@ -3203,7 +3207,7 @@ test "S8 headless rejects hostile NPC restore and controller overflow before aut
     };
     const hostile = try std.json.Stringify.valueAlloc(
         allocator,
-        simulation_snapshot.SnapshotV11{
+        simulation_snapshot.SnapshotV13{
             .schema_version = sandbox_contracts.snapshot_schema,
             .completed_ticks = 0,
             .fixed_delta_seconds = 1.0 / 120.0,
@@ -3214,6 +3218,7 @@ test "S8 headless rejects hostile NPC restore and controller overflow before aut
             .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
             .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
             .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+            .navigation_gates = simulation_snapshot.initial_navigation_gates,
             .crates = &.{},
             .characters = &.{},
             .vehicles = &.{},
@@ -3975,6 +3980,7 @@ fn makeS4cScenarioSnapshot(allocator: std.mem.Allocator) ![]u8 {
         .interaction_config = interaction_contract.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npc_contract.NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &crate_records,
         .characters = &character_records,
         .vehicles = &vehicle_records,

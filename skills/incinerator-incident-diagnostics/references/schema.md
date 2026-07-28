@@ -1,7 +1,7 @@
-# Incident bundle schema 3
+# Incident bundle schema 4
 
 All paths are relative to the run folder. Every NDJSON line is one complete
-schema-3 JSON object. The inspector rejects earlier schemas; there is no
+schema-4 JSON object. The inspector rejects earlier schemas; there is no
 fallback.
 
 ## Manifest and health
@@ -26,7 +26,7 @@ the visual lane is full, new images are rejected and counted while typed
 streams, markers, notes, replay, and handoff persistence retain a 128 MiB
 reserve. `handoff_persisted=false` means clipboard text may still be available
 in the running process but `LLM_HANDOFF.md` is not yet durable.
-These fields are required in schema 3; a partial field set is invalid.
+These fields are required in schema 4; a partial field set is invalid.
 
 `hardening_profile=none` is an ordinary run. The five developer-only IC5-G
 profiles deliberately finalize the run as `partial`:
@@ -48,7 +48,8 @@ manufacture ENOSPC.
 
 Read `evidence_capabilities` before assigning a boundary. Current bundles
 declare `full_boundary` separately for characters, NPCs, vehicles, and
-carryables, plus semantic vehicle-part and atomic note/handoff support. A
+carryables, plus semantic vehicle-part, atomic note/handoff, and exact
+navigation-lineage support. A
 missing matrix means the bundle predates explicit coverage; report that limit.
 
 ## Anomaly lifecycle and marker
@@ -100,6 +101,13 @@ District diagnostic code family `0x00090001..0x00090025` covers
 content request/cancel/ready/failure, logical submit/admit/activate/cancel/
 unload/failure, and GPU reserve/stage/submit/resident/release/drain.
 
+Navigation gameplay traces use `action="navigation"` and retain semantic
+destination ID, route/topology revision, route digest/cost/length, active
+prefix, cursor index, and the complete bounded route nodes on transition
+records. Interpret `reason` through the current navigation transition enum and
+correlate the record with the same NPC stable identity and authority tick.
+Fast route invalidation/replan cycles belong here, not in sampled state.
+
 `state`: camera and entity samples. Presence values are `present`, `absent`, or
 `unavailable`; never treat unavailable authority inspection as absent. Removed
 entities remain five-second tombstones. Records include stable replicated and
@@ -110,6 +118,13 @@ NPC relevance includes included flag,
 reason (`same_district`, `encounter`, `proximity_enter`,
 `proximity_retained`, `grace`, `excluded`), evaluation/grace tick, observer and
 owner districts, observer position, distance squared, and encounter fact.
+Schema-4 NPC records also retain destination ID/name, navigation status and
+reason, last plan trigger/result, route/topology revision, route digest,
+cost/length/active prefix/index, replan count, optional arrival tick, temporary
+physical-exclusion count, and retry tick. `waiting_for_content` means durable
+intent is waiting on residency; `blocked` is a recoverable gate or confirmed
+physical exclusion; `unreachable` is reserved for complete structural
+disconnection. `arrived` is a semantic status, not disappearance permission.
 Vehicles and currently presentable carryables use a bounded cohort with reasons
 `bounded_world`, `controlled`, or `held`; a carryable intentionally omitted
 with its owning district is `district_dormant`. Their records also include the
@@ -121,8 +136,9 @@ developer shortcut candidates. Shortcut stages are `received`, `matched`,
 `queued`, and `applied`; records include SDL/window/focus/key/modifier/repeat
 facts but no arbitrary text input.
 
-`metrics`: frame and recorder health plus screenshot cadence, memory, and fence
-metrics.
+`metrics`: frame and recorder health plus screenshot cadence, memory, fence,
+and one-second navigation aggregates for following/waiting/blocked/arrived/
+structurally-unreachable NPCs, replans, exclusions, and route maxima.
 
 The semantic map has one object ID per draw. A vehicle chassis and its four
 wheels deliberately have distinct object IDs mapped to the same stable vehicle

@@ -23,6 +23,7 @@ const Camera = @import("../camera.zig").Camera;
 const FrameTimer = @import("../timing.zig").FrameTimer;
 const engine = @import("incinerator_engine");
 const sandbox_host = @import("sandbox_host_contracts");
+const sandbox_replay = @import("sandbox_replay");
 const developer_controls = @import("developer_controls");
 const developer_diagnostics = @import("developer_diagnostics");
 const developer_profile = @import("developer_profile");
@@ -215,6 +216,22 @@ pub const GameplayEntityView = struct {
     navigation_target: ?[3]f32 = null,
     navigation_no_progress_ticks: u16 = 0,
     navigation_last_progress_tick: u64 = 0,
+    navigation_destination: ?sandbox_host.DestinationId = null,
+    navigation_status: ?sandbox_host.NpcNavigationStatus = null,
+    navigation_reason: ?sandbox_host.NpcNavigationReason = null,
+    navigation_trigger: ?sandbox_host.NpcPlanTrigger = null,
+    navigation_result: ?sandbox_host.NpcPlanResult = null,
+    navigation_route_revision: u64 = 0,
+    navigation_topology_revision: u64 = 0,
+    navigation_route_digest: u64 = 0,
+    navigation_route_cost: u32 = 0,
+    navigation_route_length: u8 = 0,
+    navigation_active_prefix_length: u8 = 0,
+    navigation_route_index: u8 = 0,
+    navigation_replan_count: u64 = 0,
+    navigation_arrival_tick: ?u64 = null,
+    navigation_physical_exclusion_count: u8 = 0,
+    navigation_physical_block_retry_tick: u64 = 0,
 };
 
 pub const GameplayActionFeedback = struct {
@@ -298,6 +315,52 @@ pub const InteractionInput = struct {
     requests: *sandbox_interaction.RequestBuffer,
 };
 
+pub const NavigationRequest = union(enum) {
+    set_destination: struct {
+        npc: sandbox_host.PersistentId,
+        destination: sandbox_host.DestinationId,
+    },
+    set_gate: sandbox_replay.NavigationGateCommand,
+};
+
+pub const NavigationRequestBuffer = struct {
+    pub const capacity: usize = 16;
+
+    items: [capacity]NavigationRequest = undefined,
+    count: u8 = 0,
+    rejected: u64 = 0,
+
+    pub fn push(self: *NavigationRequestBuffer, request: NavigationRequest) bool {
+        if (self.count == capacity) {
+            self.rejected +|= 1;
+            return false;
+        }
+        self.items[self.count] = request;
+        self.count += 1;
+        return true;
+    }
+
+    pub fn slice(self: *const NavigationRequestBuffer) []const NavigationRequest {
+        return self.items[0..self.count];
+    }
+
+    pub fn clear(self: *NavigationRequestBuffer) void {
+        self.count = 0;
+    }
+};
+
+pub const NavigationLabView = struct {
+    north_gate_open: bool,
+    south_gate_open: bool,
+    topology_revision: u64,
+};
+
+pub const NavigationInput = struct {
+    view: *const NavigationLabView,
+    gameplay: *const GameplayView,
+    requests: *NavigationRequestBuffer,
+};
+
 /// One-frame observations and fixed request sinks, grouped by concern. This is
 /// the composition/editor boundary; tools never receive App or Simulation.
 pub const FrameInput = struct {
@@ -307,6 +370,7 @@ pub const FrameInput = struct {
     visualization: VisualizationInput,
     authoring: AuthoringInput,
     interaction: InteractionInput,
+    navigation: NavigationInput,
     gameplay: GameplayInput,
     incident: IncidentInput,
 };
@@ -324,6 +388,7 @@ pub const ToolId = enum {
     render,
     diagnostics,
     gameplay_inspector,
+    navigation_lab,
     incident_capture,
     physics_debug,
     crate_authoring,

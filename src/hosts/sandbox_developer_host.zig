@@ -208,6 +208,7 @@ pub const FrameInput = struct {
     include_district_streams: bool,
     authoring: editor_contract.AuthoringInput,
     interaction: editor_contract.InteractionInput,
+    navigation: editor_contract.NavigationInput,
     gameplay_view: *const editor_contract.GameplayView,
     incident_input: incident_contract.InputSample = .{},
 };
@@ -1260,6 +1261,7 @@ pub const Owner = opaque {
             },
             .authoring = frame.authoring,
             .interaction = frame.interaction,
+            .navigation = frame.navigation,
             .gameplay = .{
                 .view = frame.gameplay_view,
                 .trace = authority.gameplayTrace(),

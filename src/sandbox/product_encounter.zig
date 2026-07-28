@@ -91,14 +91,13 @@ fn initialSpawnCommand() npc.Command {
         .coord = district_recipe.navigation_west_coord,
         .index = 2,
     };
-    const second = npc.NodeRef{
-        .coord = district_recipe.navigation_west_coord,
-        .index = 0,
-    };
     return .{ .spawn = .{
         .request_id = initial_request_id,
         .node = first,
-        .goal = .{ .patrol_between = .{ .first = first, .second = second } },
+        .goal = .{ .patrol_between = .{
+            .first = district_recipe.depot_forecourt,
+            .second = district_recipe.player_plaza,
+        } },
     } };
 }
 

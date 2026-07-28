@@ -1,11 +1,13 @@
 # Incident Evidence Reliability And Boundary Corrections
 
-**Status:** IC5-A through IC5-I implemented and software-validated; the IC5-G
-long gameplay, window lifecycle, graphical/semantic replay, bounded A/B
-performance, and deterministic failure-hardening gates pass; only the physical
-macOS/human visual checkpoint remains open
+**Status:** Complete and human-accepted. IC5-A through IC5-I, schema-3 visual
+capture, long gameplay, window lifecycle, graphical/semantic replay, bounded
+A/B performance, deterministic failure hardening, fresh human bundles, and the
+physical macOS gameplay checkpoint pass.
 
 **Date:** 2026-07-19
+
+**Last reviewed:** 2026-07-27
 
 **Platform:** Apple Silicon macOS developer product; Linux and Windows remain
 deferred
@@ -286,8 +288,8 @@ Starting budgets to measure rather than silently exceed:
 
 ## Concrete Implementation Sequence
 
-The corrective track refines the open IC5 hardening phase. Complete it in the
-following order; do not mark parent IC5 complete from partial progress.
+The corrective track refined IC5 in the following order. Parent IC5 was marked
+complete only after the full sequence and physical checkpoint passed.
 
 | Phase | Outcome | Depends on |
 |---|---|---|
@@ -511,7 +513,7 @@ owning boundary plus an ordinary installed Metal journey.
   GPU capture latency, writer queue, artifact growth, and shutdown latency.
 - [x] Run the inherited unit, headless, replay, architecture, source-package,
   and installed Metal gates.
-- [ ] Generate a new human-flagged bundle for the two repaired journeys and
+- [x] Generate new human-flagged bundles for the repaired journeys and
   inspect every typed and visual artifact.
 - [x] Update ADR-021, the parent design, validation record, root plan, README,
   architecture findings, and repository skill only from measured results.
@@ -530,10 +532,13 @@ clipboard publication still succeeds once. A real host-volume ENOSPC is not
 manufactured because consuming the developer's filesystem is unsafe; the
 writer-owned exact byte ceiling exercises the same fail-closed write boundary.
 
-**Human checkpoint:** The tester confirms the physical shortcut, district
-transition, NPC continuity, and usefulness of the trailing evidence. This is
-the only required external checkpoint; all earlier work can proceed
-autonomously.
+**Human checkpoint:** Complete across the staged July 16-27 sessions. The
+tester exercised UI incident flagging/handoff, district and open-boundary
+traversal, vehicle continuity and NPC contact, combat/death/replacement, and
+carry/drop behavior, supplied multiple searchable schema-3 bundles, and now
+reports the current game functioning well. Command+Option+I remains the
+recommended convenience shortcut; the visible Incident Capture UI remains the
+authoritative fallback.
 
 **Exit:** IC5 is complete only when partial evidence is honest, both anomalies
 remain repaired under long scripted and installed graphical execution, and a
@@ -631,7 +636,7 @@ unexplained absence before replacement.
   instead of continuing to push into a blocker to manufacture occlusion.
 - [x] Run the aggregate, S11, replay, interaction, physics, content, and
   installed Metal journey gates against this exact cohort.
-- [ ] Obtain a fresh human pass for wheel motion, explicit rejected drop,
+- [x] Obtain a fresh human pass for wheel motion, open-world carry/drop,
   route continuity, NPC death/replacement readability, and UI/shortcut copy.
 
 The route pin is deliberately product-specific. It does not weaken the

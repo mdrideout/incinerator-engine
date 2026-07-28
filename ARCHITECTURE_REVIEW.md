@@ -1,14 +1,12 @@
 # Incinerator Engine Architecture Review
 
-**Status:** Living assessment; the accepted gameplay/session foundation now
-includes schema-2 local incident evidence, authority-owned NPC relevance,
-one-hop district visual prefetch, the long IC5-G gameplay/replay journey, and
-the IC5-H bounded vehicle/carry continuity and evidence-capability correction.
-The real window lifecycle and bounded capture-cost gates also pass. Controlled
-IC5-G destructive/failure hardening and the physical macOS/human visual
-checkpoint remain open.
+**Status:** Living assessment; the Apple Silicon macOS gameplay/session
+foundation now includes the implemented S12 semantic-navigation slice,
+higher-fidelity two-district world, schema-4 evidence, and automated Metal
+acceptance. No open P0/P1 architectural finding blocks its final human
+walkthrough. S13 remains deferred until that checkpoint is reviewed.
 
-**Last reviewed:** 2026-07-17
+**Last reviewed:** 2026-07-28
 
 **Scope:** Current post-S11 architecture, its demonstrated strengths, and its
 remaining structural pressure before another product or service slice
@@ -30,7 +28,9 @@ remaining structural pressure before another product or service slice
 → [`S11 accepted`](docs/validation/s11-npc-encounter-combat-response.md)
 → [`post-S11 automated closeout passed; manual acceptance exposed validation gaps`](docs/validation/post-s11-runtime-corrective-audit.md)
 → [`IV0-IV5 interaction validation and observability accepted`](docs/validation/gameplay-interaction-validation-and-observability.md)
-→ [`IC5-A-IC5-H corrective work implemented`](docs/design/incident-evidence-reliability-and-boundary-corrections.md)
+→ [`IC5 accepted`](docs/validation/human-test-incident-capture.md)
+→ [`open-world spatial and vehicle-dynamics correction complete`](docs/design/open-world-spatial-diagnostics-and-playability.md)
+→ [`S12 automated acceptance complete; human walkthrough pending`](docs/validation/s12-destination-driven-navigation.md)
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 
@@ -167,7 +167,7 @@ an optional non-vendored Steamworks adapter for Steam networking compatibility.
   explicit lifetimes and do not masquerade as each other.
 - Dynamic physics owns simulation transforms; presentation reads interpolated
   previous/current state.
-- Snapshot V11 is canonical logical state and contains no Flecs IDs, Jolt
+- Snapshot V12 is canonical logical state and contains no Flecs IDs, Jolt
   handles, GPU objects, borrowed pointers, or asynchronous worker ownership.
 - Feature queues and external-producer paths are bounded with typed admission,
   reserved authority outcomes, and visible observational loss.
@@ -256,15 +256,20 @@ claim.
 | A-F042 | A cold-restored hostile encounter could resume NPC melee in the persistent headless product, but that host had no exact owner for the resulting public vitals damage/death FIFO pair | P1 | Second post-S11 audit | Resolved: encounter attacks have a stable typed correlation domain; the operational host peeks and commits only an exact owned damage outcome plus its exact lethal death event, preserves unrelated heads as fault evidence, and proves cold-restored combat reaches quiescence and resaves |
 | A-F043 | The client-owned combat-presentation owner retains local feedback and HUD-anchor state without an explicit local avatar/session identity key, so a future fresh join that reuses one graphical scene could briefly display the prior avatar's cooldown, disposition, or anchor | P2 | Before fresh room/account switching or avatar-identity replacement can reuse a graphical scene | Open: key local presentation by session plus participant/avatar generation/incarnation, reset local-only feedback/anchor on an identity transition, retain it across same-avatar reconnect, and test both paths |
 | A-F044 | The dedicated cold `-Dproduct=headless` build graph drifted from the shared simulation imports after S11: `vitals_contract` and `npc_encounter_contract` reached the client graph but not the cold root | P1 | Final post-S11 packaging audit | Resolved and verified: the cold product declares both exact root imports, its direct test/lifecycle gate exits successfully, and the current extracted-source aggregate passes 182/182 broad steps with 409/409 tests plus 32/32 cold steps with 62/62 tests |
-| A-F045 | Human trace evidence showed that death removed the local projection, district-edge drop placement rejected valid player intent without a readable reason, and high-rate movement samples evicted useful causal context | P1 | Post-IV human-trace corrective | Resolved: authority retains a noninteractive zero-health death proxy through respawn; interaction tries bounded active-district placements then the last active pose; trace schema 2 preserves typed reason domains, coalesces analog movement, and records semantic presentation transitions; product feedback names the exact disposition |
+| A-F045 | Human trace evidence showed that death removed the local projection, district-edge drop placement rejected valid player intent without a readable reason, and high-rate movement samples evicted useful causal context | P1 | Post-IV human-trace corrective | Resolved and later superseded at the drop boundary: authority retains a noninteractive zero-health death proxy through respawn; trace schema 2 preserves typed reasons and semantic transitions; ADR-022 removes district-residency gating and old-pose fallback entirely so a held object drops at its authoritative spatial destination |
 | A-F046 | MP3 included asynchronous world bootstrap, the listen observer could finish before the remote member, and IV5 clean-repeat compared live sampled bytes as though the non-lockstep engine promised bitwise determinism | P1 | Post-IV aggregate stabilization | Resolved without weakening product claims: MP3 uses its deterministic host-managed empty-world scope, listen waits for bounded remote completion, and IV5 settles bootstrap then compares causal action/submission/outcome semantics while the impaired link retains exact same-message seeded decisions |
 | A-F047 | `drawMeshWithMaterial` ignored `base_color` for `pos_color` primitives, so combat supplied a red corpse while the product remained orange; the independent visibility fragment used the intended color and accepted a nearly occluded corpse | P1 | Final rendered human acceptance | Resolved: primitive material tint is a reflected 16-byte fragment contract, debug draws push white explicitly, dead avatars remain in NPC presentation separation, and the Metal death checkpoint requires at least 64 depth-tested local-corpse pixels. Direct swapchain acceptance confirms the corpse is visibly red and distinct from the hostile |
-| A-F048 | V1 human incident evidence treated flag time as symptom time, sampled too sparsely, lost absent entity membership, reported stale live health, and omitted an NPC encounter replay output lane | P0 | IC5 evidence corrective | Resolved in schema 2: bounded product trail plus human/semantic lanes use actual indexed times; lifecycle and live health are atomic/reduced; tri-state membership, tombstones, and relevance facts cross authority/replication/presentation/draw; one replay boundary classifies public outputs. The long normal/resize/minimize/rapid-flag/replay journey and capture A/B pass; physical shortcut and human continuity acceptance remain IC5-G gates. |
+| A-F048 | V1 human incident evidence treated flag time as symptom time, sampled too sparsely, lost absent entity membership, reported stale live health, and omitted an NPC encounter replay output lane | P0 | IC5 evidence corrective | Resolved and human-accepted in schema 3: the -5 through +2 second visual window, actual indexed times, atomic lifecycle/health, tri-state membership, tombstones, replay, live handoff, failure profiles, and fresh human bundles make the current incident workflow usable without treating flag time as symptom time |
 | A-F049 | District recipe cohort 3 reached manifests, replay, configs, and graphical streaming while the cold headless manifest validator duplicated and retained recipe 2 | P0 | IC5 source-package closeout | Resolved without compatibility: `headless_content` imports the sandbox recipe owner for exact fail-closed admission, and the cold lifecycle plus filtered-source gates execute the current cohort. |
 | A-F050 | NPC death scheduled replacement directly at the authority-to-simulation seam, mutating the `npc_encounter` digest outside the normalized replay command spine; short replays never reached death and missed it | P0 | IC5-G long replay | Resolved in replay cohort 10: bounded schedule/defer/complete ingress is canonically encoded and applied before its eligible tick; focused codec/simulation tests and the 2,106-tick journey replay match through death and replacement. |
 | A-F051 | The initial full-drawable anchor policy reserved 239,155,200 bytes on a Retina 2560x1440 window, violating the declared 128 MiB capture-memory boundary | P0 | IC5-G capture-cost gate | Resolved without relaxing the budget: the 30 Hz product lane owns transient continuity and four 1 Hz full-drawable slots own human/UI context. Measured bounded downloads are 121,190,400 bytes; a fresh smoke and full journey retain all five requested anchors with zero warnings. |
 | A-F052 | A process killed while post-roll was capturing had no materialized anomaly marker yet, and both fresh-agent diagnostic consumers aborted instead of explaining the valid live partial state | P0 | IC5-G unclean-exit gate | Resolved: the atomic running manifest and anomaly index remain authoritative; inspector and canonical/personal skill report `capturing`, `marker=pending`, zero finalized windows, absent replay/handoff, and explicit partial-in-time warnings without mutating the bundle. |
 | A-F053 | Exact district equality removed an authority-live vehicle/carryable from the client projection, while incident state and semantic maps could not prove those object boundaries; accepted-ingress replay then compared a newer authority frame once the objects remained visible | P0 | IC5-H human vehicle incident | Resolved with the deliberately bounded four-vehicle/four-carryable projection, typed bounded/controlled/held/dormant evidence, stable identities and tombstones, shared chassis/wheel semantic identity, a manifest capability matrix, recorded-tick replay comparison, and same-identity real-GNS/Metal seam acceptance. A future spatial policy requires measured hysteresis and no-pop evidence; no generic replication graph was added. |
+| A-F054 | Carryable existence and player-requested drop were incorrectly coupled to exact active district residency, preventing ordinary open-world interaction outside the tiny authored catalog | P0 | ADR-022 open-world correction | Resolved without compatibility: spatial coordinates are indexing metadata, `InteractionFeature` remains the lifetime/body owner, drop uses one authoritative carrier-relative pose, and unload/reload cannot suspend or hide the object |
+| A-F055 | Vehicle handling had only subjective play evidence, so friction/stability changes could silently trade braking, lateral slip, recovery, and rollover behavior | P1 | First handling correction | Resolved for the current single archetype: explicit backend-neutral tire curves and a real-Jolt 120 Hz rig measure stopping, steady turn, slip, slalom, skid recovery, and rollover; the report and tuning skill preserve accepted tradeoffs |
+| A-F056 | Incident manifests write stale protocol/snapshot literals instead of sourcing the accepted live cohort, so a navigation incident could misidentify the runtime that produced it | P1 | S12-A preflight | Resolved: schema-4 manifests source protocol/replay/snapshot cohort constants, drift tests fail closed, and a fresh protocol-14/replay-14/snapshot-13 bundle passes strict inspection |
+| A-F057 | NPC base intent is a cooked node reference; route results conflate inactive/capacity/disconnected outcomes, and failed displacement recovery may restore an old pose | P1 | S12 destination/recovery contract | Resolved under [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md): semantic destination intent, one pure typed planner, explicit execution status/lineage, collision-aware re-anchoring, confirmed edge exclusions, and a zero-teleport counter replace raw-node/BFS/snap-back behavior |
+| A-F058 | The installed six-node line and triangle presentation cannot exercise alternate routes, topology replanning, or human-readable navigation diagnosis | P1 | S12 playable evaluation | Resolved for the bounded slice: the installed 16-node/32-edge urban block has two transactional seam gates, visible blockers, six destinations, Navigation Lab, independent overlays, and schema-4 route evidence. Human walkthrough remains the acceptance checkpoint, not an architecture implementation gap |
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,
@@ -407,6 +412,20 @@ not as an unbounded file-reorganization phase.
     acceptance pass; the historical corrective record is superseded by the
     accepted
     [`Gameplay Interaction Validation And Observability Evidence`](docs/validation/gameplay-interaction-validation-and-observability.md).
+14. **IC5 and the open-world corrective — complete and human-accepted.**
+    Schema-3 incident evidence, destructive/failure hardening, recipe-5 open
+    traversal, collision-driven NPC route rebasing, spatial carryable lifetime,
+    district/navigation overlays, and objective vehicle handling close the
+    current macOS baseline without adding a telemetry platform, generic
+    streaming framework, or speculative AI/navigation stack.
+
+S12 now supplies the intended pressure test without changing the owner model:
+semantic destination is durable intent, route state is derived, district
+authority owns topology/gates, and physical pose remains truth. The immediate
+next action is its human evaluation-world and incident walkthrough. S13
+authored population is the next implementation slice after that review; it
+must not pre-emptively add a navmesh, crowd solver, behavior tree, ECS
+framework, scheduler, or service layer.
 
 ## Architecture Definition of Done Through S11
 

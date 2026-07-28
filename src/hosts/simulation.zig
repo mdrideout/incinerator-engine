@@ -30,6 +30,7 @@ const simulation_snapshot = @import("simulation_snapshot");
 const simulation_diagnostics = @import("simulation_diagnostics");
 const sandbox_diagnostics = @import("sandbox_diagnostics_contract");
 const sandbox_host_contracts = @import("sandbox_host_contracts");
+const sandbox_navigation = @import("sandbox_navigation");
 
 const Command = crates.Command;
 const Outcome = crates.Outcome;
@@ -87,6 +88,14 @@ const NpcReplacementDiagnostics = npc_replacement_contract.Diagnostics;
 const NavigationNodeRef = npcs.NodeRef;
 const navigation_west_coord = sandbox_district_recipe.navigation_west_coord;
 const navigation_east_coord = sandbox_district_recipe.navigation_east_coord;
+pub const navigation_gate_half_extents = [3]f32{ 0.2, 1.0, 1.0 };
+
+pub fn navigationGatePosition(gate: sandbox_navigation.Gate) [3]f32 {
+    return switch (gate) {
+        .north => .{ 8, 1, 4 },
+        .south => .{ 8, 1, -3 },
+    };
+}
 const ChunkCoord = district_contract.ChunkCoord;
 const LoadTicket = district_contract.LoadTicket;
 const PhysicsDebugConfig = engine.physics_debug.Config;
@@ -203,13 +212,17 @@ const DistrictFeature = district_implementation.Feature(
     district_replay_loader.Loader,
     sandbox_district_recipe,
 );
+const SandboxNavigationAccess = sandbox_navigation.RuntimeAccess(
+    DistrictFeature.NavigationAccess,
+);
+pub const NavigationGateState = sandbox_navigation.GateState;
 const InteractionFeature = interaction_implementation.Feature(
     jolt.CrateBodies,
     CharacterFeature.CarrierAccess,
 );
 const NpcFeature = npc_implementation.Feature(
     jolt.CharacterControllers,
-    DistrictFeature.NavigationAccess,
+    SandboxNavigationAccess,
 );
 const VitalsFeature = vitals_implementation.Feature();
 
@@ -238,7 +251,7 @@ const NpcReplacementAccess = struct {
     character_feature: *CharacterFeature,
     vehicle_feature: *VehicleFeature,
     vitals_feature: *VitalsFeature,
-    navigation_access: *DistrictFeature.NavigationAccess,
+    navigation_access: *SandboxNavigationAccess,
     npc_config: npcs.Config,
 
     pub fn nodePosition(
@@ -348,7 +361,8 @@ const State = struct {
     district_bodies: jolt.DistrictBodies,
     district_loader: district_replay_loader.Loader,
     district_feature: DistrictFeature,
-    navigation_access: DistrictFeature.NavigationAccess,
+    district_navigation_access: DistrictFeature.NavigationAccess,
+    navigation_access: SandboxNavigationAccess,
     interaction_feature: InteractionFeature,
     vehicle_feature: VehicleFeature,
     npc_feature: NpcFeature,
@@ -359,6 +373,7 @@ const State = struct {
     npc_replacement_policy: NpcReplacementPolicy,
     ground: ?jolt.BodyId,
     block: ?jolt.BodyId,
+    navigation_gate_bodies: [2]?jolt.BodyId,
     capture: ?*ActiveCapture,
     diagnostic_fault_probe: DiagnosticFaultProbe,
     diagnostic_fault_probe_registered: bool,
@@ -460,7 +475,7 @@ pub const Simulation = struct {
 
     fn fromValidatedSnapshot(
         allocator: std.mem.Allocator,
-        snapshot: simulation_snapshot.SnapshotV11,
+        snapshot: simulation_snapshot.SnapshotV13,
         config: simulation_snapshot.RestoreConfig,
     ) !Simulation {
         try validateNpcLimit(config.npc.max_npcs);
@@ -496,6 +511,10 @@ pub const Simulation = struct {
             snapshot.districts,
             config.district_assets,
         );
+        try simulation.state.navigation_access.restoreGateState(
+            snapshot.navigation_gates,
+        );
+        try simulation.syncNavigationGateBodies();
         try simulation.state.interaction_feature.restoreRecords(snapshot.interactions);
         try simulation.state.vehicle_feature.restoreRecords(snapshot.vehicles);
         try simulation.state.npc_feature.restoreRecords(snapshot.npcs);
@@ -535,6 +554,7 @@ pub const Simulation = struct {
         state.physics = physics;
         state.ground = null;
         state.block = null;
+        state.navigation_gate_bodies = .{ null, null };
         state.capture = null;
         state.diagnostic_fault_probe = .{};
         state.diagnostic_fault_probe_registered = false;
@@ -580,7 +600,10 @@ pub const Simulation = struct {
             &state.district_loader,
         );
         errdefer state.district_feature.deinit();
-        state.navigation_access = state.district_feature.navigationAccess();
+        state.district_navigation_access = state.district_feature.navigationAccess();
+        state.navigation_access = SandboxNavigationAccess.init(
+            &state.district_navigation_access,
+        );
         state.interaction_feature = try InteractionFeature.init(
             &state.runtime,
             &state.bodies,
@@ -677,6 +700,13 @@ pub const Simulation = struct {
         if (state.block) |block| {
             if (!state.physics.removeBody(block)) {
                 @panic("simulation block cleanup invariant failed");
+            }
+        }
+        for (state.navigation_gate_bodies) |gate_body| {
+            if (gate_body) |body| {
+                if (!state.physics.removeBody(body)) {
+                    @panic("simulation navigation gate cleanup invariant failed");
+                }
             }
         }
         if (state.ground) |ground| {
@@ -1488,6 +1518,7 @@ pub const Simulation = struct {
         _ = self.state.physics.extractDebug(config, completed_tick, storage);
         if (config.bounds) {
             try self.appendDistrictOwnershipDebug(storage);
+            try self.appendNavigationDebug(storage);
             try self.appendNpcEncounterDebug(storage);
         }
         return storage.batch() orelse error.PhysicsDebugBatchMissing;
@@ -1624,6 +1655,155 @@ pub const Simulation = struct {
         }
     }
 
+    fn appendNavigationDebug(
+        self: *Simulation,
+        storage: *engine.physics_debug.Storage,
+    ) !void {
+        const graph_object = engine.physics_debug.ObjectRef{
+            .kind = 0x4e415647,
+            .serial = self.state.navigation_access.topologyRevision(),
+        };
+        const coords = [_]ChunkCoord{ navigation_west_coord, navigation_east_coord };
+        for (coords) |coord| {
+            for (0..district_contract.max_navigation_nodes) |index| {
+                const reference = NavigationNodeRef{
+                    .coord = coord,
+                    .index = @intCast(index),
+                };
+                const node = switch (self.state.navigation_access.resolveCatalogNode(
+                    reference,
+                )) {
+                    .ready => |value| value,
+                    .invalid_reference => continue,
+                };
+                const source_active =
+                    self.state.navigation_access.activeTicketFor(coord) != null;
+                const node_color: engine.physics_debug.Color = if (source_active)
+                    .{ 0.15, 0.75, 0.85, 1.0 }
+                else
+                    .{ 1.0, 0.65, 0.1, 1.0 };
+                appendDebugCross(
+                    storage,
+                    debugRaised(node.node.position, 0.12),
+                    0.18,
+                    node_color,
+                    graph_object,
+                );
+                for (0..node.node.edge_count) |ordinal| {
+                    const edge = switch (self.state.navigation_access.resolveCatalogEdge(
+                        reference,
+                        @intCast(ordinal),
+                    )) {
+                        .ready => |value| value.edge,
+                        .invalid_reference, .invalid_ordinal => return error.InvalidNavigationDebugTopology,
+                    };
+                    const target = switch (self.state.navigation_access.resolveCatalogNode(
+                        edge.target,
+                    )) {
+                        .ready => |value| value,
+                        .invalid_reference => return error.InvalidNavigationDebugTopology,
+                    };
+                    const target_active =
+                        self.state.navigation_access.activeTicketFor(edge.target.coord) != null;
+                    const edge_color: engine.physics_debug.Color =
+                        if (self.state.navigation_access.edgeAvailability(
+                            reference,
+                            edge.target,
+                        ) == .closed)
+                            .{ 1.0, 0.1, 0.85, 1.0 }
+                        else if (!source_active or !target_active)
+                            .{ 1.0, 0.65, 0.1, 1.0 }
+                        else
+                            .{ 0.15, 0.75, 0.85, 1.0 };
+                    appendDebugLine(
+                        storage,
+                        debugRaised(node.node.position, 0.11),
+                        debugRaised(target.node.position, 0.11),
+                        edge_color,
+                        graph_object,
+                    );
+                }
+            }
+        }
+
+        const destination_ids = [_]npcs.DestinationId{
+            sandbox_district_recipe.player_plaza,
+            sandbox_district_recipe.depot_forecourt,
+            sandbox_district_recipe.south_gate_approach,
+            sandbox_district_recipe.market_terminal,
+            sandbox_district_recipe.alley_junction,
+            sandbox_district_recipe.transit_yard,
+        };
+        for (destination_ids) |id| {
+            const destination = switch (self.state.navigation_access.resolveDestination(id)) {
+                .ready => |value| value,
+                .invalid_destination => return error.InvalidNavigationDebugDestination,
+            };
+            appendDebugCross(
+                storage,
+                debugRaised(destination.position, 0.35),
+                0.38,
+                .{ 0.25, 0.95, 0.4, 1.0 },
+                .{ .kind = 0x4e415644, .serial = id.value },
+            );
+        }
+
+        var npc_views: [npcs.max_npcs]NpcView = undefined;
+        const views = try self.state.npc_feature.copyViews(&npc_views);
+        for (views) |npc_view| {
+            const object = engine.physics_debug.ObjectRef{
+                .kind = 0x4e415650,
+                .serial = npc_view.id.local,
+            };
+            var route_start = debugRaised(npc_view.position, 0.2);
+            const nodes = npc_view.route.plan.slice();
+            const first_pending = @min(
+                @as(usize, npc_view.route.index) + 1,
+                nodes.len,
+            );
+            for (nodes[first_pending..], first_pending..) |reference, route_index| {
+                const resolved = switch (self.state.navigation_access.resolveCatalogNode(
+                    reference,
+                )) {
+                    .ready => |value| value,
+                    .invalid_reference => continue,
+                };
+                const route_end = debugRaised(resolved.node.position, 0.2);
+                const color: engine.physics_debug.Color =
+                    if (route_index == first_pending)
+                        .{ 1.0, 1.0, 1.0, 1.0 }
+                    else if (npc_view.navigation_status == .blocked or
+                    npc_view.navigation_status == .structurally_unreachable)
+                        .{ 1.0, 0.1, 0.1, 1.0 }
+                    else
+                        .{ 0.2, 1.0, 0.35, 1.0 };
+                appendDebugLine(storage, route_start, route_end, color, object);
+                route_start = route_end;
+            }
+            for (npc_view.physical_edge_exclusions[0..npc_view.physical_edge_exclusion_count]) |excluded| {
+                const source = switch (self.state.navigation_access.resolveCatalogNode(
+                    excluded.source,
+                )) {
+                    .ready => |value| value,
+                    .invalid_reference => continue,
+                };
+                const target = switch (self.state.navigation_access.resolveCatalogNode(
+                    excluded.target,
+                )) {
+                    .ready => |value| value,
+                    .invalid_reference => continue,
+                };
+                appendDebugLine(
+                    storage,
+                    debugRaised(source.node.position, 0.26),
+                    debugRaised(target.node.position, 0.26),
+                    .{ 1.0, 0.05, 0.05, 1.0 },
+                    object,
+                );
+            }
+        }
+    }
+
     pub fn crate(self: *Simulation, id: engine.PersistentId) !CrateView {
         try self.state.runtime.ensureOwnerThread();
         return self.state.crate_feature.view(id);
@@ -1647,6 +1827,90 @@ pub const Simulation = struct {
     pub fn npc(self: *Simulation, id: engine.PersistentId) !NpcView {
         try self.state.runtime.ensureOwnerThread();
         return self.state.npc_feature.view(id);
+    }
+
+    pub fn pollNpcNavigationTransition(
+        self: *Simulation,
+    ) ?npcs.NavigationTransition {
+        self.state.runtime.assertOwnerThread();
+        return self.state.npc_feature.pollNavigationTransition();
+    }
+
+    pub fn submitNavigationGate(
+        self: *Simulation,
+        command: sandbox_replay.NavigationGateCommand,
+    ) !bool {
+        try self.state.runtime.ensureOwnerThread();
+        const gate: sandbox_navigation.Gate = switch (command.gate) {
+            .north => .north,
+            .south => .south,
+        };
+        const eligible_tick = try self.state.runtime.commandTargetTick();
+        const changed = try self.applyNavigationGate(gate, command.open);
+        if (changed) {
+            self.recordAcceptedCommand(
+                eligible_tick,
+                sandbox_replay.NormalizedCommand.fromNavigationGate(command),
+            );
+        }
+        return changed;
+    }
+
+    fn applyNavigationGate(
+        self: *Simulation,
+        gate: sandbox_navigation.Gate,
+        open: bool,
+    ) !bool {
+        const index: usize = @intFromEnum(gate);
+        const current_open = switch (gate) {
+            .north => self.state.navigation_access.north_open,
+            .south => self.state.navigation_access.south_open,
+        };
+        if (current_open == open) return false;
+        if (open) {
+            const body = self.state.navigation_gate_bodies[index] orelse
+                return error.NavigationGateBodyMissing;
+            if (!self.state.physics.removeBody(body)) {
+                return error.NavigationGateBodyRemovalFailed;
+            }
+            self.state.navigation_gate_bodies[index] = null;
+            _ = self.state.navigation_access.setGate(gate, true);
+            return true;
+        }
+
+        if (self.state.navigation_gate_bodies[index] != null) {
+            return error.NavigationGateBodyAlreadyPresent;
+        }
+        const body = try self.state.physics.createStaticBox(
+            navigationGatePosition(gate),
+            navigation_gate_half_extents,
+        );
+        self.state.navigation_gate_bodies[index] = body;
+        _ = self.state.navigation_access.setGate(gate, false);
+        return true;
+    }
+
+    fn syncNavigationGateBodies(self: *Simulation) !void {
+        const state = self.state.navigation_access.gateState();
+        if (!state.north_open) {
+            self.state.navigation_gate_bodies[@intFromEnum(sandbox_navigation.Gate.north)] =
+                try self.state.physics.createStaticBox(
+                    navigationGatePosition(.north),
+                    navigation_gate_half_extents,
+                );
+        }
+        if (!state.south_open) {
+            self.state.navigation_gate_bodies[@intFromEnum(sandbox_navigation.Gate.south)] =
+                try self.state.physics.createStaticBox(
+                    navigationGatePosition(.south),
+                    navigation_gate_half_extents,
+                );
+        }
+    }
+
+    pub fn navigationGateState(self: *const Simulation) sandbox_navigation.GateState {
+        self.state.runtime.assertOwnerThread();
+        return self.state.navigation_access.gateState();
     }
 
     pub fn vitals(self: *const Simulation, target: vitals_contract.Target) ?VitalsView {
@@ -1707,6 +1971,7 @@ pub const Simulation = struct {
             .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(
                 self.state.npc_encounter_feature.config,
             ),
+            .navigation_gates = self.state.navigation_access.gateState(),
             .crates = crate_records,
             .characters = character_records,
             .vehicles = vehicle_records,
@@ -1860,6 +2125,14 @@ pub const Simulation = struct {
             &district_writer,
             scratch.identities,
         );
+        const gate_state = self.state.navigation_access.gateState();
+        const gate_domain = "incinerator.navigation.gates";
+        district_writer.writeU8(@intCast(gate_domain.len));
+        district_writer.writeBytes(gate_domain);
+        district_writer.writeU16(1);
+        district_writer.writeBool(gate_state.north_open);
+        district_writer.writeBool(gate_state.south_open);
+        district_writer.writeU64(gate_state.topology_revision);
         var interaction_writer = engine.contracts.replay.Writer.init();
         try self.state.interaction_feature.writeLogicalState(&interaction_writer);
         var npc_writer = engine.contracts.replay.Writer.init();
@@ -2050,6 +2323,7 @@ fn submitNormalized(
                 correlation.generation,
             ),
         },
+        .navigation_gate => |value| _ = try simulation.submitNavigationGate(value),
     }
 }
 
@@ -3317,6 +3591,7 @@ test "snapshot owns character tuning and preserves canonical yaw bytes" {
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &.{},
         .characters = &records,
         .vehicles = &.{},
@@ -3440,7 +3715,7 @@ test "snapshot tuning and host character capacity fail before world construction
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
     }};
-    var snapshot = simulation_snapshot.SnapshotV11{
+    var snapshot = simulation_snapshot.SnapshotV13{
         .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -3451,6 +3726,7 @@ test "snapshot tuning and host character capacity fail before world construction
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &.{},
         .characters = &records,
         .vehicles = &.{},
@@ -3682,7 +3958,7 @@ test "V11 validation owns schema cursor and cross-feature identity policy" {
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
     }};
-    const snapshot = simulation_snapshot.SnapshotV11{
+    const snapshot = simulation_snapshot.SnapshotV13{
         .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -3693,6 +3969,7 @@ test "V11 validation owns schema cursor and cross-feature identity policy" {
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &crate_records,
         .characters = &character_records,
         .vehicles = &.{},
@@ -3780,7 +4057,7 @@ test "V11 validation rejects missing and multiply assigned vehicle drivers" {
             .driver_id = .{ .namespace = 731, .local = 1 },
         },
     };
-    const snapshot = simulation_snapshot.SnapshotV11{
+    const snapshot = simulation_snapshot.SnapshotV13{
         .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -3791,6 +4068,7 @@ test "V11 validation rejects missing and multiply assigned vehicle drivers" {
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &.{},
         .characters = &character_records,
         .vehicles = &vehicle_records,
@@ -3848,7 +4126,7 @@ test "V7 interaction preflight rejects holder conflicts before acquiring authori
         .linear_velocity = .{ 0, 0, 0 },
         .angular_velocity = .{ 0, 0, 0 },
     }};
-    const snapshot = simulation_snapshot.SnapshotV11{
+    const snapshot = simulation_snapshot.SnapshotV13{
         .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -3859,6 +4137,7 @@ test "V7 interaction preflight rejects holder conflicts before acquiring authori
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &.{},
         .characters = &character_records,
         .vehicles = &vehicle_records,
@@ -3942,6 +4221,7 @@ test "interaction composes real Jolt drop collect and held restore transactional
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &.{},
         .characters = &character_records,
         .vehicles = &.{},
@@ -4076,10 +4356,150 @@ fn drainNpcPersistenceTestOutputs(simulation: *Simulation) void {
     while (simulation.pollVitalsEvent() != null) {}
 }
 
+test "real Jolt destination replans through the open seam gate and arrives" {
+    const allocator = std.testing.allocator;
+    var simulation = try Simulation.init(allocator, .{
+        .namespace = 8_100,
+        .create_ground = false,
+    });
+    defer simulation.deinit();
+
+    _ = try activateNpcTestDistrict(&simulation, 1, navigation_west_coord);
+    _ = try activateNpcTestDistrict(&simulation, 2, navigation_east_coord);
+    try simulation.submitNpc(.{ .spawn = .{
+        .request_id = 3,
+        .node = .{ .coord = navigation_west_coord, .index = 0 },
+        .goal = .{ .navigate_to = sandbox_district_recipe.market_terminal },
+    } });
+    try simulation.tick();
+    const npc_id = switch (simulation.pollNpcOutcome() orelse
+        return error.NpcSpawnOutcomeMissing) {
+        .spawned => |value| value.id,
+        else => return error.UnexpectedNpcOutcome,
+    };
+    while (simulation.pollNpcNavigationTransition() != null) {}
+
+    const preferred = try simulation.npc(npc_id);
+    var preferred_uses_north_gate = false;
+    for (preferred.route.plan.slice()) |node| {
+        preferred_uses_north_gate = preferred_uses_north_gate or
+            (ChunkCoord.eql(node.coord, navigation_west_coord) and node.index == 6);
+    }
+    try std.testing.expect(preferred_uses_north_gate);
+
+    try std.testing.expect(try simulation.submitNavigationGate(.{
+        .gate = .north,
+        .open = false,
+    }));
+    try simulation.tick();
+    const replanned = try simulation.npc(npc_id);
+    try std.testing.expectEqual(npcs.NavigationStatus.following, replanned.navigation_status);
+    try std.testing.expectEqual(
+        npcs.PlanTrigger.topology_changed,
+        replanned.navigation_lineage.last_trigger,
+    );
+    try std.testing.expect(replanned.navigation_lineage.route_revision >
+        preferred.navigation_lineage.route_revision);
+    var uses_south_gate = false;
+    for (replanned.route.plan.slice()) |node| {
+        uses_south_gate = uses_south_gate or
+            (ChunkCoord.eql(node.coord, navigation_west_coord) and node.index == 7);
+    }
+    try std.testing.expect(uses_south_gate);
+
+    var saw_invalidation = false;
+    var saw_commit = false;
+    var saw_arrival = false;
+    while (simulation.pollNpcNavigationTransition()) |transition| {
+        saw_invalidation = saw_invalidation or transition.kind == .route_invalidated;
+        saw_commit = saw_commit or transition.kind == .plan_committed;
+    }
+    for (0..4_000) |_| {
+        try simulation.tick();
+        while (simulation.pollNpcNavigationTransition()) |transition| {
+            saw_invalidation = saw_invalidation or transition.kind == .route_invalidated;
+            saw_commit = saw_commit or transition.kind == .plan_committed;
+            saw_arrival = saw_arrival or transition.kind == .destination_arrived;
+        }
+        while (simulation.pollNpcEvent() != null) {}
+        if ((try simulation.npc(npc_id)).navigation_status == .arrived) break;
+    }
+
+    const arrived = try simulation.npc(npc_id);
+    try std.testing.expectEqual(npcs.NavigationStatus.arrived, arrived.navigation_status);
+    try std.testing.expectEqual(@as(u32, 0), arrived.navigation_lineage.teleport_rollback_count);
+    try std.testing.expect(saw_invalidation);
+    try std.testing.expect(saw_commit);
+    try std.testing.expect(saw_arrival);
+    try std.testing.expectEqual(@as(usize, 1), (try simulation.npcPresentation(0)).len);
+}
+
+test "cold restore derives blocked destination state from retained gates" {
+    const allocator = std.testing.allocator;
+    var saved: []u8 = undefined;
+    var npc_id: engine.PersistentId = undefined;
+    var blocked_position: [3]f32 = undefined;
+    {
+        var simulation = try Simulation.init(allocator, .{
+            .namespace = 8_102,
+            .create_ground = false,
+        });
+        defer simulation.deinit();
+        _ = try activateNpcTestDistrict(&simulation, 1, navigation_west_coord);
+        _ = try activateNpcTestDistrict(&simulation, 2, navigation_east_coord);
+        try simulation.submitNpc(.{ .spawn = .{
+            .request_id = 3,
+            .node = .{ .coord = navigation_west_coord, .index = 0 },
+            .goal = .{ .navigate_to = sandbox_district_recipe.market_terminal },
+        } });
+        try simulation.tick();
+        npc_id = switch (simulation.pollNpcOutcome() orelse
+            return error.NpcSpawnOutcomeMissing) {
+            .spawned => |value| value.id,
+            else => return error.UnexpectedNpcOutcome,
+        };
+        try std.testing.expect(try simulation.submitNavigationGate(.{
+            .gate = .north,
+            .open = false,
+        }));
+        try std.testing.expect(try simulation.submitNavigationGate(.{
+            .gate = .south,
+            .open = false,
+        }));
+        try simulation.tick();
+        const blocked = try simulation.npc(npc_id);
+        try std.testing.expectEqual(npcs.NavigationStatus.blocked, blocked.navigation_status);
+        blocked_position = blocked.position;
+        while (simulation.pollNpcNavigationTransition() != null) {}
+        while (simulation.pollNpcEvent() != null) {}
+        saved = try simulation.save(allocator);
+    }
+    defer allocator.free(saved);
+
+    var restored = try Simulation.fromSnapshot(allocator, saved, .{
+        .create_ground = false,
+    });
+    defer restored.deinit();
+    const gates = restored.navigationGateState();
+    try std.testing.expect(!gates.north_open);
+    try std.testing.expect(!gates.south_open);
+    try std.testing.expectEqual(
+        @as(u32, sandbox_district_recipe.static_box_count) * 2 + 2,
+        restored.bodyCount(),
+    );
+    const blocked = try restored.npc(npc_id);
+    try std.testing.expectEqual(npcs.NavigationStatus.blocked, blocked.navigation_status);
+    try std.testing.expect(std.meta.eql(
+        npcs.Goal{ .navigate_to = sandbox_district_recipe.market_terminal },
+        blocked.goal,
+    ));
+    try std.testing.expectEqual(blocked_position, blocked.position);
+    try std.testing.expectEqual(@as(u32, 0), blocked.navigation_lineage.teleport_rollback_count);
+}
+
 test "real Jolt NPC patrol waits crosses generations suspends and restores once" {
     const allocator = std.testing.allocator;
     const west_start = NavigationNodeRef{ .coord = navigation_west_coord, .index = 0 };
-    const east_end = NavigationNodeRef{ .coord = navigation_east_coord, .index = 2 };
     var saved: []u8 = undefined;
     var npc_id: engine.PersistentId = undefined;
 
@@ -4105,8 +4525,8 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
             .request_id = 10,
             .node = west_start,
             .goal = .{ .patrol_between = .{
-                .first = west_start,
-                .second = east_end,
+                .first = sandbox_district_recipe.player_plaza,
+                .second = sandbox_district_recipe.market_terminal,
             } },
         } });
         try simulation.tick();
@@ -4325,11 +4745,15 @@ test "sustained real Jolt vehicle contact can displace NPC across district seam"
             },
         },
     });
-    try simulation.submitNpc(.{ .spawn = .{
-        .request_id = 5,
-        .node = .{ .coord = navigation_west_coord, .index = 2 },
-        .goal = .hold,
-    } });
+    try simulation.submitNpc(.{
+        .spawn = .{
+            .request_id = 5,
+            // W6 is the north seam gate in the S12 graph. Keep this focused proof
+            // at the ownership seam instead of depending on the pre-S12 node map.
+            .node = .{ .coord = navigation_west_coord, .index = 6 },
+            .goal = .hold,
+        },
+    });
     try simulation.tick();
     const character_id = (simulation.pollCharacterOutcome() orelse
         return error.CharacterSpawnOutcomeMissing).spawned.id;
@@ -4508,7 +4932,6 @@ test "encounter pursuit save restore defers target and owner residency canonical
     const allocator = std.testing.allocator;
     const namespace: u64 = 8_109_1;
     const west_start = NavigationNodeRef{ .coord = navigation_west_coord, .index = 0 };
-    const east_end = NavigationNodeRef{ .coord = navigation_east_coord, .index = 2 };
     const encounter_config = npc_encounter_contract.Config{
         .sight_facing_cos = -1,
         .ambient_perception_interval_ticks = 1,
@@ -4543,8 +4966,8 @@ test "encounter pursuit save restore defers target and owner residency canonical
             .request_id = 4,
             .node = west_start,
             .goal = .{ .patrol_between = .{
-                .first = west_start,
-                .second = east_end,
+                .first = sandbox_district_recipe.player_plaza,
+                .second = sandbox_district_recipe.market_terminal,
             } },
         } });
         try simulation.tick();
@@ -4785,7 +5208,7 @@ test "NPC capacity and hostile V11 snapshots fail before world authority" {
     };
     var hostile_npc = valid_npc;
     hostile_npc.position = .{ 9, 0, 3 };
-    var snapshot = simulation_snapshot.SnapshotV11{
+    var snapshot = simulation_snapshot.SnapshotV13{
         .schema_version = simulation_snapshot.schema_version,
         .completed_ticks = 0,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -4796,6 +5219,7 @@ test "NPC capacity and hostile V11 snapshots fail before world authority" {
         .interaction_config = InteractionConfigV1.fromConfig(.{}),
         .npc_config = NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = simulation_snapshot.NpcEncounterConfigV1.fromConfig(.{}),
+        .navigation_gates = simulation_snapshot.initial_navigation_gates,
         .crates = &.{},
         .characters = &.{},
         .vehicles = &.{},
@@ -4976,4 +5400,84 @@ test "vitals and dead incarnation survive canonical save restart" {
     const resaved = try restored.save(allocator);
     defer allocator.free(resaved);
     try std.testing.expectEqualSlices(u8, saved, resaved);
+}
+
+test "navigation gate command capture replays topology collision and digest" {
+    const allocator = std.testing.allocator;
+    const content = try testContentCohort(
+        [_]u8{0x8c} ** 32,
+        [_]u8{0xc8} ** 32,
+    );
+    var encoded: []u8 = undefined;
+    {
+        var simulation = try Simulation.init(allocator, .{
+            .namespace = 8_132,
+            .create_ground = false,
+        });
+        defer simulation.deinit();
+        try std.testing.expect(
+            (try simulation.beginFlightRecording(content, .{})) == .admitted,
+        );
+        try std.testing.expect(try simulation.submitNavigationGate(.{
+            .gate = .north,
+            .open = false,
+        }));
+        try simulation.tick();
+        encoded = try simulation.finishFlightRecording(allocator);
+    }
+    defer allocator.free(encoded);
+
+    var parsed = try sandbox_replay.parse(allocator, encoded);
+    defer parsed.deinit();
+    try parsed.validateCompatible(content);
+    try std.testing.expectEqual(@as(usize, 1), parsed.bootstrap_commands.len);
+    try std.testing.expect(parsed.bootstrap_commands[0].command == .navigation_gate);
+    const command = parsed.bootstrap_commands[0].command.navigation_gate;
+    try std.testing.expectEqual(sandbox_replay.NavigationGate.north, command.gate);
+    try std.testing.expect(!command.open);
+
+    const result = try replayCapture(allocator, parsed.view(), content);
+    try std.testing.expect(result == .matched);
+    try std.testing.expectEqual(@as(u64, 1), result.matched.completed_ticks);
+}
+
+test "navigation gate topology collision and durable state change together" {
+    const allocator = std.testing.allocator;
+    var saved: []u8 = undefined;
+    {
+        var simulation = try Simulation.init(allocator, .{
+            .namespace = 8_131,
+            .create_ground = false,
+        });
+        defer simulation.deinit();
+        try std.testing.expectEqual(@as(u32, 0), simulation.bodyCount());
+        try std.testing.expect(try simulation.submitNavigationGate(.{
+            .gate = .north,
+            .open = false,
+        }));
+        try std.testing.expectEqual(@as(u32, 1), simulation.bodyCount());
+        const closed = simulation.navigationGateState();
+        try std.testing.expect(!closed.north_open);
+        try std.testing.expect(closed.south_open);
+        try std.testing.expectEqual(@as(u64, 2), closed.topology_revision);
+        try std.testing.expect(!try simulation.submitNavigationGate(.{
+            .gate = .north,
+            .open = false,
+        }));
+        saved = try simulation.save(allocator);
+    }
+    defer allocator.free(saved);
+
+    var restored = try Simulation.fromSnapshot(allocator, saved, .{
+        .create_ground = false,
+    });
+    defer restored.deinit();
+    try std.testing.expectEqual(@as(u32, 1), restored.bodyCount());
+    try std.testing.expect(!restored.navigationGateState().north_open);
+    try std.testing.expect(try restored.submitNavigationGate(.{
+        .gate = .north,
+        .open = true,
+    }));
+    try std.testing.expectEqual(@as(u32, 0), restored.bodyCount());
+    try std.testing.expect(restored.navigationGateState().north_open);
 }

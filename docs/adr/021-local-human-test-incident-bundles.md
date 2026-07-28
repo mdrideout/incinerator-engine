@@ -4,7 +4,8 @@
 
 **Date:** Accepted 2026-07-16; evidence-capability amendment 2026-07-17;
 budget, handoff, and deterministic-failure amendments 2026-07-18; schema-3
-visual-window amendment 2026-07-19
+visual-window amendment 2026-07-19; schema-4 S12 navigation-evidence amendment
+2026-07-28
 
 ## Context
 
@@ -68,7 +69,7 @@ chassis and wheels share one stable entity identity. Chronological visual
 reports are derived outside the immutable run folder from indexed actual
 capture times.
 
-`inspect-incident` strictly validates schema 3 and indexes a bundle.
+`inspect-incident` strictly validates the current schema 4 and indexes a bundle.
 `replay-incident` performs same-cohort semantic replay through one explicit
 public-output boundary. `--replay-incident=<absolute-run-folder>` drives
 captured controls through the normal graphical composition, but is explicitly
@@ -90,6 +91,12 @@ five-anchor marker with eight required UI-inclusive anchors and changes the
 visual window from -4/+3 to -5/+2 seconds. Producer, inspector, handoff,
 documentation, and diagnostics skill advance as one cohort; no schema-2
 fallback parser is retained.
+
+Schema 4 is an intentional greenfield break from schema 3 for S12. It adds
+semantic destination, route/topology lineage, status/reason, bounded physical
+edge-exclusion, and exact route-change evidence to NPC state and gameplay
+timeline records. Producer, strict inspector, handoff, documentation, and the
+diagnostics skill advance together; no schema-3 fallback parser is retained.
 
 The local evidence is developer-only. It captures no arbitrary text, global
 input, credentials, signed admission material, upload, analytics, or remote

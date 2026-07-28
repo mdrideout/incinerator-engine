@@ -7,6 +7,7 @@
 const std = @import("std");
 const zgui = @import("zgui");
 const engine = @import("incinerator_engine");
+const sandbox_host = @import("sandbox_host_contracts");
 const tool_module = @import("../tool.zig");
 
 const GameplayInput = tool_module.GameplayInput;
@@ -68,6 +69,13 @@ fn reasonName(
         else
             @errorName(@errorFromInt(@as(u16, @intCast(reason)))),
         .protocol_disposition => "protocol_disposition",
+        .navigation_reason => if (std.enums.fromInt(
+            sandbox_host.NpcNavigationReason,
+            reason,
+        )) |value|
+            @tagName(value)
+        else
+            "unknown_navigation_reason",
         .validation_code => "validation_code",
     };
 }
@@ -311,6 +319,54 @@ pub fn draw(
                 if (entity.navigation_target) |target| zgui.text(
                     "navigation target ({d:.3}, {d:.3}, {d:.3})",
                     .{ target[0], target[1], target[2] },
+                );
+                if (entity.navigation_destination) |destination| zgui.text(
+                    "destination {s} ({d})",
+                    .{
+                        sandbox_host.destinationName(destination) orelse "unknown",
+                        destination.value,
+                    },
+                );
+                if (entity.navigation_status) |status| zgui.text(
+                    "status {s} / {s} | trigger {s} -> {s}",
+                    .{
+                        @tagName(status),
+                        if (entity.navigation_reason) |reason|
+                            @tagName(reason)
+                        else
+                            "none",
+                        if (entity.navigation_trigger) |trigger|
+                            @tagName(trigger)
+                        else
+                            "none",
+                        if (entity.navigation_result) |result|
+                            @tagName(result)
+                        else
+                            "none",
+                    },
+                );
+                zgui.text(
+                    "route rev {d} topo {d} digest 0x{x} | node {d}/{d} active {d} cost {d}",
+                    .{
+                        entity.navigation_route_revision,
+                        entity.navigation_topology_revision,
+                        entity.navigation_route_digest,
+                        entity.navigation_route_index,
+                        entity.navigation_route_length,
+                        entity.navigation_active_prefix_length,
+                        entity.navigation_route_cost,
+                    },
+                );
+                zgui.text(
+                    "replans {d} | arrival tick {?d}",
+                    .{ entity.navigation_replan_count, entity.navigation_arrival_tick },
+                );
+                zgui.text(
+                    "physical exclusions {d} | retry tick {d}",
+                    .{
+                        entity.navigation_physical_exclusion_count,
+                        entity.navigation_physical_block_retry_tick,
+                    },
                 );
             }
             if (entity.target) |target| {

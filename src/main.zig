@@ -311,7 +311,12 @@ const s6_required_overlap_cycles: u8 = 3;
 const s6_west_only = [2]f32{ 0, 0 };
 const s6_overlap = [2]f32{ 8, 0 };
 const s6_east_only = [2]f32{ 24, 0 };
-const s6_fully_outside = [2]f32{ 40, 32 };
+const s6_fully_outside = [2]f32{ 64, 64 };
+// The normal S12 product keeps both neighboring scenes visually warm. The S8
+// validation composition needs a deliberately colder client focus so it can
+// prove that east-side authority suspension is visually safe without changing
+// the product prefetch policy.
+const s8_west_only_prefetch = [2]f32{ -24, 0 };
 
 const S6SmokeStage = enum {
     west_resident,
@@ -428,17 +433,12 @@ fn s7ReplicaConverged(
 const s8_population_count: usize = 1;
 const s8_spawn_first_request_id: u64 = 8_000;
 const s8_despawn_first_request_id: u64 = 9_000;
-const s8_replica_convergence_timeout_ticks: u64 =
-    @as(u64, session_budgets.ticks_per_npc_snapshot) +
-    @as(u64, session_budgets.ticks_per_snapshot);
-const s8_west_seam = sandbox_contracts.NavigationNodeRef{
+const s8_replica_convergence_timeout_ticks: u64 = timing.TICK_RATE;
+const s8_west_start = sandbox_contracts.NavigationNodeRef{
     .coord = district_west_coord,
     .index = 2,
 };
-const s8_east_end = sandbox_contracts.NavigationNodeRef{
-    .coord = district_east_coord,
-    .index = 2,
-};
+const s8_east_destination = sandbox_contracts.market_terminal_destination;
 
 comptime {
     if (population.max_population_commands != sandbox_contracts.npc_capacity) {
@@ -448,6 +448,7 @@ comptime {
 
 const S8SmokeStage = enum {
     overlap_resident,
+    observer_spawned,
     population_spawned,
     destination_waiting,
     destination_reloaded,
@@ -455,6 +456,7 @@ const S8SmokeStage = enum {
     owner_dormant,
     owner_resumed,
     population_despawned,
+    observer_despawned,
     final_drain,
 };
 
@@ -520,15 +522,11 @@ const S8PopulationSmokeSummary = struct {
         self: *S8PopulationSmokeSummary,
         diagnostics: NpcDiagnostics,
         controllers: CharacterControllerDiagnostics,
+        character_count: u32,
     ) !void {
-        // This isolated smoke owns no player CharacterVirtual. Require the
-        // direct Physics-registry count, the independently summed feature
-        // count, and NPC feature ownership to agree on every rendered frame.
-        // That makes a leaked, duplicated, or untracked native controller a
-        // native closeout failure instead of an invisible feature-only count.
         if (controllers.native_capacity != 128 or
             controllers.native_used != controllers.feature_owned or
-            controllers.feature_owned != diagnostics.controller_count or
+            controllers.feature_owned != diagnostics.controller_count + character_count or
             !controllers.authority_consistent)
         {
             return error.S8PopulationNativeControllerMismatch;
@@ -557,21 +555,21 @@ const S8PopulationSmokeSummary = struct {
             self.peak_active != s8_population_count or
             self.peak_waiting != s8_population_count or
             self.peak_dormant != s8_population_count or
-            self.peak_native_controllers != s8_population_count or
+            self.peak_native_controllers != s8_population_count + 1 or
             self.waiting_events != s8_population_count or
             self.waiting_resume_events != s8_population_count or
             self.transfer_events != s8_population_count or
             self.dormant_events != s8_population_count or
             self.controller_resume_events != s8_population_count or
-            self.goal_events != 0 or !self.two_resident_scenes or
+            self.goal_events != s8_population_count or !self.two_resident_scenes or
             self.peak_live_scenes != 2 or self.peak_resident_scenes != 2 or
             self.peak_active_batches == 0 or self.peak_active_batches > 2 or
-            self.peak_staged_cpu_bytes != 344 or
-            self.peak_staged_upload_bytes != 116 or
+            self.peak_staged_cpu_bytes != installed_district_staged_cpu_bytes or
+            self.peak_staged_upload_bytes != installed_district_gpu_bytes or
             self.peak_in_flight_upload_bytes == 0 or
-            self.peak_in_flight_upload_bytes > 232 or
-            self.peak_in_flight_upload_bytes % 116 != 0 or
-            self.peak_resident_gpu_bytes != 232 or
+            self.peak_in_flight_upload_bytes > 2 * installed_district_gpu_bytes or
+            self.peak_in_flight_upload_bytes % installed_district_gpu_bytes != 0 or
+            self.peak_resident_gpu_bytes != 2 * installed_district_gpu_bytes or
             diagnostics.transfers != s8_population_count or
             diagnostics.controllers_suspended != s8_population_count or
             diagnostics.controllers_resumed != s8_population_count or
@@ -631,6 +629,7 @@ fn s8RequestIndex(request_id: u64, first_request_id: u64) !usize {
 const S8PopulationEvidence = struct {
     identities: [s8_population_count]?sandbox_contracts.PersistentId = @splat(null),
     spawned: [s8_population_count]bool = @splat(false),
+    first_destination_reached: [s8_population_count]bool = @splat(false),
     waiting: [s8_population_count]bool = @splat(false),
     waiting_resumed: [s8_population_count]bool = @splat(false),
     transferred: [s8_population_count]bool = @splat(false),
@@ -673,6 +672,7 @@ const S8PopulationEvidence = struct {
 
     fn complete(self: *const S8PopulationEvidence) bool {
         if (!self.spawnedComplete() or
+            !allSeen(&self.first_destination_reached) or
             !self.waitingComplete() or
             !self.waitingResumeComplete() or
             !self.transferComplete() or
@@ -819,12 +819,19 @@ const S8PopulationEvidence = struct {
                 );
             },
             .goal_reached => |reached| {
-                _ = self.indexForIdentity(reached.id) orelse
+                const index = self.indexForIdentity(reached.id) orelse
                     return error.UnexpectedS8NpcEvent;
-                // This smoke unloads the east owner immediately after transfer,
-                // before the east terminal can be reached. Any goal event is an
-                // unexpected lifecycle class, not evidence to aggregate later.
-                return error.UnexpectedS8NpcEvent;
+                if ((stage != .population_spawned and stage != .destination_waiting) or
+                    !sandbox_contracts.DestinationId.eql(
+                        reached.destination,
+                        sandbox_contracts.south_gate_approach_destination,
+                    ) or
+                    self.first_destination_reached[index])
+                {
+                    return error.UnexpectedS8NpcEvent;
+                }
+                self.first_destination_reached[index] = true;
+                summary.goal_events += 1;
             },
         }
     }
@@ -905,6 +912,14 @@ const S11CombatSmokeProgress = struct {
     character_flash_overran: bool = false,
     npc_flash_overran: bool = false,
     render_plan_mismatch: bool = false,
+    post_respawn_source_samples: u32 = 0,
+    post_respawn_source_missing: u32 = 0,
+    post_respawn_move_samples: u32 = 0,
+    first_source_position: [3]f32 = @splat(0),
+    first_npc_position: [3]f32 = @splat(0),
+    last_source_position: [3]f32 = @splat(0),
+    last_npc_position: [3]f32 = @splat(0),
+    last_target_distance_squared: f32 = 0,
 
     fn expectedHealthBarDrawCalls(plan: combat_presentation.HealthBarPlan) u64 {
         if (!plan.visible) return 0;
@@ -1137,16 +1152,32 @@ const S11CombatSmokeProgress = struct {
             !self.product_hud_action_feedback or
             !self.visibility_contact or !self.visibility_player_death or
             !self.visibility_respawn or !self.visibility_npc_death or
-            !self.visibility_bounds_valid or self.visibility_observations < 7)
+            !self.visibility_bounds_valid or self.visibility_observations < 5)
         {
             std.debug.print(
-                "S11_COMBAT_SMOKE_MISSING char_flash_overran={} " ++
+                "S11_COMBAT_SMOKE_MISSING npc_spawned={} melee_hits={d} " ++
+                    "player_dead={} player_respawned={} respawn_accepted={} " ++
+                    "npc_killed={} character_bar={} npc_bar={} windup={} " ++
+                    "character_flash={} npc_flash={} npc_death_drawn={} " ++
+                    "char_flash_overran={} " ++
                     "npc_flash_overran={} render_plan_mismatch={} " ++
                     "char_flash_expired={} npc_flash_expired={} " ++
                     "visibility_contact={} visibility_death={} " ++
                     "visibility_respawn={} visibility_npc_death={} " ++
                     "visibility_bounds={} visibility_observations={d}\n",
                 .{
+                    self.npc_spawned,
+                    self.accepted_melee_hits,
+                    self.player_dead,
+                    self.player_respawned,
+                    self.respawn_accepted,
+                    self.npc_killed,
+                    self.character_bar_drawn,
+                    self.npc_bar_drawn,
+                    self.npc_windup_drawn,
+                    self.character_hit_flash_drawn,
+                    self.npc_hit_flash_drawn,
+                    self.npc_death_drawn,
                     self.character_flash_overran,
                     self.npc_flash_overran,
                     self.render_plan_mismatch,
@@ -1158,6 +1189,32 @@ const S11CombatSmokeProgress = struct {
                     self.visibility_npc_death,
                     self.visibility_bounds_valid,
                     self.visibility_observations,
+                },
+            );
+            std.debug.print(
+                "S11_COMBAT_SMOKE_TARGET post_respawn_sources={d} missing={d} moves={d} " ++
+                    "first_source=({d:.3},{d:.3},{d:.3}) " ++
+                    "first_npc=({d:.3},{d:.3},{d:.3}) " ++
+                    "last_source=({d:.3},{d:.3},{d:.3}) " ++
+                    "last_npc=({d:.3},{d:.3},{d:.3}) " ++
+                    "distance_squared={d:.3}\n",
+                .{
+                    self.post_respawn_source_samples,
+                    self.post_respawn_source_missing,
+                    self.post_respawn_move_samples,
+                    self.first_source_position[0],
+                    self.first_source_position[1],
+                    self.first_source_position[2],
+                    self.first_npc_position[0],
+                    self.first_npc_position[1],
+                    self.first_npc_position[2],
+                    self.last_source_position[0],
+                    self.last_source_position[1],
+                    self.last_source_position[2],
+                    self.last_npc_position[0],
+                    self.last_npc_position[1],
+                    self.last_npc_position[2],
+                    self.last_target_distance_squared,
                 },
             );
             return error.S11CombatSmokeEvidenceMissing;
@@ -1263,6 +1320,11 @@ const S4FaultLoopProbe = struct {
 const s3_smoke_resident_cycles: u8 = 3;
 const s3_smoke_near = [2]f32{ 0, 0 };
 const s3_smoke_far = [2]f32{ 32, 32 };
+const installed_district_meshes: usize = 4;
+const installed_district_materials: usize = 4;
+const installed_district_instances: usize = 16;
+const installed_district_staged_cpu_bytes: u64 = 3_888;
+const installed_district_gpu_bytes: u64 = 2_528;
 const s4_smoke_pause_frames: u64 = 600;
 const s4_smoke_pause_frame_seconds: f64 = 1.0 / 30.0;
 const s4_smoke_stream_attempt_limit: u32 = 480;
@@ -1705,6 +1767,8 @@ const App = struct {
     interaction_last_outcome: ?sandbox_contracts.InteractionOutcome,
     interaction_last_player_result: ?sandbox_host.InteractionActionResult,
     interaction_submission_failures: u64,
+    navigation_requests: editor_contract.NavigationRequestBuffer = .{},
+    navigation_next_request_id: u64 = 0x4e41_5600_0000_0001,
     product_feedback: product_feedback.Owner,
     product_presentation_trace: product_presentation_trace.Owner,
     product_encounter: sandbox_product_encounter.Owner,
@@ -1719,6 +1783,7 @@ const App = struct {
     visibility_oracle: VisibilityOracleState,
     district_streaming: *district_streaming_host.Owner,
     district_focus_override: ?[2]f32,
+    district_prefetch_focus_override: ?[2]f32,
 
     // The persistence host owns canonical capture and durable commit policy.
     // The editor receives only an immutable feedback projection and a bounded
@@ -1935,7 +2000,8 @@ const App = struct {
                 .material = sandbox_visual_resources.character_material_handle,
             } },
             .block = switch (profile) {
-                .sandbox, .s1_smoke => sandbox_block,
+                .s1_smoke => sandbox_block,
+                .sandbox => null,
                 .s0_smoke, .s2_smoke, .s3_smoke => null,
             },
         };
@@ -2083,6 +2149,7 @@ const App = struct {
             .visibility_oracle = validation_visibility,
             .district_streaming = district_streaming,
             .district_focus_override = null,
+            .district_prefetch_focus_override = null,
             .persistence = persistence,
             .game_camera = .{
                 .position = .{ 0, 3, 10, 1 },
@@ -2367,8 +2434,37 @@ const App = struct {
             .bootstrap => if (tick >= 60 and tick < 90) {
                 actions.look_delta = .{ 0.004, -0.001 };
             },
-            .collect, .drop => {
-                actions.carry_pressed = tick == progress.stage_enter_tick +| 1;
+            .collect => {
+                if (self.simulation.player().focusPosition()) |position| {
+                    const carryables = self.simulation.presentation().carryables(0);
+                    if (carryables.len != 0) {
+                        const target = carryables[0].pose.position;
+                        const delta = [2]f32{
+                            target[0] - position[0],
+                            target[2] - position[2],
+                        };
+                        const horizontal_distance_squared =
+                            delta[0] * delta[0] + delta[1] * delta[1];
+                        if (horizontal_distance_squared > 4) {
+                            const inverse = 1.0 / @sqrt(horizontal_distance_squared);
+                            const world_x = delta[0] * inverse;
+                            const world_z = delta[1] * inverse;
+                            const sine = @sin(self.game_camera.yaw);
+                            const cosine = @cos(self.game_camera.yaw);
+                            actions.move = .{
+                                world_x * cosine + world_z * sine,
+                                world_x * sine - world_z * cosine,
+                            };
+                        } else {
+                            actions.carry_pressed =
+                                (tick -| progress.stage_enter_tick) % 30 == 1;
+                        }
+                    }
+                }
+            },
+            .drop => {
+                actions.carry_pressed =
+                    (tick -| progress.stage_enter_tick) % 30 == 1;
             },
             .enter_vehicle => {
                 if (self.simulation.player().focusPosition()) |position| {
@@ -2399,7 +2495,11 @@ const App = struct {
                             delta[0] * delta[0] + delta[1] * delta[1];
                         const vertical = target[1] - position[1];
                         const distance_squared = horizontal_distance_squared + vertical * vertical;
-                        if (distance_squared > 4) {
+                        // The character capsule cannot overlap the vehicle's
+                        // chassis. Stop at a reachable point inside the
+                        // configured three-metre entry range instead of
+                        // walking forever toward the chassis origin.
+                        if (distance_squared > 8) {
                             const inverse = 1.0 / @sqrt(horizontal_distance_squared);
                             const world_x = delta[0] * inverse;
                             const world_z = delta[1] * inverse;
@@ -2969,7 +3069,7 @@ const App = struct {
                         return error.VisualSmokeCratePresentationMissing;
                     }
                     switch (scenario) {
-                        .none, .s3_streaming, .s7_interaction, .s11_combat => {},
+                        .none, .s3_streaming, .s8_population, .s7_interaction, .s11_combat => {},
                         .s1_character => if (self.initial_character_id != null) {
                             if (presentation.character_count > 1) {
                                 return error.S1VisualSmokeCharacterPresentationMissing;
@@ -3212,7 +3312,7 @@ const App = struct {
                         return error.S2VisualSmokeDriverStillActive;
                     }
                 },
-                .s3_streaming, .s7_interaction => {},
+                .s3_streaming, .s8_population, .s7_interaction => {},
                 .s11_combat => try self.validation.s11_combat.requireComplete(),
                 .s4_physics_debug => try self.validateS4PhysicsDebugSmoke(summary),
             }
@@ -3628,10 +3728,10 @@ const App = struct {
             summary.resident_frames == 0 or
             summary.peak_live_scenes != 1 or
             summary.peak_active_batches != 1 or
-            summary.peak_staged_cpu_bytes != 344 or
-            summary.peak_staged_upload_bytes != 116 or
-            summary.peak_in_flight_upload_bytes != 116 or
-            summary.peak_resident_gpu_bytes != 116 or
+            summary.peak_staged_cpu_bytes != installed_district_staged_cpu_bytes or
+            summary.peak_staged_upload_bytes != installed_district_gpu_bytes or
+            summary.peak_in_flight_upload_bytes != installed_district_gpu_bytes or
+            summary.peak_resident_gpu_bytes != installed_district_gpu_bytes or
             (config.virtual_render_hz > timing.TICK_RATE and summary.zero_tick_frames == 0) or
             (config.virtual_render_hz < timing.TICK_RATE and summary.multi_tick_frames == 0))
         {
@@ -3681,7 +3781,7 @@ const App = struct {
         }
         const stats = try self.district_streaming.gpuUsage();
         if (stats.live_scenes != 1 or stats.resident_scenes != 1 or
-            stats.resident_gpu_bytes != 116)
+            stats.resident_gpu_bytes != installed_district_gpu_bytes)
         {
             return error.S6StreamingSmokeSingleGpuInvariant;
         }
@@ -3719,15 +3819,24 @@ const App = struct {
                 draw.ticket,
                 draw.assets.scene,
             );
-            if (resident.meshes().len != 1 or resident.materials().len != 1 or
-                resident.instances().len != 2)
+            if (resident.meshes().len != installed_district_meshes or
+                resident.materials().len != installed_district_materials or
+                resident.instances().len != installed_district_instances)
             {
+                std.debug.print(
+                    "S6_AUTHORED_SCENE_MISMATCH meshes={d} materials={d} instances={d}\n",
+                    .{
+                        resident.meshes().len,
+                        resident.materials().len,
+                        resident.instances().len,
+                    },
+                );
                 return error.S6StreamingSmokeAuthoredSceneInvariant;
             }
         }
         const stats = try self.district_streaming.gpuUsage();
         if (stats.live_scenes != 2 or stats.resident_scenes != 2 or
-            stats.resident_gpu_bytes != 232)
+            stats.resident_gpu_bytes != 2 * installed_district_gpu_bytes)
         {
             return error.S6StreamingSmokeOverlapGpuInvariant;
         }
@@ -3782,13 +3891,13 @@ const App = struct {
             gpu.current.staged_cpu_bytes != 0 or
             gpu.current.staged_upload_bytes != 0 or
             gpu.current.in_flight_upload_bytes != 0 or
-            gpu.current.resident_gpu_bytes != 232 or
+            gpu.current.resident_gpu_bytes != 2 * installed_district_gpu_bytes or
             gpu.high_water.live_scenes < 2 or
             gpu.high_water.resident_scenes < 2 or
             gpu.high_water.active_batches < 1 or
-            gpu.high_water.staged_cpu_bytes < 344 or
-            gpu.high_water.in_flight_upload_bytes < 116 or
-            gpu.high_water.resident_gpu_bytes < 232)
+            gpu.high_water.staged_cpu_bytes < installed_district_staged_cpu_bytes or
+            gpu.high_water.in_flight_upload_bytes < installed_district_gpu_bytes or
+            gpu.high_water.resident_gpu_bytes < 2 * installed_district_gpu_bytes)
         {
             return error.S6StreamingSmokeOverlapDiagnosticGpuMismatch;
         }
@@ -3826,9 +3935,9 @@ const App = struct {
         if (gpu.high_water.live_scenes < 2 or
             gpu.high_water.resident_scenes < 2 or
             gpu.high_water.active_batches < 1 or
-            gpu.high_water.staged_cpu_bytes < 344 or
-            gpu.high_water.in_flight_upload_bytes < 116 or
-            gpu.high_water.resident_gpu_bytes < 232)
+            gpu.high_water.staged_cpu_bytes < installed_district_staged_cpu_bytes or
+            gpu.high_water.in_flight_upload_bytes < installed_district_gpu_bytes or
+            gpu.high_water.resident_gpu_bytes < 2 * installed_district_gpu_bytes)
         {
             return error.S6StreamingSmokeDrainedDiagnosticGpuMismatch;
         }
@@ -3855,7 +3964,7 @@ const App = struct {
             try self.district_streaming.pumpContent(self.districtAuthorityPort(), self.frame_timer.total_frames);
             const ticks_before = self.simulation.inspection().tickIndex();
             while (self.frame_timer.shouldTick()) {
-                try self.simulateTick(true, .s3_streaming);
+                try self.simulateTick(true, .s8_population);
                 self.frame_timer.recordCompletedTick();
             }
             const ticks_this_frame = self.simulation.inspection().tickIndex() - ticks_before;
@@ -3951,12 +4060,12 @@ const App = struct {
             summary.reverse_overlaps != s6_required_overlap_cycles or
             summary.peak_live_scenes != 2 or
             summary.peak_resident_scenes != 2 or
-            summary.peak_staged_cpu_bytes != 344 or
-            summary.peak_staged_upload_bytes != 116 or
+            summary.peak_staged_cpu_bytes != installed_district_staged_cpu_bytes or
+            summary.peak_staged_upload_bytes != installed_district_gpu_bytes or
             summary.peak_in_flight_upload_bytes == 0 or
-            summary.peak_in_flight_upload_bytes > 232 or
-            summary.peak_in_flight_upload_bytes % 116 != 0 or
-            summary.peak_resident_gpu_bytes != 232 or
+            summary.peak_in_flight_upload_bytes > 2 * installed_district_gpu_bytes or
+            summary.peak_in_flight_upload_bytes % installed_district_gpu_bytes != 0 or
+            summary.peak_resident_gpu_bytes != 2 * installed_district_gpu_bytes or
             summary.peak_active_batches == 0 or summary.peak_active_batches > 2 or
             (config.virtual_render_hz > timing.TICK_RATE and
                 (summary.zero_tick_frames == 0 or summary.multi_tick_frames != 0)) or
@@ -3982,6 +4091,7 @@ const App = struct {
         while (self.simulation.npcs().pollEvent()) |event| {
             try evidence.observeEvent(stage, summary, event);
         }
+        self.recordNpcNavigationTransitions();
     }
 
     fn requireS8NpcViews(
@@ -4062,6 +4172,7 @@ const App = struct {
         var evidence = S8PopulationEvidence{};
         var replica_wait_started_tick: ?u64 = null;
         self.district_focus_override = s6_overlap;
+        self.district_prefetch_focus_override = s6_overlap;
 
         smoke_loop: while (summary.attempted_frames < config.frames) {
             self.input_buffer.beginFrame();
@@ -4077,7 +4188,7 @@ const App = struct {
 
             const ticks_before = self.simulation.inspection().tickIndex();
             while (self.frame_timer.shouldTick()) {
-                try self.simulateTick(true, .s3_streaming);
+                try self.simulateTick(true, .s8_population);
                 try self.processS8NpcOutputs(&summary, &evidence, stage);
                 self.frame_timer.recordCompletedTick();
             }
@@ -4090,6 +4201,7 @@ const App = struct {
             try summary.observeNpc(
                 diagnostics,
                 simulation_diagnostics.character_controllers,
+                simulation_diagnostics.characters.active_count,
             );
             const presentation = switch (try self.render(self.frame_timer.alpha())) {
                 .ready => |value| value,
@@ -4117,12 +4229,21 @@ const App = struct {
                     try self.validateS6Overlap();
                     try self.validateS6OverlapDeveloperSnapshot();
                     summary.two_resident_scenes = true;
+                    try self.simulation.characters().submit(.{ .spawn = .{
+                        .request_id = 1,
+                        .position = sandbox_contracts.default_character_spawn_position,
+                    } });
+                    stage = .observer_spawned;
+                },
+                .observer_spawned => if (self.initial_character_id != null and
+                    presentation.character_count == 1)
+                {
                     const batch = try population.plan(s8_population_count, .{
                         .first_request_id = s8_spawn_first_request_id,
-                        .start_node = s8_west_seam,
+                        .start_node = s8_west_start,
                         .goal = .{ .patrol_between = .{
-                            .first = s8_west_seam,
-                            .second = s8_east_end,
+                            .first = sandbox_contracts.south_gate_approach_destination,
+                            .second = s8_east_destination,
                         } },
                     });
                     for (batch.slice()) |command| try self.simulation.npcs().submit(command);
@@ -4150,6 +4271,7 @@ const App = struct {
                             true,
                         );
                         self.district_focus_override = s6_west_only;
+                        self.district_prefetch_focus_override = s8_west_only_prefetch;
                         stage = .destination_waiting;
                     }
                 },
@@ -4172,6 +4294,7 @@ const App = struct {
                     );
                     try self.requireS8ProjectedNpcIdentities(&evidence.identities);
                     self.district_focus_override = s6_overlap;
+                    self.district_prefetch_focus_override = s6_overlap;
                     stage = .destination_reloaded;
                 },
                 .destination_reloaded => if (evidence.waitingResumeComplete()) {
@@ -4199,8 +4322,9 @@ const App = struct {
                     if (try s8ReplicaConverged(
                         self.simulation.inspection().tickIndex(),
                         &replica_wait_started_tick,
-                        presentation.npc_count == 0,
+                        presentation.npc_count == s8_population_count,
                     )) {
+                        try self.requireS8ProjectedNpcIdentities(&evidence.identities);
                         try self.requireS8NpcViews(
                             &evidence.identities,
                             district_east_coord,
@@ -4208,12 +4332,17 @@ const App = struct {
                             true,
                         );
                         self.district_focus_override = s6_west_only;
+                        self.district_prefetch_focus_override = s8_west_only_prefetch;
                         stage = .owner_dormant;
                     }
                 },
                 .owner_dormant => if (self.districtSlotIdle(
                     district_east_slot_index,
-                ) and evidence.dormantComplete()) {
+                ) and evidence.dormantComplete() and try s8ReplicaConverged(
+                    self.simulation.inspection().tickIndex(),
+                    &replica_wait_started_tick,
+                    presentation.npc_count == 0,
+                )) {
                     if (summary.dormant_events != s8_population_count or
                         diagnostics.dormant_count != s8_population_count or
                         diagnostics.controller_count != 0 or
@@ -4229,6 +4358,7 @@ const App = struct {
                         false,
                     );
                     self.district_focus_override = s6_overlap;
+                    self.district_prefetch_focus_override = s6_overlap;
                     stage = .owner_resumed;
                 },
                 .owner_resumed => if (try self.districtSlotResident(
@@ -4271,6 +4401,16 @@ const App = struct {
                         return error.S8PopulationDespawnMismatch;
                     }
                     self.district_focus_override = s6_fully_outside;
+                    self.district_prefetch_focus_override = s6_fully_outside;
+                    try self.simulation.characters().submit(.{ .despawn = .{
+                        .id = self.initial_character_id orelse
+                            return error.S8PopulationObserverMissing,
+                    } });
+                    stage = .observer_despawned;
+                },
+                .observer_despawned => if (self.initial_character_id == null and
+                    presentation.character_count == 0)
+                {
                     stage = .final_drain;
                 },
                 .final_drain => if (self.districtSlotIdle(district_west_slot_index) and
@@ -4296,6 +4436,24 @@ const App = struct {
         // cadence-independent rather than relying on catching an ephemeral
         // staged state between host pumps.
         summary.observeGpu((try self.district_streaming.gpuDiagnostics()).high_water);
+        if (!evidence.complete()) {
+            std.debug.print(
+                "S8_EVIDENCE_INCOMPLETE stage={s} spawned={any} first_goal={any} " ++
+                    "waiting={any} resumed={any} transferred={any} dormant={any} " ++
+                    "controller_resumed={any} despawned={any}\n",
+                .{
+                    @tagName(stage),
+                    evidence.spawned,
+                    evidence.first_destination_reached,
+                    evidence.waiting,
+                    evidence.waiting_resumed,
+                    evidence.transferred,
+                    evidence.dormant,
+                    evidence.controller_resumed,
+                    evidence.despawned,
+                },
+            );
+        }
         try evidence.requireComplete();
         summary.ticks = self.simulation.inspection().tickIndex();
         const final_diagnostics = self.simulation.developer().diagnostics();
@@ -4705,9 +4863,9 @@ const App = struct {
             draws[0].ticket,
             active.scene.?,
         );
-        if (resident.meshes().len != 1 or
-            resident.materials().len != 1 or
-            resident.instances().len != 2)
+        if (resident.meshes().len != installed_district_meshes or
+            resident.materials().len != installed_district_materials or
+            resident.instances().len != installed_district_instances)
         {
             return error.S3StreamingSmokeAuthoredSceneInvariant;
         }
@@ -4717,7 +4875,8 @@ const App = struct {
         // scene accounting instead of assuming worker completion order.
         if (stats.resident_scenes == 0 or stats.resident_scenes > 2 or
             stats.live_scenes != stats.resident_scenes or
-            stats.resident_gpu_bytes != @as(u64, stats.resident_scenes) * 116)
+            stats.resident_gpu_bytes !=
+                @as(u64, stats.resident_scenes) * installed_district_gpu_bytes)
         {
             return error.S3StreamingSmokeGpuInvariant;
         }
@@ -4734,7 +4893,8 @@ const App = struct {
             gpu.current.resident_scenes == 0 or gpu.current.resident_scenes > 2 or
             gpu.current.live_scenes != gpu.current.resident_scenes or
             gpu.current.active_batches != 0 or
-            gpu.current.resident_gpu_bytes != @as(u64, gpu.current.resident_scenes) * 116 or
+            gpu.current.resident_gpu_bytes !=
+                @as(u64, gpu.current.resident_scenes) * installed_district_gpu_bytes or
             gpu.high_water.active_batches != 1)
         {
             std.debug.print(
@@ -5594,7 +5754,10 @@ const App = struct {
     /// the source of truth for logical district ownership.
     fn districtPrefetchPosition(self: *App) !?[2]f32 {
         if (build_options.validation_mode or builtin.is_test) {
-            if (self.validation.profile == .s3_smoke) return self.district_focus_override;
+            if (self.validation.profile == .s3_smoke) {
+                return self.district_prefetch_focus_override orelse
+                    self.district_focus_override;
+            }
             if (self.validation.profile != .sandbox) return null;
         }
         const position = self.simulation.player().focusPosition() orelse return null;
@@ -5629,7 +5792,7 @@ const App = struct {
                         self.validation_tick_origin,
                     s1_jump_tick,
                 ),
-                .s2_vehicle, .s3_streaming, .s4_physics_debug => sandbox_controls.idleTickSample(),
+                .s2_vehicle, .s3_streaming, .s8_population, .s4_physics_debug => sandbox_controls.idleTickSample(),
                 .s7_interaction => blk: {
                     var result = sandbox_controls.idleTickSample();
                     result.move = self.validation.s7_scripted_move;
@@ -5648,7 +5811,7 @@ const App = struct {
                     try self.submitCharacterActions(actions);
                 },
                 .s2_vehicle => try self.submitInteractiveActions(self.s2ScriptedActions()),
-                .s3_streaming, .s4_physics_debug => {},
+                .s3_streaming, .s8_population, .s4_physics_debug => {},
                 .s7_interaction => if (self.validation.s7_character_actions_enabled) if (self.initial_character_id != null) {
                     try self.submitCharacterActions(actions);
                 },
@@ -5735,7 +5898,9 @@ const App = struct {
                     }
                     self.initial_character_id = spawned.id;
                 },
-                .despawned => |id| if ((scenario == .s7_interaction or scenario == .s11_combat) and
+                .despawned => |id| if ((scenario == .s7_interaction or
+                    scenario == .s8_population or
+                    scenario == .s11_combat) and
                     std.meta.eql(id, self.initial_character_id orelse
                         return error.UnexpectedCharacterBootstrapOutcome))
                 {
@@ -5898,6 +6063,26 @@ const App = struct {
                 return err;
             };
         }
+    }
+
+    fn applyNavigationRequests(
+        self: *App,
+        requests: []const editor_contract.NavigationRequest,
+    ) !void {
+        for (requests) |request| switch (request) {
+            .set_destination => |set| {
+                const request_id = self.navigation_next_request_id;
+                try self.simulation.npcs().submit(.{ .set_goal = .{
+                    .request_id = request_id,
+                    .id = set.npc,
+                    .goal = .{ .navigate_to = set.destination },
+                } });
+                self.navigation_next_request_id +|= 1;
+            },
+            .set_gate => |command| {
+                _ = try self.simulation.developer().submitNavigationGate(command);
+            },
+        };
     }
 
     fn advanceAuthoringFeedback(self: *App) u64 {
@@ -6153,73 +6338,73 @@ const App = struct {
             living_npc.?.combat.windup)
             .contact
         else if (!progress.visibility_player_death and progress.player_dead and
-            dead_local_character != null and living_npc != null)
+            dead_local_character != null)
             .player_death
+        else if (!progress.visibility_npc_death and dead_npc != null)
+            .npc_death
         else if (!progress.visibility_respawn and progress.respawned_character_drawn and
             local_character != null and living_npc != null)
             .respawn
-        else if (!progress.visibility_npc_death and local_character != null and
-            dead_npc != null)
-            .npc_death
         else
             return;
 
-        const selected_npc = switch (checkpoint) {
+        const selected_npc: ?sandbox_host.NpcDraw = switch (checkpoint) {
+            .contact => living_npc.?,
             .npc_death => dead_npc.?,
-            .contact, .player_death, .respawn => living_npc.?,
+            .player_death, .respawn => null,
         };
         var draws: [2]visibility_oracle.Draw = undefined;
         var entities: [2]?engine.gameplay_trace.EntityRef = @splat(null);
         var count: usize = 0;
-        const character = if (checkpoint == .player_death)
+        const selected_character: ?sandbox_host.CharacterDraw = if (checkpoint == .player_death)
             dead_local_character.?
         else
-            local_character.?;
-        const rotation = zm.quatToMat(zm.f32x4(
-            character.pose.rotation[0],
-            character.pose.rotation[1],
-            character.pose.rotation[2],
-            character.pose.rotation[3],
-        ));
-        const translation = zm.translation(
-            character.pose.position[0],
-            character.pose.position[1],
-            character.pose.position[2],
-        );
-        draws[count] = .{
-            .object_id = 1,
-            .mesh = try self.visuals.resolve(character.mesh, character.material),
-            .model = zm.mul(rotation, translation),
-            .view_projection = view_projection,
-            .display_color = character.combat.body_color,
-        };
-        entities[count] = gameplayEntityRef(character.entity, character.incarnation);
-        count += 1;
-        const npc_rotation = zm.quatToMat(zm.f32x4(
-            selected_npc.pose.rotation[0],
-            selected_npc.pose.rotation[1],
-            selected_npc.pose.rotation[2],
-            selected_npc.pose.rotation[3],
-        ));
-        const npc_translation = zm.translation(
-            selected_npc.pose.position[0],
-            selected_npc.pose.position[1],
-            selected_npc.pose.position[2],
-        );
-        // A newly respawned player can legitimately face away from the
-        // surviving NPC. That checkpoint declares only the player observable;
-        // contact, player death, and NPC death declare both. The oracle must
-        // test product semantics, not invent a requirement that every live
-        // world entity is on-camera.
-        if (checkpoint != .respawn) {
+            local_character;
+        if (selected_character) |character| {
+            const rotation = zm.quatToMat(zm.f32x4(
+                character.pose.rotation[0],
+                character.pose.rotation[1],
+                character.pose.rotation[2],
+                character.pose.rotation[3],
+            ));
+            const translation = zm.translation(
+                character.pose.position[0],
+                character.pose.position[1],
+                character.pose.position[2],
+            );
+            draws[count] = .{
+                .object_id = 1,
+                .mesh = try self.visuals.resolve(character.mesh, character.material),
+                .model = zm.mul(rotation, translation),
+                .view_projection = view_projection,
+                .display_color = character.combat.body_color,
+            };
+            entities[count] = gameplayEntityRef(character.entity, character.incarnation);
+            count += 1;
+        }
+        // Contact declares both actors. Death and respawn checkpoints declare
+        // the entity whose semantic state changed, so unrelated projection
+        // timing cannot suppress a short-lived but valid visual proof.
+        if (selected_npc) |npc| {
+            const npc_rotation = zm.quatToMat(zm.f32x4(
+                npc.pose.rotation[0],
+                npc.pose.rotation[1],
+                npc.pose.rotation[2],
+                npc.pose.rotation[3],
+            ));
+            const npc_translation = zm.translation(
+                npc.pose.position[0],
+                npc.pose.position[1],
+                npc.pose.position[2],
+            );
             draws[count] = .{
                 .object_id = 2,
-                .mesh = try self.visuals.resolve(selected_npc.mesh, selected_npc.material),
+                .mesh = try self.visuals.resolve(npc.mesh, npc.material),
                 .model = zm.mul(npc_rotation, npc_translation),
                 .view_projection = view_projection,
-                .display_color = selected_npc.combat.entity.body_color,
+                .display_color = npc.combat.entity.body_color,
             };
-            entities[count] = gameplayEntityRef(selected_npc.entity, selected_npc.incarnation);
+            entities[count] = gameplayEntityRef(npc.entity, npc.incarnation);
             count += 1;
         }
 
@@ -6531,6 +6716,52 @@ const App = struct {
             }
         }
         while (self.simulation.npcs().pollEvent()) |_| {}
+        self.recordNpcNavigationTransitions();
+    }
+
+    fn recordNpcNavigationTransitions(self: *App) void {
+        while (self.simulation.npcs().pollNavigationTransition()) |transition| {
+            var navigation_evidence = engine.gameplay_trace.NavigationEvidence{
+                .destination_id = if (transition.destination) |destination|
+                    destination.value
+                else
+                    null,
+                .route_revision = transition.route_revision,
+                .topology_revision = transition.topology_revision,
+                .route_digest = transition.route.digest,
+                .route_cost = transition.route.total_cost,
+                .route_length = transition.route.len,
+                .active_prefix_length = transition.route.active_prefix_len,
+                .route_index = transition.route_index,
+            };
+            for (transition.route.slice(), 0..) |node, index| {
+                navigation_evidence.nodes[index] = .{
+                    .district_x = node.coord.x,
+                    .district_z = node.coord.z,
+                    .index = node.index,
+                };
+            }
+            _ = self.simulation.developer().recordGameplayTrace(.{
+                .authority_tick = transition.tick,
+                .presentation_frame = self.frame_timer.total_frames,
+                .topology_id = transition.topology_revision,
+                .correlation_id = transition.route_revision,
+                .actor = .{
+                    .namespace = transition.id.namespace,
+                    .local = transition.id.local,
+                },
+                .source = .simulation,
+                .stage = .simulation_outcome,
+                .kind = .navigation,
+                .disposition = .emitted,
+                .reason_domain = .navigation_reason,
+                .reason = @intFromEnum(transition.reason),
+                .fields = .{ .position = true, .state = true },
+                .position = transition.position,
+                .state = @intFromEnum(transition.kind),
+                .navigation = navigation_evidence,
+            });
+        }
     }
 
     fn submitCharacterActions(
@@ -6565,11 +6796,10 @@ const App = struct {
             {
                 try self.simulation.npcs().submit(.{ .spawn = .{
                     .request_id = s11_npc_spawn_request_id,
-                    .node = .{ .coord = district_west_coord, .index = 0 },
-                    .goal = .{ .navigate_to = .{
-                        .coord = district_west_coord,
-                        .index = 1,
-                    } },
+                    .node = .{ .coord = district_west_coord, .index = 1 },
+                    .goal = .{
+                        .navigate_to = sandbox_contracts.south_gate_approach_destination,
+                    },
                 } });
                 progress.npc_spawn_submitted = true;
             }
@@ -6590,25 +6820,37 @@ const App = struct {
             return actions;
         }
 
-        const npc_draws = self.simulation.presentation().npcs(1);
-        var target: ?sandbox_host.NpcDraw = null;
-        for (npc_draws) |draw| {
-            if (draw.life_state == .alive) {
-                target = draw;
-                break;
-            }
-        }
-        const npc = target orelse return actions;
-        const source = self.simulation.player().focusPosition() orelse return actions;
-        const delta_x = npc.pose.position[0] - source[0];
-        const delta_z = npc.pose.position[2] - source[2];
+        if (progress.npc_killed) return actions;
+        const npc = try self.simulation.npcs().view(
+            progress.npc_id orelse return actions,
+        );
+        const source = self.simulation.player().focusPosition() orelse {
+            if (progress.player_respawned) progress.post_respawn_source_missing +|= 1;
+            return actions;
+        };
+        // Validation control follows authority state so render cadence cannot
+        // alter its inputs. Presentation remains independently asserted by the
+        // health/death plans and Metal visibility oracle below.
+        const delta_x = npc.position[0] - source[0];
+        const delta_z = npc.position[2] - source[2];
         const distance_squared = delta_x * delta_x + delta_z * delta_z;
+        if (progress.player_respawned) {
+            if (progress.post_respawn_source_samples == 0) {
+                progress.first_source_position = source;
+                progress.first_npc_position = npc.position;
+            }
+            progress.post_respawn_source_samples +|= 1;
+            progress.last_source_position = source;
+            progress.last_npc_position = npc.position;
+            progress.last_target_distance_squared = distance_squared;
+        }
         self.game_camera.yaw = std.math.atan2(delta_x, -delta_z);
 
         const should_engage = !progress.provocation_hit or progress.player_respawned;
         if (!should_engage) return actions;
         if (distance_squared > 2.4 * 2.4) {
             actions.move = .{ 0, 1 };
+            if (progress.player_respawned) progress.post_respawn_move_samples +|= 1;
         } else if (hud.melee_remaining_ticks == 0 and
             tick >= progress.last_melee_request_tick +| 5)
         {
@@ -6641,6 +6883,7 @@ const App = struct {
             .goal_set, .rejected => return error.UnexpectedS11NpcOutcome,
         };
         while (self.simulation.npcs().pollEvent()) |_| {}
+        self.recordNpcNavigationTransitions();
     }
 
     fn processVehicleOutcomes(
@@ -6657,7 +6900,7 @@ const App = struct {
                     self.initial_vehicle_id = spawned.id;
                 },
                 .rejected => if (validation_composition) switch (scenario) {
-                    .none, .s1_character, .s2_vehicle, .s3_streaming, .s4_physics_debug, .s7_interaction, .s11_combat => return error.ScriptedVehicleCommandRejected,
+                    .none, .s1_character, .s2_vehicle, .s3_streaming, .s8_population, .s4_physics_debug, .s7_interaction, .s11_combat => return error.ScriptedVehicleCommandRejected,
                 } else return error.UnexpectedVehicleCommandRejection,
                 .despawned => return error.UnexpectedVehicleBootstrapOutcome,
             }
@@ -7282,9 +7525,9 @@ const App = struct {
         self.gpu_renderer.drawMesh(&self.ground_mesh, zm.identity(), view_proj);
         scene_draw_calls +|= 1;
         const draws_block = if (build_options.validation_mode or builtin.is_test)
-            self.validation.profile == .sandbox or self.validation.profile == .s1_smoke
+            self.validation.profile == .s1_smoke
         else
-            true;
+            false;
         if (draws_block) {
             const block_scale = zm.scaling(
                 sandbox_block.half_extents[0] * 2,
@@ -7299,6 +7542,30 @@ const App = struct {
             self.gpu_renderer.drawMesh(
                 &self.block_mesh,
                 zm.mul(block_scale, block_translation),
+                view_proj,
+            );
+            scene_draw_calls +|= 1;
+        }
+        const gate_state = self.simulation.developer().navigationGateState();
+        const gate_positions = [_][3]f32{
+            .{ 8, 1, 4 },
+            .{ 8, 1, -3 },
+        };
+        const gate_open = [_]bool{
+            gate_state.north_open,
+            gate_state.south_open,
+        };
+        for (gate_positions, gate_open) |position, open| {
+            if (open) continue;
+            const gate_scale = zm.scaling(0.4, 2.0, 2.0);
+            const gate_translation = zm.translation(
+                position[0],
+                position[1],
+                position[2],
+            );
+            self.gpu_renderer.drawMesh(
+                &self.block_mesh,
+                zm.mul(gate_scale, gate_translation),
                 view_proj,
             );
             scene_draw_calls +|= 1;
@@ -7979,6 +8246,22 @@ const App = struct {
             var navigation_target: ?[3]f32 = null;
             var navigation_no_progress_ticks: u16 = 0;
             var navigation_last_progress_tick: u64 = 0;
+            var navigation_destination: ?sandbox_contracts.DestinationId = null;
+            var navigation_status: ?sandbox_contracts.NpcNavigationStatus = null;
+            var navigation_reason: ?sandbox_contracts.NpcNavigationReason = null;
+            var navigation_trigger: ?sandbox_contracts.NpcPlanTrigger = null;
+            var navigation_result: ?sandbox_contracts.NpcPlanResult = null;
+            var navigation_route_revision: u64 = 0;
+            var navigation_topology_revision: u64 = 0;
+            var navigation_route_digest: u64 = 0;
+            var navigation_route_cost: u32 = 0;
+            var navigation_route_length: u8 = 0;
+            var navigation_active_prefix_length: u8 = 0;
+            var navigation_route_index: u8 = 0;
+            var navigation_replan_count: u64 = 0;
+            var navigation_arrival_tick: ?u64 = null;
+            var navigation_physical_exclusion_count: u8 = 0;
+            var navigation_physical_block_retry_tick: u64 = 0;
             const radius = draw.radius;
             const half_height = draw.half_height;
             if (persistent) |id| {
@@ -7997,6 +8280,31 @@ const App = struct {
                     navigation_target = view.navigation_progress.target;
                     navigation_no_progress_ticks = view.navigation_progress.no_progress_ticks;
                     navigation_last_progress_tick = view.navigation_progress.last_progress_tick;
+                    navigation_destination = switch (view.goal) {
+                        .hold => null,
+                        .navigate_to => |destination| destination,
+                        .patrol_between => |patrol| switch (view.route.patrol_leg) {
+                            .toward_second => patrol.second,
+                            .none, .toward_first => patrol.first,
+                        },
+                    };
+                    navigation_status = view.navigation_status;
+                    navigation_reason = view.navigation_reason;
+                    navigation_trigger = view.navigation_lineage.last_trigger;
+                    navigation_result = view.navigation_lineage.last_result;
+                    navigation_route_revision = view.navigation_lineage.route_revision;
+                    navigation_topology_revision = view.navigation_lineage.topology_revision;
+                    navigation_route_digest = view.route.plan.digest;
+                    navigation_route_cost = view.route.plan.total_cost;
+                    navigation_route_length = view.route.plan.len;
+                    navigation_active_prefix_length = view.route.plan.active_prefix_len;
+                    navigation_route_index = view.route.index;
+                    navigation_replan_count = view.navigation_lineage.replan_count;
+                    navigation_arrival_tick = view.navigation_lineage.arrival_tick;
+                    navigation_physical_exclusion_count =
+                        view.physical_edge_exclusion_count;
+                    navigation_physical_block_retry_tick =
+                        view.physical_block_retry_tick;
                 }
             }
             var projected = editor_contract.GameplayEntityView{
@@ -8026,6 +8334,22 @@ const App = struct {
                 .navigation_target = navigation_target,
                 .navigation_no_progress_ticks = navigation_no_progress_ticks,
                 .navigation_last_progress_tick = navigation_last_progress_tick,
+                .navigation_destination = navigation_destination,
+                .navigation_status = navigation_status,
+                .navigation_reason = navigation_reason,
+                .navigation_trigger = navigation_trigger,
+                .navigation_result = navigation_result,
+                .navigation_route_revision = navigation_route_revision,
+                .navigation_topology_revision = navigation_topology_revision,
+                .navigation_route_digest = navigation_route_digest,
+                .navigation_route_cost = navigation_route_cost,
+                .navigation_route_length = navigation_route_length,
+                .navigation_active_prefix_length = navigation_active_prefix_length,
+                .navigation_route_index = navigation_route_index,
+                .navigation_replan_count = navigation_replan_count,
+                .navigation_arrival_tick = navigation_arrival_tick,
+                .navigation_physical_exclusion_count = navigation_physical_exclusion_count,
+                .navigation_physical_block_retry_tick = navigation_physical_block_retry_tick,
             };
             applyNpcInterestEvidence(&projected, inspection.npcInterest(draw.entity));
             result.entities[result.entity_count] = projected;
@@ -8261,6 +8585,13 @@ const App = struct {
                 ),
                 else => "protocol_disposition",
             },
+            .navigation_reason => if (std.enums.fromInt(
+                sandbox_contracts.NpcNavigationReason,
+                reason,
+            )) |value|
+                @tagName(value)
+            else
+                "unknown_navigation_reason",
             .validation_code => "validation_code",
         };
     }
@@ -8367,12 +8698,20 @@ const App = struct {
     ) !void {
         self.authoring_requests.clear();
         self.interaction_requests.clear();
+        self.navigation_requests.clear();
         defer {
             self.authoring_requests.clear();
             self.interaction_requests.clear();
+            self.navigation_requests.clear();
         }
         const authoring_view = try self.crateAuthoringView();
         const interaction_view = try self.interactionEditorView();
+        const gates = self.simulation.developer().navigationGateState();
+        const navigation_view = editor_contract.NavigationLabView{
+            .north_gate_open = gates.north_open,
+            .south_gate_open = gates.south_open,
+            .topology_revision = gates.topology_revision,
+        };
         self.applyDeveloperEffects(try self.developer.drawEditor(
             &self.gpu_renderer,
             self.developerAuthorityPort(),
@@ -8388,6 +8727,11 @@ const App = struct {
                 .interaction = .{
                     .view = &interaction_view,
                     .requests = &self.interaction_requests,
+                },
+                .navigation = .{
+                    .view = &navigation_view,
+                    .gameplay = gameplay_view,
+                    .requests = &self.navigation_requests,
                 },
                 .gameplay_view = gameplay_view,
                 .incident_input = .{
@@ -8417,6 +8761,7 @@ const App = struct {
         ));
         try self.applyAuthoringRequests(self.authoring_requests.slice());
         try self.applyInteractionRequests(self.interaction_requests.slice());
+        try self.applyNavigationRequests(self.navigation_requests.slice());
     }
 
     /// Minimal frame used after a retained Runtime system fault. It deliberately
@@ -9421,10 +9766,10 @@ test "S8 population smoke summary requires exact bounded lifecycle evidence" {
         .peak_live_scenes = 2,
         .peak_resident_scenes = 2,
         .peak_active_batches = 1,
-        .peak_staged_cpu_bytes = 344,
-        .peak_staged_upload_bytes = 116,
-        .peak_in_flight_upload_bytes = 116,
-        .peak_resident_gpu_bytes = 232,
+        .peak_staged_cpu_bytes = installed_district_staged_cpu_bytes,
+        .peak_staged_upload_bytes = installed_district_gpu_bytes,
+        .peak_in_flight_upload_bytes = installed_district_gpu_bytes,
+        .peak_resident_gpu_bytes = 2 * installed_district_gpu_bytes,
         .final_entities = 0,
         .final_bodies = 1,
         .final_native_controllers = 0,
@@ -9442,6 +9787,10 @@ test "S8 population smoke summary requires exact bounded lifecycle evidence" {
         .outcomes = .{ .high_water = s8_population_count },
         .events = .{ .high_water = s8_population_count },
         .event_drops = .{},
+        .navigation_transitions = .{},
+        .replans = 0,
+        .deferred_replans = 0,
+        .teleport_rollbacks = 0,
     };
     const controllers = CharacterControllerDiagnostics{
         .native_used = 0,
@@ -9608,7 +9957,7 @@ test "S8 per-identity evidence rejects duplicate missing and swapped outputs" {
         error.UnexpectedS8NpcEvent,
         evidence.observeEvent(.crossed_east, &summary, .{ .goal_reached = .{
             .id = first,
-            .node = s8_east_end,
+            .destination = sandbox_contracts.market_terminal_destination,
         } }),
     );
 

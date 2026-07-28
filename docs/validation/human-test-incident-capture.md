@@ -1,13 +1,9 @@
 # Human-Test Incident Capture Validation Record
 
-**Status:** Schema-3 visual capture succeeds the validated schema-2 IC5-A
-through IC5-F, IC5-H bounded-object evidence, and
-IC5-I budget-safe handoff/playable-boundary correction are validated for the
-Apple Silicon macOS solo developer product. IC5-G long gameplay/replay, real
-window lifecycle, capture-cost, and five-profile deterministic failure gates
-pass. Only the physical shortcut/drop/district/NPC/vehicle human checkpoint
-remains open in the
-[corrective implementation plan](../design/incident-evidence-reliability-and-boundary-corrections.md)
+**Status:** Accepted for the Apple Silicon macOS solo developer product.
+Schema-3 visual capture, IC5-A through IC5-I, long gameplay/replay, real window
+lifecycle, capture-cost, five-profile deterministic failure hardening, fresh
+human bundles, and the physical drop/district/NPC/vehicle checkpoint pass.
 
 **Date:** 2026-07-19
 
@@ -440,7 +436,9 @@ drops. Event-level tests cover SDL scancode F9, keycode F9, Command+Shift+9,
 modifier rejection, and key-up rejection. Schema 2 adds Command+Option+I as the
 recommended route and tests keycode, scancode, fields, focus, disabled state,
 repeat, key-up, one-request-per-press, and bounded queue saturation. Synthetic
-events prove routing only; the physical macOS gate remains open.
+events prove routing. Human testing accepts the visible Incident Capture
+window and Copy-for-LLM workflow as the primary path; Command+Option+I is the
+recommended convenience shortcut and the UI remains the explicit fallback.
 
 ## IC5-I budget and playable-boundary correction
 
@@ -657,24 +655,24 @@ semantic replay matched all 2,149 captured ticks. The strict inspector accepted
 four complete anomalies, 16 typed windows, 387 visuals, zero recorder loss,
 and durable replay/handoff. It also truthfully reported 207 suspicious
 dominant-green frames during scripted close-range NPC combat. That is a dynamic
-camera-occlusion warning rather than the original cornflower fault frame, but
-the run is not treated as visual acceptance. Direct human acceptance remains
-required for all former perimeter directions and sustained vehicle contact
-through the seam.
+camera-occlusion warning rather than the original cornflower fault frame, so
+the automated heuristic alone was not used as visual acceptance. The
+subsequent targeted human pass confirmed open traversal and sustained
+vehicle/NPC contact without a retained fault or entity discontinuity.
 
 ## Explicit remaining limits
 
-- Command+Option+I still requires one focused physical macOS run from SDL
-  receipt through applied anomaly ID. F9/Fn+F9 remains optional and is expected
-  to be absent when macOS consumes the function row.
+- Command+Option+I remains a convenience path rather than the sole admission
+  path. Its SDL routing is automated; the visible Incident Capture UI is the
+  accepted human fallback. F9/Fn+F9 remains optional and may be consumed by
+  macOS.
 - Current human workflow acceptance is solo macOS. Listen/dedicated bundle
   parent/child orchestration is deferred with those human-test products.
 - Capture-on/off performance, real minimized-window automation, unusable-root,
   forced unclean-exit behavior, queue/visual/writer pressure, and explicit GPU
-  submission/fence failures pass. The physical workflow checkpoint remains
-  required before calling IC5 fully closed.
-- The full west-to-east/east-to-west scripted walk/drive journey now passes;
-  direct human continuity confirmation remains open.
+  submission/fence failures pass.
+- The full west-to-east/east-to-west scripted walk/drive journey and direct
+  human continuity checkpoint pass.
 - The full evidence-truth, trailing visual, shortcut delivery, causal
   membership, replay, skill, and anomaly-specific repair sequence is now owned
   by the corrective plan; none is accepted from documentation alone.

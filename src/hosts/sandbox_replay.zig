@@ -30,7 +30,7 @@ pub const DigestCategory = replay.Category;
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'R', 'P', 'L', 'A', 'Y' };
 pub const format_version: u16 = 1;
-pub const schema_cohort: u16 = 12;
+pub const schema_cohort: u16 = 14;
 pub const header_size: usize = 64;
 pub const integrity_size: usize = @sizeOf(Digest);
 pub const max_envelope_bytes: usize = 8 * 1024 * 1024;
@@ -494,6 +494,17 @@ pub const CommandSource = enum(u8) {
     npc = 6,
     vitals = 7,
     npc_replacement = 8,
+    navigation_gate = 9,
+};
+
+pub const NavigationGate = enum(u8) {
+    north = 1,
+    south = 2,
+};
+
+pub const NavigationGateCommand = struct {
+    gate: NavigationGate,
+    open: bool,
 };
 
 pub const NormalizedNpcReplacementSchedule = struct {
@@ -570,6 +581,7 @@ pub const NormalizedCommand = union(CommandSource) {
     npc: npcs.Command,
     vitals: vitals.Command,
     npc_replacement: NormalizedNpcReplacementCommand,
+    navigation_gate: NavigationGateCommand,
 
     pub fn fromCrate(command: crates.Command) NormalizedCommand {
         return .{ .crate = command };
@@ -603,6 +615,10 @@ pub const NormalizedCommand = union(CommandSource) {
         command: NormalizedNpcReplacementCommand,
     ) NormalizedCommand {
         return .{ .npc_replacement = command };
+    }
+
+    pub fn fromNavigationGate(command: NavigationGateCommand) NormalizedCommand {
+        return .{ .navigation_gate = command };
     }
 
     pub fn fingerprint(self: NormalizedCommand) !Digest {
@@ -1378,6 +1394,10 @@ fn encodeNormalizedCommand(sink: anytype, command: NormalizedCommand) !void {
         .npc => |value| try encodeNpcCommand(sink, value),
         .vitals => |value| try encodeVitalsCommand(sink, value),
         .npc_replacement => |value| try encodeNpcReplacementCommand(sink, value),
+        .navigation_gate => |value| {
+            try sink.writeU8(@intFromEnum(value.gate));
+            try sink.writeBool(value.open);
+        },
     }
 }
 
@@ -1466,12 +1486,12 @@ fn encodeNpcGoal(sink: anytype, goal: npcs.Goal) !void {
         .hold => try sink.writeU8(@intFromEnum(NpcGoalTag.hold)),
         .navigate_to => |target| {
             try sink.writeU8(@intFromEnum(NpcGoalTag.navigate_to));
-            try encodeNavigationNodeRef(sink, target);
+            try encodeDestinationId(sink, target);
         },
         .patrol_between => |patrol| {
             try sink.writeU8(@intFromEnum(NpcGoalTag.patrol_between));
-            try encodeNavigationNodeRef(sink, patrol.first);
-            try encodeNavigationNodeRef(sink, patrol.second);
+            try encodeDestinationId(sink, patrol.first);
+            try encodeDestinationId(sink, patrol.second);
         },
     }
 }
@@ -1684,7 +1704,7 @@ fn encodeDistrictBuild(sink: anytype, build: district_contract.DistrictBuild) !v
         try encodeChunkCoord(sink, edge.target.coord);
         try sink.writeU8(edge.target.index);
         try sink.writeU8(edge.flags);
-        try sink.writeU16(edge.reserved);
+        try sink.writeU16(edge.cost);
     }
 }
 
@@ -1726,6 +1746,10 @@ fn encodeLoadTicket(sink: anytype, ticket: district_contract.LoadTicket) !void {
 fn encodeNavigationNodeRef(sink: anytype, reference: npcs.NodeRef) !void {
     try encodeChunkCoord(sink, reference.coord);
     try sink.writeU8(reference.index);
+}
+
+fn encodeDestinationId(sink: anytype, id: npcs.DestinationId) !void {
+    try sink.writeU16(id.value);
 }
 
 fn encodePose(sink: anytype, pose: engine.physics.Pose) !void {
@@ -1866,6 +1890,7 @@ fn validateNormalizedCommand(command: NormalizedCommand) !void {
             .damage => |damage| try damage.validate(),
         },
         .npc_replacement => |value| try validateNormalizedNpcReplacementCommand(value),
+        .navigation_gate => {},
     }
 }
 
@@ -2011,7 +2036,7 @@ fn encodeBuildValidationFailure(value: district_contract.BuildValidationFailure)
         .invalid_navigation_node_degree => 15,
         .invalid_navigation_edge_target => 16,
         .invalid_navigation_edge_flags => 17,
-        .invalid_navigation_edge_reserved => 18,
+        .invalid_navigation_edge_cost => 18,
         .duplicate_navigation_edge => 19,
         .non_canonical_navigation_edge_order => 20,
         .decoded_byte_count_mismatch => 21,
@@ -2463,6 +2488,13 @@ fn decodeNormalizedCommand(reader: *Reader) !NormalizedCommand {
         .npc_replacement => .{
             .npc_replacement = try decodeNpcReplacementCommand(reader),
         },
+        .navigation_gate => .{ .navigation_gate = .{
+            .gate = std.enums.fromInt(
+                NavigationGate,
+                try reader.readU8(),
+            ) orelse return error.InvalidNavigationGate,
+            .open = try reader.readBool(),
+        } },
     };
 }
 
@@ -2576,12 +2608,18 @@ fn decodeNpcGoal(reader: *Reader) !npcs.Goal {
         return error.InvalidNpcGoalTag;
     return switch (tag) {
         .hold => .hold,
-        .navigate_to => .{ .navigate_to = try decodeNavigationNodeRef(reader) },
+        .navigate_to => .{ .navigate_to = try decodeDestinationId(reader) },
         .patrol_between => .{ .patrol_between = .{
-            .first = try decodeNavigationNodeRef(reader),
-            .second = try decodeNavigationNodeRef(reader),
+            .first = try decodeDestinationId(reader),
+            .second = try decodeDestinationId(reader),
         } },
     };
+}
+
+fn decodeDestinationId(reader: *Reader) !npcs.DestinationId {
+    const id = npcs.DestinationId{ .value = try reader.readU16() };
+    try id.validate();
+    return id;
 }
 
 fn decodeInteractionCommand(reader: *Reader) !interactions.Command {
@@ -2811,7 +2849,7 @@ fn decodeDistrictBuild(reader: *Reader) !district_contract.DistrictBuild {
                 .index = try reader.readU8(),
             },
             .flags = try reader.readU8(),
-            .reserved = try reader.readU16(),
+            .cost = try reader.readU16(),
         };
     }
     return result;
@@ -2900,7 +2938,7 @@ fn decodeBuildValidationFailure(value: u8) !district_contract.BuildValidationFai
         15 => .invalid_navigation_node_degree,
         16 => .invalid_navigation_edge_target,
         17 => .invalid_navigation_edge_flags,
-        18 => .invalid_navigation_edge_reserved,
+        18 => .invalid_navigation_edge_cost,
         19 => .duplicate_navigation_edge,
         20 => .non_canonical_navigation_edge_order,
         21 => .decoded_byte_count_mismatch,
@@ -2915,12 +2953,12 @@ fn minimumRecordPayloadSize(
     ingress_count: u32,
     digest_count: u32,
 ) !usize {
-    // Smallest command is a persistent-ID-only despawn. Smallest completion
-    // is cancellation with one ticket. Digests are fixed-size.
+    // Smallest command is one navigation-gate enum plus its open bit. Smallest
+    // completion is cancellation with one ticket. Digests are fixed-size.
     const command_total = std.math.mul(
         usize,
         @as(usize, bootstrap_count) + @as(usize, command_count),
-        8 + 1 + 1 + 16,
+        8 + 1 + 1 + 1,
     ) catch return error.ReplayEnvelopeTooLarge;
     const ingress_total = std.math.mul(
         usize,
@@ -2966,7 +3004,7 @@ const TestCapture = struct {
     world: WorldConfig,
     content: ContentCohort,
     bootstrap: [6]RecordedCommand,
-    commands: [18]RecordedCommand,
+    commands: [19]RecordedCommand,
     ingress: [3]DistrictCompletionIngress,
     digests: [4]TickDigests,
 
@@ -3148,29 +3186,24 @@ fn testCapture() !TestCapture {
             .{ .eligible_tick = 4, .command = .{ .npc = .{ .set_goal = .{
                 .request_id = 13,
                 .id = third_id,
-                .goal = .{ .navigate_to = .{
-                    .coord = sandbox_recipe.navigation_east_coord,
-                    .index = 2,
-                } },
+                .goal = .{ .navigate_to = sandbox_recipe.market_terminal },
             } } } },
             .{ .eligible_tick = 4, .command = .{ .npc = .{ .set_goal = .{
                 .request_id = 14,
                 .id = third_id,
                 .goal = .{ .patrol_between = .{
-                    .first = .{
-                        .coord = sandbox_recipe.navigation_west_coord,
-                        .index = 0,
-                    },
-                    .second = .{
-                        .coord = sandbox_recipe.navigation_east_coord,
-                        .index = 2,
-                    },
+                    .first = sandbox_recipe.player_plaza,
+                    .second = sandbox_recipe.market_terminal,
                 } },
             } } } },
             .{ .eligible_tick = 4, .command = .{ .npc = .{ .despawn = .{
                 .request_id = 15,
                 .id = third_id,
             } } } },
+            .{ .eligible_tick = 4, .command = .{ .navigation_gate = .{
+                .gate = .north,
+                .open = false,
+            } } },
         },
         .ingress = .{
             .{
@@ -3227,7 +3260,7 @@ fn refreshIntegrity(bytes: []u8) void {
 
 test "current simulation cohort pins the exact Jolt worker and capacity configuration" {
     try current_simulation_cohort.validate();
-    try std.testing.expectEqual(@as(u16, 12), current_simulation_cohort.replay_schema);
+    try std.testing.expectEqual(@as(u16, 14), current_simulation_cohort.replay_schema);
     try std.testing.expectEqual(@as(u16, 5), current_simulation_cohort.engine_schedule_cohort);
     try std.testing.expectEqual(
         sandbox_host_contracts.snapshot_schema,
@@ -3363,10 +3396,6 @@ test "NPC command codec covers every command goal and validates while decoding" 
         .coord = sandbox_recipe.navigation_west_coord,
         .index = 0,
     };
-    const east = npcs.NodeRef{
-        .coord = sandbox_recipe.navigation_east_coord,
-        .index = 2,
-    };
     const id = engine.PersistentId{ .namespace = 77, .local = 3 };
     const commands = [_]NormalizedCommand{
         NormalizedCommand.fromNpc(.{ .spawn = .{
@@ -3377,19 +3406,22 @@ test "NPC command codec covers every command goal and validates while decoding" 
         NormalizedCommand.fromNpc(.{ .set_goal = .{
             .request_id = 102,
             .id = id,
-            .goal = .{ .navigate_to = east },
+            .goal = .{ .navigate_to = sandbox_recipe.market_terminal },
         } }),
         NormalizedCommand.fromNpc(.{ .set_goal = .{
             .request_id = 103,
             .id = id,
-            .goal = .{ .patrol_between = .{ .first = west, .second = east } },
+            .goal = .{ .patrol_between = .{
+                .first = sandbox_recipe.player_plaza,
+                .second = sandbox_recipe.market_terminal,
+            } },
         } }),
         NormalizedCommand.fromNpc(.{ .despawn = .{
             .request_id = 104,
             .id = id,
         } }),
     };
-    const expected_sizes = [_]usize{ 20, 36, 45, 26 };
+    const expected_sizes = [_]usize{ 20, 29, 31, 26 };
 
     for (commands, expected_sizes) |command, expected_size| {
         try validateNormalizedCommand(command);
@@ -3408,7 +3440,7 @@ test "NPC command codec covers every command goal and validates while decoding" 
     var patrol_fingerprint_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
         &patrol_fingerprint_expected,
-        "6492549f47350880de4b5146f93141a2108c75dff564c72a8162762322ffa4e6",
+        "278a51b1d529e47d1e9e268710bc2326134b20416e3fd8eb3759e8847527d9a8",
     );
     try std.testing.expectEqual(
         patrol_fingerprint_expected,
@@ -3474,7 +3506,10 @@ test "NPC command codec covers every command goal and validates while decoding" 
     const noncanonical_patrol = NormalizedCommand.fromNpc(.{ .set_goal = .{
         .request_id = 105,
         .id = id,
-        .goal = .{ .patrol_between = .{ .first = west, .second = west } },
+        .goal = .{ .patrol_between = .{
+            .first = sandbox_recipe.player_plaza,
+            .second = sandbox_recipe.player_plaza,
+        } },
     } });
     var patrol_storage: [128]u8 = undefined;
     var patrol_sink = ByteSink{ .bytes = &patrol_storage };
@@ -3620,16 +3655,15 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     const same = try testContentCohort();
     try std.testing.expectEqual(try content.fingerprint(), try same.fingerprint());
 
-    // Recipe V5 removes the temporary route-containment perimeter while
-    // retaining the two authored obstacles, intentionally advancing the
-    // renderer-free content cohort.
-    var recipe_v5_expected: Digest = undefined;
+    // Recipe V6 installs the branched semantic-destination graph and revised
+    // visible blockers, intentionally advancing the renderer-free cohort.
+    var recipe_v6_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
-        &recipe_v5_expected,
-        "67df0ed6cae36ffc19175bb0253ab8b73fdfd80ba58bdba36143ee092cb31bfb",
+        &recipe_v6_expected,
+        "aed02b987d1b6e9aa3d29515a0af4d809f3d242d8032a6c906927f9a167ab45b",
     );
-    const recipe_v5_actual = try content.fingerprint();
-    try std.testing.expectEqualSlices(u8, &recipe_v5_expected, &recipe_v5_actual);
+    const recipe_v6_actual = try content.fingerprint();
+    try std.testing.expectEqualSlices(u8, &recipe_v6_expected, &recipe_v6_actual);
 
     const catalog = try ContentCohort.init(
         "district/catalog",
@@ -3641,7 +3675,7 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     );
     try catalog.validate();
     const catalog_fingerprint = try catalog.fingerprint();
-    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v5_actual));
+    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v6_actual));
 
     var catalog_fixture = try testCapture();
     catalog_fixture.content = catalog;
@@ -3806,7 +3840,7 @@ test "replay cursor preserves commands-before-ingress order and finds exact dive
     try std.testing.expectEqual(@as(usize, 5), tick_three.commands.len);
     try std.testing.expectEqual(@as(usize, 1), tick_three.district_ingress.len);
     const tick_four = cursor.next() orelse return error.MissingReplayTick;
-    try std.testing.expectEqual(@as(usize, 8), tick_four.commands.len);
+    try std.testing.expectEqual(@as(usize, 9), tick_four.commands.len);
     try std.testing.expectEqual(@as(usize, 1), tick_four.district_ingress.len);
     try std.testing.expect(cursor.next() == null);
 

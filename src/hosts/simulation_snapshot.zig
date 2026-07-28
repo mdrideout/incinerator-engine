@@ -27,6 +27,7 @@ const npc_snapshot_validation = @import("npc_snapshot_validation");
 pub const schema_version = sandbox_host_contracts.snapshot_schema;
 pub const max_bytes: usize = 8 * 1024 * 1024;
 pub const NpcEncounterConfigV1 = npc_encounters.ConfigV1;
+pub const initial_navigation_gates = sandbox_navigation.initial_gate_state;
 
 pub const Limits = struct {
     max_crates: usize = 1024,
@@ -35,7 +36,7 @@ pub const Limits = struct {
     max_npcs: usize = npcs.max_npcs,
 };
 
-pub const SnapshotV11 = struct {
+pub const SnapshotV13 = struct {
     schema_version: u16,
     completed_ticks: u64,
     fixed_delta_seconds: f32,
@@ -46,6 +47,7 @@ pub const SnapshotV11 = struct {
     interaction_config: interactions.InteractionConfigV1,
     npc_config: npcs.NpcConfigV1,
     npc_encounter_config: npc_encounters.ConfigV1,
+    navigation_gates: sandbox_navigation.GateState,
     crates: []const crates.CrateV1,
     characters: []const characters.CharacterV1,
     vehicles: []const vehicles.VehicleV1,
@@ -120,7 +122,7 @@ pub fn worldConfigFingerprint(
 /// a second public serialization path.
 pub fn encode(
     allocator: std.mem.Allocator,
-    value: SnapshotV11,
+    value: SnapshotV13,
     limits: Limits,
 ) ![]u8 {
     try validate(
@@ -147,9 +149,9 @@ pub fn parse(
     max_characters: usize,
     max_vehicles: usize,
     max_npcs: usize,
-) !std.json.Parsed(SnapshotV11) {
+) !std.json.Parsed(SnapshotV13) {
     if (bytes.len > max_bytes) return error.SnapshotTooLarge;
-    var parsed = try std.json.parseFromSlice(SnapshotV11, allocator, bytes, .{});
+    var parsed = try std.json.parseFromSlice(SnapshotV13, allocator, bytes, .{});
     errdefer parsed.deinit();
     try validate(
         parsed.value,
@@ -165,7 +167,7 @@ pub fn parse(
 /// admitted by its enclosing save envelope. Host-owned capacities and assets
 /// are inputs; logical tuning must reproduce the same canonical fingerprint.
 pub fn validateWorldConfig(
-    snapshot: SnapshotV11,
+    snapshot: SnapshotV13,
     expected: sandbox_host_contracts.Config,
 ) !void {
     const snapshot_character = try snapshot.character_config.toConfig(
@@ -200,7 +202,7 @@ pub fn validateWorldConfig(
 }
 
 pub fn validate(
-    snapshot: SnapshotV11,
+    snapshot: SnapshotV13,
     max_crates: usize,
     max_characters: usize,
     max_vehicles: usize,
@@ -219,6 +221,7 @@ pub fn validate(
     try snapshot.interaction_config.validate();
     try snapshot.npc_config.validate();
     _ = try snapshot.npc_encounter_config.toConfig();
+    try snapshot.navigation_gates.validate();
     try validateNpcLimit(max_npcs);
     try validateVirtualCharacterBudget(max_characters, max_npcs);
     try crates.validateRecords(snapshot.crates, max_crates);
@@ -462,7 +465,7 @@ pub fn configFromReplayWorld(
     };
 }
 
-fn validateIdentity(id: engine.PersistentId, snapshot: SnapshotV11) !void {
+fn validateIdentity(id: engine.PersistentId, snapshot: SnapshotV13) !void {
     if (id.namespace != snapshot.namespace) return error.ForeignIdentityNamespace;
     if (id.local >= snapshot.next_local_id) return error.IdentityCursorWouldCollide;
 }
@@ -479,7 +482,7 @@ fn validateVirtualCharacterBudget(max_characters: usize, max_npcs: usize) !void 
     }
 }
 
-fn emptySnapshot() SnapshotV11 {
+fn emptySnapshot() SnapshotV13 {
     return .{
         .schema_version = schema_version,
         .completed_ticks = 0,
@@ -491,6 +494,7 @@ fn emptySnapshot() SnapshotV11 {
         .interaction_config = interactions.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npcs.NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = npc_encounters.ConfigV1.fromConfig(.{}),
+        .navigation_gates = initial_navigation_gates,
         .crates = &.{},
         .characters = &.{},
         .vehicles = &.{},
@@ -503,7 +507,7 @@ fn emptySnapshot() SnapshotV11 {
     };
 }
 
-test "canonical V11 snapshot round trips without native authority" {
+test "canonical V13 snapshot round trips without native authority" {
     const expected = emptySnapshot();
     const bytes = try encode(std.testing.allocator, expected, .{});
     defer std.testing.allocator.free(bytes);

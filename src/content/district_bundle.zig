@@ -7,7 +7,8 @@ const std = @import("std");
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'D', 'B', 'N', 'D', 'L' };
 pub const format_version: u16 = 2;
-pub const schema_cohort: u16 = 2;
+pub const schema_cohort: u16 = 3;
+pub const max_navigation_outgoing_edges: u8 = 3;
 pub const header_size: u32 = 320;
 pub const section_count: usize = 12;
 pub const none_index: u32 = std.math.maxInt(u32);
@@ -129,7 +130,7 @@ pub const NavigationEdge = struct {
     target_coord: [2]i32,
     target_node: u8,
     flags: u8 = 0,
-    reserved: u16 = 0,
+    cost: u16 = 1,
 };
 
 /// Borrowed immutable scene data. The owner of every slice must outlive it.
@@ -638,7 +639,8 @@ fn validationFailure(bundle: BundleView, limits: Limits) ?ValidationFailure {
             if (!isCanonicalFiniteF32(component)) return .invalid_navigation_node;
         }
         if (node.flags & ~navigation_node_known_flags != 0 or node.reserved != 0 or
-            node.edge_count == 0 or node.edge_count > 2 or
+            node.edge_count == 0 or
+            node.edge_count > max_navigation_outgoing_edges or
             node.first_edge != expected_first_edge)
         {
             return .invalid_navigation_node;
@@ -649,7 +651,7 @@ fn validationFailure(bundle: BundleView, limits: Limits) ?ValidationFailure {
         var previous: ?NavigationEdge = null;
         for (bundle.navigation_edges[expected_first_edge..edge_end]) |edge| {
             if (edge.target_node >= limits.max_navigation_nodes or
-                edge.flags != 0 or edge.reserved != 0)
+                edge.flags != 0 or edge.cost == 0)
             {
                 return .invalid_navigation_edge;
             }
@@ -1019,7 +1021,7 @@ fn encodeNavigationEdges(bytes: []u8, values: []const NavigationEdge) void {
         putI32(bytes, base + 4, value.target_coord[1]);
         bytes[base + 8] = value.target_node;
         bytes[base + 9] = value.flags;
-        putU16(bytes, base + 10, value.reserved);
+        putU16(bytes, base + 10, value.cost);
     }
 }
 
@@ -1029,7 +1031,7 @@ fn decodeNavigationEdges(values: []NavigationEdge, bytes: []const u8) void {
         value.target_coord = .{ getI32(bytes, base), getI32(bytes, base + 4) };
         value.target_node = bytes[base + 8];
         value.flags = bytes[base + 9];
-        value.reserved = getU16(bytes, base + 10);
+        value.cost = getU16(bytes, base + 10);
     }
 }
 

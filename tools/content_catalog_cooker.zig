@@ -278,7 +278,7 @@ test "catalog cooker rejects complete logical navigation mismatch" {
             .target_coord = .{ edge.target.coord.x, edge.target.coord.z },
             .target_node = edge.target.index,
             .flags = edge.flags,
-            .reserved = edge.reserved,
+            .cost = edge.cost,
         };
     }
     var view = content.bundle.BundleView{
@@ -299,12 +299,12 @@ test "catalog cooker rejects complete logical navigation mismatch" {
     };
     try validateLogicalScene(view, &build);
 
-    edges[4].target_node = 1;
+    edges[4].cost += 1;
     try std.testing.expectError(
         error.CookedDistrictLogicalShapeMismatch,
         validateLogicalScene(view, &build),
     );
-    edges[4].target_node = 0;
+    edges[4].cost -= 1;
     nodes[0].flags = 0;
     try std.testing.expectError(
         error.CookedDistrictLogicalShapeMismatch,

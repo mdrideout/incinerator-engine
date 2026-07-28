@@ -37,8 +37,8 @@ pub const ManifestV1 = struct {
         if (!std.mem.eql(
             u8,
             self.catalog_semantic_id,
-            "incinerator.s6.two-district",
-        ) or self.catalog_wire_schema != 1) {
+            sandbox_recipe.catalog_semantic_id,
+        ) or self.catalog_wire_schema != sandbox_recipe.catalog_wire_schema) {
             return error.IncompatibleLogicalCatalog;
         }
         _ = try headless_config.decodeDigest(self.content_cohort_fingerprint);

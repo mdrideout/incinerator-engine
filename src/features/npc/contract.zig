@@ -3,15 +3,19 @@
 const std = @import("std");
 const engine = @import("engine_contracts");
 const navigation = @import("navigation_contract");
+const planner = @import("navigation_planner");
 
 pub const NodeRef = navigation.NodeRef;
 pub const ChunkCoord = navigation.ChunkCoord;
+pub const DestinationId = navigation.DestinationId;
 
 pub const max_npcs: usize = 64;
 pub const max_pending_commands: usize = 128;
 pub const max_outcomes: usize = 128;
 pub const max_events: usize = 256;
-pub const max_route_nodes: usize = 16;
+pub const max_navigation_transitions: usize = 256;
+pub const max_route_nodes: usize = navigation.max_route_nodes;
+pub const max_physical_edge_exclusions: usize = 2;
 
 pub const Budget = struct {
     npcs: u32 = max_npcs,
@@ -20,6 +24,7 @@ pub const Budget = struct {
     commands: u32 = max_pending_commands,
     outcomes: u32 = max_outcomes,
     events: u32 = max_events,
+    navigation_transitions: u32 = max_navigation_transitions,
 };
 
 pub const declared_budget = Budget{};
@@ -124,13 +129,13 @@ pub const NpcConfigV1 = struct {
 };
 
 pub const PatrolBetween = struct {
-    first: navigation.NodeRef,
-    second: navigation.NodeRef,
+    first: DestinationId,
+    second: DestinationId,
 };
 
 pub const Goal = union(enum) {
     hold,
-    navigate_to: navigation.NodeRef,
+    navigate_to: DestinationId,
     patrol_between: PatrolBetween,
 };
 
@@ -157,6 +162,111 @@ pub const NavigationProgress = struct {
     last_progress_tick: u64 = 0,
 };
 
+/// Semantic navigation execution is independent from controller residency.
+/// An NPC may be physically active while waiting, blocked, or arrived.
+pub const NavigationStatus = enum(u8) {
+    idle,
+    resolving,
+    following,
+    waiting_for_content,
+    blocked,
+    arrived,
+    structurally_unreachable,
+};
+
+pub const NavigationReason = enum(u8) {
+    none,
+    destination_assigned,
+    destination_changed,
+    restored,
+    encounter_resumed,
+    external_displacement,
+    owner_transferred,
+    district_inactive,
+    district_generation_changed,
+    topology_changed,
+    edge_closed,
+    physical_obstruction,
+    outside_navigation_coverage,
+    structurally_disconnected,
+    destination_reached,
+};
+
+pub const PlanTrigger = enum(u8) {
+    destination_assigned,
+    destination_changed,
+    restored,
+    encounter_resumed,
+    external_displacement,
+    owner_transferred,
+    district_generation_changed,
+    topology_changed,
+    physical_obstruction,
+};
+
+pub const PlanResult = enum(u8) {
+    none,
+    ready,
+    waiting_for_content,
+    blocked_by_traversal,
+    structurally_unreachable,
+    invalid_destination,
+    invalid_topology,
+    capacity_exhausted,
+    deferred_budget,
+};
+
+pub const NavigationLineage = struct {
+    route_revision: u64 = 0,
+    planned_tick: u64 = 0,
+    topology_revision: u64 = 0,
+    last_trigger: PlanTrigger = .destination_assigned,
+    last_result: PlanResult = .none,
+    replan_count: u32 = 0,
+    arrival_tick: ?u64 = null,
+    displacement_tick: ?u64 = null,
+    teleport_rollback_count: u32 = 0,
+};
+
+pub const NavigationTransitionKind = enum(u8) {
+    destination_assigned,
+    destination_changed,
+    plan_requested,
+    plan_committed,
+    plan_waiting,
+    plan_blocked,
+    plan_unreachable,
+    route_invalidated,
+    waypoint_advanced,
+    waiting_entered,
+    waiting_resumed,
+    block_suspected,
+    block_confirmed,
+    block_cleared,
+    displacement_detected,
+    anchor_changed,
+    destination_arrived,
+};
+
+/// Transition-only evidence. Route commits retain the bounded route value so
+/// incident capture and deterministic replay never have to infer a fast replan
+/// from later state.
+pub const NavigationTransition = struct {
+    tick: u64,
+    id: engine.PersistentId,
+    kind: NavigationTransitionKind,
+    destination: ?DestinationId = null,
+    status: NavigationStatus,
+    reason: NavigationReason,
+    trigger: PlanTrigger,
+    result: PlanResult,
+    route_revision: u64,
+    topology_revision: u64,
+    route: RoutePlan = .{},
+    route_index: u8 = 0,
+    position: [3]f32,
+};
+
 /// Narrow authority port for encounter-owned movement intent. The NPC feature
 /// remains the sole owner of controller motion and semantic patrol routes.
 pub const EncounterLocomotion = union(enum) {
@@ -181,20 +291,8 @@ pub const PatrolLeg = enum(u8) {
     toward_second,
 };
 
-pub const RoutePlan = struct {
-    nodes: [max_route_nodes]navigation.NodeRef = [_]navigation.NodeRef{.{}} ** max_route_nodes,
-    len: u8 = 0,
-
-    pub fn slice(self: *const RoutePlan) []const navigation.NodeRef {
-        return self.nodes[0..@min(@as(usize, self.len), max_route_nodes)];
-    }
-
-    pub fn next(self: *const RoutePlan, index: u8) ?navigation.NodeRef {
-        const next_index = @as(usize, index) + 1;
-        if (next_index >= self.len or next_index >= max_route_nodes) return null;
-        return self.nodes[next_index];
-    }
-};
+pub const RoutePlan = planner.RoutePlan;
+pub const NavigationEdgeExclusion = planner.EdgeExclusion;
 
 pub const RouteCursor = struct {
     plan: RoutePlan = .{},
@@ -316,7 +414,7 @@ pub const OwnerTransferred = struct {
 
 pub const GoalReached = struct {
     id: engine.PersistentId,
-    node: navigation.NodeRef,
+    destination: DestinationId,
 };
 
 pub const Event = union(enum) {
@@ -347,6 +445,16 @@ pub const NpcView = struct {
     controller_present: bool,
     encounter_locomotion: ?EncounterLocomotion,
     navigation_progress: NavigationProgress,
+    navigation_status: NavigationStatus,
+    navigation_reason: NavigationReason,
+    navigation_lineage: NavigationLineage,
+    physical_edge_exclusions: [max_physical_edge_exclusions]NavigationEdgeExclusion =
+        [_]NavigationEdgeExclusion{.{
+            .source = .{},
+            .target = .{},
+        }} ** max_physical_edge_exclusions,
+    physical_edge_exclusion_count: u8 = 0,
+    physical_block_retry_tick: u64 = 0,
 };
 
 pub const NpcDraw = struct {
@@ -372,6 +480,10 @@ pub const Diagnostics = struct {
     outcomes: engine.diagnostics.QueueStats,
     events: engine.diagnostics.QueueStats,
     event_drops: EventDropCounts,
+    navigation_transitions: engine.diagnostics.QueueStats,
+    replans: u64,
+    deferred_replans: u64,
+    teleport_rollbacks: u64,
 };
 
 pub const NpcV1 = struct {
@@ -406,11 +518,11 @@ pub fn validateCommand(command: Command) !void {
 pub fn validateGoal(goal: Goal) !void {
     switch (goal) {
         .hold => {},
-        .navigate_to => |target| try validateNodeRef(target),
+        .navigate_to => |destination| try destination.validate(),
         .patrol_between => |patrol| {
-            try validateNodeRef(patrol.first);
-            try validateNodeRef(patrol.second);
-            if (navigation.NodeRef.eql(patrol.first, patrol.second)) {
+            try patrol.first.validate();
+            try patrol.second.validate();
+            if (DestinationId.eql(patrol.first, patrol.second)) {
                 return error.InvalidNpcPatrol;
             }
         },

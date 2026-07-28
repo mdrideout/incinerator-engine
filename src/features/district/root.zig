@@ -149,6 +149,74 @@ pub fn Feature(
             ) navigation_contract.NearestNodeResolution {
                 return self.feature.resolveNearestNavigationNode(position);
             }
+
+            pub fn resolveDestination(
+                _: *NavigationAccess,
+                id: navigation_contract.DestinationId,
+            ) navigation_contract.DestinationResolution {
+                const destination = CanonicalContent.resolveDestination(id) orelse
+                    return .invalid_destination;
+                return .{ .ready = destination };
+            }
+
+            pub fn resolveCatalogNode(
+                _: *NavigationAccess,
+                reference: navigation_contract.NodeRef,
+            ) navigation_contract.CatalogNodeResolution {
+                const build = canonicalNavigationBuild(
+                    CanonicalContent,
+                    reference.coord,
+                ) orelse return .invalid_reference;
+                if (reference.index >= build.navigation_node_count) {
+                    return .invalid_reference;
+                }
+                return .{ .ready = .{
+                    .reference = reference,
+                    .node = build.navigation_nodes[reference.index],
+                } };
+            }
+
+            pub fn resolveCatalogEdge(
+                self: *NavigationAccess,
+                source: navigation_contract.NodeRef,
+                ordinal: u8,
+            ) navigation_contract.CatalogEdgeResolution {
+                const resolved = switch (self.resolveCatalogNode(source)) {
+                    .ready => |value| value,
+                    .invalid_reference => return .invalid_reference,
+                };
+                if (ordinal >= resolved.node.edge_count) return .invalid_ordinal;
+                const build = canonicalNavigationBuild(
+                    CanonicalContent,
+                    source.coord,
+                ) orelse return .invalid_reference;
+                const edge_index = @as(usize, resolved.node.first_edge) + ordinal;
+                if (edge_index >= build.navigation_edge_count) return .invalid_ordinal;
+                return .{ .ready = .{
+                    .source = source,
+                    .ordinal = ordinal,
+                    .edge = build.navigation_edges[edge_index],
+                } };
+            }
+
+            pub fn activeTicketFor(
+                self: *NavigationAccess,
+                coord: navigation_contract.ChunkCoord,
+            ) ?navigation_contract.LoadTicket {
+                return self.feature.activeTicketFor(coord);
+            }
+
+            pub fn topologyRevision(_: *NavigationAccess) u64 {
+                return 1;
+            }
+
+            pub fn edgeAvailability(
+                _: *NavigationAccess,
+                _: navigation_contract.NodeRef,
+                _: navigation_contract.NodeRef,
+            ) navigation_contract.EdgeAvailability {
+                return .open;
+            }
         };
 
         allocator: std.mem.Allocator,
@@ -1664,6 +1732,34 @@ const TestCanonicalContent = struct {
     pub const current_recipe_version: u32 = 1;
     pub const navigation_primary_coord = district_contract.ChunkCoord{ .x = 0, .z = 0 };
     pub const navigation_adjacent_coord = district_contract.ChunkCoord{ .x = 1, .z = 0 };
+
+    pub fn resolveDestination(
+        id: navigation_contract.DestinationId,
+    ) ?navigation_contract.Destination {
+        return switch (id.value) {
+            1 => .{
+                .id = id,
+                .position = .{ -4, 0, 3 },
+                .arrival_radius = 0.25,
+                .anchors = .{ .{
+                    .coord = navigation_primary_coord,
+                    .index = 0,
+                }, .{} },
+                .anchor_count = 1,
+            },
+            2 => .{
+                .id = id,
+                .position = .{ 20, 0, 3 },
+                .arrival_radius = 0.25,
+                .anchors = .{ .{
+                    .coord = navigation_adjacent_coord,
+                    .index = 2,
+                }, .{} },
+                .anchor_count = 1,
+            },
+            else => null,
+        };
+    }
 
     pub fn build(
         coord: district_contract.ChunkCoord,

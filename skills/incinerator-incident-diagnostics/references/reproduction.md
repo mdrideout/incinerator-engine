@@ -28,6 +28,11 @@
   generic `runtime_system_fault` code alone is not an exact root cause.
 - For NPC disappearance, inspect interest reason, observer/entity districts,
   distance, encounter retention, and grace deadline.
+- For NPC navigation, compare semantic destination and route revision before
+  and after the report. Require a typed trigger/result for every change,
+  distinguish inactive-content waiting from gate/physical blockage, and prove
+  that external displacement changes the anchor/route without rewriting the
+  authoritative pose.
 - For input shortcuts, require received -> matched -> queued -> applied.
 - Inspect the continuous product trail and all eight human anchors using actual
   timing. Compare semantic-ID, product-only, and human-visible evidence.

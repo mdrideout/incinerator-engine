@@ -690,8 +690,14 @@ const Harness = struct {
             },
             .goal_reached => |value| {
                 try self.requireNpcId(value.id);
-                if (!npc_contract.NodeRef.eql(value.node, west_node) and
-                    !npc_contract.NodeRef.eql(value.node, east_node))
+                if (!npc_contract.DestinationId.eql(
+                    value.destination,
+                    sandbox_contracts.player_plaza_destination,
+                ) and
+                    !npc_contract.DestinationId.eql(
+                        value.destination,
+                        sandbox_contracts.market_terminal_destination,
+                    ))
                 {
                     return error.InvalidNpcGoalEvent;
                 }
@@ -972,7 +978,10 @@ fn spawnPopulation(harness: *Harness) !void {
     const batch = try population.plan(npc_ceiling, .{
         .first_request_id = first_request_id,
         .start_node = west_node,
-        .goal = .{ .patrol_between = .{ .first = west_node, .second = east_node } },
+        .goal = .{ .patrol_between = .{
+            .first = sandbox_contracts.player_plaza_destination,
+            .second = sandbox_contracts.market_terminal_destination,
+        } },
     });
     for (batch.slice()) |command| try harness.world.submitNpc(command);
     try harness.metrics.observe(harness.world);
@@ -1006,7 +1015,10 @@ fn spawnPopulation(harness: *Harness) !void {
     try harness.world.submitNpc(.{ .spawn = .{
         .request_id = 2_000,
         .node = west_node,
-        .goal = .{ .patrol_between = .{ .first = west_node, .second = east_node } },
+        .goal = .{ .patrol_between = .{
+            .first = sandbox_contracts.player_plaza_destination,
+            .second = sandbox_contracts.market_terminal_destination,
+        } },
     } });
     try harness.metrics.observe(harness.world);
     try harness.tick(false);
@@ -1187,8 +1199,14 @@ fn requireActiveScaleState(
         }
         switch (view.goal) {
             .patrol_between => |goal| {
-                if (!npc_contract.NodeRef.eql(goal.first, west_node) or
-                    !npc_contract.NodeRef.eql(goal.second, east_node))
+                if (!npc_contract.DestinationId.eql(
+                    goal.first,
+                    sandbox_contracts.player_plaza_destination,
+                ) or
+                    !npc_contract.DestinationId.eql(
+                        goal.second,
+                        sandbox_contracts.market_terminal_destination,
+                    ))
                 {
                     return error.S8NpcGoalMismatch;
                 }

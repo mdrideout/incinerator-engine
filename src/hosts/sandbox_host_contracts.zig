@@ -29,6 +29,11 @@ pub const NavigationNodeRef = npcs.NodeRef;
 pub const NpcEvent = npcs.Event;
 pub const NpcOutcome = npcs.Outcome;
 pub const NpcState = npcs.State;
+pub const NpcNavigationStatus = npcs.NavigationStatus;
+pub const NpcNavigationReason = npcs.NavigationReason;
+pub const NpcPlanTrigger = npcs.PlanTrigger;
+pub const NpcPlanResult = npcs.PlanResult;
+pub const DestinationId = npcs.DestinationId;
 pub const PersistentId = engine.PersistentId;
 pub const RejectionReason = crates.RejectionReason;
 pub const VehicleCommandRejected = vehicles.CommandRejected;
@@ -39,8 +44,18 @@ pub const district_static_box_count: u32 = sandbox_district_recipe.static_box_co
 pub const district_blocking_proxy_count: u8 = sandbox_district_recipe.blocking_proxy_count;
 pub const navigation_east_coord = sandbox_district_recipe.navigation_east_coord;
 pub const navigation_west_coord = sandbox_district_recipe.navigation_west_coord;
+pub const player_plaza_destination = sandbox_district_recipe.player_plaza;
+pub const depot_forecourt_destination = sandbox_district_recipe.depot_forecourt;
+pub const south_gate_approach_destination = sandbox_district_recipe.south_gate_approach;
+pub const market_terminal_destination = sandbox_district_recipe.market_terminal;
+pub const alley_junction_destination = sandbox_district_recipe.alley_junction;
+pub const transit_yard_destination = sandbox_district_recipe.transit_yard;
+
+pub fn destinationName(id: DestinationId) ?[]const u8 {
+    return sandbox_district_recipe.destinationName(id);
+}
 pub const npc_capacity = npcs.max_npcs;
-pub const snapshot_schema: u16 = 12;
+pub const snapshot_schema: u16 = 13;
 pub const DistrictPresentationPlan = sandbox_district_recipe.PresentationPlan;
 
 /// Default playable product spawn and the local movement envelope guaranteed
@@ -195,7 +210,7 @@ test "graphical sandbox contracts publish values without mutable authority" {
 
     const config = Config{ .namespace = 42 };
     try std.testing.expectEqual(@as(u64, 42), config.namespace);
-    try std.testing.expectEqual(snapshot_schema, @as(u16, 12));
+    try std.testing.expectEqual(snapshot_schema, @as(u16, 13));
 }
 
 test "default playable spawn and initial traversal clear canonical blockers" {

@@ -579,6 +579,7 @@ client_sources=(
   "$root/src/sandbox/gameplay_scenarios.zig"
   "$root/src/sandbox/district_recipe.zig"
   "$root/src/features/district_contract.zig"
+  "$root/src/features/navigation_contract.zig"
   "$root/src/engine/contracts.zig"
   "$root/src/engine/identity.zig"
   "$root/src/engine/transform.zig"
@@ -610,7 +611,7 @@ client_imports="$({
 })"
 for imported in $client_imports; do
   case "$imported" in
-    ../identity.zig|../transform.zig|contracts/diagnostics.zig|contracts/physics.zig|contracts/physics_debug.zig|contracts/rendering.zig|contracts/replay.zig|identity.zig|transform.zig|std|zmath|district_contract|engine_contracts|incinerator_engine|network_cohort_options|sandbox_district_recipe|sandbox_gameplay_scenarios|shader_assets|session_budgets|session_protocol|combat_presentation|session_client|session_room|room_coordinator|room_ticket|client_scene|replicated_world|session_transport_policy|reconnect_policy|client_clock|gns_direct|mp2_presentation|session_identity|session_prediction|vehicle_prediction|sdl.zig|renderer.zig|primitives.zig|mesh.zig|camera.zig|texture.zig) ;;
+    ../identity.zig|../transform.zig|contracts/diagnostics.zig|contracts/physics.zig|contracts/physics_debug.zig|contracts/rendering.zig|contracts/replay.zig|identity.zig|transform.zig|std|zmath|district_contract|navigation_contract|engine_contracts|incinerator_engine|network_cohort_options|sandbox_district_recipe|sandbox_gameplay_scenarios|shader_assets|session_budgets|session_protocol|combat_presentation|session_client|session_room|room_coordinator|room_ticket|client_scene|replicated_world|session_transport_policy|reconnect_policy|client_clock|gns_direct|mp2_presentation|session_identity|session_prediction|vehicle_prediction|sdl.zig|renderer.zig|primitives.zig|mesh.zig|camera.zig|texture.zig) ;;
     *) fail "unclassified dependency entered the graphical client closure: $imported" ;;
   esac
 done
@@ -673,7 +674,7 @@ authority_imports="$({
 })"
 for imported in $authority_imports; do
   case "$imported" in
-    ../identity.zig|../transform.zig|builtin|character_contract|character_feature|contracts/diagnostics.zig|contracts/physics.zig|contracts/physics_debug.zig|contracts/rendering.zig|contracts/replay.zig|crate_contract|crate_feature|diagnostics.zig|district_contract|district_feature_contract|district_feature|district_replay_loader|district_worker_contract|district_worker|driver_contract|engine/bounded_queue.zig|engine/diagnostics.zig|engine/fixed_step.zig|engine/gameplay_invariants.zig|engine/gameplay_scenario.zig|engine/gameplay_trace.zig|engine/runtime.zig|engine_contracts|gameplay_admission|gameplay_trace.zig|gns_direct|identity.zig|incinerator_engine|interaction_contract|interaction_feature_contract|interaction_feature|jolt_c|jolt_physics|navigation_contract|network_cohort_options|npc_contract|npc_encounter_contract|npc_encounter_feature|npc_feature|npc_snapshot_validation|sandbox_diagnostics_contract|sandbox_district_recipe|sandbox_host_contracts|sandbox_navigation|sandbox_npc_replacement|sandbox_npc_replacement_contract|sandbox_replay|sandbox_simulation|session_authority|session_authority_diagnostics|session_budgets|session_identity|session_protocol|session_transport_policy|simulation_cohort_options|simulation_diagnostics|simulation_snapshot|snapshot_source|std|transform.zig|vehicle_contract|vehicle_feature|vitals_contract|vitals_feature|zflecs) ;;
+    ../identity.zig|../transform.zig|builtin|character_contract|character_feature|contracts/diagnostics.zig|contracts/physics.zig|contracts/physics_debug.zig|contracts/rendering.zig|contracts/replay.zig|crate_contract|crate_feature|diagnostics.zig|district_contract|district_feature_contract|district_feature|district_replay_loader|district_worker_contract|district_worker|driver_contract|engine/bounded_queue.zig|engine/diagnostics.zig|engine/fixed_step.zig|engine/gameplay_invariants.zig|engine/gameplay_scenario.zig|engine/gameplay_trace.zig|engine/runtime.zig|engine_contracts|gameplay_admission|gameplay_trace.zig|gns_direct|identity.zig|incinerator_engine|interaction_contract|interaction_feature_contract|interaction_feature|jolt_c|jolt_physics|navigation_contract|navigation_planner|network_cohort_options|npc_contract|npc_encounter_contract|npc_encounter_feature|npc_feature|npc_snapshot_validation|sandbox_diagnostics_contract|sandbox_district_recipe|sandbox_host_contracts|sandbox_navigation|sandbox_npc_replacement|sandbox_npc_replacement_contract|sandbox_replay|sandbox_simulation|session_authority|session_authority_diagnostics|session_budgets|session_identity|session_protocol|session_transport_policy|simulation_cohort_options|simulation_diagnostics|simulation_snapshot|snapshot_source|std|transform.zig|vehicle_contract|vehicle_feature|vitals_contract|vitals_feature|zflecs) ;;
     *) fail "unclassified dependency entered the dedicated authority closure: $imported" ;;
   esac
 done

@@ -442,7 +442,7 @@ fn cook(
             .target_coord = .{ edge.target.coord.x, edge.target.coord.z },
             .target_node = edge.target.index,
             .flags = edge.flags,
-            .reserved = edge.reserved,
+            .cost = edge.cost,
         });
     }
     return result;

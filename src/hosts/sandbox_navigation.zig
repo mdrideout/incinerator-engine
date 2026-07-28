@@ -10,6 +10,178 @@ const district = @import("district_contract");
 const navigation = @import("navigation_contract");
 const recipe = @import("sandbox_district_recipe");
 
+pub const Gate = enum(u8) {
+    north,
+    south,
+};
+
+pub const GateState = struct {
+    north_open: bool,
+    south_open: bool,
+    topology_revision: u64,
+
+    pub fn validate(self: GateState) !void {
+        if (self.topology_revision == 0) {
+            return error.InvalidNavigationTopologyRevision;
+        }
+    }
+};
+
+pub const initial_gate_state = GateState{
+    .north_open = true,
+    .south_open = true,
+    .topology_revision = 1,
+};
+
+/// Sandbox-owned traversal policy layered over district-owned content and
+/// residency. Closing a gate changes runtime traversal only; it never edits
+/// the immutable admitted graph or destination catalog.
+pub fn RuntimeAccess(comptime DistrictAccess: type) type {
+    navigation.assertImplementation(DistrictAccess);
+    return struct {
+        const Self = @This();
+
+        district: *DistrictAccess,
+        north_open: bool = true,
+        south_open: bool = true,
+        topology_revision: u64 = 1,
+
+        pub fn init(district_access: *DistrictAccess) Self {
+            return .{ .district = district_access };
+        }
+
+        pub fn restoreGateState(self: *Self, state: GateState) !void {
+            try state.validate();
+            self.north_open = state.north_open;
+            self.south_open = state.south_open;
+            self.topology_revision = state.topology_revision;
+        }
+
+        pub fn gateState(self: *const Self) GateState {
+            return .{
+                .north_open = self.north_open,
+                .south_open = self.south_open,
+                .topology_revision = self.topology_revision,
+            };
+        }
+
+        pub fn setGate(self: *Self, gate: Gate, open: bool) bool {
+            const value = switch (gate) {
+                .north => &self.north_open,
+                .south => &self.south_open,
+            };
+            if (value.* == open) return false;
+            value.* = open;
+            self.topology_revision +|= 1;
+            return true;
+        }
+
+        pub fn resolveNode(
+            self: *Self,
+            reference: navigation.NodeRef,
+        ) navigation.NodeResolution {
+            return self.district.resolveNode(reference);
+        }
+
+        pub fn resolveEdge(
+            self: *Self,
+            source: navigation.NodeRef,
+            ordinal: u8,
+        ) navigation.EdgeResolution {
+            return self.district.resolveEdge(source, ordinal);
+        }
+
+        pub fn validateTraversal(
+            self: *Self,
+            source: navigation.NodeRef,
+            target: navigation.NodeRef,
+        ) navigation.TraversalValidation {
+            return self.district.validateTraversal(source, target);
+        }
+
+        pub fn nearestActiveNode(
+            self: *Self,
+            position: [3]f32,
+        ) navigation.NearestNodeResolution {
+            return self.district.nearestActiveNode(position);
+        }
+
+        pub fn resolveDestination(
+            self: *Self,
+            id: navigation.DestinationId,
+        ) navigation.DestinationResolution {
+            return self.district.resolveDestination(id);
+        }
+
+        pub fn resolveCatalogNode(
+            self: *Self,
+            reference: navigation.NodeRef,
+        ) navigation.CatalogNodeResolution {
+            return self.district.resolveCatalogNode(reference);
+        }
+
+        pub fn resolveCatalogEdge(
+            self: *Self,
+            source: navigation.NodeRef,
+            ordinal: u8,
+        ) navigation.CatalogEdgeResolution {
+            return self.district.resolveCatalogEdge(source, ordinal);
+        }
+
+        pub fn activeTicketFor(
+            self: *Self,
+            coord: navigation.ChunkCoord,
+        ) ?navigation.LoadTicket {
+            return self.district.activeTicketFor(coord);
+        }
+
+        pub fn topologyRevision(self: *Self) u64 {
+            return self.topology_revision;
+        }
+
+        pub fn edgeAvailability(
+            self: *Self,
+            source: navigation.NodeRef,
+            target: navigation.NodeRef,
+        ) navigation.EdgeAvailability {
+            if (isGateEdge(source, target, .north)) {
+                return if (self.north_open) .open else .closed;
+            }
+            if (isGateEdge(source, target, .south)) {
+                return if (self.south_open) .open else .closed;
+            }
+            return .open;
+        }
+    };
+}
+
+fn isGateEdge(
+    source: navigation.NodeRef,
+    target: navigation.NodeRef,
+    gate: Gate,
+) bool {
+    const west_index: u8 = switch (gate) {
+        .north => 6,
+        .south => 7,
+    };
+    const east_index: u8 = switch (gate) {
+        .north => 0,
+        .south => 6,
+    };
+    const west = navigation.NodeRef{
+        .coord = recipe.navigation_west_coord,
+        .index = west_index,
+    };
+    const east = navigation.NodeRef{
+        .coord = recipe.navigation_east_coord,
+        .index = east_index,
+    };
+    return (navigation.NodeRef.eql(source, west) and
+        navigation.NodeRef.eql(target, east)) or
+        (navigation.NodeRef.eql(source, east) and
+            navigation.NodeRef.eql(target, west));
+}
+
 pub const CanonicalAccess = struct {
     pub fn resolveNode(
         _: *CanonicalAccess,
@@ -94,6 +266,69 @@ pub const CanonicalAccess = struct {
         }
         return .{ .ready = best orelse return .unavailable };
     }
+
+    pub fn resolveDestination(
+        _: *CanonicalAccess,
+        id: navigation.DestinationId,
+    ) navigation.DestinationResolution {
+        const destination = recipe.resolveDestination(id) orelse
+            return .invalid_destination;
+        return .{ .ready = destination };
+    }
+
+    pub fn resolveCatalogNode(
+        _: *CanonicalAccess,
+        reference: navigation.NodeRef,
+    ) navigation.CatalogNodeResolution {
+        const build = canonicalBuild(reference.coord) orelse
+            return .invalid_reference;
+        if (reference.index >= build.navigation_node_count) {
+            return .invalid_reference;
+        }
+        return .{ .ready = .{
+            .reference = reference,
+            .node = build.navigation_nodes[reference.index],
+        } };
+    }
+
+    pub fn resolveCatalogEdge(
+        self: *CanonicalAccess,
+        source: navigation.NodeRef,
+        ordinal: u8,
+    ) navigation.CatalogEdgeResolution {
+        const node_value = switch (self.resolveCatalogNode(source)) {
+            .ready => |value| value,
+            .invalid_reference => return .invalid_reference,
+        };
+        if (ordinal >= node_value.node.edge_count) return .invalid_ordinal;
+        const build = canonicalBuild(source.coord) orelse return .invalid_reference;
+        const edge_index = @as(usize, node_value.node.first_edge) + ordinal;
+        if (edge_index >= build.navigation_edge_count) return .invalid_ordinal;
+        return .{ .ready = .{
+            .source = source,
+            .ordinal = ordinal,
+            .edge = build.navigation_edges[edge_index],
+        } };
+    }
+
+    pub fn activeTicketFor(
+        _: *CanonicalAccess,
+        coord: navigation.ChunkCoord,
+    ) ?navigation.LoadTicket {
+        return if (canonicalBuild(coord) != null) canonicalTicket(coord) else null;
+    }
+
+    pub fn topologyRevision(_: *CanonicalAccess) u64 {
+        return 1;
+    }
+
+    pub fn edgeAvailability(
+        _: *CanonicalAccess,
+        _: navigation.NodeRef,
+        _: navigation.NodeRef,
+    ) navigation.EdgeAvailability {
+        return .open;
+    }
 };
 
 fn canonicalBuild(coord: navigation.ChunkCoord) ?district.DistrictBuild {
@@ -124,7 +359,7 @@ test "canonical preflight access validates exact route without runtime authority
     };
     const west_seam = navigation.NodeRef{
         .coord = recipe.navigation_west_coord,
-        .index = 2,
+        .index = 6,
     };
     const east_seam = navigation.NodeRef{
         .coord = recipe.navigation_east_coord,
@@ -135,7 +370,7 @@ test "canonical preflight access validates exact route without runtime authority
         .ready => |value| value,
         else => return error.ExpectedCanonicalNode,
     };
-    try std.testing.expectEqualDeep([3]f32{ -4, 0, 3 }, start.node.position);
+    try std.testing.expectEqualDeep([3]f32{ -5, 0, 5 }, start.node.position);
     try std.testing.expectEqual(@as(u64, 1), start.ticket.generation);
     const seam = switch (access.resolveEdge(west_seam, 1)) {
         .ready => |value| value,
@@ -156,7 +391,7 @@ test "canonical preflight access validates exact route without runtime authority
     );
     try std.testing.expect(access.resolveNode(.{
         .coord = recipe.navigation_west_coord,
-        .index = 3,
+        .index = 8,
     }) == .invalid_reference);
     try std.testing.expect(access.resolveEdge(west_start, 1) == .invalid_ordinal);
     try std.testing.expectEqualDeep(

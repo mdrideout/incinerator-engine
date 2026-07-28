@@ -1441,6 +1441,14 @@ pub const NpcRole = struct {
         return stateFrom(self.context).authority.npcs().pollEvent();
     }
 
+    pub fn pollNavigationTransition(
+        self: NpcRole,
+    ) ?npc_contract.NavigationTransition {
+        return stateFrom(
+            self.context,
+        ).authority.npcs().pollNavigationTransition();
+    }
+
     pub fn view(self: NpcRole, id: engine.PersistentId) !npc_contract.NpcView {
         return stateFrom(self.context).authority.npcs().view(id);
     }
@@ -1455,6 +1463,23 @@ pub const DeveloperRole = struct {
 
     pub fn diagnostics(self: DeveloperRole) diagnostics_contract.Diagnostics {
         return stateFrom(self.context).authority.developer().diagnostics();
+    }
+
+    pub fn submitNavigationGate(
+        self: DeveloperRole,
+        command: sandbox_replay.NavigationGateCommand,
+    ) !bool {
+        return stateFrom(
+            self.context,
+        ).authority.developer().submitNavigationGate(command);
+    }
+
+    pub fn navigationGateState(
+        self: DeveloperRole,
+    ) session_authority.NavigationGateState {
+        return stateFrom(
+            self.context,
+        ).authority.developer().navigationGateState();
     }
 
     pub fn snapshotFlightRecording(

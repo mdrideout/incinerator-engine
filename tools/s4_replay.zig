@@ -6,6 +6,7 @@ const district_content_catalog = @import("district_content_catalog");
 const replay = @import("sandbox_replay");
 const sandbox = @import("sandbox_simulation");
 const sandbox_contracts = @import("sandbox_host_contracts");
+const npc_contract = @import("npc_contract");
 
 const fixture_coord = sandbox_contracts.ChunkCoord{ .x = 0, .z = 0 };
 const worker_progress_limit: usize = 2_000;
@@ -426,15 +427,13 @@ fn requireAlteredNpcGoalDivergence(
         .npc => |*npc| switch (npc.*) {
             .spawn => |*spawn| switch (spawn.goal) {
                 .patrol_between => |*patrol| {
-                    if (patrol.second.index != 2 or
-                        !sandbox_contracts.ChunkCoord.eql(
-                            patrol.second.coord,
-                            sandbox_contracts.navigation_east_coord,
-                        ))
+                    if (patrol.second.value !=
+                        sandbox_contracts.market_terminal_destination.value)
                     {
                         return error.UnexpectedNpcPatrolGoal;
                     }
-                    patrol.second.index = 1;
+                    patrol.second =
+                        sandbox_contracts.transit_yard_destination;
                 },
                 else => unreachable,
             },
@@ -627,8 +626,8 @@ fn runSmokeScenario(
         .request_id = Request.npc_spawn,
         .node = .{ .coord = sandbox_contracts.navigation_west_coord, .index = 0 },
         .goal = .{ .patrol_between = .{
-            .first = .{ .coord = sandbox_contracts.navigation_west_coord, .index = 0 },
-            .second = .{ .coord = sandbox_contracts.navigation_east_coord, .index = 2 },
+            .first = sandbox_contracts.player_plaza_destination,
+            .second = sandbox_contracts.market_terminal_destination,
         } },
     } });
     try tickAndDrain(simulation, state);
@@ -1073,14 +1072,14 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
         },
         .goal_reached => |reached| {
             try requireNpcIdentity(state, reached.id);
-            const is_west = sandbox_contracts.ChunkCoord.eql(
-                reached.node.coord,
-                sandbox_contracts.navigation_west_coord,
-            ) and reached.node.index == 0;
-            const is_east = sandbox_contracts.ChunkCoord.eql(
-                reached.node.coord,
-                sandbox_contracts.navigation_east_coord,
-            ) and reached.node.index == 2;
+            const is_west = npc_contract.DestinationId.eql(
+                reached.destination,
+                sandbox_contracts.player_plaza_destination,
+            );
+            const is_east = npc_contract.DestinationId.eql(
+                reached.destination,
+                sandbox_contracts.market_terminal_destination,
+            );
             if (!is_west and !is_east) return error.UnexpectedNpcEvent;
             state.npc_goal_reached = true;
         },

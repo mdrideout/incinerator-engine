@@ -1,0 +1,47 @@
+{
+  "schema_version": 1,
+  "benchmark": "s12-destination-navigation",
+  "recorded": "2026-07-28",
+  "zig_version": "0.16.0",
+  "optimize": "ReleaseFast",
+  "target_arch": "aarch64",
+  "target_os": "macos",
+  "content_cohort_fingerprint": "7c4f7a353ac7f1160f123bd21ea1ee356c9a274dae7646d29d0a6f4b63f5bc80",
+  "methodology": "64-request planner cohorts admitted at the eight-query authority budget over 4096 measured waves, plus 2048 real-Jolt ticks for six controllers at distinct authored anchors",
+  "planner": {
+    "request_cohort": 64,
+    "waves": 4096,
+    "queries_per_wave": 8,
+    "total_queries": 32768,
+    "route_digest_accumulator": 2615804729959975360,
+    "searched_nodes": 448512,
+    "searched_edges": 849920,
+    "timing": {
+      "samples": 4096,
+      "mean_ns": 995971.6447753906,
+      "p50_ns": 985041,
+      "p95_ns": 1139292,
+      "p99_ns": 1210042,
+      "max_ns": 1327709
+    }
+  },
+  "movement": {
+    "ticks": 2048,
+    "npcs": 6,
+    "moved_npcs": 6,
+    "arrived_npcs": 3,
+    "blocked_npcs": 0,
+    "peak_controllers": 6,
+    "route_replans": 10,
+    "teleport_rollbacks": 0,
+    "timing": {
+      "samples": 2048,
+      "mean_ns": 48895.86181640625,
+      "p50_ns": 45667,
+      "p95_ns": 62875,
+      "p99_ns": 76417,
+      "max_ns": 137625
+    }
+  },
+  "p99_ceiling_ns": 4166000
+}

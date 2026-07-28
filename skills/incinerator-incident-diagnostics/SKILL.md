@@ -1,6 +1,6 @@
 ---
 name: incinerator-incident-diagnostics
-description: Inspect and diagnose schema-3 Incinerator Engine human-test incident folders containing live manifests, anomaly lifecycle events, materialized NDJSON windows, product and human-visible trailing images, semantic-ID evidence, shortcut delivery records, and accepted-ingress replay captures. Use when a tester supplies an incident folder or LLM handoff, flags a visual/gameplay/input anomaly, asks what happened near a timestamp, or asks to reproduce and verify a repair.
+description: Inspect and diagnose schema-4 Incinerator Engine human-test incident folders containing live manifests, navigation route lineage, anomaly lifecycle events, materialized NDJSON windows, product and human-visible trailing images, semantic-ID evidence, shortcut delivery records, and accepted-ingress replay captures. Use when a tester supplies an incident folder or LLM handoff, flags a visual/gameplay/navigation/input anomaly, asks what happened near a timestamp, or asks to reproduce and verify a repair.
 ---
 
 # Incinerator Incident Diagnostics
@@ -60,10 +60,10 @@ the human handoff only.
 
 - `timeline-window.ndjson`: action disposition, lifecycle, district streaming,
   diagnostic code, immutable `runtime_fault`/`authority_cycle_fault` ownership,
-  correlation, spawn/despawn, and anomaly flag.
+  correlation, spawn/despawn, navigation route transitions, and anomaly flag.
 - `state-window.ndjson`: tri-state authority/replication/presentation/draw
   membership, tombstones, relevance reason/facts, transforms, vitals,
-  encounter state, and separation.
+  encounter state, separation, and compact current navigation state.
 - `input-window.ndjson`: semantic held state and explicit pressed edges, UI
   capture/minimize state, plus reserved-shortcut `received`, `matched`,
   `queued`, and `applied` stages.
@@ -74,6 +74,12 @@ the human handoff only.
 
 Search stable identity as namespace/local/incarnation. Search typed removal and
 relevance reasons rather than inferring absence from a missing current draw.
+For navigation, retain the semantic destination as intent and treat the route
+as derived evidence. Correlate `route_revision`, `topology_revision`,
+`trigger`, `result`, route digest/nodes, status/reason, owner district, and
+temporary physical exclusions. Distinguish `waiting_for_content`, recoverable
+runtime `blocked`, and structural `unreachable`; never infer one from lack of
+motion alone.
 Read `manifest.json.evidence_capabilities` before assuming an entity kind has
 full boundary or semantic-part coverage. For vehicles and carryables, follow
 `persistent_id`, bounded-world interest, baseline/snapshot sequence, observer
@@ -103,6 +109,11 @@ vehicle being investigated.
   retained phase/system/error or authority stage as the owning failure
   boundary. If the retained record is absent, report the exact diagnostic
   limitation and request terminal evidence instead of guessing.
+- An NPC navigation anomaly: assign destination intent to the NPC owner,
+  immutable graph/residency to district content, authored gate state to the
+  traversal owner, and confirmed segment obstruction to physical recovery.
+  A transition without a matching route revision, or a revision without a
+  transition record, is evidence failure.
 
 State observed facts, boundary inference, and remaining uncertainty separately.
 

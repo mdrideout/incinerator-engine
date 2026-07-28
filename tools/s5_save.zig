@@ -239,10 +239,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     try world.submitNpc(.{ .set_goal = .{
         .request_id = 31,
         .id = npc_id,
-        .goal = .{ .navigate_to = .{
-            .coord = sandbox_contracts.navigation_east_coord,
-            .index = 2,
-        } },
+        .goal = .{ .navigate_to = sandbox_contracts.market_terminal_destination },
     } });
     try world.tick();
     try drainNpcOutputs(&world, &npc_evidence);
@@ -662,10 +659,9 @@ fn drainNpcOutputs(world: *sandbox.Simulation, evidence: *NpcEvidence) !void {
         },
         .goal_set => |set| {
             const id = evidence.id orelse return error.UnexpectedNpcOutcome;
-            const expected_goal = npc_contract.Goal{ .navigate_to = .{
-                .coord = sandbox_contracts.navigation_east_coord,
-                .index = 2,
-            } };
+            const expected_goal = npc_contract.Goal{
+                .navigate_to = sandbox_contracts.market_terminal_destination,
+            };
             if (set.request_id != 31 or
                 !std.meta.eql(set.id, id) or
                 !std.meta.eql(set.goal, expected_goal) or
@@ -760,8 +756,7 @@ fn verifyCompactNpcSnapshot(
                 else => return error.UnexpectedNpcSnapshotRecord,
             };
             const next = record.route.next orelse return error.UnexpectedNpcSnapshotRecord;
-            if (!sandbox_contracts.ChunkCoord.eql(target.coord, sandbox_contracts.navigation_east_coord) or
-                target.index != 2 or
+            if (!std.meta.eql(target, sandbox_contracts.market_terminal_destination) or
                 !sandbox_contracts.ChunkCoord.eql(next.coord, sandbox_contracts.navigation_east_coord) or
                 next.index != 0)
             {
@@ -940,17 +935,9 @@ fn preflightSnapshotCatalog(
         {
             return error.NpcDistrictCoordinateNotInCatalog;
         }
-        switch (record.goal) {
-            .hold => {},
-            .navigate_to => |target| if (admission.entryForCoordinate(target.coord) == null) {
-                return error.NpcDistrictCoordinateNotInCatalog;
-            },
-            .patrol_between => |patrol| if (admission.entryForCoordinate(patrol.first.coord) == null or
-                admission.entryForCoordinate(patrol.second.coord) == null)
-            {
-                return error.NpcDistrictCoordinateNotInCatalog;
-            },
-        }
+        // Snapshot parsing already validates semantic destinations against the
+        // exact canonical destination catalog. Only spatial owner/route
+        // references must be checked against installed district admission.
     }
 }
 

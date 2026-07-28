@@ -1,6 +1,6 @@
 # Playable Boundary And Vehicle–NPC Collision Correction
 
-**Status:** Implemented; aggregate and physical Metal acceptance pending
+**Status:** Complete and physically accepted
 
 **Date:** 2026-07-19
 
@@ -134,7 +134,7 @@ enter the inspection loop for ordinary collision.
    in incident timeline files and teach diagnostic consumers to report it.
 5. [x] Run focused NPC, physics, district, session, replay, incident, source
    package, and aggregate macOS tests.
-6. [ ] Run an installed Metal journey and request a physical pass: cross every
+6. [x] Run an installed Metal journey and request a physical pass: cross every
    former perimeter, drive into the NPC at the seam, continue driving, and
    verify no cornflower fault frame or entity discontinuity.
 
@@ -179,9 +179,14 @@ four scripted anomaly lifecycles under recipe 5. Strict inspection accepted the
 bundle, and semantic replay matched all 2,149 attached ticks. Its automated
 visual heuristic reported 207 dominant-green frames while scripted close-range
 combat put the NPC between the character and camera. That is not the original
-cornflower retained-fault failure, but it prevents using this journey as the
-physical acceptance required by step 6. Open-perimeter and sustained
-vehicle-contact behavior still require the targeted human pass below.
+cornflower retained-fault failure, so the automated heuristic alone was not
+used as physical acceptance.
+
+The subsequent targeted human pass crossed the former perimeter without a
+rendering failure and sustained vehicle contact with the NPC without a
+cornflower retained-fault frame or entity discontinuity. The later ADR-022
+work separately closes open-world carry/drop semantics, navigation-progress
+diagnostics, and objective vehicle handling.
 
 ## Acceptance
 

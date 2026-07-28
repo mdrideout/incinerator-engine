@@ -1,25 +1,15 @@
 # Incinerator Engine Overhaul Plan
 
-**Status:** Gameplay interaction validation and observability is complete and
-accepted after the pre-multiplayer program, post-M3 greenfield cleanup, MP0-MP6, the
-M4 multiplayer foundation, M5 client/authority cohesion, M6 transactional
-authority, S10 damage/death/respawn, and S11 NPC encounter/combat response are
-complete and accepted; the temporal gameplay validation and
-causal-observability gaps exposed by post-S11 manual acceptance are closed;
-IC0-IC4 local human-test incident capture is accepted for the macOS solo
-developer product; the schema-2 IC5-A through IC5-I corrective cohort and its
-schema-3 visual-window successor, plus the IC5-G long
-gameplay/replay, real window lifecycle, and capture-cost gates, and the IC5-H
-bounded-object/evidence correction and the five-profile deterministic
-destructive/failure matrix are implemented and validated; IC5-I budget-safe handoff and
-truthful playable-boundary corrections have passed focused, aggregate,
-network/fault, replay, and installed Metal validation; the physical macOS/
-human visual checkpoint remains open;
-secondary platforms are deferred
+**Status:** The Apple Silicon macOS foundation is complete and accepted through
+S11, IV0-IV5, IC0-IC5, and the open-world correction. S12 destination-driven
+navigation, its higher-fidelity two-district world, schema-4 evidence, and
+automated native acceptance are implemented. The final S12 human walkthrough
+and two preserved human incident captures remain pending. Secondary platforms
+and public multiplayer services remain deferred.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-07-18
+**Last reviewed:** 2026-07-28
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -37,8 +27,9 @@ secondary platforms are deferred
 → [`S11 accepted`](docs/validation/s11-npc-encounter-combat-response.md)
 → [`post-S11 automated closeout passed; manual acceptance exposed validation gaps`](docs/validation/post-s11-runtime-corrective-audit.md)
 → [`IV0-IV5 interaction validation and observability accepted`](docs/validation/gameplay-interaction-validation-and-observability.md)
-→ [`IC0-IC4 incident capture accepted; IC5 reopened`](docs/validation/human-test-incident-capture.md)
-→ [`IC5-A-IC5-I corrective work implemented; physical human closeout remains`](docs/design/incident-evidence-reliability-and-boundary-corrections.md)
+→ [`IC0-IC5 incident capture and human closeout accepted`](docs/validation/human-test-incident-capture.md)
+→ [`open-world spatial and vehicle-dynamics correction complete`](docs/design/open-world-spatial-diagnostics-and-playability.md)
+→ [`S12 automated acceptance complete; human walkthrough pending`](docs/validation/s12-destination-driven-navigation.md)
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
 
@@ -356,9 +347,11 @@ logical authority and operational lifecycle:
 - S5 through S8 established typed durable authoring, exact two-district
   catalogs, cross-district carry ownership, cooked-route NPC authority,
   Snapshot V7/replay cohort 5, and a measured 64-NPC/65-controller scale
-  contract. S10/S11 and the post-S11 streamed-route correction advance the
-  current durable state to Snapshot V11. Incident replay schema 11 additionally
-  records authority-owned vitals and NPC-replacement orchestration so lethal
+  contract. S10/S11, the post-S11 streamed-route correction, and ADR-022's
+  spatial-object/vehicle-tuning change advance the current durable state to
+  Snapshot V12 and replay schema 12. Protocol revision 14 removes the invalid
+  residency-gated drop meaning without a compatibility decoder. Replay records
+  authority-owned vitals and NPC-replacement orchestration so lethal
   encounter/repopulation cycles and explicit drop purpose remain inside the
   exact replay boundary. The
   `world-config-v5` domain remains unchanged.
@@ -439,7 +432,8 @@ logical authority and operational lifecycle:
 | D-019 | Network identity/protocol/replication are explicit and feature-owned; durable saves, replication snapshots, prediction history, and accepted-ingress replay remain distinct | Accepted in [ADR-017](docs/adr/017-network-identity-protocol-and-replication.md) | MP2 protocol implementation |
 | D-020 | Use open-source GameNetworkingSockets through its flat C API, prove direct IP first, keep dedicated authority canonical, and preserve optional non-vendored Steamworks P2P/SDR compatibility | Accepted in [ADR-018](docs/adr/018-gamenetworkingsockets-and-steam-compatible-routing.md) | MP2 transport implementation |
 | D-021 | Validate gameplay as one causal temporal journey through typed scenarios, bounded interaction traces, continuous invariants, readable product feedback, semantic Metal visibility, and shared topology/fault execution | Accepted in [ADR-020](docs/adr/020-gameplay-interaction-validation-and-observability.md); IV0-IV5 complete | Additional gameplay slices |
-| D-022 | Persist human-test evidence as bounded per-run incident bundles with anomaly bookmarks, grep-friendly streams, trailing real-swapchain screenshots, concise LLM handoff, and replay attachments | Accepted in [ADR-021](docs/adr/021-local-human-test-incident-bundles.md); schema-2 IC5-A through IC5-I, including long gameplay/window/replay/cost, deterministic failure hardening, and bounded-object/budget/playable-boundary corrections, are implemented and validated for macOS solo under the [corrective plan](docs/design/incident-evidence-reliability-and-boundary-corrections.md). Schema 3 cleanly replaces the visual marker contract with the -5/+2 eight-anchor window. | Physical macOS/human checkpoint for the current schema-3 bundle |
+| D-022 | Persist human-test evidence as bounded per-run incident bundles with anomaly bookmarks, grep-friendly streams, trailing real-swapchain screenshots, concise LLM handoff, and replay attachments | Accepted in [ADR-021](docs/adr/021-local-human-test-incident-bundles.md); IC5-A through IC5-I, including long gameplay/window/replay/cost, deterministic failure hardening, bounded-object/budget/playable-boundary corrections, and the schema-3 -5/+2 eight-anchor visual contract, are implemented and human-validated for macOS solo under the [corrective plan](docs/design/incident-evidence-reliability-and-boundary-corrections.md). | Extend the same evidence quality when a future product phase makes listen/dedicated human sessions routine |
+| D-023 | NPCs retain stable semantic destinations while a shared deterministic bounded planner derives transient routes, distinguishes waiting/blocked/unreachable, and accepts physical displacement without snap-back | Accepted and implemented in [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md), the [S12 plan](docs/design/s12-destination-driven-navigation.md), [evaluation world](docs/design/s12-navigation-evaluation-world.md), and [automated acceptance record](docs/validation/s12-destination-driven-navigation.md) | S12 human walkthrough, then S13 |
 
 ### Decision notes
 
@@ -518,7 +512,9 @@ before dependency resolution.
 | S10 | Players and NPCs use authoritative vitals, death cleanup, and generational avatar respawn | Complete, independently reviewed, and accepted on Apple Silicon macOS |
 | S11 | A hostile NPC perceives, selects, chases, attacks, disengages, dies, and is safely replaced with visible authoritative feedback | Complete, independently reviewed, and accepted on Apple Silicon macOS |
 | Post-S11 correction | Repair playable movement/facing/blockers/wheels, close discovered route/delivery/headless/product-bootstrap/lifecycle seams, and repeat the macOS evidence matrix | Complete and accepted; later IC5-H/IC5-I evidence and boundary corrections are separately recorded |
-| IC5-I | Protect incident handoff under visual saturation and make the current playable route/drop/death boundaries truthful | Focused, aggregate, MP4, S11, replay, fresh-bundle, and installed Metal validation complete; direct human visual acceptance remains open |
+| IC5 | Make human anomaly capture, replay, handoff, and gameplay-boundary evidence trustworthy under ordinary and destructive conditions | Complete and accepted through schema 3, fresh human bundles, installed Metal, replay, failure hardening, and physical gameplay acceptance |
+| Open-world corrective | Preserve traversal and dynamic-object continuity while exposing district/NPC intent and objectively characterizing vehicle handling | Complete and human-accepted; ADR-022 and the vehicle-dynamics report record the current contract |
+| S12 | One NPC retains a semantic destination through branch choice, content waiting, topology revision, physical obstruction, displacement, encounter interruption, restore, replay, and network placement | Implemented; automated focused, performance, schema-4 incident, and installed Metal acceptance pass. Human evaluation-world and two preserved incident captures remain |
 
 M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
 slices. M3 is a narrow pre-network readiness gate, not a speculative server
@@ -1775,7 +1771,7 @@ Record evidence rather than relying only on target numbers:
     ceiling, and then repeat the independent audit plus full macOS evidence
     matrix. Implementation is complete; check this item only after the final
     evidence table is populated.
-44. [ ] Close IC5-G after implementing IC5-A through IC5-I from
+44. [x] Close IC5-G after implementing IC5-A through IC5-I from
     `docs/design/incident-evidence-reliability-and-boundary-corrections.md`:
     schema-2 evidence truth, trailing visual capture, cross-boundary causal
     state, replay/inspector/skill reliability, district prefetch, and NPC
@@ -1800,6 +1796,50 @@ Record evidence rather than relying only on target numbers:
     express tire friction explicitly, and preserve deterministic real-Jolt
     stopping/turn/slip/slalom/skid/rollover characterization in a report and
     reusable tuning skill.
+
+### Current next product sequence
+
+Finish the remaining human S12 acceptance before starting the ordered future
+recommendations.
+
+47. [x] **S12 — Destination-driven navigation and recovery implementation.**
+    Implemented under
+    [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md),
+    the [phased implementation plan](docs/design/s12-destination-driven-navigation.md),
+    and the [higher-fidelity evaluation-world specification](docs/design/s12-navigation-evaluation-world.md).
+    Let an NPC own a semantic destination while the navigation slice resolves
+    a route across admitted district graphs, replans after physical
+    displacement or topology change, and distinguishes waiting, blocked, and
+    structurally unreachable without teleporting. Prove the same authority
+    behavior in solo, listen, and dedicated placements. Do not add Recast,
+    crowd simulation, or a generic behavior tree. Automated acceptance is
+    recorded in
+    [the S12 validation ledger](docs/validation/s12-destination-driven-navigation.md);
+    its human walkthrough and two incident captures are the remaining phase
+    checkpoint.
+48. [ ] **S13 — Authored population and sandbox activity.** Introduce explicit
+    pedestrian roles, destination/activity producers, sufficient spawn and
+    navigation slots, bounded population replacement, and readable activity
+    inspection. This is the trigger to address A-F035/A-F037, not before.
+49. [ ] **S14 — Ranged combat vertical slice.** Add one authoritative weapon
+    archetype with equip/fire/reload/ammunition state, source-aware damage
+    feedback, death integration, replay, reconnect, and impairment coverage.
+    Lag compensation remains a measured follow-up rather than an entry
+    abstraction.
+50. [ ] **S15 — Content-rich district expansion.** Author a materially larger
+    traversable district cohort with obstacles, destinations, population
+    anchors, and streaming/performance evidence. Resolve support-surface
+    ownership and select a navmesh/crowd solution only if this content proves
+    the fixed graph insufficient.
+51. [ ] **G1 — Open-engine/separate-game boundary.** Before production game
+    content or distribution, prove a separately built game composition,
+    content package, configuration boundary, third-party notices, and licensing
+    decision without stabilizing a speculative public runtime ABI.
+52. [ ] **MP7+ — Network productization when the gameplay loop warrants it.**
+    Add private Internet/Steam-compatible routing, then dedicated deployment,
+    operational security, and public services as separate programs. Do not
+    combine NAT/relay, hosting, accounts, matchmaking, anti-cheat, or MMO
+    operations into one phase.
 
 ---
 
@@ -1878,3 +1918,6 @@ Record evidence rather than relying only on target numbers:
 | 2026-07-19 | Expanded and validated the schema-3 human visual evidence window | The continuous 15 FPS product trail now covers five seconds before through two seconds after a flag using 80 bounded slots. Eight UI-inclusive anchors cover every whole second from -5 through +2 using seven history-only one-Hz slots and two flag-only slots, preventing rapid flags from consuming prehistory. The combined Retina download allocation remains below 176 MiB; actual indexed timestamps remain authoritative. A 2,214-tick Metal journey produced four complete incidents, eight anchors each, 387 visuals, zero loss/warnings, and a matching 2,154-tick replay; the five-profile failure gate passes 49/49. |
 | 2026-07-19 | Implemented the recipe-5 open-boundary and vehicle–NPC authority correction | Removed the temporary collision/proxy perimeter and advanced every cooked/headless/replay cohort; made positional NPC ownership rebase route/encounter intent with local inactive/disconnected-content recovery; added exact retained runtime/authority fault records and consumers. Deterministic feature and real-Jolt contact regressions pass, as do 255/255 aggregate steps with 942/942 tests, extracted 182/182 broad plus 32/32 cold gates, and the 59-step Metal fault smoke. The product journey completed and replayed but retained dominant-green close-combat camera warnings, so targeted physical open-traversal/contact acceptance remains open. |
 | 2026-07-19 | Accepted the physical open-boundary/contact checkpoint and completed the spatial-interaction, diagnostics, and vehicle-dynamics correction | Human testing confirmed open traversal and sustained vehicle/NPC contact. The follow-up removes carryable residency gating and obsolete fallbacks, proves drops at unauthored coordinates, adds active district/NPC target/progress evidence, uses a 1600x900 window with wider follow distances and spaced default actors, and records real-Jolt legacy/current stopping, turn, slip, slalom, skid, and rollover results in `docs/validation/vehicle-dynamics.md` plus the `incinerator-vehicle-tuning` skill. Snapshot/replay/protocol advance to 12/12/14 without compatibility decoders. |
+| 2026-07-27 | Reconciled the accepted macOS baseline and proposed the next product sequence | Current human testing reports the game functioning well; IC5 and the playable-boundary checkpoint are closed in current-status records. S12 destination-driven navigation is the recommended next slice, followed by authored population, ranged combat, richer districts, the separate game-package proof, and only then broader network productization. |
+| 2026-07-27 | Completed the repository-grounded S12 planning contract | Proposed ADR-023, a seven-phase implementation/acceptance plan, and a bounded higher-fidelity two-district urban evaluation world. The plan preserves existing authority owners, separates semantic destination from transient route, requires truthful waiting/blocked/unreachable evidence, replaces displacement snap-back with re-anchoring, and makes inspector/overlay/incident/replay proof part of acceptance. |
+| 2026-07-28 | Implemented S12 destination-driven navigation and completed automated acceptance | Accepted ADR-023; added six semantic destinations, a deterministic weighted planner, lineage/status/recovery, two transactional seam gates, an installed two-district urban test world, Navigation Lab and overlays, schema-4 incident evidence, snapshot 13/replay 14/protocol 14, persistence/replay/fault/placement coverage, separated planner/real-Jolt measurement, and two-rate Metal acceptance. The focused gate passes 104/104 steps with 293/293 tests; the full `verify-s12` aggregate, source package/headless lifecycle, and all five installed incident-hardening profiles pass. The final human walkthrough and two preserved incident captures remain. |

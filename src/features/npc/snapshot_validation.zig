@@ -7,6 +7,7 @@
 const std = @import("std");
 const engine = @import("engine_contracts");
 const navigation = @import("navigation_contract");
+const navigation_planner = @import("navigation_planner");
 const npc = @import("npc_contract");
 
 pub fn validateRecords(
@@ -80,43 +81,51 @@ pub fn validateRecords(
                     return error.NpcHoldCursorMismatch;
                 }
             },
-            .navigate_to => |target| {
-                try requireValidContentNode(navigation_access, target);
+            .navigate_to => |destination| {
+                try requireValidDestination(navigation_access, destination);
                 if (record.route.patrol_leg != .none) {
                     return error.NpcNavigateCursorMismatch;
                 }
                 switch (record.route.mode) {
                     .exact_prefix => {
                         if ((record.route.next == null) !=
-                            navigation.NodeRef.eql(record.route.current, target))
+                            destinationHasAnchor(
+                                navigation_access,
+                                destination,
+                                record.route.current,
+                            ))
                         {
                             return error.NpcNavigateCursorMismatch;
                         }
-                        try verifyActiveRoutePrefix(
+                        try verifyActiveDestinationPrefix(
                             navigation_access,
                             record.route.current,
-                            target,
+                            destination,
                             record.route.next,
                         );
                     },
                     .deferred_rebuild => {
                         if (record.route.next != null or
-                            navigation.NodeRef.eql(record.route.current, target))
+                            destinationHasAnchor(
+                                navigation_access,
+                                destination,
+                                record.route.current,
+                            ))
                         {
                             return error.NpcNavigateCursorMismatch;
                         }
-                        try verifyDeferredRoute(
+                        try verifyDeferredDestination(
                             navigation_access,
                             record.route.current,
-                            target,
+                            destination,
                         );
                     },
                 }
             },
             .patrol_between => |patrol| {
-                try requireValidContentNode(navigation_access, patrol.first);
-                try requireValidContentNode(navigation_access, patrol.second);
-                const target = switch (record.route.patrol_leg) {
+                try requireValidDestination(navigation_access, patrol.first);
+                try requireValidDestination(navigation_access, patrol.second);
+                const destination = switch (record.route.patrol_leg) {
                     .toward_first => patrol.first,
                     .toward_second => patrol.second,
                     .none => return error.NpcPatrolCursorMismatch,
@@ -124,33 +133,73 @@ pub fn validateRecords(
                 switch (record.route.mode) {
                     .exact_prefix => {
                         if ((record.route.next == null) !=
-                            navigation.NodeRef.eql(record.route.current, target))
+                            destinationHasAnchor(
+                                navigation_access,
+                                destination,
+                                record.route.current,
+                            ))
                         {
                             return error.NpcPatrolCursorMismatch;
                         }
-                        try verifyActiveRoutePrefix(
+                        try verifyActiveDestinationPrefix(
                             navigation_access,
                             record.route.current,
-                            target,
+                            destination,
                             record.route.next,
                         );
                     },
                     .deferred_rebuild => {
                         if (record.route.next != null or
-                            navigation.NodeRef.eql(record.route.current, target))
+                            destinationHasAnchor(
+                                navigation_access,
+                                destination,
+                                record.route.current,
+                            ))
                         {
                             return error.NpcPatrolCursorMismatch;
                         }
-                        try verifyDeferredRoute(
+                        try verifyDeferredDestination(
                             navigation_access,
                             record.route.current,
-                            target,
+                            destination,
                         );
                     },
                 }
             },
         }
     }
+}
+
+fn requireValidDestination(
+    access: anytype,
+    id: navigation.DestinationId,
+) !void {
+    const destination = switch (access.resolveDestination(id)) {
+        .ready => |value| value,
+        .invalid_destination => return error.NpcPersistedGoalInvalid,
+    };
+    destination.validate() catch return error.NpcPersistedGoalInvalid;
+    for (destination.anchorSlice()) |anchor| {
+        switch (access.resolveCatalogNode(anchor)) {
+            .ready => {},
+            .invalid_reference => return error.NpcPersistedGoalInvalid,
+        }
+    }
+}
+
+fn destinationHasAnchor(
+    access: anytype,
+    id: navigation.DestinationId,
+    reference: navigation.NodeRef,
+) bool {
+    const destination = switch (access.resolveDestination(id)) {
+        .ready => |value| value,
+        .invalid_destination => return false,
+    };
+    for (destination.anchorSlice()) |anchor| {
+        if (navigation.NodeRef.eql(anchor, reference)) return true;
+    }
+    return false;
 }
 
 fn requireValidContentNode(access: anytype, reference: navigation.NodeRef) !void {
@@ -160,134 +209,38 @@ fn requireValidContentNode(access: anytype, reference: navigation.NodeRef) !void
     }
 }
 
-fn verifyActiveRoutePrefix(
+fn verifyActiveDestinationPrefix(
     access: anytype,
     start: navigation.NodeRef,
-    target: navigation.NodeRef,
+    destination: navigation.DestinationId,
     expected_next: ?navigation.NodeRef,
 ) !void {
-    const route = switch (try buildRoute(access, start, target)) {
-        .ready => |plan| plan,
-        .inactive => return,
-        .invalid_content => return error.NpcPersistedRouteInvalid,
-        .no_path => return error.NpcPersistedGoalUnreachable,
+    const route = switch (navigation_planner.plan(access, start, destination)) {
+        .ready, .waiting_for_content => |plan| plan,
+        .invalid_destination, .invalid_topology => return error.NpcPersistedRouteInvalid,
+        .blocked_by_traversal, .structurally_unreachable => {
+            return error.NpcPersistedGoalUnreachable;
+        },
+        .capacity_exhausted => return error.NpcRoutePlannerCapacityExceeded,
     };
     if (!optionalNodeRefEql(expected_next, route.next(0))) {
         return error.NpcPersistedRouteMismatch;
     }
 }
 
-fn verifyDeferredRoute(
+fn verifyDeferredDestination(
     access: anytype,
     start: navigation.NodeRef,
-    target: navigation.NodeRef,
+    destination: navigation.DestinationId,
 ) !void {
-    switch (try buildRoute(access, start, target)) {
-        .ready, .inactive => {},
-        .invalid_content => return error.NpcPersistedRouteInvalid,
-        .no_path => return error.NpcPersistedGoalUnreachable,
+    switch (navigation_planner.plan(access, start, destination)) {
+        .ready, .waiting_for_content, .blocked_by_traversal => {},
+        .invalid_destination, .invalid_topology => return error.NpcPersistedRouteInvalid,
+        .structurally_unreachable => {
+            return error.NpcPersistedGoalUnreachable;
+        },
+        .capacity_exhausted => return error.NpcRoutePlannerCapacityExceeded,
     }
-}
-
-const RouteBuild = union(enum) {
-    ready: npc.RoutePlan,
-    inactive,
-    invalid_content,
-    no_path,
-};
-
-fn buildRoute(
-    access: anytype,
-    start: navigation.NodeRef,
-    target: navigation.NodeRef,
-) !RouteBuild {
-    switch (access.resolveNode(start)) {
-        .ready => {},
-        .district_inactive => return .inactive,
-        .invalid_reference => return .invalid_content,
-    }
-    switch (access.resolveNode(target)) {
-        .ready => {},
-        .district_inactive => return .inactive,
-        .invalid_reference => return .invalid_content,
-    }
-    if (navigation.NodeRef.eql(start, target)) {
-        return .{ .ready = planWithOne(start) };
-    }
-
-    var refs: [npc.max_route_nodes]navigation.NodeRef = undefined;
-    var previous: [npc.max_route_nodes]i8 = @splat(-1);
-    var queue: [npc.max_route_nodes]u8 = undefined;
-    refs[0] = start;
-    queue[0] = 0;
-    var count: usize = 1;
-    var head: usize = 0;
-    var tail: usize = 1;
-    var target_index: ?usize = null;
-
-    while (head < tail and target_index == null) : (head += 1) {
-        const source_index: usize = queue[head];
-        const source_ref = refs[source_index];
-        const source = switch (access.resolveNode(source_ref)) {
-            .ready => |resolved| resolved,
-            .district_inactive => return .inactive,
-            .invalid_reference => return .invalid_content,
-        };
-        for (0..source.node.edge_count) |ordinal_usize| {
-            const ordinal: u8 = @intCast(ordinal_usize);
-            const resolved_edge = switch (access.resolveEdge(source_ref, ordinal)) {
-                .ready => |resolved| resolved,
-                .district_inactive => return .inactive,
-                .invalid_reference, .invalid_ordinal => {
-                    return error.NpcNavigationPortInvariantBroken;
-                },
-            };
-            if (!navigation.LoadTicket.eql(source.ticket, resolved_edge.ticket)) {
-                return error.NpcNavigationTicketInvariantBroken;
-            }
-            const candidate = resolved_edge.edge.target;
-            switch (access.resolveNode(candidate)) {
-                .ready => {},
-                .district_inactive => continue,
-                .invalid_reference => return error.NpcNavigationPortInvariantBroken,
-            }
-
-            var found = false;
-            for (refs[0..count]) |existing| {
-                if (navigation.NodeRef.eql(existing, candidate)) {
-                    found = true;
-                    break;
-                }
-            }
-            if (found) continue;
-            if (count == npc.max_route_nodes) return .no_path;
-            refs[count] = candidate;
-            previous[count] = @intCast(source_index);
-            queue[tail] = @intCast(count);
-            tail += 1;
-            if (navigation.NodeRef.eql(candidate, target)) target_index = count;
-            count += 1;
-        }
-    }
-
-    const found = target_index orelse return .no_path;
-    var reversed: [npc.max_route_nodes]navigation.NodeRef = undefined;
-    var length: usize = 0;
-    var cursor: i8 = @intCast(found);
-    while (cursor >= 0) {
-        reversed[length] = refs[@intCast(cursor)];
-        length += 1;
-        cursor = previous[@intCast(cursor)];
-    }
-    var plan = npc.RoutePlan{ .len = @intCast(length) };
-    for (0..length) |index| plan.nodes[index] = reversed[length - 1 - index];
-    return .{ .ready = plan };
-}
-
-fn planWithOne(reference: navigation.NodeRef) npc.RoutePlan {
-    var result = npc.RoutePlan{ .len = 1 };
-    result.nodes[0] = reference;
-    return result;
 }
 
 fn routeFromRecord(

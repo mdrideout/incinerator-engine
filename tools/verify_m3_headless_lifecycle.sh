@@ -76,8 +76,12 @@ sed \
 
 first_output="$work/first.out"
 second_output="$work/second.out"
-"$binary" --config "$virtual_config" --content-manifest "$manifest" --synthetic-producers \
-    > "$first_output" 2>&1
+if ! "$binary" --config "$virtual_config" --content-manifest "$manifest" --synthetic-producers \
+    > "$first_output" 2>&1; then
+    echo "initial virtual headless lifecycle failed" >&2
+    cat "$first_output" >&2
+    exit 1
+fi
 grep -q '"restored":false' "$first_output"
 grep -q '"world_tick":256' "$first_output"
 grep -Eq '"producer_ingress_high_water":[1-9]' "$first_output"
@@ -136,7 +140,9 @@ grep -q '"restored":true' "$work/recovered.out"
 # before world construction and cannot replace the last committed save.
 before=$(shasum -a 256 "$virtual_root/world.isav" | awk '{print $1}')
 bad_manifest="$work/content.bad.json"
-sed 's/53a65a03bee9/63a65a03bee9/' "$manifest" > "$bad_manifest"
+sed -E \
+    's/("content_cohort_fingerprint": ")[0-9a-f]{64}/\10000000000000000000000000000000000000000000000000000000000000000/' \
+    "$manifest" > "$bad_manifest"
 expect_failure \
     "mismatched compiled logical content" \
     "$work/rejected.out" \
@@ -149,7 +155,9 @@ test "$before" = "$after"
 # configured cohort digest differs. This exercises config-to-manifest
 # admission, rather than the compiled-manifest check above.
 cohort_mismatch_config="$work/cohort-mismatch.json"
-sed 's/53a65a03bee9/63a65a03bee9/' "$virtual_config" > "$cohort_mismatch_config"
+sed -E \
+    's/("expected_content_cohort": ")[0-9a-f]{64}/\10000000000000000000000000000000000000000000000000000000000000000/' \
+    "$virtual_config" > "$cohort_mismatch_config"
 expect_failure \
     "config-to-manifest cohort mismatch" \
     "$work/cohort-mismatch.out" \

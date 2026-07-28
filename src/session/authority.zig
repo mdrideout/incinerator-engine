@@ -31,6 +31,8 @@ const transport_policy = @import("session_transport_policy");
 const authority_diagnostics = @import("session_authority_diagnostics");
 const sandbox_replay = @import("sandbox_replay");
 
+pub const NavigationGateState = sandbox.NavigationGateState;
+
 comptime {
     if (protocol.vehicle_wheel_count != engine.physics.vehicle_wheel_count) {
         @compileError("session and engine vehicle wheel counts must agree");
@@ -42,7 +44,7 @@ comptime {
 /// multiple joins in the same authority cycle cannot select the same point.
 const automatic_spawn_candidates = [_][3]f32{
     .{ -3, 0, 0 },  .{ -1, 0, 0 },  .{ 1, 0, 0 },  .{ 3, 0, 0 },
-    .{ 6, 0, 0 },   .{ -6, 0, 2 },  .{ -1, 0, 2 }, .{ 5, 0, 2 },
+    .{ 6, 0, 0 },   .{ -7, 0, 1 },  .{ -1, 0, 2 }, .{ 5, 0, 2 },
     .{ -3, 0, 7 },  .{ -1, 0, 7 },  .{ 1, 0, 7 },  .{ 3, 0, 7 },
     .{ -3, 0, -7 }, .{ -1, 0, -7 }, .{ 1, 0, -7 }, .{ 3, 0, -7 },
 };
@@ -885,6 +887,7 @@ const HostObservations = struct {
     interaction_outcomes: ObservationQueue(interaction_feature_contract.Outcome) = .{},
     npc_outcomes: ObservationQueue(npc_contract.Outcome) = .{},
     npc_events: ObservationQueue(npc_contract.Event) = .{},
+    npc_navigation_transitions: ObservationQueue(npc_contract.NavigationTransition) = .{},
     records_dropped: u64 = 0,
 
     fn empty(self: *const HostObservations) bool {
@@ -897,7 +900,8 @@ const HostObservations = struct {
             self.district_events.len == 0 and
             self.interaction_outcomes.len == 0 and
             self.npc_outcomes.len == 0 and
-            self.npc_events.len == 0;
+            self.npc_events.len == 0 and
+            self.npc_navigation_transitions.len == 0;
     }
 
     fn pending(self: *const HostObservations) u32 {
@@ -906,7 +910,7 @@ const HostObservations = struct {
             self.vehicle_outcomes.len + self.vehicle_events.len +
             self.district_outcomes.len + self.district_events.len +
             self.interaction_outcomes.len + self.npc_outcomes.len +
-            self.npc_events.len;
+            self.npc_events.len + self.npc_navigation_transitions.len;
         return std.math.cast(u32, total) orelse std.math.maxInt(u32);
     }
 };
@@ -4119,6 +4123,12 @@ const AuthorityCore = struct {
                 .goal_reached => {},
             }
         }
+        while (self.simulation.pollNpcNavigationTransition()) |transition| {
+            self.retainObservation(
+                &self.observations.npc_navigation_transitions,
+                transition,
+            );
+        }
     }
 
     fn processVitalsOutcomes(self: *AuthorityCore) !void {
@@ -6280,6 +6290,14 @@ pub const EmbeddedNpcRole = struct {
         return authorityCore(self.context).observations.npc_events.pop();
     }
 
+    pub fn pollNavigationTransition(
+        self: EmbeddedNpcRole,
+    ) ?npc_contract.NavigationTransition {
+        return authorityCore(
+            self.context,
+        ).observations.npc_navigation_transitions.pop();
+    }
+
     pub fn presentation(
         self: EmbeddedNpcRole,
         alpha: f32,
@@ -6304,6 +6322,19 @@ pub const EmbeddedDeveloperRole = struct {
 
     pub fn diagnostics(self: EmbeddedDeveloperRole) sandbox_diagnostics_contract.Diagnostics {
         return authorityCore(self.context).simulation.diagnostics();
+    }
+
+    pub fn submitNavigationGate(
+        self: EmbeddedDeveloperRole,
+        command: sandbox_replay.NavigationGateCommand,
+    ) !bool {
+        return authorityCore(self.context).simulation.submitNavigationGate(command);
+    }
+
+    pub fn navigationGateState(
+        self: EmbeddedDeveloperRole,
+    ) sandbox.NavigationGateState {
+        return authorityCore(self.context).simulation.navigationGateState();
     }
 
     pub fn beginFlightRecording(

@@ -49,8 +49,8 @@ test "fixed population planning is deterministic bounded and stateless" {
         .first_request_id = 40,
         .start_node = .{ .coord = .{ .x = 0, .z = 0 }, .index = 0 },
         .goal = .{ .patrol_between = .{
-            .first = .{ .coord = .{ .x = 0, .z = 0 }, .index = 0 },
-            .second = .{ .coord = .{ .x = 1, .z = 0 }, .index = 2 },
+            .first = .{ .value = 1 },
+            .second = .{ .value = 4 },
         } },
     };
     const first = try plan(max_population_commands, template);

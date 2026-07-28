@@ -33,6 +33,7 @@ pub const Kind = enum {
     carry_toggle,
     melee,
     respawn,
+    navigation,
     perception,
     damage,
     death,
@@ -68,6 +69,7 @@ pub const ReasonDomain = enum {
     none,
     error_code,
     protocol_disposition,
+    navigation_reason,
     validation_code,
 };
 
@@ -89,6 +91,34 @@ pub const EntityRef = struct {
     namespace: u64,
     local: u64,
     incarnation: u32 = 0,
+};
+
+pub const max_navigation_route_nodes: usize = 16;
+
+pub const NavigationNodeRef = struct {
+    district_x: i32,
+    district_z: i32,
+    index: u8,
+};
+
+/// Exact bounded route evidence for navigation transitions. The gameplay
+/// journal retains this copied value so incident capture cannot miss a route
+/// that was invalidated and replaced between state samples.
+pub const NavigationEvidence = struct {
+    destination_id: ?u16 = null,
+    route_revision: u64,
+    topology_revision: u64,
+    route_digest: u64,
+    route_cost: u32,
+    route_length: u8,
+    active_prefix_length: u8,
+    route_index: u8,
+    nodes: [max_navigation_route_nodes]NavigationNodeRef =
+        [_]NavigationNodeRef{.{
+            .district_x = 0,
+            .district_z = 0,
+            .index = 0,
+        }} ** max_navigation_route_nodes,
 };
 
 /// Small typed payload for the first implementation. Zero-valued absent
@@ -125,6 +155,7 @@ pub const Record = struct {
     state: u16 = 0,
     deadline_tick: u64 = 0,
     visible_pixels: u32 = 0,
+    navigation: ?NavigationEvidence = null,
 };
 
 pub const AppendResult = enum {
