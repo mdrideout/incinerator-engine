@@ -30,6 +30,7 @@ const developer_profile = @import("developer_profile");
 const developer_visualization = @import("developer_visualization");
 const sandbox_authoring = @import("sandbox_authoring");
 const sandbox_interaction = @import("sandbox_interaction");
+const population = @import("population_contract");
 const incident = @import("../engine/incident.zig");
 
 pub const DeveloperSnapshot = developer_diagnostics.Snapshot(sandbox_host.Diagnostics);
@@ -233,6 +234,11 @@ pub const GameplayEntityView = struct {
     navigation_arrival_tick: ?u64 = null,
     navigation_physical_exclusion_count: u8 = 0,
     navigation_physical_block_retry_tick: u64 = 0,
+    population_member: ?population.PopulationMemberId = null,
+    population_role: ?population.Role = null,
+    population_disposition: ?population.CombatDisposition = null,
+    population_activity_kind: ?population.ActivityKind = null,
+    population_activity_state: ?population.ActivityState = null,
 };
 
 pub const GameplayActionFeedback = struct {
@@ -362,6 +368,23 @@ pub const NavigationInput = struct {
     requests: *NavigationRequestBuffer,
 };
 
+/// Immutable population-owner projection for one editor frame. Definitions
+/// and records remain borrowed values; the optional editor receives neither
+/// the population owner nor a mutation path.
+pub const PopulationView = struct {
+    catalog: population.Catalog,
+    members: []const population.MemberRecordV1,
+    slots: []const population.ActivitySlotRecordV1,
+    diagnostics: ?population.Diagnostics,
+};
+
+pub const PopulationInput = struct {
+    view: *const PopulationView,
+    gameplay: *const GameplayView,
+    visualization: *const developer_visualization.Snapshot,
+    visualization_requests: *developer_visualization.RequestBuffer,
+};
+
 /// One-frame observations and fixed request sinks, grouped by concern. This is
 /// the composition/editor boundary; tools never receive App or Simulation.
 pub const FrameInput = struct {
@@ -372,6 +395,7 @@ pub const FrameInput = struct {
     authoring: AuthoringInput,
     interaction: InteractionInput,
     navigation: NavigationInput,
+    population: PopulationInput,
     gameplay: GameplayInput,
     incident: IncidentInput,
 };
@@ -390,6 +414,7 @@ pub const ToolId = enum {
     diagnostics,
     gameplay_inspector,
     navigation_lab,
+    population_lab,
     incident_capture,
     physics_debug,
     crate_authoring,

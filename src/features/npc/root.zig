@@ -13,7 +13,7 @@ const navigation = @import("navigation_contract");
 const navigation_planner = @import("navigation_planner");
 
 const logical_state_domain = "incinerator.npc.logical";
-const logical_state_schema: u16 = 4;
+const logical_state_schema: u16 = 5;
 
 const NodeRef = feature_contract.NodeRef;
 const ChunkCoord = feature_contract.ChunkCoord;
@@ -132,6 +132,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
         const Npc = struct { marker: u8 = 1 };
         const LogicalState = struct {
             owner: navigation.ChunkCoord,
+            hostile_to_players: bool,
             goal: Goal,
             route: RouteCursor,
             state: State,
@@ -372,6 +373,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             return .{
                 .id = id,
                 .owner = logical.owner,
+                .hostile_to_players = logical.hostile_to_players,
                 .goal = logical.goal,
                 .route = logical.route,
                 .state = logical.state,
@@ -561,6 +563,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 records[index] = .{
                     .id = id,
                     .owner = logical.owner,
+                    .hostile_to_players = logical.hostile_to_players,
                     .goal = logical.goal,
                     .route = route,
                     .position = canonicalVector(logical.position),
@@ -611,6 +614,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                     return error.NpcLogicalStateInvariantBroken;
                 writePersistentId(writer, id);
                 writeCoord(writer, logical.owner);
+                writer.writeBool(logical.hostile_to_players);
                 try writeGoal(writer, logical.goal);
                 writePersistentRouteCursor(
                     writer,
@@ -1426,7 +1430,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             if (self.record_count >= max_npcs) {
                 return rejection(.spawn, .capacity_reached, spawn.request_id, null);
             }
-            const start = switch (self.navigation_access.resolveNode(spawn.node)) {
+            const start = switch (self.navigation_access.resolveNode(spawn.anchor)) {
                 .ready => |resolved| resolved,
                 .district_inactive => return rejection(
                     .spawn,
@@ -1441,7 +1445,21 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                     null,
                 ),
             };
-            const route_result = try self.buildGoalRoute(spawn.node, spawn.goal, start.node.position);
+            if (!std.meta.eql(spawn.position, start.node.position) and
+                !try self.anchorReachable(spawn.position, start.node.position))
+            {
+                return rejection(
+                    .spawn,
+                    .start_pose_blocked,
+                    spawn.request_id,
+                    null,
+                );
+            }
+            const route_result = try self.buildGoalRoute(
+                spawn.anchor,
+                spawn.goal,
+                spawn.position,
+            );
             const route_tag = std.meta.activeTag(route_result);
             if (route_tag == .invalid_content) {
                 return rejection(.spawn, .invalid_goal, spawn.request_id, null);
@@ -1449,9 +1467,9 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             const route = switch (route_result) {
                 .ready => |value| value,
                 .blocked, .structurally_unreachable => routeAwaitingRebuild(
-                    spawn.node,
-                    try self.initialPatrolLeg(spawn.node, spawn.goal),
-                    start.node.position,
+                    spawn.anchor,
+                    try self.initialPatrolLeg(spawn.anchor, spawn.goal),
+                    spawn.position,
                 ),
                 .invalid_content => unreachable,
             };
@@ -1459,11 +1477,12 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             self.createRecord(
                 null,
                 start.reference.coord,
+                spawn.hostile_to_players,
                 spawn.goal,
                 route,
-                start.node.position,
+                spawn.position,
                 .{ 0, 0, 0 },
-                0,
+                spawn.facing_yaw,
                 start.ticket,
                 .destination_assigned,
                 plan_result,
@@ -1994,6 +2013,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             self: *Self,
             restored_id: ?engine.PersistentId,
             owner: navigation.ChunkCoord,
+            hostile_to_players: bool,
             goal: Goal,
             route: RouteCursor,
             position: [3]f32,
@@ -2012,6 +2032,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
 
             var logical = LogicalState{
                 .owner = owner,
+                .hostile_to_players = hostile_to_players,
                 .goal = goal,
                 .route = route,
                 .state = if (ticket == null) .dormant else .active,
@@ -2101,6 +2122,7 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
             try self.createRecord(
                 record.id,
                 record.owner,
+                record.hostile_to_players,
                 record.goal,
                 route,
                 record.position,
@@ -2971,7 +2993,10 @@ fn writeCommand(writer: *engine.contracts.replay.Writer, command: Command) !void
         .spawn => |spawn| {
             writer.writeU8(1);
             writer.writeU64(spawn.request_id);
-            writeNodeRef(writer, spawn.node);
+            try writeVector3(writer, spawn.position);
+            try writer.writeF32(spawn.facing_yaw);
+            writeNodeRef(writer, spawn.anchor);
+            writer.writeBool(spawn.hostile_to_players);
             try writeGoal(writer, spawn.goal);
         },
         .set_goal => |set_goal| {
@@ -3083,9 +3108,10 @@ fn writeRejectionReason(
         .not_owned => 4,
         .start_district_inactive => 5,
         .invalid_start_node => 6,
-        .goal_district_inactive => 7,
-        .invalid_goal => 8,
-        .unreachable_goal => 9,
+        .start_pose_blocked => 7,
+        .goal_district_inactive => 8,
+        .invalid_goal => 9,
+        .unreachable_goal => 10,
     });
 }
 
@@ -3562,14 +3588,14 @@ const TestWorld = struct {
 };
 
 fn spawnPatrol(world: *TestWorld, request_id: u64) !engine.PersistentId {
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = request_id,
-        .node = westNode(0),
-        .goal = .{ .patrol_between = .{
+    try world.feature.enqueue(.{ .spawn = testSpawn(
+        request_id,
+        westNode(0),
+        .{ .patrol_between = .{
             .first = west_start_destination,
             .second = east_end_destination,
         } },
-    } });
+    ) });
     try world.runtime.tick();
     return switch (world.feature.pollOutcome() orelse return error.MissingNpcOutcome) {
         .spawned => |spawned| spawned.id,
@@ -3591,10 +3617,25 @@ fn expectRejected(
     }
 }
 
+fn testSpawn(request_id: u64, anchor: navigation.NodeRef, goal: Goal) SpawnNpc {
+    return .{
+        .request_id = request_id,
+        .position = if (validReference(anchor))
+            nodePosition(anchor)
+        else
+            .{ 0, 0, 0 },
+        .facing_yaw = 0,
+        .anchor = anchor,
+        .hostile_to_players = false,
+        .goal = goal,
+    };
+}
+
 fn validNpcRecord(id_local: u64) NpcV1 {
     return .{
         .id = .{ .namespace = test_namespace, .local = id_local },
         .owner = west_coord,
+        .hostile_to_players = false,
         .goal = .{ .navigate_to = east_end_destination },
         .route = .{
             .current = westNode(0),
@@ -3696,11 +3737,11 @@ test "NPC logical digest includes saturated drops and transition counters" {
     try std.testing.expect(!std.mem.eql(u8, &suspended, &resumed));
     try std.testing.expectEqual(resumed, try npcLogicalDigest(&world));
 
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 1,
-        .node = westNode(0),
-        .goal = .{ .navigate_to = east_end_destination },
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(
+        1,
+        westNode(0),
+        .{ .navigate_to = east_end_destination },
+    ) });
     try world.runtime.tick();
     _ = world.feature.pollOutcome() orelse return error.MissingNpcOutcome;
     while (world.feature.pollEvent() != null) {}
@@ -3956,11 +3997,7 @@ test "externally displaced NPC adopts positional owner and rebases hold intent" 
     try world.init();
     defer world.deinit();
 
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 1,
-        .node = westNode(2),
-        .goal = .hold,
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(1, westNode(2), .hold) });
     try world.runtime.tick();
     const spawned = switch (world.feature.pollOutcome() orelse
         return error.MissingNpcOutcome) {
@@ -4010,11 +4047,7 @@ test "external displacement into unavailable navigation recovers locally" {
         try world.init();
         defer world.deinit();
 
-        try world.feature.enqueue(.{ .spawn = .{
-            .request_id = 1,
-            .node = westNode(2),
-            .goal = .hold,
-        } });
+        try world.feature.enqueue(.{ .spawn = testSpawn(1, westNode(2), .hold) });
         try world.runtime.tick();
         const spawned = switch (world.feature.pollOutcome() orelse
             return error.MissingNpcOutcome) {
@@ -4043,11 +4076,11 @@ test "external displacement without a route recovers locally" {
     defer world.deinit();
     world.navigation_access.seam_connected = false;
 
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 1,
-        .node = westNode(2),
-        .goal = .{ .navigate_to = west_start_destination },
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(
+        1,
+        westNode(2),
+        .{ .navigate_to = west_start_destination },
+    ) });
     try world.runtime.tick();
     const spawned = switch (world.feature.pollOutcome() orelse
         return error.MissingNpcOutcome) {
@@ -4081,11 +4114,7 @@ test "blocked displacement recovery suspends and reconstructs locally" {
     try world.init();
     defer world.deinit();
 
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 1,
-        .node = westNode(2),
-        .goal = .hold,
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(1, westNode(2), .hold) });
     try world.runtime.tick();
     const spawned = switch (world.feature.pollOutcome() orelse
         return error.MissingNpcOutcome) {
@@ -4318,6 +4347,7 @@ fn patrolRecord(
     return .{
         .id = .{ .namespace = test_namespace, .local = id_local },
         .owner = navigation.ownerForPosition(position) catch unreachable,
+        .hostile_to_players = false,
         .goal = .{ .patrol_between = .{
             .first = west_start_destination,
             .second = east_end_destination,
@@ -4417,19 +4447,20 @@ test "NPC commands accept waiting and blocked intent but reject invalid stale an
     try world.init();
     defer world.deinit();
 
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 1,
-        .node = .{ .coord = west_coord, .index = 7 },
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(
+        1,
+        .{ .coord = west_coord, .index = 7 },
+        .hold,
+    ) });
     try world.runtime.tick();
     try expectRejected(world.feature.pollOutcome(), .spawn, .invalid_start_node);
 
     world.navigation_access.east_active = false;
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 2,
-        .node = westNode(0),
-        .goal = .{ .navigate_to = east_end_destination },
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(
+        2,
+        westNode(0),
+        .{ .navigate_to = east_end_destination },
+    ) });
     try world.runtime.tick();
     const waiting_id = switch (world.feature.pollOutcome() orelse
         return error.MissingNpcOutcome) {
@@ -4443,11 +4474,11 @@ test "NPC commands accept waiting and blocked intent but reject invalid stale an
 
     world.navigation_access.east_active = true;
     world.navigation_access.seam_connected = false;
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 3,
-        .node = westNode(0),
-        .goal = .{ .navigate_to = east_end_destination },
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(
+        3,
+        westNode(0),
+        .{ .navigate_to = east_end_destination },
+    ) });
     try world.runtime.tick();
     const blocked_id = switch (world.feature.pollOutcome() orelse
         return error.MissingNpcOutcome) {
@@ -4460,11 +4491,11 @@ test "NPC commands accept waiting and blocked intent but reject invalid stale an
     );
     world.navigation_access.seam_connected = true;
 
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 4,
-        .node = westNode(0),
-        .goal = .{ .navigate_to = .{ .value = 99 } },
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(
+        4,
+        westNode(0),
+        .{ .navigate_to = .{ .value = 99 } },
+    ) });
     try world.runtime.tick();
     try expectRejected(world.feature.pollOutcome(), .spawn, .invalid_goal);
 
@@ -4478,10 +4509,7 @@ test "NPC commands accept waiting and blocked intent but reject invalid stale an
     try expectRejected(world.feature.pollOutcome(), .set_goal, .npc_not_found);
 
     world.controllers.max_live = world.controllers.live_count;
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 6,
-        .node = westNode(0),
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(6, westNode(0), .hold) });
     try world.runtime.tick();
     try expectRejected(world.feature.pollOutcome(), .spawn, .controller_capacity_reached);
     try std.testing.expectEqual(@as(usize, 2), world.feature.count());
@@ -4493,11 +4521,11 @@ test "topology revision replans retained destination through blocked and resumed
     try world.init();
     defer world.deinit();
 
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 1,
-        .node = westNode(0),
-        .goal = .{ .navigate_to = east_end_destination },
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(
+        1,
+        westNode(0),
+        .{ .navigate_to = east_end_destination },
+    ) });
     try world.runtime.tick();
     const id = switch (world.feature.pollOutcome() orelse
         return error.MissingNpcOutcome) {
@@ -4535,11 +4563,11 @@ test "topology replan wave is stable-ID ordered and bounded to eight per tick" {
     defer world.deinit();
 
     for (0..max_npcs) |index| {
-        try world.feature.enqueue(.{ .spawn = .{
-            .request_id = index + 1,
-            .node = westNode(0),
-            .goal = .{ .navigate_to = east_end_destination },
-        } });
+        try world.feature.enqueue(.{ .spawn = testSpawn(
+            index + 1,
+            westNode(0),
+            .{ .navigate_to = east_end_destination },
+        ) });
     }
     try world.runtime.tick();
     var ids: [max_npcs]engine.PersistentId = undefined;
@@ -4587,11 +4615,11 @@ test "confirmed physical blockage excludes the segment and retries after clearan
     world.controllers.freeze_updates = true;
     world.controllers.line_unobstructed = false;
 
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 1,
-        .node = westNode(0),
-        .goal = .{ .navigate_to = east_end_destination },
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(
+        1,
+        westNode(0),
+        .{ .navigate_to = east_end_destination },
+    ) });
     try world.runtime.tick();
     const id = switch (world.feature.pollOutcome() orelse
         return error.MissingNpcOutcome) {
@@ -4634,11 +4662,7 @@ test "confirmed physical blockage excludes the segment and retries after clearan
 }
 
 test "rejected set goal is atomic across view digest entities and controller ownership" {
-    const spawn = Command{ .spawn = .{
-        .request_id = 1,
-        .node = westNode(0),
-        .goal = .hold,
-    } };
+    const spawn = Command{ .spawn = testSpawn(1, westNode(0), .hold) };
     var subject_id: engine.PersistentId = undefined;
     var view_before: NpcView = undefined;
     var view_after: NpcView = undefined;
@@ -4766,17 +4790,19 @@ test "NPC authority queues reserve all outcomes and enforce population capacity"
     defer world.deinit();
 
     for (0..max_pending_commands) |index| {
-        try world.feature.enqueue(.{ .spawn = .{
-            .request_id = index + 1,
-            .node = westNode(0),
-        } });
+        try world.feature.enqueue(.{ .spawn = testSpawn(
+            index + 1,
+            westNode(0),
+            .hold,
+        ) });
     }
     try std.testing.expectError(
         error.NpcCommandQueueFull,
-        world.feature.enqueue(.{ .spawn = .{
-            .request_id = max_pending_commands + 1,
-            .node = westNode(0),
-        } }),
+        world.feature.enqueue(.{ .spawn = testSpawn(
+            max_pending_commands + 1,
+            westNode(0),
+            .hold,
+        ) }),
     );
     var diagnostics_value = world.feature.diagnostics();
     try std.testing.expectEqual(@as(u32, max_pending_commands), diagnostics_value.commands.occupancy);
@@ -4846,10 +4872,7 @@ test "NPC authority queues reserve all outcomes and enforce population capacity"
     try std.testing.expectEqual(@as(u32, 0), diagnostics_value.outcomes.occupancy);
     try std.testing.expectEqual(@as(u32, 0), diagnostics_value.events.occupancy);
 
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 2_000,
-        .node = westNode(0),
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(2_000, westNode(0), .hold) });
     try world.runtime.tick();
     const fresh_id = switch (world.feature.pollOutcome() orelse
         return error.MissingNpcOutcome) {
@@ -5016,11 +5039,7 @@ fn exerciseActualEventSaturation(kind: EventSaturationKind) !void {
         .goal_reached => .{ .navigate_to = west_end_destination },
     };
     for (0..max_npcs) |index| {
-        try world.feature.enqueue(.{ .spawn = .{
-            .request_id = index + 1,
-            .node = westNode(0),
-            .goal = goal,
-        } });
+        try world.feature.enqueue(.{ .spawn = testSpawn(index + 1, westNode(0), goal) });
     }
     try world.runtime.tick();
     for (&ids, 0..) |*id, index| switch (world.feature.pollOutcome() orelse
@@ -5229,10 +5248,7 @@ fn exerciseActualEventSaturation(kind: EventSaturationKind) !void {
 
     world.navigation_access.west_active = true;
     world.navigation_access.west_generation += 1;
-    try world.feature.enqueue(.{ .spawn = .{
-        .request_id = 2_000,
-        .node = westNode(0),
-    } });
+    try world.feature.enqueue(.{ .spawn = testSpawn(2_000, westNode(0), .hold) });
     try world.runtime.tick();
     const fresh_id = switch (world.feature.pollOutcome() orelse
         return error.MissingNpcOutcome) {

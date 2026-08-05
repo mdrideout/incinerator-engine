@@ -899,7 +899,10 @@ fn setupIntegratedSlices(
     for (0..sandbox_contracts.npc_capacity) |index| {
         try authority.world.submitNpc(.{ .spawn = .{
             .request_id = first_npc_request_id + index,
-            .node = west_node,
+            .position = .{ -5, 0, 5 },
+            .facing_yaw = 0,
+            .anchor = west_node,
+            .hostile_to_players = true,
             .goal = .{ .patrol_between = .{
                 .first = west_node,
                 .second = east_node,
@@ -934,7 +937,10 @@ fn setupIntegratedSlices(
     // one typed capacity rejection without a partial entity/controller commit.
     try authority.world.submitNpc(.{ .spawn = .{
         .request_id = 2_000,
-        .node = west_node,
+        .position = .{ -5, 0, 5 },
+        .facing_yaw = 0,
+        .anchor = west_node,
+        .hostile_to_players = true,
         .goal = .hold,
     } });
     try tickWithoutCrateWork(authority);

@@ -670,6 +670,7 @@ fn embeddedCoreConfig() authority_module.CoreConfig {
                 .max_vehicles = budgets.max_vehicles,
                 .max_entry_distance = 5,
             },
+            .authored_population = true,
         },
         .world_bootstrap = .dedicated_fixture,
         .participant_spawn = .automatic,

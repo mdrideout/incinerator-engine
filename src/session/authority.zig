@@ -16,7 +16,8 @@ const district_feature_contract = @import("district_feature_contract");
 const interaction_feature_contract = @import("interaction_feature_contract");
 const npc_contract = @import("npc_contract");
 const npc_encounter_contract = @import("npc_encounter_contract");
-const npc_replacement_contract = @import("sandbox_npc_replacement_contract");
+const population_contract = @import("population_contract");
+const sandbox_population_catalog = @import("sandbox_population_catalog");
 const vitals_contract = @import("vitals_contract");
 const district_contract = @import("district_contract");
 const sandbox_district_recipe = @import("sandbox_district_recipe");
@@ -51,7 +52,7 @@ const automatic_spawn_candidates = [_][3]f32{
 
 comptime {
     if (automatic_spawn_candidates.len != budgets.max_participants) {
-        @compileError("automatic spawn slots must cover the participant capacity exactly");
+        @compileError("automatic spawn slots must cover participant capacity exactly");
     }
 }
 
@@ -511,13 +512,28 @@ const NpcSlot = struct {
     replicated: identity.ReplicatedEntityId = .invalid,
     vitals_pending: bool = false,
     despawn_pending: bool = false,
-    replacement_spawn_pending: bool = false,
+    population_replacement_spawn_pending: bool = false,
     death_proxy: ?NpcDeathProxy = null,
+    population_member: ?population_contract.PopulationMemberId = null,
+    population_actor_generation: u16 = 0,
+    population_spawn_correlation: u64 = 0,
+    population_spawn_slot: ?population_contract.SpawnSlotId = null,
+    population_goal_correlation: u64 = 0,
+    population_activity_sequence: u64 = 0,
+    population_destination: ?npc_contract.DestinationId = null,
 };
 
 const NpcDeathProxy = struct {
     owner: district_contract.ChunkCoord,
     state: protocol.NpcState,
+};
+
+const NpcPopulationProjection = struct {
+    member: u16 = 0,
+    role: protocol.NpcPopulationRole = .unassigned,
+    combat_disposition: protocol.NpcCombatDisposition = .unassigned,
+    activity_kind: protocol.NpcActivityKind = .none,
+    activity_state: protocol.NpcActivityState = .unassigned,
 };
 
 const melee_damage: u16 = 34;
@@ -899,6 +915,7 @@ const HostObservations = struct {
     npc_outcomes: ObservationQueue(npc_contract.Outcome) = .{},
     npc_events: ObservationQueue(npc_contract.Event) = .{},
     npc_navigation_transitions: ObservationQueue(npc_contract.NavigationTransition) = .{},
+    population_transitions: ObservationQueue(population_contract.Transition) = .{},
     records_dropped: u64 = 0,
 
     fn empty(self: *const HostObservations) bool {
@@ -912,7 +929,8 @@ const HostObservations = struct {
             self.interaction_outcomes.len == 0 and
             self.npc_outcomes.len == 0 and
             self.npc_events.len == 0 and
-            self.npc_navigation_transitions.len == 0;
+            self.npc_navigation_transitions.len == 0 and
+            self.population_transitions.len == 0;
     }
 
     fn pending(self: *const HostObservations) u32 {
@@ -921,7 +939,8 @@ const HostObservations = struct {
             self.vehicle_outcomes.len + self.vehicle_events.len +
             self.district_outcomes.len + self.district_events.len +
             self.interaction_outcomes.len + self.npc_outcomes.len +
-            self.npc_events.len + self.npc_navigation_transitions.len;
+            self.npc_events.len + self.npc_navigation_transitions.len +
+            self.population_transitions.len;
         return std.math.cast(u32, total) orelse std.math.maxInt(u32);
     }
 };
@@ -1041,6 +1060,7 @@ const AuthorityCore = struct {
     participant_spawn: ParticipantSpawn,
     observation_mode: ObservationMode,
     npc_interest_mode: NpcInterestMode,
+    population_enabled: bool,
     observations: HostObservations = .{},
     snapshot_source_issued: bool = false,
     durable_requests: DurableRequestQueue = .{},
@@ -1188,6 +1208,7 @@ const AuthorityCore = struct {
             .participant_spawn = core_config.participant_spawn,
             .observation_mode = core_config.observation,
             .npc_interest_mode = core_config.npc_interest,
+            .population_enabled = core_config.simulation.authored_population,
             .persistence_cohort = persistence_cohort,
             .credential_issuer = credential_issuer,
             .session = session,
@@ -1200,6 +1221,23 @@ const AuthorityCore = struct {
             .options = options,
         };
         errdefer authority.simulation.deinit();
+        for (&authority.npcs, 0..) |*npc, index| {
+            npc.replicated.index = @intCast(
+                budgets.max_participants + budgets.max_vehicles +
+                    budgets.max_carryables + index + 1,
+            );
+            if (core_config.simulation.authored_population and
+                index < population_contract.ordinary_member_count)
+            {
+                npc.population_member = .{ .value = @intCast(index + 1) };
+                npc.population_actor_generation = 1;
+                npc.generation = 1;
+                npc.replicated.generation = 1;
+            }
+        }
+        if (core_config.simulation.authored_population) {
+            try authority.simulation.enablePopulation(.{});
+        }
         if (core_config.world_bootstrap == .dedicated_fixture) {
             authority.vehicles[0] = .{
                 .spawn_pending = true,
@@ -1230,16 +1268,6 @@ const AuthorityCore = struct {
                     .generation = 1,
                 },
             };
-            for (&authority.npcs, 0..) |*npc, index| {
-                npc.generation = 1;
-                npc.replicated = .{
-                    .index = @intCast(
-                        budgets.max_participants + budgets.max_vehicles +
-                            budgets.max_carryables + index + 1,
-                    ),
-                    .generation = 1,
-                };
-            }
             try authority.simulation.submitDistrict(.{ .request_load = .{
                 .request_id = districtBootstrapRequestId(0),
                 .coord = sandbox_district_recipe.navigation_west_coord,
@@ -1451,9 +1479,6 @@ const AuthorityCore = struct {
     fn submitHostNpc(self: *AuthorityCore, command: npc_contract.Command) !void {
         try self.ensureOperationalMutation();
         try self.requireHostManaged();
-        if (command == .spawn and decodeNpcSpawnRequestId(command.spawn.request_id) != null) {
-            return error.ReservedAuthorityCorrelation;
-        }
         try self.simulation.submitNpc(command);
     }
 
@@ -1925,25 +1950,6 @@ const AuthorityCore = struct {
         try self.applyHeldInputs(self.simulation.tickIndex());
     }
 
-    fn npcReplacementCandidates(npc_index: usize) [3]npc_contract.NodeRef {
-        const primary = if (npc_index % 2 == 0)
-            sandbox_district_recipe.navigation_west_coord
-        else
-            sandbox_district_recipe.navigation_east_coord;
-        const alternate = if (npc_index % 2 == 0)
-            sandbox_district_recipe.navigation_east_coord
-        else
-            sandbox_district_recipe.navigation_west_coord;
-        return .{
-            .{ .coord = primary, .index = @intCast(npc_index % 3) },
-            .{ .coord = primary, .index = @intCast((npc_index + 1) % 3) },
-            .{
-                .coord = alternate,
-                .index = if (npc_index % 2 == 0) 2 else 0,
-            },
-        };
-    }
-
     fn drainSimulationOutcomes(self: *AuthorityCore) !void {
         self.processCrateOutcomes();
         try self.processVitalsOutcomes();
@@ -1951,39 +1957,214 @@ const AuthorityCore = struct {
         try self.processVehicleOutcomes();
         try self.processDistrictOutcomes();
         try self.processInteractionOutcomes();
-        try self.processNpcReplacementOutcomes();
         try self.processNpcOutcomes();
-        self.processNpcEncounterCues();
+        try self.processNpcEncounterCues();
+        if (self.population_enabled) {
+            try self.simulation.stepPopulation();
+            try self.processPopulationIntents();
+            while (self.simulation.pollPopulationTransition()) |transition| {
+                self.retainObservation(
+                    &self.observations.population_transitions,
+                    transition,
+                );
+            }
+        }
     }
 
-    fn processNpcEncounterCues(self: *AuthorityCore) void {
-        while (self.simulation.pollNpcEncounterCue()) |_| {
+    fn processNpcEncounterCues(self: *AuthorityCore) !void {
+        while (self.simulation.pollNpcEncounterCue()) |cue| {
+            switch (cue) {
+                .state_changed => |changed| {
+                    const npc_index = self.findNpcByPersistent(changed.npc.id) orelse
+                        return error.UnknownNpcEncounterCue;
+                    const npc = self.npcs[npc_index];
+                    const member = npc.population_member orelse {
+                        self.force_snapshot = true;
+                        continue;
+                    };
+                    if (changed.previous == .patrolling and
+                        changed.current != .patrolling)
+                    {
+                        try self.simulation.populationInterrupt(
+                            member,
+                            changed.npc.id,
+                        );
+                    } else if (changed.current == .patrolling and
+                        changed.previous != .patrolling)
+                    {
+                        try self.simulation.populationResume(
+                            member,
+                            changed.npc.id,
+                        );
+                    }
+                },
+                .target_changed,
+                .attack_started,
+                .attack_resolved,
+                .hit_reaction,
+                .died,
+                => {},
+            }
             self.force_snapshot = true;
         }
     }
 
-    fn processNpcReplacementOutcomes(self: *AuthorityCore) !void {
-        while (self.simulation.pollNpcReplacementOutcome()) |outcome| switch (outcome) {
-            .ready => |ready| {
-                if (ready.slot >= self.npcs.len) return error.InvalidNpcReplacementSlot;
-                const npc = &self.npcs[ready.slot];
-                if (npc.active or npc.spawn_pending or npc.despawn_pending or
-                    npc.replacement_spawn_pending)
+    fn processPopulationIntents(self: *AuthorityCore) !void {
+        while (self.simulation.peekPopulationIntent()) |intent| switch (intent) {
+            .spawn => |spawn| {
+                const npc_index = try populationNpcIndex(spawn.member);
+                const npc = &self.npcs[npc_index];
+                if (npc.population_member == null or
+                    !population_contract.PopulationMemberId.eql(
+                        npc.population_member.?,
+                        spawn.member,
+                    ) or
+                    npc.active or npc.spawn_pending or npc.despawn_pending or
+                    npc.population_spawn_correlation != 0 or
+                    npc.population_actor_generation != spawn.actor_generation)
                 {
-                    return error.InvalidNpcReplacementState;
+                    return error.InvalidPopulationSpawnState;
                 }
-                npc.generation = ready.generation;
-                npc.replicated.generation = ready.generation;
-                npc.spawn_pending = true;
-                npc.replacement_spawn_pending = true;
+                const member = sandbox_population_catalog.memberDefinition(
+                    spawn.member,
+                ) orelse return error.PopulationMemberNotFound;
+                const slot = sandbox_population_catalog.spawnSlotDefinition(
+                    spawn.preferred_slot,
+                ) orelse return error.PopulationSpawnSlotNotFound;
+                if (!slot.roles.accepts(member.role)) {
+                    return error.PopulationSpawnRoleMismatch;
+                }
+                if ((try self.simulation.navigationNodePosition(slot.anchor)) == null) {
+                    try self.simulation.populationDeferSpawn(
+                        spawn.member,
+                        spawn.actor_generation,
+                        .district_inactive,
+                    );
+                    try self.simulation.commitPopulationIntent(intent);
+                    continue;
+                }
+                var reservations: [population_contract.decisions_per_tick][3]f32 = undefined;
+                var reservation_count: usize = 0;
+                for (self.npcs, 0..) |candidate, candidate_index| {
+                    if (candidate_index == npc_index or
+                        !candidate.spawn_pending or
+                        candidate.population_spawn_slot == null)
+                    {
+                        continue;
+                    }
+                    const candidate_slot =
+                        sandbox_population_catalog.spawnSlotDefinition(
+                            candidate.population_spawn_slot.?,
+                        ) orelse return error.PopulationSpawnSlotNotFound;
+                    if (reservation_count == reservations.len) {
+                        return error.PopulationSpawnReservationCapacityReached;
+                    }
+                    reservations[reservation_count] = candidate_slot.position;
+                    reservation_count += 1;
+                }
+                const retry_reason = try self.simulation.populationSpawnRetryReason(
+                    slot.position,
+                    spawn.replacement,
+                    reservations[0..reservation_count],
+                );
+                if (retry_reason != .none) {
+                    try self.simulation.populationDeferSpawn(
+                        spawn.member,
+                        spawn.actor_generation,
+                        retry_reason,
+                    );
+                    try self.simulation.commitPopulationIntent(intent);
+                    continue;
+                }
                 try self.simulation.submitNpc(.{ .spawn = .{
-                    .request_id = npcSpawnRequestId(ready.slot, ready.generation),
-                    .node = ready.node,
+                    .request_id = spawn.correlation_id,
+                    .position = slot.position,
+                    .facing_yaw = try engine.transform.normalizeFacingYaw(
+                        slot.facing_yaw,
+                    ),
+                    .anchor = slot.anchor,
+                    .hostile_to_players = member.combat_disposition == .hostile_to_players,
                     .goal = .hold,
                 } });
-                self.force_snapshot = true;
+                npc.generation = spawn.actor_generation;
+                npc.replicated.generation = spawn.actor_generation;
+                npc.spawn_pending = true;
+                npc.population_replacement_spawn_pending = spawn.replacement;
+                npc.population_spawn_correlation = spawn.correlation_id;
+                npc.population_spawn_slot = spawn.preferred_slot;
+                try self.simulation.commitPopulationIntent(intent);
             },
-            .deferred => self.force_snapshot = true,
+            .set_destination => |destination| {
+                const npc_index = try populationNpcIndex(destination.member);
+                const npc = &self.npcs[npc_index];
+                if (npc.population_member == null or
+                    !population_contract.PopulationMemberId.eql(
+                        npc.population_member.?,
+                        destination.member,
+                    ) or
+                    npc.population_actor_generation != destination.actor_generation or
+                    !npc.active or npc.persistent == null or
+                    !std.meta.eql(npc.persistent.?, destination.actor) or
+                    npc.population_goal_correlation != 0)
+                {
+                    return error.InvalidPopulationDestinationState;
+                }
+                try self.simulation.submitNpc(.{ .set_goal = .{
+                    .request_id = destination.correlation_id,
+                    .id = destination.actor,
+                    .goal = .{ .navigate_to = destination.destination },
+                } });
+                npc.population_goal_correlation = destination.correlation_id;
+                npc.population_activity_sequence = destination.activity_sequence;
+                npc.population_destination = destination.destination;
+                try self.simulation.commitPopulationIntent(intent);
+            },
+        };
+    }
+
+    fn npcPopulationProjection(
+        self: *const AuthorityCore,
+        slot: NpcSlot,
+    ) !NpcPopulationProjection {
+        const member_id = slot.population_member orelse return .{};
+        const member = self.simulation.populationMember(member_id) orelse
+            return error.PopulationMemberNotFound;
+        const definition = sandbox_population_catalog.memberDefinition(member_id) orelse
+            return error.PopulationMemberNotFound;
+        const program = sandbox_population_catalog.programDefinition(
+            definition.program,
+        ) orelse return error.PopulationProgramNotFound;
+        if (member.program_cursor >= program.step_count) {
+            return error.InvalidPopulationProgramCursor;
+        }
+        const step = program.stepSlice()[member.program_cursor];
+        return .{
+            .member = member_id.value,
+            .role = switch (definition.role) {
+                .resident => .resident,
+                .worker => .worker,
+                .visitor => .visitor,
+            },
+            .combat_disposition = switch (definition.combat_disposition) {
+                .passive => .passive,
+                .hostile_to_players => .hostile_to_players,
+            },
+            .activity_kind = switch (step.kind) {
+                .commute => .commute,
+                .shop => .shop,
+                .visit => .visit,
+                .idle => .idle,
+            },
+            .activity_state = switch (member.activity_state) {
+                .selecting => .selecting,
+                .waiting_for_slot => .waiting_for_slot,
+                .traveling => .traveling,
+                .dwelling => .dwelling,
+                .completing => .completing,
+                .interrupted => .interrupted,
+                .vacant => .vacant,
+                .replacement_pending => .replacement_pending,
+            },
         };
     }
 
@@ -3820,18 +4001,7 @@ const AuthorityCore = struct {
                         return error.DuplicateDistrictActivation;
                     }
                     self.active_districts[district_index] = true;
-                    if (district_index == 1) {
-                        for (self.npcs[0..budgets.product_npcs], 0..) |*npc, index| {
-                            npc.spawn_pending = true;
-                            const node = productNpcSpawnNode(index);
-                            try self.simulation.submitNpc(.{ .spawn = .{
-                                .request_id = npcSpawnRequestId(index, npc.generation),
-                                .node = node,
-                                .goal = .hold,
-                            } });
-                        }
-                        continue;
-                    }
+                    if (district_index == 1) continue;
                     try self.simulation.submitDistrict(.{ .request_load = .{
                         .request_id = districtBootstrapRequestId(1),
                         .coord = sandbox_district_recipe.navigation_east_coord,
@@ -4048,15 +4218,28 @@ const AuthorityCore = struct {
             defer self.retainObservation(&self.observations.npc_outcomes, outcome);
             switch (outcome) {
                 .spawned => |spawned| {
-                    if (decodeNpcSpawnRequestId(spawned.request_id)) |decoded| {
-                        const npc = &self.npcs[decoded.index];
-                        if (npc.generation != decoded.generation or !npc.spawn_pending) {
-                            return error.StaleNpcSpawnOutcome;
+                    if (self.findNpcByPopulationSpawnCorrelation(
+                        spawned.request_id,
+                    )) |npc_index| {
+                        const npc = &self.npcs[npc_index];
+                        const member = npc.population_member orelse
+                            return error.PopulationNpcMemberMissing;
+                        if (!npc.spawn_pending or npc.active or
+                            npc.population_spawn_correlation != spawned.request_id)
+                        {
+                            return error.StalePopulationSpawnOutcome;
                         }
                         npc.spawn_pending = false;
                         npc.active = true;
                         npc.persistent = spawned.id;
+                        npc.population_spawn_correlation = 0;
+                        npc.population_spawn_slot = null;
                         npc.vitals_pending = true;
+                        try self.simulation.populationBindActor(
+                            member,
+                            npc.population_actor_generation,
+                            spawned.id,
+                        );
                         try self.simulation.submitVitals(.{ .register = .{
                             .target = npcVitalsTarget(npc.*, spawned.id),
                         } });
@@ -4074,8 +4257,29 @@ const AuthorityCore = struct {
                     }
                     self.force_snapshot = true;
                 },
-                .goal_set => if (self.world_bootstrap != .host_managed) {
-                    return error.UnexpectedNpcMutationOutcome;
+                .goal_set => |goal_set| {
+                    const npc_index = self.findNpcByPopulationGoalCorrelation(
+                        goal_set.request_id,
+                    ) orelse {
+                        if (self.world_bootstrap != .host_managed) {
+                            return error.UnexpectedNpcMutationOutcome;
+                        }
+                        continue;
+                    };
+                    const npc = &self.npcs[npc_index];
+                    if (!npc.active or npc.persistent == null or
+                        !std.meta.eql(npc.persistent.?, goal_set.id) or
+                        npc.population_goal_correlation != goal_set.request_id or
+                        npc.population_destination == null or
+                        goal_set.goal != .navigate_to or
+                        !npc_contract.DestinationId.eql(
+                            npc.population_destination.?,
+                            goal_set.goal.navigate_to,
+                        ))
+                    {
+                        return error.StalePopulationGoalOutcome;
+                    }
+                    npc.population_goal_correlation = 0;
                 },
                 .despawned => |despawned| {
                     if (decodeNpcDeathRequestId(despawned.request_id)) |decoded| {
@@ -4093,6 +4297,9 @@ const AuthorityCore = struct {
                         npc.active = false;
                         npc.despawn_pending = false;
                         npc.persistent = null;
+                        npc.population_goal_correlation = 0;
+                        npc.population_activity_sequence = 0;
+                        npc.population_destination = null;
                         self.force_snapshot = true;
                     } else if (self.world_bootstrap != .host_managed) {
                         return error.UnexpectedNpcMutationOutcome;
@@ -4108,24 +4315,46 @@ const AuthorityCore = struct {
                         self.force_snapshot = true;
                     }
                 },
-                .rejected => |rejected| if (decodeNpcSpawnRequestId(rejected.request_id)) |decoded| {
-                    const npc = &self.npcs[decoded.index];
-                    if (!npc.replacement_spawn_pending or !npc.spawn_pending or
-                        npc.generation != decoded.generation)
-                    {
-                        if (self.world_bootstrap != .host_managed) {
-                            return error.NpcBootstrapRejected;
+                .rejected => |rejected| {
+                    if (self.findNpcByPopulationSpawnCorrelation(
+                        rejected.request_id,
+                    )) |npc_index| {
+                        const npc = &self.npcs[npc_index];
+                        const member = npc.population_member orelse
+                            return error.PopulationNpcMemberMissing;
+                        if (!npc.spawn_pending or
+                            npc.population_spawn_correlation != rejected.request_id)
+                        {
+                            return error.StalePopulationSpawnRejection;
                         }
-                    } else {
                         npc.spawn_pending = false;
-                        npc.replacement_spawn_pending = false;
-                        try self.simulation.deferNpcReplacement(
-                            @intCast(decoded.index),
-                            decoded.generation,
+                        npc.population_replacement_spawn_pending = false;
+                        npc.population_spawn_correlation = 0;
+                        npc.population_spawn_slot = null;
+                        try self.simulation.populationDeferSpawn(
+                            member,
+                            npc.population_actor_generation,
+                            try populationSpawnRetryReason(rejected.reason),
                         );
+                    } else if (self.findNpcByPopulationGoalCorrelation(
+                        rejected.request_id,
+                    )) |npc_index| {
+                        const npc = &self.npcs[npc_index];
+                        const member = npc.population_member orelse
+                            return error.PopulationNpcMemberMissing;
+                        const actor = npc.persistent orelse
+                            return error.PopulationNpcActorMissing;
+                        try self.simulation.populationDeferDestination(
+                            member,
+                            actor,
+                            npc.population_activity_sequence,
+                        );
+                        npc.population_goal_correlation = 0;
+                        npc.population_activity_sequence = 0;
+                        npc.population_destination = null;
+                    } else if (self.world_bootstrap != .host_managed) {
+                        return error.NpcBootstrapRejected;
                     }
-                } else if (self.world_bootstrap != .host_managed) {
-                    return error.NpcBootstrapRejected;
                 },
             }
         }
@@ -4133,7 +4362,34 @@ const AuthorityCore = struct {
             self.retainObservation(&self.observations.npc_events, event);
             switch (event) {
                 .state_changed, .owner_transferred => self.force_snapshot = true,
-                .goal_reached => {},
+                .goal_reached => |reached| {
+                    const npc_index = self.findNpcByPersistent(reached.id) orelse
+                        continue;
+                    const npc = &self.npcs[npc_index];
+                    const member = npc.population_member orelse continue;
+                    const member_record = self.simulation.populationMember(member) orelse
+                        return error.PopulationMemberNotFound;
+                    const activity_slot = member_record.activity_slot orelse continue;
+                    const definition = sandbox_population_catalog.activitySlotDefinition(
+                        activity_slot,
+                    ) orelse return error.PopulationActivitySlotNotFound;
+                    if (member_record.activity_state == .traveling and
+                        npc.population_destination != null and
+                        npc_contract.DestinationId.eql(
+                            reached.destination,
+                            definition.destination,
+                        ) and
+                        npc_contract.DestinationId.eql(
+                            reached.destination,
+                            npc.population_destination.?,
+                        ))
+                    {
+                        try self.simulation.populationArrive(member, reached.id);
+                        npc.population_activity_sequence = 0;
+                        npc.population_destination = null;
+                        self.force_snapshot = true;
+                    }
+                },
             }
         }
         while (self.simulation.pollNpcNavigationTransition()) |transition| {
@@ -4187,12 +4443,8 @@ const AuthorityCore = struct {
                         return error.StaleNpcVitalsRegistration;
                     }
                     npc.vitals_pending = false;
-                    if (npc.replacement_spawn_pending) {
-                        try self.simulation.completeNpcReplacement(
-                            @intCast(npc_index),
-                            npc.generation,
-                        );
-                        npc.replacement_spawn_pending = false;
+                    if (npc.population_replacement_spawn_pending) {
+                        npc.population_replacement_spawn_pending = false;
                     }
                     // Keep the red death proxy through all safe-spawn delay
                     // and retry states. The registered replacement is the
@@ -4358,13 +4610,26 @@ const AuthorityCore = struct {
                     },
                 };
                 npc.despawn_pending = true;
-                const candidates = npcReplacementCandidates(npc_index);
-                try self.simulation.scheduleNpcReplacement(
-                    @intCast(npc_index),
-                    nextGeneration(npc.generation),
-                    died.authority_tick,
-                    &candidates,
-                );
+                if (npc.population_member) |member| {
+                    try self.simulation.populationVacate(member, died.target.id);
+                    npc.population_actor_generation =
+                        (self.simulation.populationMember(member) orelse
+                            return error.PopulationMemberNotFound).actor_generation;
+                    npc.population_goal_correlation = 0;
+                    npc.population_activity_sequence = 0;
+                    npc.population_destination = null;
+                }
+                const population_projection = try self.npcPopulationProjection(npc.*);
+                npc.death_proxy.?.state.population_member =
+                    population_projection.member;
+                npc.death_proxy.?.state.population_role =
+                    population_projection.role;
+                npc.death_proxy.?.state.combat_disposition =
+                    population_projection.combat_disposition;
+                npc.death_proxy.?.state.activity_kind =
+                    population_projection.activity_kind;
+                npc.death_proxy.?.state.activity_state =
+                    population_projection.activity_state;
                 try self.simulation.submitNpc(.{ .despawn = .{
                     .request_id = npcDeathRequestId(npc_index, npc.generation),
                     .id = died.target.id,
@@ -4537,6 +4802,19 @@ const AuthorityCore = struct {
         const target = self.participants[participant_index];
         const replication = &self.replication[participant_index];
         const observer_position = try self.participantAvatarWorldPosition(participant_index);
+        // A connected participant retains a readable projection while its live
+        // character is absent during death/respawn. Prefer the exact retained
+        // death pose for interest diagnostics. Full-world development policy
+        // does not require a spatial observer, so use the retained district
+        // center during the narrower pre-spawn interval instead of erasing the
+        // NPC lane.
+        const npc_interest_origin = observer_position orelse
+            if (target.death_proxy) |proxy|
+                proxy.state.position
+            else if (self.npc_interest_mode == .full_world)
+                districtCenterPosition(target.relevance_coord)
+            else
+                null;
         var snapshot = protocol.Snapshot.empty();
         snapshot.baseline_id = target.baseline_id;
         snapshot.sequence = replication.next_sequence;
@@ -4701,7 +4979,10 @@ const AuthorityCore = struct {
             else
                 continue;
             const encounter = self.simulation.npcEncounter(vital.target);
-            const interest_origin = observer_position orelse continue;
+            const population_projection = try self.npcPopulationProjection(
+                self.npcs[npc_index],
+            );
+            const interest_origin = npc_interest_origin orelse continue;
             const encounter_relevant = if (encounter) |value| if (value.target) |encounter_target|
                 target.character != null and std.meta.eql(
                     encounter_target,
@@ -4743,13 +5024,18 @@ const AuthorityCore = struct {
                     0,
                 .attack_impact_tick = if (encounter) |value| value.attack_impact_tick else 0,
                 .attack_ready_tick = if (encounter) |value| value.ready_tick else 0,
+                .population_member = population_projection.member,
+                .population_role = population_projection.role,
+                .combat_disposition = population_projection.combat_disposition,
+                .activity_kind = population_projection.activity_kind,
+                .activity_state = population_projection.activity_state,
             };
             snapshot.npc_count += 1;
         }
         for (self.npcs, 0..) |npc, npc_index| {
             if (npc.active) continue;
             const proxy = npc.death_proxy orelse continue;
-            const interest_origin = observer_position orelse continue;
+            const interest_origin = npc_interest_origin orelse continue;
             if (!evaluateNpcInterest(
                 self.npc_interest_mode,
                 &replication.npc_interest[npc_index],
@@ -5469,6 +5755,36 @@ const AuthorityCore = struct {
         return null;
     }
 
+    fn findNpcByPopulationSpawnCorrelation(
+        self: *const AuthorityCore,
+        correlation: u64,
+    ) ?usize {
+        if (correlation == 0) return null;
+        for (self.npcs, 0..) |npc, index| {
+            if (npc.population_member != null and
+                npc.population_spawn_correlation == correlation)
+            {
+                return index;
+            }
+        }
+        return null;
+    }
+
+    fn findNpcByPopulationGoalCorrelation(
+        self: *const AuthorityCore,
+        correlation: u64,
+    ) ?usize {
+        if (correlation == 0) return null;
+        for (self.npcs, 0..) |npc, index| {
+            if (npc.population_member != null and
+                npc.population_goal_correlation == correlation)
+            {
+                return index;
+            }
+        }
+        return null;
+    }
+
     /// Resolves the authority-owned durable identity for an exact active
     /// replicated generation. This is intentionally read-only: feature views
     /// remain the canonical source for feature-owned presentation metadata.
@@ -5601,19 +5917,13 @@ const AuthorityCore = struct {
         persistent: engine.PersistentId,
     ) !void {
         if (self.findNpcByPersistent(persistent) != null) return error.DuplicateHostNpc;
-        for (&self.npcs, 0..) |*npc, index| {
-            if (npc.active or npc.spawn_pending) continue;
+        for (&self.npcs) |*npc| {
+            if (npc.population_member != null or npc.active or npc.spawn_pending) continue;
             npc.generation +%= 1;
             if (npc.generation == 0) npc.generation = 1;
             npc.active = true;
             npc.persistent = persistent;
-            npc.replicated = .{
-                .index = @intCast(
-                    budgets.max_participants + budgets.max_vehicles +
-                        budgets.max_carryables + index + 1,
-                ),
-                .generation = npc.generation,
-            };
+            npc.replicated.generation = npc.generation;
             return;
         }
         return error.HostNpcReplicationCapacityReached;
@@ -5625,7 +5935,14 @@ const AuthorityCore = struct {
     ) void {
         const index = self.findNpcByPersistent(persistent) orelse return;
         const generation = self.npcs[index].generation;
-        self.npcs[index] = .{ .generation = generation };
+        const replicated_index = self.npcs[index].replicated.index;
+        self.npcs[index] = .{
+            .generation = generation,
+            .replicated = .{
+                .index = replicated_index,
+                .generation = generation,
+            },
+        };
     }
 
     fn findParticipantByCharacter(
@@ -5739,7 +6056,7 @@ const AuthorityCore = struct {
     }
 };
 
-fn dedicatedCoreConfig() CoreConfig {
+fn dedicatedCoreConfig(authored_population: bool) CoreConfig {
     return .{
         .simulation = .{
             .namespace = 0x4d50_3201,
@@ -5751,6 +6068,7 @@ fn dedicatedCoreConfig() CoreConfig {
                 .max_vehicles = budgets.max_vehicles,
                 .max_entry_distance = 5,
             },
+            .authored_population = authored_population,
         },
         .world_bootstrap = .dedicated_fixture,
         .participant_spawn = .automatic,
@@ -5808,7 +6126,7 @@ pub const DedicatedAuthority = opaque {
     ) !*DedicatedAuthority {
         return @ptrCast(try createAuthorityCore(
             allocator,
-            dedicatedCoreConfig(),
+            dedicatedCoreConfig(true),
             options,
             null,
             false,
@@ -5898,10 +6216,14 @@ pub const DedicatedAuthority = opaque {
         return self.stateConst().diagnostics();
     }
 
-    pub fn npcReplacementDiagnostics(
+    pub fn populationDiagnostics(
         self: *const DedicatedAuthority,
-    ) npc_replacement_contract.Diagnostics {
-        return self.stateConst().simulation.npcReplacementDiagnostics();
+    ) ?population_contract.Diagnostics {
+        return self.stateConst().simulation.populationDiagnostics();
+    }
+
+    pub fn populationLogicalDigest(self: *const DedicatedAuthority) ?u64 {
+        return self.stateConst().simulation.populationLogicalDigest();
     }
 };
 
@@ -6314,6 +6636,12 @@ pub const EmbeddedNpcRole = struct {
         ).observations.npc_navigation_transitions.pop();
     }
 
+    pub fn pollPopulationTransition(
+        self: EmbeddedNpcRole,
+    ) ?population_contract.Transition {
+        return authorityCore(self.context).observations.population_transitions.pop();
+    }
+
     pub fn presentation(
         self: EmbeddedNpcRole,
         alpha: f32,
@@ -6598,10 +6926,28 @@ pub const EmbeddedInspectionRole = struct {
         return authorityCoreConst(self.context).simulation.npcEncounterDiagnostics();
     }
 
-    pub fn npcReplacementDiagnostics(
+    pub fn populationMembers(
         self: EmbeddedInspectionRole,
-    ) npc_replacement_contract.Diagnostics {
-        return authorityCoreConst(self.context).simulation.npcReplacementDiagnostics();
+    ) []const population_contract.MemberRecordV1 {
+        return authorityCoreConst(self.context).simulation.populationMembers();
+    }
+
+    pub fn populationSlots(
+        self: EmbeddedInspectionRole,
+    ) []const population_contract.ActivitySlotRecordV1 {
+        return authorityCoreConst(self.context).simulation.populationSlots();
+    }
+
+    pub fn populationDiagnostics(
+        self: EmbeddedInspectionRole,
+    ) ?population_contract.Diagnostics {
+        return authorityCoreConst(self.context).simulation.populationDiagnostics();
+    }
+
+    pub fn populationCatalog(
+        self: EmbeddedInspectionRole,
+    ) population_contract.Catalog {
+        return authorityCoreConst(self.context).simulation.populationCatalog();
     }
 
     pub fn copyNpcEncounterTransitions(
@@ -6631,6 +6977,14 @@ fn participantId(index: usize, generation: u16) identity.ParticipantId {
 
 fn districtCoord(value: district_contract.ChunkCoord) protocol.DistrictCoord {
     return .{ .x = value.x, .z = value.z };
+}
+
+fn districtCenterPosition(coord: district_contract.ChunkCoord) [3]f32 {
+    return .{
+        @as(f32, @floatFromInt(coord.x)) * district_contract.chunk_span,
+        0,
+        @as(f32, @floatFromInt(coord.z)) * district_contract.chunk_span,
+    };
 }
 
 fn authorityDistrictIndex(coord: district_contract.ChunkCoord) ?usize {
@@ -6820,6 +7174,36 @@ fn npcVitalsTarget(npc: NpcSlot, id: engine.PersistentId) vitals_contract.Target
     };
 }
 
+fn populationNpcIndex(
+    member: population_contract.PopulationMemberId,
+) !usize {
+    try member.validate();
+    const index = @as(usize, member.value) - 1;
+    if (index >= population_contract.ordinary_member_count or
+        index >= budgets.max_npcs)
+    {
+        return error.PopulationMemberOutsideProductCohort;
+    }
+    return index;
+}
+
+fn populationSpawnRetryReason(
+    reason: npc_contract.RejectionReason,
+) !population_contract.SpawnRetryReason {
+    return switch (reason) {
+        .capacity_reached, .controller_capacity_reached => .capacity,
+        .start_district_inactive => .district_inactive,
+        .start_pose_blocked => .occupied,
+        .invalid_start_node => error.InvalidAuthoredPopulationAnchor,
+        .goal_district_inactive,
+        .invalid_goal,
+        .unreachable_goal,
+        .npc_not_found,
+        .not_owned,
+        => error.InvalidPopulationSpawnRejection,
+    };
+}
+
 fn protocolLifeState(state: vitals_contract.LifeState) protocol.AvatarLifeState {
     return switch (state) {
         .alive => .alive,
@@ -6939,34 +7323,15 @@ fn decodeCarryableSpawnRequestId(value: u64) ?struct { index: usize, generation:
     };
 }
 
-fn npcSpawnRequestId(index: usize, generation: u16) u64 {
-    return 0x4d50_3700_0000_0000 |
-        (@as(u64, generation) << 16) |
-        @as(u64, @intCast(index + 1));
-}
-
-fn productNpcSpawnNode(index: usize) npc_contract.NodeRef {
-    std.debug.assert(index < budgets.product_npcs);
-    const nodes_per_district = budgets.product_npcs / 2;
-    std.debug.assert(budgets.product_npcs % 2 == 0);
-    std.debug.assert(nodes_per_district == 3);
-    return .{
-        .coord = if (index % 2 == 0)
-            sandbox_district_recipe.navigation_west_coord
-        else
-            sandbox_district_recipe.navigation_east_coord,
-        .index = @intCast(index / 2),
+fn npcNodePosition(reference: npc_contract.NodeRef) [3]f32 {
+    const build = switch (sandbox_district_recipe.build(
+        reference.coord,
+        sandbox_district_recipe.current_recipe_version,
+    )) {
+        .ready => |value| value,
+        .failed => unreachable,
     };
-}
-
-fn decodeNpcSpawnRequestId(value: u64) ?struct { index: usize, generation: u16 } {
-    if (value & 0xffff_ffff_0000_0000 != 0x4d50_3700_0000_0000) return null;
-    const raw_index: u16 = @truncate(value);
-    if (raw_index == 0 or raw_index > budgets.max_npcs) return null;
-    return .{
-        .index = raw_index - 1,
-        .generation = @truncate(value >> 16),
-    };
+    return build.navigation_nodes[reference.index].position;
 }
 
 fn interactionTransactionId(
@@ -7056,6 +7421,18 @@ fn initTestEmbeddedAuthority(
         core_config,
         options,
         @splat(credential_secret_byte),
+        false,
+    ));
+}
+
+fn initTestDedicatedAuthority(
+    authored_population: bool,
+) !*DedicatedAuthority {
+    return @ptrCast(try createAuthorityCore(
+        std.testing.allocator,
+        dedicatedCoreConfig(authored_population),
+        .{},
+        null,
         false,
     ));
 }
@@ -7246,26 +7623,28 @@ test "automatic participant slots cover capacity and clear canonical blockers" {
     }
 }
 
-test "automatic product NPC fixture uses every authored route node once" {
-    try std.testing.expectEqual(@as(usize, 6), budgets.product_npcs);
+test "automatic product NPC fixture uses every authored member spawn once" {
+    try std.testing.expectEqual(
+        population_contract.ordinary_member_count,
+        budgets.product_npcs,
+    );
     for (0..budgets.product_npcs) |index| {
-        const candidate = productNpcSpawnNode(index);
-        try std.testing.expect(candidate.index < 3);
+        const candidate = sandbox_population_catalog.members[index].initial_spawn_slot;
         for (0..index) |earlier_index| {
-            try std.testing.expect(!std.meta.eql(
+            try std.testing.expect(!population_contract.SpawnSlotId.eql(
                 candidate,
-                productNpcSpawnNode(earlier_index),
+                sandbox_population_catalog.members[earlier_index].initial_spawn_slot,
             ));
         }
     }
 }
 
-test "automatic admission reserves full capacity around the live fixture" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+test "automatic admission reserves product capacity around the live fixture" {
+    const authority = try initTestDedicatedAuthority(true);
     defer authority.deinit();
     const core = authority.state();
     var fixture_settled = false;
-    for (0..10_000) |_| {
+    for (0..256) |_| {
         var settled_npcs: usize = 0;
         for (core.npcs) |npc| {
             settled_npcs += @intFromBool(
@@ -7282,9 +7661,21 @@ test "automatic admission reserves full capacity around the live fixture" {
         while (takeOutboundForTest(authority) != null) {}
         std.Thread.yield() catch {};
     }
+    if (!fixture_settled) {
+        std.debug.print(
+            "S13 fixture did not settle: tick={} population={any}\n",
+            .{
+                core.simulation.tickIndex(),
+                core.simulation.populationDiagnostics(),
+            },
+        );
+        for (core.npcs[0..budgets.product_npcs], 0..) |npc, index| {
+            std.debug.print("  member={} npc={any}\n", .{ index + 1, npc });
+        }
+    }
     try std.testing.expect(fixture_settled);
 
-    for (0..budgets.max_participants) |participant_index| {
+    for (0..budgets.product_participants) |participant_index| {
         const candidate = try core.selectInitialSpawnPosition(participant_index) orelse
             return error.AutomaticSpawnCapacityUnavailable;
         const participant = &core.participants[participant_index];
@@ -7295,7 +7686,7 @@ test "automatic admission reserves full capacity around the live fixture" {
 }
 
 test "spawning character remains occupied during reservation handoff" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
     const core = authority.state();
     const transport = TransportConnection{ .value = 101 };
@@ -7842,7 +8233,13 @@ test "faulted authority rejects every operational mutation but preserves shutdow
     );
     try std.testing.expectError(
         error.AuthorityFaulted,
-        authority.npcs().submit(.{ .spawn = .{ .request_id = 6, .node = .{} } }),
+        authority.npcs().submit(.{ .spawn = .{
+            .request_id = 6,
+            .position = .{ 0, 0, 0 },
+            .facing_yaw = 0,
+            .anchor = .{},
+            .hostile_to_players = false,
+        } }),
     );
     try std.testing.expectError(error.AuthorityFaulted, authority.persistence().issueSource());
     try std.testing.expectError(error.AuthorityFaulted, authority.session().tick());
@@ -8494,7 +8891,7 @@ fn testTakeAndAcknowledgeBaseline(
 }
 
 test "authority admits two participants and emits join-in-progress snapshots" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
 
     _ = try authority.openConnection(.{ .value = 101 });
@@ -8536,7 +8933,7 @@ test "authority admits two participants and emits join-in-progress snapshots" {
 }
 
 test "authority drops stale input without terminating an unreliable stream" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
     _ = try authority.openConnection(.{ .value = 1 });
     try authority.ingest(.{ .value = 1 }, .{ .hello = .{
@@ -8743,7 +9140,7 @@ test "npc interest retains nearby and engaged actors across district boundaries"
 }
 
 test "full-world NPC policy projects the sandbox cohort across district seams" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(true);
     defer authority.deinit();
     const transport = TransportConnection{ .value = 0x4e50_4301 };
     _ = try authority.openConnection(transport);
@@ -8796,6 +9193,38 @@ test "full-world NPC policy projects the sandbox cohort across district seams" {
         interest.observer_district,
         interest.owner_district,
     ));
+
+    const live_character = core.participants[participant_index].character orelse
+        return error.MissingObserverCharacter;
+    const live_view = try core.simulation.character(live_character);
+    core.participants[participant_index].death_proxy = .{
+        .owner = try district_contract.chunkCoordForWorldPosition(live_view.position),
+        .state = .{
+            .entity = core.participants[participant_index].replicated,
+            .owner = welcome.participant,
+            .position = live_view.position,
+            .velocity = .{ 0, 0, 0 },
+            .facing_yaw = live_view.facing_yaw,
+            .incarnation = core.participants[participant_index].avatar_incarnation,
+            .health = 0,
+            .maximum_health = vitals_contract.default_max_health,
+            .life_state = .dead,
+        },
+    };
+    core.participants[participant_index].character = null;
+    core.replication[participant_index].npc_interest = @splat(.{});
+    const dead_observer = try core.buildRelevantSnapshot(participant_index);
+    try std.testing.expectEqual(snapshot.npc_count, dead_observer.npc_count);
+    var projected_active: u8 = 0;
+    for (core.npcs, 0..) |npc, index| {
+        if (!npc.active) continue;
+        projected_active += 1;
+        const dead_interest = core.replication[participant_index].npc_interest[index];
+        try std.testing.expect(dead_interest.included);
+        try std.testing.expectEqual(NpcInterestReason.full_world, dead_interest.reason);
+        try std.testing.expectEqual(live_view.position, dead_interest.observer_position);
+    }
+    try std.testing.expectEqual(dead_observer.npc_count, projected_active);
 }
 
 test "occupied character follows chassis while bounded vehicle stays projected across districts" {
@@ -9047,7 +9476,7 @@ test "same-cycle vehicle enter and melee permutations remain exclusive" {
 }
 
 test "authoritative melee kills once and explicit respawn replaces avatar incarnation" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
     const attacker_transport = TransportConnection{ .value = 801 };
     const victim_transport = TransportConnection{ .value = 802 };
@@ -9237,8 +9666,8 @@ test "authoritative melee kills once and explicit respawn replaces avatar incarn
     try std.testing.expectEqual(@as(u8, 1), respawn_records);
 }
 
-test "NPC death schedules one durable safe replacement with a new incarnation" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+test "NPC death vacates and replaces the exact authored member" {
+    const authority = try initTestDedicatedAuthority(true);
     defer authority.deinit();
 
     var bootstrapped = false;
@@ -9288,9 +9717,16 @@ test "NPC death schedules one durable safe replacement with a new incarnation" {
         return error.MissingNpcDeathPresentation;
     try std.testing.expectEqual(protocol.AvatarLifeState.dead, death_proxy.state.life_state);
     try std.testing.expectEqual(@as(u16, 0), death_proxy.state.health);
+    const vacant_member = authority.state().simulation.populationMember(.{
+        .value = 1,
+    }) orelse return error.PopulationMemberMissingAfterDeath;
     try std.testing.expectEqual(
-        @as(u16, 1),
-        authority.state().simulation.npcReplacementDiagnostics().pending,
+        population_contract.MemberLifecycle.vacant,
+        vacant_member.lifecycle,
+    );
+    try std.testing.expectEqual(
+        nextGeneration(victim_before.generation),
+        vacant_member.actor_generation,
     );
 
     var replaced = false;
@@ -9304,9 +9740,7 @@ test "NPC death schedules one durable safe replacement with a new incarnation" {
         if (current.active and current.vitals_pending and current.persistent != null and
             !std.meta.eql(current.persistent.?, victim_id))
         {
-            const handoff = authority.state().simulation.npcReplacementDiagnostics();
-            try std.testing.expect(current.replacement_spawn_pending);
-            try std.testing.expectEqual(@as(u16, 1), handoff.awaiting_spawn);
+            try std.testing.expect(current.population_replacement_spawn_pending);
             try std.testing.expect(current.death_proxy != null);
             observed_proxy_until_replacement = true;
             observed_spawn_vitals_handoff = true;
@@ -9330,38 +9764,19 @@ test "NPC death schedules one durable safe replacement with a new incarnation" {
     try std.testing.expect(observed_spawn_vitals_handoff);
     try std.testing.expect(observed_proxy_after_despawn);
     try std.testing.expect(observed_proxy_until_replacement);
-    const replacement_diagnostics = authority.state().simulation.npcReplacementDiagnostics();
-    try std.testing.expectEqual(@as(u16, 0), replacement_diagnostics.pending);
-    try std.testing.expectEqual(@as(u16, 0), replacement_diagnostics.awaiting_spawn);
-    try std.testing.expectEqual(@as(u64, 1), replacement_diagnostics.replacements_ready);
-}
-
-test "NPC replacement candidates retain a deterministic offscreen district option" {
-    const west = AuthorityCore.npcReplacementCandidates(0);
-    try std.testing.expectEqualDeep(
-        sandbox_district_recipe.navigation_west_coord,
-        west[0].coord,
-    );
-    try std.testing.expectEqualDeep(
-        sandbox_district_recipe.navigation_east_coord,
-        west[2].coord,
-    );
-    try std.testing.expectEqual(@as(u8, 2), west[2].index);
-
-    const east = AuthorityCore.npcReplacementCandidates(1);
-    try std.testing.expectEqualDeep(
-        sandbox_district_recipe.navigation_east_coord,
-        east[0].coord,
-    );
-    try std.testing.expectEqualDeep(
-        sandbox_district_recipe.navigation_west_coord,
-        east[2].coord,
-    );
-    try std.testing.expectEqual(@as(u8, 0), east[2].index);
+    const rebound = authority.state().simulation.populationMember(.{
+        .value = 1,
+    }) orelse return error.PopulationMemberMissingAfterReplacement;
+    try std.testing.expectEqual(population_contract.MemberLifecycle.live, rebound.lifecycle);
+    try std.testing.expect(rebound.actor != null);
+    try std.testing.expect(std.meta.eql(
+        authority.state().npcs[0].persistent.?,
+        rebound.actor.?,
+    ));
 }
 
 test "authority defers admitted input until its declared target tick" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
     const transport = TransportConnection{ .value = 1 };
     _ = try authority.openConnection(transport);
@@ -9447,7 +9862,7 @@ test "authority defers admitted input until its declared target tick" {
 }
 
 test "typed authority ingress rejects zero action sequences before state drift" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
     const transport = TransportConnection{ .value = 1 };
     _ = try authority.openConnection(transport);
@@ -9503,7 +9918,7 @@ test "typed authority ingress rejects zero action sequences before state drift" 
 }
 
 test "outbound lease retry preserves the exact publication head" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
     const transport = TransportConnection{ .value = 1 };
     _ = try authority.openConnection(transport);
@@ -9945,7 +10360,7 @@ test "reconnect replay drains a full bounded ledger across quota-safe cycles" {
 }
 
 test "authority owns vehicle enter drive exit and dynamic seat projection" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
     const transport = TransportConnection{ .value = 1 };
     _ = try authority.openConnection(transport);
@@ -10074,7 +10489,7 @@ test "authority owns vehicle enter drive exit and dynamic seat projection" {
 }
 
 test "graceful leave orders cleanup behind an admitted vehicle transition" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
     const transport = TransportConnection{ .value = 1 };
     _ = try authority.openConnection(transport);
@@ -10104,7 +10519,7 @@ test "graceful leave orders cleanup behind an admitted vehicle transition" {
 }
 
 test "authority shutdown is a reliable terminal semantic message" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
     _ = try authority.openConnection(.{ .value = 1 });
     try authority.ingest(.{ .value = 1 }, .{ .hello = .{
@@ -10119,7 +10534,7 @@ test "authority shutdown is a reliable terminal semantic message" {
 }
 
 test "per-tick input quota terminates abusive ingress without growth" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
     _ = try authority.openConnection(.{ .value = 1 });
     try authority.ingest(.{ .value = 1 }, .{ .hello = .{
@@ -10149,7 +10564,7 @@ test "per-tick input quota terminates abusive ingress without growth" {
 }
 
 test "terminal admission failures release connections without partial participants" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
 
     _ = try authority.openConnection(.{ .value = 1 });
@@ -10183,7 +10598,7 @@ test "terminal admission failures release connections without partial participan
 }
 
 test "duplicate account and connection timeouts are bounded session decisions" {
-    const authority = try DedicatedAuthority.init(std.testing.allocator);
+    const authority = try initTestDedicatedAuthority(false);
     defer authority.deinit();
 
     _ = try authority.openConnection(.{ .value = 1 });

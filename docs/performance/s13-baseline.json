@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "benchmark": "s13-authored-population",
+  "zig_version": "0.16.0",
+  "optimize": "ReleaseFast",
+  "target_arch": "aarch64",
+  "target_os": "macos",
+  "methodology": "8192 fixed owner ticks for separate 12/16 authored cohorts with immediate deterministic host acknowledgements; 2048 measured real-Jolt ticks for 16 uniquely placed CharacterVirtual actors after 120 warmup ticks; 4096 bounded 64-command synthetic planning waves; exact protocol-15 full-snapshot wire sizes",
+  "ordinary": {
+    "cohort": "ordinary",
+    "members": 12,
+    "ticks": 8192,
+    "timing": {
+      "samples": 8192,
+      "mean_ns": 62.7623291015625,
+      "p50_ns": 42,
+      "p95_ns": 167,
+      "p99_ns": 250,
+      "max_ns": 3875
+    },
+    "fixed_owner_bytes": 21992,
+    "workload_heap_allocations": 0,
+    "decisions": 1761,
+    "transitions_drained": 2134,
+    "slot_contentions": 343,
+    "lease_expirations": 0,
+    "intent_queue_high_water": 4,
+    "transition_queue_high_water": 8,
+    "transition_drops": 0,
+    "logical_digest": 5531278371741765495,
+    "snapshot_json_bytes": 7990,
+    "snapshot_encode": {
+      "samples": 256,
+      "mean_ns": 8734.890625,
+      "p50_ns": 8000,
+      "p95_ns": 11833,
+      "p99_ns": 23625,
+      "max_ns": 33167
+    },
+    "snapshot_parse_restore": {
+      "samples": 256,
+      "mean_ns": 119855.97265625,
+      "p50_ns": 113791,
+      "p95_ns": 138000,
+      "p99_ns": 162125,
+      "max_ns": 234375
+    }
+  },
+  "physical_owner": {
+    "cohort": "physical_stress",
+    "members": 16,
+    "ticks": 8192,
+    "timing": {
+      "samples": 8192,
+      "mean_ns": 86.2938232421875,
+      "p50_ns": 83,
+      "p95_ns": 208,
+      "p99_ns": 333,
+      "max_ns": 11125
+    },
+    "fixed_owner_bytes": 21992,
+    "workload_heap_allocations": 0,
+    "decisions": 2813,
+    "transitions_drained": 3195,
+    "slot_contentions": 862,
+    "lease_expirations": 0,
+    "intent_queue_high_water": 4,
+    "transition_queue_high_water": 8,
+    "transition_drops": 0,
+    "logical_digest": 8619472822206598871,
+    "snapshot_json_bytes": 10170,
+    "snapshot_encode": {
+      "samples": 256,
+      "mean_ns": 10720.6953125,
+      "p50_ns": 10084,
+      "p95_ns": 14375,
+      "p99_ns": 22708,
+      "max_ns": 30042
+    },
+    "snapshot_parse_restore": {
+      "samples": 256,
+      "mean_ns": 124765.94140625,
+      "p50_ns": 119000,
+      "p95_ns": 147542,
+      "p99_ns": 161000,
+      "max_ns": 223458
+    }
+  },
+  "physical_jolt": {
+    "members": 16,
+    "warmup_ticks": 120,
+    "measured_ticks": 2048,
+    "timing": {
+      "samples": 2048,
+      "mean_ns": 15645.00732421875,
+      "p50_ns": 14834,
+      "p95_ns": 19875,
+      "p99_ns": 26917,
+      "max_ns": 86750
+    },
+    "static_bodies": 6,
+    "character_virtual_controllers": 16,
+    "placement_queries": 16,
+    "placement_rejections": 0,
+    "separation_violations": 0,
+    "max_rss_bytes": 12320768
+  },
+  "synthetic": {
+    "npcs": 64,
+    "waves": 4096,
+    "commands": 262144,
+    "timing": {
+      "samples": 4096,
+      "mean_ns": 1134.09130859375,
+      "p50_ns": 1125,
+      "p95_ns": 1167,
+      "p99_ns": 1542,
+      "max_ns": 10291
+    },
+    "workload_heap_allocations": 0,
+    "digest": 34359869440
+  },
+  "projection": {
+    "npc_state_fixed_bytes": 80,
+    "empty_snapshot_wire_bytes": 42,
+    "ordinary": {
+      "npcs": 12,
+      "full_snapshot_wire_bytes": 918,
+      "full_snapshot_bytes_per_second_at_npc_rate": 9180
+    },
+    "physical": {
+      "npcs": 16,
+      "full_snapshot_wire_bytes": 1210,
+      "full_snapshot_bytes_per_second_at_npc_rate": 12100
+    },
+    "synthetic": {
+      "npcs": 64,
+      "full_snapshot_wire_bytes": 4714,
+      "full_snapshot_bytes_per_second_at_npc_rate": 47140
+    }
+  },
+  "ceilings": {
+    "owner_p99_ns": 4166000,
+    "physical_p99_ns": 4166000,
+    "synthetic_p99_ns": 4166000,
+    "population_workload_heap_allocations": 0
+  }
+}

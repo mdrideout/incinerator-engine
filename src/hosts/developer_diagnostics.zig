@@ -338,20 +338,42 @@ fn formatNpcEncounterDiagnosticsAlloc(
     simulation: anytype,
 ) ![]u8 {
     const SimulationDiagnostics = @TypeOf(simulation);
-    if (!@hasField(SimulationDiagnostics, "npc_encounter") or
-        !@hasField(SimulationDiagnostics, "npc_replacement"))
-    {
+    if (!@hasField(SimulationDiagnostics, "npc_encounter")) {
         return allocator.dupe(u8, "npc_encounter=absent");
     }
     const encounter = simulation.npc_encounter;
-    const replacement = simulation.npc_replacement;
+    const population_suffix = if (@hasField(SimulationDiagnostics, "population"))
+        if (simulation.population) |population|
+            try std.fmt.allocPrint(
+                allocator,
+                " population live={d} awaiting={d} vacant={d} replacement={d} " ++
+                    "travel={d} dwell={d} wait={d} interrupted={d} " ++
+                    "slots={d}/{d}/{d} retries={d}",
+                .{
+                    population.live,
+                    population.awaiting_spawn,
+                    population.vacant,
+                    population.replacement_pending,
+                    population.traveling,
+                    population.dwelling,
+                    population.waiting_for_slot,
+                    population.interrupted,
+                    population.free_slots,
+                    population.claimed_slots,
+                    population.occupied_slots,
+                    population.spawn_retries.total(),
+                },
+            )
+        else
+            try allocator.dupe(u8, " population=disabled")
+    else
+        try allocator.dupe(u8, "");
+    defer allocator.free(population_suffix);
     return std.fmt.allocPrint(
         allocator,
         "npc_encounter records={d} patrol={d} pursue={d} windup={d} recovery={d} " ++
             "search={d} return={d} los={d} deferred={d} acquired={d} switched={d} " ++
-            "lost={d} attacks={d}/{d}/{d} reactions={d} trace={d} " ++
-            "replacement pending={d} spawning={d} attempts={d} ready={d} retries={d} " ++
-            "retry_reasons=inactive:{d} occupied:{d} near:{d} visible:{d}",
+            "lost={d} attacks={d}/{d}/{d} reactions={d} trace={d}{s}",
         .{
             encounter.records,
             encounter.patrolling,
@@ -370,15 +392,7 @@ fn formatNpcEncounterDiagnosticsAlloc(
             encounter.attacks_cancelled,
             encounter.hit_reactions,
             encounter.transition_history,
-            replacement.pending,
-            replacement.awaiting_spawn,
-            replacement.attempts,
-            replacement.replacements_ready,
-            replacement.retries,
-            replacement.district_inactive,
-            replacement.occupied,
-            replacement.too_close_to_player,
-            replacement.visible_to_player,
+            population_suffix,
         },
     );
 }

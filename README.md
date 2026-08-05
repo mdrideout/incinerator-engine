@@ -64,16 +64,25 @@ contact, carry/drop continuity, and schema-4 incident workflow. The default
 product uses a 1600×900 window, wider follow cameras, separated sandbox spawns,
 district/navigation intent overlays, and the measured vehicle profile recorded
 in [`docs/validation/vehicle-dynamics.md`](docs/validation/vehicle-dynamics.md).
-S12 destination-driven NPC navigation and replanning is now implemented. Its
-accepted architecture, implementation record, bounded higher-fidelity map,
-and automated evidence are recorded in
+S12 destination-driven NPC navigation and replanning is implemented. S13 now
+builds authored sandbox activity on that boundary: twelve stable population
+members own explicit roles, combat disposition, deterministic cyclic activity,
+exclusive slots, safe generational replacement, and readable Population Lab
+plus incident evidence. The implementation, bounded higher-fidelity map, and
+automated evidence are recorded in
 [`ADR-023`](docs/adr/023-semantic-destinations-and-navigation-recovery.md),
 the [`S12 plan`](docs/design/s12-destination-driven-navigation.md), and the
 [`S12 evaluation world`](docs/design/s12-navigation-evaluation-world.md), with
 executed results in the
-[`S12 validation ledger`](docs/validation/s12-destination-driven-navigation.md).
-The final human Navigation Lab walkthrough and two preserved incident captures
-remain before S13 population work.
+[`S12 validation ledger`](docs/validation/s12-destination-driven-navigation.md),
+then
+[`ADR-024`](docs/adr/024-authored-population-intent-and-activity-slots.md),
+[`S13 authored-population plan`](docs/design/s13-authored-population-and-sandbox-activity.md),
+[`S13 population evaluation world`](docs/design/s13-population-evaluation-world.md),
+[`S13 validation ledger`](docs/validation/s13-authored-population-and-sandbox-activity.md),
+and [`S13 performance baseline`](docs/performance/s13-baseline.md). S13
+implementation and automated acceptance are complete; its ordinary-product
+human walkthrough remains before full phase acceptance.
 Broader Steam/public-service infrastructure remains deferred.
 
 ## Toolchain Cohort
@@ -383,6 +392,14 @@ zig build smoke-installed-s12-macos \
   -Doptimize=ReleaseFast -Deditor=true
 zig build verify-s12 \
   -Doptimize=ReleaseFast -Deditor=true
+zig build test-s13-population \
+  -Doptimize=Debug -Deditor=false
+zig build measure-s13 \
+  -Doptimize=ReleaseFast -Deditor=false
+zig build smoke-installed-s13-macos \
+  -Doptimize=ReleaseFast -Deditor=true
+zig build verify-s13 \
+  -Doptimize=Debug -Deditor=true
 zig build smoke-installed-s4-diagnostics-macos \
   -Doptimize=ReleaseFast -Deditor=false
 zig build smoke-installed-s4-replay-macos \
@@ -676,6 +693,15 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`Human Test Incident Capture and LLM Diagnostic Handoff`](docs/design/human-test-incident-capture.md)
 - [`ADR-021: Local Human-Test Incident Bundles`](docs/adr/021-local-human-test-incident-bundles.md)
 - [`Human-Test Incident Capture Validation Record`](docs/validation/human-test-incident-capture.md)
+- [`ADR-023: Semantic Destinations and Navigation Recovery`](docs/adr/023-semantic-destinations-and-navigation-recovery.md)
+- [`S12 Destination-Driven Navigation Plan`](docs/design/s12-destination-driven-navigation.md)
+- [`S12 Navigation Evaluation World`](docs/design/s12-navigation-evaluation-world.md)
+- [`S12 Automated Acceptance Record`](docs/validation/s12-destination-driven-navigation.md)
+- [`ADR-024: Authored Population Intent and Activity Slots`](docs/adr/024-authored-population-intent-and-activity-slots.md)
+- [`S13 Authored Population and Sandbox Activity Plan`](docs/design/s13-authored-population-and-sandbox-activity.md)
+- [`S13 Population Evaluation World`](docs/design/s13-population-evaluation-world.md)
+- [`S13 Automated Acceptance Record`](docs/validation/s13-authored-population-and-sandbox-activity.md)
+- [`S13 Performance Baseline`](docs/performance/s13-baseline.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 

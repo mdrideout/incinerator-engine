@@ -287,11 +287,7 @@ pub fn Feature(comptime Visibility: type) type {
             while (index != 0) {
                 index -= 1;
                 const observed = findNpc(frame.npcs, self.records[index].npc);
-                if (observed == null or !isHostileNpc(
-                    frame.npcs,
-                    self.records[index].npc,
-                    self.config.hostile_npc_limit,
-                )) {
+                if (observed == null or !observed.?.hostile_to_players) {
                     self.removeRecord(index);
                 } else {
                     self.records[index].alive = observed.?.alive;
@@ -300,9 +296,7 @@ pub fn Feature(comptime Visibility: type) type {
             }
 
             for (frame.npcs) |npc| {
-                if (!isHostileNpc(frame.npcs, npc.target, self.config.hostile_npc_limit)) {
-                    continue;
-                }
+                if (!npc.hostile_to_players) continue;
                 if (!npc.alive or !npc.available or self.findRecord(npc.target) != null) continue;
                 if (self.record_count == contract.max_records) {
                     return error.NpcEncounterCapacityReached;
@@ -866,18 +860,6 @@ fn findNpc(
     return null;
 }
 
-fn isHostileNpc(
-    observations: []const contract.NpcObservation,
-    target: vitals.Target,
-    limit: u8,
-) bool {
-    var ordinal: usize = 0;
-    for (observations) |observation| {
-        if (contract.lessThanTarget({}, observation.target, target)) ordinal += 1;
-    }
-    return ordinal < limit;
-}
-
 fn findPlayer(
     observations: []const contract.CombatantObservation,
     target: vitals.Target,
@@ -1143,6 +1125,7 @@ test "stable target selection starts pursuit and emits one directive" {
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     const farther = contract.CombatantObservation{
         .target = testTarget(.player, 3),
@@ -1189,6 +1172,7 @@ test "pursuit holds an authored stand-off before melee windup" {
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     var player = contract.CombatantObservation{
         .target = testTarget(.player, 1),
@@ -1243,6 +1227,7 @@ test "windup commits authoritative NPC melee then enters recovery" {
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     const player = contract.CombatantObservation{
         .target = testTarget(.player, 1),
@@ -1285,6 +1270,7 @@ test "damage stimulus deterministically retargets its player instigator" {
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     const player = contract.CombatantObservation{
         .target = testTarget(.player, 4),
@@ -1321,7 +1307,6 @@ test "damage stimulus deterministically retargets its player instigator" {
 test "stable NPC order enforces the shared LOS budget without silent work" {
     var visibility = TestVisibility{};
     var feature = try Feature(TestVisibility).init(&visibility, .{
-        .hostile_npc_limit = 2,
         .ambient_perception_interval_ticks = 1,
         .engaged_perception_interval_ticks = 1,
         .los_queries_per_tick = 1,
@@ -1334,12 +1319,14 @@ test "stable NPC order enforces the shared LOS budget without silent work" {
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     const second = contract.NpcObservation{
         .target = testTarget(.npc, 11),
         .position = .{ 1, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     const player = contract.CombatantObservation{
         .target = testTarget(.player, 1),
@@ -1373,6 +1360,7 @@ test "occluded target is searched, forgotten, and returned to patrol" {
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     const player = contract.CombatantObservation{
         .target = testTarget(.player, 1),
@@ -1413,6 +1401,7 @@ test "occupied-vehicle target becomes ineligible and disengages" {
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     var player = contract.CombatantObservation{
         .target = testTarget(.player, 1),
@@ -1444,6 +1433,7 @@ test "death during windup emits hold and cannot commit post-death damage" {
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     const player = contract.CombatantObservation{
         .target = testTarget(.player, 1),
@@ -1496,6 +1486,7 @@ test "navigation unavailability cancels windup and returns to patrol" {
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     const player = contract.CombatantObservation{
         .target = testTarget(.player, 1),
@@ -1566,6 +1557,7 @@ test "navigation unavailability without an encounter override keeps patrol owner
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
 
     try feature.step(.{
@@ -1604,6 +1596,7 @@ test "mid-windup canonical records restore exact authority deadlines" {
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     const player = contract.CombatantObservation{
         .target = testTarget(.player, 1),
@@ -1638,6 +1631,7 @@ test "undrained output rejects the next frame before authority state changes" {
         .position = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     const player = contract.CombatantObservation{
         .target = testTarget(.player, 1),
@@ -1670,9 +1664,9 @@ test "64 NPC and 16 participant ceiling consumes the exact shared LOS budget det
         .position = .{ @as(f32, @floatFromInt(index % 8)) * 0.1, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
     const config = contract.Config{
-        .hostile_npc_limit = contract.max_records,
         .ambient_perception_interval_ticks = 1,
         .engaged_perception_interval_ticks = 1,
         .los_queries_per_tick = 16,

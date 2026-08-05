@@ -209,6 +209,7 @@ pub const FrameInput = struct {
     authoring: editor_contract.AuthoringInput,
     interaction: editor_contract.InteractionInput,
     navigation: editor_contract.NavigationInput,
+    population_view: *const editor_contract.PopulationView,
     gameplay_view: *const editor_contract.GameplayView,
     incident_input: incident_contract.InputSample = .{},
 };
@@ -1262,6 +1263,12 @@ pub const Owner = opaque {
             .authoring = frame.authoring,
             .interaction = frame.interaction,
             .navigation = frame.navigation,
+            .population = .{
+                .view = frame.population_view,
+                .gameplay = frame.gameplay_view,
+                .visualization = &visualization_snapshot,
+                .visualization_requests = &state.visualization_requests,
+            },
             .gameplay = .{
                 .view = frame.gameplay_view,
                 .trace = authority.gameplayTrace(),

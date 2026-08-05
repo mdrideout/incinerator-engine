@@ -1,11 +1,11 @@
 # Incinerator Multiplayer-First Architecture and Delivery Plan
 
 **Status:** MP0-MP6, M4-M6, S10-S11, IV0-IV5, IC5, the open-world
-corrective, and S12 automated destination-navigation acceptance are
-implemented on Apple Silicon macOS. The S12 human walkthrough remains before
-S13; public Internet, Steamworks, hosting, and MMO services remain deferred.
+corrective, S12 navigation, and S13 authored-population automated acceptance
+are implemented on Apple Silicon macOS. The S13 human walkthrough remains;
+public Internet, Steamworks, hosting, and MMO services remain deferred.
 
-**Last reviewed:** 2026-07-28
+**Last reviewed:** 2026-08-01
 
 **Current platform:** Apple Silicon macOS only
 
@@ -793,6 +793,21 @@ hardening remain later programs.
    [validation ledger](docs/validation/s12-destination-driven-navigation.md)
    for review. Follow its human checkpoint with authored population, ranged
    combat, and richer districts as separate gameplay slices.
+9. **S13 authored population and sandbox activity — implemented; automated
+   acceptance complete and human walkthrough pending.** Stable population
+   members, explicit roles/hostility, deterministic cyclic activity, exclusive
+   authored slots, safe generational replacement, and population diagnostics
+   are implemented under
+   [ADR-024](docs/adr/024-authored-population-intent-and-activity-slots.md) and
+   the
+   [S13 plan](docs/design/s13-authored-population-and-sandbox-activity.md), with
+   evidence in the
+   [validation ledger](docs/validation/s13-authored-population-and-sandbox-activity.md)
+   and [performance baseline](docs/performance/s13-baseline.md).
+   The same authority runs in solo/listen/dedicated placements; clients observe
+   role/activity projection but never select activity, hostility, death, or
+   replacement. No new routing, lobby, Steamworks, hosting, or MMO service
+   scope is part of S13.
 
 No post-M4 phase silently broadens platform, public-service, Steamworks, public
 Internet listen-host, or MMO scope. MP6's explicit listen scope is limited to

@@ -12,7 +12,7 @@ const districts = @import("district_feature_contract");
 const interactions = @import("interaction_feature_contract");
 const npcs = @import("npc_contract");
 const npc_encounters = @import("npc_encounter_contract");
-const npc_replacements = @import("sandbox_npc_replacement_contract");
+const population = @import("population_contract");
 const district_worker = @import("district_worker_contract");
 
 pub const CharacterControllerDiagnostics = struct {
@@ -40,7 +40,7 @@ pub const Diagnostics = struct {
     interaction: interactions.Diagnostics,
     npc: npcs.Diagnostics,
     npc_encounter: npc_encounters.Diagnostics,
-    npc_replacement: npc_replacements.Diagnostics,
+    population: ?population.Diagnostics,
     district_worker: district_worker.Diagnostics,
 };
 

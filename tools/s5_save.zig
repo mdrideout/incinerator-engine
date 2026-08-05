@@ -207,7 +207,10 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     var npc_evidence = NpcEvidence{};
     try world.submitNpc(.{ .spawn = .{
         .request_id = 30,
-        .node = .{ .coord = sandbox_contracts.navigation_west_coord, .index = 0 },
+        .position = .{ -5, 0, 5 },
+        .facing_yaw = 0,
+        .anchor = .{ .coord = sandbox_contracts.navigation_west_coord, .index = 0 },
+        .hostile_to_players = true,
         .goal = .hold,
     } });
     try world.tick();

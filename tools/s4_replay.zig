@@ -624,7 +624,10 @@ fn runSmokeScenario(
 
     try simulation.submitNpc(.{ .spawn = .{
         .request_id = Request.npc_spawn,
-        .node = .{ .coord = sandbox_contracts.navigation_west_coord, .index = 0 },
+        .position = .{ -5, 0, 5 },
+        .facing_yaw = 0,
+        .anchor = .{ .coord = sandbox_contracts.navigation_west_coord, .index = 0 },
+        .hostile_to_players = true,
         .goal = .{ .patrol_between = .{
             .first = sandbox_contracts.player_plaza_destination,
             .second = sandbox_contracts.market_terminal_destination,

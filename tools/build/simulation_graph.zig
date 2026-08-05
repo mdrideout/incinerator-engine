@@ -69,9 +69,9 @@ pub const Graph = struct {
     vitals: *std.Build.Module,
     npc_encounter_contract: *std.Build.Module,
     npc_encounter: *std.Build.Module,
-    sandbox_npc_replacement_contract: *std.Build.Module,
-    sandbox_npc_replacement: *std.Build.Module,
     population_contract: *std.Build.Module,
+    sandbox_population_catalog: *std.Build.Module,
+    sandbox_population: *std.Build.Module,
     interaction_feature_contract: *std.Build.Module,
     interaction: *std.Build.Module,
     session_authority_diagnostics: *std.Build.Module,
@@ -237,7 +237,7 @@ pub fn create(
     );
     const simulation_cohort_options = cohort_options.createModule();
     const network_options = b.addOptions();
-    network_options.addOption(u16, "protocol_revision", 14);
+    network_options.addOption(u16, "protocol_revision", 15);
     network_options.addOption(u64, "build_cohort", networkBuildCohort());
     network_options.addOption(
         u64,
@@ -537,27 +537,35 @@ pub fn create(
             .{ .name = "vitals_contract", .module = vitals_contract },
         },
     });
-    const sandbox_npc_replacement_contract = b.createModule(.{
-        .root_source_file = b.path("src/hosts/sandbox_npc_replacement_contract.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "npc_contract", .module = npc_contract }},
-    });
-    const sandbox_npc_replacement = b.createModule(.{
-        .root_source_file = b.path("src/hosts/sandbox_npc_replacement.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "incinerator_engine", .module = engine },
-            .{ .name = "npc_contract", .module = npc_contract },
-            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
-        },
-    });
     const population_contract = b.createModule(.{
         .root_source_file = b.path("src/features/population/contract.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "npc_contract", .module = npc_contract }},
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts },
+            .{ .name = "npc_contract", .module = npc_contract },
+        },
+    });
+    const sandbox_population_catalog = b.createModule(.{
+        .root_source_file = b.path("src/sandbox/population_catalog.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "district_contract", .module = district_contract },
+            .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "population_contract", .module = population_contract },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
+        },
+    });
+    const sandbox_population = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_population.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = engine },
+            .{ .name = "population_contract", .module = population_contract },
+            .{ .name = "sandbox_population_catalog", .module = sandbox_population_catalog },
+        },
     });
     const interaction_feature_contract = b.createModule(.{
         .root_source_file = b.path("src/features/interaction/contract.zig"),
@@ -633,7 +641,7 @@ pub fn create(
             .{ .name = "npc_contract", .module = npc_contract },
             .{ .name = "vitals_contract", .module = vitals_contract },
             .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
-            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
+            .{ .name = "population_contract", .module = population_contract },
             .{ .name = "district_worker_contract", .module = district_worker_contract },
         },
     });
@@ -677,7 +685,7 @@ pub fn create(
             .{ .name = "npc_contract", .module = npc_contract },
             .{ .name = "vitals_contract", .module = vitals_contract },
             .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
-            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
+            .{ .name = "population_contract", .module = population_contract },
             .{ .name = "district_contract", .module = district_contract },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts },
@@ -701,7 +709,8 @@ pub fn create(
             .{ .name = "vitals_contract", .module = vitals_contract },
             .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
             .{ .name = "npc_snapshot_validation", .module = npc_snapshot_validation },
-            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
+            .{ .name = "population_contract", .module = population_contract },
+            .{ .name = "sandbox_population_catalog", .module = sandbox_population_catalog },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
             .{ .name = "sandbox_navigation", .module = sandbox_navigation },
             .{ .name = "sandbox_replay", .module = sandbox_replay },
@@ -734,8 +743,9 @@ pub fn create(
             .{ .name = "vitals_feature", .module = vitals },
             .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
             .{ .name = "npc_encounter_feature", .module = npc_encounter },
-            .{ .name = "sandbox_npc_replacement", .module = sandbox_npc_replacement },
-            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
+            .{ .name = "population_contract", .module = population_contract },
+            .{ .name = "sandbox_population_catalog", .module = sandbox_population_catalog },
+            .{ .name = "sandbox_population", .module = sandbox_population },
             .{ .name = "district_worker_contract", .module = district_worker_contract },
             .{ .name = "district_replay_loader", .module = district_replay_loader },
             .{ .name = "jolt_physics", .module = jolt_physics },
@@ -884,6 +894,7 @@ pub fn create(
             .{ .name = "district_feature_contract", .module = district_feature_contract },
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "npc_contract", .module = npc_contract },
+            .{ .name = "population_contract", .module = population_contract },
             .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract },
             .{ .name = "session_budgets", .module = session_budgets },
             .{ .name = "session_identity", .module = session_identity },
@@ -914,7 +925,8 @@ pub fn create(
             .{ .name = "interaction_feature_contract", .module = interaction_feature_contract },
             .{ .name = "npc_contract", .module = npc_contract },
             .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
-            .{ .name = "sandbox_npc_replacement_contract", .module = sandbox_npc_replacement_contract },
+            .{ .name = "population_contract", .module = population_contract },
+            .{ .name = "sandbox_population_catalog", .module = sandbox_population_catalog },
             .{ .name = "vitals_contract", .module = vitals_contract },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
             .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract },
@@ -964,9 +976,9 @@ pub fn create(
         .vitals = vitals,
         .npc_encounter_contract = npc_encounter_contract,
         .npc_encounter = npc_encounter,
-        .sandbox_npc_replacement_contract = sandbox_npc_replacement_contract,
-        .sandbox_npc_replacement = sandbox_npc_replacement,
         .population_contract = population_contract,
+        .sandbox_population_catalog = sandbox_population_catalog,
+        .sandbox_population = sandbox_population,
         .interaction_feature_contract = interaction_feature_contract,
         .interaction = interaction,
         .session_authority_diagnostics = session_authority_diagnostics,

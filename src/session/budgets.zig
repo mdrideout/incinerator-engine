@@ -16,10 +16,9 @@ pub const product_carryables: usize = 1;
 pub const max_relevant_districts_per_client: usize = 4;
 pub const product_relevant_districts_per_client: usize = 1;
 pub const max_npcs: usize = 64;
-/// The installed two-district route currently authors three distinct spawn
-/// nodes per district. Keep the default playable room to one NPC per authored
-/// point; the 64-NPC ceiling remains an explicit synthetic scale profile.
-pub const product_npcs: usize = 6;
+/// The ordinary authored sandbox roster. The 64-NPC ceiling remains an
+/// explicit synthetic logic/transaction pressure profile.
+pub const product_npcs: usize = 12;
 pub const npc_snapshot_hz: u32 = 10;
 pub const ticks_per_npc_snapshot: u32 = authority_tick_hz / npc_snapshot_hz;
 pub const snapshot_history_capacity: usize = 8;

@@ -284,6 +284,39 @@ pub const NpcEncounterState = enum(u8) {
     returning = 6,
 };
 
+pub const NpcPopulationRole = enum(u8) {
+    unassigned = 0,
+    resident = 1,
+    worker = 2,
+    visitor = 3,
+};
+
+pub const NpcCombatDisposition = enum(u8) {
+    unassigned = 0,
+    passive = 1,
+    hostile_to_players = 2,
+};
+
+pub const NpcActivityKind = enum(u8) {
+    none = 0,
+    commute = 1,
+    shop = 2,
+    visit = 3,
+    idle = 4,
+};
+
+pub const NpcActivityState = enum(u8) {
+    unassigned = 0,
+    selecting = 1,
+    waiting_for_slot = 2,
+    traveling = 3,
+    dwelling = 4,
+    completing = 5,
+    interrupted = 6,
+    vacant = 7,
+    replacement_pending = 8,
+};
+
 pub const NpcState = struct {
     entity: identity.ReplicatedEntityId,
     position: [3]f32,
@@ -298,6 +331,11 @@ pub const NpcState = struct {
     encounter_state_enter_tick: u64 = 0,
     attack_impact_tick: u64 = 0,
     attack_ready_tick: u64 = 0,
+    population_member: u16 = 0,
+    population_role: NpcPopulationRole = .unassigned,
+    combat_disposition: NpcCombatDisposition = .unassigned,
+    activity_kind: NpcActivityKind = .none,
+    activity_state: NpcActivityState = .unassigned,
 };
 
 pub const SnapshotKind = enum(u8) {
@@ -1291,6 +1329,20 @@ fn validateSnapshot(value: Snapshot) !void {
             npc.maximum_health,
             npc.life_state,
         );
+        if (npc.population_member == 0) {
+            if (npc.population_role != .unassigned or
+                npc.combat_disposition != .unassigned or
+                npc.activity_kind != .none or
+                npc.activity_state != .unassigned)
+            {
+                return error.InvalidNpcPopulationProjection;
+            }
+        } else if (npc.population_role == .unassigned or
+            npc.combat_disposition == .unassigned or
+            npc.activity_state == .unassigned)
+        {
+            return error.InvalidNpcPopulationProjection;
+        }
     }
     for (value.removed_characters[0..value.removed_character_count]) |entity| {
         try entity.validate();
@@ -2007,6 +2059,11 @@ fn encodeNpc(encoder: *Encoder, value: NpcState) !void {
     try encoder.u64Value(value.encounter_state_enter_tick);
     try encoder.u64Value(value.attack_impact_tick);
     try encoder.u64Value(value.attack_ready_tick);
+    try encoder.u16Value(value.population_member);
+    try encoder.u8Value(@intFromEnum(value.population_role));
+    try encoder.u8Value(@intFromEnum(value.combat_disposition));
+    try encoder.u8Value(@intFromEnum(value.activity_kind));
+    try encoder.u8Value(@intFromEnum(value.activity_state));
 }
 
 fn decodeNpc(decoder: *Decoder) !NpcState {
@@ -2024,6 +2081,11 @@ fn decodeNpc(decoder: *Decoder) !NpcState {
         .encounter_state_enter_tick = 0,
         .attack_impact_tick = 0,
         .attack_ready_tick = 0,
+        .population_member = 0,
+        .population_role = .unassigned,
+        .combat_disposition = .unassigned,
+        .activity_kind = .none,
+        .activity_state = .unassigned,
     };
     for (&value.position) |*component| component.* = try decoder.f32Value();
     for (&value.velocity) |*component| component.* = try decoder.f32Value();
@@ -2046,6 +2108,23 @@ fn decodeNpc(decoder: *Decoder) !NpcState {
     value.encounter_state_enter_tick = try decoder.u64Value();
     value.attack_impact_tick = try decoder.u64Value();
     value.attack_ready_tick = try decoder.u64Value();
+    value.population_member = try decoder.u16Value();
+    value.population_role = enumFromInt(
+        NpcPopulationRole,
+        try decoder.u8Value(),
+    ) catch return error.InvalidEnum;
+    value.combat_disposition = enumFromInt(
+        NpcCombatDisposition,
+        try decoder.u8Value(),
+    ) catch return error.InvalidEnum;
+    value.activity_kind = enumFromInt(
+        NpcActivityKind,
+        try decoder.u8Value(),
+    ) catch return error.InvalidEnum;
+    value.activity_state = enumFromInt(
+        NpcActivityState,
+        try decoder.u8Value(),
+    ) catch return error.InvalidEnum;
     return value;
 }
 

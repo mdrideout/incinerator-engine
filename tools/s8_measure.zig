@@ -61,7 +61,7 @@ comptime {
     if (npc_contract.max_npcs != npc_ceiling) {
         @compileError("S8 measurement and simulation NPC cohorts differ");
     }
-    if (population.max_population_commands != npc_ceiling) {
+    if (population.synthetic_command_capacity != npc_ceiling) {
         @compileError("S8 population producer must emit the exact cohort");
     }
     if (jolt.max_virtual_characters != controller_capacity) {
@@ -975,9 +975,12 @@ fn spawnActors(harness: *Harness) !Identities {
 
 fn spawnPopulation(harness: *Harness) !void {
     const first_request_id: u64 = 1_000;
-    const batch = try population.plan(npc_ceiling, .{
+    const batch = try population.planSynthetic(npc_ceiling, .{
         .first_request_id = first_request_id,
-        .start_node = west_node,
+        .position = .{ -5, 0, 5 },
+        .facing_yaw = 0,
+        .anchor = west_node,
+        .hostile_to_players = true,
         .goal = .{ .patrol_between = .{
             .first = sandbox_contracts.player_plaza_destination,
             .second = sandbox_contracts.market_terminal_destination,
@@ -1014,7 +1017,10 @@ fn spawnPopulation(harness: *Harness) !void {
     const before = harness.world.diagnostics();
     try harness.world.submitNpc(.{ .spawn = .{
         .request_id = 2_000,
-        .node = west_node,
+        .position = .{ -5, 0, 5 },
+        .facing_yaw = 0,
+        .anchor = west_node,
+        .hostile_to_players = true,
         .goal = .{ .patrol_between = .{
             .first = sandbox_contracts.player_plaza_destination,
             .second = sandbox_contracts.market_terminal_destination,

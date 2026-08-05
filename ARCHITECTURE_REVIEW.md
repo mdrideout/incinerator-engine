@@ -1,22 +1,23 @@
 # Incinerator Engine Architecture Review
 
 **Status:** Living assessment; the Apple Silicon macOS gameplay/session
-foundation now includes the implemented S12 semantic-navigation slice,
-higher-fidelity two-district world, schema-4 evidence, and automated Metal
-acceptance. No open P0/P1 architectural finding blocks its final human
-walkthrough. S13 remains deferred until that checkpoint is reviewed.
+foundation now includes S12 semantic navigation and the implemented S13
+authored-population/activity slice. Protocol 15, snapshot 14, replay 16,
+incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
+automated Metal/product acceptance are current. No open P0/P1 architectural
+finding blocks the final S13 human walkthrough.
 
-**Last reviewed:** 2026-07-28
+**Last reviewed:** 2026-08-01
 
-**Scope:** Current post-S11 architecture, its demonstrated strengths, and its
+**Scope:** Current post-S13 architecture, its demonstrated strengths, and its
 remaining structural pressure before another product or service slice
 
 **Related roadmap:** [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md)
 
 **Multiplayer strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
-**Latest accepted program:**
-[`docs/validation/gameplay-interaction-validation-and-observability.md`](docs/validation/gameplay-interaction-validation-and-observability.md)
+**Latest automated acceptance:**
+[`docs/validation/s13-authored-population-and-sandbox-activity.md`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 
 **Accepted cohesion contract:**
 [`docs/design/m5-client-authority-cohesion.md`](docs/design/m5-client-authority-cohesion.md)
@@ -31,6 +32,7 @@ remaining structural pressure before another product or service slice
 → [`IC5 accepted`](docs/validation/human-test-incident-capture.md)
 → [`open-world spatial and vehicle-dynamics correction complete`](docs/design/open-world-spatial-diagnostics-and-playability.md)
 → [`S12 automated acceptance complete; human walkthrough pending`](docs/validation/s12-destination-driven-navigation.md)
+→ [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 
@@ -246,9 +248,9 @@ claim.
 | A-F032 | Several policies treated the retained hidden CharacterVirtual pose as the player location while driving, and the authority still admitted on-foot melee from or against vehicle occupants | P1 | Post-S11 corrective pass | Resolved: one authority participant-world-position boundary uses the occupied chassis for focus/relevance/spawn safety; replacement visibility does the same through a narrow vehicle read port; client and authority both enforce on-foot-only melee |
 | A-F033 | Durable pending NPC replacement records could be restored by the persistent headless product, but no operational consumer completed or deferred the emitted replacement outcome | P1 | Post-S11 corrective pass | Resolved: the headless composition advances an exact transaction from ready to correlated NPC spawn to vitals registration; only the matching `registered` outcome completes replacement, spawn rejection defers, vitals rejection compensates with an exact despawn before deferral, unrelated FIFO heads remain fault evidence, and in-flight transactions forbid quiescent save while settled state cold-restores and resaves exactly |
 | A-F034 | The accepted S11 record claimed an engaged-NPC replication priority while all NPC projection still uses the global 10 Hz lane | P2 | Before combat density or reaction readability depends on a faster engaged cadence | Open; measure and design an explicit priority budget instead of treating cue-forced publication as a second cadence |
-| A-F035 | Sandbox replacement candidates are still selected inside session authority, and hostile assignment follows current persistent-identity rank rather than authored durable population intent | P2 | Before multiple NPC roles/archetypes, encounter populations, or wanted/faction behavior | Open; move authored candidate/role intent behind a sandbox population contract without introducing a generic AI framework |
+| A-F035 | Sandbox replacement candidates were selected inside session authority, and hostile assignment followed current persistent-identity rank rather than authored durable population intent | P2 | S13 authored population | Resolved: stable population membership now owns role, explicit combat disposition, cyclic activity, authored spawn candidates, typed retry, and replacement across actor generations; session authority only routes intents and performs bounded placement queries |
 | A-F036 | Reliable life feedback fans out room-wide, carries no NPC source cue, and graphical acceptance/inspection remains stronger on lifecycle logs than source direction, semantic mid-state JIP, and per-NPC decision evidence | P2 | Before directional damage UI, materially larger rooms, or more sophisticated NPC behavior | Open; add relevance/recipient policy and a typed source cue only with the product UI that consumes it, then strengthen renderer-neutral semantic acceptance and selected-NPC inspection |
-| A-F037 | NPC replacement placement queries rigid bodies and live-player separation, but do not explicitly reject another live `CharacterVirtual`; the 64-NPC synthetic stress cohort necessarily maps many actors onto only six authored route nodes | P2 | Before a denser authored population/slot contract or crowd behavior where overlap is unacceptable | Open by design: automatic product bootstrap is now six NPCs, one per authored node, while the 64-NPC synthetic ceiling deliberately permits co-location. Requiring live-capsule separation against the current six-node stress fixture would make replacement impossible; author sufficient slots/crowd policy first, then add a bounded NPC-separation query if that product contract requires it |
+| A-F037 | NPC replacement placement queried rigid bodies and live-player separation but not another live `CharacterVirtual`; the 64-NPC synthetic cohort mapped too many actors onto too few physical anchors | P2 | S13 authored placement and separation | Resolved for declared scope: 24 spawn slots, sixteen unique real-Jolt placements, live-NPC capsule separation, same-cycle reservation, and zero measured placement/separation failures cover the 12/16 physical cohorts; 64 is explicitly logic/projection pressure, not crowd acceptance |
 | A-F038 | A compact saved NPC route prefix could be mistaken for a completed farther goal while destination content was inactive, flipping a patrol leg; restored pursuit could also be lost while its target cohort or owner was unavailable | P1 | Post-S11 corrective pass | Resolved: persisted routes distinguish `exact_prefix` from owner-aligned `deferred_rebuild`; inactive content cannot manufacture goal completion, patrol intent survives, and pending pursuit installs only after the required target/owner cohort reloads. Snapshot V11/replay 8 and focused navigate/patrol/pursuit restore tests fix the contract |
 | A-F039 | Valid S11 life/action bursts competed directly with the 16-message per-connection wire quota, conflating logical publication with transport preparation and allowing one slow consumer to threaten room progress | P1 | Post-S11 corrective pass | Resolved: one conservative admitted cycle derives 172 participant publications and the ledger retains two cycles (344 records); a cursor drains ordered batches under the 16-message wire ceiling, overflow retires only the slow participant, and exact burst/reconnect/client/presentation FIFO tests preserve bounded delivery |
 | A-F040 | The normal `zig build run` product had no playable hostile NPC even though validation-only S11 compositions did, so the accepted solo product claim exceeded ordinary composition | P1 | Post-S11 corrective pass | Resolved: a narrow product owner waits for the player and west district, submits one initial hostile through the host-managed authority, correlates its exact result, and has a renderer-free normal-product host test; the installed validation smoke separately proves the full combat presentation |
@@ -406,9 +408,9 @@ not as an unbounded file-reorganization phase.
     streamed-route, reliable-delivery, persistent-headless, ordinary
     product-bootstrap/lifecycle, causal-trace, silent-action, close-contact,
     and human-visible death gaps found by real play plus independent audits.
-    It also reduces automatic product population to six distinct authored
-    nodes while retaining 64 as a synthetic pressure profile and A-F037 as an
-    explicit density trigger. The complete automated matrix and direct rendered
+    It also reduced the then-automatic product population to six distinct
+    authored nodes while retaining 64 as a synthetic pressure profile and
+    recording the physical-density gap later resolved by S13. The complete automated matrix and direct rendered
     acceptance pass; the historical corrective record is superseded by the
     accepted
     [`Gameplay Interaction Validation And Observability Evidence`](docs/validation/gameplay-interaction-validation-and-observability.md).
@@ -419,23 +421,45 @@ not as an unbounded file-reorganization phase.
     current macOS baseline without adding a telemetry platform, generic
     streaming framework, or speculative AI/navigation stack.
 
-S12 now supplies the intended pressure test without changing the owner model:
-semantic destination is durable intent, route state is derived, district
-authority owns topology/gates, and physical pose remains truth. The immediate
-next action is its human evaluation-world and incident walkthrough. S13
-authored population is the next implementation slice after that review; it
-must not pre-emptively add a navmesh, crowd solver, behavior tree, ECS
-framework, scheduler, or service layer.
+S12 supplies the intended route boundary: semantic destination is durable
+intent, route state is derived, district authority owns topology/gates, and
+physical pose remains truth. S13 now gives population pressure a narrow owner. Stable
+population membership survives disposable NPC actor replacement; an immutable
+sandbox catalog owns roles, cyclic activity programs, sites, activity slots,
+spawn slots, and explicit combat disposition; a bounded population runtime
+owns activity/claim/replacement decisions; and NPC/navigation/encounter/vitals/
+session retain their existing movement, route, combat, health, and routing
+responsibilities. The initial 12-member product and 16-member physical cohort
+are deliberately separate from the 64-NPC synthetic engine ceiling.
 
-## Architecture Definition of Done Through S11
+This is architecturally preferable to adopting a broad AI stack now. Activity
+owns why a destination is selected, S12 owns how it is reached, and a
+free/claimed/occupied slot ledger owns exclusive use. Behavior graphs,
+navmeshes, crowd avoidance, simulation/representation/replication LOD, and
+generative agents remain explicit measured triggers. The recorded p99 for the
+sixteen-controller real-Jolt cohort is 0.027 ms, so no broad AI/crowd framework
+is justified by current pressure. See
+[`ADR-024`](docs/adr/024-authored-population-intent-and-activity-slots.md),
+the
+[`S13 plan`](docs/design/s13-authored-population-and-sandbox-activity.md), and
+the
+[`S13 evaluation world`](docs/design/s13-population-evaluation-world.md), with
+executed evidence in the
+[`S13 validation ledger`](docs/validation/s13-authored-population-and-sandbox-activity.md)
+and [`performance baseline`](docs/performance/s13-baseline.md).
+
+## Architecture Definition of Done Through S13
 
 M4 satisfies the remote multiplayer foundation. M5 satisfies embedded
 cohesion. M6 satisfies the transactional authority boundary. MP6 satisfies the
 playable room and constrained listen/dedicated placement criteria. S10 proves
 player combat/lifecycle authority. S11 proves that a second combat producer,
 autonomous NPC behavior, death presentation, and durable replacement can extend
-those boundaries without moving source of truth into the client; the linked
-acceptance records contain the evidence.
+those boundaries without moving source of truth into the client. S12 separates
+semantic destination from derived route, and S13 separates durable population
+intent from disposable physical actors while preserving the same authority in
+solo, listen, and dedicated placements; the linked acceptance records contain
+the evidence.
 
 - Embedded solo, constrained listen, and dedicated placement share one authority
   model; public Internet/Steam/NAT listen-host productization remains future work.

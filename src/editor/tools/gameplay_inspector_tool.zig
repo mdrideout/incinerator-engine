@@ -8,6 +8,7 @@ const std = @import("std");
 const zgui = @import("zgui");
 const engine = @import("incinerator_engine");
 const sandbox_host = @import("sandbox_host_contracts");
+const population = @import("population_contract");
 const tool_module = @import("../tool.zig");
 
 const GameplayInput = tool_module.GameplayInput;
@@ -76,6 +77,13 @@ fn reasonName(
             @tagName(value)
         else
             "unknown_navigation_reason",
+        .population_transition => if (std.enums.fromInt(
+            population.TransitionReason,
+            reason,
+        )) |value|
+            @tagName(value)
+        else
+            "unknown_population_transition",
         .validation_code => "validation_code",
     };
 }
@@ -308,6 +316,37 @@ pub fn draw(
                 .{ entity.radius, entity.half_height, entity.nearest_actor_separation },
             );
             if (entity.kind == .npc) {
+                if (entity.population_member) |member| {
+                    zgui.text(
+                        "population member {d} | role {s} | disposition {s}",
+                        .{
+                            member.value,
+                            if (entity.population_role) |value|
+                                @tagName(value)
+                            else
+                                "unavailable",
+                            if (entity.population_disposition) |value|
+                                @tagName(value)
+                            else
+                                "unavailable",
+                        },
+                    );
+                    zgui.text(
+                        "activity {s} / {s}",
+                        .{
+                            if (entity.population_activity_kind) |value|
+                                @tagName(value)
+                            else
+                                "unavailable",
+                            if (entity.population_activity_state) |value|
+                                @tagName(value)
+                            else
+                                "unavailable",
+                        },
+                    );
+                } else {
+                    zgui.text("population member unavailable (synthetic NPC)", .{});
+                }
                 zgui.text(
                     "navigation {s} | no-progress {d} ticks | last progress {d}",
                     .{

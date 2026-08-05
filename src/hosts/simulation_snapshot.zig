@@ -16,7 +16,8 @@ const interactions = @import("interaction_feature_contract");
 const npcs = @import("npc_contract");
 const vitals = @import("vitals_contract");
 const npc_encounters = @import("npc_encounter_contract");
-const npc_replacements = @import("sandbox_npc_replacement_contract");
+const population = @import("population_contract");
+const population_catalog = @import("sandbox_population_catalog");
 const sandbox_district_recipe = @import("sandbox_district_recipe");
 const sandbox_navigation = @import("sandbox_navigation");
 const sandbox_replay = @import("sandbox_replay");
@@ -36,7 +37,7 @@ pub const Limits = struct {
     max_npcs: usize = npcs.max_npcs,
 };
 
-pub const SnapshotV13 = struct {
+pub const SnapshotV14 = struct {
     schema_version: u16,
     completed_ticks: u64,
     fixed_delta_seconds: f32,
@@ -47,6 +48,7 @@ pub const SnapshotV13 = struct {
     interaction_config: interactions.InteractionConfigV1,
     npc_config: npcs.NpcConfigV1,
     npc_encounter_config: npc_encounters.ConfigV1,
+    authored_population: bool,
     navigation_gates: sandbox_navigation.GateState,
     crates: []const crates.CrateV1,
     characters: []const characters.CharacterV1,
@@ -56,7 +58,7 @@ pub const SnapshotV13 = struct {
     npcs: []const npcs.NpcV1,
     vitals: []const vitals.VitalsV1 = &.{},
     npc_encounters: []const npc_encounters.RecordV1,
-    npc_replacements: []const npc_replacements.RecordV1,
+    population: ?population.SnapshotV1,
 };
 
 pub const CharacterRestoreOptions = struct {
@@ -100,6 +102,7 @@ pub fn worldConfig(config: sandbox_host_contracts.Config) !sandbox_replay.WorldC
         config.npc,
         config.npc_encounter,
         config.create_ground,
+        config.authored_population,
         if (config.block) |block| .{
             .position = block.position,
             .half_extents = block.half_extents,
@@ -122,7 +125,7 @@ pub fn worldConfigFingerprint(
 /// a second public serialization path.
 pub fn encode(
     allocator: std.mem.Allocator,
-    value: SnapshotV13,
+    value: SnapshotV14,
     limits: Limits,
 ) ![]u8 {
     try validate(
@@ -149,9 +152,9 @@ pub fn parse(
     max_characters: usize,
     max_vehicles: usize,
     max_npcs: usize,
-) !std.json.Parsed(SnapshotV13) {
+) !std.json.Parsed(SnapshotV14) {
     if (bytes.len > max_bytes) return error.SnapshotTooLarge;
-    var parsed = try std.json.parseFromSlice(SnapshotV13, allocator, bytes, .{});
+    var parsed = try std.json.parseFromSlice(SnapshotV14, allocator, bytes, .{});
     errdefer parsed.deinit();
     try validate(
         parsed.value,
@@ -167,7 +170,7 @@ pub fn parse(
 /// admitted by its enclosing save envelope. Host-owned capacities and assets
 /// are inputs; logical tuning must reproduce the same canonical fingerprint.
 pub fn validateWorldConfig(
-    snapshot: SnapshotV13,
+    snapshot: SnapshotV14,
     expected: sandbox_host_contracts.Config,
 ) !void {
     const snapshot_character = try snapshot.character_config.toConfig(
@@ -192,6 +195,7 @@ pub fn validateWorldConfig(
         .interaction = snapshot_interaction,
         .npc = snapshot_npc,
         .npc_encounter = snapshot_npc_encounter,
+        .authored_population = snapshot.authored_population,
         .block = expected.block,
     });
     const embedded_digest = try embedded.fingerprint();
@@ -202,7 +206,7 @@ pub fn validateWorldConfig(
 }
 
 pub fn validate(
-    snapshot: SnapshotV13,
+    snapshot: SnapshotV14,
     max_crates: usize,
     max_characters: usize,
     max_vehicles: usize,
@@ -246,23 +250,6 @@ pub fn validate(
             record.npc,
         )) return error.NpcEncounterRecordsNotCanonical;
     }
-    if (snapshot.npc_replacements.len > npc_replacements.max_records) {
-        return error.TooManyNpcReplacementRecords;
-    }
-    for (snapshot.npc_replacements, 0..) |record, index| {
-        try npc_replacements.validateRecord(record);
-        if (index != 0 and snapshot.npc_replacements[index - 1].slot >= record.slot) {
-            return error.NpcReplacementRecordsNotCanonical;
-        }
-        for (record.candidates[0..record.candidate_count]) |candidate| {
-            switch (canonical_navigation.resolveNode(candidate)) {
-                .ready => {},
-                .district_inactive => unreachable,
-                .invalid_reference => return error.InvalidNpcReplacementCandidate,
-            }
-        }
-    }
-
     for (snapshot.crates) |record| {
         try validateIdentity(record.id, snapshot);
     }
@@ -434,6 +421,151 @@ pub fn validate(
             }
         }
     }
+    try validatePopulation(snapshot);
+}
+
+fn validatePopulation(snapshot: SnapshotV14) !void {
+    if (!snapshot.authored_population) {
+        if (snapshot.population != null) {
+            return error.UnexpectedPopulationSnapshot;
+        }
+        return;
+    }
+    const value = snapshot.population orelse return error.PopulationSnapshotMissing;
+    try value.config.validate();
+    try population_catalog.validate();
+    if (value.catalog_version != population_catalog.catalog_version) {
+        return error.PopulationCatalogVersionMismatch;
+    }
+    if (value.last_step_tick > snapshot.completed_ticks) {
+        return error.PopulationTickAheadOfSnapshot;
+    }
+    const expected_members: usize = switch (value.config.cohort) {
+        .ordinary => population.ordinary_member_count,
+        .physical_stress => population.max_members,
+    };
+    if (value.members.len != expected_members or
+        value.slots.len != population.max_activity_slots)
+    {
+        return error.InvalidPopulationSnapshotCapacity;
+    }
+
+    for (value.members, 0..) |member, index| {
+        const definition = population_catalog.members[index];
+        if (!population.PopulationMemberId.eql(member.id, definition.id) or
+            member.actor_generation == 0 or member.spawn_in_flight or
+            member.last_transition_tick > snapshot.completed_ticks)
+        {
+            return error.InvalidPopulationMemberRecord;
+        }
+        const program = population_catalog.programDefinition(
+            definition.program,
+        ) orelse return error.InvalidPopulationProgramReference;
+        if (member.program_cursor >= program.stepSlice().len) {
+            return error.InvalidPopulationProgramCursor;
+        }
+        for (value.members[0..index]) |earlier| {
+            if (earlier.actor != null and member.actor != null and
+                std.meta.eql(earlier.actor.?, member.actor.?))
+            {
+                return error.DuplicatePopulationActor;
+            }
+        }
+
+        switch (member.lifecycle) {
+            .live => {
+                const actor = member.actor orelse return error.PopulationLiveActorMissing;
+                const npc_record = for (snapshot.npcs) |candidate| {
+                    if (std.meta.eql(candidate.id, actor)) break candidate;
+                } else return error.PopulationActorNotFound;
+                const expected_hostile =
+                    definition.combat_disposition == .hostile_to_players;
+                if (npc_record.hostile_to_players != expected_hostile) {
+                    return error.PopulationCombatDispositionMismatch;
+                }
+                const target = vitals.Target{
+                    .kind = .npc,
+                    .id = actor,
+                    .incarnation = .{ .value = member.actor_generation },
+                };
+                const vital_present = for (snapshot.vitals) |record| {
+                    if (std.meta.eql(record.target, target)) break true;
+                } else false;
+                const encounter_present = for (snapshot.npc_encounters) |record| {
+                    if (std.meta.eql(record.npc, target)) break true;
+                } else false;
+                if (!vital_present or !encounter_present) {
+                    return error.PopulationActorLifecycleIncomplete;
+                }
+            },
+            .awaiting_spawn, .vacant, .replacement_pending => {
+                if (member.actor != null) return error.PopulationInactiveActorPresent;
+            },
+        }
+
+        const has_activity_claim =
+            member.activity_state == .traveling or
+            member.activity_state == .dwelling;
+        if (has_activity_claim) {
+            const site_id = member.activity_site orelse
+                return error.PopulationActivitySiteMissing;
+            const slot_id = member.activity_slot orelse
+                return error.PopulationActivitySlotMissing;
+            const slot = population_catalog.activitySlotDefinition(slot_id) orelse
+                return error.InvalidPopulationActivitySlot;
+            const step = program.stepSlice()[member.program_cursor];
+            if (!population.ActivitySiteId.eql(site_id, step.site) or
+                !population.ActivitySiteId.eql(slot.site, site_id) or
+                !slot.activities.accepts(step.kind))
+            {
+                return error.PopulationActivityCatalogMismatch;
+            }
+        } else if (member.activity_site != null or member.activity_slot != null) {
+            return error.UnexpectedPopulationActivityClaim;
+        }
+        switch (member.lifecycle) {
+            .awaiting_spawn => if (member.activity_state != .replacement_pending)
+                return error.InvalidPopulationLifecycleState,
+            .live => if (member.activity_state == .vacant or
+                member.activity_state == .replacement_pending)
+                return error.InvalidPopulationLifecycleState,
+            .vacant => if (member.activity_state != .vacant)
+                return error.InvalidPopulationLifecycleState,
+            .replacement_pending => if (member.activity_state != .replacement_pending)
+                return error.InvalidPopulationLifecycleState,
+        }
+    }
+
+    for (value.slots, 0..) |slot, index| {
+        if (!population.ActivitySlotId.eql(
+            slot.id,
+            population_catalog.activity_slots[index].id,
+        )) return error.InvalidPopulationSlotRecord;
+        switch (slot.state) {
+            .free => {
+                if (slot.member != null or slot.lease_deadline_tick != 0) {
+                    return error.InvalidFreePopulationSlot;
+                }
+            },
+            .claimed, .occupied => {
+                const member_id = slot.member orelse
+                    return error.PopulationSlotMemberMissing;
+                const member = for (value.members) |candidate| {
+                    if (population.PopulationMemberId.eql(
+                        candidate.id,
+                        member_id,
+                    )) break candidate;
+                } else return error.PopulationSlotMemberNotFound;
+                if (member.lifecycle != .live or member.activity_slot == null or
+                    !population.ActivitySlotId.eql(member.activity_slot.?, slot.id) or
+                    (slot.state == .claimed and member.activity_state != .traveling) or
+                    (slot.state == .occupied and member.activity_state != .dwelling))
+                {
+                    return error.PopulationSlotClaimMismatch;
+                }
+            },
+        }
+    }
 }
 
 /// Convert a fully validated replay construction record into the one concrete
@@ -458,6 +590,7 @@ pub fn configFromReplayWorld(
         .interaction = try world.interaction.toConfig(),
         .npc = try world.npc.toConfig(.{}),
         .npc_encounter = try world.npc_encounter.toConfig(),
+        .authored_population = world.authored_population,
         .block = if (world.block) |block| .{
             .position = block.position,
             .half_extents = block.half_extents,
@@ -465,7 +598,7 @@ pub fn configFromReplayWorld(
     };
 }
 
-fn validateIdentity(id: engine.PersistentId, snapshot: SnapshotV13) !void {
+fn validateIdentity(id: engine.PersistentId, snapshot: SnapshotV14) !void {
     if (id.namespace != snapshot.namespace) return error.ForeignIdentityNamespace;
     if (id.local >= snapshot.next_local_id) return error.IdentityCursorWouldCollide;
 }
@@ -482,7 +615,7 @@ fn validateVirtualCharacterBudget(max_characters: usize, max_npcs: usize) !void 
     }
 }
 
-fn emptySnapshot() SnapshotV13 {
+fn emptySnapshot() SnapshotV14 {
     return .{
         .schema_version = schema_version,
         .completed_ticks = 0,
@@ -494,6 +627,7 @@ fn emptySnapshot() SnapshotV13 {
         .interaction_config = interactions.InteractionConfigV1.fromConfig(.{}),
         .npc_config = npcs.NpcConfigV1.fromConfig(.{}),
         .npc_encounter_config = npc_encounters.ConfigV1.fromConfig(.{}),
+        .authored_population = false,
         .navigation_gates = initial_navigation_gates,
         .crates = &.{},
         .characters = &.{},
@@ -503,11 +637,11 @@ fn emptySnapshot() SnapshotV13 {
         .npcs = &.{},
         .vitals = &.{},
         .npc_encounters = &.{},
-        .npc_replacements = &.{},
+        .population = null,
     };
 }
 
-test "canonical V13 snapshot round trips without native authority" {
+test "canonical V14 snapshot round trips without native authority" {
     const expected = emptySnapshot();
     const bytes = try encode(std.testing.allocator, expected, .{});
     defer std.testing.allocator.free(bytes);
@@ -565,5 +699,74 @@ test "snapshot codec enforces size schema and exact world identity" {
     try std.testing.expectError(
         error.SnapshotWorldConfigMismatch,
         validateWorldConfig(drifted, config),
+    );
+}
+
+test "population preflight rejects catalog and claim drift before native authority" {
+    var members: [population.ordinary_member_count]population.MemberRecordV1 = undefined;
+    for (&members, population_catalog.members[0..members.len]) |*record, definition| {
+        record.* = .{
+            .id = definition.id,
+            .lifecycle = .awaiting_spawn,
+            .actor_generation = 1,
+            .spawn_in_flight = false,
+            .program_cursor = definition.phase_offset,
+            .activity_sequence = 0,
+            .activity_state = .replacement_pending,
+            .deadline_tick = 0,
+            .retry_tick = 1,
+            .spawn_retry_reason = .none,
+            .spawn_candidate_cursor = 0,
+            .last_transition_tick = 0,
+            .last_transition_reason = .cold_bootstrap,
+        };
+    }
+    var slots: [population.max_activity_slots]population.ActivitySlotRecordV1 =
+        undefined;
+    for (&slots, population_catalog.activity_slots) |*record, definition| {
+        record.* = .{
+            .id = definition.id,
+            .state = .free,
+            .lease_deadline_tick = 0,
+        };
+    }
+    var population_snapshot = population.SnapshotV1{
+        .catalog_version = population_catalog.catalog_version,
+        .config = .{},
+        .last_step_tick = 0,
+        .stats = .{},
+        .members = &members,
+        .slots = &slots,
+    };
+    var snapshot = emptySnapshot();
+    snapshot.authored_population = true;
+    snapshot.population = population_snapshot;
+    try validate(snapshot, 1, 1, 1, npcs.max_npcs);
+
+    members[0].id = .{ .value = 99 };
+    try std.testing.expectError(
+        error.InvalidPopulationMemberRecord,
+        validate(snapshot, 1, 1, 1, npcs.max_npcs),
+    );
+    members[0].id = population_catalog.members[0].id;
+
+    slots[0].state = .claimed;
+    slots[0].member = members[0].id;
+    slots[0].lease_deadline_tick = 10;
+    try std.testing.expectError(
+        error.PopulationSlotClaimMismatch,
+        validate(snapshot, 1, 1, 1, npcs.max_npcs),
+    );
+
+    slots[0] = .{
+        .id = population_catalog.activity_slots[0].id,
+        .state = .free,
+        .lease_deadline_tick = 0,
+    };
+    population_snapshot.catalog_version +%= 1;
+    snapshot.population = population_snapshot;
+    try std.testing.expectError(
+        error.PopulationCatalogVersionMismatch,
+        validate(snapshot, 1, 1, 1, npcs.max_npcs),
     );
 }

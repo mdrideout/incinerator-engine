@@ -1,22 +1,22 @@
 {
   "schema_version": 1,
-  "catalog_semantic_id": "incinerator.s12.two-district",
+  "catalog_semantic_id": "incinerator.s13.population-two-district",
   "catalog_wire_schema": 1,
-  "content_cohort_fingerprint": "7c4f7a353ac7f1160f123bd21ea1ee356c9a274dae7646d29d0a6f4b63f5bc80",
-  "catalog_file_sha256": "7d1c19be3844b3aa1c4b4957b26617c0b8d4f618450f23505e8f35d6f115b0f2",
+  "content_cohort_fingerprint": "4cf1512641aa88af49b71a09c4504c528d8ef4edaa070d7a79699e88d6cce290",
+  "catalog_file_sha256": "e5debef275d9bd8f8cefc2f223d12a47995f267544a2f63b47fb561ca104d24b",
   "districts": [
     {
       "semantic_id": "district.west",
       "coord_x": 0,
       "coord_z": 0,
-      "recipe_version": 6,
+      "recipe_version": 7,
       "bundle_file_sha256": "d4d72f9dd029c7b85c750fe97c228c75f48d2e6e14838917bde601f090bcd44b"
     },
     {
       "semantic_id": "district.east",
       "coord_x": 1,
       "coord_z": 0,
-      "recipe_version": 6,
+      "recipe_version": 7,
       "bundle_file_sha256": "d7d9f1d3c71a014cf61337c44df4ee5981fe973635f98a67cf7af9bd2b4d8ba5"
     }
   ]

@@ -238,9 +238,9 @@ pub fn build(b: *std.Build) void {
     const vitals_feature_module = graph.vitals;
     const npc_encounter_contract_module = graph.npc_encounter_contract;
     const npc_encounter_feature_module = graph.npc_encounter;
-    const sandbox_npc_replacement_contract_module = graph.sandbox_npc_replacement_contract;
-    const sandbox_npc_replacement_module = graph.sandbox_npc_replacement;
     const population_contract_module = graph.population_contract;
+    const sandbox_population_catalog_module = graph.sandbox_population_catalog;
+    const sandbox_population_module = graph.sandbox_population;
     const interaction_feature_contract_module = graph.interaction_feature_contract;
     const interaction_feature_module = graph.interaction;
     const session_authority_diagnostics_module = graph.session_authority_diagnostics;
@@ -848,22 +848,13 @@ pub fn build(b: *std.Build) void {
     content_relocation_step.dependOn(&run_content_relocation.step);
 
     addClientImport(exe, validation_exe, "population_contract", population_contract_module);
-    addClientImport(exe, validation_exe, "session_budgets", session_budgets_module);
-    const sandbox_product_encounter_module = b.createModule(.{
-        .root_source_file = b.path("src/sandbox/product_encounter.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{
-            .{ .name = "npc_contract", .module = npc_contract_module },
-            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
-        },
-    });
     addClientImport(
         exe,
         validation_exe,
-        "sandbox_product_encounter",
-        sandbox_product_encounter_module,
+        "sandbox_population_catalog",
+        sandbox_population_catalog_module,
     );
+    addClientImport(exe, validation_exe, "session_budgets", session_budgets_module);
     const sandbox_product_character_lifecycle_module = b.createModule(.{
         .root_source_file = b.path("src/sandbox/product_character_lifecycle.zig"),
         .target = target,
@@ -879,19 +870,31 @@ pub fn build(b: *std.Build) void {
         "sandbox_product_character_lifecycle",
         sandbox_product_character_lifecycle_module,
     );
-    const sandbox_product_encounter_host_test_module = b.createModule(.{
-        .root_source_file = b.path("src/hosts/sandbox_product_encounter_test.zig"),
+    const sandbox_product_population_host_test_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_product_population_test.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
             .{ .name = "incinerator_engine", .module = mod },
             .{ .name = "local_solo_session", .module = local_solo_session_module },
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
-            .{ .name = "sandbox_product_encounter", .module = sandbox_product_encounter_module },
-            .{
-                .name = "sandbox_product_character_lifecycle",
-                .module = sandbox_product_character_lifecycle_module,
-            },
+            .{ .name = "population_contract", .module = population_contract_module },
+            .{ .name = "sandbox_replay", .module = sandbox_replay_module },
+            .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
+        },
+    });
+    const sandbox_population_catalog_host_test_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_population_catalog_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "jolt_physics", .module = jolt_physics_module },
+            .{ .name = "district_contract", .module = district_contract_module },
+            .{ .name = "population_contract", .module = population_contract_module },
+            .{ .name = "sandbox_population_catalog", .module = sandbox_population_catalog_module },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
         },
     });
     const sandbox_gameplay_scenarios_module = b.createModule(.{
@@ -2317,6 +2320,14 @@ pub fn build(b: *std.Build) void {
         "smoke-installed-s11-macos",
         "Run installed S11 combat-presentation Metal smokes at 240/80 Hz from /tmp (native Apple Silicon only)",
     );
+    const installed_s13_smoke_step = b.step(
+        "smoke-installed-s13-macos",
+        "Run the ordinary twelve-member S13 Metal smoke above/below 60 Hz from /tmp (native Apple Silicon only)",
+    );
+    const s13_incident_benchmark_step = b.step(
+        "benchmark-s13-incident-macos",
+        "Measure incident capture in the ordinary S13 Metal product (native Apple Silicon only)",
+    );
     const installed_s4_diagnostics_smoke_step = b.step(
         "smoke-installed-s4-diagnostics-macos",
         "Run the installed S4 diagnostics/fault-inspection Metal smoke from /tmp (native Apple Silicon only)",
@@ -2514,6 +2525,60 @@ pub fn build(b: *std.Build) void {
         );
         installed_s11_smoke_below.step.dependOn(&installed_s11_smoke_above.step);
         installed_s11_smoke_step.dependOn(&installed_s11_smoke_below.step);
+
+        const installed_s13_smoke_above = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
+            "--s13-population-smoke",
+            "--frames=3840",
+            "--virtual-render-hz=240",
+        });
+        installed_s13_smoke_above.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s13_smoke_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s13_smoke_above.step.dependOn(b.getInstallStep());
+        const installed_s13_smoke_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s13-population-smoke",
+            "--frames=640",
+            "--virtual-render-hz=40",
+        });
+        installed_s13_smoke_below.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s13_smoke_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s13_smoke_below.step.dependOn(&installed_s13_smoke_above.step);
+        installed_s13_smoke_step.dependOn(&installed_s13_smoke_below.step);
+
+        if (incident_capture_enabled) {
+            const installed_product_path = b.getInstallPath(.bin, exe.out_filename);
+            const benchmark_root = "/tmp/incinerator-s13-incident-benchmark";
+            const benchmark_prepare = b.addSystemCommand(&.{
+                "rm",
+                "-rf",
+                benchmark_root,
+            });
+            benchmark_prepare.step.dependOn(b.getInstallStep());
+            const benchmark_incident = b.addSystemCommand(&.{
+                installed_product_path,
+                "--incident-benchmark",
+            });
+            benchmark_incident.setCwd(.{ .cwd_relative = "/tmp" });
+            benchmark_incident.removeEnvironmentVariable(
+                "INCINERATOR_CONTENT_ROOT",
+            );
+            benchmark_incident.setEnvironmentVariable(
+                "INCINERATOR_INCIDENT_ROOT",
+                benchmark_root,
+            );
+            benchmark_incident.step.dependOn(&benchmark_prepare.step);
+            s13_incident_benchmark_step.dependOn(&benchmark_incident.step);
+        } else {
+            const incident_required = b.addFail(
+                "S13 incident benchmark requires -Dincident-capture=true",
+            );
+            s13_incident_benchmark_step.dependOn(&incident_required.step);
+        }
 
         const installed_s4_diagnostics_smoke = addValidationCommand(b, install_validation_step, &.{
             installed_validation_path,
@@ -2996,6 +3061,8 @@ pub fn build(b: *std.Build) void {
         installed_s7_smoke_step.dependOn(&native_only.step);
         installed_s8_smoke_step.dependOn(&native_only.step);
         installed_s11_smoke_step.dependOn(&native_only.step);
+        installed_s13_smoke_step.dependOn(&native_only.step);
+        s13_incident_benchmark_step.dependOn(&native_only.step);
         installed_s4_diagnostics_smoke_step.dependOn(&native_only.step);
         installed_s4_replay_smoke_step.dependOn(&native_only.step);
         installed_s4_physics_debug_smoke_step.dependOn(&native_only.step);
@@ -3148,23 +3215,6 @@ pub fn build(b: *std.Build) void {
     );
     npc_encounter_test_step.dependOn(&run_npc_encounter_contract_tests.step);
     npc_encounter_test_step.dependOn(&run_npc_encounter_feature_tests.step);
-    const npc_replacement_tests = b.addTest(.{
-        .root_module = sandbox_npc_replacement_module,
-    });
-    const run_npc_replacement_tests = b.addRunArtifact(npc_replacement_tests);
-    const npc_replacement_contract_tests = b.addTest(.{
-        .root_module = sandbox_npc_replacement_contract_module,
-    });
-    const run_npc_replacement_contract_tests = b.addRunArtifact(
-        npc_replacement_contract_tests,
-    );
-    const npc_replacement_test_step = b.step(
-        "test-npc-replacement",
-        "Run durable safe NPC replacement policy tests",
-    );
-    npc_replacement_test_step.dependOn(&run_npc_replacement_tests.step);
-    npc_replacement_test_step.dependOn(&run_npc_replacement_contract_tests.step);
-
     const driver_contract_tests = b.addTest(.{ .root_module = driver_contract_module });
     const run_driver_contract_tests = b.addRunArtifact(driver_contract_tests);
     const driver_contract_test_step = b.step(
@@ -3303,9 +3353,59 @@ pub fn build(b: *std.Build) void {
     );
     const population_contract_test_step = b.step(
         "test-population-contract",
-        "Run fixed stateless NPC population planning contract tests",
+        "Run authored population value contract tests",
     );
     population_contract_test_step.dependOn(&run_population_contract_tests.step);
+
+    const sandbox_population_catalog_tests = b.addTest(.{
+        .root_module = sandbox_population_catalog_module,
+    });
+    const run_sandbox_population_catalog_tests = b.addRunArtifact(
+        sandbox_population_catalog_tests,
+    );
+    const sandbox_population_catalog_test_step = b.step(
+        "test-sandbox-population-catalog",
+        "Run exact authored roster, activity, destination, and placement admission tests",
+    );
+    sandbox_population_catalog_test_step.dependOn(
+        &run_sandbox_population_catalog_tests.step,
+    );
+
+    const sandbox_population_catalog_host_tests = b.addTest(.{
+        .root_module = sandbox_population_catalog_host_test_module,
+    });
+    const run_sandbox_population_catalog_host_tests = b.addRunArtifact(
+        sandbox_population_catalog_host_tests,
+    );
+    const sandbox_population_catalog_host_test_step = b.step(
+        "test-sandbox-population-placement",
+        "Run native Jolt placement proof for sixteen authored activity poses",
+    );
+    sandbox_population_catalog_host_test_step.dependOn(
+        &run_sandbox_population_catalog_host_tests.step,
+    );
+
+    const sandbox_population_tests = b.addTest(.{
+        .root_module = sandbox_population_module,
+    });
+    const run_sandbox_population_tests = b.addRunArtifact(
+        sandbox_population_tests,
+    );
+    const sandbox_population_test_step = b.step(
+        "test-sandbox-population",
+        "Run deterministic member, activity, slot, and replacement intent authority tests",
+    );
+    sandbox_population_test_step.dependOn(&run_sandbox_population_tests.step);
+
+    const test_s13_population_step = b.step(
+        "test-s13-population",
+        "Run S13 authored population contracts and catalog admission",
+    );
+    test_s13_population_step.dependOn(population_contract_test_step);
+    test_s13_population_step.dependOn(sandbox_population_catalog_test_step);
+    test_s13_population_step.dependOn(sandbox_population_catalog_host_test_step);
+    test_s13_population_step.dependOn(sandbox_population_test_step);
+    test_s13_population_step.dependOn(sandbox_navigation_test_step);
 
     const district_gpu_registry_tests = b.addTest(.{
         .root_module = district_gpu_registry_module,
@@ -3359,32 +3459,18 @@ pub fn build(b: *std.Build) void {
     );
     sandbox_controls_test_step.dependOn(&run_sandbox_controls_tests.step);
 
-    const sandbox_product_encounter_tests = b.addTest(.{
-        .root_module = sandbox_product_encounter_module,
+    const sandbox_product_population_host_tests = b.addTest(.{
+        .root_module = sandbox_product_population_host_test_module,
     });
-    const run_sandbox_product_encounter_tests = b.addRunArtifact(
-        sandbox_product_encounter_tests,
+    const run_sandbox_product_population_host_tests = b.addRunArtifact(
+        sandbox_product_population_host_tests,
     );
-    const sandbox_product_encounter_test_step = b.step(
-        "test-sandbox-product-encounter",
-        "Run product-composition NPC encounter bootstrap tests",
+    const sandbox_product_population_host_test_step = b.step(
+        "test-sandbox-product-population-host",
+        "Run authored product population through the host-managed local session",
     );
-    sandbox_product_encounter_test_step.dependOn(
-        &run_sandbox_product_encounter_tests.step,
-    );
-
-    const sandbox_product_encounter_host_tests = b.addTest(.{
-        .root_module = sandbox_product_encounter_host_test_module,
-    });
-    const run_sandbox_product_encounter_host_tests = b.addRunArtifact(
-        sandbox_product_encounter_host_tests,
-    );
-    const sandbox_product_encounter_host_test_step = b.step(
-        "test-sandbox-product-encounter-host",
-        "Run normal product NPC encounter and local character lifecycle through the host-managed session",
-    );
-    sandbox_product_encounter_host_test_step.dependOn(
-        &run_sandbox_product_encounter_host_tests.step,
+    sandbox_product_population_host_test_step.dependOn(
+        &run_sandbox_product_population_host_tests.step,
     );
 
     const sandbox_invocation_tests = b.addTest(.{
@@ -3729,7 +3815,6 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_vitals_feature_tests.step);
     test_step.dependOn(&run_npc_encounter_contract_tests.step);
     test_step.dependOn(&run_npc_encounter_feature_tests.step);
-    test_step.dependOn(&run_npc_replacement_tests.step);
     test_step.dependOn(&run_driver_contract_tests.step);
     test_step.dependOn(&run_interaction_contract_tests.step);
     test_step.dependOn(&run_vehicle_feature_tests.step);
@@ -3743,13 +3828,15 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_interaction_feature_tests.step);
     test_step.dependOn(&run_npc_feature_tests.step);
     test_step.dependOn(&run_population_contract_tests.step);
+    test_step.dependOn(&run_sandbox_population_catalog_tests.step);
+    test_step.dependOn(&run_sandbox_population_catalog_host_tests.step);
+    test_step.dependOn(&run_sandbox_population_tests.step);
     test_step.dependOn(&run_district_gpu_registry_tests.step);
     test_step.dependOn(&run_district_scene_adapter_tests.step);
     test_step.dependOn(&run_district_presentation_tests.step);
     test_step.dependOn(&run_district_streaming_host_tests.step);
     test_step.dependOn(&run_sandbox_controls_tests.step);
-    test_step.dependOn(&run_sandbox_product_encounter_tests.step);
-    test_step.dependOn(&run_sandbox_product_encounter_host_tests.step);
+    test_step.dependOn(&run_sandbox_product_population_host_tests.step);
     test_step.dependOn(&run_sandbox_invocation_tests.step);
     test_step.dependOn(&run_sandbox_host_contracts_tests.step);
     test_step.dependOn(&run_developer_controls_tests.step);
@@ -3933,6 +4020,46 @@ pub fn build(b: *std.Build) void {
     );
     measure_s12_step.dependOn(&run_s12_measure.step);
 
+    const s13_measure_root_module = b.createModule(.{
+        .root_source_file = b.path("tools/s13_measure.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "district_contract", .module = district_contract_module },
+            .{ .name = "jolt_physics", .module = jolt_physics_module },
+            .{ .name = "npc_contract", .module = npc_contract_module },
+            .{ .name = "population_contract", .module = population_contract_module },
+            .{ .name = "sandbox_population", .module = sandbox_population_module },
+            .{ .name = "sandbox_population_catalog", .module = sandbox_population_catalog_module },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
+            .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
+        },
+    });
+    const s13_measure_exe = b.addExecutable(.{
+        .name = "incinerator_s13_measure",
+        .root_module = s13_measure_root_module,
+    });
+    const s13_measure_check_step = b.step(
+        "check-s13-measure",
+        "Compile the SDL-free S13 authored-population measurement",
+    );
+    s13_measure_check_step.dependOn(&s13_measure_exe.step);
+    const run_s13_measure = b.addRunArtifact(s13_measure_exe);
+    const measure_s13_step = b.step(
+        "measure-s13",
+        "Run the ReleaseFast S13 owner, physical, synthetic, persistence, and projection measurement",
+    );
+    measure_s13_step.dependOn(&run_s13_measure.step);
+    const s13_measure_tests = b.addTest(.{ .root_module = s13_measure_root_module });
+    const run_s13_measure_tests = b.addRunArtifact(s13_measure_tests);
+    const s13_measure_test_step = b.step(
+        "test-s13-measure",
+        "Run S13 authored-population measurement methodology tests",
+    );
+    s13_measure_test_step.dependOn(&run_s13_measure_tests.step);
+
     const installed_s12_smoke_step = b.step(
         "smoke-installed-s12-macos",
         "Run installed S12 navigation/world and inherited combat Metal smokes",
@@ -3945,7 +4072,7 @@ pub fn build(b: *std.Build) void {
         "Run authoritative NPC encounter, durability, network, and graphical acceptance",
     );
     verify_s11_step.dependOn(npc_encounter_test_step);
-    verify_s11_step.dependOn(npc_replacement_test_step);
+    verify_s11_step.dependOn(sandbox_population_test_step);
     verify_s11_step.dependOn(vitals_feature_test_step);
     verify_s11_step.dependOn(simulation_snapshot_test_step);
     verify_s11_step.dependOn(sandbox_simulation_test_step);
@@ -3961,7 +4088,7 @@ pub fn build(b: *std.Build) void {
     verify_s11_step.dependOn(verify_s11_listen_step);
     verify_s11_step.dependOn(verify_s11_dedicated_step);
     verify_s11_step.dependOn(installed_s11_smoke_step);
-    verify_s11_step.dependOn(sandbox_product_encounter_host_test_step);
+    verify_s11_step.dependOn(sandbox_product_population_host_test_step);
 
     const verify_s12_step = b.step(
         "verify-s12",
@@ -3975,6 +4102,26 @@ pub fn build(b: *std.Build) void {
     verify_s12_step.dependOn(check_validation_step);
     verify_s12_step.dependOn(verify_source_package_step);
     verify_s12_step.dependOn(installed_s12_smoke_step);
+
+    const verify_s13_step = b.step(
+        "verify-s13",
+        "Run complete S13 authored-population, lifecycle, evidence, and macOS acceptance",
+    );
+    verify_s13_step.dependOn(test_s13_population_step);
+    verify_s13_step.dependOn(test_s12_navigation_step);
+    verify_s13_step.dependOn(s12_measure_test_step);
+    verify_s13_step.dependOn(s13_measure_test_step);
+    verify_s13_step.dependOn(sandbox_product_population_host_test_step);
+    verify_s13_step.dependOn(simulation_snapshot_test_step);
+    verify_s13_step.dependOn(sandbox_replay_test_step);
+    verify_s13_step.dependOn(session_contract_test_step);
+    verify_s13_step.dependOn(developer_diagnostics_test_step);
+    verify_s13_step.dependOn(interaction_matrix_step);
+    verify_s13_step.dependOn(verify_s11_step);
+    verify_s13_step.dependOn(verify_incident_hardening_step);
+    verify_s13_step.dependOn(check_validation_step);
+    verify_s13_step.dependOn(verify_source_package_step);
+    verify_s13_step.dependOn(installed_s13_smoke_step);
 
     const interaction_validation_audit_command = b.addSystemCommand(&.{
         "bash",

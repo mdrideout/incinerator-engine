@@ -67,6 +67,7 @@ const Summary = struct {
     submission_fingerprint: u64,
     outcome_fingerprint: u64,
     ingress_fingerprint: u64,
+    population_digest: u64,
     player_deaths: u16,
     player_respawns: u16,
     npc_kills: u16,
@@ -243,6 +244,7 @@ pub fn main(init: std.process.Init) !void {
 fn equivalentScenarioOutcome(first: Summary, repeated: Summary) bool {
     return first.ticks == repeated.ticks and
         first.outcome_fingerprint == repeated.outcome_fingerprint and
+        first.population_digest == repeated.population_digest and
         first.player_deaths == repeated.player_deaths and
         first.player_respawns == repeated.player_respawns and
         first.npc_kills == repeated.npc_kills and
@@ -267,6 +269,7 @@ test "scenario repeat separates semantic outcome from live bootstrap sampling" {
         .submission_fingerprint = 2,
         .outcome_fingerprint = 3,
         .ingress_fingerprint = 4,
+        .population_digest = 5,
         .player_deaths = 1,
         .player_respawns = 1,
         .npc_kills = 1,
@@ -475,6 +478,8 @@ fn runTrial(invocation: Invocation, failure: *FailureContext) !Summary {
         .submission_fingerprint = journey.submission_fingerprint,
         .outcome_fingerprint = journey.outcome_fingerprint,
         .ingress_fingerprint = normalizedIngressFingerprint(authority, tick_origin),
+        .population_digest = authority.populationLogicalDigest() orelse
+            return error.AuthoredPopulationDigestMissing,
         .player_deaths = journey.player_deaths,
         .player_respawns = journey.player_respawns,
         .npc_kills = journey.npc_kills,
@@ -799,7 +804,7 @@ fn report(invocation: Invocation, result: Summary) void {
             "relevance_transfers={d} up_lost/dup/reorder/blackout={d}/{d}/{d}/{d} " ++
             "down_lost/dup/reorder/blackout={d}/{d}/{d}/{d} queue_high={d}/{d} " ++
             "action_fingerprint={x} submission_fingerprint={x} " ++
-            "outcome_fingerprint={x} ingress_fingerprint={x}\n",
+            "outcome_fingerprint={x} ingress_fingerprint={x} population_digest={x}\n",
         .{
             @tagName(invocation.profile),
             invocation.seed,
@@ -831,6 +836,7 @@ fn report(invocation: Invocation, result: Summary) void {
             result.submission_fingerprint,
             result.outcome_fingerprint,
             result.ingress_fingerprint,
+            result.population_digest,
         },
     );
 }

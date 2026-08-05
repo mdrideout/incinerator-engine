@@ -34,6 +34,7 @@ pub const Kind = enum {
     melee,
     respawn,
     navigation,
+    population,
     perception,
     damage,
     death,
@@ -70,6 +71,7 @@ pub const ReasonDomain = enum {
     error_code,
     protocol_disposition,
     navigation_reason,
+    population_transition,
     validation_code,
 };
 
@@ -121,6 +123,23 @@ pub const NavigationEvidence = struct {
         }} ** max_navigation_route_nodes,
 };
 
+pub const PopulationEvidence = struct {
+    member_id: u16,
+    actor_generation: u16,
+    role: u8,
+    combat_disposition: u8,
+    activity_program: u8,
+    activity_sequence: u64,
+    activity_kind: u8,
+    previous_state: u8,
+    current_state: u8,
+    transition_reason: u8,
+    activity_site: ?u16 = null,
+    activity_slot: ?u16 = null,
+    deadline_tick: u64,
+    retry_reason: u8,
+};
+
 /// Small typed payload for the first implementation. Zero-valued absent
 /// fields are distinguished by `fields`; no heap allocation or strings occur
 /// on the capture path.
@@ -156,6 +175,7 @@ pub const Record = struct {
     deadline_tick: u64 = 0,
     visible_pixels: u32 = 0,
     navigation: ?NavigationEvidence = null,
+    population: ?PopulationEvidence = null,
 };
 
 pub const AppendResult = enum {

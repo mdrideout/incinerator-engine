@@ -45,7 +45,6 @@ const district_streaming_host = @import("hosts/district_streaming_host.zig");
 const district_content_catalog = @import("district_content_catalog");
 const content = @import("content");
 const sandbox_controls = @import("sandbox_controls.zig");
-const sandbox_product_encounter = @import("sandbox_product_encounter");
 const sandbox_product_character_lifecycle = @import("sandbox_product_character_lifecycle");
 const developer_controls = @import("developer_controls");
 const developer_diagnostics = @import("developer_diagnostics");
@@ -70,6 +69,7 @@ const visibility_oracle = @import("visibility_oracle.zig");
 const sandbox_contracts = @import("sandbox_host_contracts");
 const session_budgets = @import("session_budgets");
 const population = @import("population_contract");
+const population_catalog = @import("sandbox_population_catalog");
 const DeveloperSnapshot = sandbox_developer_host.Snapshot;
 const NpcDiagnostics = @FieldType(sandbox_contracts.Diagnostics, "npc");
 const CharacterControllerDiagnostics = @FieldType(
@@ -172,6 +172,8 @@ const RunSummary = struct {
     attempted_frames: u64 = 0,
     ready_frames: u64 = 0,
     unavailable_frames: u64 = 0,
+    zero_tick_frames: u64 = 0,
+    multi_tick_frames: u64 = 0,
     crate_presented_frames: u64 = 0,
     position_changed: bool = false,
     rotation_changed: bool = false,
@@ -441,7 +443,7 @@ const s8_west_start = sandbox_contracts.NavigationNodeRef{
 const s8_east_destination = sandbox_contracts.market_terminal_destination;
 
 comptime {
-    if (population.max_population_commands != sandbox_contracts.npc_capacity) {
+    if (population.synthetic_command_capacity != sandbox_contracts.npc_capacity) {
         @compileError("the population producer and sandbox NPC budget must match");
     }
 }
@@ -837,7 +839,7 @@ const S8PopulationEvidence = struct {
     }
 };
 
-const s11_npc_spawn_request_id: u64 = 11_000;
+const s11_hostile_population_member = population.PopulationMemberId{ .value = 1 };
 
 const S11VisibilityCheckpoint = enum {
     contact,
@@ -860,8 +862,7 @@ const S11VisibilityCheckpoint = enum {
 /// draw submissions that consume the extracted combat plans.
 const S11CombatSmokeProgress = struct {
     active: bool = false,
-    npc_spawn_submitted: bool = false,
-    npc_spawned: bool = false,
+    target_selected: bool = false,
     npc_id: ?sandbox_contracts.PersistentId = null,
     initial_incarnation: ?u16 = null,
     dead_incarnation: ?u16 = null,
@@ -1130,7 +1131,7 @@ const S11CombatSmokeProgress = struct {
     }
 
     fn requireComplete(self: S11CombatSmokeProgress) !void {
-        if (!self.npc_spawned or !self.player_dead or !self.player_respawned or
+        if (!self.target_selected or !self.player_dead or !self.player_respawned or
             !self.respawn_accepted or self.accepted_melee_hits < 3 or
             !self.npc_killed or !self.character_bar_drawn or
             !self.npc_bar_drawn or !self.npc_windup_drawn or
@@ -1155,7 +1156,7 @@ const S11CombatSmokeProgress = struct {
             !self.visibility_bounds_valid or self.visibility_observations < 5)
         {
             std.debug.print(
-                "S11_COMBAT_SMOKE_MISSING npc_spawned={} melee_hits={d} " ++
+                "S11_COMBAT_SMOKE_MISSING target_selected={} melee_hits={d} " ++
                     "player_dead={} player_respawned={} respawn_accepted={} " ++
                     "npc_killed={} character_bar={} npc_bar={} windup={} " ++
                     "character_flash={} npc_flash={} npc_death_drawn={} " ++
@@ -1166,7 +1167,7 @@ const S11CombatSmokeProgress = struct {
                     "visibility_respawn={} visibility_npc_death={} " ++
                     "visibility_bounds={} visibility_observations={d}\n",
                 .{
-                    self.npc_spawned,
+                    self.target_selected,
                     self.accepted_melee_hits,
                     self.player_dead,
                     self.player_respawned,
@@ -1218,6 +1219,126 @@ const S11CombatSmokeProgress = struct {
                 },
             );
             return error.S11CombatSmokeEvidenceMissing;
+        }
+    }
+};
+
+/// Installed-Metal evidence for the ordinary authored population. This tracks
+/// only immutable client draws and copied diagnostics; it never drives or
+/// repairs population authority.
+const S13PopulationSmokeProgress = struct {
+    active: bool = false,
+    member_seen: [population.ordinary_member_count]bool = @splat(false),
+    resident_seen: bool = false,
+    worker_seen: bool = false,
+    visitor_seen: bool = false,
+    traveling_seen: bool = false,
+    dwelling_seen: bool = false,
+    waiting_seen: bool = false,
+    full_cohort_reached: bool = false,
+    full_cohort_frames: u64 = 0,
+    incomplete_after_full_frames: u64 = 0,
+    peak_draws: u8 = 0,
+    invalid_identity: bool = false,
+
+    fn observe(
+        self: *S13PopulationSmokeProgress,
+        draws: []const sandbox_host.NpcDraw,
+    ) void {
+        if (!self.active) return;
+        self.peak_draws = @max(
+            self.peak_draws,
+            std.math.cast(u8, draws.len) orelse std.math.maxInt(u8),
+        );
+        var current: [population.ordinary_member_count]bool = @splat(false);
+        for (draws) |draw| {
+            if (draw.population_member == 0 or
+                draw.population_member > population.ordinary_member_count)
+            {
+                self.invalid_identity = true;
+                continue;
+            }
+            const member_index = @as(usize, draw.population_member - 1);
+            if (current[member_index]) self.invalid_identity = true;
+            current[member_index] = true;
+            self.member_seen[member_index] = true;
+            switch (draw.population_role) {
+                .resident => self.resident_seen = true,
+                .worker => self.worker_seen = true,
+                .visitor => self.visitor_seen = true,
+                .unassigned => self.invalid_identity = true,
+            }
+            switch (draw.activity_state) {
+                .traveling => self.traveling_seen = true,
+                .dwelling => self.dwelling_seen = true,
+                .waiting_for_slot => self.waiting_seen = true,
+                else => {},
+            }
+        }
+        var complete = draws.len == population.ordinary_member_count;
+        for (current) |present| complete = complete and present;
+        if (complete) {
+            self.full_cohort_reached = true;
+            self.full_cohort_frames +|= 1;
+        } else if (self.full_cohort_reached) {
+            self.incomplete_after_full_frames +|= 1;
+        }
+    }
+
+    fn requireComplete(
+        self: S13PopulationSmokeProgress,
+        diagnostics: ?population.Diagnostics,
+        summary: RunSummary,
+        config: VisualSmokeConfig,
+    ) !void {
+        var every_member = true;
+        for (self.member_seen) |seen| every_member = every_member and seen;
+        const state = diagnostics orelse return error.S13PopulationDiagnosticsMissing;
+        if (!every_member or !self.resident_seen or !self.worker_seen or
+            !self.visitor_seen or !self.traveling_seen or !self.dwelling_seen or
+            !self.waiting_seen or !self.full_cohort_reached or
+            self.full_cohort_frames == 0 or self.incomplete_after_full_frames != 0 or
+            self.peak_draws != population.ordinary_member_count or
+            self.invalid_identity or state.live != population.ordinary_member_count or
+            state.awaiting_spawn != 0 or state.vacant != 0 or
+            state.replacement_pending != 0 or state.slot_contentions == 0 or
+            state.intents.occupancy != 0 or state.intents.rejected != 0 or
+            (config.virtual_render_hz > timing.TICK_RATE and
+                (summary.zero_tick_frames == 0 or summary.multi_tick_frames != 0)) or
+            (config.virtual_render_hz < timing.TICK_RATE and
+                (summary.multi_tick_frames == 0 or summary.zero_tick_frames != 0)))
+        {
+            std.debug.print(
+                "S13_POPULATION_SMOKE_MISSING members={} roles={}/{}/{} " ++
+                    "traveling={} dwelling={} waiting={} full={} full_frames={d} " ++
+                    "incomplete_after_full={d} peak_draws={d} invalid_identity={} " ++
+                    "live={d} awaiting={d} vacant={d} replacing={d} " ++
+                    "contentions={d} intents={d}/{d} cadence={d}/{d}\n",
+                .{
+                    every_member,
+                    self.resident_seen,
+                    self.worker_seen,
+                    self.visitor_seen,
+                    self.traveling_seen,
+                    self.dwelling_seen,
+                    self.waiting_seen,
+                    self.full_cohort_reached,
+                    self.full_cohort_frames,
+                    self.incomplete_after_full_frames,
+                    self.peak_draws,
+                    self.invalid_identity,
+                    state.live,
+                    state.awaiting_spawn,
+                    state.vacant,
+                    state.replacement_pending,
+                    state.slot_contentions,
+                    state.intents.occupancy,
+                    state.intents.rejected,
+                    summary.zero_tick_frames,
+                    summary.multi_tick_frames,
+                },
+            );
+            return error.S13PopulationSmokeEvidenceMissing;
         }
     }
 };
@@ -1685,6 +1806,7 @@ const IncidentJourneyStage = enum {
 const IncidentJourneyNpc = struct {
     entity: sandbox_host.ReplicatedEntityId,
     incarnation: u16,
+    population_member: u16,
 };
 
 const IncidentJourneyProgress = struct {
@@ -1730,6 +1852,7 @@ const ValidationAppState = if (build_options.validation_mode or builtin.is_test)
     s7_scripted_move: [2]f32 = .{ 0, 0 },
     s7_character_actions_enabled: bool = true,
     s11_combat: S11CombatSmokeProgress = .{},
+    s13_population: S13PopulationSmokeProgress = .{},
     s4_fault_loop_probe: ?*S4FaultLoopProbe = null,
 } else void;
 
@@ -1771,7 +1894,6 @@ const App = struct {
     navigation_next_request_id: u64 = 0x4e41_5600_0000_0001,
     product_feedback: product_feedback.Owner,
     product_presentation_trace: product_presentation_trace.Owner,
-    product_encounter: sandbox_product_encounter.Owner,
     product_character_lifecycle: sandbox_product_character_lifecycle.Owner,
     validation: ValidationAppState,
     validation_tick_origin: u64 = 0,
@@ -1999,6 +2121,7 @@ const App = struct {
                 .mesh = sandbox_visual_resources.character_mesh_handle,
                 .material = sandbox_visual_resources.character_material_handle,
             } },
+            .authored_population = profile == .sandbox,
             .block = switch (profile) {
                 .s1_smoke => sandbox_block,
                 .sandbox => null,
@@ -2138,7 +2261,6 @@ const App = struct {
             .interaction_submission_failures = 0,
             .product_feedback = .{},
             .product_presentation_trace = .{},
-            .product_encounter = .{},
             .product_character_lifecycle = .{},
             .validation = if (build_options.validation_mode or builtin.is_test)
                 .{ .profile = profile }
@@ -2567,9 +2689,14 @@ const App = struct {
                 } else {
                     actions.melee_pressed = (tick -| progress.stage_enter_tick) % 30 == 1;
                     const npcs = self.simulation.presentation().npcs(0);
-                    if (npcs.len != 0) {
+                    for (npcs) |npc| {
+                        if (npc.population_member !=
+                            s11_hostile_population_member.value)
+                        {
+                            continue;
+                        }
                         if (self.simulation.player().focusPosition()) |position| {
-                            const target = npcs[0].pose.position;
+                            const target = npc.pose.position;
                             const delta = [2]f32{
                                 target[0] - position[0],
                                 target[2] - position[2],
@@ -2594,6 +2721,7 @@ const App = struct {
                                 };
                             }
                         }
+                        break;
                     }
                 }
             },
@@ -2620,10 +2748,15 @@ const App = struct {
 
         const npc_draws = self.simulation.presentation().npcs(0);
         if (progress.initial_npc == null) for (npc_draws) |npc| {
-            if (npc.life_state != .alive) continue;
+            if (npc.life_state != .alive or
+                npc.population_member != s11_hostile_population_member.value)
+            {
+                continue;
+            }
             progress.initial_npc = .{
                 .entity = npc.entity,
                 .incarnation = npc.incarnation,
+                .population_member = npc.population_member,
             };
             break;
         };
@@ -2634,15 +2767,17 @@ const App = struct {
                 if (!progress.saw_npc_dead) progress.npc_dead_tick = tick;
                 progress.saw_npc_dead = true;
             }
-            if (progress.saw_npc_dead and !same_incarnation and npc.life_state == .alive) {
+            if (progress.saw_npc_dead and
+                npc.population_member == initial.population_member and
+                !same_incarnation and npc.life_state == .alive)
+            {
                 progress.saw_npc_replacement = true;
             }
         };
 
         switch (progress.stage) {
             .bootstrap => if (tick >= 120 and self.initial_carryable_id != null and
-                progress.initial_npc != null and
-                self.product_encounter.state == .bootstrap_complete)
+                progress.initial_npc != null)
             {
                 progress.enter(.collect, tick);
             },
@@ -2704,24 +2839,27 @@ const App = struct {
     ) !bool {
         const tick = self.simulation.inspection().tickIndex();
         if (tick > progress.stage_enter_tick +| 1_200 or tick > 3_600) {
-            const replacement = self.simulation.developer().diagnostics().npc_replacement;
+            const population_diagnostics =
+                self.simulation.developer().diagnostics().population orelse
+                return error.PopulationDiagnosticsMissing;
             std.debug.print(
                 "INCIDENT_JOURNEY_TIMEOUT stage={s} tick={d} stage_enter={d} " ++
-                    "replacement=pending:{d},spawning:{d},attempts:{d},ready:{d}," ++
-                    "retries:{d},inactive:{d},occupied:{d},near:{d},visible:{d}\n",
+                    "population=live:{d},awaiting:{d},vacant:{d},replacement:{d}," ++
+                    "traveling:{d},dwelling:{d},waiting:{d},interrupted:{d}," ++
+                    "spawn_retries:{d}\n",
                 .{
                     @tagName(progress.stage),
                     tick,
                     progress.stage_enter_tick,
-                    replacement.pending,
-                    replacement.awaiting_spawn,
-                    replacement.attempts,
-                    replacement.replacements_ready,
-                    replacement.retries,
-                    replacement.district_inactive,
-                    replacement.occupied,
-                    replacement.too_close_to_player,
-                    replacement.visible_to_player,
+                    population_diagnostics.live,
+                    population_diagnostics.awaiting_spawn,
+                    population_diagnostics.vacant,
+                    population_diagnostics.replacement_pending,
+                    population_diagnostics.traveling,
+                    population_diagnostics.dwelling,
+                    population_diagnostics.waiting_for_slot,
+                    population_diagnostics.interrupted,
+                    population_diagnostics.spawn_retries.total(),
                 },
             );
             return error.IncidentJourneyIncomplete;
@@ -2873,6 +3011,8 @@ const App = struct {
         self.validation_tick_origin = self.simulation.inspection().tickIndex();
         if (scenario == .s11_combat) {
             self.validation.s11_combat = .{ .active = true };
+        } else if (scenario == .s13_population) {
+            self.validation.s13_population = .{ .active = true };
         }
         var running = true;
         var retained_runtime_error: ?anyerror = null;
@@ -2984,6 +3124,7 @@ const App = struct {
             // ================================================================
             // Run simulation at fixed timestep. Multiple ticks may run per frame
             // if we're behind, or zero ticks if we're ahead.
+            const ticks_before = self.simulation.inspection().tickIndex();
             if (self.developer.takeSingleStep()) {
                 self.simulateTick(true, scenario) catch |err| {
                     if (!self.developer.hasRetainedFault(self.developerAuthorityPort())) return err;
@@ -3021,6 +3162,9 @@ const App = struct {
                     self.frame_timer.recordCompletedTick();
                 }
             }
+            const ticks_this_frame = self.simulation.inspection().tickIndex() - ticks_before;
+            if (ticks_this_frame == 0) summary.zero_tick_frames +|= 1;
+            if (ticks_this_frame > 1) summary.multi_tick_frames +|= 1;
 
             // ================================================================
             // PHASE 3: PRESENTATION (Interpolated)
@@ -3069,7 +3213,7 @@ const App = struct {
                         return error.VisualSmokeCratePresentationMissing;
                     }
                     switch (scenario) {
-                        .none, .s3_streaming, .s8_population, .s7_interaction, .s11_combat => {},
+                        .none, .s3_streaming, .s8_population, .s7_interaction, .s11_combat, .s13_population => {},
                         .s1_character => if (self.initial_character_id != null) {
                             if (presentation.character_count > 1) {
                                 return error.S1VisualSmokeCharacterPresentationMissing;
@@ -3314,6 +3458,11 @@ const App = struct {
                 },
                 .s3_streaming, .s8_population, .s7_interaction => {},
                 .s11_combat => try self.validation.s11_combat.requireComplete(),
+                .s13_population => try self.validation.s13_population.requireComplete(
+                    self.simulation.inspection().populationDiagnostics(),
+                    summary,
+                    config,
+                ),
                 .s4_physics_debug => try self.validateS4PhysicsDebugSmoke(summary),
             }
             const expected = try smokeExpectation(config);
@@ -4238,9 +4387,12 @@ const App = struct {
                 .observer_spawned => if (self.initial_character_id != null and
                     presentation.character_count == 1)
                 {
-                    const batch = try population.plan(s8_population_count, .{
+                    const batch = try population.planSynthetic(s8_population_count, .{
                         .first_request_id = s8_spawn_first_request_id,
-                        .start_node = s8_west_start,
+                        .position = .{ -5, 0, 5 },
+                        .facing_yaw = 0,
+                        .anchor = s8_west_start,
+                        .hostile_to_players = true,
                         .goal = .{ .patrol_between = .{
                             .first = sandbox_contracts.south_gate_approach_destination,
                             .second = s8_east_destination,
@@ -5792,7 +5944,7 @@ const App = struct {
                         self.validation_tick_origin,
                     s1_jump_tick,
                 ),
-                .s2_vehicle, .s3_streaming, .s8_population, .s4_physics_debug => sandbox_controls.idleTickSample(),
+                .s2_vehicle, .s3_streaming, .s8_population, .s4_physics_debug, .s13_population => sandbox_controls.idleTickSample(),
                 .s7_interaction => blk: {
                     var result = sandbox_controls.idleTickSample();
                     result.move = self.validation.s7_scripted_move;
@@ -5816,6 +5968,7 @@ const App = struct {
                     try self.submitCharacterActions(actions);
                 },
                 .s11_combat => try self.submitInteractiveActions(actions),
+                .s13_population => try self.submitInteractiveActions(actions),
             }
         } else {
             try self.submitInteractiveActions(actions);
@@ -5900,7 +6053,7 @@ const App = struct {
                 },
                 .despawned => |id| if ((scenario == .s7_interaction or
                     scenario == .s8_population or
-                    scenario == .s11_combat) and
+                    scenario == .s11_combat or scenario == .s13_population) and
                     std.meta.eql(id, self.initial_character_id orelse
                         return error.UnexpectedCharacterBootstrapOutcome))
                 {
@@ -5914,10 +6067,10 @@ const App = struct {
         while (self.simulation.vehicles().pollEvent()) |_| {}
         try self.district_streaming.processOutcomes(self.districtAuthorityPort(), self.frame_timer.total_frames);
         try self.processInteractionOutcomes(validation_composition, scenario);
-        if (validation_composition and scenario == .s11_combat) {
-            try self.processS11NpcObservations();
-        } else if (!validation_composition) {
-            try self.processProductNpcObservations();
+        if (!validation_composition or scenario == .s11_combat or
+            scenario == .s13_population)
+        {
+            try self.processNpcDeveloperObservations();
         }
         try self.processPlayerActionResults(validation_composition, scenario);
         try self.maybeBootstrapCarryable(validation_composition, scenario);
@@ -5935,7 +6088,6 @@ const App = struct {
                 position_xz,
             );
         }
-        if (!validation_composition) try self.maybeBootstrapProductEncounter();
         if (validation_composition and scenario == .s2_vehicle) try self.observeS2State();
         try self.pumpPersistenceCommit();
         self.extractPhysicsDebug();
@@ -6634,7 +6786,7 @@ const App = struct {
         }
         if (validation_composition) {
             switch (scenario) {
-                .none, .s7_interaction => {},
+                .none, .s7_interaction, .s13_population => {},
                 else => return,
             }
         }
@@ -6696,27 +6848,11 @@ const App = struct {
         self.district_focus_override = s6_west_only;
     }
 
-    fn maybeBootstrapProductEncounter(self: *App) !void {
-        const command = self.product_encounter.pendingSpawn(.{
-            .player_ready = self.initial_character_id != null,
-            .west_district_active = self.simulation.districts().activeTicket(district_west_coord) != null,
-        }) orelse return;
-        try self.simulation.npcs().submit(command);
-        try self.product_encounter.markSubmitted(command);
-    }
-
-    fn processProductNpcObservations(self: *App) !void {
-        while (self.simulation.npcs().pollOutcome()) |outcome| {
-            switch (try self.product_encounter.observe(outcome)) {
-                .unrelated => {},
-                .activated => std.debug.print(
-                    "Sandbox NPC encounter active (patrol, melee, death, respawn)\n",
-                    .{},
-                ),
-            }
-        }
+    fn processNpcDeveloperObservations(self: *App) !void {
+        while (self.simulation.npcs().pollOutcome()) |_| {}
         while (self.simulation.npcs().pollEvent()) |_| {}
         self.recordNpcNavigationTransitions();
+        self.recordPopulationTransitions();
     }
 
     fn recordNpcNavigationTransitions(self: *App) void {
@@ -6764,6 +6900,58 @@ const App = struct {
         }
     }
 
+    fn recordPopulationTransitions(self: *App) void {
+        while (self.simulation.npcs().pollPopulationTransition()) |transition| {
+            const definition = population_catalog.memberDefinition(
+                transition.member,
+            ) orelse continue;
+            _ = self.simulation.developer().recordGameplayTrace(.{
+                .authority_tick = transition.tick,
+                .presentation_frame = self.frame_timer.total_frames,
+                .correlation_id = transition.activity_sequence,
+                .actor = if (transition.actor) |actor| .{
+                    .namespace = actor.namespace,
+                    .local = actor.local,
+                    .incarnation = transition.actor_generation,
+                } else null,
+                .source = .simulation,
+                .stage = .simulation_outcome,
+                .kind = .population,
+                .disposition = switch (transition.reason) {
+                    .spawn_deferred, .destination_deferred, .slot_unavailable => .rejected,
+                    .spawn_requested, .slot_claimed => .emitted,
+                    else => .applied,
+                },
+                .reason_domain = .population_transition,
+                .reason = @intFromEnum(transition.reason),
+                .fields = .{
+                    .state = true,
+                    .deadline = transition.deadline_tick != 0,
+                },
+                .state = @intFromEnum(transition.current_state),
+                .deadline_tick = transition.deadline_tick,
+                .population = .{
+                    .member_id = transition.member.value,
+                    .actor_generation = transition.actor_generation,
+                    .role = @intFromEnum(definition.role),
+                    .combat_disposition = @intFromEnum(
+                        definition.combat_disposition,
+                    ),
+                    .activity_program = transition.program.value,
+                    .activity_sequence = transition.activity_sequence,
+                    .activity_kind = @intFromEnum(transition.activity_kind),
+                    .previous_state = @intFromEnum(transition.previous_state),
+                    .current_state = @intFromEnum(transition.current_state),
+                    .transition_reason = @intFromEnum(transition.reason),
+                    .activity_site = if (transition.site) |site| site.value else null,
+                    .activity_slot = if (transition.slot) |slot| slot.value else null,
+                    .deadline_tick = transition.deadline_tick,
+                    .retry_reason = @intFromEnum(transition.retry_reason),
+                },
+            });
+        }
+    }
+
     fn submitCharacterActions(
         self: *App,
         actions: sandbox_controls.TickSample,
@@ -6790,18 +6978,17 @@ const App = struct {
     fn s11ScriptedActions(self: *App) !sandbox_controls.TickSample {
         var actions = sandbox_controls.idleTickSample();
         const progress = &self.validation.s11_combat;
-        if (!progress.npc_spawn_submitted) {
-            if (self.initial_character_id != null and
-                self.simulation.districts().activeTicket(district_west_coord) != null)
-            {
-                try self.simulation.npcs().submit(.{ .spawn = .{
-                    .request_id = s11_npc_spawn_request_id,
-                    .node = .{ .coord = district_west_coord, .index = 1 },
-                    .goal = .{
-                        .navigate_to = sandbox_contracts.south_gate_approach_destination,
-                    },
-                } });
-                progress.npc_spawn_submitted = true;
+        if (!progress.target_selected) {
+            if (self.initial_character_id != null) {
+                for (self.simulation.inspection().populationMembers()) |member| {
+                    if (!population.PopulationMemberId.eql(
+                        member.id,
+                        s11_hostile_population_member,
+                    )) continue;
+                    progress.npc_id = member.actor orelse return actions;
+                    progress.target_selected = true;
+                    break;
+                }
             }
             return actions;
         }
@@ -6860,32 +7047,6 @@ const App = struct {
         return actions;
     }
 
-    fn processS11NpcObservations(self: *App) !void {
-        const progress = &self.validation.s11_combat;
-        while (self.simulation.npcs().pollOutcome()) |outcome| switch (outcome) {
-            .spawned => |spawned| {
-                if (spawned.request_id != s11_npc_spawn_request_id or
-                    progress.npc_spawned or
-                    !std.meta.eql(spawned.owner, district_west_coord))
-                {
-                    return error.UnexpectedS11NpcOutcome;
-                }
-                progress.npc_spawned = true;
-                progress.npc_id = spawned.id;
-            },
-            .despawned => |despawned| {
-                if (!std.meta.eql(despawned.id, progress.npc_id orelse
-                    return error.UnexpectedS11NpcOutcome))
-                {
-                    return error.UnexpectedS11NpcOutcome;
-                }
-            },
-            .goal_set, .rejected => return error.UnexpectedS11NpcOutcome,
-        };
-        while (self.simulation.npcs().pollEvent()) |_| {}
-        self.recordNpcNavigationTransitions();
-    }
-
     fn processVehicleOutcomes(
         self: *App,
         comptime validation_composition: bool,
@@ -6900,7 +7061,7 @@ const App = struct {
                     self.initial_vehicle_id = spawned.id;
                 },
                 .rejected => if (validation_composition) switch (scenario) {
-                    .none, .s1_character, .s2_vehicle, .s3_streaming, .s8_population, .s4_physics_debug, .s7_interaction, .s11_combat => return error.ScriptedVehicleCommandRejected,
+                    .none, .s1_character, .s2_vehicle, .s3_streaming, .s8_population, .s4_physics_debug, .s7_interaction, .s11_combat, .s13_population => return error.ScriptedVehicleCommandRejected,
                 } else return error.UnexpectedVehicleCommandRejection,
                 .despawned => return error.UnexpectedVehicleBootstrapOutcome,
             }
@@ -7456,6 +7617,7 @@ const App = struct {
             if (self.validation.profile == .s2_smoke and self.validation.s2_smoke.entered) {
                 observeS2WheelPresentation(&self.validation.s2_smoke, vehicle_draws);
             }
+            self.validation.s13_population.observe(npc_draws);
         }
         var follow_target: ?[3]f32 = null;
         var follow_distance: f32 = 0;
@@ -8351,6 +8513,39 @@ const App = struct {
                 .navigation_arrival_tick = navigation_arrival_tick,
                 .navigation_physical_exclusion_count = navigation_physical_exclusion_count,
                 .navigation_physical_block_retry_tick = navigation_physical_block_retry_tick,
+                .population_member = if (draw.population_member == 0)
+                    null
+                else
+                    .{ .value = draw.population_member },
+                .population_role = switch (draw.population_role) {
+                    .unassigned => null,
+                    .resident => .resident,
+                    .worker => .worker,
+                    .visitor => .visitor,
+                },
+                .population_disposition = switch (draw.combat_disposition) {
+                    .unassigned => null,
+                    .passive => .passive,
+                    .hostile_to_players => .hostile_to_players,
+                },
+                .population_activity_kind = switch (draw.activity_kind) {
+                    .none => null,
+                    .commute => .commute,
+                    .shop => .shop,
+                    .visit => .visit,
+                    .idle => .idle,
+                },
+                .population_activity_state = switch (draw.activity_state) {
+                    .unassigned => null,
+                    .selecting => .selecting,
+                    .waiting_for_slot => .waiting_for_slot,
+                    .traveling => .traveling,
+                    .dwelling => .dwelling,
+                    .completing => .completing,
+                    .interrupted => .interrupted,
+                    .vacant => .vacant,
+                    .replacement_pending => .replacement_pending,
+                },
             };
             applyNpcInterestEvidence(&projected, inspection.npcInterest(draw.entity));
             result.entities[result.entity_count] = projected;
@@ -8593,6 +8788,13 @@ const App = struct {
                 @tagName(value)
             else
                 "unknown_navigation_reason",
+            .population_transition => if (std.enums.fromInt(
+                population.TransitionReason,
+                reason,
+            )) |value|
+                @tagName(value)
+            else
+                "unknown_population_transition",
             .validation_code => "validation_code",
         };
     }
@@ -8635,9 +8837,12 @@ const App = struct {
             break;
         }
         if (std.mem.eql(u8, npc_state, "none")) {
-            const replacement = self.simulation.developer().diagnostics().npc_replacement;
-            if (replacement.pending != 0 or replacement.awaiting_spawn != 0) {
-                npc_state = "REPLACEMENT PENDING";
+            if (self.simulation.developer().diagnostics().population) |population_diagnostics| {
+                if (population_diagnostics.replacement_pending != 0 or
+                    population_diagnostics.awaiting_spawn != 0)
+                {
+                    npc_state = "REPLACEMENT PENDING";
+                }
             }
         }
         const feedback = self.product_feedback.current(hud.authority_tick);
@@ -8713,6 +8918,13 @@ const App = struct {
             .south_gate_open = gates.south_open,
             .topology_revision = gates.topology_revision,
         };
+        const inspection = self.simulation.inspection();
+        const population_view = editor_contract.PopulationView{
+            .catalog = inspection.populationCatalog(),
+            .members = inspection.populationMembers(),
+            .slots = inspection.populationSlots(),
+            .diagnostics = inspection.populationDiagnostics(),
+        };
         self.applyDeveloperEffects(try self.developer.drawEditor(
             &self.gpu_renderer,
             self.developerAuthorityPort(),
@@ -8734,6 +8946,7 @@ const App = struct {
                     .gameplay = gameplay_view,
                     .requests = &self.navigation_requests,
                 },
+                .population_view = &population_view,
                 .gameplay_view = gameplay_view,
                 .incident_input = .{
                     .move_forward = self.input_buffer.isKeyDown(input.Key.W),
@@ -9060,7 +9273,7 @@ fn initValidationApp(
     save_root: ?SaveRootPath,
 ) !App {
     return switch (mode) {
-        .normal, .s4_physics_debug_smoke, .s11_combat_smoke => initValidationAppWithProfile(
+        .normal, .s4_physics_debug_smoke, .s11_combat_smoke, .s13_population_smoke => initValidationAppWithProfile(
             io,
             .sandbox,
             content_root,
@@ -9136,6 +9349,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         .s7_interaction_smoke,
         .s8_population_smoke,
         .s11_combat_smoke,
+        .s13_population_smoke,
         .s4_diagnostics_smoke,
         .s4_physics_debug_smoke,
         .s5_authoring_smoke,
@@ -9158,6 +9372,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         .s7_interaction_smoke,
         .s8_population_smoke,
         .s11_combat_smoke,
+        .s13_population_smoke,
         .s4_diagnostics_smoke,
         .s4_physics_debug_smoke,
         .s5_authoring_smoke,
@@ -9219,6 +9434,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
     var s7_interaction_smoke_succeeded = false;
     var s8_population_smoke_succeeded = false;
     var s11_combat_smoke_succeeded = false;
+    var s13_population_smoke_succeeded = false;
     var s4_physics_debug_smoke_succeeded = false;
     var s5_authoring_smoke_succeeded = false;
     var window_lifecycle_smoke_succeeded = false;
@@ -9248,6 +9464,9 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         }
         if (s11_combat_smoke_succeeded) {
             std.debug.print("S11_COMBAT_SMOKE_SHUTDOWN status=clean\n", .{});
+        }
+        if (s13_population_smoke_succeeded) {
+            std.debug.print("S13_POPULATION_SMOKE_SHUTDOWN status=clean\n", .{});
         }
         if (s4_physics_debug_smoke_succeeded) {
             std.debug.print("S4_PHYSICS_DEBUG_SMOKE_SHUTDOWN status=clean\n", .{});
@@ -9524,7 +9743,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
             const summary = try app.runValidation(config, .s11_combat);
             const evidence = app.validation.s11_combat;
             std.debug.print(
-                "S11_COMBAT_SMOKE_RESULT frames={d} ticks={d} npc_spawned={} " ++
+                "S11_COMBAT_SMOKE_RESULT frames={d} ticks={d} target_selected={} " ++
                     "melee_hits={d} player_dead={} respawned={} npc_killed={} " ++
                     "character_bar={} npc_bar={} character_flash={} " ++
                     "character_flash_expired={} npc_flash={} npc_flash_expired={} " ++
@@ -9538,7 +9757,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                 .{
                     summary.ready_frames,
                     app.simulation.inspection().tickIndex() -| app.validation_tick_origin,
-                    evidence.npc_spawned,
+                    evidence.target_selected,
                     evidence.accepted_melee_hits,
                     evidence.player_dead,
                     evidence.respawn_accepted,
@@ -9585,6 +9804,40 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                 },
             );
             s11_combat_smoke_succeeded = true;
+        },
+        .s13_population_smoke => |config| {
+            const summary = try app.runValidation(config, .s13_population);
+            const evidence = app.validation.s13_population;
+            const diagnostics = app.simulation.inspection().populationDiagnostics().?;
+            std.debug.print(
+                "S13_POPULATION_SMOKE_RESULT frames={d} ticks={d} " ++
+                    "zero_tick_frames={d} multi_tick_frames={d} " ++
+                    "full_cohort_frames={d} incomplete_after_full={d} " ++
+                    "peak_draws={d} roles={}/{}/{} traveling={} dwelling={} " ++
+                    "waiting={} live={d} contentions={d} decisions={d} " ++
+                    "virtual_render_hz={d} gpu_driver={s}\n",
+                .{
+                    summary.ready_frames,
+                    app.simulation.inspection().tickIndex() -| app.validation_tick_origin,
+                    summary.zero_tick_frames,
+                    summary.multi_tick_frames,
+                    evidence.full_cohort_frames,
+                    evidence.incomplete_after_full_frames,
+                    evidence.peak_draws,
+                    evidence.resident_seen,
+                    evidence.worker_seen,
+                    evidence.visitor_seen,
+                    evidence.traveling_seen,
+                    evidence.dwelling_seen,
+                    evidence.waiting_seen,
+                    diagnostics.live,
+                    diagnostics.slot_contentions,
+                    diagnostics.decisions,
+                    config.virtual_render_hz,
+                    shader_assets.driver,
+                },
+            );
+            s13_population_smoke_succeeded = true;
         },
         .s4_diagnostics_smoke => {
             const summary = try app.runS4DiagnosticsSmoke();
@@ -9757,12 +10010,13 @@ test "S8 population smoke summary requires exact bounded lifecycle evidence" {
         .peak_active = s8_population_count,
         .peak_waiting = s8_population_count,
         .peak_dormant = s8_population_count,
-        .peak_native_controllers = s8_population_count,
+        .peak_native_controllers = s8_population_count + 1,
         .waiting_events = s8_population_count,
         .waiting_resume_events = s8_population_count,
         .transfer_events = s8_population_count,
         .dormant_events = s8_population_count,
         .controller_resume_events = s8_population_count,
+        .goal_events = s8_population_count,
         .two_resident_scenes = true,
         .peak_live_scenes = 2,
         .peak_resident_scenes = 2,
@@ -9856,6 +10110,10 @@ test "S8 per-identity evidence requires every exact lifecycle slot" {
 
     for (0..s8_population_count) |index| {
         const id = s8TestIdentity(index);
+        try evidence.observeEvent(.population_spawned, &summary, .{ .goal_reached = .{
+            .id = id,
+            .destination = sandbox_contracts.south_gate_approach_destination,
+        } });
         try evidence.observeEvent(.destination_waiting, &summary, .{ .state_changed = .{
             .id = id,
             .previous = .active,

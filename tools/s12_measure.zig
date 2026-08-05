@@ -187,7 +187,10 @@ fn measureMovement(init: std.process.Init) !MovementReport {
             return error.S12MovementStartInactive;
         try world.submitNpc(.{ .spawn = .{
             .request_id = 100 + index,
-            .node = start,
+            .position = initial_positions[index],
+            .facing_yaw = 0,
+            .anchor = start,
+            .hostile_to_players = false,
             .goal = .{ .navigate_to = destinations[index] },
         } });
     }

@@ -4,7 +4,8 @@
 
 **Date:** Accepted 2026-07-16; evidence-capability amendment 2026-07-17;
 budget, handoff, and deterministic-failure amendments 2026-07-18; schema-3
-visual-window amendment 2026-07-19; schema-4 S12 navigation-evidence amendment
+visual-window amendment 2026-07-19; schema-4 S12 navigation-evidence amendment;
+schema-5 S13 authored-population amendment 2026-07-28
 2026-07-28
 
 ## Context
@@ -69,7 +70,7 @@ chassis and wheels share one stable entity identity. Chronological visual
 reports are derived outside the immutable run folder from indexed actual
 capture times.
 
-`inspect-incident` strictly validates the current schema 4 and indexes a bundle.
+`inspect-incident` strictly validates the current schema 5 and indexes a bundle.
 `replay-incident` performs same-cohort semantic replay through one explicit
 public-output boundary. `--replay-incident=<absolute-run-folder>` drives
 captured controls through the normal graphical composition, but is explicitly

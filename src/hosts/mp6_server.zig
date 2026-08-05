@@ -178,23 +178,22 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     const diagnostics = server.authority.diagnostics();
-    const replacement = server.authority.npcReplacementDiagnostics();
+    const population = server.authority.populationDiagnostics();
     try server.stop(init.io);
     try room_owner.close();
     std.debug.print(
         "MP6_SERVER_CLOSED room={d} tick={d} participants={d} host_migration=false " ++
-            "replacement_pending={d} replacement_awaiting={d} replacement_ready={d} " ++
-            "replacement_retries={d} replacement_near={d} replacement_visible={d}\n",
+            "population_live={d} population_awaiting={d} population_vacant={d} " ++
+            "population_replacement={d} population_retries={d}\n",
         .{
             invocation.room_id,
             diagnostics.tick,
             diagnostics.active_participants,
-            replacement.pending,
-            replacement.awaiting_spawn,
-            replacement.replacements_ready,
-            replacement.retries,
-            replacement.too_close_to_player,
-            replacement.visible_to_player,
+            if (population) |value| value.live else 0,
+            if (population) |value| value.awaiting_spawn else 0,
+            if (population) |value| value.vacant else 0,
+            if (population) |value| value.replacement_pending else 0,
+            if (population) |value| value.spawn_retries.total() else 0,
         },
     );
 }

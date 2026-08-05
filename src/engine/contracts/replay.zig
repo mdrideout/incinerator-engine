@@ -21,6 +21,7 @@ pub const Category = enum(u8) {
     interaction = 6,
     npc = 7,
     npc_encounter = 8,
+    population = 9,
 };
 
 /// Canonical logical hashes captured after one successfully completed tick.
@@ -34,6 +35,7 @@ pub const TickDigests = struct {
     interaction: Digest,
     npc: Digest,
     npc_encounter: Digest,
+    population: Digest,
 
     pub fn get(self: TickDigests, category: Category) Digest {
         return switch (category) {
@@ -45,6 +47,7 @@ pub const TickDigests = struct {
             .interaction => self.interaction,
             .npc => self.npc,
             .npc_encounter => self.npc_encounter,
+            .population => self.population,
         };
     }
 };
@@ -182,6 +185,7 @@ test "tick digest categories have stable tags and exact field routing" {
     try std.testing.expectEqual(@as(u8, 6), @intFromEnum(Category.interaction));
     try std.testing.expectEqual(@as(u8, 7), @intFromEnum(Category.npc));
     try std.testing.expectEqual(@as(u8, 8), @intFromEnum(Category.npc_encounter));
+    try std.testing.expectEqual(@as(u8, 9), @intFromEnum(Category.population));
 
     const values = TickDigests{
         .tick_index = 44,
@@ -193,6 +197,7 @@ test "tick digest categories have stable tags and exact field routing" {
         .interaction = [_]u8{6} ** 32,
         .npc = [_]u8{7} ** 32,
         .npc_encounter = [_]u8{8} ** 32,
+        .population = [_]u8{9} ** 32,
     };
     try std.testing.expectEqual(@as(u64, 44), values.tick_index);
     try std.testing.expectEqual(values.runtime, values.get(.runtime));
@@ -203,4 +208,5 @@ test "tick digest categories have stable tags and exact field routing" {
     try std.testing.expectEqual(values.interaction, values.get(.interaction));
     try std.testing.expectEqual(values.npc, values.get(.npc));
     try std.testing.expectEqual(values.npc_encounter, values.get(.npc_encounter));
+    try std.testing.expectEqual(values.population, values.get(.population));
 }

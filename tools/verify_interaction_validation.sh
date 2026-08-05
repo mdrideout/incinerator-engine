@@ -56,11 +56,11 @@ grep -Fq 'const gameplay_scenarios = @import("sandbox_gameplay_scenarios");' \
   "$root/src/hosts/mp2_client.zig" || fail "network client does not use the shared scenario catalog"
 grep -Fq 'const gameplay_scenarios = @import("sandbox_gameplay_scenarios");' \
   "$root/src/hosts/mp6_listen_client.zig" || fail "listen client does not use the shared scenario catalog"
-grep -Fq 'network_options.addOption(u16, "protocol_revision", 14);' \
+grep -Fq 'network_options.addOption(u16, "protocol_revision", 15);' \
   "$root/tools/build/simulation_graph.zig" || fail "wire cohort was not bumped for lifecycle ordering"
 grep -Fq 'PrimitiveFragmentSettings' "$root/shaders/triangle.frag" ||
   fail "primitive material tint shader contract is missing"
 grep -Fq 'minimum_meaningful_pixels: u32 = 64' "$root/src/visibility_oracle.zig" ||
   fail "meaningful visibility threshold is missing"
 
-echo "INTERACTION_VALIDATION_AUDIT_PASS phases=6 human_trace=accepted docs=why-design-evidence scenario_catalog=shared fault_runner=seeded protocol=14 renderer_tint=reflected"
+echo "INTERACTION_VALIDATION_AUDIT_PASS phases=6 human_trace=accepted docs=why-design-evidence scenario_catalog=shared fault_runner=seeded protocol=15 renderer_tint=reflected"

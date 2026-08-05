@@ -14,6 +14,7 @@ const vehicle_contract = @import("vehicle_contract");
 const district_contract = @import("district_feature_contract");
 const interaction_contract = @import("interaction_feature_contract");
 const npc_contract = @import("npc_contract");
+const population_contract = @import("population_contract");
 const diagnostics_contract = @import("sandbox_diagnostics_contract");
 const budgets = @import("session_budgets");
 const identity = @import("session_identity");
@@ -182,6 +183,11 @@ pub const NpcDraw = struct {
     encounter_state_enter_tick: u64,
     attack_impact_tick: u64,
     attack_ready_tick: u64,
+    population_member: u16,
+    population_role: protocol.NpcPopulationRole,
+    combat_disposition: protocol.NpcCombatDisposition,
+    activity_kind: protocol.NpcActivityKind,
+    activity_state: protocol.NpcActivityState,
     combat: combat_presentation.NpcPlan,
 };
 
@@ -838,6 +844,11 @@ const State = struct {
                 .encounter_state_enter_tick = npc.encounter_state_enter_tick,
                 .attack_impact_tick = npc.attack_impact_tick,
                 .attack_ready_tick = npc.attack_ready_tick,
+                .population_member = npc.population_member,
+                .population_role = npc.population_role,
+                .combat_disposition = npc.combat_disposition,
+                .activity_kind = npc.activity_kind,
+                .activity_state = npc.activity_state,
                 .combat = combat,
             };
             count += 1;
@@ -1450,6 +1461,14 @@ pub const NpcRole = struct {
         ).authority.npcs().pollNavigationTransition();
     }
 
+    pub fn pollPopulationTransition(
+        self: NpcRole,
+    ) ?population_contract.Transition {
+        return stateFrom(
+            self.context,
+        ).authority.npcs().pollPopulationTransition();
+    }
+
     pub fn view(self: NpcRole, id: engine.PersistentId) !npc_contract.NpcView {
         return stateFrom(self.context).authority.npcs().view(id);
     }
@@ -1663,6 +1682,30 @@ pub const InspectionRole = struct {
             .observations = state.authority.inspection().observationDiagnostics(),
             .last_tick = state.last_tick,
         };
+    }
+
+    pub fn populationMembers(
+        self: InspectionRole,
+    ) []const population_contract.MemberRecordV1 {
+        return stateFromConst(self.context).authority.inspection().populationMembers();
+    }
+
+    pub fn populationSlots(
+        self: InspectionRole,
+    ) []const population_contract.ActivitySlotRecordV1 {
+        return stateFromConst(self.context).authority.inspection().populationSlots();
+    }
+
+    pub fn populationDiagnostics(
+        self: InspectionRole,
+    ) ?population_contract.Diagnostics {
+        return stateFromConst(self.context).authority.inspection().populationDiagnostics();
+    }
+
+    pub fn populationCatalog(
+        self: InspectionRole,
+    ) population_contract.Catalog {
+        return stateFromConst(self.context).authority.inspection().populationCatalog();
     }
 };
 

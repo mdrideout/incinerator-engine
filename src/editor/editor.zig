@@ -19,6 +19,7 @@ const render_tool = @import("tools/render_tool.zig");
 const diagnostics_tool = @import("tools/diagnostics_tool.zig");
 const gameplay_inspector_tool = @import("tools/gameplay_inspector_tool.zig");
 const navigation_lab_tool = @import("tools/navigation_lab_tool.zig");
+const population_lab_tool = @import("tools/population_lab_tool.zig");
 const incident_capture_tool = @import("tools/incident_capture_tool.zig");
 const physics_debug_tool = @import("tools/physics_debug_tool.zig");
 const crate_authoring_tool = @import("tools/crate_authoring_tool.zig");
@@ -47,6 +48,7 @@ const default_tools = [_]Tool{
     Tool.init(diagnostics_tool.descriptor),
     Tool.init(gameplay_inspector_tool.descriptor),
     Tool.init(navigation_lab_tool.descriptor),
+    Tool.init(population_lab_tool.descriptor),
     Tool.init(incident_capture_tool.descriptor),
     Tool.init(physics_debug_tool.descriptor),
     Tool.init(crate_authoring_tool.descriptor),
@@ -63,6 +65,7 @@ pub const Editor = struct {
     crate_authoring: crate_authoring_tool.State = .{},
     gameplay_inspector: gameplay_inspector_tool.State = .{},
     navigation_lab: navigation_lab_tool.State = .{},
+    population_lab: population_lab_tool.State = .{},
     incident_capture: incident_capture_tool.State = .{},
 
     /// Initialize the owned editor after the renderer has claimed its window.
@@ -198,6 +201,10 @@ pub const Editor = struct {
             .navigation_lab => navigation_lab_tool.draw(
                 &self.navigation_lab,
                 &frame.navigation,
+            ),
+            .population_lab => population_lab_tool.draw(
+                &self.population_lab,
+                &frame.population,
             ),
             .incident_capture => incident_capture_tool.draw(
                 &self.incident_capture,

@@ -25,6 +25,10 @@ pub const colors = struct {
     pub const health: Color = .{ 0.15, 0.90, 0.20, 1 };
     pub const health_empty: Color = .{ 0.35, 0.05, 0.05, 1 };
     pub const npc_patrolling: Color = .{ 0.65, 0.25, 0.95, 1 };
+    pub const npc_resident: Color = .{ 0.22, 0.72, 0.34, 1 };
+    pub const npc_worker: Color = .{ 0.18, 0.48, 0.92, 1 };
+    pub const npc_visitor: Color = .{ 0.76, 0.34, 0.88, 1 };
+    pub const npc_hostile: Color = .{ 0.95, 0.20, 0.18, 1 };
     pub const npc_waiting: Color = .{ 0.45, 0.45, 0.55, 1 };
     pub const npc_pursuing: Color = .{ 0.95, 0.20, 0.18, 1 };
     pub const npc_windup: Color = .{ 1, 0.50, 0.05, 1 };
@@ -234,7 +238,14 @@ pub const Owner = struct {
         );
         const base_color: Color = switch (state.encounter_state) {
             .patrolling => if (state.state == .active)
-                colors.npc_patrolling
+                if (state.combat_disposition == .hostile_to_players)
+                    colors.npc_hostile
+                else switch (state.population_role) {
+                    .unassigned => colors.npc_patrolling,
+                    .resident => colors.npc_resident,
+                    .worker => colors.npc_worker,
+                    .visitor => colors.npc_visitor,
+                }
             else
                 colors.npc_waiting,
             .pursuing => colors.npc_pursuing,
@@ -515,6 +526,42 @@ test "NPC render plan exposes windup deadlines and dead presentation" {
     try std.testing.expect(!dead.windup);
     try std.testing.expectEqualDeep(colors.dead, dead.entity.body_color);
     try std.testing.expectEqual(@as(f32, 0), dead.entity.health_bar.fraction);
+}
+
+test "NPC role color yields to hostility encounter hit and death feedback" {
+    var owner = Owner{};
+    var state = npc(.{ .index = 32, .generation = 1 });
+    state.population_member = 2;
+    state.population_role = .worker;
+    state.combat_disposition = .passive;
+    state.activity_kind = .commute;
+    state.activity_state = .traveling;
+    try std.testing.expectEqualDeep(
+        colors.npc_worker,
+        owner.npcPlan(1, state).entity.body_color,
+    );
+
+    state.combat_disposition = .hostile_to_players;
+    try std.testing.expectEqualDeep(
+        colors.npc_hostile,
+        owner.npcPlan(2, state).entity.body_color,
+    );
+    state.encounter_state = .searching;
+    try std.testing.expectEqualDeep(
+        colors.npc_searching,
+        owner.npcPlan(3, state).entity.body_color,
+    );
+    state.health = 70;
+    try std.testing.expectEqualDeep(
+        colors.hit_flash,
+        owner.npcPlan(4, state).entity.body_color,
+    );
+    state.health = 0;
+    state.life_state = .dead;
+    try std.testing.expectEqualDeep(
+        colors.dead,
+        owner.npcPlan(5, state).entity.body_color,
+    );
 }
 
 test "NPC damage flash expires on the common authority clock" {

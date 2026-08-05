@@ -334,7 +334,10 @@ pub const NpcRouteCursorV1 = struct {
 
 pub const SpawnNpc = struct {
     request_id: u64,
-    node: navigation.NodeRef,
+    position: [3]f32,
+    facing_yaw: f32,
+    anchor: navigation.NodeRef,
+    hostile_to_players: bool,
     goal: Goal = .hold,
 };
 
@@ -364,6 +367,7 @@ pub const RejectionReason = enum(u8) {
     not_owned,
     start_district_inactive,
     invalid_start_node,
+    start_pose_blocked,
     goal_district_inactive,
     invalid_goal,
     unreachable_goal,
@@ -436,6 +440,7 @@ pub const EventDropCounts = struct {
 pub const NpcView = struct {
     id: engine.PersistentId,
     owner: navigation.ChunkCoord,
+    hostile_to_players: bool,
     goal: Goal,
     route: RouteCursor,
     state: State,
@@ -489,6 +494,7 @@ pub const Diagnostics = struct {
 pub const NpcV1 = struct {
     id: engine.PersistentId,
     owner: navigation.ChunkCoord,
+    hostile_to_players: bool,
     goal: Goal,
     route: NpcRouteCursorV1,
     position: [3]f32,
@@ -500,7 +506,20 @@ pub fn validateCommand(command: Command) !void {
     switch (command) {
         .spawn => |spawn| {
             if (spawn.request_id == 0) return error.InvalidNpcRequestId;
-            try validateNodeRef(spawn.node);
+            try validateNodeRef(spawn.anchor);
+            for (spawn.position) |component| {
+                if (!std.math.isFinite(component)) return error.InvalidNpcSpawnPosition;
+            }
+            const owner = try navigation.ownerForPosition(spawn.position);
+            if (!navigation.ChunkCoord.eql(owner, spawn.anchor.coord)) {
+                return error.NpcSpawnOwnerMismatch;
+            }
+            const facing = try engine.transform.normalizeFacingYaw(spawn.facing_yaw);
+            if (facing != spawn.facing_yaw or
+                (spawn.facing_yaw == 0 and std.math.signbit(spawn.facing_yaw)))
+            {
+                return error.NonCanonicalNpcSpawnFacing;
+            }
             try validateGoal(spawn.goal);
         },
         .set_goal => |set_goal| {

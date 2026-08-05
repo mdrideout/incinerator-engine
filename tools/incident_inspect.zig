@@ -1,8 +1,8 @@
-//! SDL/GPU-free schema-4 validator and concise incident-bundle index.
+//! SDL/GPU-free schema-5 validator and concise incident-bundle index.
 
 const std = @import("std");
 
-const schema_version: u16 = 4;
+const schema_version: u16 = 5;
 const maximum_manifest_bytes = 64 * 1024;
 const maximum_segment_bytes = 8 * 1024 * 1024;
 const maximum_anomalies = 64;
@@ -15,6 +15,7 @@ const EvidenceCapabilities = struct {
     semantic_vehicle_parts: bool,
     atomic_note_handoff: bool,
     navigation_lineage: bool,
+    population_activity: bool,
 };
 
 const Manifest = struct {
@@ -338,13 +339,14 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
         !std.mem.eql(u8, capabilities.carryables, "full_boundary") or
         !capabilities.semantic_vehicle_parts or
         !capabilities.atomic_note_handoff or
-        !capabilities.navigation_lineage)
+        !capabilities.navigation_lineage or
+        !capabilities.population_activity)
     {
         return error.InvalidEvidenceCapabilities;
     }
     std.debug.print(
-        "  capabilities characters={s} npcs={s} vehicles={s} carryables={s} vehicle_parts={} atomic_note={} navigation_lineage={}\n",
-        .{ capabilities.characters, capabilities.npcs, capabilities.vehicles, capabilities.carryables, capabilities.semantic_vehicle_parts, capabilities.atomic_note_handoff, capabilities.navigation_lineage },
+        "  capabilities characters={s} npcs={s} vehicles={s} carryables={s} vehicle_parts={} atomic_note={} navigation_lineage={} population_activity={}\n",
+        .{ capabilities.characters, capabilities.npcs, capabilities.vehicles, capabilities.carryables, capabilities.semantic_vehicle_parts, capabilities.atomic_note_handoff, capabilities.navigation_lineage, capabilities.population_activity },
     );
 
     var anomalies: [maximum_anomalies]AnomalySummary = @splat(.{});

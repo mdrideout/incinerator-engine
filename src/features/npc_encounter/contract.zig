@@ -12,7 +12,6 @@ pub const max_cues: usize = 1024;
 pub const max_transition_history: usize = 256;
 
 pub const Config = struct {
-    hostile_npc_limit: u8 = 1,
     sight_radius: f32 = 20.0,
     sight_facing_cos: f32 = 0.5,
     last_seen_memory_ticks: u16 = 180,
@@ -41,8 +40,7 @@ pub const Config = struct {
     los_queries_per_npc: u8 = 4,
 
     pub fn validate(self: Config) !void {
-        if (self.hostile_npc_limit == 0 or self.hostile_npc_limit > max_records or
-            !positiveFinite(self.sight_radius) or
+        if (!positiveFinite(self.sight_radius) or
             !unitCos(self.sight_facing_cos) or
             self.last_seen_memory_ticks == 0 or
             !positiveFinite(self.pursuit_leash) or
@@ -75,7 +73,6 @@ pub const Config = struct {
 };
 
 pub const ConfigV1 = struct {
-    hostile_npc_limit: u8,
     sight_radius: f32,
     sight_facing_cos: f32,
     last_seen_memory_ticks: u16,
@@ -101,7 +98,6 @@ pub const ConfigV1 = struct {
 
     pub fn fromConfig(config: Config) ConfigV1 {
         return .{
-            .hostile_npc_limit = config.hostile_npc_limit,
             .sight_radius = config.sight_radius,
             .sight_facing_cos = config.sight_facing_cos,
             .last_seen_memory_ticks = config.last_seen_memory_ticks,
@@ -129,7 +125,6 @@ pub const ConfigV1 = struct {
 
     pub fn toConfig(self: ConfigV1) !Config {
         const result = Config{
-            .hostile_npc_limit = self.hostile_npc_limit,
             .sight_radius = self.sight_radius,
             .sight_facing_cos = self.sight_facing_cos,
             .last_seen_memory_ticks = self.last_seen_memory_ticks,
@@ -208,6 +203,7 @@ pub const NpcObservation = struct {
     position: [3]f32,
     facing_yaw: f32,
     alive: bool,
+    hostile_to_players: bool,
     available: bool = true,
     current_health: u16 = vitals.default_max_health,
 };

@@ -8,8 +8,8 @@ const std = @import("std");
 const district = @import("district_contract");
 const navigation = @import("navigation_contract");
 
-pub const current_recipe_version: u32 = 6;
-pub const catalog_semantic_id = "incinerator.s12.two-district";
+pub const current_recipe_version: u32 = 7;
+pub const catalog_semantic_id = "incinerator.s13.population-two-district";
 pub const catalog_wire_schema: u16 = 1;
 pub const static_box_count: u8 = 3;
 pub const blocking_proxy_count: u8 = static_box_count - 1;
@@ -22,50 +22,130 @@ pub const south_gate_approach = navigation.DestinationId{ .value = 3 };
 pub const market_terminal = navigation.DestinationId{ .value = 4 };
 pub const alley_junction = navigation.DestinationId{ .value = 5 };
 pub const transit_yard = navigation.DestinationId{ .value = 6 };
-pub const destination_count: usize = 6;
+pub const player_plaza_companion = navigation.DestinationId{ .value = 7 };
+pub const depot_forecourt_companion = navigation.DestinationId{ .value = 8 };
+pub const south_gate_companion = navigation.DestinationId{ .value = 9 };
+pub const north_walk_first = navigation.DestinationId{ .value = 10 };
+pub const north_walk_second = navigation.DestinationId{ .value = 11 };
+pub const market_terminal_second = navigation.DestinationId{ .value = 12 };
+pub const market_terminal_third = navigation.DestinationId{ .value = 13 };
+pub const alley_junction_companion = navigation.DestinationId{ .value = 14 };
+pub const transit_yard_companion = navigation.DestinationId{ .value = 15 };
+pub const east_court = navigation.DestinationId{ .value = 16 };
+pub const destination_count: usize = 16;
 
 pub fn resolveDestination(id: navigation.DestinationId) ?navigation.Destination {
     const entry: navigation.Destination = switch (id.value) {
         1 => .{
             .id = player_plaza,
-            .position = .{ -5, 0, 5 },
+            .position = .{ -6.5, 0, 6.2 },
             .arrival_radius = 0.25,
             .anchors = .{ nodeRef(navigation_west_coord, 0), .{} },
             .anchor_count = 1,
         },
         2 => .{
             .id = depot_forecourt,
-            .position = .{ 4, 0, 5 },
+            .position = .{ 4, 0, 6.3 },
             .arrival_radius = 0.25,
             .anchors = .{ nodeRef(navigation_west_coord, 5), .{} },
             .anchor_count = 1,
         },
         3 => .{
             .id = south_gate_approach,
-            .position = .{ 3, 0, -3 },
+            .position = .{ 3, 0, -5.8 },
             .arrival_radius = 0.25,
             .anchors = .{ nodeRef(navigation_west_coord, 3), .{} },
             .anchor_count = 1,
         },
         4 => .{
             .id = market_terminal,
-            .position = .{ 20, 0, 5 },
+            .position = .{ 18.5, 0, 6.3 },
             .arrival_radius = 0.25,
             .anchors = .{ nodeRef(navigation_east_coord, 2), .{} },
             .anchor_count = 1,
         },
         5 => .{
             .id = alley_junction,
-            .position = .{ 14, 0, 0 },
+            .position = .{ 13, 0, -0.8 },
             .arrival_radius = 0.25,
             .anchors = .{ nodeRef(navigation_east_coord, 7), .{} },
             .anchor_count = 1,
         },
         6 => .{
             .id = transit_yard,
-            .position = .{ 20, 0, -4 },
+            .position = .{ 19, 0, -5.7 },
             .arrival_radius = 0.25,
             .anchors = .{ nodeRef(navigation_east_coord, 4), .{} },
+            .anchor_count = 1,
+        },
+        7 => .{
+            .id = player_plaza_companion,
+            .position = .{ -3.5, 0, 6.2 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_west_coord, 0), .{} },
+            .anchor_count = 1,
+        },
+        8 => .{
+            .id = depot_forecourt_companion,
+            .position = .{ 5.8, 0, 5.2 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_west_coord, 5), .{} },
+            .anchor_count = 1,
+        },
+        9 => .{
+            .id = south_gate_companion,
+            .position = .{ 5.3, 0, -4.8 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_west_coord, 7), .{} },
+            .anchor_count = 1,
+        },
+        10 => .{
+            .id = north_walk_first,
+            .position = .{ 2, 0, 1.5 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_west_coord, 4), .{} },
+            .anchor_count = 1,
+        },
+        11 => .{
+            .id = north_walk_second,
+            .position = .{ 4.5, 0, 2.5 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_west_coord, 4), .{} },
+            .anchor_count = 1,
+        },
+        12 => .{
+            .id = market_terminal_second,
+            .position = .{ 20.5, 0, 6.3 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_east_coord, 2), .{} },
+            .anchor_count = 1,
+        },
+        13 => .{
+            .id = market_terminal_third,
+            .position = .{ 22.5, 0, 5.3 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_east_coord, 2), .{} },
+            .anchor_count = 1,
+        },
+        14 => .{
+            .id = alley_junction_companion,
+            .position = .{ 14.5, 0, 0.6 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_east_coord, 7), .{} },
+            .anchor_count = 1,
+        },
+        15 => .{
+            .id = transit_yard_companion,
+            .position = .{ 21.5, 0, -5.5 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_east_coord, 4), .{} },
+            .anchor_count = 1,
+        },
+        16 => .{
+            .id = east_court,
+            .position = .{ 12.5, 0, 5.8 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_east_coord, 1), .{} },
             .anchor_count = 1,
         },
         else => return null,
@@ -82,6 +162,16 @@ pub fn destinationName(id: navigation.DestinationId) ?[]const u8 {
         4 => "market_terminal",
         5 => "alley_junction",
         6 => "transit_yard",
+        7 => "player_plaza_companion",
+        8 => "depot_forecourt_companion",
+        9 => "south_gate_companion",
+        10 => "north_walk_first",
+        11 => "north_walk_second",
+        12 => "market_terminal_second",
+        13 => "market_terminal_third",
+        14 => "alley_junction_companion",
+        15 => "transit_yard_companion",
+        16 => "east_court",
         else => null,
     };
 }

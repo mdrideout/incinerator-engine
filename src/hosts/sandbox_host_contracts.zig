@@ -55,7 +55,7 @@ pub fn destinationName(id: DestinationId) ?[]const u8 {
     return sandbox_district_recipe.destinationName(id);
 }
 pub const npc_capacity = npcs.max_npcs;
-pub const snapshot_schema: u16 = 13;
+pub const snapshot_schema: u16 = 14;
 pub const DistrictPresentationPlan = sandbox_district_recipe.PresentationPlan;
 
 /// Default playable product spawn and the local movement envelope guaranteed
@@ -87,6 +87,7 @@ pub const Config = struct {
     interaction: interactions.Config = .{},
     npc: npcs.Config = .{},
     npc_encounter: npc_encounters.Config = .{},
+    authored_population: bool = false,
     block: ?StaticBox = null,
 };
 
@@ -210,7 +211,7 @@ test "graphical sandbox contracts publish values without mutable authority" {
 
     const config = Config{ .namespace = 42 };
     try std.testing.expectEqual(@as(u64, 42), config.namespace);
-    try std.testing.expectEqual(snapshot_schema, @as(u16, 13));
+    try std.testing.expectEqual(snapshot_schema, @as(u16, 14));
 }
 
 test "default playable spawn and initial traversal clear canonical blockers" {

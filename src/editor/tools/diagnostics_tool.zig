@@ -320,21 +320,35 @@ pub fn draw(ctx: *const DeveloperInput) void {
                 encounter.hit_reactions,
             },
         );
-        const replacement = simulation.npc_replacement;
-        zgui.text(
-            "Replacement pending={d} awaiting={d} attempts={d} ready={d} retries={d} reasons inactive/occupied/near/visible={d}/{d}/{d}/{d}",
-            .{
-                replacement.pending,
-                replacement.awaiting_spawn,
-                replacement.attempts,
-                replacement.replacements_ready,
-                replacement.retries,
-                replacement.district_inactive,
-                replacement.occupied,
-                replacement.too_close_to_player,
-                replacement.visible_to_player,
-            },
-        );
+        if (simulation.population) |population| {
+            zgui.text(
+                "Population live/awaiting/vacant/replacement={d}/{d}/{d}/{d} activity travel/dwell/wait/interrupted={d}/{d}/{d}/{d}",
+                .{
+                    population.live,
+                    population.awaiting_spawn,
+                    population.vacant,
+                    population.replacement_pending,
+                    population.traveling,
+                    population.dwelling,
+                    population.waiting_for_slot,
+                    population.interrupted,
+                },
+            );
+            zgui.text(
+                "Population slots free/claimed/occupied={d}/{d}/{d} decisions={d} contentions={d} lease expirations={d} spawn retries={d}",
+                .{
+                    population.free_slots,
+                    population.claimed_slots,
+                    population.occupied_slots,
+                    population.decisions,
+                    population.slot_contentions,
+                    population.lease_expirations,
+                    population.spawn_retries.total(),
+                },
+            );
+        } else {
+            zgui.text("Population disabled", .{});
+        }
         const procedural_worker = simulation.district_worker;
         zgui.text(
             "Procedural worker={s}, generation={?d}, started={}, cancel={}, completion={s}",

@@ -3,13 +3,15 @@
 **Status:** The Apple Silicon macOS foundation is complete and accepted through
 S11, IV0-IV5, IC0-IC5, and the open-world correction. S12 destination-driven
 navigation, its higher-fidelity two-district world, schema-4 evidence, and
-automated native acceptance are implemented. The final S12 human walkthrough
-and two preserved human incident captures remain pending. Secondary platforms
-and public multiplayer services remain deferred.
+automated native acceptance are implemented. S13 authored population and
+sandbox activity are implemented through automated product acceptance,
+performance measurement, schema-5 incident evidence, and cleanup. The final
+S12 and S13 human walkthroughs remain pending. Secondary platforms and public
+multiplayer services remain deferred.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-07-28
+**Last reviewed:** 2026-08-01
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -30,6 +32,7 @@ and public multiplayer services remain deferred.
 → [`IC0-IC5 incident capture and human closeout accepted`](docs/validation/human-test-incident-capture.md)
 → [`open-world spatial and vehicle-dynamics correction complete`](docs/design/open-world-spatial-diagnostics-and-playability.md)
 → [`S12 automated acceptance complete; human walkthrough pending`](docs/validation/s12-destination-driven-navigation.md)
+→ [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
 
@@ -434,6 +437,7 @@ logical authority and operational lifecycle:
 | D-021 | Validate gameplay as one causal temporal journey through typed scenarios, bounded interaction traces, continuous invariants, readable product feedback, semantic Metal visibility, and shared topology/fault execution | Accepted in [ADR-020](docs/adr/020-gameplay-interaction-validation-and-observability.md); IV0-IV5 complete | Additional gameplay slices |
 | D-022 | Persist human-test evidence as bounded per-run incident bundles with anomaly bookmarks, grep-friendly streams, trailing real-swapchain screenshots, concise LLM handoff, and replay attachments | Accepted in [ADR-021](docs/adr/021-local-human-test-incident-bundles.md); IC5-A through IC5-I, including long gameplay/window/replay/cost, deterministic failure hardening, bounded-object/budget/playable-boundary corrections, and the schema-3 -5/+2 eight-anchor visual contract, are implemented and human-validated for macOS solo under the [corrective plan](docs/design/incident-evidence-reliability-and-boundary-corrections.md). | Extend the same evidence quality when a future product phase makes listen/dedicated human sessions routine |
 | D-023 | NPCs retain stable semantic destinations while a shared deterministic bounded planner derives transient routes, distinguishes waiting/blocked/unreachable, and accepts physical displacement without snap-back | Accepted and implemented in [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md), the [S12 plan](docs/design/s12-destination-driven-navigation.md), [evaluation world](docs/design/s12-navigation-evaluation-world.md), and [automated acceptance record](docs/validation/s12-destination-driven-navigation.md) | S12 human walkthrough, then S13 |
+| D-024 | Stable authored population membership owns role, cyclic activity intent, slot claims, combat disposition, and replacement across disposable NPC actors | Accepted and implemented in [ADR-024](docs/adr/024-authored-population-intent-and-activity-slots.md), the [S13 plan](docs/design/s13-authored-population-and-sandbox-activity.md), the [population evaluation world](docs/design/s13-population-evaluation-world.md), the [S13 validation ledger](docs/validation/s13-authored-population-and-sandbox-activity.md), and the [performance baseline](docs/performance/s13-baseline.md) | S13 human walkthrough, then S14 |
 
 ### Decision notes
 
@@ -546,8 +550,8 @@ The post-S11 correction then closes playable movement/facing/blocker/wheel,
 streamed-route, reliable-delivery, persistent-headless, presentation, and
 ordinary product-bootstrap/lifecycle gaps. Automatic listen/dedicated bootstrap
 now uses six authored NPC nodes, while 64 remains the synthetic scale ceiling
-and its co-location pressure stays explicit in A-F037. Final corrective
-acceptance is pending the evidence matrix in the
+and its historical co-location pressure is resolved by S13's separate
+sixteen-controller physical cohort. Final corrective acceptance is recorded in the
 [`Post-S11 Runtime Corrective Audit`](docs/validation/post-s11-runtime-corrective-audit.md).
 Shared diagnostics, storage, content, rendering, and server-shaped capabilities
 are extracted only as concrete slices prove their consumers.
@@ -1822,10 +1826,27 @@ recommendations.
     solo/listen/dedicated sandbox placements while retaining bounded interest
     only as an explicit future scale policy; fresh human continuity
     confirmation remains open.
-48. [ ] **S13 — Authored population and sandbox activity.** Introduce explicit
-    pedestrian roles, destination/activity producers, sufficient spawn and
-    navigation slots, bounded population replacement, and readable activity
-    inspection. This is the trigger to address A-F035/A-F037, not before.
+48. [ ] **S13 — Authored population and sandbox activity.** Implementation and
+    automated acceptance are complete; the ordinary-product human walkthrough
+    remains. The accepted implementation is recorded under
+    [ADR-024](docs/adr/024-authored-population-intent-and-activity-slots.md),
+    the
+    [phased implementation plan](docs/design/s13-authored-population-and-sandbox-activity.md),
+    and the
+    [population evaluation-world specification](docs/design/s13-population-evaluation-world.md).
+    It introduces stable authored population members, three pedestrian roles,
+    explicit combat disposition, short deterministic cyclic activity programs,
+    capacity-one activity slots, sufficient spawn/navigation placement,
+    bounded safe replacement, and Population Lab plus incident evidence.
+    Activity owns why a semantic destination is selected; S12 navigation
+    continues to own how it is reached. The planning target is 12 ordinary and
+    16 authored-stress members with 24 spawn slots and 16 activity slots.
+    Session-index candidate selection and persistent-ID-ranked hostility were
+    removed without compatibility. A-F035/A-F037 are resolved for the declared
+    12/16 cohorts; 64 remains logic/projection pressure only. Do not add a
+    behavior tree, StateTree, GOAP,
+    navmesh, crowd solver, LLM agent, relevance cutoff, or generic AI framework
+    without measured product pressure.
 49. [ ] **S14 — Ranged combat vertical slice.** Add one authoritative weapon
     archetype with equip/fire/reload/ammunition state, source-aware damage
     feedback, death integration, replay, reconnect, and impairment coverage.
@@ -1927,3 +1948,5 @@ recommendations.
 | 2026-07-27 | Completed the repository-grounded S12 planning contract | Proposed ADR-023, a seven-phase implementation/acceptance plan, and a bounded higher-fidelity two-district urban evaluation world. The plan preserves existing authority owners, separates semantic destination from transient route, requires truthful waiting/blocked/unreachable evidence, replaces displacement snap-back with re-anchoring, and makes inspector/overlay/incident/replay proof part of acceptance. |
 | 2026-07-28 | Implemented S12 destination-driven navigation and completed automated acceptance | Accepted ADR-023; added six semantic destinations, a deterministic weighted planner, lineage/status/recovery, two transactional seam gates, an installed two-district urban test world, Navigation Lab and overlays, schema-4 incident evidence, snapshot 13/replay 14/protocol 14, persistence/replay/fault/placement coverage, separated planner/real-Jolt measurement, and two-rate Metal acceptance. The focused gate passes 104/104 steps with 293/293 tests; the full `verify-s12` aggregate, source package/headless lifecycle, and all five installed incident-hardening profiles pass. The final human walkthrough and two preserved incident captures remain. |
 | 2026-07-28 | Corrected premature NPC projection removal found by the first S12 human incident | Healthy schema-4 evidence and matching 7,353-tick replay proved a live NPC was intentionally omitted at roughly 29.5 m by the historical 20/24 m cross-district interest policy. Current solo/listen/dedicated sandbox placements now select explicit `full_world` NPC publication with typed diagnostic reason; bounded hysteresis remains opt-in and tested for a later measured scale phase. Focused session/S12, serialized full `verify-s12`, editor product, and validation gates pass. Exact graphical re-execution completed 7,500 ticks with 490/490 NPC samples authority-present/replicated/presented/drawn through 67.9 m; fresh human continuity confirmation remains. |
+| 2026-07-28 | Completed repository-grounded S13 research and planning | Proposed ADR-024, an eight-phase implementation/acceptance plan, and a bounded two-district population evaluation world. The plan introduces stable population-member identity across actor replacement, three authored roles, explicit hostility, deterministic cyclic activity programs, activity-slot reservations, sufficient spawn slots, live-NPC separation, Population Lab/incident evidence, and separate 12/16/64 product/physical/synthetic cohorts. It deliberately defers behavior trees, StateTree, GOAP, Recast/Detour, ORCA/RVO, generative agents, LOD/relevance work, S15 expansion, and service scope until measured pressure exists. |
+| 2026-08-01 | Completed S13 implementation and automated acceptance | Added the twelve-member authored product roster, sixteen-member real-Jolt placement cohort, stable member/actor-generation lifecycle, explicit roles and hostility, deterministic activity/slot ownership, safe replacement, protocol/snapshot/replay/incident cohort break, Population Lab, schema-5 evidence, installed 240/40 Hz Metal proofs, paired incident-cost measurement, and a `verify-s13` aggregate. Removed the standalone replacement/product-encounter path, resolved A-F035/A-F037 for declared scope, and retained 64 only as synthetic logic/projection pressure. Final ordinary-product human walkthrough remains before full S13 acceptance. |

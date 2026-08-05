@@ -33,7 +33,7 @@ pub const Inputs = struct {
     interaction: @FieldType(Diagnostics, "interaction"),
     npc: @FieldType(Diagnostics, "npc"),
     npc_encounter: @FieldType(Diagnostics, "npc_encounter"),
-    npc_replacement: @FieldType(Diagnostics, "npc_replacement"),
+    population: @FieldType(Diagnostics, "population"),
     district_worker: @FieldType(Diagnostics, "district_worker"),
 };
 
@@ -72,7 +72,7 @@ pub fn compose(inputs: Inputs) Diagnostics {
         .interaction = inputs.interaction,
         .npc = inputs.npc,
         .npc_encounter = inputs.npc_encounter,
-        .npc_replacement = inputs.npc_replacement,
+        .population = inputs.population,
         .district_worker = inputs.district_worker,
     };
 }
@@ -171,19 +171,7 @@ fn testInputs() Inputs {
             .cues_pending = 0,
             .transition_history = 0,
         },
-        .npc_replacement = .{
-            .pending = 0,
-            .awaiting_spawn = 0,
-            .attempts = 0,
-            .replacements_ready = 0,
-            .retries = 0,
-            .district_inactive = 0,
-            .occupied = 0,
-            .too_close_to_player = 0,
-            .visible_to_player = 0,
-            .outcomes_pending = 0,
-            .outcomes_high_water = 0,
-        },
+        .population = null,
         .district_worker = .{
             .state = .idle,
             .generation = null,
