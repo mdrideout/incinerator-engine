@@ -211,15 +211,19 @@ pub const FrameInput = struct {
     navigation: editor_contract.NavigationInput,
     population_view: *const editor_contract.PopulationView,
     gameplay_view: *const editor_contract.GameplayView,
+    neural_view: *const editor_contract.NeuralView,
     incident_input: incident_contract.InputSample = .{},
 };
 
 pub const Effects = struct {
     reset_gameplay_actions: bool = false,
+    toggle_neural_presentation: bool = false,
 
     pub fn merge(self: *Effects, other: Effects) void {
         self.reset_gameplay_actions = self.reset_gameplay_actions or
             other.reset_gameplay_actions;
+        self.toggle_neural_presentation = self.toggle_neural_presentation !=
+            other.toggle_neural_presentation;
     }
 };
 
@@ -368,6 +372,7 @@ const State = struct {
     incident_screenshots: ?incident_screenshot.Owner = null,
     incident_semantic: ?incident_semantic.Owner = null,
     incident_requests: incident_contract.RequestBuffer = .{},
+    neural_requests: editor_contract.NeuralRequests = .{},
     pending_shortcuts: PendingShortcutQueue = .{},
     window_id: c.SDL_WindowID,
     incident_clipboard: [incident_contract.max_handoff_bytes]u8 = undefined,
@@ -1191,6 +1196,7 @@ pub const Owner = opaque {
         state.diagnostic_requests.clear();
         state.gameplay_trace_requests.clear();
         state.visualization_requests.clear();
+        state.neural_requests.clear();
         // Incident hotkeys are collected by the event pump before this draw.
         // Editor requests join the same fixed mailbox and are applied only
         // after the immutable frame inputs are no longer borrowed.
@@ -1199,6 +1205,7 @@ pub const Owner = opaque {
             state.diagnostic_requests.clear();
             state.gameplay_trace_requests.clear();
             state.visualization_requests.clear();
+            state.neural_requests.clear();
         }
         const diagnostics_snapshot = try self.snapshot(
             authority,
@@ -1278,8 +1285,12 @@ pub const Owner = opaque {
                 .view = &incident_snapshot,
                 .requests = &state.incident_requests,
             },
+            .neural = .{
+                .view = frame.neural_view,
+                .requests = &state.neural_requests,
+            },
         });
-        const effects = self.applyControlRequests(
+        var effects = self.applyControlRequests(
             authority,
             frame.frame_timer.total_frames,
             state.control_requests.slice(),
@@ -1297,6 +1308,7 @@ pub const Owner = opaque {
             state.gameplay_trace_requests.slice(),
         );
         self.applyVisualizationRequests(state.visualization_requests.slice());
+        effects.toggle_neural_presentation = state.neural_requests.toggle_model;
         if (state.incident) |capture| {
             while (state.pending_shortcuts.pop()) |candidate| {
                 if (capture.flag(

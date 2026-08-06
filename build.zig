@@ -59,12 +59,37 @@ fn sourceIdentity(b: *std.Build) SourceIdentity {
         .dirty = false,
         .dirty_fingerprint = "clean",
     };
+    code = 0;
+    const fingerprint_input = b.runAllowFail(
+        &.{
+            "sh",
+            "-c",
+            "git diff --binary --no-ext-diff HEAD -- . && " ++
+                "git ls-files --others --exclude-standard | " ++
+                "while IFS= read -r path; do " ++
+                "printf '%s\\n' \"$path\"; git hash-object -- \"$path\"; done",
+        },
+        &code,
+        .ignore,
+    ) catch return .{
+        .revision = revision,
+        .dirty = true,
+        .dirty_fingerprint = "content-unavailable",
+    };
+    if (code != 0) return .{
+        .revision = revision,
+        .dirty = true,
+        .dirty_fingerprint = "content-unavailable",
+    };
+    var fingerprint: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(fingerprint_input, &fingerprint, .{});
     return .{
         .revision = revision,
         .dirty = true,
-        .dirty_fingerprint = b.fmt("wyhash-{x:0>16}", .{
-            std.hash.Wyhash.hash(0, status),
-        }),
+        .dirty_fingerprint = b.fmt(
+            "sha256-{s}",
+            .{&std.fmt.bytesToHex(fingerprint, .lower)},
+        ),
     };
 }
 
@@ -2024,6 +2049,46 @@ pub fn build(b: *std.Build) void {
         "Create read-only PNG contact sheets: zig build incident-visual-report -- <run-folder> <new-output-folder>",
     );
     incident_visual_report_step.dependOn(&incident_visual_report.step);
+
+    const nr0_capture_inspect = b.addSystemCommand(&.{
+        "python3",
+        b.pathFromRoot("tools/neural-rendering/inspect_nr0_capture.py"),
+    });
+    if (b.args) |args| nr0_capture_inspect.addArgs(args);
+    const nr0_capture_inspect_step = b.step(
+        "inspect-nr0-capture",
+        "Validate NR0-B capture integrity: zig build inspect-nr0-capture -- <capture-root>...",
+    );
+    nr0_capture_inspect_step.dependOn(&nr0_capture_inspect.step);
+
+    const nr0_visual_report = b.addSystemCommand(&.{
+        "python3",
+        b.pathFromRoot("tools/neural-rendering/nr0_visual_report.py"),
+    });
+    if (b.args) |args| nr0_visual_report.addArgs(args);
+    const nr0_visual_report_step = b.step(
+        "nr0-visual-report",
+        "Create an external NR0 frame contact sheet: zig build nr0-visual-report -- <capture-root> <new-output.ppm>",
+    );
+    nr0_visual_report_step.dependOn(&nr0_visual_report.step);
+
+    const verify_nr0_ab = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tools/verify_nr0_ab.sh"),
+    });
+    verify_nr0_ab.addFileArg(validation_exe.getEmittedBin());
+    verify_nr0_ab.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    verify_nr0_ab.addArg(b.pathFromRoot("."));
+    verify_nr0_ab.step.dependOn(&install_cooked_fixture.step);
+    verify_nr0_ab.step.dependOn(&install_fixture_provenance.step);
+    verify_nr0_ab.step.dependOn(&install_cooked_east.step);
+    verify_nr0_ab.step.dependOn(&install_east_provenance.step);
+    verify_nr0_ab.step.dependOn(&install_cooked_catalog.step);
+    const verify_nr0_ab_step = b.step(
+        "verify-nr0-ab",
+        "Run deterministic macOS Metal NR0-A/B capture acceptance and retain /tmp evidence",
+    );
+    verify_nr0_ab_step.dependOn(&verify_nr0_ab.step);
 
     // Durable authoring/save verification is a separate cold, SDL/editor/GPU-
     // free product. The installed smoke invokes it twice so restore occurs in
@@ -4263,6 +4328,30 @@ fn buildShaders(
         "shaders/visibility.frag",
         "visibility.frag",
     );
+    const neural_primitive_vertex = compileShader(
+        b,
+        tools,
+        "shaders/neural_primitive.vert",
+        "neural_primitive.vert",
+    );
+    const neural_primitive_fragment = compileShader(
+        b,
+        tools,
+        "shaders/neural_primitive.frag",
+        "neural_primitive.frag",
+    );
+    const neural_model_vertex = compileShader(
+        b,
+        tools,
+        "shaders/neural_model.vert",
+        "neural_model.vert",
+    );
+    const neural_model_fragment = compileShader(
+        b,
+        tools,
+        "shaders/neural_model.frag",
+        "neural_model.frag",
+    );
 
     const extension = format.fileExtension();
     _ = generated.addCopyFile(triangle_vertex.target, b.fmt("triangle.vert.{s}", .{extension}));
@@ -4273,6 +4362,10 @@ fn buildShaders(
         visibility_fragment.target,
         b.fmt("visibility.frag.{s}", .{extension}),
     );
+    _ = generated.addCopyFile(neural_primitive_vertex.target, b.fmt("neural_primitive.vert.{s}", .{extension}));
+    _ = generated.addCopyFile(neural_primitive_fragment.target, b.fmt("neural_primitive.frag.{s}", .{extension}));
+    _ = generated.addCopyFile(neural_model_vertex.target, b.fmt("neural_model.vert.{s}", .{extension}));
+    _ = generated.addCopyFile(neural_model_fragment.target, b.fmt("neural_model.frag.{s}", .{extension}));
 
     _ = generated.addCopyFile(reflectShader(b, tools, triangle_vertex.spirv, "triangle.vert"), "triangle.vert.json");
     _ = generated.addCopyFile(reflectShader(b, tools, triangle_fragment.spirv, "triangle.frag"), "triangle.frag.json");
@@ -4282,6 +4375,10 @@ fn buildShaders(
         reflectShader(b, tools, visibility_fragment.spirv, "visibility.frag"),
         "visibility.frag.json",
     );
+    _ = generated.addCopyFile(reflectShader(b, tools, neural_primitive_vertex.spirv, "neural_primitive.vert"), "neural_primitive.vert.json");
+    _ = generated.addCopyFile(reflectShader(b, tools, neural_primitive_fragment.spirv, "neural_primitive.frag"), "neural_primitive.frag.json");
+    _ = generated.addCopyFile(reflectShader(b, tools, neural_model_vertex.spirv, "neural_model.vert"), "neural_model.vert.json");
+    _ = generated.addCopyFile(reflectShader(b, tools, neural_model_fragment.spirv, "neural_model.frag"), "neural_model.frag.json");
 
     const module_source = generated.add("shader_assets.zig", b.fmt(
         \\pub const Format = enum {{ msl }};
@@ -4293,11 +4390,19 @@ fn buildShaders(
         \\pub const model_vertex = @embedFile("model.vert.{s}");
         \\pub const model_fragment = @embedFile("model.frag.{s}");
         \\pub const visibility_fragment = @embedFile("visibility.frag.{s}");
+        \\pub const neural_primitive_vertex = @embedFile("neural_primitive.vert.{s}");
+        \\pub const neural_primitive_fragment = @embedFile("neural_primitive.frag.{s}");
+        \\pub const neural_model_vertex = @embedFile("neural_model.vert.{s}");
+        \\pub const neural_model_fragment = @embedFile("neural_model.frag.{s}");
         \\
     , .{
         @tagName(format),
         format.entrypoint(),
         format.driver(),
+        extension,
+        extension,
+        extension,
+        extension,
         extension,
         extension,
         extension,
@@ -4311,6 +4416,10 @@ fn buildShaders(
         \\pub const model_vertex = @embedFile("model.vert.json");
         \\pub const model_fragment = @embedFile("model.frag.json");
         \\pub const visibility_fragment = @embedFile("visibility.frag.json");
+        \\pub const neural_primitive_vertex = @embedFile("neural_primitive.vert.json");
+        \\pub const neural_primitive_fragment = @embedFile("neural_primitive.frag.json");
+        \\pub const neural_model_vertex = @embedFile("neural_model.vert.json");
+        \\pub const neural_model_fragment = @embedFile("neural_model.frag.json");
         \\
     );
 

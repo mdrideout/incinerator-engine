@@ -1,7 +1,7 @@
 # Neural Rendering Research
 
-**Status:** Active research supporting accepted ADR-025; preliminary NR-0001
-capture, training, export, and native runtime proof implemented, full NR0 open
+**Status:** Active research supporting accepted ADR-025; NR0-A/B input and
+capture foundation accepted, NR0-C through NR0-G open
 
 **Last reviewed:** 2026-08-05
 

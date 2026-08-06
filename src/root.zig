@@ -12,6 +12,7 @@ pub const diagnostic_contracts = contracts.diagnostics;
 pub const physics = contracts.physics;
 pub const physics_debug = contracts.physics_debug;
 pub const rendering = contracts.rendering;
+pub const neural_rendering = contracts.neural_rendering;
 pub const fixed_step = @import("engine/fixed_step.zig");
 pub const bounded_queue = @import("engine/bounded_queue.zig");
 pub const diagnostics = @import("engine/diagnostics.zig");
@@ -39,6 +40,7 @@ test "public engine surface remains coherent" {
     std.testing.refAllDecls(physics);
     std.testing.refAllDecls(physics_debug);
     std.testing.refAllDecls(rendering);
+    std.testing.refAllDecls(neural_rendering);
     std.testing.refAllDecls(fixed_step);
     std.testing.refAllDecls(bounded_queue);
     std.testing.refAllDecls(diagnostics);

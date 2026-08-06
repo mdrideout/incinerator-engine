@@ -71,6 +71,38 @@ exists.
 - Advance schemas without compatibility decoders; coordinate every producer,
   consumer, capture, bundle, diagnostic, test, and document in the change.
 
+## Current NR0-A/B contract
+
+The accepted input ABI is `incinerator.neural-input.v1`: six 400×225 RGBA8
+appearance, linear-depth, world-normal, motion, semantic, and instance targets.
+The paired conventional target is canonical 1600×900. Capture schema 2 requires
+an absolute absent root plus explicit cohort, sequence, and camera-path
+ownership. Its raw bytes are canonical RGBA8 (including normalization from a
+BGRA Metal product source); PPM images are debug derivatives only.
+
+Use the Neural Rendering Lab for live schema, shader, history, identity,
+render, model, and capture state. Use these tools for external evidence:
+
+```sh
+zig build inspect-nr0-capture -- <capture-root> [<capture-root> ...]
+zig build inspect-nr0-capture -- --require-identical <capture-a> <capture-b>
+zig build nr0-visual-report -- <capture-root> <new-output.ppm>
+zig build verify-nr0-ab
+```
+
+Open `capture.json`, then `frames.ndjson`, then the referenced per-frame
+manifest. Check full source/content/schema/shader provenance and matrix/frame
+identity before interpreting images. A complete capture must have every raw and
+debug digest, stable identity mapping, zero compact-ID collision, and an exact
+recorded/requested frame count. The inspector also requires aligned coverage,
+grayscale depth, unit decoded normals, binary history, and manifest-backed
+semantic/instance pixels. Do not infer buffer meaning from color alone; use the
+schema encoding and debug-encoding strings.
+
+NR-0001 RGB training tools predate capture schema 2. Do not silently adapt or
+discard its extra channels. NR0-C must introduce an explicit versioned dataset
+adapter and numbered experiment.
+
 ## Validation and handoff
 
 For each completed NR0 phase:

@@ -37,6 +37,7 @@ const timing = @import("timing.zig");
 const input = @import("input.zig");
 const renderer = @import("renderer.zig");
 const mesh = @import("mesh.zig");
+const texture = @import("texture.zig");
 const primitives = @import("primitives.zig");
 const sandbox_visual_resources = @import("sandbox_visual_resources.zig");
 const district_contract = @import("district_contract");
@@ -54,6 +55,7 @@ const sandbox_developer_host = @import("hosts/sandbox_developer_host.zig");
 const incident_capture = @import("hosts/incident_capture.zig");
 const incident_input_replay = @import("hosts/incident_input_replay.zig");
 const neural_capture_host = @import("hosts/neural_capture_host.zig");
+const neural_input_host = @import("hosts/neural_input_host.zig");
 const neural_rendering_host = @import("hosts/neural_rendering_host.zig");
 const sandbox_invocation = @import("sandbox_invocation");
 const sandbox_authoring = @import("sandbox_authoring");
@@ -1871,6 +1873,7 @@ const App = struct {
     frame_timer: timing.FrameTimer,
     input_buffer: input.InputBuffer,
     neural_rendering: ?neural_rendering_host.Owner = null,
+    neural_inputs: ?neural_input_host.Owner = null,
     neural_capture: ?neural_capture_host.Owner = null,
 
     simulation: *sandbox_host.Placement,
@@ -2294,6 +2297,7 @@ const App = struct {
         self.gpu_renderer.drainForExternalTeardown();
 
         if (self.neural_capture) |*owner| owner.deinit();
+        if (self.neural_inputs) |*owner| owner.deinit();
         if (self.neural_rendering) |*owner| owner.deinit(&self.gpu_renderer);
 
         if (build_options.validation_mode) {
@@ -2325,24 +2329,42 @@ const App = struct {
     fn configureNeuralRendering(self: *App, environ_map: anytype) !void {
         const model_path = environ_map.get("INCINERATOR_NR_MODEL");
         const capture_root = environ_map.get("INCINERATOR_NR_CAPTURE_ROOT");
-        if (model_path == null and capture_root == null) return;
+        const lab_requested = if (environ_map.get("INCINERATOR_NR_LAB")) |value|
+            std.mem.eql(u8, value, "1") or std.ascii.eqlIgnoreCase(value, "true")
+        else
+            false;
+        if (model_path == null and capture_root == null and !lab_requested) return;
         if (model_path) |path| if (!std.fs.path.isAbsolute(path)) {
             return error.NeuralModelPathMustBeAbsolute;
         };
 
-        var neural = try neural_rendering_host.Owner.init(
-            self.io,
+        var neural: ?neural_rendering_host.Owner = null;
+        if (model_path) |path| {
+            neural = try neural_rendering_host.Owner.init(
+                self.io,
+                &self.gpu_renderer,
+                path,
+            );
+        }
+        errdefer if (neural) |*owner| owner.deinit(&self.gpu_renderer);
+        var neural_inputs = try neural_input_host.Owner.init(
+            std.heap.page_allocator,
             &self.gpu_renderer,
-            model_path,
         );
-        errdefer neural.deinit(&self.gpu_renderer);
+        errdefer neural_inputs.deinit();
         var capture: ?neural_capture_host.Owner = null;
         if (capture_root) |root| {
             const count_text = environ_map.get("INCINERATOR_NR_CAPTURE_FRAMES") orelse
                 return error.NeuralCaptureFrameCountRequired;
             const start_text = environ_map.get("INCINERATOR_NR_CAPTURE_START_FRAME") orelse "0";
             const stride_text = environ_map.get("INCINERATOR_NR_CAPTURE_STRIDE") orelse "1";
-            capture = try neural_capture_host.Owner.init(self.io, .{
+            const cohort_text = environ_map.get("INCINERATOR_NR_COHORT") orelse
+                return error.NeuralCaptureCohortRequired;
+            const sequence = environ_map.get("INCINERATOR_NR_SEQUENCE") orelse
+                return error.NeuralCaptureSequenceRequired;
+            const camera_path = environ_map.get("INCINERATOR_NR_CAMERA_PATH") orelse
+                return error.NeuralCaptureCameraPathRequired;
+            capture = try neural_capture_host.Owner.init(self.io, std.heap.page_allocator, &self.gpu_renderer, .{
                 .root = root,
                 .start_frame = std.fmt.parseUnsigned(u64, start_text, 10) catch
                     return error.InvalidNeuralCaptureStartFrame,
@@ -2350,23 +2372,35 @@ const App = struct {
                     return error.InvalidNeuralCaptureStride,
                 .frame_count = std.fmt.parseUnsigned(u64, count_text, 10) catch
                     return error.InvalidNeuralCaptureFrameCount,
+                .cohort = try neural_capture_host.parseCohort(cohort_text),
+                .sequence = sequence,
+                .camera_path = camera_path,
+                .content_digest = try self.district_streaming.contentDigest(),
             });
         }
         self.neural_rendering = neural;
+        self.neural_inputs = neural_inputs;
         self.neural_capture = capture;
-        const diagnostics = self.neural_rendering.?.diagnostics();
-        std.debug.print(
-            "NEURAL_RENDERER_POC model_loaded={} enabled={} model={s} capture={s}\n",
-            .{
-                diagnostics.model_loaded,
-                diagnostics.enabled,
-                model_path orelse "none",
-                capture_root orelse "none",
-            },
-        );
-        if (model_path != null) std.debug.print("  N - Toggle neural scene presentation\n", .{});
-        if (!diagnostics.model_loaded and model_path != null) {
-            std.debug.print("NEURAL_RENDERER_FALLBACK reason={s}\n", .{diagnostics.last_error});
+        if (self.neural_rendering) |*owner| {
+            const diagnostics = owner.diagnostics();
+            std.debug.print(
+                "NEURAL_RENDERER_POC model_loaded={} enabled={} model={s} capture={s}\n",
+                .{
+                    diagnostics.model_loaded,
+                    diagnostics.enabled,
+                    model_path.?,
+                    capture_root orelse "none",
+                },
+            );
+            std.debug.print("  N - Toggle neural scene presentation\n", .{});
+            if (!diagnostics.model_loaded) {
+                std.debug.print("NEURAL_RENDERER_FALLBACK reason={s}\n", .{diagnostics.last_error});
+            }
+        } else {
+            std.debug.print(
+                "NR0_INPUTS schema={s} capture={s}\n",
+                .{ engine.neural_rendering.schema_name, capture_root orelse "none" },
+            );
         }
     }
 
@@ -5701,6 +5735,9 @@ const App = struct {
         effects: sandbox_developer_host.Effects,
     ) void {
         if (effects.reset_gameplay_actions) self.action_latch.clear();
+        if (effects.toggle_neural_presentation) {
+            if (self.neural_rendering) |*neural| _ = neural.toggle();
+        }
     }
 
     fn developerAuthorityPort(self: *App) sandbox_developer_host.AuthorityPort {
@@ -6523,19 +6560,19 @@ const App = struct {
         );
         try self.gpu_renderer.submitFrame();
         self.developer.afterSuccessfulFrameSubmission(&self.gpu_renderer);
+        if (self.neural_capture) |*capture| {
+            if (capture.wantsFrame(self.frame_timer.total_frames)) {
+                const inputs = &self.neural_inputs.?;
+                try capture.record(&self.gpu_renderer, inputs);
+            }
+        }
         if (self.neural_rendering) |*neural| {
-            const capture_requested = if (self.neural_capture) |*capture|
-                capture.wantsFrame(self.frame_timer.total_frames)
-            else
-                false;
             if (try neural.readbackAndPredict(
                 &self.gpu_renderer,
                 self.simulation.inspection().tickIndex(),
                 self.frame_timer.total_frames,
-                capture_requested,
-            )) |captured| {
-                if (capture_requested) try self.neural_capture.?.record(captured);
-            }
+                false,
+            )) |_| {}
         }
     }
 
@@ -7414,6 +7451,91 @@ const App = struct {
         return 2;
     }
 
+    /// Submit one product-scene draw and mirror the exact immutable draw plan
+    /// into the optional NR0 auxiliary adapter. UI/debug calls continue using
+    /// Renderer directly and therefore never enter model input.
+    fn drawPresentationMesh(
+        self: *App,
+        identity: engine.neural_rendering.DrawIdentity,
+        gpu_mesh: *const mesh.Mesh,
+        diffuse_texture: ?texture.Texture,
+        base_color: [4]f32,
+        model: zm.Mat,
+        view_projection: zm.Mat,
+    ) !void {
+        self.gpu_renderer.drawMeshWithMaterial(
+            gpu_mesh,
+            diffuse_texture,
+            base_color,
+            model,
+            view_projection,
+        );
+        if (self.neural_inputs) |*inputs| try inputs.record(.{
+            .identity = identity,
+            .mesh = gpu_mesh,
+            .diffuse_texture = diffuse_texture,
+            .base_color = base_color,
+            .model = model,
+            .view_projection = view_projection,
+        });
+    }
+
+    fn persistentNeuralIdentity(
+        persistent_id: engine.PersistentId,
+        semantic: engine.neural_rendering.SemanticClass,
+        part: engine.neural_rendering.SemanticPart,
+        ordinal: u16,
+    ) engine.neural_rendering.DrawIdentity {
+        return .{
+            .identity = .{ .persistent = .{
+                .namespace = persistent_id.namespace,
+                .local = persistent_id.local,
+            } },
+            .semantic = semantic,
+            .part = part,
+            .ordinal = ordinal,
+        };
+    }
+
+    fn replicatedNeuralIdentity(
+        entity: sandbox_host.ReplicatedEntityId,
+        semantic: engine.neural_rendering.SemanticClass,
+        part: engine.neural_rendering.SemanticPart,
+    ) engine.neural_rendering.DrawIdentity {
+        return .{
+            .identity = .{ .replicated = .{
+                .index = entity.index,
+                .generation = entity.generation,
+            } },
+            .semantic = semantic,
+            .part = part,
+        };
+    }
+
+    fn fixtureNeuralIdentity(
+        fixture: u64,
+        semantic: engine.neural_rendering.SemanticClass,
+        ordinal: u16,
+    ) engine.neural_rendering.DrawIdentity {
+        return .{
+            .identity = .{ .fixture = fixture },
+            .semantic = semantic,
+            .ordinal = ordinal,
+        };
+    }
+
+    /// Authored district decoration has one visual identity before and after
+    /// logical activation. Streaming slots are transient storage and must not
+    /// become temporal model identity.
+    fn districtSceneNeuralIdentity(
+        coord: district_contract.ChunkCoord,
+    ) engine.neural_rendering.Identity {
+        const x_bits: u32 = @bitCast(coord.x);
+        const z_bits: u32 = @bitCast(coord.z);
+        return .{ .fixture = 0x4449_0000_0000_0000 ^
+            (@as(u64, x_bits) << 32) ^ @as(u64, z_bits) };
+    }
+
     fn drawCombatHudMarkers(
         self: *App,
         position: [3]f32,
@@ -7476,15 +7598,22 @@ const App = struct {
     fn drawAuthoredDistrictScene(
         self: *App,
         scene: anytype,
+        identity: engine.neural_rendering.Identity,
         view_projection: zm.Mat,
     ) !u64 {
         var draw_calls: u64 = 0;
-        for (scene.instances()) |instance| {
+        for (scene.instances(), 0..) |instance, instance_index| {
             if (instance.mesh_index >= scene.meshes().len) {
                 return error.DistrictResidentInstanceInvalid;
             }
             const resident_mesh = scene.meshes()[instance.mesh_index];
-            self.gpu_renderer.drawMeshWithMaterial(
+            try self.drawPresentationMesh(
+                .{
+                    .identity = identity,
+                    .semantic = .district,
+                    .ordinal = std.math.cast(u16, instance_index) orelse
+                        return error.DistrictResidentInstanceOrdinalOverflow,
+                },
                 resident_mesh.mesh,
                 scene.materialTexture(resident_mesh.material_index),
                 scene.materialBaseColor(resident_mesh.material_index),
@@ -7757,6 +7886,20 @@ const App = struct {
 
         // Get view-projection matrix from camera
         const view_proj = self.game_camera.getViewProjectionMatrix(aspect_ratio);
+        if (self.neural_inputs) |*inputs| {
+            const target_extent = self.gpu_renderer.getProductSceneExtent();
+            try inputs.beginFrame(.{
+                .authority_tick = self.simulation.inspection().tickIndex(),
+                .presentation_frame = self.frame_timer.total_frames,
+                .interpolation_alpha = alpha,
+                .target_width = target_extent.width,
+                .target_height = target_extent.height,
+                .history_reset = if (inputs.diagnostics().rendered_frames == 0)
+                    .first_frame
+                else
+                    .none,
+            }, self.game_camera.getViewMatrix());
+        }
         scene_extraction_profile.finish(.success);
 
         var scene_draw_profile = self.beginHostProfile(
@@ -7769,7 +7912,14 @@ const App = struct {
 
         // The ground is a visual-host fixture matching the simulation-owned
         // static body. Feature-owned entities arrive through extraction below.
-        self.gpu_renderer.drawMesh(&self.ground_mesh, zm.identity(), view_proj);
+        try self.drawPresentationMesh(
+            fixtureNeuralIdentity(1, .environment, 0),
+            &self.ground_mesh,
+            self.ground_mesh.diffuse_texture,
+            .{ 1, 1, 1, 1 },
+            zm.identity(),
+            view_proj,
+        );
         scene_draw_calls +|= 1;
         const draws_block = if (build_options.validation_mode or builtin.is_test)
             self.validation.profile == .s1_smoke
@@ -7786,8 +7936,11 @@ const App = struct {
                 sandbox_block.position[1],
                 sandbox_block.position[2],
             );
-            self.gpu_renderer.drawMesh(
+            try self.drawPresentationMesh(
+                fixtureNeuralIdentity(2, .environment, 0),
                 &self.block_mesh,
+                self.block_mesh.diffuse_texture,
+                .{ 1, 1, 1, 1 },
                 zm.mul(block_scale, block_translation),
                 view_proj,
             );
@@ -7802,7 +7955,7 @@ const App = struct {
             gate_state.north_open,
             gate_state.south_open,
         };
-        for (gate_positions, gate_open) |position, open| {
+        for (gate_positions, gate_open, 0..) |position, open, gate_index| {
             if (open) continue;
             const gate_scale = zm.scaling(0.4, 2.0, 2.0);
             const gate_translation = zm.translation(
@@ -7810,8 +7963,11 @@ const App = struct {
                 position[1],
                 position[2],
             );
-            self.gpu_renderer.drawMesh(
+            try self.drawPresentationMesh(
+                fixtureNeuralIdentity(10 + gate_index, .environment, 0),
                 &self.block_mesh,
+                self.block_mesh.diffuse_texture,
+                .{ 1, 1, 1, 1 },
                 zm.mul(gate_scale, gate_translation),
                 view_proj,
             );
@@ -7823,7 +7979,12 @@ const App = struct {
         // and blocker proxies remain exclusively authority-ticketed below.
         for (0..district_streaming_host.slot_count) |slot_index| {
             if (try self.district_streaming.prefetchedVisual(slot_index)) |scene| {
-                scene_draw_calls +|= try self.drawAuthoredDistrictScene(scene, view_proj);
+                const slot = try self.district_streaming.slot(slot_index);
+                scene_draw_calls +|= try self.drawAuthoredDistrictScene(
+                    scene,
+                    districtSceneNeuralIdentity(slot.coord),
+                    view_proj,
+                );
             }
         }
 
@@ -7838,7 +7999,11 @@ const App = struct {
                 scene.meshes().len != 0,
             );
             if (district_plan.authored_scene_resident) {
-                scene_draw_calls +|= try self.drawAuthoredDistrictScene(scene, view_proj);
+                scene_draw_calls +|= try self.drawAuthoredDistrictScene(
+                    scene,
+                    districtSceneNeuralIdentity(draw.build.coord),
+                    view_proj,
+                );
             }
             // Cooked meshes are currently decoration, not proof that a
             // collision primitive is represented. Mandatory blocker proxies
@@ -7865,8 +8030,17 @@ const App = struct {
                     box.pose.position[1],
                     box.pose.position[2],
                 );
-                self.gpu_renderer.drawMesh(
+                try self.drawPresentationMesh(
+                    persistentNeuralIdentity(
+                        draw.persistent_id,
+                        .district,
+                        .whole,
+                        std.math.cast(u16, box_index) orelse
+                            return error.DistrictProxyOrdinalOverflow,
+                    ),
                     &self.block_mesh,
+                    self.block_mesh.diffuse_texture,
+                    .{ 1, 1, 1, 1 },
                     zm.mul(zm.mul(scale, rotation), translation),
                     view_proj,
                 );
@@ -7895,7 +8069,14 @@ const App = struct {
                 draw.pose.position[2],
             );
             const model_matrix = zm.mul(zm.mul(scale, rotation), translation);
-            self.gpu_renderer.drawMesh(crate_mesh, model_matrix, view_proj);
+            try self.drawPresentationMesh(
+                persistentNeuralIdentity(draw.persistent_id, .crate, .whole, 0),
+                crate_mesh,
+                crate_mesh.diffuse_texture,
+                .{ 1, 1, 1, 1 },
+                model_matrix,
+                view_proj,
+            );
             scene_draw_calls +|= 1;
         }
 
@@ -7918,8 +8099,11 @@ const App = struct {
                 draw.pose.position[1],
                 draw.pose.position[2],
             );
-            self.gpu_renderer.drawMesh(
+            try self.drawPresentationMesh(
+                replicatedNeuralIdentity(draw.entity, .carryable, .whole),
                 &self.block_mesh,
+                self.block_mesh.diffuse_texture,
+                .{ 1, 1, 1, 1 },
                 zm.mul(zm.mul(scale, rotation), translation),
                 view_proj,
             );
@@ -7947,8 +8131,15 @@ const App = struct {
                 draw.chassis_pose.position[1],
                 draw.chassis_pose.position[2],
             );
-            self.gpu_renderer.drawMesh(
+            try self.drawPresentationMesh(
+                replicatedNeuralIdentity(
+                    draw.entity,
+                    .vehicle,
+                    .vehicle_chassis,
+                ),
                 chassis_mesh,
+                chassis_mesh.diffuse_texture,
+                .{ 1, 1, 1, 1 },
                 zm.mul(zm.mul(chassis_scale, chassis_rotation), chassis_translation),
                 view_proj,
             );
@@ -7972,8 +8163,17 @@ const App = struct {
                     wheel.pose.position[1],
                     wheel.pose.position[2],
                 );
-                self.gpu_renderer.drawMesh(
+                const wheel_part: engine.neural_rendering.SemanticPart = switch (wheel.index) {
+                    .front_left => .vehicle_wheel_front_left,
+                    .front_right => .vehicle_wheel_front_right,
+                    .rear_left => .vehicle_wheel_rear_left,
+                    .rear_right => .vehicle_wheel_rear_right,
+                };
+                try self.drawPresentationMesh(
+                    replicatedNeuralIdentity(draw.entity, .vehicle, wheel_part),
                     wheel_mesh,
+                    wheel_mesh.diffuse_texture,
+                    .{ 1, 1, 1, 1 },
                     zm.mul(zm.mul(wheel_scale, wheel_rotation), wheel_translation),
                     view_proj,
                 );
@@ -7994,7 +8194,8 @@ const App = struct {
                 draw.pose.position[1],
                 draw.pose.position[2],
             );
-            self.gpu_renderer.drawMeshWithMaterial(
+            try self.drawPresentationMesh(
+                replicatedNeuralIdentity(draw.entity, .character, .whole),
                 character_mesh,
                 null,
                 draw.combat.body_color,
@@ -8034,7 +8235,8 @@ const App = struct {
                 draw.pose.position[1],
                 draw.pose.position[2],
             );
-            self.gpu_renderer.drawMeshWithMaterial(
+            try self.drawPresentationMesh(
+                replicatedNeuralIdentity(draw.entity, .npc, .whole),
                 npc_mesh,
                 null,
                 draw.combat.entity.body_color,
@@ -8086,6 +8288,7 @@ const App = struct {
         // 2. Let editor do its thing (copy pass + its own render pass)
         // 3. Submit everything together
         self.gpu_renderer.endRenderPass();
+        if (self.neural_inputs) |*inputs| try inputs.render(&self.gpu_renderer);
         self.developer.prepareIncidentProductFrame(
             &self.gpu_renderer,
             self.simulation.inspection().tickIndex(),
@@ -9010,6 +9213,55 @@ const App = struct {
             .slots = inspection.populationSlots(),
             .diagnostics = inspection.populationDiagnostics(),
         };
+        var neural_view = editor_contract.NeuralView{};
+        if (self.neural_inputs) |*inputs| {
+            const diagnostics = inputs.diagnostics();
+            neural_view = .{
+                .available = diagnostics.available,
+                .schema_version = diagnostics.schema_version,
+                .schema_name = diagnostics.schema_name,
+                .schema_fingerprint = diagnostics.schema_fingerprint,
+                .shader_fingerprint = diagnostics.shader_fingerprint,
+                .authority_tick = diagnostics.authority_tick,
+                .presentation_frame = diagnostics.presentation_frame,
+                .draw_count = diagnostics.draw_count,
+                .history_valid_draws = diagnostics.history_valid_draws,
+                .history_reset_draws = diagnostics.history_reset_draws,
+                .compact_id_collisions = diagnostics.compact_id_collisions,
+                .rendered_frames = diagnostics.rendered_frames,
+                .render_failures = diagnostics.render_failures,
+                .last_error = diagnostics.last_error,
+            };
+            for (diagnostics.views, 0..) |view, index| {
+                neural_view.textures[index] = .{
+                    .channel = view.channel,
+                    .binding = view.binding,
+                    .width = view.width,
+                    .height = view.height,
+                };
+            }
+        }
+        if (self.neural_rendering) |*neural| {
+            const diagnostics = neural.diagnostics();
+            neural_view.model_loaded = diagnostics.model_loaded;
+            neural_view.model_enabled = diagnostics.enabled;
+            neural_view.model_predictions = diagnostics.predictions;
+            neural_view.model_inference_ms = diagnostics.last_inference_ms;
+            if (neural_view.last_error.len == 0) {
+                neural_view.last_error = diagnostics.last_error;
+            }
+        }
+        if (self.neural_capture) |*capture| {
+            const diagnostics = capture.diagnostics();
+            neural_view.capture_active = true;
+            neural_view.capture_root = diagnostics.root;
+            neural_view.capture_cohort = @tagName(diagnostics.cohort);
+            neural_view.capture_sequence = diagnostics.sequence;
+            neural_view.capture_camera_path = diagnostics.camera_path;
+            neural_view.capture_recorded_frames = diagnostics.recorded_frames;
+            neural_view.capture_requested_frames = diagnostics.requested_frames;
+            neural_view.capture_failures = diagnostics.capture_failures;
+        }
         self.applyDeveloperEffects(try self.developer.drawEditor(
             &self.gpu_renderer,
             self.developerAuthorityPort(),
@@ -9033,6 +9285,7 @@ const App = struct {
                 },
                 .population_view = &population_view,
                 .gameplay_view = gameplay_view,
+                .neural_view = &neural_view,
                 .incident_input = .{
                     .move_forward = self.input_buffer.isKeyDown(input.Key.W),
                     .move_backward = self.input_buffer.isKeyDown(input.Key.S),

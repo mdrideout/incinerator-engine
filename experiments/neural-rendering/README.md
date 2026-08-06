@@ -11,6 +11,10 @@ nr-0002-spatial-held-out/
 nr-0003-temporal-history/
 ```
 
+`nr0-ab-input-capture/` is a conformance record for the engine input/capture
+foundation, not a trained-model experiment and not part of the numbered model
+candidate sequence.
+
 Once tooling exists, each committed experiment directory should contain only
 the information needed to reproduce and review intent:
 
@@ -31,4 +35,3 @@ invocation.
 Experiment state never selects the product model. Promotion crosses the
 separate boundary documented in
 [`../../models/neural-rendering/README.md`](../../models/neural-rendering/README.md).
-

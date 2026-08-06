@@ -297,6 +297,60 @@ pub const IncidentInput = struct {
     requests: *incident.RequestBuffer,
 };
 
+pub const NeuralTextureView = struct {
+    channel: engine.neural_rendering.Channel,
+    binding: *const anyopaque,
+    width: u32,
+    height: u32,
+};
+
+pub const NeuralView = struct {
+    available: bool = false,
+    schema_version: u16 = 0,
+    schema_name: []const u8 = "unavailable",
+    schema_fingerprint: []const u8 = "",
+    shader_fingerprint: []const u8 = "",
+    authority_tick: u64 = 0,
+    presentation_frame: u64 = 0,
+    draw_count: usize = 0,
+    history_valid_draws: usize = 0,
+    history_reset_draws: usize = 0,
+    compact_id_collisions: u64 = 0,
+    rendered_frames: u64 = 0,
+    render_failures: u64 = 0,
+    model_loaded: bool = false,
+    model_enabled: bool = false,
+    model_predictions: u64 = 0,
+    model_inference_ms: f64 = 0,
+    capture_active: bool = false,
+    capture_root: []const u8 = "",
+    capture_cohort: []const u8 = "",
+    capture_sequence: []const u8 = "",
+    capture_camera_path: []const u8 = "",
+    capture_recorded_frames: u64 = 0,
+    capture_requested_frames: u64 = 0,
+    capture_failures: u64 = 0,
+    last_error: []const u8 = "",
+    textures: [engine.neural_rendering.channels.len]NeuralTextureView = undefined,
+};
+
+pub const NeuralRequests = struct {
+    toggle_model: bool = false,
+
+    pub fn toggleModel(self: *NeuralRequests) void {
+        self.toggle_model = !self.toggle_model;
+    }
+
+    pub fn clear(self: *NeuralRequests) void {
+        self.toggle_model = false;
+    }
+};
+
+pub const NeuralInput = struct {
+    view: *const NeuralView,
+    requests: *NeuralRequests,
+};
+
 pub const DeveloperInput = struct {
     snapshot: *const DeveloperSnapshot,
     journal: engine.runtime.DiagnosticJournal.BorrowedView,
@@ -398,6 +452,7 @@ pub const FrameInput = struct {
     population: PopulationInput,
     gameplay: GameplayInput,
     incident: IncidentInput,
+    neural: NeuralInput,
 };
 
 // ============================================================================
@@ -419,6 +474,7 @@ pub const ToolId = enum {
     physics_debug,
     crate_authoring,
     interaction,
+    neural_rendering_lab,
 };
 
 pub const Descriptor = struct {

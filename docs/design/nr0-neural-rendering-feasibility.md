@@ -1,7 +1,6 @@
 # NR0 Game-Specific Neural Rendering Feasibility Slice
 
-**Status:** In progress; preliminary NR-0001 spatial pipeline proof complete,
-NR0-A through NR0-G remain open
+**Status:** In progress; NR0-A and NR0-B complete, NR0-C through NR0-G open
 
 **Date:** 2026-08-05
 
@@ -69,6 +68,8 @@ deterministic replay/camera cohort
 
 ### NR0-A — Presentation schema and debug views
 
+**Status:** Complete on 2026-08-05.
+
 - Define the smallest engine-owned input/output schema.
 - Establish exact texture formats, coordinate systems, color/exposure, depth,
   motion-vector, jitter, semantic class, stable instance identity, and resize
@@ -81,7 +82,17 @@ deterministic replay/camera cohort
 **Exit:** a human and an automated inspector can verify the meaning and
 alignment of every buffer in the real evaluation scene.
 
+Implemented as engine contract `incinerator.neural-input.v1`: 400×225 RGBA8
+appearance, linear view depth, world normal, previous-to-current NDC motion,
+semantic, and stable compact instance channels. The presentation-only GPU host
+mirrors immutable product draws into one six-target pass. The Neural Rendering
+Lab exposes all channels and schema, shader, history, identity-collision,
+render, model, and capture diagnostics. Shader ABI/reflection tests and a human
+contact sheet validate the encodings and alignment.
+
 ### NR0-B — Deterministic paired capture
+
+**Status:** Complete on 2026-08-05.
 
 - Add a capture host/tool path that runs the same simulation tick, camera,
   effect seed, exposure, and dimensions through cheap-input and target paths.
@@ -93,6 +104,19 @@ alignment of every buffer in the real evaluation scene.
   deterministic buffer digests where the renderer contract promises them.
 
 **Exit:** one inspectable, rights-attributed paired corpus exists outside Git.
+
+Implemented as capture schema 2. A selected frame is fenced after successful
+presentation, writes the six raw input textures, human-readable PPM
+derivatives, a canonical 1600×900 conventional target, stable identity
+mappings, camera and frame state, source/content/schema/shader fingerprints,
+and SHA-256 digests. Backend product color is normalized to canonical RGBA8
+while retaining its source GPU format as provenance. Capture roots are
+absolute, exclusive, external,
+atomically marked partial/complete, and explicitly owned by cohort, sequence,
+and camera path. The inspector rejects incomplete, corrupt, cross-cohort,
+identity-drifting, or non-repeatable captures. `zig build verify-nr0-ab`
+executes two fresh S13 runs, requires byte-identical declared buffers, and
+emits a visual report.
 
 ### NR0-C — Spatial model baseline
 
@@ -167,18 +191,21 @@ Accepted capability contracts may then become core engine infrastructure.
 
 ## Implementation locations
 
-The preliminary proof currently uses:
+The implemented foundation uses:
 
 ```text
 src/adapters/neural_rendering/macos.h
 src/adapters/neural_rendering/macos.m
 src/hosts/neural_rendering_host.zig
 src/hosts/neural_capture_host.zig
+src/hosts/neural_input_host.zig
+src/engine/contracts/neural_rendering.zig
+src/editor/tools/neural_rendering_lab_tool.zig
 ```
 
-The versioned engine contract and promoted-bundle content owner remain future
-NR0 work and will live under `src/engine/contracts/` and `src/content/` only
-when those phases begin.
+The versioned input contract is now engine-owned. The promoted-bundle content
+owner remains future NR0-E work and will live under `src/content/` only when
+that phase begins.
 
 Do not put capture, model selection, history policy, inference orchestration, or
 experiment code into `src/renderer.zig`. That file may remain the owner of
@@ -190,7 +217,7 @@ The current repository scaffold is:
 ```text
 docs/research/neural-rendering/   evidence and feasibility reasoning
 experiments/neural-rendering/     committed experiment intent and conclusions
-tools/neural-rendering/           future offline capture/train/evaluate/export/promote entry points
+tools/neural-rendering/           capture inspection plus offline train/evaluate/export/promote tools
 models/neural-rendering/          deliberately promoted sandbox runtime bundles
 fixtures/nr0_neural_renderer/     conformance/evaluation source assets
 ```

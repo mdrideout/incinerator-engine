@@ -1,6 +1,7 @@
 # NR0 Neural Rendering Evaluation Scene
 
-**Status:** Planned; source assets not authored
+**Status:** NR0-A/B conformance scene accepted on S13; dedicated NR0-C/D art
+fixture remains planned
 
 **Date:** 2026-08-05
 
@@ -33,6 +34,14 @@ scene should reuse existing engine capabilities where they provide the needed
 pressure, but its source assets and camera program remain a separate NR0
 fixture so gameplay validation is not coupled to training data.
 
+NR0-A/B deliberately use the existing deterministic S13 population scene as a
+conformance cohort. It already pressures stable character, NPC, vehicle,
+carryable, district, authored-scene, and repeated-part identities across moving
+frames. This accepts the buffer and capture foundations without claiming the
+material, lighting, transparency, effect, camera-cut, or resize coverage needed
+for NR0-C/D quality evaluation. Those additions belong in the dedicated fixture
+when the first multi-channel model experiment begins.
+
 ## Capture cohorts
 
 Begin with exact 1600×900 target output and 400×225 cheap appearance input.
@@ -64,6 +73,10 @@ The product/editor must be able to display and capture:
   and
 - synchronized four-up and cropped comparisons.
 
+NR0-A/B provide the cheap and auxiliary views in the live Neural Rendering Lab,
+the conventional target in capture, and a synchronized contact-sheet report.
+Model result/error overlays and incident integration remain NR0-C/D/F work.
+
 The existing incident workflow should record model identity, schema, fallback
 reason, history reset reason, inference timing, and the same visual anchors used
 for ordinary human-test evidence.
@@ -74,4 +87,3 @@ The fixture is accepted only when its source/provenance is explicit, its paired
 capture is inspectable, every required buffer aligns at moving boundaries, and
 the same replay/camera cohort can be used by offline evaluation and the
 installed runtime smoke.
-

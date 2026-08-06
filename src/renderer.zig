@@ -529,6 +529,16 @@ pub const Renderer = struct {
         return self.depth_format;
     }
 
+    /// Presentation adapters may reuse the renderer-owned immutable fallback
+    /// resources while the renderer remains alive. Ownership never transfers.
+    pub fn getDefaultSampler(self: *const Renderer) *c.SDL_GPUSampler {
+        return self.default_sampler;
+    }
+
+    pub fn getPlaceholderTexture(self: *const Renderer) Texture {
+        return self.placeholder_texture.borrow();
+    }
+
     pub fn physicsDebugPipelinesAvailable(self: *const Renderer) bool {
         return self.physics_debug_pipelines != null;
     }

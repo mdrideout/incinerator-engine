@@ -84,6 +84,39 @@ test "SDL GPU shader interfaces and resources match the renderer contract" {
             .output_locations = &.{ 0, 1 },
             .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 32 }},
         },
+        .{
+            .source = "neural_primitive.vert",
+            .reflection = reflections.neural_primitive_vertex,
+            .stage = "vert",
+            .input_locations = &.{ 0, 1 },
+            .output_locations = &.{ 0, 1, 2, 3, 4, 5 },
+            .ubos = &.{.{ .set = 1, .binding = 0, .block_size = 320 }},
+        },
+        .{
+            .source = "neural_primitive.frag",
+            .reflection = reflections.neural_primitive_fragment,
+            .stage = "frag",
+            .input_locations = &.{ 0, 1, 2, 3, 4, 5 },
+            .output_locations = &.{ 0, 1, 2, 3, 4, 5 },
+            .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 64 }},
+        },
+        .{
+            .source = "neural_model.vert",
+            .reflection = reflections.neural_model_vertex,
+            .stage = "vert",
+            .input_locations = &.{ 0, 1, 2 },
+            .output_locations = &.{ 0, 1, 2, 3, 4, 5, 6 },
+            .ubos = &.{.{ .set = 1, .binding = 0, .block_size = 320 }},
+        },
+        .{
+            .source = "neural_model.frag",
+            .reflection = reflections.neural_model_fragment,
+            .stage = "frag",
+            .input_locations = &.{ 0, 1, 2, 3, 4, 5, 6 },
+            .output_locations = &.{ 0, 1, 2, 3, 4, 5 },
+            .textures = &.{.{ .set = 2, .binding = 0 }},
+            .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 64 }},
+        },
     };
 
     for (contracts) |contract| try validateContract(contract);
@@ -95,6 +128,10 @@ test "selected backend artifacts have the expected container and entry point" {
     try std.testing.expect(std.mem.indexOf(u8, shader_assets.triangle_vertex, "vertex main0") != null);
     try std.testing.expect(std.mem.indexOf(u8, shader_assets.triangle_fragment, "fragment main0") != null);
     try std.testing.expect(std.mem.indexOf(u8, shader_assets.visibility_fragment, "fragment main0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, shader_assets.neural_primitive_vertex, "vertex main0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, shader_assets.neural_primitive_fragment, "fragment main0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, shader_assets.neural_model_vertex, "vertex main0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, shader_assets.neural_model_fragment, "fragment main0") != null);
 }
 
 fn validateContract(contract: Contract) !void {

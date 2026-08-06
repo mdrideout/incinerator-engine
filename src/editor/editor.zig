@@ -24,6 +24,7 @@ const incident_capture_tool = @import("tools/incident_capture_tool.zig");
 const physics_debug_tool = @import("tools/physics_debug_tool.zig");
 const crate_authoring_tool = @import("tools/crate_authoring_tool.zig");
 const interaction_tool = @import("tools/interaction_tool.zig");
+const neural_rendering_lab_tool = @import("tools/neural_rendering_lab_tool.zig");
 
 const c = sdl.c;
 
@@ -53,6 +54,7 @@ const default_tools = [_]Tool{
     Tool.init(physics_debug_tool.descriptor),
     Tool.init(crate_authoring_tool.descriptor),
     Tool.init(interaction_tool.descriptor),
+    Tool.init(neural_rendering_lab_tool.descriptor),
 };
 
 pub const Editor = struct {
@@ -216,6 +218,7 @@ pub const Editor = struct {
                 &frame.authoring,
             ),
             .interaction => interaction_tool.draw(&frame.interaction),
+            .neural_rendering_lab => neural_rendering_lab_tool.draw(&frame.neural),
         }
     }
 

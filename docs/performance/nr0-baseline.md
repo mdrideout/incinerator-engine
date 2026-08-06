@@ -1,6 +1,7 @@
 # NR0 Neural Rendering Performance Baseline
 
-**Status:** Preliminary NR-0001 proof measured; full NR0 baseline open
+**Status:** NR-0001 and NR0-A/B foundation measured; full model/runtime baseline
+open
 
 **Date:** 2026-08-05
 
@@ -51,3 +52,23 @@ CPU layout conversion, and Core ML prediction. It therefore demonstrates the
 cost center rather than hiding it: native Core ML execution is small for this
 toy model, while CPU staging dominates. A GPU-resident adapter and complete
 frame/GPU/memory instrumentation remain prerequisites for NR0-F/D acceptance.
+
+## NR0-A/B foundation measurements
+
+These figures characterize the input and capture foundation, not inference
+performance or a shipping budget.
+
+| Item | Result |
+|---|---|
+| Hardware/backend | Same Apple M2 Max host; debug build; SDL3 GPU Metal |
+| Schema | `incinerator.neural-input.v1`, six 400×225 RGBA8 targets |
+| Canonical paired target | 1600×900 RGBA8, derived from the exact submitted product scene before UI |
+| Raw capture volume | 7,920,000 bytes per selected frame: 2,160,000 bytes of inputs plus 5,760,000 bytes of target, before PPM/manifests |
+| Deterministic acceptance | Two 3,840-frame S13 launches at 240 Hz virtual presentation / 60 Hz simulation; 964 ticks each; six selected frames; zero capture failures; byte-identical declared buffers |
+| Graphical lab smoke | Approximately 120 FPS / 8.3 ms reported by the existing debug frame counter with all six live targets and editor visible; not a percentile benchmark |
+| Capture synchronization | Selected frames deliberately use a same-queue submit fence and blocking readback; normal frames do not pay this capture path |
+
+The MRT pass itself still needs GPU timestamps, frame-time percentiles, memory
+residency, and on/off A/B measurement in NR0-D. The deterministic 240 Hz value
+is a scripted virtual presentation rate and must not be represented as measured
+rendering throughput.

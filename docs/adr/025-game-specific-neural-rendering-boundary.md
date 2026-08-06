@@ -1,7 +1,7 @@
 # ADR-025: Game-Specific Neural Rendering Boundary and Model Promotion
 
-**Status:** Accepted; preliminary NR-0001 pipeline proof implemented, full NR0
-not accepted
+**Status:** Accepted; NR0-A/B input and capture foundation implemented, full
+NR0 remains open
 
 **Date:** 2026-08-05
 
@@ -125,7 +125,7 @@ remain deferred until the product selects another platform.
 
 ## Consequences
 
-## Preliminary implementation checkpoint
+## Implementation checkpoints
 
 NR-0001 now implements a deliberately narrower proof beneath this decision:
 
@@ -144,10 +144,25 @@ NR-0001 now implements a deliberately narrower proof beneath this decision:
 
 This checkpoint does not change the model-bundle decision. Its model path is an
 explicit developer experiment path, not runtime content or promotion. Its
-blocking CPU readback/upload is a measured disposable bridge. NR0 still owes
-the versioned auxiliary-buffer ABI, full evaluation scene, GPU-resident
-adapter, model promotion, installed bundle validation, temporal failure work,
-and human acceptance.
+blocking CPU readback/upload is a measured disposable bridge.
+
+NR0-A/B subsequently establish the accepted foundation beneath this ADR:
+
+- engine-owned `incinerator.neural-input.v1` defines six 400×225 RGBA8
+  appearance, linear-depth, world-normal, motion, semantic, and instance
+  channels with explicit coordinate, history, and identity conventions;
+- a presentation-only Metal MRT host mirrors immutable product draws without
+  authority access and exposes all channels and state in the Neural Rendering
+  Lab;
+- capture schema 2 pairs those exact raw inputs with the submitted scene at a
+  canonical 1600×900, records full frame/camera/identity/provenance metadata,
+  and hashes every artifact; and
+- deterministic two-launch acceptance validates split ownership, identity
+  stability, byte equality, and human-visible channel alignment.
+
+NR0 still owes the full evaluation fixture and multi-channel model, failure
+analysis, GPU-resident inference adapter, promotion, installed bundle
+validation, temporal failure work, and final human acceptance.
 
 ### Positive
 

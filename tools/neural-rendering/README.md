@@ -1,11 +1,10 @@
 # Neural Rendering Offline Tools
 
-This directory owns the first macOS-local NR0 experiment toolchain. The current
-commands prove existing-frame preparation, exact same-frame engine product-color
-capture, whole-run dataset assembly, spatial training/evaluation, Core ML
-export, and native in-engine prediction. This is the deliberately narrow
-NR-0001 pipeline proof. Auxiliary-buffer capture, promotion, and an installed
-GPU-resident runtime remain later NR0 phases.
+This directory owns the macOS-local NR0 experiment toolchain. It contains the
+preliminary NR-0001 existing-frame model loop plus the accepted NR0-A/B
+multi-channel capture, inspection, and visual-report tools. Spatial model work
+against the new schema begins in NR0-C. Promotion and an installed GPU-resident
+runtime remain later NR0 phases.
 
 Training frameworks and their environments stay here or in an explicitly
 managed external environment. They cannot enter the product, validation-only
@@ -89,83 +88,73 @@ The experiment definition explains why these existing frames cannot satisfy
 NR0 paired-capture or visual-quality acceptance:
 [`../../experiments/neural-rendering/nr-0001-spatial-pipeline/README.md`](../../experiments/neural-rendering/nr-0001-spatial-pipeline/README.md).
 
-## Exact engine product-color pipeline
+## NR0-A/B multi-channel paired capture
 
-The validation host can capture an exact same-frame 80x45 input and 320x180
-conventional product-color target. Editor UI and diagnostics are composed later
-and are absent from both images. Each capture root must be absolute and must not
-already exist. Use separate complete runs as train, validation, and test
-cohorts; never split neighboring frames from one run across those sets.
+The product now renders schema-v1 neural inputs as six 400×225 RGBA8 targets:
+appearance, linear depth, world normal, motion, semantic, and instance. A
+selected frame is captured with the exact submitted conventional scene at a
+canonical 1600×900 before editor UI and diagnostics. Every raw buffer, debug
+PPM, stable presentation identity, matrix, frame/tick, effect value, source,
+content, schema, and shader revision is recorded and hashed in capture schema 2.
+Metal BGRA product color is normalized to canonical RGBA8 raw bytes; the source
+GPU format remains in each frame manifest.
+
+Every capture root must be absolute and absent. Cohort, sequence, and camera
+path are mandatory. Adjacent frames from one sequence belong to one cohort;
+never split a sequence across train, validation, and test.
 
 ```sh
-zig build install-validation -Deditor=false
+zig build install-validation -Deditor=true
 
 VALIDATION="$PWD/zig-out/libexec/incinerator/incinerator_validation"
-TRAIN_CAPTURE="$INCINERATOR_NR_ROOT/runs/nr0-engine-train-20260805-a"
-VALIDATION_CAPTURE="$INCINERATOR_NR_ROOT/runs/nr0-engine-validation-20260805-a"
-TEST_CAPTURE="$INCINERATOR_NR_ROOT/runs/nr0-engine-test-20260805-a"
+CAPTURE="$INCINERATOR_NR_ROOT/datasets/nr0-ab-validation-s13-0001"
 
-INCINERATOR_NR_CAPTURE_ROOT="$TRAIN_CAPTURE" \
+INCINERATOR_CONTENT_ROOT="$PWD/zig-out/share/incinerator/content" \
+INCINERATOR_NR_CAPTURE_ROOT="$CAPTURE" \
 INCINERATOR_NR_CAPTURE_START_FRAME=300 \
-INCINERATOR_NR_CAPTURE_STRIDE=5 \
-INCINERATOR_NR_CAPTURE_FRAMES=80 \
+INCINERATOR_NR_CAPTURE_STRIDE=60 \
+INCINERATOR_NR_CAPTURE_FRAMES=3 \
+INCINERATOR_NR_COHORT=validation \
+INCINERATOR_NR_SEQUENCE=s13-default-follow-0001 \
+INCINERATOR_NR_CAMERA_PATH=default-follow \
   "$VALIDATION" --s13-population-smoke --frames=3840 --virtual-render-hz=240
 
-INCINERATOR_NR_CAPTURE_ROOT="$VALIDATION_CAPTURE" \
-INCINERATOR_NR_CAPTURE_START_FRAME=1400 \
-INCINERATOR_NR_CAPTURE_STRIDE=5 \
-INCINERATOR_NR_CAPTURE_FRAMES=80 \
-  "$VALIDATION" --s13-population-smoke --frames=3840 --virtual-render-hz=240
-
-INCINERATOR_NR_CAPTURE_ROOT="$TEST_CAPTURE" \
-INCINERATOR_NR_CAPTURE_START_FRAME=2800 \
-INCINERATOR_NR_CAPTURE_STRIDE=5 \
-INCINERATOR_NR_CAPTURE_FRAMES=80 \
-  "$VALIDATION" --s13-population-smoke --frames=3840 --virtual-render-hz=240
+zig build inspect-nr0-capture -- "$CAPTURE"
+zig build nr0-visual-report -- "$CAPTURE" "$INCINERATOR_NR_ROOT/reports/nr0-ab-s13-0001.ppm"
 ```
 
-The frame windows above reproduce NR-0001; they are recorded sampling choices,
-not engine limits. Each completed root contains `capture.json`, `frames.ndjson`,
-and digest-addressed `inputs/` and `targets/`. If a model is also active, the
-same record includes its corresponding `outputs/` image.
+A complete root contains `capture.json`, `frames.ndjson`, per-frame manifests,
+six raw/debug channel directories, and raw/debug conventional targets. Raw
+files are training data; PPM files are explicitly described human derivatives.
+The inspector validates completeness, extents, byte counts, all digests,
+schema/shader provenance, split ownership, stable/compact identity mapping,
+cross-channel coverage, depth/normal/motion encoding, and semantic/instance
+pixels against their declared frame mappings.
 
-Assemble, train, export, and benchmark without a mutable `latest` alias:
+Use the acceptance step after changing the input contract, shaders, capture,
+presentation identity, camera derivation, or relevant renderer seams:
 
 ```sh
-PYTHON="$INCINERATOR_NR_ROOT/envs/nr0-poc/bin/python"
-DATASET="$INCINERATOR_NR_ROOT/datasets/nr0-engine-product-pairs-20260805-a"
-RUN="$INCINERATOR_NR_ROOT/runs/nr0-engine-spatial-20260805-a"
-EXPORT="$INCINERATOR_NR_ROOT/runs/nr0-engine-coreml-20260805-a"
-
-"$PYTHON" tools/neural-rendering/assemble_engine_dataset.py \
-  --train-capture "$TRAIN_CAPTURE" \
-  --validation-capture "$VALIDATION_CAPTURE" \
-  --test-capture "$TEST_CAPTURE" \
-  --output "$DATASET"
-
-"$PYTHON" tools/neural-rendering/train_spatial.py \
-  --dataset "$DATASET/dataset.json" \
-  --output "$RUN" \
-  --epochs 40 \
-  --batch-size 16 \
-  --learning-rate 0.001 \
-  --device mps
-
-"$PYTHON" tools/neural-rendering/export_coreml.py \
-  --checkpoint "$RUN/checkpoint.pt" \
-  --output "$EXPORT" \
-  --input-width 80 \
-  --input-height 45
-
-"$PYTHON" tools/neural-rendering/benchmark_coreml.py \
-  --model "$EXPORT/spatial-upscaler.mlpackage" \
-  --output "$EXPORT/benchmark-all.json" \
-  --iterations 500 \
-  --warmup 50 \
-  --input-width 80 \
-  --input-height 45 \
-  --compute-units all
+zig build verify-nr0-ab
 ```
+
+It launches the deterministic S13 cohort twice, requires the logical and byte
+signatures to match, and prints the retained external evidence root containing
+both captures and a contact sheet. To keep a named acceptance root, call the
+underlying script with an absent fourth path:
+
+```sh
+zig build install-validation -Deditor=true
+sh tools/verify_nr0_ab.sh \
+  "$PWD/zig-out/libexec/incinerator/incinerator_validation" \
+  "$PWD/zig-out/share/incinerator/content" \
+  "$PWD" \
+  "$INCINERATOR_NR_ROOT/acceptance/nr0-ab-20260805"
+```
+
+NR-0001 training tools consume their earlier RGB-pair schema. Do not silently
+feed schema-2 captures to them. NR0-C must define one multi-channel dataset
+adapter and experiment before making a new quality claim.
 
 ## Try the native proof
 
