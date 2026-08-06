@@ -1,6 +1,7 @@
 # ADR-025: Game-Specific Neural Rendering Boundary and Model Promotion
 
-**Status:** Accepted direction; NR0 implementation not started
+**Status:** Accepted; preliminary NR-0001 pipeline proof implemented, full NR0
+not accepted
 
 **Date:** 2026-08-05
 
@@ -124,6 +125,30 @@ remain deferred until the product selects another platform.
 
 ## Consequences
 
+## Preliminary implementation checkpoint
+
+NR-0001 now implements a deliberately narrower proof beneath this decision:
+
+- `Renderer` owns a product-only color texture and resolves it to the
+  swapchain before conventional UI and diagnostics;
+- an opt-in capture host records exact same-frame 80x45 input and 320x180
+  conventional product-color target pairs with source/tick/frame identity and
+  digests;
+- repository-owned Python tools prepare declared whole-run splits, train one
+  25,552-parameter spatial residual upscaler on MPS, compare against bicubic,
+  export a fixed-shape FP16 ML Program, and benchmark Core ML;
+- an opt-in macOS adapter performs native Core ML prediction from product color
+  only, presents the result one frame later, toggles with `N`, and falls back
+  on absence or rejection; and
+- headless and server graphs remain free of Core ML and training dependencies.
+
+This checkpoint does not change the model-bundle decision. Its model path is an
+explicit developer experiment path, not runtime content or promotion. Its
+blocking CPU readback/upload is a measured disposable bridge. NR0 still owes
+the versioned auxiliary-buffer ABI, full evaluation scene, GPU-resident
+adapter, model promotion, installed bundle validation, temporal failure work,
+and human acceptance.
+
 ### Positive
 
 - Gameplay remains deterministic, headless, network-authoritative, and
@@ -156,4 +181,3 @@ measure those decisions rather than inventing limits.
 It also does not authorize diffusion, a general video model, a learned world
 model, authority feedback, runtime training, cloud inference, or replacement of
 the deterministic renderer fallback.
-

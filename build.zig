@@ -418,6 +418,18 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
+    // NR-0001's macOS adapter is present only in graphical products. Cold
+    // authority, replay, measurement, and server graphs never acquire Core ML.
+    for ([_]*std.Build.Step.Compile{ exe, validation_exe }) |graphical| {
+        graphical.root_module.addCSourceFiles(.{
+            .files = &.{"src/adapters/neural_rendering/macos.m"},
+            .flags = &.{"-fobjc-arc"},
+            .language = .objective_c,
+        });
+        graphical.root_module.link_libc = true;
+        graphical.root_module.linkFramework("Foundation", .{});
+        graphical.root_module.linkFramework("CoreML", .{});
+    }
     addClientImport(exe, validation_exe, "content", content_module);
     addClientImport(exe, validation_exe, "engine_contracts", contracts_module);
     addClientImport(exe, validation_exe, "session_protocol", session_protocol_module);

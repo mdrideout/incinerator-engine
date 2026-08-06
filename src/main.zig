@@ -53,6 +53,8 @@ const authority_diagnostics = @import("session_authority_diagnostics");
 const sandbox_developer_host = @import("hosts/sandbox_developer_host.zig");
 const incident_capture = @import("hosts/incident_capture.zig");
 const incident_input_replay = @import("hosts/incident_input_replay.zig");
+const neural_capture_host = @import("hosts/neural_capture_host.zig");
+const neural_rendering_host = @import("hosts/neural_rendering_host.zig");
 const sandbox_invocation = @import("sandbox_invocation");
 const sandbox_authoring = @import("sandbox_authoring");
 const sandbox_interaction = @import("sandbox_interaction");
@@ -1868,6 +1870,8 @@ const App = struct {
     developer: *sandbox_developer_host.Owner,
     frame_timer: timing.FrameTimer,
     input_buffer: input.InputBuffer,
+    neural_rendering: ?neural_rendering_host.Owner = null,
+    neural_capture: ?neural_capture_host.Owner = null,
 
     simulation: *sandbox_host.Placement,
     initial_crate_id: ?sandbox_contracts.PersistentId,
@@ -2289,6 +2293,9 @@ const App = struct {
         // editor, overlay, mesh, texture, or streamed-GPU owner is released.
         self.gpu_renderer.drainForExternalTeardown();
 
+        if (self.neural_capture) |*owner| owner.deinit();
+        if (self.neural_rendering) |*owner| owner.deinit(&self.gpu_renderer);
+
         if (build_options.validation_mode) {
             if (self.visibility_oracle) |*owner| owner.deinit();
         }
@@ -2313,6 +2320,54 @@ const App = struct {
         std.debug.print(" Total frames: {d}\n", .{self.frame_timer.total_frames});
         std.debug.print(" Total simulation ticks: {d}\n", .{completed_ticks});
         std.debug.print("===========================================\n", .{});
+    }
+
+    fn configureNeuralRendering(self: *App, environ_map: anytype) !void {
+        const model_path = environ_map.get("INCINERATOR_NR_MODEL");
+        const capture_root = environ_map.get("INCINERATOR_NR_CAPTURE_ROOT");
+        if (model_path == null and capture_root == null) return;
+        if (model_path) |path| if (!std.fs.path.isAbsolute(path)) {
+            return error.NeuralModelPathMustBeAbsolute;
+        };
+
+        var neural = try neural_rendering_host.Owner.init(
+            self.io,
+            &self.gpu_renderer,
+            model_path,
+        );
+        errdefer neural.deinit(&self.gpu_renderer);
+        var capture: ?neural_capture_host.Owner = null;
+        if (capture_root) |root| {
+            const count_text = environ_map.get("INCINERATOR_NR_CAPTURE_FRAMES") orelse
+                return error.NeuralCaptureFrameCountRequired;
+            const start_text = environ_map.get("INCINERATOR_NR_CAPTURE_START_FRAME") orelse "0";
+            const stride_text = environ_map.get("INCINERATOR_NR_CAPTURE_STRIDE") orelse "1";
+            capture = try neural_capture_host.Owner.init(self.io, .{
+                .root = root,
+                .start_frame = std.fmt.parseUnsigned(u64, start_text, 10) catch
+                    return error.InvalidNeuralCaptureStartFrame,
+                .frame_stride = std.fmt.parseUnsigned(u64, stride_text, 10) catch
+                    return error.InvalidNeuralCaptureStride,
+                .frame_count = std.fmt.parseUnsigned(u64, count_text, 10) catch
+                    return error.InvalidNeuralCaptureFrameCount,
+            });
+        }
+        self.neural_rendering = neural;
+        self.neural_capture = capture;
+        const diagnostics = self.neural_rendering.?.diagnostics();
+        std.debug.print(
+            "NEURAL_RENDERER_POC model_loaded={} enabled={} model={s} capture={s}\n",
+            .{
+                diagnostics.model_loaded,
+                diagnostics.enabled,
+                model_path orelse "none",
+                capture_root orelse "none",
+            },
+        );
+        if (model_path != null) std.debug.print("  N - Toggle neural scene presentation\n", .{});
+        if (!diagnostics.model_loaded and model_path != null) {
+            std.debug.print("NEURAL_RENDERER_FALLBACK reason={s}\n", .{diagnostics.last_error});
+        }
     }
 
     fn beginHostProfile(
@@ -2410,6 +2465,21 @@ const App = struct {
             defer input_profile.finish(.failure);
             self.input_buffer.beginFrame();
             running = self.input_buffer.pumpEvents(self.developer.eventSink());
+            if (self.input_buffer.isKeyPressed(input.Key.N)) {
+                if (self.neural_rendering) |*neural| {
+                    const enabled = neural.toggle();
+                    const diagnostics = neural.diagnostics();
+                    std.debug.print(
+                        "NEURAL_RENDERER enabled={} model_loaded={} model={s} error={s}\n",
+                        .{
+                            enabled,
+                            diagnostics.model_loaded,
+                            neural.model_path orelse "capture-only",
+                            diagnostics.last_error,
+                        },
+                    );
+                }
+            }
             if (incident_mode.isJourney()) {
                 try self.advanceIncidentJourneyWindowLifecycle(&incident_journey);
             }
@@ -6453,6 +6523,20 @@ const App = struct {
         );
         try self.gpu_renderer.submitFrame();
         self.developer.afterSuccessfulFrameSubmission(&self.gpu_renderer);
+        if (self.neural_rendering) |*neural| {
+            const capture_requested = if (self.neural_capture) |*capture|
+                capture.wantsFrame(self.frame_timer.total_frames)
+            else
+                false;
+            if (try neural.readbackAndPredict(
+                &self.gpu_renderer,
+                self.simulation.inspection().tickIndex(),
+                self.frame_timer.total_frames,
+                capture_requested,
+            )) |captured| {
+                if (capture_requested) try self.neural_capture.?.record(captured);
+            }
+        }
     }
 
     /// Capture only semantic S11 checkpoints. The serial readback is kept out
@@ -7548,6 +7632,7 @@ const App = struct {
     /// Render the current frame using SDL3 GPU API
     /// `alpha` is the interpolation factor (0.0 to 1.0) for smooth visuals.
     fn render(self: *App, alpha: f32) !RenderResult {
+        if (self.neural_rendering) |*neural| try neural.prepareFrame(&self.gpu_renderer);
         // Streamed submissions are independent of the frame command buffer.
         // Poll fences without waiting, then submit at most one bounded batch.
         var stream_gpu_profile = self.beginHostProfile(
@@ -9195,6 +9280,7 @@ fn productMain(init: std.process.Init, args: anytype) !void {
     );
     var app_deinitialized = false;
     defer if (!app_deinitialized) app.deinit();
+    try app.configureNeuralRendering(init.environ_map);
     switch (mode) {
         .incident_smoke => {
             try app.runIncidentCaptureSmoke();
@@ -9426,6 +9512,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         resolved_content_root,
         configured_save_root,
     );
+    try app.configureNeuralRendering(init.environ_map);
     var visual_smoke_succeeded = false;
     var s1_visual_smoke_succeeded = false;
     var s2_visual_smoke_succeeded = false;

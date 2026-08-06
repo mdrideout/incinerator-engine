@@ -83,14 +83,19 @@ then
 and [`S13 performance baseline`](docs/performance/s13-baseline.md). S13
 implementation and automated acceptance are complete; its ordinary-product
 human walkthrough remains before full phase acceptance.
-The engine also has an accepted but unimplemented parallel neural-rendering
-direction. [ADR-025](docs/adr/025-game-specific-neural-rendering-boundary.md)
+The engine also has an accepted parallel neural-rendering direction with its
+first deliberately unpromoted proof of concept implemented.
+[ADR-025](docs/adr/025-game-specific-neural-rendering-boundary.md)
 keeps the deterministic game authoritative, treats the model as a
 presentation-only capability, separates mutable experiment runs from runtime,
 and permits only an explicitly promoted immutable model bundle to become game
 content. See the [research index](docs/research/neural-rendering/README.md) and
-[NR0 feasibility plan](docs/design/nr0-neural-rendering-feasibility.md). No model
-or neural runtime is currently selected or shipped.
+[NR0 feasibility plan](docs/design/nr0-neural-rendering-feasibility.md). The
+current 80x45-to-320x180 Core ML path proves exact product-scene capture,
+session-separated MPS training/evaluation, export, native inference, explicit
+fallback, and conventional UI composition. It uses a disposable blocking
+CPU-staged adapter and no model is promoted, selected as game content, or
+shipped.
 Broader Steam/public-service infrastructure remains deferred.
 
 ## Toolchain Cohort

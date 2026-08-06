@@ -21,9 +21,9 @@
 //! driver. Render-target formats are queried at runtime.
 //!
 //! The render loop follows the modern GPU pattern:
-//! 1. beginFrame() - acquire command buffer, start render pass
+//! 1. beginFrame() - acquire command buffer, start the product-scene pass
 //! 2. drawMesh() - record draw commands (call multiple times)
-//! 3. endRenderPass() - make the swapchain available to optional overlays
+//! 3. endRenderPass() - resolve product scene to the swapchain for overlays
 //! 4. submitFrame() - submit all recorded GPU work
 //!
 //! Currently implemented:
@@ -35,7 +35,7 @@
 //! Future additions:
 //! - Instanced rendering
 //! - Shadow mapping
-//! - Multiple render targets
+//! - Auxiliary presentation targets
 
 const std = @import("std");
 const zm = @import("zmath");
@@ -115,6 +115,20 @@ fn injectInitFailure(configured: ?InitFailurePoint, reached: InitFailurePoint) !
 }
 
 const DepthTarget = struct {
+    texture: *c.SDL_GPUTexture,
+    width: u32,
+    height: u32,
+};
+
+/// Product scene color is deliberately separate from the final drawable.
+/// Conventional UI and diagnostics stay outside future scene inference.
+const SceneTarget = struct {
+    texture: *c.SDL_GPUTexture,
+    width: u32,
+    height: u32,
+};
+
+const PresentationOverride = struct {
     texture: *c.SDL_GPUTexture,
     width: u32,
     height: u32,
@@ -246,6 +260,7 @@ pub const Renderer = struct {
 
     // Depth buffer for proper 3D rendering (closer pixels occlude farther ones)
     depth_target: DepthTarget,
+    scene_target: SceneTarget,
 
     // Texture sampling resources
     default_sampler: *c.SDL_GPUSampler,
@@ -257,6 +272,7 @@ pub const Renderer = struct {
     current_swapchain: ?*c.SDL_GPUTexture = null, // Swapchain texture for this frame
     current_swapchain_width: u32 = 0,
     current_swapchain_height: u32 = 0,
+    presentation_override: ?PresentationOverride = null,
 
     /// Initialize the GPU renderer for a window.
     /// This creates the GPU device and graphics pipeline.
@@ -391,6 +407,12 @@ pub const Renderer = struct {
         };
         errdefer c.SDL_ReleaseGPUTexture(device, depth_texture);
 
+        const scene_texture = createSceneTexture(device, swapchain_format, width, height) orelse {
+            std.debug.print("Failed to create product scene texture: {s}\n", .{c.SDL_GetError()});
+            return error.SceneTextureCreationFailed;
+        };
+        errdefer c.SDL_ReleaseGPUTexture(device, scene_texture);
+
         // Create default sampler for texture sampling (linear filtering)
         const default_sampler = c.SDL_CreateGPUSampler(device, &c.SDL_GPUSamplerCreateInfo{
             .min_filter = c.SDL_GPU_FILTER_LINEAR,
@@ -441,6 +463,11 @@ pub const Renderer = struct {
                 .width = width,
                 .height = height,
             },
+            .scene_target = .{
+                .texture = scene_texture,
+                .width = width,
+                .height = height,
+            },
             .default_sampler = default_sampler,
             .placeholder_texture = placeholder_texture,
         };
@@ -452,6 +479,7 @@ pub const Renderer = struct {
 
         self.placeholder_texture.deinit();
         c.SDL_ReleaseGPUSampler(self.device, self.default_sampler);
+        c.SDL_ReleaseGPUTexture(self.device, self.scene_target.texture);
         c.SDL_ReleaseGPUTexture(self.device, self.depth_target.texture);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_color);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv);
@@ -549,31 +577,22 @@ pub const Renderer = struct {
             return error.InvalidSwapchainSize;
         }
 
-        // Step 3: Recreate depth buffer if window was resized
-        if (swapchain_width != self.depth_target.width or swapchain_height != self.depth_target.height) {
-            const replacement = createDepthTexture(
-                self.device,
-                self.depth_format,
-                swapchain_width,
-                swapchain_height,
-            );
-            commitDepthReplacement(
-                &self.depth_target,
-                replacement,
-                swapchain_width,
-                swapchain_height,
-                @ptrCast(self.device),
-                releaseGpuTexture,
-            ) catch |err| {
-                std.debug.print("Failed to recreate depth texture: {s}\n", .{c.SDL_GetError()});
+        // Step 3: Recreate the paired product-scene targets transactionally
+        // when the drawable changes. Neither target can advance alone.
+        if (swapchain_width != self.depth_target.width or swapchain_height != self.depth_target.height or
+            swapchain_width != self.scene_target.width or swapchain_height != self.scene_target.height)
+        {
+            self.resizeSceneTargets(swapchain_width, swapchain_height) catch |err| {
+                std.debug.print("Failed to recreate product scene targets: {s}\n", .{c.SDL_GetError()});
                 try retireAcquiredSwapchain(cmd);
                 return err;
             };
         }
 
-        // Step 4: Set up color target (what we see on screen)
+        // Step 4: Render product color offscreen. The final drawable is
+        // reserved for the resolved scene plus conventional UI/diagnostics.
         const color_target = c.SDL_GPUColorTargetInfo{
-            .texture = acquired_swapchain,
+            .texture = self.scene_target.texture,
             .mip_level = 0,
             .layer_or_depth_plane = 0,
             .clear_color = c.SDL_FColor{
@@ -852,6 +871,43 @@ pub const Renderer = struct {
         if (self.current_render_pass) |render_pass| {
             c.SDL_EndGPURenderPass(render_pass);
             self.current_render_pass = null;
+            const swapchain = self.current_swapchain orelse return;
+            const source = self.presentation_override orelse PresentationOverride{
+                .texture = self.scene_target.texture,
+                .width = self.scene_target.width,
+                .height = self.scene_target.height,
+            };
+            c.SDL_BlitGPUTexture(self.current_cmd.?, &c.SDL_GPUBlitInfo{
+                .source = .{
+                    .texture = source.texture,
+                    .mip_level = 0,
+                    .layer_or_depth_plane = 0,
+                    .x = 0,
+                    .y = 0,
+                    .w = source.width,
+                    .h = source.height,
+                },
+                .destination = .{
+                    .texture = swapchain,
+                    .mip_level = 0,
+                    .layer_or_depth_plane = 0,
+                    .x = 0,
+                    .y = 0,
+                    .w = self.current_swapchain_width,
+                    .h = self.current_swapchain_height,
+                },
+                .load_op = c.SDL_GPU_LOADOP_DONT_CARE,
+                .clear_color = .{ .r = 0, .g = 0, .b = 0, .a = 1 },
+                .flip_mode = c.SDL_FLIP_NONE,
+                .filter = if (self.presentation_override == null)
+                    c.SDL_GPU_FILTER_NEAREST
+                else
+                    c.SDL_GPU_FILTER_LINEAR,
+                .cycle = false,
+                .padding1 = 0,
+                .padding2 = 0,
+                .padding3 = 0,
+            });
         }
     }
 
@@ -909,6 +965,30 @@ pub const Renderer = struct {
         return self.current_cmd;
     }
 
+    /// Borrow product-only scene color after its pass ends. The texture never
+    /// includes editor UI or diagnostic overlays.
+    pub fn getProductSceneTexture(self: *Renderer) *c.SDL_GPUTexture {
+        return self.scene_target.texture;
+    }
+
+    pub fn getProductSceneExtent(self: *const Renderer) struct { width: u32, height: u32 } {
+        return .{ .width = self.scene_target.width, .height = self.scene_target.height };
+    }
+
+    pub fn setScenePresentationOverride(
+        self: *Renderer,
+        texture: *c.SDL_GPUTexture,
+        width: u32,
+        height: u32,
+    ) void {
+        std.debug.assert(width != 0 and height != 0);
+        self.presentation_override = .{ .texture = texture, .width = width, .height = height };
+    }
+
+    pub fn clearScenePresentationOverride(self: *Renderer) void {
+        self.presentation_override = null;
+    }
+
     pub fn getSwapchainExtent(self: *const Renderer) ?struct { width: u32, height: u32 } {
         if (self.current_swapchain == null or self.current_swapchain_width == 0 or
             self.current_swapchain_height == 0) return null;
@@ -924,6 +1004,29 @@ pub const Renderer = struct {
         var h: c_int = 0;
         _ = c.SDL_GetWindowSize(self.window, &w, &h);
         return .{ .width = w, .height = h };
+    }
+
+    fn resizeSceneTargets(self: *Renderer, width: u32, height: u32) !void {
+        const next_depth = createDepthTexture(
+            self.device,
+            self.depth_format,
+            width,
+            height,
+        ) orelse return error.DepthTextureCreationFailed;
+        errdefer c.SDL_ReleaseGPUTexture(self.device, next_depth);
+        const next_scene = createSceneTexture(
+            self.device,
+            self.swapchain_format,
+            width,
+            height,
+        ) orelse return error.SceneTextureCreationFailed;
+
+        const previous_depth = self.depth_target.texture;
+        const previous_scene = self.scene_target.texture;
+        self.depth_target = .{ .texture = next_depth, .width = width, .height = height };
+        self.scene_target = .{ .texture = next_scene, .width = width, .height = height };
+        c.SDL_ReleaseGPUTexture(self.device, previous_depth);
+        c.SDL_ReleaseGPUTexture(self.device, previous_scene);
     }
 };
 
@@ -1453,6 +1556,26 @@ fn createDepthTexture(
         .type = c.SDL_GPU_TEXTURETYPE_2D,
         .format = depth_format,
         .usage = c.SDL_GPU_TEXTUREUSAGE_DEPTH_STENCIL_TARGET,
+        .width = width,
+        .height = height,
+        .layer_count_or_depth = 1,
+        .num_levels = 1,
+        .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
+        .props = 0,
+    });
+}
+
+fn createSceneTexture(
+    device: *c.SDL_GPUDevice,
+    format: c.SDL_GPUTextureFormat,
+    width: u32,
+    height: u32,
+) ?*c.SDL_GPUTexture {
+    return c.SDL_CreateGPUTexture(device, &c.SDL_GPUTextureCreateInfo{
+        .type = c.SDL_GPU_TEXTURETYPE_2D,
+        .format = format,
+        .usage = c.SDL_GPU_TEXTUREUSAGE_COLOR_TARGET |
+            c.SDL_GPU_TEXTUREUSAGE_SAMPLER,
         .width = width,
         .height = height,
         .layer_count_or_depth = 1,

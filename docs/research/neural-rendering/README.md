@@ -1,7 +1,7 @@
 # Neural Rendering Research
 
-**Status:** Active research supporting accepted ADR-025; no neural runtime is
-implemented yet
+**Status:** Active research supporting accepted ADR-025; preliminary NR-0001
+capture, training, export, and native runtime proof implemented, full NR0 open
 
 **Last reviewed:** 2026-08-05
 
@@ -22,4 +22,3 @@ Start with:
 Research may compare broad techniques. Implementation choices enter the
 engine only through an ADR or an amendment to ADR-025, an executable vertical
 slice, and recorded validation.
-

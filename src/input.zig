@@ -436,6 +436,7 @@ pub const Key = struct {
     pub const F = c.SDL_SCANCODE_F;
     pub const Q = c.SDL_SCANCODE_Q;
     pub const R = c.SDL_SCANCODE_R;
+    pub const N = c.SDL_SCANCODE_N;
     pub const SPACE = c.SDL_SCANCODE_SPACE;
     pub const LSHIFT = c.SDL_SCANCODE_LSHIFT;
 };

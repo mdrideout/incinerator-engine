@@ -1,6 +1,7 @@
 # NR0 Game-Specific Neural Rendering Feasibility Slice
 
-**Status:** Planned; implementation not started
+**Status:** In progress; preliminary NR-0001 spatial pipeline proof complete,
+NR0-A through NR0-G remain open
 
 **Date:** 2026-08-05
 
@@ -25,6 +26,27 @@ output, exposes its cost and identity, and falls back truthfully.
 
 NR0 is a parallel core-rendering track. It does not replace or renumber the
 gameplay S-series.
+
+## Preliminary NR-0001 checkpoint
+
+The first critical-path proof completed on 2026-08-05 before the richer NR0
+buffer ABI was designed. It intentionally answers “can this repository and Mac
+execute the whole loop?” before asking the art-quality question.
+
+| Capability | Executed result | NR0 disposition |
+|---|---|---|
+| Product/UI boundary | Product scene renders offscreen and resolves before editor UI | Retain as core presentation boundary |
+| Existing-frame tool smoke | MPS train/evaluate/export/Core ML predict succeeded | Superseded as primary evidence by engine capture; retained as loader smoke |
+| Exact engine product-color pairs | Three independent S13 Metal runs captured 80 train, 80 validation, and 80 test frames | Valid pipeline evidence; insufficient for NR0-B auxiliary-buffer acceptance |
+| Spatial baseline | 25,552 parameters; untouched-test MAE 0.04348 versus bicubic 0.05134 | Candidate pipeline passes; no art-direction claim |
+| Export | FP16 ML Program; max PyTorch/Core ML error 0.001274 | Candidate export passes; not promoted content |
+| Native runtime | 3,840-frame S13 run, 3,840 predictions, zero failures, UI outside inference | Technical proof passes; CPU-staged bridge is disposable |
+| Failure | Missing model selected explicit conventional fallback and completed the Metal smoke | Preliminary fallback passes |
+| Runtime cost | Standalone Core ML p50 0.465 ms; staged live mean 5.579 ms, max 11.409 ms at 80x45→320x180 | Confirms GPU-resident staging is required before NR0-F acceptance |
+
+External evidence roots and exact commands are recorded in
+[`../../experiments/neural-rendering/nr-0001-spatial-pipeline/README.md`](../../experiments/neural-rendering/nr-0001-spatial-pipeline/README.md).
+No generated dataset, checkpoint, or model package is committed.
 
 ## Definition of the slice
 
@@ -143,17 +165,20 @@ survives every declared fallback transition.
 **Exit:** the end-to-end slice is accepted or rejected with preserved evidence.
 Accepted capability contracts may then become core engine infrastructure.
 
-## Proposed implementation locations
+## Implementation locations
 
-Create runtime files only as their phase begins:
+The preliminary proof currently uses:
 
 ```text
-src/engine/contracts/neural_rendering.zig
-src/adapters/neural_rendering/macos.zig
-src/content/neural_model_bundle.zig
+src/adapters/neural_rendering/macos.h
+src/adapters/neural_rendering/macos.m
 src/hosts/neural_rendering_host.zig
 src/hosts/neural_capture_host.zig
 ```
+
+The versioned engine contract and promoted-bundle content owner remain future
+NR0 work and will live under `src/engine/contracts/` and `src/content/` only
+when those phases begin.
 
 Do not put capture, model selection, history policy, inference orchestration, or
 experiment code into `src/renderer.zig`. That file may remain the owner of
@@ -203,4 +228,3 @@ Large mutable artifacts remain outside Git.
 - arbitrary plugin graphs or a general render graph rewrite;
 - a hosted experiment registry; and
 - an engine license, game license, or model distribution policy.
-

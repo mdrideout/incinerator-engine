@@ -2040,7 +2040,7 @@ test "incident manifest cohorts source the live protocol and snapshot owners" {
         manifest_snapshot_cohort,
     );
     try std.testing.expectEqual(@as(u16, 15), manifest_protocol_cohort);
-    try std.testing.expectEqual(@as(u16, 13), manifest_snapshot_cohort);
+    try std.testing.expectEqual(@as(u16, 14), manifest_snapshot_cohort);
 }
 
 test "handoff is available to clipboard before durable writer completion" {
