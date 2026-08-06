@@ -5,12 +5,15 @@ foundation now includes S12 semantic navigation and the implemented S13
 authored-population/activity slice. Protocol 15, snapshot 14, replay 16,
 incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
 automated Metal/product acceptance are current. No open P0/P1 architectural
-finding blocks the final S13 human walkthrough.
+finding blocks the final S13 human walkthrough. ADR-025 accepts the ownership
+boundary for a parallel game-specific neural-rendering feasibility track; NR0
+has not implemented that capability.
 
-**Last reviewed:** 2026-08-01
+**Last reviewed:** 2026-08-05
 
-**Scope:** Current post-S13 architecture, its demonstrated strengths, and its
-remaining structural pressure before another product or service slice
+**Scope:** Current post-S13 architecture, its demonstrated strengths, its
+remaining structural pressure before another product or service slice, and the
+accepted pre-implementation boundary for NR0
 
 **Related roadmap:** [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md)
 
@@ -33,6 +36,9 @@ remaining structural pressure before another product or service slice
 → [`open-world spatial and vehicle-dynamics correction complete`](docs/design/open-world-spatial-diagnostics-and-playability.md)
 → [`S12 automated acceptance complete; human walkthrough pending`](docs/validation/s12-destination-driven-navigation.md)
 → [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
+
+**Parallel core-rendering track:**
+[`ADR-025 accepted; NR0 planned, not implemented`](docs/adr/025-game-specific-neural-rendering-boundary.md)
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 
@@ -135,6 +141,10 @@ The accepted foundation remains:
    projections or submit typed requests; they are not parallel authorities.
 6. Shared infrastructure is extracted only from demonstrated consumers and
    retains domain-specific policy at its edge.
+7. A future game-specific neural renderer is presentation infrastructure: it
+   consumes immutable versioned raster inputs, never becomes authority, and
+   loads only a deliberately promoted immutable game-content bundle while the
+   conventional render remains available as fallback.
 
 The accepted multiplayer refinement is:
 
@@ -272,6 +282,7 @@ claim.
 | A-F056 | Incident manifests write stale protocol/snapshot literals instead of sourcing the accepted live cohort, so a navigation incident could misidentify the runtime that produced it | P1 | S12-A preflight | Resolved: schema-4 manifests source protocol/replay/snapshot cohort constants, drift tests fail closed, and a fresh protocol-14/replay-14/snapshot-13 bundle passes strict inspection |
 | A-F057 | NPC base intent is a cooked node reference; route results conflate inactive/capacity/disconnected outcomes, and failed displacement recovery may restore an old pose | P1 | S12 destination/recovery contract | Resolved under [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md): semantic destination intent, one pure typed planner, explicit execution status/lineage, collision-aware re-anchoring, confirmed edge exclusions, and a zero-teleport counter replace raw-node/BFS/snap-back behavior |
 | A-F058 | The installed six-node line and triangle presentation cannot exercise alternate routes, topology replanning, or human-readable navigation diagnosis | P1 | S12 playable evaluation | Resolved for the bounded slice: the installed 16-node/32-edge urban block has two transactional seam gates, visible blockers, six destinations, Navigation Lab, independent overlays, and schema-4 route evidence. Human walkthrough remains the acceptance checkpoint, not an architecture implementation gap |
+| A-F059 | The current conventional renderer has no versioned neural-input ABI, paired-capture path, runtime inference owner, or promoted-model content contract; adding these directly to `renderer.zig` would conflate renderer, experiment, content, and history lifecycles | P1 | NR0 game-specific neural-rendering feasibility slice | Direction accepted in ADR-025; implementation remains open and must proceed through the NR0 vertical slice rather than a subsystem-first refactor |
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,

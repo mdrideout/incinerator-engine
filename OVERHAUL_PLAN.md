@@ -7,11 +7,13 @@ automated native acceptance are implemented. S13 authored population and
 sandbox activity are implemented through automated product acceptance,
 performance measurement, schema-5 incident evidence, and cleanup. The final
 S12 and S13 human walkthroughs remain pending. Secondary platforms and public
-multiplayer services remain deferred.
+multiplayer services remain deferred. ADR-025 now accepts a parallel NR0
+game-specific neural-rendering feasibility track; its implementation has not
+started.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-08-01
+**Last reviewed:** 2026-08-05
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -33,6 +35,9 @@ multiplayer services remain deferred.
 → [`open-world spatial and vehicle-dynamics correction complete`](docs/design/open-world-spatial-diagnostics-and-playability.md)
 → [`S12 automated acceptance complete; human walkthrough pending`](docs/validation/s12-destination-driven-navigation.md)
 → [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
+
+**Parallel core-rendering track:**
+[`NR0 accepted direction and planned feasibility slice`](docs/design/nr0-neural-rendering-feasibility.md)
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
 
@@ -82,6 +87,9 @@ The overhaul must produce these separable products:
 4. A headless simulation host suitable for behavioral tests and authoritative servers.
 5. SDL, Jolt, storage, and platform adapters that implement narrow capability contracts.
 6. Feature modules that own behavior end to end rather than scattering it across global subsystem folders.
+7. Offline neural-rendering experiment, evaluation, export, and promotion tools
+   whose mutable artifacts remain separate from the runtime and selected game
+   content.
 
 The goal is not to finish a generalized engine before making a game. The engine should emerge from successive playable slices, with each slice proving the APIs and shared capabilities it needs.
 
@@ -105,6 +113,13 @@ flowchart TD
     S --> R["Presentation Snapshot"]
     R --> A
 ```
+
+ADR-025 adds a presentation-only refinement: a title-specific neural renderer
+may consume versioned immutable raster inputs and produce final scene color.
+The deterministic game remains authoritative; the conventional low-fidelity
+render remains the fallback; and only an explicitly promoted model bundle may
+enter runtime content. Mutable datasets, training runs, and checkpoints are
+not engine state.
 
 ### 2.1 Engine kernel
 
@@ -438,6 +453,7 @@ logical authority and operational lifecycle:
 | D-022 | Persist human-test evidence as bounded per-run incident bundles with anomaly bookmarks, grep-friendly streams, trailing real-swapchain screenshots, concise LLM handoff, and replay attachments | Accepted in [ADR-021](docs/adr/021-local-human-test-incident-bundles.md); IC5-A through IC5-I, including long gameplay/window/replay/cost, deterministic failure hardening, bounded-object/budget/playable-boundary corrections, and the schema-3 -5/+2 eight-anchor visual contract, are implemented and human-validated for macOS solo under the [corrective plan](docs/design/incident-evidence-reliability-and-boundary-corrections.md). | Extend the same evidence quality when a future product phase makes listen/dedicated human sessions routine |
 | D-023 | NPCs retain stable semantic destinations while a shared deterministic bounded planner derives transient routes, distinguishes waiting/blocked/unreachable, and accepts physical displacement without snap-back | Accepted and implemented in [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md), the [S12 plan](docs/design/s12-destination-driven-navigation.md), [evaluation world](docs/design/s12-navigation-evaluation-world.md), and [automated acceptance record](docs/validation/s12-destination-driven-navigation.md) | S12 human walkthrough, then S13 |
 | D-024 | Stable authored population membership owns role, cyclic activity intent, slot claims, combat disposition, and replacement across disposable NPC actors | Accepted and implemented in [ADR-024](docs/adr/024-authored-population-intent-and-activity-slots.md), the [S13 plan](docs/design/s13-authored-population-and-sandbox-activity.md), the [population evaluation world](docs/design/s13-population-evaluation-world.md), the [S13 validation ledger](docs/validation/s13-authored-population-and-sandbox-activity.md), and the [performance baseline](docs/performance/s13-baseline.md) | S13 human walkthrough, then S14 |
+| D-025 | Game-specific neural rendering is a presentation capability with a versioned buffer ABI, explicit fallback, external experiment lifecycle, and human-promoted immutable model bundles | Accepted direction in [ADR-025](docs/adr/025-game-specific-neural-rendering-boundary.md), backed by the [research record](docs/research/neural-rendering/README.md) and [NR0 plan](docs/design/nr0-neural-rendering-feasibility.md); not implemented | NR0 implementation and measured Apple Silicon acceptance |
 
 ### Decision notes
 
@@ -519,6 +535,8 @@ before dependency resolution.
 | IC5 | Make human anomaly capture, replay, handoff, and gameplay-boundary evidence trustworthy under ordinary and destructive conditions | Complete and accepted through schema 3, fresh human bundles, installed Metal, replay, failure hardening, and physical gameplay acceptance |
 | Open-world corrective | Preserve traversal and dynamic-object continuity while exposing district/NPC intent and objectively characterizing vehicle handling | Complete and human-accepted; ADR-022 and the vehicle-dynamics report record the current contract |
 | S12 | One NPC retains a semantic destination through branch choice, content waiting, topology revision, physical obstruction, displacement, encounter interruption, restore, replay, and network placement | Implemented; automated focused, performance, schema-4 incident, and installed Metal acceptance pass. Human evaluation-world and two preserved incident captures remain |
+| S13 | Twelve stable authored population members perform role-driven activities, contend for slots, fight, die, and replace safely | Implemented; automated product, schema-5 incident, scale, performance, and Metal acceptance pass. Human walkthrough remains |
+| NR0 | A paired deterministic scene produces an evaluated spatial model, explicit promotion, installed macOS inference, truthful fallback, diagnostics, and measured evidence | Planned parallel core-rendering feasibility slice under ADR-025; no implementation or model selected |
 
 M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
 slices. M3 is a narrow pre-network readiness gate, not a speculative server
@@ -1482,6 +1500,13 @@ These are not independent “finish the subsystem” milestones. Slices pull the
 - culling, batching, instancing, and LOD based on evidence;
 - GPU upload queues and deferred destruction;
 - draw, visibility, upload, and GPU timing metrics.
+- versioned low-fidelity appearance and auxiliary-buffer semantics when NR0
+  begins;
+- a neural presentation host and macOS adapter isolated from gameplay authority;
+- exact promoted-model content loading, history reset, fallback, and incident
+  evidence; and
+- offline paired-capture/evaluation/promotion tools outside runtime dependency
+  graphs.
 
 ### 25.3 Asset evolution
 
@@ -1847,6 +1872,20 @@ recommendations.
     behavior tree, StateTree, GOAP,
     navmesh, crowd solver, LLM agent, relevance cutoff, or generic AI framework
     without measured product pressure.
+
+**Parallel core-rendering track — NR0:** [ ] Implement the accepted
+[game-specific neural-rendering feasibility slice](docs/design/nr0-neural-rendering-feasibility.md)
+without renumbering or hiding the gameplay roadmap. Begin with exact raster
+input semantics and debug views, then paired capture, one compact spatial
+baseline, held-out evaluation, explicit promotion, installed macOS inference,
+fallback, diagnostics, and human acceptance. The
+[research record](docs/research/neural-rendering/README.md),
+[ADR-025](docs/adr/025-game-specific-neural-rendering-boundary.md),
+[evaluation scene](docs/design/nr0-neural-rendering-evaluation-scene.md),
+[validation ledger](docs/validation/nr0-neural-rendering-feasibility.md), and
+[performance placeholder](docs/performance/nr0-baseline.md) are now persistent;
+no runtime implementation or selected model is claimed.
+
 49. [ ] **S14 — Ranged combat vertical slice.** Add one authoritative weapon
     archetype with equip/fire/reload/ammunition state, source-aware damage
     feedback, death integration, replay, reconnect, and impairment coverage.
@@ -1950,3 +1989,4 @@ recommendations.
 | 2026-07-28 | Corrected premature NPC projection removal found by the first S12 human incident | Healthy schema-4 evidence and matching 7,353-tick replay proved a live NPC was intentionally omitted at roughly 29.5 m by the historical 20/24 m cross-district interest policy. Current solo/listen/dedicated sandbox placements now select explicit `full_world` NPC publication with typed diagnostic reason; bounded hysteresis remains opt-in and tested for a later measured scale phase. Focused session/S12, serialized full `verify-s12`, editor product, and validation gates pass. Exact graphical re-execution completed 7,500 ticks with 490/490 NPC samples authority-present/replicated/presented/drawn through 67.9 m; fresh human continuity confirmation remains. |
 | 2026-07-28 | Completed repository-grounded S13 research and planning | Proposed ADR-024, an eight-phase implementation/acceptance plan, and a bounded two-district population evaluation world. The plan introduces stable population-member identity across actor replacement, three authored roles, explicit hostility, deterministic cyclic activity programs, activity-slot reservations, sufficient spawn slots, live-NPC separation, Population Lab/incident evidence, and separate 12/16/64 product/physical/synthetic cohorts. It deliberately defers behavior trees, StateTree, GOAP, Recast/Detour, ORCA/RVO, generative agents, LOD/relevance work, S15 expansion, and service scope until measured pressure exists. |
 | 2026-08-01 | Completed S13 implementation and automated acceptance | Added the twelve-member authored product roster, sixteen-member real-Jolt placement cohort, stable member/actor-generation lifecycle, explicit roles and hostility, deterministic activity/slot ownership, safe replacement, protocol/snapshot/replay/incident cohort break, Population Lab, schema-5 evidence, installed 240/40 Hz Metal proofs, paired incident-cost measurement, and a `verify-s13` aggregate. Removed the standalone replacement/product-encounter path, resolved A-F035/A-F037 for declared scope, and retained 64 only as synthetic logic/projection pressure. Final ordinary-product human walkthrough remains before full S13 acceptance. |
+| 2026-08-05 | Accepted and scaffolded the NR0 game-specific neural-rendering direction | ADR-025 separates deterministic authority, presentation-only neural inputs/runtime, mutable external experiment runs, and deliberately promoted immutable game-content bundles. Added the July 2026 research record, feasibility and evaluation-scene plans, experiment/tool/model/fixture boundaries, empty validation/performance ledgers, and a repository-owned agent skill. No renderer code, training dependency, model weight, or runtime acceptance is claimed. |

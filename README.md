@@ -83,6 +83,14 @@ then
 and [`S13 performance baseline`](docs/performance/s13-baseline.md). S13
 implementation and automated acceptance are complete; its ordinary-product
 human walkthrough remains before full phase acceptance.
+The engine also has an accepted but unimplemented parallel neural-rendering
+direction. [ADR-025](docs/adr/025-game-specific-neural-rendering-boundary.md)
+keeps the deterministic game authoritative, treats the model as a
+presentation-only capability, separates mutable experiment runs from runtime,
+and permits only an explicitly promoted immutable model bundle to become game
+content. See the [research index](docs/research/neural-rendering/README.md) and
+[NR0 feasibility plan](docs/design/nr0-neural-rendering-feasibility.md). No model
+or neural runtime is currently selected or shipped.
 Broader Steam/public-service infrastructure remains deferred.
 
 ## Toolchain Cohort
@@ -619,6 +627,12 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`ARCHITECTURE_REVIEW.md`](ARCHITECTURE_REVIEW.md)
 - [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 - [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
+- [`Neural Rendering Research`](docs/research/neural-rendering/README.md)
+- [`ADR-025: Game-Specific Neural Rendering Boundary and Model Promotion`](docs/adr/025-game-specific-neural-rendering-boundary.md)
+- [`NR0 Game-Specific Neural Rendering Feasibility Slice`](docs/design/nr0-neural-rendering-feasibility.md)
+- [`NR0 Neural Rendering Evaluation Scene`](docs/design/nr0-neural-rendering-evaluation-scene.md)
+- [`NR0 Validation Ledger`](docs/validation/nr0-neural-rendering-feasibility.md)
+- [`NR0 Performance Baseline`](docs/performance/nr0-baseline.md)
 - [`ADR-007: Product, Platform, and Compatibility Scope`](docs/adr/007-product-platform-and-compatibility-scope.md)
 - [`ADR-008: Feature-Oriented Engine Architecture`](docs/adr/008-feature-oriented-engine-architecture.md)
 - [`S0 Crate Lifecycle Design`](docs/design/s0-crate-lifecycle.md)

@@ -21,6 +21,7 @@ zig-out/
 .DS_Store
 __pycache__/
 *.py[cod]
+/artifacts/neural-rendering/
 
 # Game engine files
 imgui.ini

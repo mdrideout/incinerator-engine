@@ -1,0 +1,4 @@
+interface:
+  display_name: "Incinerator Neural Rendering"
+  short_description: "Develop and promote neural rendering safely"
+  default_prompt: "Use $incinerator-neural-rendering to plan or implement an Incinerator neural-rendering experiment through explicit promotion."

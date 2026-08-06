@@ -20,3 +20,7 @@
 - Do not change architecture or strategy to acommodate pedantic nitpicks that have low material impact.
 - Race conditions and footguns must be grounded in likely real-world exceptions, NOT unlikely theoretical scenarios in a vacuum.
 - Do not get caught in self-invalidation loops. This can look like failing overly-pedantic tests, over-engineering a solution to pass the test, and then failing those tests. I end up deleting a lot of these scenarios to save you and allow forward progress.
+
+## Neural Rendering
+
+- For neural-rendering research, capture, experiments, model bundles, promotion, runtime inference, or NR0 work, read `skills/incinerator-neural-rendering/SKILL.md` and `docs/adr/025-game-specific-neural-rendering-boundary.md` before acting. Keep deterministic authority, mutable experiment artifacts, and deliberately promoted runtime game content as separate owners.
