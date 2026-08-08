@@ -1,9 +1,8 @@
 # ADR-025: Game-Specific Neural Rendering Boundary and Model Promotion
 
-**Status:** Accepted; NR0-A/B input and capture foundation implemented, full
-NR0 remains open
+**Status:** Accepted; NR0-A through NR0-C implemented, full NR0 remains open
 
-**Date:** 2026-08-05
+**Date:** 2026-08-07
 
 **Platform:** Apple Silicon macOS first
 
@@ -160,9 +159,23 @@ NR0-A/B subsequently establish the accepted foundation beneath this ADR:
 - deterministic two-launch acceptance validates split ownership, identity
   stability, byte equality, and human-visible channel alignment.
 
-NR0 still owes the full evaluation fixture and multi-channel model, failure
-analysis, GPU-resident inference adapter, promotion, installed bundle
-validation, temporal failure work, and final human acceptance.
+NR0-C subsequently establishes the first multi-channel spatial candidate:
+
+- a versioned dataset adapter packs the six captures into an explicit 17-plane
+  model ABI without authority or private gameplay inputs;
+- a 51,888-parameter residual convolutional model passes controlled fit before
+  training on a separate sequence;
+- validation and test own disjoint deterministic camera programs, with test
+  evaluated only after validation selection;
+- nearest, bilinear, and bicubic comparisons plus full-frame human evidence
+  establish the spatial result; and
+- one fixed-shape FP16 Core ML export and standalone benchmark remain external,
+  immutable, and unpromoted.
+
+NR0 still owes the dedicated failure-analysis fixture, temporal and
+out-of-distribution evaluation, GPU-resident inference adapter, promotion,
+installed bundle validation, full end-to-end performance evidence, and final
+human acceptance.
 
 ### Positive
 

@@ -91,11 +91,12 @@ presentation-only capability, separates mutable experiment runs from runtime,
 and permits only an explicitly promoted immutable model bundle to become game
 content. See the [research index](docs/research/neural-rendering/README.md) and
 [NR0 feasibility plan](docs/design/nr0-neural-rendering-feasibility.md). The
-current 80x45-to-320x180 Core ML path proves exact product-scene capture,
-session-separated MPS training/evaluation, export, native inference, explicit
-fallback, and conventional UI composition. It uses a disposable blocking
-CPU-staged adapter and no model is promoted, selected as game content, or
-shipped.
+preliminary 80x45-to-320x180 path proved native Core ML and explicit fallback.
+NR0-C now adds the first `incinerator.neural-input.v1` model: 17 planes at
+400x225, a 51,888-parameter 4x spatial residual network, disjoint camera-cohort
+selection/test, human comparison, and an FP16 Core ML export. It is an external
+unpromoted candidate; the installed adapter remains a disposable blocking
+proof and no model is selected as game content or shipped.
 Broader Steam/public-service infrastructure remains deferred.
 
 ## Toolchain Cohort

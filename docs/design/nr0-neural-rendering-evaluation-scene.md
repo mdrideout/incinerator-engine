@@ -1,9 +1,9 @@
 # NR0 Neural Rendering Evaluation Scene
 
-**Status:** NR0-A/B conformance scene accepted on S13; dedicated NR0-C/D art
-fixture remains planned
+**Status:** NR0-A/B conformance and NR0-C spatial baseline accepted on S13;
+dedicated NR0-D art/failure fixture remains planned
 
-**Date:** 2026-08-05
+**Date:** 2026-08-06
 
 ## Purpose
 
@@ -37,10 +37,11 @@ fixture so gameplay validation is not coupled to training data.
 NR0-A/B deliberately use the existing deterministic S13 population scene as a
 conformance cohort. It already pressures stable character, NPC, vehicle,
 carryable, district, authored-scene, and repeated-part identities across moving
-frames. This accepts the buffer and capture foundations without claiming the
-material, lighting, transparency, effect, camera-cut, or resize coverage needed
-for NR0-C/D quality evaluation. Those additions belong in the dedicated fixture
-when the first multi-channel model experiment begins.
+frames. NR0-C adds real default-follow, close-orbit, wide-orbit, and elevated
+camera programs and accepts the first multi-channel spatial reconstruction
+baseline. This still does not claim the material, lighting, transparency,
+effect, camera-cut, resize, or temporal coverage needed for failure-envelope
+evaluation. Those additions belong in the dedicated NR0-D fixture.
 
 ## Capture cohorts
 
@@ -75,7 +76,9 @@ The product/editor must be able to display and capture:
 
 NR0-A/B provide the cheap and auxiliary views in the live Neural Rendering Lab,
 the conventional target in capture, and a synchronized contact-sheet report.
-Model result/error overlays and incident integration remain NR0-C/D/F work.
+NR0-C preserves full-frame target/baseline/model comparisons and amplified
+absolute error externally. Live model/error overlays and incident integration
+remain NR0-D/F work.
 
 The existing incident workflow should record model identity, schema, fallback
 reason, history reset reason, inference timing, and the same visual anchors used

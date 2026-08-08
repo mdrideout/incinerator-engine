@@ -113,6 +113,51 @@ def git_revision(repo_root: Path) -> str | None:
     return result.stdout.strip() if result.returncode == 0 else None
 
 
+def git_worktree_record(repo_root: Path) -> dict[str, Any]:
+    revision = git_revision(repo_root)
+    status = subprocess.run(
+        ["git", "status", "--porcelain=v1", "--untracked-files=all"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    ).stdout
+    diff = subprocess.run(
+        ["git", "diff", "--binary", "HEAD", "--"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    ).stdout
+    untracked_output = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard", "-z"],
+        cwd=repo_root,
+        check=True,
+        capture_output=True,
+    ).stdout
+    untracked = [value.decode("utf-8") for value in untracked_output.split(b"\0") if value]
+    fingerprint = hashlib.sha256()
+    fingerprint.update((revision or "unknown").encode())
+    fingerprint.update(b"\0status\0")
+    fingerprint.update(status)
+    fingerprint.update(b"\0diff\0")
+    fingerprint.update(diff)
+    untracked_files = []
+    for relative in sorted(untracked):
+        path = repo_root / relative
+        file_digest = sha256_file(path)
+        fingerprint.update(b"\0untracked\0")
+        fingerprint.update(relative.encode())
+        fingerprint.update(b"\0")
+        fingerprint.update(file_digest.encode())
+        untracked_files.append({"path": relative, "sha256": file_digest})
+    return {
+        "revision": revision,
+        "dirty": bool(status),
+        "dirty_fingerprint": f"sha256-{fingerprint.hexdigest()}",
+        "status": status.decode("utf-8").splitlines(),
+        "untracked_files": untracked_files,
+    }
+
+
 def environment_record(repo_root: Path) -> dict[str, Any]:
     freeze = subprocess.run(
         [sys.executable, "-m", "pip", "freeze", "--all"],
@@ -128,7 +173,7 @@ def environment_record(repo_root: Path) -> dict[str, Any]:
         "machine": platform.machine(),
         "torch": torch.__version__,
         "mps_available": torch.backends.mps.is_available(),
-        "repository_revision": git_revision(repo_root),
+        "repository": git_worktree_record(repo_root),
         "pip_freeze": freeze,
     }
 

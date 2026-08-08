@@ -55,6 +55,7 @@ const sandbox_developer_host = @import("hosts/sandbox_developer_host.zig");
 const incident_capture = @import("hosts/incident_capture.zig");
 const incident_input_replay = @import("hosts/incident_input_replay.zig");
 const neural_capture_host = @import("hosts/neural_capture_host.zig");
+const neural_capture_camera = @import("hosts/neural_capture_camera.zig");
 const neural_input_host = @import("hosts/neural_input_host.zig");
 const neural_rendering_host = @import("hosts/neural_rendering_host.zig");
 const sandbox_invocation = @import("sandbox_invocation");
@@ -1875,6 +1876,7 @@ const App = struct {
     neural_rendering: ?neural_rendering_host.Owner = null,
     neural_inputs: ?neural_input_host.Owner = null,
     neural_capture: ?neural_capture_host.Owner = null,
+    neural_capture_camera_program: ?neural_capture_camera.Program = null,
 
     simulation: *sandbox_host.Placement,
     initial_crate_id: ?sandbox_contracts.PersistentId,
@@ -2353,6 +2355,7 @@ const App = struct {
         );
         errdefer neural_inputs.deinit();
         var capture: ?neural_capture_host.Owner = null;
+        var capture_camera_program: ?neural_capture_camera.Program = null;
         if (capture_root) |root| {
             const count_text = environ_map.get("INCINERATOR_NR_CAPTURE_FRAMES") orelse
                 return error.NeuralCaptureFrameCountRequired;
@@ -2364,6 +2367,7 @@ const App = struct {
                 return error.NeuralCaptureSequenceRequired;
             const camera_path = environ_map.get("INCINERATOR_NR_CAMERA_PATH") orelse
                 return error.NeuralCaptureCameraPathRequired;
+            capture_camera_program = try neural_capture_camera.parse(camera_path);
             capture = try neural_capture_host.Owner.init(self.io, std.heap.page_allocator, &self.gpu_renderer, .{
                 .root = root,
                 .start_frame = std.fmt.parseUnsigned(u64, start_text, 10) catch
@@ -2374,13 +2378,14 @@ const App = struct {
                     return error.InvalidNeuralCaptureFrameCount,
                 .cohort = try neural_capture_host.parseCohort(cohort_text),
                 .sequence = sequence,
-                .camera_path = camera_path,
+                .camera_path = neural_capture_camera.name(capture_camera_program.?),
                 .content_digest = try self.district_streaming.contentDigest(),
             });
         }
         self.neural_rendering = neural;
         self.neural_inputs = neural_inputs;
         self.neural_capture = capture;
+        self.neural_capture_camera_program = capture_camera_program;
         if (self.neural_rendering) |*owner| {
             const diagnostics = owner.diagnostics();
             std.debug.print(
@@ -7880,6 +7885,14 @@ const App = struct {
                     follow_distance,
                     hit_fraction,
                     0.2,
+                );
+            }
+            if (self.neural_capture_camera_program) |program| {
+                neural_capture_camera.apply(
+                    program,
+                    &self.game_camera,
+                    target,
+                    self.frame_timer.total_frames,
                 );
             }
         }

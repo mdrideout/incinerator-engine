@@ -1,8 +1,8 @@
 # NR0 Game-Specific Neural Rendering Feasibility Slice
 
-**Status:** In progress; NR0-A and NR0-B complete, NR0-C through NR0-G open
+**Status:** In progress; NR0-A through NR0-C complete, NR0-D through NR0-G open
 
-**Date:** 2026-08-05
+**Date:** 2026-08-06
 
 **Platform:** Apple Silicon macOS only
 
@@ -120,6 +120,8 @@ emits a visual report.
 
 ### NR0-C — Spatial model baseline
 
+**Status:** Complete on 2026-08-06.
+
 - Implement the smallest feed-forward convolutional encoder-decoder that can
   overfit one controlled cohort.
 - Advance to held-out camera paths, locations, motion, materials, identities,
@@ -130,6 +132,20 @@ emits a visual report.
 
 **Exit:** an exported candidate beats declared non-neural baselines on the
 accepted numerical and human comparison without test-frame leakage.
+
+Implemented in
+[`NR-0002`](../../experiments/neural-rendering/nr-0002-multichannel-spatial-baseline/README.md).
+The schema-2 adapter packs the six RGBA8 captures into an explicit 17-plane
+ABI. A 51,888-parameter low-resolution residual encoder/decoder first passed an
+eight-frame controlled-fit gate, then trained on a separate default-follow
+sequence. Epoch selection used only an orbit-wide validation path; the
+elevated-sweep test path was evaluated once afterward. Nearest, bilinear,
+bicubic, and model MAE/MSE/PSNR/SSIM are preserved with full-frame comparisons.
+The held-out model beat every deterministic baseline, exported to a fixed-shape
+FP16 Core ML package, and passed PyTorch/Core ML agreement. It remains an
+external, unpromoted candidate. S13 establishes the spatial model baseline;
+dedicated art materials, effects, temporal pressure, and failure-envelope work
+remain NR0-D rather than being implied by this result.
 
 ### NR0-D — Evaluation and failure analysis
 

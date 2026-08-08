@@ -1,10 +1,9 @@
 # Neural Rendering Offline Tools
 
 This directory owns the macOS-local NR0 experiment toolchain. It contains the
-preliminary NR-0001 existing-frame model loop plus the accepted NR0-A/B
-multi-channel capture, inspection, and visual-report tools. Spatial model work
-against the new schema begins in NR0-C. Promotion and an installed GPU-resident
-runtime remain later NR0 phases.
+preliminary NR-0001 existing-frame model loop, the accepted NR0-A/B
+multi-channel capture/inspection tools, and the complete NR0-C 17-plane model
+loop. Promotion and an installed GPU-resident runtime remain later NR0 phases.
 
 Training frameworks and their environments stay here or in an explicitly
 managed external environment. They cannot enter the product, validation-only
@@ -153,8 +152,38 @@ sh tools/verify_nr0_ab.sh \
 ```
 
 NR-0001 training tools consume their earlier RGB-pair schema. Do not silently
-feed schema-2 captures to them. NR0-C must define one multi-channel dataset
-adapter and experiment before making a new quality claim.
+feed schema-2 captures to them. NR0-C uses the separate schema-2 adapter and
+NR-0002 experiment below.
+
+## NR0-C multi-channel spatial baseline
+
+NR0-C has a separate schema-2 adapter and model family. It packs the accepted
+capture channels into 17 named planes and never feeds camera, authority,
+simulation, entity, or input-control state into the network. Capture-only
+camera programs are real deterministic presentation poses, not metadata labels.
+
+Run its focused contracts in the pinned environment:
+
+```sh
+PYTHON="$INCINERATOR_NR_ROOT/envs/nr0-poc/bin/python"
+"$PYTHON" tools/neural-rendering/test_nr0_c_tools.py
+```
+
+The complete reproduction command is recorded in
+[`NR-0002`](../../experiments/neural-rendering/nr-0002-multichannel-spatial-baseline/README.md).
+`tools/run_nr0_c.sh` requires the installed validation binary, installed content
+root, repository root, pinned Python, and a new absolute run root. It performs
+four disjoint captures, inspection, dataset assembly, controlled fit, held-out
+training/selection/test, Core ML export, and benchmark. Its final manifest uses
+`pending` visual review deliberately; an agent or human must inspect the saved
+comparison sheets and run `finalize_nr0_c.py --visual-review accepted` against
+the same root to create the final `experiment.json`. Pending review writes
+`experiment-pending.json`; neither file is overwritten. A completed accepted
+or rejected run is immutable. Verify its retained digests and gates read-only:
+
+```sh
+"$PYTHON" tools/neural-rendering/inspect_nr0_experiment.py <absolute-run-root>
+```
 
 ## Try the native proof
 

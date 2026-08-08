@@ -1,9 +1,9 @@
 # Neural Rendering Research
 
-**Status:** Active research supporting accepted ADR-025; NR0-A/B input and
-capture foundation accepted, NR0-C through NR0-G open
+**Status:** Active research supporting accepted ADR-025; NR0-A through NR0-C
+accepted, NR0-D through NR0-G open
 
-**Last reviewed:** 2026-08-05
+**Last reviewed:** 2026-08-06
 
 This directory preserves the evidence and reasoning behind Incinerator's
 game-specific neural-rendering track. It is research input, not a runtime

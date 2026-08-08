@@ -1,9 +1,9 @@
 # NR0 Neural Rendering Performance Baseline
 
-**Status:** NR-0001 and NR0-A/B foundation measured; full model/runtime baseline
-open
+**Status:** NR-0001, NR0-A/B foundation, and NR0-C standalone model measured;
+full installed runtime baseline open
 
-**Date:** 2026-08-05
+**Date:** 2026-08-06
 
 Record the first accepted baseline here. Do not copy performance from research
 papers into the Incinerator result table.
@@ -72,3 +72,28 @@ The MRT pass itself still needs GPU timestamps, frame-time percentiles, memory
 residency, and on/off A/B measurement in NR0-D. The deterministic 240 Hz value
 is a scripted virtual presentation rate and must not be represented as measured
 rendering throughput.
+
+## NR0-C spatial candidate measurements
+
+These numbers characterize the first 17-plane model and standalone Core ML
+execution. They are not an installed end-to-end or shipping budget.
+
+| Item | Result |
+|---|---|
+| Hardware/runtime | Same Apple M2 Max host; PyTorch 2.7.0 MPS; Core ML 9.0; macOS 15.7.7 |
+| Model | 51,888 parameters; 24 features; three residual blocks; fixed 4× residual decoder |
+| Stored artifacts | 213,685-byte PyTorch checkpoint; 119,721-byte Core ML package; 1,067,884,544-byte complete evidence root including 72 raw/debug paired frames and samples |
+| Dimensions | 17 planes at 400×225; RGB output at 1600×900 |
+| Precision/export | PyTorch FP32 training; FP16 macOS 15 ML Program candidate |
+| Training | 80 epochs, 40 train frames, deterministic aligned 96×96 input patches, batch 4; epoch 80 selected by orbit-wide validation |
+| Validation | model MAE 0.02556 / PSNR 22.51 dB / SSIM 0.8710; best baseline MAE 0.18025 / PSNR 13.91 dB / SSIM 0.8074 |
+| Untouched test | model MAE 0.02556 / PSNR 24.18 dB / SSIM 0.8661; best baseline MAE 0.18479 / PSNR 13.90 dB / SSIM 0.7981 |
+| PyTorch/Core ML agreement | mean absolute error 0.000103; maximum 0.000491 |
+| Standalone Core ML prediction | `ALL`, 500 iterations after 50 warmups: p50 5.077 ms, p95 5.720 ms, p99 5.988 ms, max 6.096 ms |
+| CPU+GPU comparison | 200 iterations after 20 warmups: p50 5.072 ms, p95 5.782 ms, p99 6.505 ms, max 6.771 ms |
+
+The PyTorch full-frame p50 was approximately 2.8–2.9 ms after MPS warmup, but
+that is an offline framework measurement and is not interchangeable with Core
+ML or product frame timing. NR0-D/F still own model/package memory, activation
+residency, GPU timestamps, input raster cost, output composition, UI/present,
+fallback transitions, sustained frame pacing, and end-to-end latency.

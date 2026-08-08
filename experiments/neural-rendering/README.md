@@ -15,6 +15,13 @@ nr-0003-temporal-history/
 foundation, not a trained-model experiment and not part of the numbered model
 candidate sequence.
 
+Implemented numbered experiments:
+
+- [`nr-0001-spatial-pipeline/`](nr-0001-spatial-pipeline/README.md): preliminary
+  RGB pipeline proof; complete and unpromoted.
+- [`nr-0002-multichannel-spatial-baseline/`](nr-0002-multichannel-spatial-baseline/README.md):
+  accepted NR0-C 17-plane spatial candidate; complete and unpromoted.
+
 Once tooling exists, each committed experiment directory should contain only
 the information needed to reproduce and review intent:
 

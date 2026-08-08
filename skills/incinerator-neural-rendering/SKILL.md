@@ -71,7 +71,7 @@ exists.
 - Advance schemas without compatibility decoders; coordinate every producer,
   consumer, capture, bundle, diagnostic, test, and document in the change.
 
-## Current NR0-A/B contract
+## Current NR0-A through NR0-C contract
 
 The accepted input ABI is `incinerator.neural-input.v1`: six 400×225 RGBA8
 appearance, linear-depth, world-normal, motion, semantic, and instance targets.
@@ -100,8 +100,19 @@ semantic/instance pixels. Do not infer buffer meaning from color alone; use the
 schema encoding and debug-encoding strings.
 
 NR-0001 RGB training tools predate capture schema 2. Do not silently adapt or
-discard its extra channels. NR0-C must introduce an explicit versioned dataset
-adapter and numbered experiment.
+discard its extra channels. NR0-C uses `nr0_dataset.py` and NR-0002: appearance
+RGB, depth R, normal RGB, motion/history RGB, semantic RGB, instance RGB, and
+coverage A form an exact 17-plane ABI. Training targets remain canonical
+1600×900 RGB. Whole capture sequences own overfit/train/validation/test splits;
+the test sequence is evaluated only after validation selection.
+
+`tools/run_nr0_c.sh` reproduces capture through export in a new external root.
+The compact spatial model, deterministic nearest/bilinear/bicubic comparisons,
+full-frame metrics/samples, checkpoint, Core ML export, benchmarks, exact
+environment, and final conclusion stay in that root. `finalize_nr0_c.py` writes
+a pending review separately from final accepted/rejected `experiment.json`.
+NR-0002 is an unpromoted spatial candidate, not art-direction, temporal,
+runtime, or shipping evidence.
 
 ## Validation and handoff
 
