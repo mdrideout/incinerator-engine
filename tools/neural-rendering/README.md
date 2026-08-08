@@ -3,7 +3,8 @@
 This directory owns the macOS-local NR0 experiment toolchain. It contains the
 preliminary NR-0001 existing-frame model loop, the accepted NR0-A/B
 multi-channel capture/inspection tools, and the complete NR0-C 17-plane model
-loop. Promotion and an installed GPU-resident runtime remain later NR0 phases.
+loop plus NR0-D stress evaluation. Promotion and an installed GPU-resident
+runtime remain later NR0 phases.
 
 Training frameworks and their environments stay here or in an explicitly
 managed external environment. They cannot enter the product, validation-only
@@ -205,3 +206,60 @@ This proof uses a blocking GPU readback, CPU tensor conversion, and GPU upload.
 That path exists only to close and measure the loop. It is not the future
 GPU-resident NR0 runtime and no artifact produced by these commands belongs in
 `models/neural-rendering/` without the explicit promotion phase.
+
+## NR0-D stress evaluation and failure analysis
+
+NR0-D uses a dedicated presentation-only fixture and the `near-pass`,
+`fast-orbit`, `disocclusion-sweep`, `camera-cut`, `top-down`, and
+`resize-cycle` capture programs. The fixture represents rigid geometry,
+categorical identity, occlusion, and motion pressure that the current renderer
+actually exposes. It does not pretend current flat-color primitives prove
+metallic, glossy, emissive, transparency, volumetric, or exposure-conditioned
+rendering.
+
+Run the focused metric contracts first:
+
+```sh
+PYTHON="$INCINERATOR_NR_ROOT/envs/nr0-poc/bin/python"
+"$PYTHON" tools/neural-rendering/test_nr0_d_tools.py
+```
+
+The complete runner requires the installed validation host, installed content,
+repository, pinned Python, exact NR-0002 checkpoint, and a new absolute root:
+
+```sh
+zig build install-validation -Deditor=true
+tools/run_nr0_d.sh \
+  "$PWD/zig-out/libexec/incinerator/incinerator_validation" \
+  "$PWD/zig-out/share/incinerator/content" \
+  "$PWD" \
+  "$PYTHON" \
+  "$INCINERATOR_NR_ROOT/experiments/nr-0002-20260806-a/heldout-run/checkpoint.pt" \
+  "$INCINERATOR_NR_ROOT/experiments/<new-nr0-d-run-id>"
+```
+
+The external evaluation root retains complete frame, instance, semantic-edge,
+temporal, inference, memory, and visual evidence. Inspect it read-only, then
+append exactly one review conclusion:
+
+```sh
+"$PYTHON" tools/neural-rendering/inspect_nr0_d.py <evaluation-root>
+"$PYTHON" tools/neural-rendering/finalize_nr0_d.py \
+  --root <evaluation-root> \
+  --review accepted \
+  --note '<observed useful envelope and unacceptable failures>'
+```
+
+An accepted NR0-D review accepts the phase evidence, not the model for runtime
+selection. NR0-E remains the only promotion boundary.
+
+The accepted 2026-08-08 evaluation is retained at
+`$INCINERATOR_NR_ROOT/experiments/nr0-d-20260807-a`; its crop-complete entry
+point is `evaluation-v2/evaluation.json`. It covers 478 frames and 9,374
+visible instances across all six paths. The evidence accepts NR0-D but finds
+NR-0002 unsuitable for promotion because temporal residual and boundary
+sharpness are worse than bilinear. The immutable `evaluation/` first pass is
+retained but superseded because it omitted the promised measured temporal and
+disocclusion convenience crops. See the committed
+[evaluation conclusion](../../experiments/neural-rendering/nr-0002-multichannel-spatial-baseline/NR0-D-EVALUATION.md)
+before designing the next candidate.

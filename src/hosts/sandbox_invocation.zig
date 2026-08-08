@@ -31,6 +31,7 @@ pub const ProgramMode = union(enum) {
     s8_population_smoke: VisualSmokeConfig,
     s11_combat_smoke: VisualSmokeConfig,
     s13_population_smoke: VisualSmokeConfig,
+    nr0_evaluation_smoke: VisualSmokeConfig,
     s4_diagnostics_smoke,
     s4_physics_debug_smoke: VisualSmokeConfig,
     s5_authoring_smoke,
@@ -117,6 +118,7 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
     var s8_population_smoke = false;
     var s11_combat_smoke = false;
     var s13_population_smoke = false;
+    var nr0_evaluation_smoke = false;
     var s4_diagnostics_smoke = false;
     var s4_physics_debug_smoke = false;
     var s5_authoring_smoke = false;
@@ -159,6 +161,9 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
         } else if (std.mem.eql(u8, arg, "--s13-population-smoke")) {
             if (s13_population_smoke) return error.DuplicateArgument;
             s13_population_smoke = true;
+        } else if (std.mem.eql(u8, arg, "--nr0-evaluation-smoke")) {
+            if (nr0_evaluation_smoke) return error.DuplicateArgument;
+            nr0_evaluation_smoke = true;
         } else if (std.mem.eql(u8, arg, "--s4-diagnostics-smoke")) {
             if (s4_diagnostics_smoke) return error.DuplicateArgument;
             s4_diagnostics_smoke = true;
@@ -205,6 +210,7 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
         if (visual_smoke or s1_visual_smoke or s2_visual_smoke or
             s3_streaming_smoke or s6_streaming_smoke or s7_interaction_smoke or
             s8_population_smoke or s11_combat_smoke or s13_population_smoke or
+            nr0_evaluation_smoke or
             window_lifecycle_smoke or init_failure_smoke or
             s4_diagnostics_smoke or s4_physics_debug_smoke or
             s5_authoring_smoke or save_root_seen or
@@ -223,6 +229,7 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
         @as(u8, @intFromBool(s8_population_smoke)) +
         @as(u8, @intFromBool(s11_combat_smoke)) +
         @as(u8, @intFromBool(s13_population_smoke)) +
+        @as(u8, @intFromBool(nr0_evaluation_smoke)) +
         @as(u8, @intFromBool(s4_diagnostics_smoke)) +
         @as(u8, @intFromBool(s4_physics_debug_smoke)) +
         @as(u8, @intFromBool(s5_authoring_smoke)) +
@@ -236,6 +243,7 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
     if (!visual_smoke and !s1_visual_smoke and !s2_visual_smoke and
         !s3_streaming_smoke and !s6_streaming_smoke and !s7_interaction_smoke and
         !s8_population_smoke and !s11_combat_smoke and !s13_population_smoke and
+        !nr0_evaluation_smoke and
         !s4_physics_debug_smoke and
         (frames != null or virtual_render_hz != null))
     {
@@ -261,7 +269,8 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
     }
     if (!visual_smoke and !s1_visual_smoke and !s2_visual_smoke and
         !s3_streaming_smoke and !s6_streaming_smoke and !s7_interaction_smoke and
-        !s8_population_smoke and !s11_combat_smoke and !s13_population_smoke)
+        !s8_population_smoke and !s11_combat_smoke and !s13_population_smoke and
+        !nr0_evaluation_smoke)
     {
         return .normal;
     }
@@ -271,7 +280,7 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
             1_440
         else if (s8_population_smoke)
             3_600
-        else if (s11_combat_smoke or s13_population_smoke)
+        else if (s11_combat_smoke or s13_population_smoke or nr0_evaluation_smoke)
             3_840
         else if (s3_streaming_smoke or s6_streaming_smoke or s7_interaction_smoke)
             1_200
@@ -280,7 +289,9 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
         .virtual_render_hz = virtual_render_hz orelse 240,
     };
     try validateSmokeAttemptBound(config);
-    return if (s13_population_smoke)
+    return if (nr0_evaluation_smoke)
+        .{ .nr0_evaluation_smoke = config }
+    else if (s13_population_smoke)
         .{ .s13_population_smoke = config }
     else if (s11_combat_smoke)
         .{ .s11_combat_smoke = config }
@@ -622,6 +633,12 @@ test "program mode parsing keeps visual smoke explicit and bounded" {
     });
     try std.testing.expectEqual(@as(u64, 3_840), s13_smoke.s13_population_smoke.frames);
     try std.testing.expectEqual(@as(u32, 240), s13_smoke.s13_population_smoke.virtual_render_hz);
+    const nr0_smoke = try parseProgramMode(&[_][]const u8{
+        "incinerator",
+        "--nr0-evaluation-smoke",
+        "--frames=300",
+    });
+    try std.testing.expectEqual(@as(u64, 300), nr0_smoke.nr0_evaluation_smoke.frames);
     const window_smoke = try parseProgramMode(&[_][]const u8{
         "incinerator",
         "--window-lifecycle-smoke",

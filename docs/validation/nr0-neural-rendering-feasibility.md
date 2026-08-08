@@ -1,8 +1,8 @@
 # NR0 Neural Rendering Feasibility Validation Ledger
 
-**Status:** NR0-A through NR0-C accepted; NR0-D through NR0-G open
+**Status:** NR0-A through NR0-D accepted; NR0-E through NR0-G open
 
-**Date:** 2026-08-06
+**Date:** 2026-08-08
 
 This ledger will record executed evidence for
 [the NR0 plan](../design/nr0-neural-rendering-feasibility.md). Documentation and
@@ -15,11 +15,12 @@ directory scaffolding are not implementation acceptance.
 | Buffer ABI | Exact format/convention tests and human debug views | **NR0-A passed:** schema v1, six MRT channels, shader contracts, live lab, raw captures, and contact-sheet inspection |
 | Paired capture | Atomic manifest, fingerprints, alignment, split integrity, and provenance | **NR0-B passed:** schema-2 capture and two-launch deterministic comparison passed; train/validation/test ownership is explicit |
 | Spatial baseline | Overfit proof followed by held-out comparison to non-neural baselines | **NR0-C passed:** 17-plane controlled fit, disjoint camera cohorts, held-out nearest/bilinear/bicubic comparison, human review, FP16 export, and standalone benchmark passed |
+| Failure envelope | Thin/small geometry, boundaries, motion, disocclusion, cuts, resize, unusual views, exhaustive visual evidence | **NR0-D passed:** 478-frame six-path fixture, every visible instance, reset-aware temporal analysis, and human reset/failure review retained; NR-0002 judged unsuitable for promotion |
 | Promotion | Source-preserving transactional copy, digest/schema verification, exact selection | Not started |
 | Runtime | Installed Apple Silicon inference with GPU-owned textures and visible model identity | Preliminary explicit-path Core ML proof passed; blocking CPU staging and no promoted bundle prevent acceptance |
 | Fallback | Missing/rejected model, resize, cut, device/inference failure, and recovery | Missing-model conventional fallback passed; remaining transitions open |
 | Boundaries | No training dependency or authority/private-gameplay access | NR0-A/B presentation contract and GPU/capture hosts plus NR0-C offline tools pass cold/headless and M5 architecture boundaries; final source audit remains NR0-G |
-| Performance | End-to-end latency, GPU time, frame pacing, and memory on named hardware | NR0-C standalone Core ML latency recorded; full GPU/frame/memory and installed end-to-end profile remains NR0-D/F |
+| Performance | End-to-end latency, GPU time, frame pacing, and memory on named hardware | NR0-C standalone Core ML and NR0-D offline PyTorch/MPS distributions recorded; installed GPU/frame/residency profile remains NR0-F |
 | Diagnostics | Debug views plus incident evidence for model/history/fallback state | Lab exposes six channels, schema/shader, history, identity collision, model, capture, failure, and timing state; incident integration remains open |
 | Human acceptance | Motion, identity, detail, disocclusion, effects, UI, fallback, and recovery | Not started |
 
@@ -27,11 +28,44 @@ directory scaffolding are not implementation acceptance.
 
 NR0-A/B accept the engine-owned input ABI and deterministic paired-capture
 foundation. NR0-C accepts the first multi-channel spatial reconstruction
-candidate against the S13 conformance scene. It does not accept final art
-quality, temporal behavior, the NR0-D failure envelope, promotion, or a shipping
-runtime. NR-0001 remains the preliminary local loop proof; NR-0002 supersedes
-it as model evidence. Both generated models remain external and must not be
-copied into `models/neural-rendering/`.
+candidate against the S13 conformance scene. NR0-D accepts the dedicated stress
+fixture and exhaustive failure-analysis method, but finds NR-0002 unsuitable
+for promotion because boundary sharpness and valid-history temporal residual
+are worse than bilinear and visible thin/fine-feature failures remain. NR-0001
+remains the preliminary local-loop proof. Both generated models remain
+external and must not be copied into `models/neural-rendering/`.
+
+Executed NR0-D evidence on 2026-08-08:
+
+- six independent installed Metal captures retained 478 frames across
+  `near-pass`, `fast-orbit`, `disocclusion-sweep`, `camera-cut`, `top-down`, and
+  `resize-cycle`, including real 1280x720, 1440x900, and restored 1600x900
+  source target transitions;
+- the evaluator retained all 478 frame records, 9,374 visible-instance
+  records, 478 reset-aware temporal records, and 4,307 visual evidence files,
+  including measured worst temporal and disocclusion crops;
+- full-frame model MAE was 0.03811 versus bilinear 0.16700, while
+  valid-history temporal residual MAE was worse at 0.04090 versus 0.03318;
+- model semantic-boundary and instance-boundary gradient MAE were both worse
+  than bilinear, matching human-observed blur, edge bleed, and thin-feature
+  loss;
+- camera-cut frames 60/120 and resize frames 120/180/240 were individually
+  inspected and contained complete independently readable output; and
+- the external evaluation integrity inspector passed after the immutable
+  accepted phase conclusion. The conclusion keeps NR-0002 explicitly
+  unpromoted and unsuitable for NR0-E;
+- NR0-C Python contracts passed 3/3, NR0-D Python contracts passed 4/4, and the
+  two neural shader contracts passed; and
+- full editor and non-editor repository tests passed, followed by a fresh
+  installed 1,200-frame Metal fixture smoke with 23 fixture draws, 25 neural
+  draws, 300 simulation ticks, live auxiliary-buffer inspection, and clean
+  shutdown.
+
+Retained NR0-D evidence:
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr0-d-20260807-a`.
+Start with `evaluation-v2/evaluation.json` and
+`evaluation-v2/conclusion.json`. The immutable `evaluation/` directory is
+retained but superseded by the crop-complete second pass.
 
 Executed NR0-C evidence on 2026-08-06:
 

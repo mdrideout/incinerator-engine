@@ -1,9 +1,9 @@
 # NR0 Neural Rendering Performance Baseline
 
-**Status:** NR-0001, NR0-A/B foundation, and NR0-C standalone model measured;
-full installed runtime baseline open
+**Status:** NR-0001, NR0-A/B foundation, NR0-C standalone model, and NR0-D
+offline stress evaluation measured; full installed runtime baseline open
 
-**Date:** 2026-08-06
+**Date:** 2026-08-08
 
 Record the first accepted baseline here. Do not copy performance from research
 papers into the Incinerator result table.
@@ -51,7 +51,7 @@ scene/UI GPU work. It includes a blocking product-texture downsample/readback,
 CPU layout conversion, and Core ML prediction. It therefore demonstrates the
 cost center rather than hiding it: native Core ML execution is small for this
 toy model, while CPU staging dominates. A GPU-resident adapter and complete
-frame/GPU/memory instrumentation remain prerequisites for NR0-F/D acceptance.
+frame/GPU/memory instrumentation remain prerequisites for NR0-F acceptance.
 
 ## NR0-A/B foundation measurements
 
@@ -69,7 +69,7 @@ performance or a shipping budget.
 | Capture synchronization | Selected frames deliberately use a same-queue submit fence and blocking readback; normal frames do not pay this capture path |
 
 The MRT pass itself still needs GPU timestamps, frame-time percentiles, memory
-residency, and on/off A/B measurement in NR0-D. The deterministic 240 Hz value
+residency, and on/off A/B measurement in NR0-F. The deterministic 240 Hz value
 is a scripted virtual presentation rate and must not be represented as measured
 rendering throughput.
 
@@ -94,6 +94,29 @@ execution. They are not an installed end-to-end or shipping budget.
 
 The PyTorch full-frame p50 was approximately 2.8–2.9 ms after MPS warmup, but
 that is an offline framework measurement and is not interchangeable with Core
-ML or product frame timing. NR0-D/F still own model/package memory, activation
-residency, GPU timestamps, input raster cost, output composition, UI/present,
-fallback transitions, sustained frame pacing, and end-to-end latency.
+ML or product frame timing. NR0-F still owns installed model/package memory,
+activation residency, GPU timestamps, input raster cost, output composition,
+UI/present, fallback transitions, sustained frame pacing, and end-to-end
+latency.
+
+## NR0-D offline stress-evaluation measurements
+
+These figures describe exhaustive PyTorch/MPS evaluation and evidence
+generation, not installed inference or a shipping memory/frame budget.
+
+| Item | Result |
+|---|---|
+| Hardware/runtime | Same Apple M2 Max host; macOS 15.7.7; PyTorch 2.7.0 MPS; Python 3.13.12 |
+| Candidate | Exact 51,888-parameter NR-0002 checkpoint; SHA-256 `35e286bc5d5018e0e6f2a409da5d23179f0cf1329d65d0f37c0da4e3917af749` |
+| Cohort | Six immutable stress captures; 478 1600×900 canonical targets; 9,374 visible-instance records |
+| Inference distribution | p50 3.430 ms; p95 5.784 ms; p99 7.473 ms; max 117.633 ms |
+| Evaluation wall time | 1,417,652 ms (about 23.6 minutes) for metrics and 4,307 visual evidence files |
+| Process peak RSS | 8,550,137,856 bytes |
+| PyTorch MPS after evaluation | 399,396,352 bytes current allocated; 3,557,277,696 bytes driver allocated |
+| External artifact volume | Approximately 11 GB retained run including the immutable superseded first report; crop-complete `evaluation-v2` approximately 2.3 GB |
+
+The process and MPS values include the Python framework, complete metric
+pipeline, and visual artifact generation. They cannot be used as model-runtime
+residency. NR0-F must measure the promoted bundle through the installed
+GPU-resident adapter before the engine accepts any runtime cost or hardware
+envelope.

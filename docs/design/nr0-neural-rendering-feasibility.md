@@ -1,8 +1,8 @@
 # NR0 Game-Specific Neural Rendering Feasibility Slice
 
-**Status:** In progress; NR0-A through NR0-C complete, NR0-D through NR0-G open
+**Status:** In progress; NR0-A through NR0-D complete, NR0-E through NR0-G open
 
-**Date:** 2026-08-06
+**Date:** 2026-08-08
 
 **Platform:** Apple Silicon macOS only
 
@@ -11,6 +11,9 @@
 
 **Evaluation scene:**
 [NR0 Evaluation Scene](nr0-neural-rendering-evaluation-scene.md)
+
+**NR0-D implementation plan:**
+[Evaluation and failure analysis](nr0-d-evaluation-and-failure-analysis.md)
 
 **Validation ledger:**
 [`../validation/nr0-neural-rendering-feasibility.md`](../validation/nr0-neural-rendering-feasibility.md)
@@ -149,16 +152,37 @@ remain NR0-D rather than being implied by this result.
 
 ### NR0-D — Evaluation and failure analysis
 
+**Status:** Complete on 2026-08-08. The executed contract and findings are
+recorded in
+[NR0-D evaluation and failure analysis](nr0-d-evaluation-and-failure-analysis.md).
+
 - Measure color/structure/perceptual quality and semantic edge/identity
   retention.
 - Inspect motion, disocclusion, small-object, transparency/effect, camera-cut,
   resize, exposure, and out-of-distribution failures.
-- Measure end-to-end latency, GPU time, peak/resident memory, upload/readback,
-  frame pacing, and fallback cost on the declared Apple hardware.
+- Measure offline candidate inference, process/MPS memory, and capture/evidence
+  cost on the declared Apple hardware; explicitly defer installed GPU-resident
+  timing, residency, frame pacing, and fallback cost to NR0-F.
 - Preserve full-frame and cropped comparisons for human review.
 
 **Exit:** the candidate's useful envelope and unacceptable failures are
 explicit; no promotion follows from one aggregate score.
+
+Implemented with a 23-identity, presentation-only fixture; six deterministic
+stress camera programs; explicit camera-cut and real-resize reset delivery; and
+an exhaustive checkpoint evaluator covering every frame, visible instance,
+boundary, valid-history pixel, and disoccluded pixel. The accepted external
+evaluation retains 478 frames, 9,374 instance records, 478 temporal records,
+and 4,307 visual artifacts, including measured worst temporal and disocclusion
+crops. NR-0002 improves broad spatial and disocclusion
+reconstruction, but is less boundary-sharp and less temporally stable than
+bilinear and visibly loses thin/fine features. NR0-D is accepted; NR-0002 is
+not suitable for promotion and remains external and unpromoted.
+
+The next actual model step is a bounded NR-0003 spatial failure-correction
+experiment evaluated against the unchanged NR0-D stress fixture. NR0-E remains
+the next engine phase, but it should not begin by promoting a candidate already
+shown to miss the accepted quality envelope.
 
 ### NR0-E — Explicit model promotion
 

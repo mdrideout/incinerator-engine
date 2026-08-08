@@ -1,6 +1,6 @@
 # ADR-025: Game-Specific Neural Rendering Boundary and Model Promotion
 
-**Status:** Accepted; NR0-A through NR0-C implemented, full NR0 remains open
+**Status:** Accepted; NR0-A through NR0-D implemented, full NR0 remains open
 
 **Date:** 2026-08-07
 
@@ -172,10 +172,22 @@ NR0-C subsequently establishes the first multi-channel spatial candidate:
 - one fixed-shape FP16 Core ML export and standalone benchmark remain external,
   immutable, and unpromoted.
 
-NR0 still owes the dedicated failure-analysis fixture, temporal and
-out-of-distribution evaluation, GPU-resident inference adapter, promotion,
-installed bundle validation, full end-to-end performance evidence, and final
-human acceptance.
+NR0-D subsequently establishes the candidate failure envelope:
+
+- a presentation-only fixture contributes stable semantic/instance identities,
+  thin and small geometry, depth layers, occlusion, and rotating parts without
+  acquiring gameplay or authority ownership;
+- six deterministic stress paths deliver explicit camera-cut and real resize
+  resets through the versioned input boundary;
+- exhaustive frame, instance, boundary, temporal-reprojection, disocclusion,
+  performance, and visual evidence remains in one immutable external root; and
+- the evaluation phase is accepted while NR-0002 remains unpromoted because
+  its temporal residual and boundary sharpness are worse than bilinear.
+
+NR0 still owes a promotion-worthy candidate, transactional promotion,
+GPU-resident inference adapter, installed bundle validation, full end-to-end
+performance evidence, and final human acceptance. The NR0-D result reinforces
+the ADR boundary: an aggregate metric cannot select runtime content.
 
 ### Positive
 

@@ -1,6 +1,6 @@
 # NR-0002 Multi-Channel Spatial Baseline
 
-**Status:** Complete NR0-C candidate; unpromoted
+**Status:** Complete NR0-C candidate; NR0-D evaluated and unpromoted
 
 **Date:** 2026-08-06
 
@@ -110,3 +110,9 @@ establish temporal stability, final materials/effects or art direction,
 out-of-distribution behavior, end-to-end runtime cost, or promotion. Those are
 NR0-D through NR0-F responsibilities. Nothing from this run was copied into
 `models/neural-rendering/` or selected by the engine.
+
+The subsequent
+[NR0-D failure evaluation](NR0-D-EVALUATION.md) established the omitted stress
+envelope. It accepted the evaluation infrastructure but found NR-0002 less
+temporally stable and less boundary-sharp than bilinear despite its broad
+spatial advantage. NR-0002 is therefore not suitable for promotion.

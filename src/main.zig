@@ -56,6 +56,7 @@ const incident_capture = @import("hosts/incident_capture.zig");
 const incident_input_replay = @import("hosts/incident_input_replay.zig");
 const neural_capture_host = @import("hosts/neural_capture_host.zig");
 const neural_capture_camera = @import("hosts/neural_capture_camera.zig");
+const neural_evaluation_fixture = @import("hosts/neural_evaluation_fixture.zig");
 const neural_input_host = @import("hosts/neural_input_host.zig");
 const neural_rendering_host = @import("hosts/neural_rendering_host.zig");
 const sandbox_invocation = @import("sandbox_invocation");
@@ -87,6 +88,7 @@ const c = sdl.c;
 test {
     _ = @import("hosts/incident_capture.zig");
     _ = @import("hosts/incident_input_replay.zig");
+    _ = @import("hosts/neural_evaluation_fixture.zig");
 }
 
 const VisualSmokeConfig = sandbox_invocation.VisualSmokeConfig;
@@ -1877,6 +1879,8 @@ const App = struct {
     neural_inputs: ?neural_input_host.Owner = null,
     neural_capture: ?neural_capture_host.Owner = null,
     neural_capture_camera_program: ?neural_capture_camera.Program = null,
+    neural_evaluation_fixture_enabled: bool = false,
+    neural_evaluation_resize_frame: ?u64 = null,
 
     simulation: *sandbox_host.Placement,
     initial_crate_id: ?sandbox_contracts.PersistentId,
@@ -2335,7 +2339,8 @@ const App = struct {
             std.mem.eql(u8, value, "1") or std.ascii.eqlIgnoreCase(value, "true")
         else
             false;
-        if (model_path == null and capture_root == null and !lab_requested) return;
+        if (model_path == null and capture_root == null and !lab_requested and
+            !self.neural_evaluation_fixture_enabled) return;
         if (model_path) |path| if (!std.fs.path.isAbsolute(path)) {
             return error.NeuralModelPathMustBeAbsolute;
         };
@@ -2355,7 +2360,8 @@ const App = struct {
         );
         errdefer neural_inputs.deinit();
         var capture: ?neural_capture_host.Owner = null;
-        var capture_camera_program: ?neural_capture_camera.Program = null;
+        var capture_camera_program: ?neural_capture_camera.Program =
+            if (self.neural_evaluation_fixture_enabled) .orbit_wide else null;
         if (capture_root) |root| {
             const count_text = environ_map.get("INCINERATOR_NR_CAPTURE_FRAMES") orelse
                 return error.NeuralCaptureFrameCountRequired;
@@ -2379,7 +2385,10 @@ const App = struct {
                 .cohort = try neural_capture_host.parseCohort(cohort_text),
                 .sequence = sequence,
                 .camera_path = neural_capture_camera.name(capture_camera_program.?),
-                .content_digest = try self.district_streaming.contentDigest(),
+                .content_digest = if (self.neural_evaluation_fixture_enabled)
+                    neural_evaluation_fixture.contentDigest()
+                else
+                    try self.district_streaming.contentDigest(),
             });
         }
         self.neural_rendering = neural;
@@ -7485,6 +7494,64 @@ const App = struct {
         });
     }
 
+    fn drawNeuralEvaluationFixture(
+        self: *App,
+        view_projection: zm.Mat,
+    ) !u64 {
+        if (!self.neural_evaluation_fixture_enabled) return 0;
+        const plans = neural_evaluation_fixture.plans(self.frame_timer.total_frames);
+        for (plans) |plan| {
+            const gpu_mesh: *const mesh.Mesh = switch (plan.mesh) {
+                .cube => &self.block_mesh,
+                .checker_cube => &self.visuals.crate_mesh,
+                .wheel => &self.visuals.vehicle_wheel_mesh,
+                .capsule => &self.visuals.character_mesh,
+            };
+            const diffuse_texture = switch (plan.mesh) {
+                .checker_cube => gpu_mesh.diffuse_texture,
+                else => null,
+            };
+            const scale = zm.scaling(plan.scale[0], plan.scale[1], plan.scale[2]);
+            const rotation = zm.mul(
+                zm.mul(zm.rotationX(plan.rotation[0]), zm.rotationY(plan.rotation[1])),
+                zm.rotationZ(plan.rotation[2]),
+            );
+            const translation = zm.translation(
+                plan.position[0],
+                plan.position[1],
+                plan.position[2],
+            );
+            try self.drawPresentationMesh(
+                plan.identity,
+                gpu_mesh,
+                diffuse_texture,
+                plan.base_color,
+                zm.mul(zm.mul(scale, rotation), translation),
+                view_projection,
+            );
+        }
+        return @intCast(plans.len);
+    }
+
+    fn applyNeuralEvaluationResize(self: *App) !void {
+        if (!self.neural_evaluation_fixture_enabled) return;
+        const program = self.neural_capture_camera_program orelse return;
+        const frame = self.frame_timer.total_frames;
+        const request = neural_capture_camera.resizeRequest(program, frame) orelse return;
+        if (self.neural_evaluation_resize_frame == frame) return;
+        if (!c.SDL_SetWindowSize(self.window, request.width, request.height)) {
+            return error.NeuralEvaluationWindowResizeFailed;
+        }
+        if (!c.SDL_SyncWindow(self.window)) {
+            return error.NeuralEvaluationWindowResizeSyncFailed;
+        }
+        self.neural_evaluation_resize_frame = frame;
+        std.debug.print(
+            "NR0_EVALUATION_RESIZE frame={d} width={d} height={d}\n",
+            .{ frame, request.width, request.height },
+        );
+    }
+
     fn persistentNeuralIdentity(
         persistent_id: engine.PersistentId,
         semantic: engine.neural_rendering.SemanticClass,
@@ -7794,6 +7861,7 @@ const App = struct {
         });
         stream_gpu_profile.finish(.success);
         self.developer.preparePhysicsDebugFrame(self.frame_timer.total_frames);
+        try self.applyNeuralEvaluationResize();
 
         // Begin the frame (clears screen)
         switch (try self.gpu_renderer.beginFrame(renderer.Colors.CORNFLOWER_BLUE)) {
@@ -7887,8 +7955,18 @@ const App = struct {
                     0.2,
                 );
             }
-            if (self.neural_capture_camera_program) |program| {
-                neural_capture_camera.apply(
+        }
+        var neural_history_reset: engine.neural_rendering.ResetReason = .none;
+        if (self.neural_capture_camera_program) |program| {
+            if (self.neural_evaluation_fixture_enabled) {
+                neural_history_reset = neural_capture_camera.apply(
+                    program,
+                    &self.game_camera,
+                    neural_evaluation_fixture.center,
+                    self.frame_timer.total_frames,
+                );
+            } else if (follow_target) |target| {
+                neural_history_reset = neural_capture_camera.apply(
                     program,
                     &self.game_camera,
                     target,
@@ -7910,7 +7988,7 @@ const App = struct {
                 .history_reset = if (inputs.diagnostics().rendered_frames == 0)
                     .first_frame
                 else
-                    .none,
+                    neural_history_reset,
             }, self.game_camera.getViewMatrix());
         }
         scene_extraction_profile.finish(.success);
@@ -7934,6 +8012,7 @@ const App = struct {
             view_proj,
         );
         scene_draw_calls +|= 1;
+        scene_draw_calls +|= try self.drawNeuralEvaluationFixture(view_proj);
         const draws_block = if (build_options.validation_mode or builtin.is_test)
             self.validation.profile == .s1_smoke
         else
@@ -9625,13 +9704,23 @@ fn initValidationApp(
     save_root: ?SaveRootPath,
 ) !App {
     return switch (mode) {
-        .normal, .s4_physics_debug_smoke, .s11_combat_smoke, .s13_population_smoke => initValidationAppWithProfile(
+        .normal,
+        .s4_physics_debug_smoke,
+        .s11_combat_smoke,
+        .s13_population_smoke,
+        => initValidationAppWithProfile(
             io,
             .sandbox,
             content_root,
             save_root,
         ),
         .visual_smoke => initValidationAppWithProfile(
+            io,
+            .s0_smoke,
+            content_root,
+            save_root,
+        ),
+        .nr0_evaluation_smoke => initValidationAppWithProfile(
             io,
             .s0_smoke,
             content_root,
@@ -9702,6 +9791,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         .s8_population_smoke,
         .s11_combat_smoke,
         .s13_population_smoke,
+        .nr0_evaluation_smoke,
         .s4_diagnostics_smoke,
         .s4_physics_debug_smoke,
         .s5_authoring_smoke,
@@ -9725,6 +9815,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         .s8_population_smoke,
         .s11_combat_smoke,
         .s13_population_smoke,
+        .nr0_evaluation_smoke,
         .s4_diagnostics_smoke,
         .s4_physics_debug_smoke,
         .s5_authoring_smoke,
@@ -9778,6 +9869,9 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         resolved_content_root,
         configured_save_root,
     );
+    if (mode == .nr0_evaluation_smoke) {
+        app.neural_evaluation_fixture_enabled = true;
+    }
     try app.configureNeuralRendering(init.environ_map);
     var visual_smoke_succeeded = false;
     var s1_visual_smoke_succeeded = false;
@@ -9788,6 +9882,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
     var s8_population_smoke_succeeded = false;
     var s11_combat_smoke_succeeded = false;
     var s13_population_smoke_succeeded = false;
+    var nr0_evaluation_smoke_succeeded = false;
     var s4_physics_debug_smoke_succeeded = false;
     var s5_authoring_smoke_succeeded = false;
     var window_lifecycle_smoke_succeeded = false;
@@ -9820,6 +9915,9 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         }
         if (s13_population_smoke_succeeded) {
             std.debug.print("S13_POPULATION_SMOKE_SHUTDOWN status=clean\n", .{});
+        }
+        if (nr0_evaluation_smoke_succeeded) {
+            std.debug.print("NR0_EVALUATION_SMOKE_SHUTDOWN status=clean\n", .{});
         }
         if (s4_physics_debug_smoke_succeeded) {
             std.debug.print("S4_PHYSICS_DEBUG_SMOKE_SHUTDOWN status=clean\n", .{});
@@ -10191,6 +10289,31 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                 },
             );
             s13_population_smoke_succeeded = true;
+        },
+        .nr0_evaluation_smoke => |config| {
+            const summary = try app.runValidation(config, .none);
+            const diagnostics = if (app.neural_inputs) |*inputs|
+                inputs.diagnostics()
+            else
+                return error.NeuralEvaluationInputHostUnavailable;
+            std.debug.print(
+                "NR0_EVALUATION_SMOKE_RESULT frames={d} ticks={d} " ++
+                    "fixture_draws={d} neural_draws={d} history_valid={d} " ++
+                    "history_reset={d} fixture_fingerprint={s} " ++
+                    "virtual_render_hz={d} gpu_driver={s}\n",
+                .{
+                    summary.ready_frames,
+                    app.simulation.inspection().tickIndex() -| app.validation_tick_origin,
+                    neural_evaluation_fixture.draw_count,
+                    diagnostics.draw_count,
+                    diagnostics.history_valid_draws,
+                    diagnostics.history_reset_draws,
+                    neural_evaluation_fixture.source_fingerprint,
+                    config.virtual_render_hz,
+                    shader_assets.driver,
+                },
+            );
+            nr0_evaluation_smoke_succeeded = true;
         },
         .s4_diagnostics_smoke => {
             const summary = try app.runS4DiagnosticsSmoke();

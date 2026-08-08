@@ -71,7 +71,7 @@ exists.
 - Advance schemas without compatibility decoders; coordinate every producer,
   consumer, capture, bundle, diagnostic, test, and document in the change.
 
-## Current NR0-A through NR0-C contract
+## Current NR0-A through NR0-D contract
 
 The accepted input ABI is `incinerator.neural-input.v1`: six 400×225 RGBA8
 appearance, linear-depth, world-normal, motion, semantic, and instance targets.
@@ -113,6 +113,33 @@ environment, and final conclusion stay in that root. `finalize_nr0_c.py` writes
 a pending review separately from final accepted/rejected `experiment.json`.
 NR-0002 is an unpromoted spatial candidate, not art-direction, temporal,
 runtime, or shipping evidence.
+
+NR0-D adds a presentation-only 23-identity fixture and six stress camera paths:
+`near-pass`, `fast-orbit`, `disocclusion-sweep`, `camera-cut`, `top-down`, and
+`resize-cycle`. Use `--nr0-evaluation-smoke` only as an installed validation
+composition. It deliberately avoids gameplay/authority ownership while using
+the real conventional and neural-input presentation seam. Camera cuts and real
+target resizes deliver explicit history-reset reasons.
+
+Run a fresh external evaluation with `tools/run_nr0_d.sh`. Read and verify an
+existing evaluation with:
+
+```sh
+python tools/neural-rendering/inspect_nr0_d.py <absolute-evaluation-root>
+```
+
+`evaluate_nr0_d.py` retains every frame and visible instance plus boundary,
+reset-aware temporal, disocclusion, timing, memory, and visual evidence.
+`finalize_nr0_d.py` appends one immutable accepted/rejected/inconclusive phase
+review; it never promotes the candidate.
+
+The accepted 2026-08-08 NR0-D evaluation finds NR-0002 broadly better than
+deterministic resize but worse than bilinear in valid-history temporal residual
+and boundary sharpness, with visible thin-feature loss and edge bleed. NR-0002
+is not suitable for promotion. Do not start NR0-E by copying it into runtime
+content. The next model experiment should first test whether broader spatial
+training coverage and loss correction resolve the measured envelope; do not
+assume temporal state is required before that experiment proves it.
 
 ## Validation and handoff
 
