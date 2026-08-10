@@ -31,6 +31,11 @@ future engine policy. A separately licensed game owns its own target assets,
 datasets, experiment history, promoted bundles, selection manifest, and rights
 record while consuming the same engine bundle contract.
 
+Under [ADR-026](../../docs/adr/026-from-scratch-title-neural-renderer.md), every
+learned artifact in a promoted bundle must descend from a declared random
+initialization and title-owned training data through the repository-owned
+framework. A fine-tuned, distilled, adapted, or repackaged external pretrained
+checkpoint is not eligible for this directory.
+
 Do not add weights before NR0 implements and verifies promotion, artifact
 storage, repository-size policy, and distribution rights.
-

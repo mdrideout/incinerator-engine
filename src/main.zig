@@ -57,6 +57,9 @@ const incident_input_replay = @import("hosts/incident_input_replay.zig");
 const neural_capture_host = @import("hosts/neural_capture_host.zig");
 const neural_capture_camera = @import("hosts/neural_capture_camera.zig");
 const neural_evaluation_fixture = @import("hosts/neural_evaluation_fixture.zig");
+const neural_target_contract = @import("hosts/neural_target_contract.zig");
+const neural_target_fixture = @import("hosts/neural_target_fixture.zig");
+const neural_target_frame = @import("hosts/neural_target_frame.zig");
 const neural_input_host = @import("hosts/neural_input_host.zig");
 const neural_rendering_host = @import("hosts/neural_rendering_host.zig");
 const sandbox_invocation = @import("sandbox_invocation");
@@ -89,6 +92,9 @@ test {
     _ = @import("hosts/incident_capture.zig");
     _ = @import("hosts/incident_input_replay.zig");
     _ = @import("hosts/neural_evaluation_fixture.zig");
+    _ = @import("hosts/neural_target_contract.zig");
+    _ = @import("hosts/neural_target_fixture.zig");
+    _ = @import("hosts/neural_target_frame.zig");
 }
 
 const VisualSmokeConfig = sandbox_invocation.VisualSmokeConfig;
@@ -1878,8 +1884,10 @@ const App = struct {
     neural_rendering: ?neural_rendering_host.Owner = null,
     neural_inputs: ?neural_input_host.Owner = null,
     neural_capture: ?neural_capture_host.Owner = null,
+    neural_target_frames: ?neural_target_frame.Owner = null,
     neural_capture_camera_program: ?neural_capture_camera.Program = null,
     neural_evaluation_fixture_enabled: bool = false,
+    neural_target_fixture_enabled: bool = false,
     neural_evaluation_resize_frame: ?u64 = null,
 
     simulation: *sandbox_host.Placement,
@@ -2302,6 +2310,7 @@ const App = struct {
         // editor, overlay, mesh, texture, or streamed-GPU owner is released.
         self.gpu_renderer.drainForExternalTeardown();
 
+        if (self.neural_target_frames) |*owner| owner.deinit();
         if (self.neural_capture) |*owner| owner.deinit();
         if (self.neural_inputs) |*owner| owner.deinit();
         if (self.neural_rendering) |*owner| owner.deinit(&self.gpu_renderer);
@@ -2335,11 +2344,19 @@ const App = struct {
     fn configureNeuralRendering(self: *App, environ_map: anytype) !void {
         const model_path = environ_map.get("INCINERATOR_NR_MODEL");
         const capture_root = environ_map.get("INCINERATOR_NR_CAPTURE_ROOT");
+        const target_frame_root = environ_map.get("INCINERATOR_NR_TARGET_FRAME_ROOT");
         const lab_requested = if (environ_map.get("INCINERATOR_NR_LAB")) |value|
             std.mem.eql(u8, value, "1") or std.ascii.eqlIgnoreCase(value, "true")
         else
             false;
-        if (model_path == null and capture_root == null and !lab_requested and
+        if (target_frame_root != null) {
+            if (!build_options.validation_mode) return error.NeuralTargetFrameValidationOnly;
+            if (capture_root == null) return error.NeuralTargetFrameRequiresCapture;
+            self.neural_evaluation_fixture_enabled = false;
+            self.neural_target_fixture_enabled = true;
+        }
+        if (model_path == null and capture_root == null and target_frame_root == null and
+            !lab_requested and
             !self.neural_evaluation_fixture_enabled) return;
         if (model_path) |path| if (!std.fs.path.isAbsolute(path)) {
             return error.NeuralModelPathMustBeAbsolute;
@@ -2355,13 +2372,21 @@ const App = struct {
         }
         errdefer if (neural) |*owner| owner.deinit(&self.gpu_renderer);
         var neural_inputs = try neural_input_host.Owner.init(
+            self.io,
             std.heap.page_allocator,
             &self.gpu_renderer,
         );
         errdefer neural_inputs.deinit();
         var capture: ?neural_capture_host.Owner = null;
         var capture_camera_program: ?neural_capture_camera.Program =
-            if (self.neural_evaluation_fixture_enabled) .orbit_wide else null;
+            if (self.neural_evaluation_fixture_enabled or self.neural_target_fixture_enabled)
+                .orbit_wide
+            else
+                null;
+        var capture_start: u64 = 0;
+        var capture_stride: u64 = 1;
+        var capture_count: u64 = 0;
+        var capture_sequence: []const u8 = "";
         if (capture_root) |root| {
             const count_text = environ_map.get("INCINERATOR_NR_CAPTURE_FRAMES") orelse
                 return error.NeuralCaptureFrameCountRequired;
@@ -2374,26 +2399,48 @@ const App = struct {
             const camera_path = environ_map.get("INCINERATOR_NR_CAMERA_PATH") orelse
                 return error.NeuralCaptureCameraPathRequired;
             capture_camera_program = try neural_capture_camera.parse(camera_path);
+            capture_start = std.fmt.parseUnsigned(u64, start_text, 10) catch
+                return error.InvalidNeuralCaptureStartFrame;
+            capture_stride = std.fmt.parseUnsigned(u64, stride_text, 10) catch
+                return error.InvalidNeuralCaptureStride;
+            capture_count = std.fmt.parseUnsigned(u64, count_text, 10) catch
+                return error.InvalidNeuralCaptureFrameCount;
+            capture_sequence = sequence;
             capture = try neural_capture_host.Owner.init(self.io, std.heap.page_allocator, &self.gpu_renderer, .{
                 .root = root,
-                .start_frame = std.fmt.parseUnsigned(u64, start_text, 10) catch
-                    return error.InvalidNeuralCaptureStartFrame,
-                .frame_stride = std.fmt.parseUnsigned(u64, stride_text, 10) catch
-                    return error.InvalidNeuralCaptureStride,
-                .frame_count = std.fmt.parseUnsigned(u64, count_text, 10) catch
-                    return error.InvalidNeuralCaptureFrameCount,
+                .start_frame = capture_start,
+                .frame_stride = capture_stride,
+                .frame_count = capture_count,
                 .cohort = try neural_capture_host.parseCohort(cohort_text),
                 .sequence = sequence,
                 .camera_path = neural_capture_camera.name(capture_camera_program.?),
-                .content_digest = if (self.neural_evaluation_fixture_enabled)
+                .content_digest = if (self.neural_target_fixture_enabled)
+                    neural_target_fixture.contentDigest()
+                else if (self.neural_evaluation_fixture_enabled)
                     neural_evaluation_fixture.contentDigest()
                 else
                     try self.district_streaming.contentDigest(),
             });
         }
+        errdefer if (capture) |*owner| owner.deinit();
+        var target_frames: ?neural_target_frame.Owner = null;
+        if (target_frame_root) |root| {
+            target_frames = try neural_target_frame.Owner.init(self.io, std.heap.page_allocator, .{
+                .root = root,
+                .capture_root = capture_root.?,
+                .start_frame = capture_start,
+                .frame_stride = capture_stride,
+                .frame_count = capture_count,
+                .sequence = capture_sequence,
+                .camera_path = neural_capture_camera.name(capture_camera_program.?),
+                .content_digest = neural_target_fixture.contentDigest(),
+                .scene = neural_target_fixture.scene,
+            });
+        }
         self.neural_rendering = neural;
         self.neural_inputs = neural_inputs;
         self.neural_capture = capture;
+        self.neural_target_frames = target_frames;
         self.neural_capture_camera_program = capture_camera_program;
         if (self.neural_rendering) |*owner| {
             const diagnostics = owner.diagnostics();
@@ -2414,6 +2461,10 @@ const App = struct {
             std.debug.print(
                 "NR0_INPUTS schema={s} capture={s}\n",
                 .{ engine.neural_rendering.schema_name, capture_root orelse "none" },
+            );
+            if (target_frame_root) |root| std.debug.print(
+                "NR4_TARGET_EXPORT schema={s} root={s}\n",
+                .{ neural_target_contract.schema_name, root },
             );
         }
     }
@@ -6577,7 +6628,26 @@ const App = struct {
         if (self.neural_capture) |*capture| {
             if (capture.wantsFrame(self.frame_timer.total_frames)) {
                 const inputs = &self.neural_inputs.?;
-                try capture.record(&self.gpu_renderer, inputs);
+                try capture.record(inputs);
+            }
+        }
+        if (self.neural_target_frames) |*target_frames| {
+            if (target_frames.wantsFrame(self.frame_timer.total_frames)) {
+                const forward = self.game_camera.getForward();
+                const up = camera.Camera.getUp();
+                const target_state = neural_target_fixture.sequenceState(
+                    self.frame_timer.total_frames,
+                );
+                try target_frames.record(&self.neural_inputs.?, .{
+                    .position = .{
+                        self.game_camera.position[0],
+                        self.game_camera.position[1],
+                        self.game_camera.position[2],
+                    },
+                    .forward = .{ forward[0], forward[1], forward[2] },
+                    .up = .{ up[0], up[1], up[2] },
+                    .vertical_fov_radians = self.game_camera.fov,
+                }, target_state.scene, target_state.event);
             }
         }
         if (self.neural_rendering) |*neural| {
@@ -7477,6 +7547,10 @@ const App = struct {
         model: zm.Mat,
         view_projection: zm.Mat,
     ) !void {
+        // NR4 is an explicitly isolated validation capture. Its fixture is
+        // submitted below with adapter-local target provenance; ordinary
+        // sandbox draws must not leak into only one side of the paired frame.
+        if (self.neural_target_fixture_enabled) return;
         self.gpu_renderer.drawMeshWithMaterial(
             gpu_mesh,
             diffuse_texture,
@@ -7529,6 +7603,54 @@ const App = struct {
                 zm.mul(zm.mul(scale, rotation), translation),
                 view_projection,
             );
+        }
+        return @intCast(plans.len);
+    }
+
+    fn drawNeuralTargetFixture(self: *App, view_projection: zm.Mat) !u64 {
+        if (!self.neural_target_fixture_enabled) return 0;
+        const plans = neural_target_fixture.plans(self.frame_timer.total_frames);
+        for (plans) |plan| {
+            const gpu_mesh: *const mesh.Mesh = switch (plan.mesh) {
+                .cube => &self.block_mesh,
+                .wheel => &self.visuals.vehicle_wheel_mesh,
+                .capsule => &self.visuals.character_mesh,
+            };
+            const source = plan.target_source;
+            const scale = zm.scaling(
+                source.transform.scale[0],
+                source.transform.scale[1],
+                source.transform.scale[2],
+            );
+            const rotation = zm.mul(
+                zm.mul(
+                    zm.rotationX(source.transform.rotation_xyz[0]),
+                    zm.rotationY(source.transform.rotation_xyz[1]),
+                ),
+                zm.rotationZ(source.transform.rotation_xyz[2]),
+            );
+            const translation = zm.translation(
+                source.transform.translation[0],
+                source.transform.translation[1],
+                source.transform.translation[2],
+            );
+            const model = zm.mul(zm.mul(scale, rotation), translation);
+            self.gpu_renderer.drawMeshWithMaterial(
+                gpu_mesh,
+                null,
+                plan.base_color,
+                model,
+                view_projection,
+            );
+            if (self.neural_inputs) |*inputs| try inputs.record(.{
+                .identity = plan.identity,
+                .mesh = gpu_mesh,
+                .diffuse_texture = null,
+                .base_color = plan.base_color,
+                .model = model,
+                .view_projection = view_projection,
+                .target_source = source,
+            });
         }
         return @intCast(plans.len);
     }
@@ -7958,7 +8080,14 @@ const App = struct {
         }
         var neural_history_reset: engine.neural_rendering.ResetReason = .none;
         if (self.neural_capture_camera_program) |program| {
-            if (self.neural_evaluation_fixture_enabled) {
+            if (self.neural_target_fixture_enabled) {
+                neural_history_reset = neural_capture_camera.apply(
+                    program,
+                    &self.game_camera,
+                    neural_target_fixture.center,
+                    self.frame_timer.total_frames,
+                );
+            } else if (self.neural_evaluation_fixture_enabled) {
                 neural_history_reset = neural_capture_camera.apply(
                     program,
                     &self.game_camera,
@@ -7978,13 +8107,18 @@ const App = struct {
         // Get view-projection matrix from camera
         const view_proj = self.game_camera.getViewProjectionMatrix(aspect_ratio);
         if (self.neural_inputs) |*inputs| {
-            const target_extent = self.gpu_renderer.getProductSceneExtent();
             try inputs.beginFrame(.{
                 .authority_tick = self.simulation.inspection().tickIndex(),
                 .presentation_frame = self.frame_timer.total_frames,
                 .interpolation_alpha = alpha,
-                .target_width = target_extent.width,
-                .target_height = target_extent.height,
+                .target_width = engine.neural_rendering.target_width,
+                .target_height = engine.neural_rendering.target_height,
+                .global_controls = if (self.neural_target_fixture_enabled)
+                    neural_target_fixture.sequenceState(
+                        self.frame_timer.total_frames,
+                    ).global_controls
+                else
+                    .{},
                 .history_reset = if (inputs.diagnostics().rendered_frames == 0)
                     .first_frame
                 else
@@ -8013,6 +8147,7 @@ const App = struct {
         );
         scene_draw_calls +|= 1;
         scene_draw_calls +|= try self.drawNeuralEvaluationFixture(view_proj);
+        scene_draw_calls +|= try self.drawNeuralTargetFixture(view_proj);
         const draws_block = if (build_options.validation_mode or builtin.is_test)
             self.validation.profile == .s1_smoke
         else
@@ -9319,6 +9454,7 @@ const App = struct {
                 .draw_count = diagnostics.draw_count,
                 .history_valid_draws = diagnostics.history_valid_draws,
                 .history_reset_draws = diagnostics.history_reset_draws,
+                .global_controls = diagnostics.global_controls,
                 .compact_id_collisions = diagnostics.compact_id_collisions,
                 .rendered_frames = diagnostics.rendered_frames,
                 .render_failures = diagnostics.render_failures,
@@ -10296,23 +10432,45 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                 inputs.diagnostics()
             else
                 return error.NeuralEvaluationInputHostUnavailable;
-            std.debug.print(
-                "NR0_EVALUATION_SMOKE_RESULT frames={d} ticks={d} " ++
-                    "fixture_draws={d} neural_draws={d} history_valid={d} " ++
-                    "history_reset={d} fixture_fingerprint={s} " ++
-                    "virtual_render_hz={d} gpu_driver={s}\n",
-                .{
-                    summary.ready_frames,
-                    app.simulation.inspection().tickIndex() -| app.validation_tick_origin,
-                    neural_evaluation_fixture.draw_count,
-                    diagnostics.draw_count,
-                    diagnostics.history_valid_draws,
-                    diagnostics.history_reset_draws,
-                    neural_evaluation_fixture.source_fingerprint,
-                    config.virtual_render_hz,
-                    shader_assets.driver,
-                },
-            );
+            if (app.neural_target_fixture_enabled) {
+                const target_diagnostics = app.neural_target_frames.?.diagnostics();
+                std.debug.print(
+                    "NR4_TARGET_SMOKE_RESULT frames={d} ticks={d} " ++
+                        "fixture_draws={d} neural_draws={d} exported={d}/{d} " ++
+                        "export_failures={d} fixture_fingerprint={s} " ++
+                        "virtual_render_hz={d} gpu_driver={s}\n",
+                    .{
+                        summary.ready_frames,
+                        app.simulation.inspection().tickIndex() -| app.validation_tick_origin,
+                        neural_target_fixture.draw_count,
+                        diagnostics.draw_count,
+                        target_diagnostics.recorded_frames,
+                        target_diagnostics.requested_frames,
+                        target_diagnostics.failures,
+                        neural_target_fixture.source_fingerprint,
+                        config.virtual_render_hz,
+                        shader_assets.driver,
+                    },
+                );
+            } else {
+                std.debug.print(
+                    "NR0_EVALUATION_SMOKE_RESULT frames={d} ticks={d} " ++
+                        "fixture_draws={d} neural_draws={d} history_valid={d} " ++
+                        "history_reset={d} fixture_fingerprint={s} " ++
+                        "virtual_render_hz={d} gpu_driver={s}\n",
+                    .{
+                        summary.ready_frames,
+                        app.simulation.inspection().tickIndex() -| app.validation_tick_origin,
+                        neural_evaluation_fixture.draw_count,
+                        diagnostics.draw_count,
+                        diagnostics.history_valid_draws,
+                        diagnostics.history_reset_draws,
+                        neural_evaluation_fixture.source_fingerprint,
+                        config.virtual_render_hz,
+                        shader_assets.driver,
+                    },
+                );
+            }
             nr0_evaluation_smoke_succeeded = true;
         },
         .s4_diagnostics_smoke => {

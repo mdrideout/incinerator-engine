@@ -1,6 +1,7 @@
 # NR0 Neural Rendering Feasibility Validation Ledger
 
-**Status:** NR0-A through NR0-D accepted; NR0-E through NR0-G open
+**Status:** NR0-A through NR0-D, NR-0004, and NR5-A/B accepted; NR5-C onward
+and NR0-E through NR0-G open
 
 **Date:** 2026-08-08
 
@@ -16,6 +17,10 @@ directory scaffolding are not implementation acceptance.
 | Paired capture | Atomic manifest, fingerprints, alignment, split integrity, and provenance | **NR0-B passed:** schema-2 capture and two-launch deterministic comparison passed; train/validation/test ownership is explicit |
 | Spatial baseline | Overfit proof followed by held-out comparison to non-neural baselines | **NR0-C passed:** 17-plane controlled fit, disjoint camera cohorts, held-out nearest/bilinear/bicubic comparison, human review, FP16 export, and standalone benchmark passed |
 | Failure envelope | Thin/small geometry, boundaries, motion, disocclusion, cuts, resize, unusual views, exhaustive visual evidence | **NR0-D passed:** 478-frame six-path fixture, every visible instance, reset-aware temporal analysis, and human reset/failure review retained; NR-0002 judged unsuitable for promotion |
+| High-fidelity truth | Same-frame rights-clean target, identity/depth alignment, exact environment and reproducibility | **NR4-C accepted:** native `160×90 → 400×225` still and sequence regenerated twice with foreign extents rejected; product direction accepted; four frame-global controls resolve the only observed ambiguity for 16 bytes/frame and no new raster target |
+| Paired title corpus | Atomic complete state, whole-sequence splits, sealed test, per-artifact provenance/digests, no leakage, compact review | **NR4-E accepted for NR5-A/B:** the NR4-D 6-sequence/108-pair corpus passed product review and factual coverage audit; explicit gaps prevent title-wide, temporal, detail, or promotion claims; test pixels remain sealed |
+| From-scratch framework | Random initializer, tensor-origin audit, immutable resume ancestry, evaluation, export agreement, and cold dependency separation | **NR5-A passed:** clean-room initialize/train/resume/evaluate/export proof passed all seven checks; parent digest preserved; TorchScript agreement exact; cold contracts require no training packages |
+| Controlled title overfit | Direct linear-HDR learning, deterministic resize comparison, complete visual review, structural/identity boundaries, exact export, sealed test | **NR5-B accepted:** all automated checks and 18-frame visual audit passed; MAE 0.009956 vs 0.447403 bilinear; localized near-edge/emissive ringing carried to NR5-C; test remains sealed |
 | Promotion | Source-preserving transactional copy, digest/schema verification, exact selection | Not started |
 | Runtime | Installed Apple Silicon inference with GPU-owned textures and visible model identity | Preliminary explicit-path Core ML proof passed; blocking CPU staging and no promoted bundle prevent acceptance |
 | Fallback | Missing/rejected model, resize, cut, device/inference failure, and recovery | Missing-model conventional fallback passed; remaining transitions open |
@@ -23,6 +28,262 @@ directory scaffolding are not implementation acceptance.
 | Performance | End-to-end latency, GPU time, frame pacing, and memory on named hardware | NR0-C standalone Core ML and NR0-D offline PyTorch/MPS distributions recorded; installed GPU/frame/residency profile remains NR0-F |
 | Diagnostics | Debug views plus incident evidence for model/history/fallback state | Lab exposes six channels, schema/shader, history, identity collision, model, capture, failure, and timing state; incident integration remains open |
 | Human acceptance | Motion, identity, detail, disocclusion, effects, UI, fallback, and recovery | Not started |
+
+## NR-0003 quality-first video baseline
+
+NR-0003 tested the official LTX-Video 2B 0.9.8 distilled checkpoint against an
+accepted Incinerator NR0-D appearance sequence. It is a numbered model
+experiment, not an accepted NR0 engine phase and not promotion evidence.
+
+- Both final schema-2 candidate evidence inspectors passed, including immutable
+  config/prompt snapshots, exact upstream/model/license identity, generated
+  video and comparison hashes, environment, MPS timing, and process memory.
+- The structure schedule generated 9 frames at 512×288 in 5.966 seconds
+  (1.509 effective FPS) with 7,918,895,104 bytes peak process RSS.
+- The richness schedule generated the same cohort in 6.079 seconds
+  (1.480 effective FPS) with 7,918,878,720 bytes peak process RSS.
+- Human comparison accepted the requested Mac proof-rate feasibility but
+  rejected stock RGB conditioning: the structure schedule mostly smooths the
+  primitive render, while the richness schedule substitutes unrelated
+  buildings and vehicles for authored geometry.
+- An upstream multiscale latent-shape failure is retained with terminal failed
+  state; exploratory mutable-config candidates are explicitly superseded.
+
+The canonical external evidence root is
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr-0003-ltxv-2b-20260808-a`.
+Start with `candidate-structure-license-final/candidate.json` and
+`candidate-rich-license-final/candidate.json`. The experiment conclusion is
+recorded in
+[`NR-0003`](../../experiments/neural-rendering/nr-0003-ltxv-2b-distilled/README.md).
+
+## NR4-A exact high-fidelity target still
+
+NR4-A implements the first target-only portion of NR-0004. It is data-factory
+evidence, not a trained model and not promotion evidence.
+
+- Blender 4.5.12 LTS Apple Silicon and its archive SHA-256 are pinned. Cycles
+  uses Metal, 256 samples, seed 73, fixed sampling, scene-linear float32
+  OpenEXR, AgX display output, and no learned denoising.
+- A rights-clean procedural urban corner contributes exactly 26 stable draws:
+  road/sidewalk/storefront, thin geometry, material classes, a four-wheel
+  vehicle, character, NPC, carryable, and crate.
+- The validation host exports one adapter-local frame package from the same
+  immutable draw plans and camera used by six 400×225 engine input channels.
+  The offline target is 1600×900 and includes beauty, object identity, linear
+  depth, normals, provenance, and synchronized visual evidence.
+- Two fresh runs completed with zero capture/export failures and reproduced
+  the engine frame identity, camera, effects, six channel hashes, conventional
+  target, identities, and normalized frame package. Target identity and depth
+  are byte-identical.
+- Both alignment reports measured 445,350 exact identity pixels over a 456,695
+  pixel fixture union: 0.975158 exact identity-over-union with no missing
+  target identity visible in the cheap source.
+- Cycles beauty output varied by at most one 8-bit display value. The float32
+  normal pass varied by at most 4.768e-7 absolute error (1.148e-8 RMSE), while
+  geometry identity/depth remained exact. The comparison records this observed
+  Metal floating-point behavior rather than inventing an acceptance threshold.
+- The source and targets were visually inspected for both executions. The
+  scene cohort and projection align; remaining magenta/cyan pixels are
+  measured raster/geometry edge differences.
+- The product owner explicitly accepted the upper-right target as a visual
+  direction worth extending into moving sequences, closing NR4-A.
+
+Canonical external evidence:
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-a-technical-20260808-v2`.
+Start with `acceptance.json`, `reproducibility.json`, and
+`run-a/evaluation/nr4-a-review.png`. The experiment definition is
+[`NR-0004`](../../experiments/neural-rendering/nr-0004-high-fidelity-target-corpus/README.md).
+
+## NR4-B material-rich moving target
+
+NR4-B advances only the adapter-local target package to v2; the engine-owned
+input ABI remains v1 pending the NR4-C ambiguity audit.
+
+- Eighteen exact frames cover six three-sample, single-cause segments: camera
+  motion, rigid vehicle motion, near-edge camera motion, wheel roll/front
+  steering, NPC occlusion/disocclusion, and lighting/emissive response.
+- The causal audit verifies stable draw identity/membership in every frame and
+  rejects any transform, camera, scene, or material-response change outside
+  the declared owner for that segment.
+- Every frame includes source capture, immutable frame package, 1600×900
+  Cycles target, object identity, depth, normal, alignment, and synchronized
+  overview/detail evidence. No cheap-visible identity is missing in the target.
+- Two fresh engine launches and 36 Cycles renders reproduced all engine
+  captures, normalized frame packages, target identity, and target depth
+  exactly. Per-frame identity-over-union spans 0.974974–0.987851.
+- Repeated target displays differ by at most one 8-bit value. Normal evidence
+  differs by at most 5.960e-7 absolute and 1.608e-8 RMSE. The recorded source
+  causes and human sheets show substantially larger authored changes, including
+  the deliberately subtle wheel-articulation response.
+- All three cheap conventional targets in the lighting-effect segment are
+  byte-identical while the exact Cycles target responds to the declared light
+  and emissive changes. This observed many-to-one input mapping is retained as
+  the first concrete NR4-C ambiguity; no replacement channel is assumed yet.
+- The first and second 18-frame renders report 132.762 and 133.374 seconds of
+  total Cycles time. Both inspectors and the cross-run comparator pass.
+- Agent visual review accepts the technical correspondence and intended target
+  variation. On 2026-08-08 the product owner reviewed and explicitly accepted
+  the synchronized moving sequence, closing NR4-B and authorizing NR4-C.
+
+Canonical external evidence:
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-b-technical-20260808-a`.
+Start with `acceptance.json`, `reproducibility.json`, and
+`run-a/evaluation/reports/nr4-b-sequence-review.png`.
+
+## NR4-C native working-resolution validation
+
+NR4-C implements a `160×90 → 400×225` 16:9 proof cohort. Prior target pixels
+and acceptance do not satisfy this gate. The current implementation establishes:
+
+- exact 2.5× top-left/pixel-center mapping across every producer and consumer;
+- correct extents, byte counts, debug decodes, border coverage, thin features,
+  identity edges, and motion vectors;
+- a direct native `400×225` Cycles still with fresh human target/alignment
+  acceptance and a regenerated native 18-frame causal sequence;
+- rejection of target pixels, metrics, references, and previews from every
+  foreign extent;
+- nearest, bilinear, and bicubic baselines at the exact new extents;
+- native `160×90`/`400×225` comparison views with UI zoom and resize baselines
+  explicitly excluded from training material;
+- two-launch logical and declared-byte reproducibility for the accepted causal
+  sequence; and
+- measured capture size, Cycles time, input-raster time where observable,
+  dataset decode time, process/GPU memory, and evidence volume on the M2 Max.
+
+The technical evidence roots are:
+
+```text
+~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-c-native-still-20260808-b
+~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-c-native-sequence-20260808-b
+```
+
+Both two-run gates pass. All corresponding engine inputs, normalized frame
+packages, target identity, and target depth reproduce exactly. Sequence display
+variation is at most 1/255 and normal variation is at most `9.537e-7` absolute
+with `1.767e-8` RMSE. The 18 direct targets render in 14.862 seconds in Run A;
+peak Blender process RSS is 540,540,928 bytes. GPU raster timing and Blender
+GPU-memory residency are unavailable and explicitly recorded as such. The
+capture records CPU command encoding instead: 2.725 ms total and 0.229 ms
+maximum over the 18 selected frames. Display-pair decode averages 6.454 ms.
+
+Target-extent structural controls still require individual ablation evidence.
+Every quality and performance claim is scoped to native `160×90 → 400×225`
+evidence; other output extents are deferred. The product owner accepted the
+native still/moving target and alignment direction on 2026-08-08.
+
+The native ambiguity audit also passes as an executed diagnostic at
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-c-native-ambiguity-20260808-b`.
+It found one semantic many-to-one segment: lighting/material target state
+changed while every non-temporal input remained byte-identical. Motion B
+changed only because history validity reset, so it was a spurious correlate
+rather than a lighting owner.
+
+The closing schema-4 evidence is retained at:
+
+```text
+~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-c-global-controls-still-20260808-a
+~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-c-global-controls-sequence-20260808-a
+```
+
+Input schema v3 adds four presentation-owned frame-global float32 controls:
+sun, world, local-light, and emissive strength. The ablation resolves the
+lighting segment in both independent runs. Its measured contract cost is 16
+bytes per frame, zero extra raster targets, and zero extra raster pixels.
+Engine capture, normalized frame packages, target identity, and target depth
+reproduce exactly; display variation is at most 1/255 and normal variation at
+most `6.557e-7` absolute / `1.774e-8` RMSE. A spatial lighting control remains
+conditional on future controlled-fit evidence.
+
+## NR4-D paired-corpus validation
+
+Canonical evidence is retained at
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-d-corpus-20260808-b`.
+Start with `acceptance.json`, `corpus/corpus.json`, and
+`corpus/review/nr4-d-corpus-review.png`.
+
+- Six complete native sequences contain 108 exact pairs across overfit, train,
+  validation, sealed test, and two stress camera programs.
+- Every source run passes target-package, target-render, identity/depth/normal,
+  rights, alignment, and artifact inspection before assembly; the copied
+  corpus then passes the same sequence inspection from its own root.
+- Frame identity joins capture, six raw channels, global controls, target
+  package, scene-linear EXR, identity, depth, normal, and target run.
+- All training and auxiliary artifacts carry exact size and SHA-256 records.
+  Review PNG/PPM derivatives are present but explicitly training-ineligible.
+- The review report excludes the sealed test split by executable contract. Its
+  15 panels cover overfit, train, validation, and stress only; test receives
+  machine integrity/alignment inspection without human pixel review.
+- Whole sequences own one split. Cross-sequence conditioning and pair digest
+  reuse fail closed; intentional repeated conditioning inside one sequence is
+  allowed because it does not leak across a split.
+- Focused negative contracts reject artifact corruption/removal and
+  cross-sequence leakage. Existing strict inspectors reject wrong schemas,
+  stale packages/targets, provenance drift, identity mismatch, missing target
+  identities, foreign extents, and non-rights-clean targets.
+- Agent review of all 18 selected source/target panels passes. The targets
+  preserve authored structure while retaining the accepted richer material and
+  lighting direction across each split.
+
+The technical gate passes. Product-level coverage sufficiency and final corpus
+acceptance belong to NR4-E. No model was trained or promoted.
+
+## NR4-E coverage and corpus acceptance
+
+Canonical evidence is retained at
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-e-coverage-20260809-b`.
+Start with `acceptance.json`, `coverage.json`, and `coverage.md`.
+
+- The product owner accepted the compact NR4-D review sheet.
+- A read-only coverage consumer verified all 108 package manifests and every
+  non-test training artifact while opening no test input or target pixels.
+- The ledger records one procedural scene, 26 stable identities, six semantic
+  classes, nine materials, six isolated causal segments, six camera programs,
+  four lighting/material states, camera distances from 5.432 to 31.183 world
+  units, explicit reset evidence, clean rights, and all whole-sequence splits.
+- Known gaps explicitly include title-wide scene/asset diversity, deformation,
+  destruction, weather, atmosphere, responsive effects, particles, crowds,
+  and long temporal coverage.
+
+NR-0004 is accepted only for NR5-A framework validation and NR5-B controlled
+spatial overfit. The sealed test remains unopened; no model was trained or
+promoted by NR4-E.
+
+## NR5-A/B from-scratch framework and controlled overfit
+
+NR5-A clean-room evidence is retained at
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr5-a-clean-room-20260809-c`.
+It passed deterministic initialization, parent and resumed loss descent,
+immutable parent ancestry, tensor-origin audit, exact TorchScript agreement,
+and external-weight rejection contracts.
+
+The accepted NR5-B run is retained at
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr5-b-controlled-overfit-20260809-c`.
+Start with `conclusion.json`, `run.json`, `evaluation/evaluation.json`,
+`checkpoints/checkpoint-audit.json`, and all 18 files under
+`evaluation/samples/`; `evaluation/nr5-b-overfit-overview.png` is the complete
+single-sheet visual index.
+
+- A 448,175-parameter two-branch model trained only on the 18-frame overfit
+  sequence from the exact recorded random initializer. The run snapshots and
+  hashes the accepted NR4-E authorization, configuration, executing tools, and
+  evaluation/environment/export manifests.
+- Epoch 238 was retained by lowest overfit loss after 208.399 seconds of MPS
+  training. The checkpoint owns 36 audited tensors and one exact initializer
+  ancestor.
+- Model linear-HDR MAE is `0.009956`, diagnostic-display MAE `0.013717`,
+  semantic-boundary MAE `0.018672`, and instance-boundary MAE `0.036004`.
+  Corresponding best bilinear values are `0.447403`, `0.366620`, `0.276200`,
+  and `0.325507`.
+- The TorchScript candidate agrees exactly on the export fixture. Offline MPS
+  inference measured 7.151 ms median and 13.588 ms p95; this is not an
+  installed runtime measurement.
+- Agent inspection of every frame accepts authored-state fidelity and declared
+  camera/object/wheel/occlusion/lighting response. Localized smoothing and
+  chromatic ringing remain in severe near-edge/high-emissive views and become
+  explicit NR5-C ablation work.
+
+NR5-B authorizes held-out NR5-C training only. Test pixels remain unopened;
+the candidate is unpromoted and not a runtime bundle.
 
 ## Acceptance conclusion
 
@@ -34,6 +295,13 @@ for promotion because boundary sharpness and valid-history temporal residual
 are worse than bilinear and visible thin/fine-feature failures remain. NR-0001
 remains the preliminary local-loop proof. Both generated models remain
 external and must not be copied into `models/neural-rendering/`.
+
+NR-0003 additionally proves that the selected Mac can run a materially larger
+pretrained video prior at the requested proof rate. It does not make stock LTX
+a renderer or a checkpoint ancestor: the observed fidelity/structure tradeoff
+rejects that conditioning path. ADR-026 requires exactly aligned high-fidelity
+targets plus a repository-defined title renderer trained from random
+initialization before NR0-E.
 
 Executed NR0-D evidence on 2026-08-08:
 

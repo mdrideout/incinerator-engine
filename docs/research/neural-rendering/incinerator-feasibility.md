@@ -2,7 +2,7 @@
 
 **Status:** Proposed technical baseline under accepted ADR-025
 
-**Reviewed:** 2026-08-05
+**Reviewed:** 2026-08-08
 
 ## Intended system
 
@@ -22,7 +22,7 @@ authoritative simulation
   -> display
 ```
 
-## Recommended first model
+## Preliminary model baseline
 
 Start with a compact spatial convolutional encoder-decoder trained from random
 initialization on perfectly paired Incinerator frames:
@@ -33,13 +33,36 @@ initialization on perfectly paired Incinerator frames:
 - predict a high-resolution RGB residual over a cheap deterministic base; and
 - run one deterministic feed-forward inference per presented frame.
 
-Do not begin with diffusion, GAN-only training, a full-resolution transformer,
-prompt conditioning, a learned world model, or gameplay input.
+This was the correct first systems baseline and produced NR-0002. It was not a
+quality ceiling. NR0-D subsequently demonstrated temporal, edge, and
+fine-feature failures that another unconditioned compact reconstruction pass
+would not answer by itself.
 
 Initial losses should combine robust color error, spatial gradients or a
-Laplacian term, structural similarity, and a perceptual term. Add adversarial
-training only if measured results remain materially over-smoothed. Add temporal
-loss only after valid motion/depth reprojection and disocclusion masks exist.
+Laplacian term, structural similarity, frequency reconstruction, and explicit
+semantic/instance boundary terms. No pretrained perceptual network participates
+in training. Add a discriminator or learned detail objective from random
+initialization only if measured results remain materially over-smoothed. Add
+temporal loss after valid motion/depth reprojection and disocclusion masks
+exist.
+
+## Quality-first video-model baseline
+
+NR-0003 next tested official LTX-Video 2B distilled at 512×288. It met the
+target Mac proof rate at roughly 1.5 FPS and demonstrated a strong learned
+material/lighting prior. Stock appearance-RGB video-to-video could not both
+retain authored geometry and introduce high fidelity. That is a conditioning
+failure, not a reason to return to increasingly elaborate small upscalers.
+
+ADR-026 now fixes the recommended direction: implement a title-specific causal
+neural renderer and train every learned component from random initialization.
+The low-fidelity Incinerator render is the reference and a genuinely
+high-fidelity render of the exact same frames is the target. Style is compiled
+into title data, weights, and explicit artist controls rather than prompt text.
+Depth, normals, motion, semantic identity, and instance identity remain the
+durable engine contract and must not be silently discarded merely because the
+stock research model accepted RGB. The detailed model and training sequence is
+the [north star](../../design/title-neural-renderer-north-star.md).
 
 ## Input contract
 
@@ -59,11 +82,12 @@ smoke, fire, water, weather, or particles. A model can only reproduce a target
 difference when the input distinguishes the cause. If two different target
 frames have identical inputs, training asks the model to average or invent.
 
-Cheap appearance may be low resolution while depth, edges, IDs, or motion are
-higher resolution when measurement proves that a cheap structural pass reduces
-model cost. The current 1600×900 product has an exact 4× spatial baseline at
-400×225. A 320×180 input maps cleanly to 1280×720; 320×240 does not match the
-current 16:9 product.
+Cheap appearance may be low resolution while depth, edges, IDs, or motion use
+the `400×225` target extent when measurement proves that a structural pass
+reduces model cost. The working proof uses only native `160×90 → 400×225`
+material with an explicit 2.5× linear mapping. Historical artifacts at other
+extents remain audit records and are excluded from generation, training,
+comparison, preview, and acceptance. Other output resolutions are deferred.
 
 ## Paired data
 
@@ -114,4 +138,3 @@ History must not feed authority or become durable game state.
   under the eventual engine/game licensing arrangement.
 
 NR0 exists to answer these with evidence before a broader renderer is designed.
-

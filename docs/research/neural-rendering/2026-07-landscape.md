@@ -2,7 +2,12 @@
 
 **Status:** Research snapshot
 
-**Reviewed:** 2026-08-05
+**Reviewed:** 2026-08-08
+
+**Subsequent product decision:**
+[ADR-026](../../adr/026-from-scratch-title-neural-renderer.md) retains external
+models as architectural comparisons only. Promotion-eligible learned
+components are trained from random initialization on title-owned exact pairs.
 
 ## Question
 
@@ -76,17 +81,22 @@ NR0 measurement decision.
 
 ## Emerging versus unsuitable starting points
 
-A causal or diffusion video generator may eventually improve realism, but it is
-not the first Incinerator baseline. General video models optimize for broad
-generation, prompts, and long synthesis rather than deterministic,
-frame-synchronous rendering under a tight interactive budget. MiniMax H3-class
-capability may be useful as an offline teacher or target-data tool, but not as
-the initial shipped renderer.
+A causal or diffusion video generator may eventually improve realism, but a
+general pretrained generator is not the Incinerator product model. General
+video models optimize for broad generation, prompts, and long synthesis rather
+than deterministic, frame-synchronous rendering under a tight interactive
+budget. MiniMax H3-class capability remains useful comparative evidence, but
+ADR-026 excludes external learned teachers, pseudo-targets, checkpoint
+initialization, and runtime weights from the product lineage.
 
-The first baseline should be a compact, game-specific, feed-forward
-convolutional encoder-decoder trained on perfectly paired captures. Temporal
-state should be introduced only after a spatial baseline proves the data,
-schema, target renderer, and promotion path.
+The first compact feed-forward baseline and its temporal failure evaluation are
+now complete as NR-0002/NR0-D. The product lineage continues through NR-0004
+high-fidelity exact targets; NR4-A's static proof and NR4-B's moving proof are
+accepted as historical adapter/correspondence evidence. NR4-C now begins by
+regenerating and freshly accepting a native `160×90 → 400×225` cohort before
+corpus work. A repository-defined causal title
+renderer is then trained from random initialization under the
+[north star](../../design/title-neural-renderer-north-star.md).
 
 ## Conclusions retained by Incinerator
 
@@ -99,4 +109,3 @@ schema, target renderer, and promotion path.
    do not infer them from research hardware.
 6. Preserve a conventional low-fidelity fallback and keep UI out of the neural
    image until after inference.
-

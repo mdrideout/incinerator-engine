@@ -51,11 +51,27 @@ therefore records those as capability gaps rather than pretending flat-color
 primitives satisfy the original material/effect requirements. Exposure is
 recorded metadata but is not an NR-0002 input plane.
 
+This fixture is consequently not the NR-0004 high-fidelity target scene.
+ADR-026's [north star](title-neural-renderer-north-star.md) requires a separate
+materially rich, exactly paired title slice before from-scratch product-model
+training. NR0-D remains a reusable source of structural, identity, temporal,
+cut, resize, and failure scenario/metric definitions. Later candidates
+recapture those scenarios at their native declared extents; earlier frames and
+results do not cross into the active cohort.
+
 ## Capture cohorts
 
-Begin with exact 1600×900 target output and 400×225 cheap appearance input.
-Higher-resolution structural buffers are permitted only when their measured
-render/memory cost is recorded.
+NR0-A through NR4-B historically used different extents. Those immutable
+artifacts remain audit history only and are excluded from the active cohort.
+
+NR4-C and the first NR5 proof instead use `160×90` cheap appearance/default
+controls and `400×225` high-fidelity targets for fast local iteration. The
+2.5× linear mapping is part of the schema and must be tested explicitly.
+Structural buffers may remain at `400×225` only when their measured render,
+storage, and model benefit justifies the exception. The still, moving sequence,
+training corpus, model output, reports, and human acceptance are all generated
+natively at these declared extents. No cross-resolution reference or preview
+participates. Other output resolutions are deferred.
 
 Keep distinct cohorts for:
 

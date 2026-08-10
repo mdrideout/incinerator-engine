@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create a dependency-free PPM contact sheet for one NR0-B captured frame."""
+"""Create a dependency-free UI-only sheet for one native input capture."""
 
 from __future__ import annotations
 
@@ -82,16 +82,12 @@ def main() -> None:
         raise ValueError("requested frame is absent")
     frame = json.loads((capture / summary["frame_manifest"]).read_text())
     cards: list[tuple[bytes, int, int]] = []
-    target_width, target_height, target_pixels = read_ppm(
-        capture / frame["target"]["debug_path"]
-    )
-    cards.append((resize_nearest(target_width, target_height, target_pixels, 800, 450), 800, 450))
     for channel in frame["channels"]:
         width, height, pixels = read_ppm(capture / channel["debug_path"])
         cards.append((resize_nearest(width, height, pixels, 400, 225), 400, 225))
-    canvas_width, canvas_height = 1200, 900
+    canvas_width, canvas_height = 1200, 450
     canvas = bytearray((28, 30, 34) * (canvas_width * canvas_height))
-    positions = ((0, 0), (800, 0), (800, 225), (0, 450), (400, 450), (800, 450), (0, 675))
+    positions = ((0, 0), (400, 0), (800, 0), (0, 225), (400, 225), (800, 225))
     for (pixels, width, height), (left, top) in zip(cards, positions, strict=True):
         paste(canvas, canvas_width, pixels, width, height, left, top)
     output.write_bytes(f"P6\n{canvas_width} {canvas_height}\n255\n".encode() + canvas)
@@ -102,7 +98,6 @@ def main() -> None:
                 "schema": 1,
                 "frame_id": frame["frame_id"],
                 "layout": [
-                    "target",
                     "appearance",
                     "linear-depth",
                     "world-normal",
@@ -111,6 +106,9 @@ def main() -> None:
                     "instance",
                 ],
                 "positions": positions,
+                "display_only": True,
+                "source_extent": frame["input_size"],
+                "ui_zoom": "nearest 160x90 to 400x225; excluded from training material",
             },
             indent=2,
         )

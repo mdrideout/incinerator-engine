@@ -7,6 +7,7 @@
 const std = @import("std");
 const camera_module = @import("../camera.zig");
 const contract = @import("incinerator_engine").neural_rendering;
+const target_fixture = @import("neural_target_fixture.zig");
 
 pub const Program = enum {
     default_follow,
@@ -19,6 +20,12 @@ pub const Program = enum {
     camera_cut,
     top_down,
     resize_cycle,
+    nr4_sequence,
+    nr4_corpus_train,
+    nr4_corpus_validation,
+    nr4_corpus_test,
+    nr4_corpus_stress_near,
+    nr4_corpus_stress_high,
 };
 
 pub fn parse(value: []const u8) !Program {
@@ -32,6 +39,12 @@ pub fn parse(value: []const u8) !Program {
     if (std.mem.eql(u8, value, "camera-cut")) return .camera_cut;
     if (std.mem.eql(u8, value, "top-down")) return .top_down;
     if (std.mem.eql(u8, value, "resize-cycle")) return .resize_cycle;
+    if (std.mem.eql(u8, value, "nr4-sequence")) return .nr4_sequence;
+    if (std.mem.eql(u8, value, "nr4-corpus-train")) return .nr4_corpus_train;
+    if (std.mem.eql(u8, value, "nr4-corpus-validation")) return .nr4_corpus_validation;
+    if (std.mem.eql(u8, value, "nr4-corpus-test")) return .nr4_corpus_test;
+    if (std.mem.eql(u8, value, "nr4-corpus-stress-near")) return .nr4_corpus_stress_near;
+    if (std.mem.eql(u8, value, "nr4-corpus-stress-high")) return .nr4_corpus_stress_high;
     return error.InvalidNeuralCaptureCameraPath;
 }
 
@@ -47,6 +60,12 @@ pub fn name(program: Program) []const u8 {
         .camera_cut => "camera-cut",
         .top_down => "top-down",
         .resize_cycle => "resize-cycle",
+        .nr4_sequence => "nr4-sequence",
+        .nr4_corpus_train => "nr4-corpus-train",
+        .nr4_corpus_validation => "nr4-corpus-validation",
+        .nr4_corpus_test => "nr4-corpus-test",
+        .nr4_corpus_stress_near => "nr4-corpus-stress-near",
+        .nr4_corpus_stress_high => "nr4-corpus-stress-high",
     };
 }
 
@@ -77,6 +96,64 @@ pub fn apply(
     presentation_frame: u64,
 ) contract.ResetReason {
     if (program == .default_follow) return .none;
+
+    if (program == .nr4_sequence or isNr4CorpusProgram(program)) {
+        const state = target_fixture.sequenceState(presentation_frame);
+        const progress = state.event.progress;
+        game_camera.position = switch (state.event.segment) {
+            .camera_motion => .{
+                target[0] - 17.0 + 34.0 * progress,
+                target[1] + 6.5 + 2.0 * progress,
+                target[2] + 15.0,
+                1,
+            },
+            .near_edge => .{
+                target[0] - 15.0 + 8.0 * progress,
+                target[1] + 1.35,
+                target[2] - 1.4,
+                1,
+            },
+            else => .{
+                target[0] + 21.6,
+                target[1] + 10.0,
+                target[2] + 10.4,
+                1,
+            },
+        };
+        const look_target = switch (state.event.segment) {
+            .near_edge => [3]f32{ target[0] - 2.7, target[1] + 0.4, target[2] - 6.0 },
+            else => target,
+        };
+        switch (program) {
+            .nr4_sequence => {},
+            .nr4_corpus_train => {
+                game_camera.position[0] += 1.5;
+                game_camera.fov = 0.82;
+            },
+            .nr4_corpus_validation => {
+                game_camera.position[0] -= 1.5;
+                game_camera.position[2] += 1.0;
+                game_camera.fov = 0.86;
+            },
+            .nr4_corpus_test => {
+                game_camera.position[1] += 2.0;
+                game_camera.position[2] -= 1.0;
+                game_camera.fov = 0.90;
+            },
+            .nr4_corpus_stress_near => {
+                game_camera.position[0] += 3.0;
+                game_camera.position[2] += 2.0;
+                game_camera.fov = 1.0;
+            },
+            .nr4_corpus_stress_high => {
+                game_camera.position[1] += 5.0;
+                game_camera.fov = 0.95;
+            },
+            else => unreachable,
+        }
+        lookAt(game_camera, look_target);
+        return if (state.event.reset) .camera_cut else .none;
+    }
 
     const frame: f32 = @floatFromInt(presentation_frame);
     if (program == .camera_cut) {
@@ -132,6 +209,7 @@ pub fn apply(
         .elevated_sweep => frame * 0.0025 - 0.45,
         .fast_orbit => frame * 0.028,
         .resize_cycle => frame * 0.006 + 0.25,
+        .nr4_sequence, .nr4_corpus_train, .nr4_corpus_validation, .nr4_corpus_test, .nr4_corpus_stress_near, .nr4_corpus_stress_high => unreachable,
         .default_follow => unreachable,
         .near_pass, .disocclusion_sweep, .camera_cut, .top_down => unreachable,
     };
@@ -141,6 +219,7 @@ pub fn apply(
         .elevated_sweep => 18.0,
         .fast_orbit => 18.0,
         .resize_cycle => 20.0,
+        .nr4_sequence, .nr4_corpus_train, .nr4_corpus_validation, .nr4_corpus_test, .nr4_corpus_stress_near, .nr4_corpus_stress_high => unreachable,
         .default_follow => unreachable,
         .near_pass, .disocclusion_sweep, .camera_cut, .top_down => unreachable,
     };
@@ -150,6 +229,7 @@ pub fn apply(
         .elevated_sweep => 18.0 + @sin(phase * 0.5) * 4.0,
         .fast_orbit => 6.0,
         .resize_cycle => 7.0,
+        .nr4_sequence, .nr4_corpus_train, .nr4_corpus_validation, .nr4_corpus_test, .nr4_corpus_stress_near, .nr4_corpus_stress_high => unreachable,
         .default_follow => unreachable,
         .near_pass, .disocclusion_sweep, .camera_cut, .top_down => unreachable,
     };
@@ -161,6 +241,18 @@ pub fn apply(
     };
     lookAt(game_camera, target);
     return .none;
+}
+
+fn isNr4CorpusProgram(program: Program) bool {
+    return switch (program) {
+        .nr4_corpus_train,
+        .nr4_corpus_validation,
+        .nr4_corpus_test,
+        .nr4_corpus_stress_near,
+        .nr4_corpus_stress_high,
+        => true,
+        else => false,
+    };
 }
 
 fn lookAt(game_camera: *camera_module.Camera, target: [3]f32) void {
@@ -177,7 +269,31 @@ test "capture camera paths have strict names" {
     try std.testing.expectEqual(Program.elevated_sweep, try parse("elevated-sweep"));
     try std.testing.expectEqual(Program.camera_cut, try parse("camera-cut"));
     try std.testing.expectEqual(Program.resize_cycle, try parse("resize-cycle"));
+    try std.testing.expectEqual(Program.nr4_sequence, try parse("nr4-sequence"));
+    try std.testing.expectEqual(Program.nr4_corpus_train, try parse("nr4-corpus-train"));
+    try std.testing.expectEqual(Program.nr4_corpus_stress_high, try parse("nr4-corpus-stress-high"));
     try std.testing.expectError(error.InvalidNeuralCaptureCameraPath, parse("metadata-only"));
+}
+
+test "NR4 sequence camera declares segment boundaries as cuts" {
+    var game_camera = camera_module.Camera{};
+    try std.testing.expectEqual(
+        contract.ResetReason.camera_cut,
+        apply(.nr4_sequence, &game_camera, target_fixture.center, target_fixture.sequence_start_frame),
+    );
+    try std.testing.expectEqual(
+        contract.ResetReason.none,
+        apply(.nr4_sequence, &game_camera, target_fixture.center, target_fixture.sequence_start_frame + 1),
+    );
+    try std.testing.expectEqual(
+        contract.ResetReason.camera_cut,
+        apply(
+            .nr4_sequence,
+            &game_camera,
+            target_fixture.center,
+            target_fixture.sequence_start_frame + target_fixture.segment_frame_span,
+        ),
+    );
 }
 
 test "orbit capture camera remains aimed at the supplied target" {

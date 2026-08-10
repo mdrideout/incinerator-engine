@@ -88,16 +88,15 @@ The experiment definition explains why these existing frames cannot satisfy
 NR0 paired-capture or visual-quality acceptance:
 [`../../experiments/neural-rendering/nr-0001-spatial-pipeline/README.md`](../../experiments/neural-rendering/nr-0001-spatial-pipeline/README.md).
 
-## NR0-A/B multi-channel paired capture
+## Native multi-channel input capture
 
-The product now renders schema-v1 neural inputs as six 400×225 RGBA8 targets:
-appearance, linear depth, world normal, motion, semantic, and instance. A
-selected frame is captured with the exact submitted conventional scene at a
-canonical 1600×900 before editor UI and diagnostics. Every raw buffer, debug
-PPM, stable presentation identity, matrix, frame/tick, effect value, source,
-content, schema, and shader revision is recorded and hashed in capture schema 2.
-Metal BGRA product color is normalized to canonical RGBA8 raw bytes; the source
-GPU format remains in each frame manifest.
+The product now renders `incinerator.neural-input.v2` as six direct `160×90`
+RGBA8 targets: appearance, linear depth, world normal, motion, semantic, and
+instance. Capture schema 3 stores only those native inputs. It does not capture
+or derive a conventional product target. High-fidelity truth is owned by the
+separate direct `400×225` target adapter. Every raw buffer, debug PPM, stable
+presentation identity, matrix, frame/tick, effect value, source, content,
+schema, shader revision, and exact 5:2 mapping is recorded and hashed.
 
 Every capture root must be absolute and absent. Cohort, sequence, and camera
 path are mandatory. Adjacent frames from one sequence belong to one cohort;
@@ -124,8 +123,8 @@ zig build nr0-visual-report -- "$CAPTURE" "$INCINERATOR_NR_ROOT/reports/nr0-ab-s
 ```
 
 A complete root contains `capture.json`, `frames.ndjson`, per-frame manifests,
-six raw/debug channel directories, and raw/debug conventional targets. Raw
-files are training data; PPM files are explicitly described human derivatives.
+and six raw/debug channel directories. Raw files are eligible input data; PPM
+files and contact sheets are explicitly described human derivatives.
 The inspector validates completeness, extents, byte counts, all digests,
 schema/shader provenance, split ownership, stable/compact identity mapping,
 cross-channel coverage, depth/normal/motion encoding, and semantic/instance
@@ -152,9 +151,9 @@ sh tools/verify_nr0_ab.sh \
   "$INCINERATOR_NR_ROOT/acceptance/nr0-ab-20260805"
 ```
 
-NR-0001 training tools consume their earlier RGB-pair schema. Do not silently
-feed schema-2 captures to them. NR0-C uses the separate schema-2 adapter and
-NR-0002 experiment below.
+NR-0001/2 training tools consume historical schemas. Do not silently feed
+capture-schema-3 roots to them. The next title model requires the NR4-D dataset
+adapter defined against the accepted native cohort.
 
 ## NR0-C multi-channel spatial baseline
 
@@ -263,3 +262,297 @@ retained but superseded because it omitted the promised measured temporal and
 disocclusion convenience crops. See the committed
 [evaluation conclusion](../../experiments/neural-rendering/nr-0002-multichannel-spatial-baseline/NR0-D-EVALUATION.md)
 before designing the next candidate.
+
+## NR-0003 LTX-Video 2B distilled baseline
+
+NR-0003 is an offline quality-first experiment. Its Python environment,
+official upstream checkout, model cache, generated sequence, and candidate
+folders are external. It does not add LTX, Transformers, or Diffusers to any
+engine product dependency graph.
+
+Use the separate environment and exact upstream revision documented in the
+[experiment conclusion](../../experiments/neural-rendering/nr-0003-ltxv-2b-distilled/README.md).
+The tools enforce a complete capture-schema-2 source, an `8N+1` frame count,
+32-pixel extent alignment, exact appearance hashes and frame lineage, explicit
+absolute absent outputs, Apple MPS, the declared 2B distilled checkpoint,
+disabled prompt enhancement, immutable config/prompt snapshots, model-license
+evidence, synchronized warm timing, process RSS, generated-video hashes, and
+source/output comparison sheets.
+
+```sh
+LTX_PYTHON="$INCINERATOR_NR_ROOT/envs/nr-0003-ltxv-2b/bin/python"
+export HF_HOME="$INCINERATOR_NR_ROOT/model-cache/huggingface"
+export PYTHONPATH="$PWD/tools/neural-rendering"
+
+"$LTX_PYTHON" tools/neural-rendering/test_nr0003_ltxv_tools.py
+
+"$LTX_PYTHON" tools/neural-rendering/prepare_ltxv_sequence.py \
+  --capture <absolute-complete-capture> \
+  --output <new-absolute-sequence-root> \
+  --frames 9 --extent 512x288 --fps 8
+
+export PYTHONPATH="$INCINERATOR_NR_ROOT/upstream/LTX-Video:$PWD/tools/neural-rendering"
+"$LTX_PYTHON" tools/neural-rendering/run_ltxv_candidate.py \
+  --repo "$PWD" \
+  --upstream "$INCINERATOR_NR_ROOT/upstream/LTX-Video" \
+  --sequence <absolute-sequence-root>/sequence.json \
+  --config "$PWD/experiments/neural-rendering/nr-0003-ltxv-2b-distilled/ltxv-2b-v2v-mps.yaml" \
+  --prompt "$PWD/experiments/neural-rendering/nr-0003-ltxv-2b-distilled/style-prompt.txt" \
+  --output <new-absolute-candidate-root>
+
+"$LTX_PYTHON" tools/neural-rendering/inspect_ltxv_candidate.py \
+  <absolute-candidate-root>
+```
+
+The conservative config is the structure baseline. The separate `rich` config
+is quality pressure that deliberately demonstrates the stock model's geometry
+failure. Neither is promotion-eligible or an initialization source. ADR-026
+retains LTX only as a comparison baseline. Do not continue stock
+prompt/strength sweeps or implement fine-tuning in place of producing exact
+high-fidelity target pairs and training the repository-owned title renderer
+from random initialization.
+
+## NR4-C native Blender/Cycles target still
+
+NR4-C is a validation-only offline target factory. It does not add Blender or
+Python to the engine, headless, server, or installed runtime dependency graph.
+It exports an adapter-local package from the same immutable draw stream used by
+the neural input capture, then reconstructs the selected frame in pinned
+Cycles Metal.
+
+Install the exact external Blender environment once:
+
+```sh
+export INCINERATOR_NR_ROOT="$HOME/Library/Application Support/Incinerator/neural-rendering"
+bash tools/neural-rendering/targets/blender/install_macos.sh \
+  "$INCINERATOR_NR_ROOT/envs/nr4-blender"
+```
+
+Build the validation host and run the two-proof gate from a new absent output
+root:
+
+```sh
+zig build install-validation -Deditor=true --summary failures
+
+NR_PYTHON="$INCINERATOR_NR_ROOT/envs/nr0-poc/bin/python"
+BLENDER="$INCINERATOR_NR_ROOT/envs/nr4-blender/apps/Blender-4.5.12.app/Contents/MacOS/Blender"
+OUTPUT="$INCINERATOR_NR_ROOT/experiments/nr4-c-native-still-$(date -u +%Y%m%dT%H%M%SZ)"
+
+PYTHONPATH=tools/neural-rendering/targets/blender \
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/test_tools.py
+
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/verify_nr4_c_still.py \
+  --validation "$PWD/zig-out/libexec/incinerator/incinerator_validation" \
+  --content-root "$PWD/zig-out/share/incinerator/content" \
+  --repo "$PWD" \
+  --blender "$BLENDER" \
+  --output "$OUTPUT"
+```
+
+Read `acceptance.json`, `reproducibility.json`, and both
+`run-*/evaluation/native-baselines/native-160x90-to-400x225-review.png` files.
+Each run also contains atomic engine
+capture and target-package manifests, canonical scene-linear OpenEXR, AgX PNG,
+identity/depth/normal buffers, alignment records, exact source/environment
+fingerprints, and command logs. Inspect either proof independently with:
+
+```sh
+PYTHONPATH=tools/neural-rendering/targets/blender \
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/inspect_native_still.py \
+  "$OUTPUT/run-a"
+```
+
+The accepted still evidence uses input schema v3, capture schema 4, and target
+frame schema v4. Capture contains native `160×90` inputs plus four exact
+frame-global float32 controls. Cycles emits the direct native `400×225` target;
+UI zoom and deterministic resize baselines are explicitly excluded from
+training material.
+
+## NR4-C native material-rich moving target
+
+NR4-C uses `incinerator.nr4.blender-target-frame.v4`, which adds explicit
+material response, local-light state, and causal sequence metadata to the
+offline adapter package and the exact 5:2 pixel-center mapping. It consumes
+`incinerator.neural-input.v3` and its 16-byte frame-global control payload.
+
+Run the focused contracts and two-proof gate from a new absolute absent root:
+
+```sh
+export INCINERATOR_NR_ROOT="$HOME/Library/Application Support/Incinerator/neural-rendering"
+NR_PYTHON="$INCINERATOR_NR_ROOT/envs/nr0-poc/bin/python"
+BLENDER="$INCINERATOR_NR_ROOT/envs/nr4-blender/apps/Blender-4.5.12.app/Contents/MacOS/Blender"
+OUTPUT="$INCINERATOR_NR_ROOT/experiments/nr4-c-native-sequence-$(date -u +%Y%m%dT%H%M%SZ)"
+
+zig build install-validation -Deditor=true --summary failures
+PYTHONPATH=tools/neural-rendering/targets/blender \
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/test_tools.py
+
+PYTHONPATH=tools/neural-rendering/targets/blender \
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/verify_nr4_c.py \
+  --validation "$PWD/zig-out/libexec/incinerator/incinerator_validation" \
+  --content-root "$PWD/zig-out/share/incinerator/content" \
+  --repo "$PWD" \
+  --blender "$BLENDER" \
+  --output "$OUTPUT"
+```
+
+The runner records 18 exact frames across camera motion, rigid vehicle motion,
+near-edge motion, wheel articulation, NPC occlusion/disocclusion, and
+lighting/emissive response. It emits one source-cause audit, per-frame
+identity/depth alignment, an overview, six detailed contact sheets, and a
+second complete proof with measured Cycles variation.
+
+Inspect retained evidence read-only:
+
+```sh
+PYTHONPATH=tools/neural-rendering/targets/blender \
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/inspect_sequence.py \
+  "$OUTPUT/run-a"
+```
+
+Start human review with `acceptance.json`, `reproducibility.json`, and
+`run-a/evaluation/reports/nr4-c-native-sequence-review.png`.
+
+## NR4-C native working resolution status
+
+NR4-C advances the engine/input/capture cohort together; existing NR4-A/B
+commands and artifacts remain historical and are not accepted as sources for
+new proof commands. The new commands use `160×90` cheap appearance/default
+controls and `400×225` direct Cycles targets. The manifest must record both
+extents and the exact 2.5× top-left, pixel-center mapping rather than a generic
+integer scale.
+
+The implemented validation sequence is:
+
+1. add focused extent, byte-count, coordinate-mapping, border, thin-feature,
+   identity-edge, and motion tests;
+2. generate and obtain fresh human acceptance for a direct native `400×225`
+   target still paired with the exact native `160×90` source event;
+3. regenerate all 18 causal frames using native `160×90` inputs and direct
+   native `400×225` targets, excluding all earlier target pixels and metrics;
+4. emit synchronized native source/target/alignment reports and establish
+   nearest, bilinear, and bicubic `160×90 → 400×225` baselines;
+5. measure capture size, target time, input raster time where observable,
+   dataset decode time, and process/GPU memory on the M2 Max; and
+6. only then run one-at-a-time control-resolution and ambiguity ablations.
+
+The producer, inspector, reports, and tests landed as one cohort. Tools reject
+foreign extents and do not generate cross-resolution references. Other output
+extents are deferred. The current external technical roots are recorded in the
+NR-0004 experiment README and validation ledger. Human review is accepted.
+
+Audit semantic conditioning without mutating a proof root:
+
+```sh
+PYTHONPATH=tools/neural-rendering/targets/blender \
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/audit_native_ambiguity.py \
+  --run "$OUTPUT/run-a" \
+  --output <new-absolute-ambiguity-root>
+```
+
+The original native audit isolated `lighting_effect`: scene/material target
+state changed while only motion B (history validity) changed in the raster
+inputs. The accepted ablation adds sun, world, local-light, and emissive
+strength as presentation-owned frame-global values. Both independent runs now
+have no ambiguous segment. The control costs 16 bytes per frame and no extra
+GPU raster target; spatial lighting remains conditional.
+
+## NR4-D paired-corpus proof
+
+Generate six fresh whole sequences, assemble them transactionally, inspect the
+self-contained copy, and retain a compact display-only split sheet:
+
+```sh
+export INCINERATOR_NR_ROOT="$HOME/Library/Application Support/Incinerator/neural-rendering"
+NR_PYTHON="$INCINERATOR_NR_ROOT/envs/nr0-poc/bin/python"
+BLENDER="$INCINERATOR_NR_ROOT/envs/nr4-blender/apps/Blender-4.5.12.app/Contents/MacOS/Blender"
+OUTPUT="$INCINERATOR_NR_ROOT/experiments/nr4-d-corpus-$(date -u +%Y%m%dT%H%M%SZ)"
+
+zig build install-validation -Deditor=true --summary failures
+PYTHONPATH=tools/neural-rendering/targets/blender \
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/test_tools.py
+
+PYTHONPATH=tools/neural-rendering/targets/blender \
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/verify_nr4_d.py \
+  --validation "$PWD/zig-out/libexec/incinerator/incinerator_validation" \
+  --content-root "$PWD/zig-out/share/incinerator/content" \
+  --repo "$PWD" \
+  --blender "$BLENDER" \
+  --output "$OUTPUT"
+```
+
+Inspect an existing corpus without modifying it:
+
+```sh
+PYTHONPATH=tools/neural-rendering/targets/blender \
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/inspect_nr4_d_corpus.py \
+  "$OUTPUT/corpus"
+```
+
+The corpus keeps overfit, train, validation, sealed test, and stress ownership
+at whole-sequence granularity. It rejects cross-sequence conditioning/pair
+reuse, provenance drift, incomplete targets, corruption, and identity
+mismatch. Repeated conditioning inside one sequence is valid temporal context,
+not split leakage. `corpus/review/` is display-only and never training input.
+
+## NR4-E and NR5-A/B title-renderer framework
+
+The cold contract suite imports no training dependency:
+
+```sh
+zig build test-title-renderer-contracts --summary all
+```
+
+Record a scoped NR4-E coverage decision in a new external root:
+
+```sh
+export INCINERATOR_NR_ROOT="$HOME/Library/Application Support/Incinerator/neural-rendering"
+NR_PYTHON="$INCINERATOR_NR_ROOT/envs/nr0-poc/bin/python"
+
+PYTHONPATH=tools/neural-rendering python3 \
+  tools/neural-rendering/title_renderer/coverage.py \
+  --corpus "$INCINERATOR_NR_ROOT/experiments/nr4-d-corpus-20260808-b/corpus" \
+  --output <new-absolute-coverage-root> \
+  --repository "$PWD" \
+  --product-approval product_owner_approved_nr4_d_review_sheet_2026_08_09
+```
+
+The coverage command hashes non-test training artifacts and reads target-frame
+metadata for every split, but never decodes test input/target pixels. Its
+acceptance is scoped; it does not convert fixture coverage into a title-wide
+claim.
+
+Run the NR5-A clean-room lifecycle proof:
+
+```sh
+PYTHONPATH=tools/neural-rendering "$NR_PYTHON" \
+  tools/neural-rendering/title_renderer/self_test.py \
+  --output <new-absolute-clean-room-root>
+```
+
+Run an NR5-B controlled overfit only after NR4-E accepts the corpus:
+
+```sh
+PYTHONPATH=tools/neural-rendering "$NR_PYTHON" \
+  tools/neural-rendering/title_renderer/train.py \
+  --corpus "$INCINERATOR_NR_ROOT/experiments/nr4-d-corpus-20260808-b/corpus" \
+  --coverage-acceptance <absolute-accepted-nr4-e-root>/acceptance.json \
+  --configuration "$PWD/experiments/neural-rendering/nr-0005-structural-title-renderer/nr5-b-controlled-overfit.json" \
+  --output <new-absolute-training-root> \
+  --repository "$PWD"
+
+zig build inspect-title-renderer-run -- <absolute-training-root>
+```
+
+The trainer opens only the overfit split, snapshots its configuration, saves
+the exact random initializer and optimizer/scheduler lineage, reports every
+frame, and emits an unpromoted TorchScript comparison candidate. Finalization
+is a separate immutable review action:
+
+```sh
+PYTHONPATH=tools/neural-rendering python3 \
+  tools/neural-rendering/title_renderer/finalize.py \
+  --run <absolute-training-root> \
+  --disposition accepted \
+  --review '<specific complete visual-review conclusion>'
+```

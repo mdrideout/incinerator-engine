@@ -38,6 +38,15 @@ pub fn draw(input: *const tool.NeuralInput) void {
             );
             zgui.textWrapped("schema fingerprint: {s}", .{view.schema_fingerprint});
             zgui.textWrapped("shader fingerprint: {s}", .{view.shader_fingerprint});
+            zgui.text(
+                "global controls: sun {d:.3} world {d:.3} local {d:.3} emissive {d:.3}",
+                .{
+                    view.global_controls.sun_strength,
+                    view.global_controls.world_strength,
+                    view.global_controls.local_light_strength,
+                    view.global_controls.emissive_strength,
+                },
+            );
             if (view.last_error.len != 0) {
                 zgui.textColored(.{ 1, 0.25, 0.25, 1 }, "last error: {s}", .{view.last_error});
             }

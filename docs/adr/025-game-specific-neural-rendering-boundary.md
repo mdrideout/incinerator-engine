@@ -1,6 +1,7 @@
 # ADR-025: Game-Specific Neural Rendering Boundary and Model Promotion
 
-**Status:** Accepted; NR0-A through NR0-D implemented, full NR0 remains open
+**Status:** Accepted; NR0-A through NR0-D, NR-0004, and NR5-A/B implemented and
+accepted; full NR0 remains open
 
 **Date:** 2026-08-07
 
@@ -11,6 +12,9 @@
 
 **Implementation plan:**
 [`../design/nr0-neural-rendering-feasibility.md`](../design/nr0-neural-rendering-feasibility.md)
+
+**Model origin and training decision:**
+[ADR-026](026-from-scratch-title-neural-renderer.md)
 
 ## Context
 
@@ -74,6 +78,12 @@ proves another contract.
 
 Training frameworks and Python packages cannot become runtime dependencies of
 the engine or cold authority products.
+
+NR4-A and NR4-B now exercise this boundary with an exact rights-clean Cycles
+target factory. The target adapter consumes an immutable presentation package;
+it does not inspect gameplay or authority state. The accepted still and moving
+sequence remain external experiment evidence and do not authorize a runtime
+model or promoted game content.
 
 ### The model bundle is versioned game content
 
@@ -184,6 +194,27 @@ NR0-D subsequently establishes the candidate failure envelope:
 - the evaluation phase is accepted while NR-0002 remains unpromoted because
   its temporal residual and boundary sharpness are worse than bilinear.
 
+NR4-C subsequently advances the active target-data boundary as one greenfield
+cohort:
+
+- `incinerator.neural-input.v3` renders six direct `160×90` presentation
+  channels, declares four frame-global lighting/material controls, and rejects
+  foreign extents;
+- capture schema 4 stores those inputs and exact 16-byte control payload,
+  removing the conventional target that was previously ambiguous with
+  training truth;
+- `incinerator.nr4.blender-target-frame.v4` pairs the exact source event with a
+  direct native `400×225` Cycles target and an explicit 5:2 top-left
+  pixel-center mapping;
+- two-run still and 18-frame causal sequence proofs preserve camera, identity,
+  target depth, rights, and provenance while deterministic resize baselines
+  remain display-only;
+- the controls resolve the only observed many-to-one target state without an
+  extra raster channel, and the product owner accepted the native direction;
+  and
+- all generated data remains external and no model, checkpoint, or runtime
+  bundle is created by this gate.
+
 NR0 still owes a promotion-worthy candidate, transactional promotion,
 GPU-resident inference adapter, installed bundle validation, full end-to-end
 performance evidence, and final human acceptance. The NR0-D result reinforces
@@ -217,6 +248,12 @@ ADR-025 does not select a final model architecture, parameter count, memory
 cap, inference framework, model file format, quantization, temporal design,
 target art style, dataset size, frame rate, or distribution mechanism. NR0 must
 measure those decisions rather than inventing limits.
+
+ADR-026 separately decides that promotion-eligible weights and learned
+components are title-specific and trained from random initialization through
+the repository-owned paired-data framework. That later decision supersedes
+NR-0003's provisional IC-LoRA direction without changing this ADR's ownership
+or promotion boundary.
 
 It also does not authorize diffusion, a general video model, a learned world
 model, authority feedback, runtime training, cloud inference, or replacement of

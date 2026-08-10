@@ -1,0 +1,16 @@
+Transform the supplied deterministic low-polygon game frames into one richly
+rendered stylized urban sandbox while preserving the exact camera motion,
+object positions, silhouettes, and timing. Checkerboard ground becomes
+detailed weathered pavement with cracks, dirt, and varied roughness. Flat
+colored panels become believable concrete, brick, painted metal, glass, and
+architectural surfaces. Vehicles retain their location, shape, wheels, and
+motion while gaining glossy painted bodywork, rubber tires, windows,
+reflections, and contact shadows. Every narrow pole, wall opening, character,
+crate, and repeated object remains present. Warm afternoon sunlight creates
+coherent directional shadows, reflected highlights, ambient occlusion, and
+atmospheric depth. Add surface texture and lighting complexity only. Do not
+create new objects, buildings, people, vehicles, roads, or camera movements.
+Do not remove or relocate visible geometry. Preserve temporal continuity and
+the supplied scene composition exactly across every frame while substantially
+increasing color detail, texture, material realism, lighting richness, and
+readable depth.

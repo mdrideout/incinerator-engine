@@ -89,14 +89,33 @@ first deliberately unpromoted proof of concept implemented.
 keeps the deterministic game authoritative, treats the model as a
 presentation-only capability, separates mutable experiment runs from runtime,
 and permits only an explicitly promoted immutable model bundle to become game
-content. See the [research index](docs/research/neural-rendering/README.md) and
+content. [ADR-026](docs/adr/026-from-scratch-title-neural-renderer.md) requires
+every promotion-eligible learned component to be title-specific and trained
+from random initialization on title-owned paired data. See the
+[north star](docs/design/title-neural-renderer-north-star.md),
+[implementation plan](docs/design/title-neural-renderer-implementation-plan.md),
+[research index](docs/research/neural-rendering/README.md), and
 [NR0 feasibility plan](docs/design/nr0-neural-rendering-feasibility.md). The
 preliminary 80x45-to-320x180 path proved native Core ML and explicit fallback.
-NR0-C now adds the first `incinerator.neural-input.v1` model: 17 planes at
+Historical NR0-C adds the first `incinerator.neural-input.v1` model: 17 planes at
 400x225, a 51,888-parameter 4x spatial residual network, disjoint camera-cohort
 selection/test, human comparison, and an FP16 Core ML export. It is an external
 unpromoted candidate; the installed adapter remains a disposable blocking
-proof and no model is selected as game content or shipped.
+proof and no model is selected as game content or shipped. NR-0003 retains
+LTX-Video 2B only as an external comparison: it proves the target Mac can run
+a rich video prior near 1.5 FPS at 512x288 while demonstrating that
+appearance-only generation substitutes authored geometry. NR-0004 now has a
+human-accepted exact still plus a technically complete 18-frame, six-segment
+Blender/Cycles moving proof with paired identity/depth evidence and two-run
+reproducibility. NR4-C has regenerated and accepted that direction as a
+self-contained native `160×90 → 400×225` cohort using input schema v3, capture
+schema 4, and target-frame schema v4. Its two-run still and 18-frame gates
+pass. Four presentation-owned frame-global controls resolve the only observed
+ambiguity for 16 bytes per frame and no new raster target. NR4-E accepts the 6
+whole-sequence/108-pair corpus for the initial structural scope. NR5-A/B accept
+the cohesive random-origin framework and controlled 18-frame overfit; NR5-C
+held-out reconstruction is next. Other target extents remain excluded and
+deferred.
 Broader Steam/public-service infrastructure remains deferred.
 
 ## Toolchain Cohort
@@ -635,6 +654,9 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 - [`Neural Rendering Research`](docs/research/neural-rendering/README.md)
 - [`ADR-025: Game-Specific Neural Rendering Boundary and Model Promotion`](docs/adr/025-game-specific-neural-rendering-boundary.md)
+- [`ADR-026: From-Scratch Title-Specific Neural Renderer`](docs/adr/026-from-scratch-title-neural-renderer.md)
+- [`Title Neural Renderer North Star`](docs/design/title-neural-renderer-north-star.md)
+- [`Title Neural Renderer Implementation Plan`](docs/design/title-neural-renderer-implementation-plan.md)
 - [`NR0 Game-Specific Neural Rendering Feasibility Slice`](docs/design/nr0-neural-rendering-feasibility.md)
 - [`NR0 Neural Rendering Evaluation Scene`](docs/design/nr0-neural-rendering-evaluation-scene.md)
 - [`NR0 Validation Ledger`](docs/validation/nr0-neural-rendering-feasibility.md)

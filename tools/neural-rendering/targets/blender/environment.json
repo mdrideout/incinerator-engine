@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "blender": {
+    "version": "4.5.12",
+    "release_line": "4.5 LTS",
+    "macos_arm64_sha256": "f4afdca92c56a9e231e45226445e6750879a70a0d2322cee80d82ce021a99fb0",
+    "macos_arm64_url": "https://download.blender.org/release/Blender4.5/blender-4.5.12-macos-arm64.dmg"
+  },
+  "cycles": {
+    "device": "METAL",
+    "feature_set": "SUPPORTED",
+    "samples": 256,
+    "use_adaptive_sampling": false,
+    "use_denoising": false,
+    "seed": 73,
+    "max_bounces": 10,
+    "diffuse_bounces": 4,
+    "glossy_bounces": 4,
+    "transmission_bounces": 8,
+    "transparent_max_bounces": 8
+  },
+  "color": {
+    "canonical": "scene-linear OpenEXR RGBA float32",
+    "view_transform": "AgX",
+    "look": "AgX - Medium High Contrast",
+    "display_device": "sRGB",
+    "display_derivative": "PNG RGBA8"
+  },
+  "rights": {
+    "source": "repository-owned procedural fixture and adapter",
+    "external_art": false,
+    "learned_denoiser": false,
+    "pretrained_weights": false
+  }
+}

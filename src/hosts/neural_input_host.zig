@@ -12,6 +12,7 @@ const renderer = @import("../renderer.zig");
 const mesh_module = @import("../mesh.zig");
 const texture_module = @import("../texture.zig");
 const sdl = @import("../sdl.zig");
+const target_contract = @import("neural_target_contract.zig");
 
 const c = sdl.c;
 const contract = engine.neural_rendering;
@@ -62,6 +63,9 @@ pub const Draw = struct {
     base_color: [4]f32,
     model: zm.Mat,
     view_projection: zm.Mat,
+    /// Optional adapter-specific source carried by the immutable draw record.
+    /// It is never rasterized into the model ABI and never reaches authority.
+    target_source: ?target_contract.Source = null,
 };
 
 const Previous = struct {
@@ -87,14 +91,19 @@ pub const Diagnostics = struct {
     draw_count: usize,
     history_valid_draws: usize,
     history_reset_draws: usize,
+    global_controls: contract.FrameGlobalControls,
     compact_id_collisions: u64,
     rendered_frames: u64,
     render_failures: u64,
+    last_command_encoding_ns: u64,
+    total_command_encoding_ns: u64,
+    maximum_command_encoding_ns: u64,
     last_error: []const u8,
     views: [contract.channels.len]TextureView,
 };
 
 pub const Owner = struct {
+    io: std.Io,
     allocator: std.mem.Allocator,
     device: *c.SDL_GPUDevice,
     depth_format: c.SDL_GPUTextureFormat,
@@ -122,11 +131,14 @@ pub const Owner = struct {
     compact_id_collisions: u64 = 0,
     history_valid_draws: usize = 0,
     history_reset_draws: usize = 0,
+    last_command_encoding_ns: u64 = 0,
+    total_command_encoding_ns: u64 = 0,
+    maximum_command_encoding_ns: u64 = 0,
     last_error: ?[]u8 = null,
     last_target_width: u32 = 0,
     last_target_height: u32 = 0,
 
-    pub fn init(allocator: std.mem.Allocator, gpu: *renderer.Renderer) !Owner {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, gpu: *renderer.Renderer) !Owner {
         const device = gpu.getDevice();
         for ([_]c.SDL_GPUTextureFormat{ appearance_format, target_format }) |format| {
             if (!c.SDL_GPUTextureSupportsFormat(
@@ -178,6 +190,7 @@ pub const Owner = struct {
         const draws = try std.ArrayList(Draw).initCapacity(allocator, 64);
         errdefer draws.deinit(allocator);
         return .{
+            .io = io,
             .allocator = allocator,
             .device = device,
             .depth_format = gpu.getDepthFormat(),
@@ -242,6 +255,7 @@ pub const Owner = struct {
     /// Render all six channels into independent low-resolution targets using
     /// the same frame command buffer. Product output remains untouched.
     pub fn render(self: *Owner, gpu: *renderer.Renderer) !void {
+        const started_ns = monotonicNowNs(self.io);
         const cmd = gpu.getCurrentCommandBuffer() orelse
             return error.NeuralInputNoFrameInProgress;
         if (self.draws.items.len == 0) return error.NeuralInputFrameHasNoDraws;
@@ -285,6 +299,12 @@ pub const Owner = struct {
             });
         }
         self.rendered_frames +|= 1;
+        self.last_command_encoding_ns = monotonicNowNs(self.io) -| started_ns;
+        self.total_command_encoding_ns +|= self.last_command_encoding_ns;
+        self.maximum_command_encoding_ns = @max(
+            self.maximum_command_encoding_ns,
+            self.last_command_encoding_ns,
+        );
     }
 
     pub fn diagnostics(self: *const Owner) Diagnostics {
@@ -306,9 +326,13 @@ pub const Owner = struct {
             .draw_count = self.draws.items.len,
             .history_valid_draws = self.history_valid_draws,
             .history_reset_draws = self.history_reset_draws,
+            .global_controls = self.frame.global_controls,
             .compact_id_collisions = self.compact_id_collisions,
             .rendered_frames = self.rendered_frames,
             .render_failures = self.render_failures,
+            .last_command_encoding_ns = self.last_command_encoding_ns,
+            .total_command_encoding_ns = self.total_command_encoding_ns,
+            .maximum_command_encoding_ns = self.maximum_command_encoding_ns,
             .last_error = self.last_error orelse "",
             .views = views,
         };
@@ -429,6 +453,12 @@ fn createColorTarget(
         .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
         .props = 0,
     }) orelse error.NeuralInputColorTargetCreationFailed;
+}
+
+fn monotonicNowNs(io: std.Io) u64 {
+    const value = std.Io.Clock.Timestamp.now(io, .awake).raw.nanoseconds;
+    if (value <= 0) return 0;
+    return std.math.cast(u64, value) orelse std.math.maxInt(u64);
 }
 
 fn colorTargetInfo(

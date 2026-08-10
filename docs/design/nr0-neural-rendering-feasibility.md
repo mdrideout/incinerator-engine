@@ -9,6 +9,13 @@
 **Decision:**
 [ADR-025](../adr/025-game-specific-neural-rendering-boundary.md)
 
+**Model origin and north star:**
+[ADR-026](../adr/026-from-scratch-title-neural-renderer.md) and
+[Title Neural Renderer North Star](title-neural-renderer-north-star.md)
+
+**NR-0004 through NR0-G implementation plan:**
+[Title Neural Renderer Implementation Plan](title-neural-renderer-implementation-plan.md)
+
 **Evaluation scene:**
 [NR0 Evaluation Scene](nr0-neural-rendering-evaluation-scene.md)
 
@@ -21,10 +28,11 @@
 ## Goal
 
 Prove one end-to-end title-specific neural-rendering path in the real
-Incinerator product: exact low-fidelity GPU inputs and a paired conventional
-target produce an evaluated spatial model; a human deliberately promotes one
-export; the installed macOS runtime loads that exact bundle, presents its
-output, exposes its cost and identity, and falls back truthfully.
+Incinerator product: exact low-fidelity GPU inputs and a paired high-fidelity
+title target train an evaluated model from random initialization; a human
+deliberately promotes one export; the installed macOS runtime loads that exact
+bundle, presents its output, exposes its cost and identity, and falls back
+truthfully.
 
 NR0 is a parallel core-rendering track. It does not replace or renumber the
 gameplay S-series.
@@ -179,10 +187,47 @@ reconstruction, but is less boundary-sharp and less temporally stable than
 bilinear and visibly loses thin/fine features. NR0-D is accepted; NR-0002 is
 not suitable for promotion and remains external and unpromoted.
 
-The next actual model step is a bounded NR-0003 spatial failure-correction
-experiment evaluated against the unchanged NR0-D stress fixture. NR0-E remains
-the next engine phase, but it should not begin by promoting a candidate already
-shown to miss the accepted quality envelope.
+### NR-0003 — Quality-first LTX-Video 2B baseline
+
+**Status:** Complete on 2026-08-08; platform feasibility accepted, stock RGB
+conditioning rejected, unpromoted.
+
+The quality-first direction intentionally departed from another small spatial
+network and tested an official pretrained causal video model. LTX-Video 2B
+distilled ran a real nine-frame Incinerator sequence at 512×288 on the M2 Max.
+Two immutable candidates measured approximately 1.5 warm FPS and 7.9 GB peak
+process RSS. Conservative denoising retained authored geometry but added little
+material or lighting fidelity. Stronger denoising produced rich, temporally
+consistent urban imagery by replacing the authored geometry, identities, and
+composition. See
+[`NR-0003`](../../experiments/neural-rendering/nr-0003-ltxv-2b-distilled/README.md)
+for exact provenance, comparisons, and measurements.
+
+NR-0003 changed the next model step but does not provide its initialization.
+ADR-026 supersedes the provisional IC-LoRA recommendation: external model
+weights remain research evidence only. NR4-A of NR-0004 proves one genuinely
+high-fidelity, exactly aligned title target still and its visual direction is
+human-accepted. NR4-B's 18 moving targets across six causally isolated segments
+are also technically and human accepted. NR4-C now begins the evidence-driven
+control-schema and corpus work from the
+[north star](title-neural-renderer-north-star.md). NR-0005 then
+trains the first repository-defined structural title renderer from random
+initialization. Appearance RGB alone is not a sufficient long-term control
+contract.
+
+The next working cohort is deliberately smaller: `160×90` cheap appearance and
+default controls reconstruct to a direct native `400×225` rich target. The
+2.5× mapping and target fidelity are validated entirely inside that cohort.
+NR4-A/B remain historical adapter/correspondence evidence, but their target
+pixels, metrics, and acceptance are excluded from active generation, training,
+comparison, preview, and acceptance. The native still and moving direction must
+be generated and accepted again at `400×225`. Other output resolutions are
+deferred.
+
+NR0-E remains the next engine phase by numbering, but it is deliberately
+blocked. Nothing should be promoted until a learned candidate preserves the
+authored world, materially improves visual fidelity, and survives the unchanged
+NR0-D failure envelope.
 
 ### NR0-E — Explicit model promotion
 
@@ -287,7 +332,9 @@ Large mutable artifacts remain outside Git.
 ## Deferred until evidence demands them
 
 - temporal model state beyond an explicit follow-up experiment;
-- diffusion, adversarial runtime sampling, or a full-resolution transformer;
+- unrestricted prompt-driven generation or a learned world model;
+- a shipping diffusion/video-transformer path before a title-trained candidate
+  passes structure, temporal, and local runtime evaluation;
 - generic multi-title training or model marketplace support;
 - cloud inference or runtime training;
 - secondary-platform inference adapters;

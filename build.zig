@@ -2057,7 +2057,7 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| nr0_capture_inspect.addArgs(args);
     const nr0_capture_inspect_step = b.step(
         "inspect-nr0-capture",
-        "Validate NR0-B capture integrity: zig build inspect-nr0-capture -- <capture-root>...",
+        "Validate native neural-input capture integrity: zig build inspect-nr0-capture -- <capture-root>...",
     );
     nr0_capture_inspect_step.dependOn(&nr0_capture_inspect.step);
 
@@ -2071,6 +2071,38 @@ pub fn build(b: *std.Build) void {
         "Create an external NR0 frame contact sheet: zig build nr0-visual-report -- <capture-root> <new-output.ppm>",
     );
     nr0_visual_report_step.dependOn(&nr0_visual_report.step);
+
+    const title_renderer_contracts = b.addSystemCommand(&.{
+        "python3",
+        "-m",
+        "unittest",
+        b.pathFromRoot("tools/neural-rendering/title_renderer/test_contracts.py"),
+        "-v",
+    });
+    title_renderer_contracts.setEnvironmentVariable(
+        "PYTHONPATH",
+        b.pathFromRoot("tools/neural-rendering"),
+    );
+    const title_renderer_contracts_step = b.step(
+        "test-title-renderer-contracts",
+        "Run cold NR4-E/NR5 corpus and sealed-test contracts without training dependencies",
+    );
+    title_renderer_contracts_step.dependOn(&title_renderer_contracts.step);
+
+    const inspect_title_renderer_run = b.addSystemCommand(&.{
+        "python3",
+        b.pathFromRoot("tools/neural-rendering/title_renderer/inspect_run.py"),
+    });
+    inspect_title_renderer_run.setEnvironmentVariable(
+        "PYTHONPATH",
+        b.pathFromRoot("tools/neural-rendering"),
+    );
+    if (b.args) |args| inspect_title_renderer_run.addArgs(args);
+    const inspect_title_renderer_run_step = b.step(
+        "inspect-title-renderer-run",
+        "Validate an external NR5 run: zig build inspect-title-renderer-run -- <absolute-run-root>",
+    );
+    inspect_title_renderer_run_step.dependOn(&inspect_title_renderer_run.step);
 
     const verify_nr0_ab = b.addSystemCommand(&.{
         "sh",
@@ -3979,6 +4011,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_vehicle_dynamics_tests.step);
     test_step.dependOn(&m3_soak_exe.step);
     test_step.dependOn(&run_m3_soak_tests.step);
+    test_step.dependOn(&title_renderer_contracts.step);
 
     const test_m5_cohesion_step = b.step(
         "test-m5-cohesion",

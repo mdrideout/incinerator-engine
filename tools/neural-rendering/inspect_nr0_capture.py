@@ -6,6 +6,8 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
+import struct
 from pathlib import Path
 
 
@@ -17,9 +19,20 @@ CHANNELS = (
     "semantic",
     "instance",
 )
-RAW_CHANNEL_BYTES = 400 * 225 * 4
-RAW_TARGET_BYTES = 1600 * 900 * 4
-RAW_BYTES_PER_FRAME = len(CHANNELS) * RAW_CHANNEL_BYTES + RAW_TARGET_BYTES
+INPUT_EXTENT = (160, 90)
+PAIRED_TARGET_EXTENT = (400, 225)
+RAW_CHANNEL_BYTES = INPUT_EXTENT[0] * INPUT_EXTENT[1] * 4
+RAW_CHANNEL_BYTES_PER_FRAME = len(CHANNELS) * RAW_CHANNEL_BYTES
+GLOBAL_CONTROL_SCHEMA = "incinerator.neural-frame-global.v1"
+GLOBAL_CONTROL_ENCODING = "float32 little-endian"
+GLOBAL_CONTROL_ORDER = (
+    "sun_strength",
+    "world_strength",
+    "local_light_strength",
+    "emissive_strength",
+)
+RAW_GLOBAL_CONTROL_BYTES = len(GLOBAL_CONTROL_ORDER) * 4
+RAW_TRAINING_BYTES_PER_FRAME = RAW_CHANNEL_BYTES_PER_FRAME + RAW_GLOBAL_CONTROL_BYTES
 SEMANTIC_PALETTE = {
     ("background", "whole"): (0, 0, 0),
     ("environment", "whole"): (128, 128, 128),
@@ -123,20 +136,53 @@ def load_capture(root: Path) -> dict:
     if not root.is_absolute():
         raise ValueError(f"capture root must be absolute: {root}")
     capture = json.loads((root / "capture.json").read_text())
-    if capture["schema"] != 2:
+    if capture["schema"] != 4:
         raise ValueError(f"unsupported capture schema in {root}")
     if capture["status"] != "complete":
         raise ValueError(f"capture is not complete: {root}")
     if capture["capture_failures"] != 0:
         raise ValueError(f"capture recorded failures: {root}")
+    if tuple(capture.get("input_size", ())) != INPUT_EXTENT:
+        raise ValueError(f"capture input extent is not native 160x90: {root}")
+    if tuple(capture.get("paired_target_size", ())) != PAIRED_TARGET_EXTENT:
+        raise ValueError(f"capture paired target extent is not native 400x225: {root}")
+    if capture.get("sampling_map") != {
+        "scale_numerator": 5,
+        "scale_denominator": 2,
+        "target_center_to_source_index": "((target_index + 0.5) * 2 / 5) - 0.5",
+        "border": "clamp",
+    }:
+        raise ValueError(f"capture sampling map is not the native 5:2 contract: {root}")
+    capture_timing = capture.get("input_raster_timing")
+    if not isinstance(capture_timing, dict) or any(
+        not isinstance(capture_timing.get(name), int) or capture_timing[name] < 0
+        for name in (
+            "last_command_encoding_ns",
+            "captured_total_command_encoding_ns",
+            "captured_maximum_command_encoding_ns",
+        )
+    ):
+        raise ValueError(f"capture input-raster timing is missing or invalid: {root}")
     index_lines = [line for line in (root / "frames.ndjson").read_text().splitlines() if line]
     summaries = [json.loads(line) for line in index_lines]
     if len(summaries) != capture["recorded_frames"]:
         raise ValueError(f"index/manifest frame count mismatch in {root}")
     if capture["recorded_frames"] != capture["selection"]["requested_frames"]:
         raise ValueError(f"capture did not satisfy its requested frame count: {root}")
-    if capture["raw_bytes_per_frame"] != RAW_BYTES_PER_FRAME:
-        raise ValueError(f"unexpected raw frame byte count in {root}")
+    expected_controls = {
+        "name": GLOBAL_CONTROL_SCHEMA,
+        "encoding": GLOBAL_CONTROL_ENCODING,
+        "order": list(GLOBAL_CONTROL_ORDER),
+        "count": len(GLOBAL_CONTROL_ORDER),
+    }
+    if capture.get("global_control_schema") != expected_controls:
+        raise ValueError(f"unexpected global-control schema in {root}")
+    if capture.get("raw_channel_bytes_per_frame") != RAW_CHANNEL_BYTES_PER_FRAME:
+        raise ValueError(f"unexpected raw channel byte count in {root}")
+    if capture.get("raw_global_control_bytes_per_frame") != RAW_GLOBAL_CONTROL_BYTES:
+        raise ValueError(f"unexpected raw global-control byte count in {root}")
+    if capture.get("raw_training_bytes_per_frame") != RAW_TRAINING_BYTES_PER_FRAME:
+        raise ValueError(f"unexpected total raw training byte count in {root}")
 
     frame_ids: set[str] = set()
     stable_identity: dict[str, dict] = {}
@@ -155,10 +201,51 @@ def load_capture(root: Path) -> dict:
             raise ValueError(f"input schema drift in {summary['frame_id']}")
         if frame["shader_fingerprint"] != capture["shader_fingerprint"] or frame["shader_sha256"] != capture["shader_sha256"]:
             raise ValueError(f"shader provenance drift in {summary['frame_id']}")
-        if tuple(frame["cheap_size"]) != (400, 225) or tuple(frame["target_size"]) != (1600, 900):
+        if tuple(frame["input_size"]) != INPUT_EXTENT or tuple(frame["paired_target_size"]) != PAIRED_TARGET_EXTENT:
             raise ValueError(f"unexpected capture extent in {summary['frame_id']}")
-        if any(value <= 0 for value in frame["source_scene_size"]):
-            raise ValueError(f"invalid source scene extent in {summary['frame_id']}")
+        if frame.get("sampling_map") != capture.get("sampling_map"):
+            raise ValueError(f"sampling-map drift in {summary['frame_id']}")
+        controls = frame.get("global_controls")
+        if not isinstance(controls, dict):
+            raise ValueError(f"missing global controls in {summary['frame_id']}")
+        if (
+            controls.get("schema_name") != GLOBAL_CONTROL_SCHEMA
+            or controls.get("encoding") != GLOBAL_CONTROL_ENCODING
+            or controls.get("order") != list(GLOBAL_CONTROL_ORDER)
+            or controls.get("raw_bytes") != RAW_GLOBAL_CONTROL_BYTES
+        ):
+            raise ValueError(f"global-control contract drift in {summary['frame_id']}")
+        values = controls.get("values")
+        if not isinstance(values, dict) or tuple(values) != GLOBAL_CONTROL_ORDER:
+            raise ValueError(f"global-control order drift in {summary['frame_id']}")
+        ordered_values = [values[name] for name in GLOBAL_CONTROL_ORDER]
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(value)
+            or value < 0
+            for value in ordered_values
+        ):
+            raise ValueError(f"invalid global-control value in {summary['frame_id']}")
+        controls_path = root / controls["raw_path"]
+        if controls_path.stat().st_size != RAW_GLOBAL_CONTROL_BYTES:
+            raise ValueError(f"bad global-control byte count: {controls_path}")
+        if sha256(controls_path) != controls.get("raw_sha256"):
+            raise ValueError(f"global-control digest mismatch: {controls_path}")
+        raw_control_values = struct.unpack("<4f", controls_path.read_bytes())
+        encoded_json_values = struct.unpack("<4f", struct.pack("<4f", *ordered_values))
+        if raw_control_values != encoded_json_values:
+            raise ValueError(f"global-control JSON/raw mismatch in {summary['frame_id']}")
+        frame_timing = frame.get("input_raster_timing")
+        if not isinstance(frame_timing, dict) or any(
+            not isinstance(frame_timing.get(name), int) or frame_timing[name] < 0
+            for name in (
+                "last_command_encoding_ns",
+                "lifetime_total_command_encoding_ns",
+                "lifetime_maximum_command_encoding_ns",
+            )
+        ):
+            raise ValueError(f"invalid input-raster timing in {summary['frame_id']}")
         by_name = {channel["name"]: channel for channel in frame["channels"]}
         if tuple(by_name) != CHANNELS:
             raise ValueError(f"channel ABI/order mismatch in {summary['frame_id']}")
@@ -176,22 +263,8 @@ def load_capture(root: Path) -> dict:
             raw_by_name[name] = raw.read_bytes()
             if sha256(debug) != channel["debug_sha256"]:
                 raise ValueError(f"debug digest mismatch: {debug}")
-            if ppm_extent(debug) != (400, 225):
+            if ppm_extent(debug) != INPUT_EXTENT:
                 raise ValueError(f"bad debug extent: {debug}")
-        target = frame["target"]
-        if target["format"] != "rgba8" or target["source_gpu_format"] not in {"rgba8", "bgra8"}:
-            raise ValueError(f"noncanonical target format in {summary['frame_id']}")
-        target_raw = root / target["raw_path"]
-        if target_raw.stat().st_size != RAW_TARGET_BYTES:
-            raise ValueError(f"bad target byte count: {target_raw}")
-        if target["raw_bytes"] != RAW_TARGET_BYTES:
-            raise ValueError(f"bad declared target byte count in {summary['frame_id']}")
-        if sha256(target_raw) != target["raw_sha256"]:
-            raise ValueError(f"target raw digest mismatch: {target_raw}")
-        if sha256(root / target["debug_path"]) != target["debug_sha256"]:
-            raise ValueError(f"target debug digest mismatch in {summary['frame_id']}")
-        if ppm_extent(root / target["debug_path"]) != (1600, 900):
-            raise ValueError(f"bad target debug extent in {summary['frame_id']}")
 
         compact: dict[int, str] = {}
         for identity in frame["identities"]:
@@ -212,6 +285,7 @@ def load_capture(root: Path) -> dict:
                 raise ValueError(f"stable identity mapping drift for {stable}")
         stats = validate_pixels(frame["frame_id"], raw_by_name, frame["identities"])
         stats["frame_id"] = frame["frame_id"]
+        stats["global_controls"] = values
         frame_stats.append(stats)
         frames.append(frame)
     return {"root": root, "capture": capture, "frames": frames, "frame_stats": frame_stats}
@@ -225,12 +299,12 @@ def logical_signature(loaded: dict) -> list[dict]:
             "interpolation_alpha": frame["interpolation_alpha"],
             "camera": frame["camera"],
             "effects": frame["effects"],
+            "global_controls": frame["global_controls"],
             "identities": frame["identities"],
             "channels": [
                 {"name": item["name"], "raw_sha256": item["raw_sha256"]}
                 for item in frame["channels"]
             ],
-            "target_sha256": frame["target"]["raw_sha256"],
         }
         for frame in loaded["frames"]
     ]

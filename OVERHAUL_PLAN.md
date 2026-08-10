@@ -8,12 +8,20 @@ sandbox activity are implemented through automated product acceptance,
 performance measurement, schema-5 incident evidence, and cleanup. The final
 S12 and S13 human walkthroughs remain pending. Secondary platforms and public
 multiplayer services remain deferred. ADR-025 now accepts a parallel NR0
-game-specific neural-rendering feasibility track; its implementation has not
-started.
+game-specific neural-rendering track. NR0-A through NR0-D and the NR-0003
+external-model comparison are complete. ADR-026 fixes the product model as a
+title-owned, densely conditioned causal renderer trained from random
+initialization. NR4-A's exact target still and NR4-B's moving target are
+accepted as historical target-adapter/correspondence evidence. NR4-C's
+self-contained native `160×90 → 400×225` still/moving cohort and minimal
+global-control schema are accepted. NR4-E accepts the 108-pair corpus for the
+initial structural scope, and NR5-A/B accept the random-origin framework and
+controlled overfit. NR5-C held-out reconstruction is next. Other target
+extents are deferred.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-08-05
+**Last reviewed:** 2026-08-08
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -37,7 +45,8 @@ started.
 → [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 
 **Parallel core-rendering track:**
-[`NR0 accepted direction and planned feasibility slice`](docs/design/nr0-neural-rendering-feasibility.md)
+[`From-scratch title neural renderer; NR5-A/B accepted; NR5-C next`](docs/design/title-neural-renderer-north-star.md)
+([implementation plan](docs/design/title-neural-renderer-implementation-plan.md))
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
 
@@ -120,6 +129,12 @@ The deterministic game remains authoritative; the conventional low-fidelity
 render remains the fallback; and only an explicitly promoted model bundle may
 enter runtime content. Mutable datasets, training runs, and checkpoints are
 not engine state.
+
+ADR-026 adds the model-origin constraint: every promotion-eligible learned
+component begins from declared random initialization and is trained through the
+repository-owned framework on title-owned, exactly paired reference/target
+data. External pretrained models may inform research but cannot initialize,
+teach, create targets for, or enter the product renderer.
 
 ### 2.1 Engine kernel
 
@@ -453,7 +468,8 @@ logical authority and operational lifecycle:
 | D-022 | Persist human-test evidence as bounded per-run incident bundles with anomaly bookmarks, grep-friendly streams, trailing real-swapchain screenshots, concise LLM handoff, and replay attachments | Accepted in [ADR-021](docs/adr/021-local-human-test-incident-bundles.md); IC5-A through IC5-I, including long gameplay/window/replay/cost, deterministic failure hardening, bounded-object/budget/playable-boundary corrections, and the schema-3 -5/+2 eight-anchor visual contract, are implemented and human-validated for macOS solo under the [corrective plan](docs/design/incident-evidence-reliability-and-boundary-corrections.md). | Extend the same evidence quality when a future product phase makes listen/dedicated human sessions routine |
 | D-023 | NPCs retain stable semantic destinations while a shared deterministic bounded planner derives transient routes, distinguishes waiting/blocked/unreachable, and accepts physical displacement without snap-back | Accepted and implemented in [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md), the [S12 plan](docs/design/s12-destination-driven-navigation.md), [evaluation world](docs/design/s12-navigation-evaluation-world.md), and [automated acceptance record](docs/validation/s12-destination-driven-navigation.md) | S12 human walkthrough, then S13 |
 | D-024 | Stable authored population membership owns role, cyclic activity intent, slot claims, combat disposition, and replacement across disposable NPC actors | Accepted and implemented in [ADR-024](docs/adr/024-authored-population-intent-and-activity-slots.md), the [S13 plan](docs/design/s13-authored-population-and-sandbox-activity.md), the [population evaluation world](docs/design/s13-population-evaluation-world.md), the [S13 validation ledger](docs/validation/s13-authored-population-and-sandbox-activity.md), and the [performance baseline](docs/performance/s13-baseline.md) | S13 human walkthrough, then S14 |
-| D-025 | Game-specific neural rendering is a presentation capability with a versioned buffer ABI, explicit fallback, external experiment lifecycle, and human-promoted immutable model bundles | Accepted direction in [ADR-025](docs/adr/025-game-specific-neural-rendering-boundary.md), backed by the [research record](docs/research/neural-rendering/README.md) and [NR0 plan](docs/design/nr0-neural-rendering-feasibility.md); not implemented | NR0 implementation and measured Apple Silicon acceptance |
+| D-025 | Game-specific neural rendering is a presentation capability with a versioned buffer ABI, explicit fallback, external experiment lifecycle, and human-promoted immutable model bundles | Accepted in [ADR-025](docs/adr/025-game-specific-neural-rendering-boundary.md); NR0-A through NR0-D foundation and external NR-0003 comparison implemented; no model promoted | NR-0004 through NR-0007 candidate work, then NR0-E through NR0-G |
+| D-026 | Promotion-eligible neural-renderer weights and learned dependencies are title-specific, trained from random initialization on title-owned exact pairs, and reproduced through the engine framework; pretrained models remain comparisons only | Accepted in [ADR-026](docs/adr/026-from-scratch-title-neural-renderer.md), the [north star](docs/design/title-neural-renderer-north-star.md), and its [phase-gated implementation plan](docs/design/title-neural-renderer-implementation-plan.md) after NR-0003 exposed the richness/structure tradeoff | NR-0004 high-fidelity target and paired-corpus foundation |
 
 ### Decision notes
 
@@ -536,7 +552,7 @@ before dependency resolution.
 | Open-world corrective | Preserve traversal and dynamic-object continuity while exposing district/NPC intent and objectively characterizing vehicle handling | Complete and human-accepted; ADR-022 and the vehicle-dynamics report record the current contract |
 | S12 | One NPC retains a semantic destination through branch choice, content waiting, topology revision, physical obstruction, displacement, encounter interruption, restore, replay, and network placement | Implemented; automated focused, performance, schema-4 incident, and installed Metal acceptance pass. Human evaluation-world and two preserved incident captures remain |
 | S13 | Twelve stable authored population members perform role-driven activities, contend for slots, fight, die, and replace safely | Implemented; automated product, schema-5 incident, scale, performance, and Metal acceptance pass. Human walkthrough remains |
-| NR0 | A paired deterministic scene produces an evaluated spatial model, explicit promotion, installed macOS inference, truthful fallback, diagnostics, and measured evidence | Planned parallel core-rendering feasibility slice under ADR-025; no implementation or model selected |
+| NR0 | A paired deterministic scene produces an evaluated title model, explicit promotion, installed macOS inference, truthful fallback, diagnostics, and measured evidence | NR0-A through NR0-D accepted; NR-0001/2 unpromoted, NR-0003 comparison-only; no model selected. ADR-026 requires the next candidate lineage to start from random initialization. |
 
 M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
 slices. M3 is a narrow pre-network readiness gate, not a speculative server
@@ -1873,18 +1889,22 @@ recommendations.
     navmesh, crowd solver, LLM agent, relevance cutoff, or generic AI framework
     without measured product pressure.
 
-**Parallel core-rendering track — NR0:** [ ] Implement the accepted
-[game-specific neural-rendering feasibility slice](docs/design/nr0-neural-rendering-feasibility.md)
-without renumbering or hiding the gameplay roadmap. Begin with exact raster
-input semantics and debug views, then paired capture, one compact spatial
-baseline, held-out evaluation, explicit promotion, installed macOS inference,
-fallback, diagnostics, and human acceptance. The
+**Parallel core-rendering track — NR0:** [ ] Continue the accepted
+[from-scratch title neural renderer](docs/design/title-neural-renderer-north-star.md)
+without renumbering or hiding the gameplay roadmap. Exact raster inputs,
+debugging, paired capture, the compact random-initialization baseline, and the
+NR0-D failure envelope are complete. NR-0003 is an external comparison only.
+Proceed through NR-0004 high-fidelity target/corpus, NR-0005 structural model,
+NR-0006 causal temporal model, and measured NR-0007 learned detail before
+explicit promotion, installed macOS inference, fallback, diagnostics, and
+human acceptance. The
 [research record](docs/research/neural-rendering/README.md),
 [ADR-025](docs/adr/025-game-specific-neural-rendering-boundary.md),
+[ADR-026](docs/adr/026-from-scratch-title-neural-renderer.md),
 [evaluation scene](docs/design/nr0-neural-rendering-evaluation-scene.md),
 [validation ledger](docs/validation/nr0-neural-rendering-feasibility.md), and
-[performance placeholder](docs/performance/nr0-baseline.md) are now persistent;
-no runtime implementation or selected model is claimed.
+[performance baseline](docs/performance/nr0-baseline.md) are persistent; no
+runtime model is selected.
 
 49. [ ] **S14 — Ranged combat vertical slice.** Add one authoritative weapon
     archetype with equip/fire/reload/ammunition state, source-aware damage

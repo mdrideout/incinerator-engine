@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "experiment": "NR-0005",
+  "title": "from-scratch structural title renderer",
+  "status": "nr5_a_and_nr5_b_accepted",
+  "current_phase": "NR5-C",
+  "current_gate": "held_out_structural_reconstruction",
+  "working_resolution": {
+    "input_extent": [160, 90],
+    "target_extent": [400, 225],
+    "linear_scale": 2.5
+  },
+  "learned_origin": "repository-owned random initialization and title-owned paired corpus only",
+  "pretrained_weights": false,
+  "promotion_eligible": false,
+  "test_policy": "sealed until validation selection in NR5-C",
+  "phase_evidence": {
+    "NR5-A": {
+      "status": "accepted",
+      "external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr5-a-clean-room-20260809-c",
+      "checks": 7,
+      "resume_parent_immutable": true,
+      "export_maximum_absolute_error": 0.0
+    },
+    "NR5-B": {
+      "status": "accepted",
+      "external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr5-b-controlled-overfit-20260809-c",
+      "frames": 18,
+      "parameters": 448175,
+      "selected_epoch": 238,
+      "training_duration_ms": 208399.34529177845,
+      "linear_hdr_mae": 0.00995595163355271,
+      "best_baseline": "bilinear",
+      "best_baseline_linear_hdr_mae": 0.4474025070667267,
+      "nr4_e_authorization_sha256": "db2f597ec567d148266bc2dd035c0907075b2e97f5e9633190735d2b45da17bb",
+      "tool_source_snapshots": 9,
+      "test_pixels_opened": false,
+      "promotion_authorized": false,
+      "known_failures": [
+        "localized smoothing in severe near-edge views",
+        "localized chromatic ringing at near-edge and high-emissive boundaries"
+      ]
+    }
+  }
+}

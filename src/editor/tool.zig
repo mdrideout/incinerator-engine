@@ -315,6 +315,7 @@ pub const NeuralView = struct {
     draw_count: usize = 0,
     history_valid_draws: usize = 0,
     history_reset_draws: usize = 0,
+    global_controls: engine.neural_rendering.FrameGlobalControls = .{},
     compact_id_collisions: u64 = 0,
     rendered_frames: u64 = 0,
     render_failures: u64 = 0,

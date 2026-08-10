@@ -5,15 +5,16 @@ foundation now includes S12 semantic navigation and the implemented S13
 authored-population/activity slice. Protocol 15, snapshot 14, replay 16,
 incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
 automated Metal/product acceptance are current. No open P0/P1 architectural
-finding blocks the final S13 human walkthrough. ADR-025 accepts the ownership
-boundary for a parallel game-specific neural-rendering feasibility track; NR0
-has not implemented that capability.
+finding blocks the final S13 human walkthrough. The parallel neural-rendering
+track has accepted NR0-A through NR0-D plus the NR-0003 external comparison.
+ADR-025 owns the presentation/promotion boundary; ADR-026 and the title neural
+renderer north star now require title-owned random-initialization training.
 
-**Last reviewed:** 2026-08-05
+**Last reviewed:** 2026-08-08
 
 **Scope:** Current post-S13 architecture, its demonstrated strengths, its
 remaining structural pressure before another product or service slice, and the
-accepted pre-implementation boundary for NR0
+accepted from-scratch title neural-renderer direction
 
 **Related roadmap:** [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md)
 
@@ -38,7 +39,7 @@ accepted pre-implementation boundary for NR0
 → [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 
 **Parallel core-rendering track:**
-[`ADR-025 accepted; NR0 planned, not implemented`](docs/adr/025-game-specific-neural-rendering-boundary.md)
+[`NR0-A through NR0-D, NR-0004, and NR5-A/B accepted; NR5-C next`](docs/design/title-neural-renderer-north-star.md)
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 
@@ -145,6 +146,10 @@ The accepted foundation remains:
    consumes immutable versioned raster inputs, never becomes authority, and
    loads only a deliberately promoted immutable game-content bundle while the
    conventional render remains available as fallback.
+8. Promotion-eligible neural-renderer weights and learned dependencies are
+   title-specific, trained from random initialization on title-owned paired
+   data, and reproducible through the engine's training framework. External
+   models are research comparisons only.
 
 The accepted multiplayer refinement is:
 
@@ -282,7 +287,8 @@ claim.
 | A-F056 | Incident manifests write stale protocol/snapshot literals instead of sourcing the accepted live cohort, so a navigation incident could misidentify the runtime that produced it | P1 | S12-A preflight | Resolved: schema-4 manifests source protocol/replay/snapshot cohort constants, drift tests fail closed, and a fresh protocol-14/replay-14/snapshot-13 bundle passes strict inspection |
 | A-F057 | NPC base intent is a cooked node reference; route results conflate inactive/capacity/disconnected outcomes, and failed displacement recovery may restore an old pose | P1 | S12 destination/recovery contract | Resolved under [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md): semantic destination intent, one pure typed planner, explicit execution status/lineage, collision-aware re-anchoring, confirmed edge exclusions, and a zero-teleport counter replace raw-node/BFS/snap-back behavior |
 | A-F058 | The installed six-node line and triangle presentation cannot exercise alternate routes, topology replanning, or human-readable navigation diagnosis | P1 | S12 playable evaluation | Resolved for the bounded slice: the installed 16-node/32-edge urban block has two transactional seam gates, visible blockers, six destinations, Navigation Lab, independent overlays, and schema-4 route evidence. Human walkthrough remains the acceptance checkpoint, not an architecture implementation gap |
-| A-F059 | The current conventional renderer has no versioned neural-input ABI, paired-capture path, runtime inference owner, or promoted-model content contract; adding these directly to `renderer.zig` would conflate renderer, experiment, content, and history lifecycles | P1 | NR0 game-specific neural-rendering feasibility slice | Direction accepted in ADR-025; implementation remains open and must proceed through the NR0 vertical slice rather than a subsystem-first refactor |
+| A-F059 | The conventional renderer lacked a versioned neural-input ABI, paired-capture path, runtime inference owner, and promoted-model content contract; adding these directly to `renderer.zig` would conflate renderer, experiment, content, and history lifecycles | P1 | NR0 game-specific neural-rendering feasibility slice | Resolved at the foundation level by ADR-025 and accepted NR0-A through NR0-D: engine-owned input/capture/evaluation hosts and external experiment ownership are separate. Promotion and the final GPU-resident runtime remain intentionally blocked on a worthy title model. |
+| A-F060 | A visually rich pretrained video model could redirect the engine toward external checkpoints, fine-tuning, appearance-only conditioning, or pseudo-targets instead of the intended reproducible game-owned renderer | P1 | Post-NR-0003 strategy correction | Resolved by ADR-026 and the title neural renderer north star: learned product components start from declared random initialization on title-owned exact pairs; NR-0003 is comparison evidence only; NR4-A is human-accepted and NR4-B now proves the exact rights-clean direction over motion. |
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,

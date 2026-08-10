@@ -1,7 +1,7 @@
 # NR0 Neural Rendering Performance Baseline
 
-**Status:** NR-0001, NR0-A/B foundation, NR0-C standalone model, and NR0-D
-offline stress evaluation measured; full installed runtime baseline open
+**Status:** NR-0001, NR0-A/B foundation, NR0-C/D, NR-0003, NR4-A/B/C/D, and
+NR5-A/B offline work measured; full installed runtime baseline open
 
 **Date:** 2026-08-08
 
@@ -120,3 +120,145 @@ pipeline, and visual artifact generation. They cannot be used as model-runtime
 residency. NR0-F must measure the promoted bundle through the installed
 GPU-resident adapter before the engine accepts any runtime cost or hardware
 envelope.
+
+## NR-0003 external-model comparison
+
+These numbers prove only that a large pretrained video prior can execute at the
+requested quality-first proof rate on the target Mac. ADR-026 prevents these
+weights from entering the title model lineage.
+
+| Item | Structure schedule | Richness schedule |
+|---|---:|---:|
+| Hardware/runtime | Apple M2 Max, 64 GB unified memory; Python 3.13, PyTorch 2.13 MPS | Same |
+| Model | LTX-Video 2B 0.9.8 distilled, external pretrained comparison | Same |
+| Dimensions/cohort | 9 frames, 512×288, 8 FPS sequence | Same |
+| Warm pipeline | 5.966 s | 6.079 s |
+| Warm effective rate | 1.509 FPS | 1.480 FPS |
+| Cold end-to-end | 30.872 s | 30.964 s |
+| Peak process RSS | 7,918,895,104 bytes | 7,918,878,720 bytes |
+| Disposition | Preserves major geometry but adds little fidelity | Adds rich materials/lighting by replacing authored geometry |
+
+The complete evidence and measurement limitations are recorded in
+[`NR-0003`](../../experiments/neural-rendering/nr-0003-ltxv-2b-distilled/README.md).
+This result informs architecture only. Future performance baselines must name
+the repository-defined model initialized and trained under ADR-026.
+
+## NR4-A offline target-factory measurements
+
+These figures measure offline training-truth manufacture, not runtime neural
+rendering and not a shipping frame budget.
+
+| Item | Result |
+|---|---|
+| Hardware/backend | Same Apple M2 Max host; Blender 4.5.12 LTS; Cycles Metal |
+| Configuration | 1600×900, 256 fixed samples, seed 73, adaptive sampling and learned denoising disabled |
+| Scene | 26-draw rights-clean procedural urban corner; 25 identities visible from the selected camera |
+| Two target renders | 5,530.988 ms and 5,520.111 ms reported Cycles render time |
+| Alignment | 0.975158 exact identity-over-union in both runs |
+| Reproducibility | Engine source, target package, tooling snapshots, identity, and depth logical evidence exact; display maximum difference 1/255; normal maximum absolute difference 4.768e-7 |
+
+The initial Metal kernel compilation is environment warmup and is recorded in
+each target log; target production is intentionally offline.
+
+## NR4-B offline moving-target measurements
+
+These are measured data-factory costs for two exact 18-frame sequence proofs,
+not an inference, training, or shipping budget.
+
+| Item | Result |
+|---|---|
+| Hardware/backend | Same Apple M2 Max host; Blender 4.5.12 LTS; Cycles Metal |
+| Configuration | 1600×900, 256 fixed samples, seed 73, adaptive sampling and learned denoising disabled |
+| Cohort | Six causally isolated three-sample segments; 18 source/target pairs per proof |
+| First proof target time | 132.762 seconds total; 4.994–18.167 seconds per target |
+| Second proof target time | 133.374 seconds total; 4.966–18.511 seconds per target |
+| Retained external evidence | Approximately 2.5 GB for both complete source, HDR target, auxiliary, alignment, report, log, and reproducibility cohorts |
+| Alignment | 0.974974–0.987851 exact identity-over-union over all frames; no cheap-visible identity omitted |
+| Reproducibility | Engine source, normalized packages, target identity, and target depth exact for all 18 corresponding frames; display maximum difference 1/255; normal maximum absolute difference 5.960e-7 |
+
+The near-edge frames dominate the target-time range because the close glass and
+lighting composition increases Cycles work. That observation is retained as
+offline renderer behavior; it is not converted into an arbitrary corpus or
+camera restriction.
+
+## NR4-C native working-resolution measurements
+
+These are fresh native-cohort data-factory measurements. They do not reuse or
+reduce NR4-A/B target pixels and are not an inference or shipping-frame budget.
+
+| Item | Result |
+|---|---|
+| Hardware/backend | Apple M2 Max, 64 GB unified memory; Blender 4.5.12 LTS; Cycles Metal |
+| Native contract | Six direct 160×90 inputs; direct 400×225 scene-linear float32 target; exact 5:2 top-left pixel-center mapping |
+| Cohort | One two-run still proof plus two 18-frame sequence proofs across six causal segments |
+| Run A target time | 14.862 seconds total; 0.646–1.516 seconds per target; 0.826 seconds mean |
+| Input adapter observation | 2.725 ms CPU command encoding total over 18 selected frames; 0.229 ms maximum; GPU raster time unavailable |
+| Display-pair decode | 6.000–6.819 ms; 6.454 ms mean |
+| Resize baselines | Nearest 0.057 ms mean; bilinear 0.365 ms; bicubic 0.564 ms |
+| Peak target process RSS | 540,540,928 bytes; Cycles GPU-memory residency unavailable from the pinned Python surface |
+| Run A evidence | 11,064,553 input bytes; 359,158 target-package bytes; 65,751,976 direct-target bytes; 11,607,072 analysis/report bytes |
+| Retained two-run roots | 9,565,341 bytes for the still gate; 178,312,689 bytes for the sequence gate |
+| Alignment | 0.940195–0.976374 exact identity-over-union; no input-visible identity omitted |
+| Reproducibility | Inputs, normalized packages, identity, and depth exact; display maximum 1/255; normal maximum `9.537e-7` absolute / `1.767e-8` RMSE |
+
+The accepted schema-4 closing sequence retains the same raster extents and adds
+four frame-global float32 controls. They cost 16 training bytes per frame and
+no additional GPU raster target or raster pixel. In its fresh Run A, 18 direct
+targets render in 15.365 seconds and peak Blender process RSS is 544,800,768
+bytes. Cross-run input/package/identity/depth evidence is exact; display
+variation is at most 1/255 and normal variation at most `6.557e-7` absolute /
+`1.774e-8` RMSE. The closing roots are named in the validation ledger.
+
+The input timing measures host CPU command encoding, not GPU execution. The
+manifest names this scope. No estimate is substituted for unavailable GPU
+timestamps or memory residency.
+
+## NR4-D paired-corpus measurements
+
+These are offline data-factory and retained-evidence costs, not inference or
+training budgets.
+
+| Item | Result |
+|---|---|
+| Cohort | 6 whole sequences; 108 native pairs; overfit/train/validation/test plus 2 stress sequences |
+| Target time | 86.245 seconds total; 0.544–1.662 seconds per direct 400×225 Cycles target |
+| Peak target process RSS | 546,144,256 bytes |
+| Input capture | 66,439,775 bytes across source runs |
+| Target-frame packages | 2,183,562 bytes across source runs |
+| Direct target evidence | 381,465,647 bytes across source runs |
+| Alignment/baseline/report evidence | 67,010,888 bytes across source runs |
+| Alignment | 0.913698–0.977032 exact identity-over-union; no input-visible identity omitted |
+| Self-contained corpus | Approximately 506 MiB |
+| Complete retained proof | Approximately 1.0 GiB, including source runs, corpus, logs, and review evidence |
+
+The superseded `-a` proof remains diagnostic evidence: its first partial
+assembly exposed a policy implementation that incorrectly treated repeated
+conditioning inside one sequence as split leakage, and its later review opened
+the nominal test split. The accepted `-b` proof fixes both: leakage is enforced
+across sequences, and test pixels cannot enter the review report.
+
+## NR5-A/B from-scratch framework and controlled-overfit measurements
+
+These measurements describe external PyTorch/MPS framework and controlled-fit
+behavior. They are not installed inference, shipping performance, or a product
+budget.
+
+| Item | Result |
+|---|---|
+| Hardware/runtime | Apple M2 Max, 64 GB unified memory; macOS 15.7.7; Python 3.13.12; PyTorch 2.7.0 MPS; OpenEXR 3.4.14 |
+| Clean-room lifecycle | 575.688 ms for initialize, train, checkpoint, immutable resume, evaluation, audit, and exact TorchScript export on the tiny framework fixture |
+| Controlled model | 448,175 parameters; 36 learned tensors; two-branch low-resolution context plus target-grid structural reconstruction |
+| Controlled cohort | 18 overfit frames; 11 continuous planes, categorical semantic/instance maps, 4 normalized global controls; direct 400×225 scene-linear HDR targets |
+| Training | 240 declared epochs; epoch 238 retained; 208.399 seconds MPS wall time |
+| Checkpoints | 1,811,179-byte random initializer; 5,438,465-byte trained checkpoint including optimizer/scheduler state and lineage |
+| Controlled-fit quality | Model linear-HDR MAE 0.009956 vs best bilinear 0.447403; diagnostic-display MAE 0.013717 vs 0.366620 |
+| Boundaries | Model semantic-boundary MAE 0.018672 vs bilinear 0.276200; instance-boundary MAE 0.036004 vs 0.325507 |
+| Offline full-frame inference | 7.151 ms median, 13.588 ms p95, 14.923 ms maximum over the 18-frame MPS evaluation |
+| Export | 1,867,652-byte TorchScript candidate; zero observed mean/maximum difference on the export fixture |
+| Provenance | Exact NR4-E authorization, configuration, nine executing tool sources, evaluation/environment/export manifests, initializer, and checkpoint retained by digest |
+
+The first 152,375-parameter `-a` attempt remains diagnostic evidence. It
+exposed visible ringing and training oscillation, motivating the measured
+capacity increase, annealed learning rate, lowest-loss selection, immutable
+configuration snapshot, and complete 18-frame visual evidence in accepted run
+`nr5-b-controlled-overfit-20260809-c`.

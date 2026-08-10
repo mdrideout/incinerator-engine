@@ -24,6 +24,22 @@ Implemented numbered experiments:
   [NR0-D failure evaluation](nr-0002-multichannel-spatial-baseline/NR0-D-EVALUATION.md)
   accepts the evaluation phase but finds the candidate unsuitable for
   promotion.
+- [`nr-0003-ltxv-2b-distilled/`](nr-0003-ltxv-2b-distilled/README.md):
+  quality-first stock LTX-Video 2B distilled baseline on M2 Max; local
+  512×288 throughput passes at roughly 1.5 FPS, while stock RGB conditioning
+  is rejected because richness and authored-structure preservation do not
+  overlap. Complete and unpromoted.
+- [`nr-0004-high-fidelity-target-corpus/`](nr-0004-high-fidelity-target-corpus/README.md):
+  from-scratch title-renderer data-factory experiment. NR4-A's exact static
+  Cycles target and NR4-B's 18-frame/six-segment moving target are technically
+  and human accepted as historical adapter/correspondence proofs. NR4-C's
+  native `160×90 → 400×225` cohort and minimal global-control schema are
+  accepted; NR4-D's 108-pair technical corpus gate passes; NR4-E accepts it
+  for the initial NR5-A/B scope with explicit broader gaps.
+- [`nr-0005-structural-title-renderer/`](nr-0005-structural-title-renderer/README.md):
+  cohesive from-scratch framework and controlled 18-frame overfit accepted;
+  exact random-origin lineage, full visual evidence, and deterministic
+  baselines retained; NR5-C held-out reconstruction is next.
 
 Once tooling exists, each committed experiment directory should contain only
 the information needed to reproduce and review intent:
@@ -41,6 +57,12 @@ exports, and exhaustive comparisons belong under an explicit external artifact
 root, never beside source by accident. A future tool should require that root
 as an explicit absolute argument and write one self-describing run folder per
 invocation.
+
+[ADR-026](../../docs/adr/026-from-scratch-title-neural-renderer.md) governs
+model origin. Promotion-eligible candidates and every learned dependency begin
+from declared random initialization and use title-owned data. External
+pretrained models may have numbered comparison experiments, but they are not
+candidate ancestors, teachers, pseudo-target producers, or promotion inputs.
 
 Experiment state never selects the product model. Promotion crosses the
 separate boundary documented in

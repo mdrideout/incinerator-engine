@@ -1,0 +1,102 @@
+{
+  "schema": 1,
+  "experiment": "NR-0004",
+  "title": "high-fidelity target and paired-corpus foundation",
+  "status": "accepted_for_initial_structural_scope",
+  "current_phase": "complete",
+  "current_gate": "nr4_e_accepted_nr5_a_and_nr5_b_authorized",
+  "working_resolution": {
+    "input_extent": [160, 90],
+    "target_extent": [400, 225],
+    "linear_scale": 2.5,
+    "aspect_ratio": "16:9",
+    "material_policy": "native 160x90 inputs and direct native 400x225 targets only",
+    "foreign_extent_policy": "excluded from generation, training, comparison, preview, and acceptance",
+    "historical_phase_policy": "reuse adapter and causal scenario definitions only; do not reuse pixels, metrics, or visual acceptance",
+    "scope": "NR4-C through first NR5 proof"
+  },
+  "model_training": false,
+  "promotion_eligible_weights": false,
+  "target_adapter": {
+    "kind": "blender_cycles",
+    "configuration": "tools/neural-rendering/targets/blender/environment.json",
+    "frame_schema": "incinerator.nr4.blender-target-frame.v4",
+    "input_schema": "incinerator.neural-input.v3",
+    "capture_schema": 4,
+    "global_control_schema": "incinerator.neural-frame-global.v1"
+  },
+  "source": {
+    "fixture": "src/hosts/neural_target_fixture.zig",
+    "rights": "repository-owned procedural source",
+    "external_art": false,
+    "pretrained_weights": false
+  },
+  "decisions": [
+    "docs/adr/025-game-specific-neural-rendering-boundary.md",
+    "docs/adr/026-from-scratch-title-neural-renderer.md"
+  ],
+  "phase_evidence": {
+    "NR4-A": {
+      "status": "accepted",
+      "frame_schema": "incinerator.nr4.blender-target-frame.v1",
+      "external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-a-technical-20260808-v2"
+    },
+    "NR4-B": {
+      "status": "accepted",
+      "accepted_date": "2026-08-08",
+      "human_review": "accepted_synchronized_moving_target_direction",
+      "frame_schema": "incinerator.nr4.blender-target-frame.v2",
+      "external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-b-technical-20260808-a",
+      "frames_per_run": 18,
+      "segments": 6
+    },
+    "NR4-C": {
+      "status": "accepted",
+      "accepted_date": "2026-08-08",
+      "human_review": "accepted_native_160x90_to_400x225_target_and_alignment_direction",
+      "input_schema": "incinerator.neural-input.v3",
+      "capture_schema": 4,
+      "frame_schema": "incinerator.nr4.blender-target-frame.v4",
+      "global_control_schema": "incinerator.neural-frame-global.v1",
+      "still_external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-c-native-still-20260808-b",
+      "sequence_external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-c-native-sequence-20260808-b",
+      "ambiguity_external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-c-native-ambiguity-20260808-b",
+      "accepted_still_external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-c-global-controls-still-20260808-a",
+      "accepted_sequence_external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-c-global-controls-sequence-20260808-a",
+      "frames_per_sequence_run": 18,
+      "segments": 6,
+      "model_output": false,
+      "foreign_extent_material": false,
+      "observed_ambiguity": "lighting_effect target scene/material changes were absent from raster channels and represented only by a spurious motion-history-validity change",
+      "resolution": "four presentation-owned frame-global float32 controls resolve the observed ambiguity",
+      "control_cost": "16 bytes per frame; zero additional GPU raster targets or pixels",
+      "spatial_lighting_control": false
+    },
+    "NR4-D": {
+      "status": "technical_gate_passed",
+      "external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-d-corpus-20260808-b",
+      "sequences": 6,
+      "frames": 108,
+      "splits": ["overfit", "train", "validation", "test", "stress"],
+      "stress_sequences": 2,
+      "test_policy": "sealed_until_final_evaluation",
+      "test_frames_in_review": false,
+      "whole_sequence_split": true,
+      "cross_sequence_conditioning_leakage": false,
+      "cross_sequence_pair_leakage": false,
+      "human_review": "agent_visual_audit_passed_product_coverage_acceptance_deferred_to_NR4-E",
+      "model_output": false
+    },
+    "NR4-E": {
+      "status": "accepted",
+      "accepted_date": "2026-08-09",
+      "external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr4-e-coverage-20260809-b",
+      "product_review": "accepted_nr4_d_review_sheet",
+      "accepted_for": "NR5-A framework and NR5-B controlled spatial overfit",
+      "test_pixels_opened": false,
+      "known_gaps_recorded": true,
+      "model_training_authorized": true,
+      "promotion_authorized": false
+    }
+  }
+}

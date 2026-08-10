@@ -1,4 +1,4 @@
-//! External NR0-B dataset capture for aligned neural inputs and conventional targets.
+//! External dataset capture for native neural-renderer inputs.
 //!
 //! The owner consumes presentation-only GPU targets after one successful
 //! product frame. Every captured frame is self-describing, hashed, and written
@@ -16,9 +16,9 @@ const c = sdl.c;
 const contract = engine.neural_rendering;
 const pixel_bytes: u32 = 4;
 const channel_bytes: u32 = contract.cheap_width * contract.cheap_height * pixel_bytes;
-const all_channel_bytes: u32 = channel_bytes * contract.channels.len;
-const target_bytes: u32 = contract.target_width * contract.target_height * pixel_bytes;
-const transfer_bytes: u32 = all_channel_bytes + target_bytes;
+const transfer_bytes: u32 = channel_bytes * contract.channels.len;
+const controls_bytes: u32 = @intCast(contract.global_control_bytes);
+const training_bytes: u32 = transfer_bytes + controls_bytes;
 
 pub const Cohort = enum { overfit, train, validation, @"test", stress };
 
@@ -47,18 +47,18 @@ pub const Owner = struct {
     io: std.Io,
     allocator: std.mem.Allocator,
     device: *c.SDL_GPUDevice,
-    source_format: c.SDL_GPUTextureFormat,
-    source_bgra: bool,
     config: Config,
     root_storage: []u8,
     sequence_storage: []u8,
     camera_path_storage: []u8,
     index: std.Io.File,
-    target: *c.SDL_GPUTexture,
     download: *c.SDL_GPUTransferBuffer,
     pixels: []u8,
     recorded: u64 = 0,
     capture_failures: u64 = 0,
+    last_input_command_encoding_ns: u64 = 0,
+    total_input_command_encoding_ns: u64 = 0,
+    maximum_input_command_encoding_ns: u64 = 0,
 
     pub fn init(
         io: std.Io,
@@ -79,7 +79,7 @@ pub const Owner = struct {
             std.Io.Dir.Permissions.fromMode(0o700),
         );
         var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
-        for ([_][]const u8{ "channels", "targets", "frames" }) |child| {
+        for ([_][]const u8{ "channels", "controls", "frames" }) |child| {
             const path = try std.fmt.bufPrint(&path_buffer, "{s}/{s}", .{ config.root, child });
             try std.Io.Dir.cwd().createDir(io, path, std.Io.Dir.Permissions.fromMode(0o700));
         }
@@ -99,19 +99,6 @@ pub const Owner = struct {
         errdefer index.close(io);
 
         const device = gpu.getDevice();
-        const source_format = gpu.getSwapchainFormat();
-        const target = c.SDL_CreateGPUTexture(device, &c.SDL_GPUTextureCreateInfo{
-            .type = c.SDL_GPU_TEXTURETYPE_2D,
-            .format = source_format,
-            .usage = c.SDL_GPU_TEXTUREUSAGE_COLOR_TARGET | c.SDL_GPU_TEXTUREUSAGE_SAMPLER,
-            .width = contract.target_width,
-            .height = contract.target_height,
-            .layer_count_or_depth = 1,
-            .num_levels = 1,
-            .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
-            .props = 0,
-        }) orelse return error.NeuralCaptureTargetCreationFailed;
-        errdefer c.SDL_ReleaseGPUTexture(device, target);
         const download = c.SDL_CreateGPUTransferBuffer(device, &c.SDL_GPUTransferBufferCreateInfo{
             .usage = c.SDL_GPU_TRANSFERBUFFERUSAGE_DOWNLOAD,
             .size = transfer_bytes,
@@ -131,15 +118,11 @@ pub const Owner = struct {
             .io = io,
             .allocator = allocator,
             .device = device,
-            .source_format = source_format,
-            .source_bgra = source_format == c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM or
-                source_format == c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM_SRGB,
             .config = config,
             .root_storage = root_storage,
             .sequence_storage = sequence_storage,
             .camera_path_storage = camera_path_storage,
             .index = index,
-            .target = target,
             .download = download,
             .pixels = pixels,
         };
@@ -162,7 +145,6 @@ pub const Owner = struct {
             .{@errorName(err)},
         );
         c.SDL_ReleaseGPUTransferBuffer(self.device, self.download);
-        c.SDL_ReleaseGPUTexture(self.device, self.target);
         self.allocator.free(self.pixels);
         self.allocator.free(self.camera_path_storage);
         self.allocator.free(self.sequence_storage);
@@ -190,7 +172,6 @@ pub const Owner = struct {
 
     pub fn record(
         self: *Owner,
-        gpu: *renderer.Renderer,
         inputs: *const neural_inputs.Owner,
     ) !void {
         const frame = inputs.frameView();
@@ -199,7 +180,7 @@ pub const Owner = struct {
             self.capture_failures +|= 1;
             self.writeCaptureManifest(.partial) catch {};
         }
-        try self.readback(gpu, inputs);
+        try self.readback(inputs);
 
         var raw_digests: [contract.channels.len][64]u8 = undefined;
         var ppm_digests: [contract.channels.len][64]u8 = undefined;
@@ -209,22 +190,20 @@ pub const Owner = struct {
             raw_digests[index] = try self.writeRawChannel(channel, frame.presentation_frame, bytes);
             ppm_digests[index] = try self.writePpmChannel(channel, frame.presentation_frame, bytes);
         }
-        const target_pixels = self.pixels[all_channel_bytes..transfer_bytes];
-        self.normalizeTarget(target_pixels);
-        const target_raw_digest = try self.writeRawTarget(frame.presentation_frame, target_pixels);
-        const target_ppm_digest = try self.writePpmTarget(frame.presentation_frame, target_pixels);
-        try self.writeFrameManifest(
-            inputs,
-            raw_digests,
-            ppm_digests,
-            target_raw_digest,
-            target_ppm_digest,
+        const controls_digest = try self.writeGlobalControls(frame);
+        const input_diagnostics = inputs.diagnostics();
+        self.last_input_command_encoding_ns = input_diagnostics.last_command_encoding_ns;
+        self.total_input_command_encoding_ns +|= input_diagnostics.last_command_encoding_ns;
+        self.maximum_input_command_encoding_ns = @max(
+            self.maximum_input_command_encoding_ns,
+            input_diagnostics.last_command_encoding_ns,
         );
+        try self.writeFrameManifest(inputs, controls_digest, raw_digests, ppm_digests);
 
         var summary = std.Io.Writer.Allocating.init(self.allocator);
         defer summary.deinit();
         try summary.writer.print(
-            "{{\"schema\":2,\"frame_id\":\"{s}-frame-{d:0>8}\",\"cohort\":\"{s}\",\"sequence\":\"{s}\",\"camera_path\":\"{s}\",\"authority_tick\":{d},\"presentation_frame\":{d},\"frame_manifest\":\"frames/frame-{d:0>8}.json\",\"target_sha256\":\"{s}\"}}\n",
+            "{{\"schema\":4,\"frame_id\":\"{s}-frame-{d:0>8}\",\"cohort\":\"{s}\",\"sequence\":\"{s}\",\"camera_path\":\"{s}\",\"authority_tick\":{d},\"presentation_frame\":{d},\"frame_manifest\":\"frames/frame-{d:0>8}.json\"}}\n",
             .{
                 self.config.sequence,
                 frame.presentation_frame,
@@ -234,7 +213,6 @@ pub const Owner = struct {
                 frame.authority_tick,
                 frame.presentation_frame,
                 frame.presentation_frame,
-                &target_raw_digest,
             },
         );
         try self.index.writeStreamingAll(self.io, summary.writer.buffered());
@@ -246,58 +224,26 @@ pub const Owner = struct {
         else
             .partial);
         std.debug.print(
-            "NR0_CAPTURE frame={d} tick={d} cohort={s} sequence={s} target_sha256={s}\n",
+            "NR_INPUT_CAPTURE frame={d} tick={d} cohort={s} sequence={s}\n",
             .{
                 frame.presentation_frame,
                 frame.authority_tick,
                 @tagName(self.config.cohort),
                 self.config.sequence,
-                &target_raw_digest,
             },
         );
     }
 
     fn readback(
         self: *Owner,
-        gpu: *renderer.Renderer,
         inputs: *const neural_inputs.Owner,
     ) !void {
-        const source = gpu.getProductSceneTexture();
-        const extent = gpu.getProductSceneExtent();
         const cmd = c.SDL_AcquireGPUCommandBuffer(self.device) orelse
             return error.NeuralCaptureCommandAcquireFailed;
         var submitted = false;
         defer if (!submitted) {
             _ = c.SDL_CancelGPUCommandBuffer(cmd);
         };
-        c.SDL_BlitGPUTexture(cmd, &c.SDL_GPUBlitInfo{
-            .source = .{
-                .texture = source,
-                .mip_level = 0,
-                .layer_or_depth_plane = 0,
-                .x = 0,
-                .y = 0,
-                .w = extent.width,
-                .h = extent.height,
-            },
-            .destination = .{
-                .texture = self.target,
-                .mip_level = 0,
-                .layer_or_depth_plane = 0,
-                .x = 0,
-                .y = 0,
-                .w = contract.target_width,
-                .h = contract.target_height,
-            },
-            .load_op = c.SDL_GPU_LOADOP_DONT_CARE,
-            .clear_color = .{ .r = 0, .g = 0, .b = 0, .a = 1 },
-            .flip_mode = c.SDL_FLIP_NONE,
-            .filter = c.SDL_GPU_FILTER_LINEAR,
-            .cycle = false,
-            .padding1 = 0,
-            .padding2 = 0,
-            .padding3 = 0,
-        });
         const copy = c.SDL_BeginGPUCopyPass(cmd) orelse
             return error.NeuralCaptureCopyPassBeginFailed;
         for (contract.channels, 0..) |channel, index| {
@@ -310,14 +256,6 @@ pub const Owner = struct {
                 contract.cheap_height,
             );
         }
-        downloadTexture(
-            copy,
-            self.target,
-            self.download,
-            all_channel_bytes,
-            contract.target_width,
-            contract.target_height,
-        );
         c.SDL_EndGPUCopyPass(copy);
         const fence = c.SDL_SubmitGPUCommandBufferAndAcquireFence(cmd) orelse
             return error.NeuralCaptureSubmissionFailed;
@@ -330,6 +268,30 @@ pub const Owner = struct {
             return error.NeuralCaptureTransferMapFailed;
         @memcpy(self.pixels, @as([*]const u8, @ptrCast(mapped))[0..transfer_bytes]);
         c.SDL_UnmapGPUTransferBuffer(self.device, self.download);
+    }
+
+    fn writeGlobalControls(
+        self: *Owner,
+        frame: contract.Frame,
+    ) ![64]u8 {
+        const values = frame.global_controls.values();
+        var bytes: [contract.global_control_bytes]u8 = undefined;
+        for (values, 0..) |value, index| {
+            const offset = index * @sizeOf(f32);
+            std.mem.writeInt(
+                u32,
+                bytes[offset..][0..@sizeOf(f32)],
+                @bitCast(value),
+                .little,
+            );
+        }
+        var relative: [192]u8 = undefined;
+        const path = try std.fmt.bufPrint(
+            &relative,
+            "controls/frame-{d:0>8}.f32le",
+            .{frame.presentation_frame},
+        );
+        return self.writeExact(path, &bytes);
     }
 
     fn writeRawChannel(
@@ -391,32 +353,6 @@ pub const Owner = struct {
         );
     }
 
-    fn writeRawTarget(self: *Owner, frame: u64, pixels: []const u8) ![64]u8 {
-        var relative: [128]u8 = undefined;
-        const path = try std.fmt.bufPrint(&relative, "targets/frame-{d:0>8}.rgba8", .{frame});
-        return self.writeExact(path, pixels);
-    }
-
-    fn writePpmTarget(self: *Owner, frame: u64, pixels: []const u8) ![64]u8 {
-        var relative: [128]u8 = undefined;
-        const path = try std.fmt.bufPrint(&relative, "targets/frame-{d:0>8}.ppm", .{frame});
-        return self.writePpm(
-            path,
-            pixels,
-            contract.target_width,
-            contract.target_height,
-            false,
-        );
-    }
-
-    fn normalizeTarget(self: *const Owner, pixels: []u8) void {
-        if (!self.source_bgra) return;
-        var offset: usize = 0;
-        while (offset < pixels.len) : (offset += pixel_bytes) {
-            std.mem.swap(u8, &pixels[offset], &pixels[offset + 2]);
-        }
-    }
-
     fn writeExact(self: *Owner, relative_path: []const u8, bytes: []const u8) ![64]u8 {
         var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
         const absolute = try std.fmt.bufPrint(&path_buffer, "{s}/{s}", .{ self.config.root, relative_path });
@@ -456,21 +392,22 @@ pub const Owner = struct {
     fn writeFrameManifest(
         self: *Owner,
         inputs: *const neural_inputs.Owner,
+        controls_digest: [64]u8,
         raw_digests: [contract.channels.len][64]u8,
         ppm_digests: [contract.channels.len][64]u8,
-        target_raw_digest: [64]u8,
-        target_ppm_digest: [64]u8,
     ) !void {
         const frame = inputs.frameView();
+        const input_diagnostics = inputs.diagnostics();
         var allocating = std.Io.Writer.Allocating.init(self.allocator);
         defer allocating.deinit();
         const writer = &allocating.writer;
         try writer.print(
-            "{{\n  \"schema\": 2,\n  \"input_schema\": {{\"version\": {d}, \"name\": \"{s}\", \"fingerprint\": \"{s}\"}},\n" ++
+            "{{\n  \"schema\": 4,\n  \"input_schema\": {{\"version\": {d}, \"name\": \"{s}\", \"fingerprint\": \"{s}\"}},\n" ++
                 "  \"shader_fingerprint\": \"{s}\", \"shader_sha256\": \"{s}\",\n  \"frame_id\": \"{s}-frame-{d:0>8}\",\n" ++
                 "  \"cohort\": \"{s}\", \"sequence\": \"{s}\", \"camera_path\": \"{s}\",\n" ++
                 "  \"authority_tick\": {d}, \"presentation_frame\": {d}, \"interpolation_alpha\": {d},\n" ++
-                "  \"source_scene_size\": [{d}, {d}], \"target_size\": [{d}, {d}], \"cheap_size\": [{d}, {d}],\n" ++
+                "  \"input_size\": [{d}, {d}], \"paired_target_size\": [{d}, {d}],\n" ++
+                "  \"sampling_map\": {{\"scale_numerator\": {d}, \"scale_denominator\": {d}, \"target_center_to_source_index\": \"((target_index + 0.5) * 2 / 5) - 0.5\", \"border\": \"clamp\"}},\n" ++
                 "  \"coordinate_system\": {{\"world\": \"right-handed +Y up -Z forward\", \"image_origin\": \"top-left\", \"sample\": \"pixel-center\"}},\n" ++
                 "  \"camera\": {{\"near\": {d}, \"far\": {d}, \"jitter_pixels\": [{d}, {d}], \"history_reset\": \"{s}\", \"view\": ",
             .{
@@ -487,12 +424,12 @@ pub const Owner = struct {
                 frame.authority_tick,
                 frame.presentation_frame,
                 frame.interpolation_alpha,
-                frame.target_width,
-                frame.target_height,
-                contract.target_width,
-                contract.target_height,
                 contract.cheap_width,
                 contract.cheap_height,
+                contract.target_width,
+                contract.target_height,
+                contract.scale_numerator,
+                contract.scale_denominator,
                 frame.near,
                 frame.far,
                 frame.jitter_pixels[0],
@@ -506,10 +443,25 @@ pub const Owner = struct {
             try writeMatrix(writer, inputs.drawsView()[0].view_projection);
         } else try writeMatrix(writer, zm.identity());
         try writer.print(
-            "}},\n  \"effects\": {{\"seed\": {d}, \"exposure\": {d}}},\n  \"content\": {{\"source_revision\": \"{s}\", \"source_dirty\": {}, \"source_dirty_fingerprint\": \"{s}\", \"content_digest\": \"{s}\"}},\n  \"channels\": [\n",
+            "}},\n  \"effects\": {{\"seed\": {d}, \"exposure\": {d}}},\n" ++
+                "  \"global_controls\": {{\"schema_name\":\"{s}\",\"encoding\":\"{s}\",\"order\":[\"sun_strength\",\"world_strength\",\"local_light_strength\",\"emissive_strength\"],\"values\":{{\"sun_strength\":{d},\"world_strength\":{d},\"local_light_strength\":{d},\"emissive_strength\":{d}}},\"raw_bytes\":{d},\"raw_path\":\"controls/frame-{d:0>8}.f32le\",\"raw_sha256\":\"{s}\"}},\n" ++
+                "  \"input_raster_timing\": {{\"scope\":\"CPU command encoding only; GPU raster time unavailable\",\"last_command_encoding_ns\":{d},\"lifetime_total_command_encoding_ns\":{d},\"lifetime_maximum_command_encoding_ns\":{d}}},\n" ++
+                "  \"content\": {{\"source_revision\": \"{s}\", \"source_dirty\": {}, \"source_dirty_fingerprint\": \"{s}\", \"content_digest\": \"{s}\"}},\n  \"channels\": [\n",
             .{
                 frame.effect_seed,
                 frame.exposure,
+                contract.global_control_schema_name,
+                contract.global_control_encoding,
+                frame.global_controls.sun_strength,
+                frame.global_controls.world_strength,
+                frame.global_controls.local_light_strength,
+                frame.global_controls.emissive_strength,
+                contract.global_control_bytes,
+                frame.presentation_frame,
+                &controls_digest,
+                input_diagnostics.last_command_encoding_ns,
+                input_diagnostics.total_command_encoding_ns,
+                input_diagnostics.maximum_command_encoding_ns,
                 build_options.source_revision,
                 build_options.source_dirty,
                 build_options.source_dirty_fingerprint,
@@ -534,17 +486,7 @@ pub const Owner = struct {
                 },
             );
         }
-        try writer.print(
-            "  ],\n  \"target\": {{\"format\":\"rgba8\",\"source_gpu_format\":\"{s}\",\"raw_bytes\":{d},\"raw_path\":\"targets/frame-{d:0>8}.rgba8\",\"raw_sha256\":\"{s}\",\"debug_path\":\"targets/frame-{d:0>8}.ppm\",\"debug_sha256\":\"{s}\"}},\n  \"identities\": [\n",
-            .{
-                if (self.source_bgra) "bgra8" else "rgba8",
-                target_bytes,
-                frame.presentation_frame,
-                &target_raw_digest,
-                frame.presentation_frame,
-                &target_ppm_digest,
-            },
-        );
+        try writer.writeAll("  ],\n  \"identities\": [\n");
         const draws = inputs.drawsView();
         for (draws, 0..) |draw, index| {
             try writer.print(
@@ -581,13 +523,12 @@ pub const Owner = struct {
         defer allocating.deinit();
         const writer = &allocating.writer;
         try writer.print(
-            "{{\n  \"schema\": 2,\n  \"status\": \"{s}\",\n  \"purpose\": \"NR0-B aligned presentation-only neural input and conventional target capture\",\n" ++
+            "{{\n  \"schema\": 4,\n  \"status\": \"{s}\",\n  \"purpose\": \"native presentation-only neural inputs and frame-global controls for direct 400x225 offline target pairing\",\n" ++
                 "  \"platform\": \"macos-aarch64-metal\",\n  \"input_schema\": {{\"version\": {d}, \"name\": \"{s}\", \"fingerprint\": \"{s}\"}},\n" ++
                 "  \"shader_fingerprint\": \"{s}\",\n  \"shader_sha256\": \"{s}\",\n  \"source_revision\": \"{s}\",\n  \"source_dirty\": {},\n  \"source_dirty_fingerprint\": \"{s}\",\n" ++
                 "  \"content_digest\": \"{s}\",\n  \"cohort\": \"{s}\",\n  \"sequence\": \"{s}\",\n  \"camera_path\": \"{s}\",\n" ++
-                "  \"input_size\": [{d}, {d}],\n  \"target_size\": [{d}, {d}],\n  \"raw_bytes_per_frame\": {d},\n" ++
-                "  \"selection\": {{\"start_frame\": {d}, \"frame_stride\": {d}, \"requested_frames\": {d}}},\n" ++
-                "  \"recorded_frames\": {d},\n  \"capture_failures\": {d},\n  \"frame_index\": \"frames.ndjson\"\n}}\n",
+                "  \"input_size\": [{d}, {d}],\n  \"paired_target_size\": [{d}, {d}],\n" ++
+                "  \"sampling_map\": {{\"scale_numerator\": {d}, \"scale_denominator\": {d}, \"target_center_to_source_index\": \"((target_index + 0.5) * 2 / 5) - 0.5\", \"border\": \"clamp\"}},\n",
             .{
                 @tagName(status),
                 contract.schema_version,
@@ -606,12 +547,32 @@ pub const Owner = struct {
                 contract.cheap_height,
                 contract.target_width,
                 contract.target_height,
+                contract.scale_numerator,
+                contract.scale_denominator,
+            },
+        );
+        try writer.print(
+            "  \"global_control_schema\": {{\"name\":\"{s}\",\"encoding\":\"{s}\",\"order\":[\"sun_strength\",\"world_strength\",\"local_light_strength\",\"emissive_strength\"],\"count\":{d}}},\n" ++
+                "  \"raw_channel_bytes_per_frame\": {d},\n  \"raw_global_control_bytes_per_frame\": {d},\n  \"raw_training_bytes_per_frame\": {d},\n" ++
+                "  \"selection\": {{\"start_frame\": {d}, \"frame_stride\": {d}, \"requested_frames\": {d}}},\n" ++
+                "  \"recorded_frames\": {d},\n  \"capture_failures\": {d},\n" ++
+                "  \"input_raster_timing\": {{\"scope\":\"CPU command encoding only; GPU raster time unavailable\",\"last_command_encoding_ns\":{d},\"captured_total_command_encoding_ns\":{d},\"captured_maximum_command_encoding_ns\":{d}}},\n" ++
+                "  \"frame_index\": \"frames.ndjson\"\n}}\n",
+            .{
+                contract.global_control_schema_name,
+                contract.global_control_encoding,
+                contract.global_control_count,
                 transfer_bytes,
+                controls_bytes,
+                training_bytes,
                 self.config.start_frame,
                 self.config.frame_stride,
                 self.config.frame_count,
                 self.recorded,
                 self.capture_failures,
+                self.last_input_command_encoding_ns,
+                self.total_input_command_encoding_ns,
+                self.maximum_input_command_encoding_ns,
             },
         );
         var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
@@ -681,8 +642,6 @@ test "capture frame selection is explicit and sequence-scoped" {
         .io = std.testing.io,
         .allocator = std.testing.allocator,
         .device = undefined,
-        .source_format = c.SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-        .source_bgra = false,
         .config = .{
             .root = "/tmp/not-opened",
             .start_frame = 10,
@@ -697,7 +656,6 @@ test "capture frame selection is explicit and sequence-scoped" {
         .sequence_storage = undefined,
         .camera_path_storage = undefined,
         .index = undefined,
-        .target = undefined,
         .download = undefined,
         .pixels = undefined,
     };
