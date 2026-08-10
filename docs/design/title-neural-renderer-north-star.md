@@ -1,9 +1,9 @@
 # Incinerator Title Neural Renderer North Star
 
-**Status:** Accepted product direction; NR-0004 and NR5-A/B accepted; NR5-C
-held-out structural reconstruction is next
+**Status:** Accepted product direction; NR-0004 and NR5-A through NR5-E
+accepted; NR6 causal temporal reconstruction is next
 
-**Date:** 2026-08-08
+**Date:** 2026-08-10
 
 **Decision:**
 [ADR-026](../adr/026-from-scratch-title-neural-renderer.md)
@@ -483,8 +483,14 @@ and architectural acceptance.
 
 ## Immediate next action
 
-NR5-A and NR5-B now prove the complete random-initialized framework and
-controlled reconstruction path. NR5-C is next: train on the declared training
-sequence, select only with validation, then open the sealed test once. Preserve
-the NR5-B structure/material gains and explicitly ablate its observed
-near-edge/high-emissive smoothing and ringing before any temporal work.
+NR5-C/D prove known-fixture held-out spatial reconstruction: selection used
+validation only, the test was opened once, a second open was rejected, and the
+selected checkpoint passed a fresh native stress cohort plus all-input branch
+ablations. Complete visual review still finds localized smoothing and chromatic
+ringing at emissive, glass, and high-contrast edges. NR5-E then proves the
+engine's live six-channel input can drive that exact checkpoint through an
+explicit Core ML bundle with comparison, fallback, model/frame diagnostics,
+incident linkage, and graphical evidence. NR6 is next: define the causal
+history/reprojection/reset contract and determine whether temporal conditioning
+improves stability without hiding those spatial limitations. The NR-0005
+checkpoint and trial bundle remain external and unpromoted.

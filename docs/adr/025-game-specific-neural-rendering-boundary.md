@@ -1,7 +1,7 @@
 # ADR-025: Game-Specific Neural Rendering Boundary and Model Promotion
 
-**Status:** Accepted; NR0-A through NR0-D, NR-0004, and NR5-A/B implemented and
-accepted; full NR0 remains open
+**Status:** Accepted; NR0-A through NR0-D, NR-0004, and NR5-A through NR5-E
+implemented and accepted; full NR0 remains open
 
 **Date:** 2026-08-07
 

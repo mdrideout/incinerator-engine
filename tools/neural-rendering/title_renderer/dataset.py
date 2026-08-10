@@ -123,6 +123,7 @@ class DatasetSpecification:
     control_maximum: tuple[float, float, float, float]
     target_minimum: float
     target_maximum: float
+    test_pixels_opened: bool
 
     def json(self) -> dict[str, Any]:
         return {
@@ -141,7 +142,7 @@ class DatasetSpecification:
             "control_maximum": list(self.control_maximum),
             "target_minimum": self.target_minimum,
             "target_maximum": self.target_maximum,
-            "test_pixels_opened": False,
+            "test_pixels_opened": self.test_pixels_opened,
         }
 
 
@@ -156,9 +157,11 @@ def _vocabulary(values: Iterable[np.ndarray]) -> dict[int, int]:
 class TitleCorpusDataset(Dataset):
     """Eager immutable tensor view over explicitly selected whole splits."""
 
-    def __init__(self, corpus_root: Path, splits: tuple[str, ...]) -> None:
-        if not splits or "test" in splits:
-            raise ValueError("NR5-A/B dataset must name non-test splits explicitly")
+    def __init__(self, corpus_root: Path, splits: tuple[str, ...], *, allow_test: bool = False) -> None:
+        if not splits:
+            raise ValueError("title-renderer dataset must name splits explicitly")
+        if "test" in splits and not allow_test:
+            raise ValueError("sealed test pixels require the explicit final-evaluation path")
         inspected = inspect_corpus_metadata(corpus_root, verify_training_artifacts=True)
         self.root: Path = inspected["root"]
         self.records = [record for record in inspected["records"] if record["split"] in splits]
@@ -206,6 +209,7 @@ class TitleCorpusDataset(Dataset):
             control_maximum=tuple(float(value) for value in control_maximum),
             target_minimum=target_minimum,
             target_maximum=target_maximum,
+            test_pixels_opened="test" in splits,
         )
         scale = np.where(control_maximum > control_minimum, control_maximum - control_minimum, 1.0)
         self.frames: list[dict[str, Any]] = []
@@ -230,6 +234,7 @@ class TitleCorpusDataset(Dataset):
             self.frames.append(
                 {
                     "frame_id": str(raw["record"]["frame_id"]),
+                    "split": str(raw["record"]["split"]),
                     "continuous": torch.from_numpy(continuous).permute(2, 0, 1).contiguous(),
                     "semantic": torch.from_numpy(semantic).long().contiguous(),
                     "instance": torch.from_numpy(instance).long().contiguous(),

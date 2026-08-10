@@ -6,11 +6,12 @@ authored-population/activity slice. Protocol 15, snapshot 14, replay 16,
 incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
 automated Metal/product acceptance are current. No open P0/P1 architectural
 finding blocks the final S13 human walkthrough. The parallel neural-rendering
-track has accepted NR0-A through NR0-D plus the NR-0003 external comparison.
+track has accepted NR0-A through NR0-D, NR-0004, and NR5-A through NR5-E plus
+the NR-0003 external comparison. NR6 causal temporal reconstruction is next.
 ADR-025 owns the presentation/promotion boundary; ADR-026 and the title neural
-renderer north star now require title-owned random-initialization training.
+renderer north star require title-owned random-initialization training.
 
-**Last reviewed:** 2026-08-08
+**Last reviewed:** 2026-08-10
 
 **Scope:** Current post-S13 architecture, its demonstrated strengths, its
 remaining structural pressure before another product or service slice, and the
@@ -39,7 +40,7 @@ accepted from-scratch title neural-renderer direction
 → [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 
 **Parallel core-rendering track:**
-[`NR0-A through NR0-D, NR-0004, and NR5-A/B accepted; NR5-C next`](docs/design/title-neural-renderer-north-star.md)
+[`NR0-A through NR0-D, NR-0004, and NR5-A through NR5-E accepted; NR6 next`](docs/design/title-neural-renderer-north-star.md)
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 

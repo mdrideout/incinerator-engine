@@ -1,9 +1,9 @@
 # NR0 Neural Rendering Feasibility Validation Ledger
 
-**Status:** NR0-A through NR0-D, NR-0004, and NR5-A/B accepted; NR5-C onward
-and NR0-E through NR0-G open
+**Status:** NR0-A through NR0-D, NR-0004, and NR5-A through NR5-E accepted;
+NR6 and NR0-E through NR0-G open
 
-**Date:** 2026-08-08
+**Date:** 2026-08-10
 
 This ledger will record executed evidence for
 [the NR0 plan](../design/nr0-neural-rendering-feasibility.md). Documentation and
@@ -18,9 +18,12 @@ directory scaffolding are not implementation acceptance.
 | Spatial baseline | Overfit proof followed by held-out comparison to non-neural baselines | **NR0-C passed:** 17-plane controlled fit, disjoint camera cohorts, held-out nearest/bilinear/bicubic comparison, human review, FP16 export, and standalone benchmark passed |
 | Failure envelope | Thin/small geometry, boundaries, motion, disocclusion, cuts, resize, unusual views, exhaustive visual evidence | **NR0-D passed:** 478-frame six-path fixture, every visible instance, reset-aware temporal analysis, and human reset/failure review retained; NR-0002 judged unsuitable for promotion |
 | High-fidelity truth | Same-frame rights-clean target, identity/depth alignment, exact environment and reproducibility | **NR4-C accepted:** native `160×90 → 400×225` still and sequence regenerated twice with foreign extents rejected; product direction accepted; four frame-global controls resolve the only observed ambiguity for 16 bytes/frame and no new raster target |
-| Paired title corpus | Atomic complete state, whole-sequence splits, sealed test, per-artifact provenance/digests, no leakage, compact review | **NR4-E accepted for NR5-A/B:** the NR4-D 6-sequence/108-pair corpus passed product review and factual coverage audit; explicit gaps prevent title-wide, temporal, detail, or promotion claims; test pixels remain sealed |
+| Paired title corpus | Atomic complete state, whole-sequence splits, sealed test, per-artifact provenance/digests, no leakage, compact review | **NR4-E accepted for NR5-A/B:** the NR4-D 6-sequence/108-pair corpus passed product review and factual coverage audit; explicit gaps prevent title-wide, temporal, detail, or promotion claims; test remained sealed through this gate |
 | From-scratch framework | Random initializer, tensor-origin audit, immutable resume ancestry, evaluation, export agreement, and cold dependency separation | **NR5-A passed:** clean-room initialize/train/resume/evaluate/export proof passed all seven checks; parent digest preserved; TorchScript agreement exact; cold contracts require no training packages |
-| Controlled title overfit | Direct linear-HDR learning, deterministic resize comparison, complete visual review, structural/identity boundaries, exact export, sealed test | **NR5-B accepted:** all automated checks and 18-frame visual audit passed; MAE 0.009956 vs 0.447403 bilinear; localized near-edge/emissive ringing carried to NR5-C; test remains sealed |
+| Controlled title overfit | Direct linear-HDR learning, deterministic resize comparison, complete visual review, structural/identity boundaries, exact export, sealed test | **NR5-B accepted:** all automated checks and 18-frame visual audit passed; MAE 0.009956 vs 0.447403 bilinear; localized near-edge/emissive ringing carried to NR5-C; test remained sealed through this gate |
+| Held-out title reconstruction | Fixed entry authorization, validation-only selection, one sealed-test opening, branch ablations, complete visual evidence | **NR5-C accepted for the known fixture:** validation MAE 0.010291 vs 0.468340 bilinear; test MAE 0.016277 vs 0.424593; a real reopen was rejected before pixels; localized edge smoothing/ringing remains |
+| Structural candidate conclusion | Fresh native stress capture, worst-frame review, export verification, timing/memory measurements, explicit disposition | **NR5-D accepted; NR6 authorized; unpromoted:** 36 stress frames pass at MAE 0.011826 vs 0.502818 bilinear; all-stress TorchScript agreement exact; visual limitations and one-fixture scope retained |
+| Interactive spatial trial | Explicit external bundle, exact live six-channel preprocessing, Core ML agreement, graphical comparison, fallback, identity/timing/incident evidence | **NR5-E accepted; external and unpromoted:** 48/48 live predictions with zero failures or unknown category pixels; native cheap/neural visual evidence reviewed; known blur/ringing retained |
 | Promotion | Source-preserving transactional copy, digest/schema verification, exact selection | Not started |
 | Runtime | Installed Apple Silicon inference with GPU-owned textures and visible model identity | Preliminary explicit-path Core ML proof passed; blocking CPU staging and no promoted bundle prevent acceptance |
 | Fallback | Missing/rejected model, resize, cut, device/inference failure, and recovery | Missing-model conventional fallback passed; remaining transitions open |
@@ -282,8 +285,74 @@ single-sheet visual index.
   chromatic ringing remain in severe near-edge/high-emissive views and become
   explicit NR5-C ablation work.
 
-NR5-B authorizes held-out NR5-C training only. Test pixels remain unopened;
-the candidate is unpromoted and not a runtime bundle.
+NR5-B authorized held-out NR5-C training only. Its candidate remains
+unpromoted and is not a runtime bundle.
+
+## NR5-C/D held-out reconstruction and structural conclusion
+
+NR5-C entry authorization is retained at
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr5-c-entry-20260810-a`.
+It binds the exact 108-pair known-fixture corpus, accepted NR4-E and NR5-B
+lineage, split ownership, source snapshots, and one-test-open policy without
+decoding test pixels.
+
+Canonical NR5-C/D evidence is retained at
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr5-c-held-out-20260810-b`.
+Start with `conclusion.json`, `run.json`, `selection.json`,
+`test-opening.json`, `test-reopen-rejection.json`,
+`stress-evaluation.json`, and `nr5-d-measurements.json`, then inspect all three
+evaluation overviews and their frame sheets.
+
+- The 448,175-parameter model trained on 36 frames and selected epoch 175 only
+  on 18 validation frames after 349.955 seconds. Validation linear-HDR MAE is
+  `0.010291` versus `0.468340` bilinear.
+- The sealed 18-frame test opened once after immutable selection. Model MAE is
+  `0.016277` versus `0.424593` bilinear. A subsequent invocation owns a separate
+  rejection record and opened no pixels.
+- A fresh Blender/Cycles Metal run at
+  `nr5-d-native-stress-corpus-20260810-a` regenerated the entire native corpus.
+  Its 36 stress frames measure `0.011826` model MAE versus `0.502818` bilinear;
+  semantic/instance boundary MAE are `0.034780`/`0.074701` versus
+  `0.280980`/`0.336319`.
+- Appearance-only, no-semantic, no-instance, and no-global-control ablations
+  all lose to the full model in aggregate. Every validation, test, and stress
+  frame sheet plus the worst-error views was inspected.
+- Authored geometry, identities, controlled object state, material response,
+  and lighting remain faithful. Localized smoothing and chromatic ringing at
+  emissive, glass, and high-contrast boundaries remain visible, especially in
+  severe near/high views.
+- TorchScript agrees exactly with PyTorch across all 36 stress frames. Offline
+  MPS inference measured `6.983 ms` median and `10.862 ms` p95; a representative
+  forward/backward process reached `1,027,063,808` bytes peak RSS. The original
+  training process lacked RSS instrumentation, so its peak remains unknown.
+
+The immutable NR5-D conclusion accepts only a known-fixture structural result
+and authorizes NR6 causal temporal work. It does not claim title-wide
+generalization, temporal readiness, art completion, promotion, or installed
+runtime acceptance.
+
+## NR5-E interactive spatial trial
+
+NR5-E exports that exact selected checkpoint into an immutable external Core ML
+trial bundle and runs it from Incinerator's live schema-v3 targets. The trial
+loader fails closed on ABI, shape, preprocessing, vocabulary, control range,
+source-lineage, package-membership, byte-count, or digest mismatch. It performs
+no runtime candidate discovery and installs no learned content.
+
+The 48-frame Metal gate produced 48 predictions with zero failures and zero
+unknown semantic or instance pixels. The retained native comparison shows the
+cheap flat-color structural source beside the model's aligned materialized and
+lit `400×225` output. Warm evidence measured `11.281 ms` for the last Core ML
+inference and a `33.475 ms` mean staged pipeline. The current path contains a
+blocking GPU readback and CPU display conversion, so these are proof
+measurements rather than a shipping budget. A cold first-use compilation
+outlier near `1052 ms` remains recorded.
+
+The accepted external bundle, command set, evidence location, exact digests,
+runtime boundary, and remaining limitations are recorded in
+[the NR5-E validation record](nr5-e-interactive-spatial-trial.md). NR5-E proves
+the complete evaluation path but does not promote the candidate. NR6 remains
+next.
 
 ## Acceptance conclusion
 

@@ -1,9 +1,9 @@
 # Title Neural Renderer Implementation Plan
 
-**Status:** NR-0004 and NR5-A/B accepted; NR5-C held-out structural renderer is
-next
+**Status:** NR-0004 and NR5-A through NR5-E accepted; NR6 causal temporal
+renderer is next
 
-**Date:** 2026-08-08
+**Date:** 2026-08-10
 
 **North star:**
 [Title Neural Renderer North Star](title-neural-renderer-north-star.md)
@@ -197,13 +197,14 @@ not reorganized merely for uniformity.
 | 5 | NR4-E coverage and corpus acceptance | **Accepted for NR5-A/B scope** | NR4-D | NR-0004 accepted with explicit gaps and sealed test |
 | 6 | NR5-A title-training framework | **Accepted** | NR4 accepted | Clean-room/random-origin contracts pass |
 | 7 | NR5-B controlled spatial overfit | **Accepted** | NR5-A | One sequence is faithfully reconstructed |
-| 8 | NR5-C held-out structural renderer | Planned | NR5-B | Structure and material gains survive held-out views |
-| 9 | NR5-D ablation and candidate conclusion | Planned | NR5-C | NR-0005 accepted or rejected, never auto-promoted |
-| 10 | NR6 causal temporal renderer | Planned | NR5 accepted | Motion, reset, drift, and responsiveness pass |
-| 11 | NR7 learned-detail residual | Conditional | Measured NR6 richness ceiling | Richness improves without structural substitution |
-| 12 | NR0-E explicit promotion | Blocked | Promotion-worthy candidate | Immutable source-preserving selection |
-| 13 | NR0-F installed macOS runtime | Blocked | NR0-E | Exact GPU-resident bundle and fallback behavior |
-| 14 | NR0-G acceptance and audit | Blocked | NR0-F | End-to-end accepted or rejected with evidence |
+| 8 | NR5-C held-out structural renderer | **Accepted** | NR5-B | Structure and material gains survive held-out views |
+| 9 | NR5-D ablation and candidate conclusion | **Accepted; NR6 authorized; unpromoted** | NR5-C | NR-0005 accepted or rejected, never auto-promoted |
+| 10 | NR5-E interactive spatial trial | **Accepted; external and unpromoted** | NR5-D | Live six-channel Core ML inference, comparison, fallback, identity, timing, incident, and graphical evidence pass |
+| 11 | NR6 causal temporal renderer | Next | NR5-E | Motion, reset, drift, and responsiveness pass without losing the trial boundary |
+| 12 | NR7 learned-detail residual | Conditional | Measured NR6 richness ceiling | Richness improves without structural substitution |
+| 13 | NR0-E explicit promotion | Blocked | Promotion-worthy candidate | Immutable source-preserving selection |
+| 14 | NR0-F installed macOS runtime | Blocked | NR0-E | Exact GPU-resident bundle and fallback behavior |
+| 15 | NR0-G acceptance and audit | Blocked | NR0-F | End-to-end accepted or rejected with evidence |
 
 ## NR-0004 — High-fidelity target and corpus foundation
 
@@ -638,6 +639,18 @@ feature, reflective, emissive, transparent, and disocclusion examples.
 title-trained material/lighting improvement. A high aggregate score cannot
 hide geometry substitution.
 
+**Executed disposition (2026-08-10): Accepted for the known fixture.** The
+entry gate fixed one 108-pair corpus, the accepted NR4-E/NR5-B lineage, and the
+exact authorization scope before test pixels were decoded. The model trained
+on 36 `overfit`/`train` frames and selected epoch 175 only on 18 validation
+frames. Validation linear-HDR MAE is `0.010291` versus `0.468340` bilinear.
+After immutable selection, the 18-frame test was opened once and measured
+`0.016277` versus `0.424593` bilinear; a real second invocation was rejected
+without decoding pixels. Appearance-only and all major input-branch ablations
+are retained. Complete validation/test visual review accepts structure,
+identity, material, lighting, and controlled state fidelity while retaining
+localized emissive/glass/high-contrast smoothing and chromatic ringing.
+
 ### NR5-D — Candidate conclusion
 
 Re-execute the accepted NR0-D spatial/failure scenario and metric definitions
@@ -650,6 +663,48 @@ then verify numerical and visual agreement through the export.
 Create `experiments/neural-rendering/nr-0005-structural-title-renderer/` with
 the immutable run identity and an explicit accepted, rejected, or inconclusive
 conclusion. Acceptance permits temporal work; it does not promote the model.
+
+**Executed disposition (2026-08-10): Accepted; NR6 authorized; unpromoted.** A
+new Blender 4.5.12/Cycles Metal execution produced a fresh 108-pair corpus with
+36 stress frames. The fixed NR5-C checkpoint measured `0.011826` linear-HDR MAE
+versus `0.502818` bilinear, and every declared quantitative gate passed. Visual
+review covered every sheet, the overview, and worst-error high/top-down frames;
+it confirms authored-state fidelity and the same localized spatial limitations
+rather than hiding them behind the aggregate metric. TorchScript agrees exactly
+with PyTorch across all 36 stress frames. Offline MPS inference measured
+`6.983 ms` median and `10.862 ms` p95 in the supplemental measurement, and a
+representative forward/backward process reached `1,027,063,808` bytes peak RSS.
+The completed training process did not record RSS, so that value remains
+explicitly unknown. Canonical evidence is
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr5-c-held-out-20260810-b`;
+the fresh corpus is `nr5-d-native-stress-corpus-20260810-a` beside it.
+
+### NR5-E — Interactive spatial trial
+
+Close the evaluation gap before adding temporal complexity. Export the exact
+NR5-D checkpoint as an external Core ML trial bundle, validate its source and
+package digests plus numerical agreement, and consume Incinerator's live
+schema-v3 targets without changing authority. Present the native `400×225`
+output beside an explicit conventional fallback. Retain bundle identity,
+source/presented-frame lineage, timing, failures, unknown categorical pixels,
+incident records, and native visual comparisons.
+
+The accepted fixture mode must exercise the same causal scene used to create
+the corpus. Ordinary sandbox execution is useful out-of-distribution evidence
+but cannot expand the model's generalization claim. The bundle remains beneath
+the external artifact root and is never discovered, installed, or promoted
+implicitly.
+
+**Executed disposition (2026-08-10): Accepted as an external, unpromoted
+trial.** The float32 Core ML export agrees with its fixed-extent PyTorch wrapper
+to maximum absolute error `0.00001955`. The 48-frame Metal gate produced 48
+predictions with zero failures and zero unknown semantic/instance pixels. The
+native comparison visibly retains authored fixture structure while adding the
+accepted material/lighting direction; localized smoothing and chromatic
+ringing remain. The runtime has an `N` comparison toggle, automatic
+conventional fallback, Neural Input / Output native comparison and collapsible
+lineage/timing diagnostics, and incident metric linkage. Full evidence and commands are recorded in
+[`../validation/nr5-e-interactive-spatial-trial.md`](../validation/nr5-e-interactive-spatial-trial.md).
 
 ## NR-0006 — Causal temporal title renderer
 
@@ -723,7 +778,7 @@ promotion-worthy candidate.
 - Exercise absence/rejection, first frame, cut, resize, model change, device
   recovery, inference failure, and return from fallback explicitly.
 - Expose selected bundle/schema/digest, input/history state, inference timing,
-  memory, and fallback/reset reasons in the Neural Rendering Lab and incident
+  memory, and fallback/reset reasons in the Neural Input / Output window and incident
   bundles.
 
 ### NR0-G — Acceptance and architectural audit
@@ -747,7 +802,7 @@ is attractive in a selected clip.
 Every phase must leave enough evidence for a fresh agent or human to answer
 what ran, what data it used, what changed, and why it passed or failed.
 
-### Live Neural Rendering Lab
+### Live Neural Input / Output window
 
 Grow the existing tool only as capabilities become real. The final lab should
 provide synchronized views of:
@@ -845,8 +900,11 @@ NR4-A and the NR4-B technical implementation are complete:
 6. **Complete:** product-owner acceptance of the moving target and alignment
    direction.
 
-**Current phase:** NR5-C trains on the declared training sequence, selects only
-on validation, and opens the sealed test once after selection. It must preserve
-the controlled-fit structure/material gain while addressing the near-edge and
-emissive ringing recorded by NR5-B. No promotion or runtime integration is
+**Current phase:** NR6 begins from the accepted but unpromoted NR-0005 spatial
+checkpoint and the NR5-E evaluation boundary. Define history ownership,
+reprojection, rejection, lifecycle, and reset contracts before adding state;
+recapture native temporal cohorts and compare causal output against
+NR-0005/no-history and deterministic baselines. The localized smoothing/ringing
+recorded by NR5-C/D remains an explicit input to the evaluation and cannot be
+hidden by temporal accumulation. No promotion or installed runtime selection is
 authorized.

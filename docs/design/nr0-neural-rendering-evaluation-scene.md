@@ -98,7 +98,7 @@ The product/editor must be able to display and capture:
   and
 - synchronized four-up and cropped comparisons.
 
-NR0-A/B provide the cheap and auxiliary views in the live Neural Rendering Lab,
+NR0-A/B provide the cheap and auxiliary views in the live Neural Input / Output window,
 the conventional target in capture, and a synchronized contact-sheet report.
 NR0-C preserves full-frame target/baseline/model comparisons and amplified
 absolute error externally. NR0-D adds exhaustive per-frame and per-instance

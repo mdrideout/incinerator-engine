@@ -16,12 +16,15 @@ accepted as historical target-adapter/correspondence evidence. NR4-C's
 self-contained native `160×90 → 400×225` still/moving cohort and minimal
 global-control schema are accepted. NR4-E accepts the 108-pair corpus for the
 initial structural scope, and NR5-A/B accept the random-origin framework and
-controlled overfit. NR5-C held-out reconstruction is next. Other target
-extents are deferred.
+controlled overfit. NR5-C/D accept the known-fixture held-out structural
+candidate and fresh native stress conclusion without promoting it. NR5-E
+accepts the external live Core ML spatial trial, comparison, fallback, and
+diagnostics without promoting it; NR6 causal temporal reconstruction is next.
+Other target extents are deferred.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-08-08
+**Last reviewed:** 2026-08-10
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -45,7 +48,7 @@ extents are deferred.
 → [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 
 **Parallel core-rendering track:**
-[`From-scratch title neural renderer; NR5-A/B accepted; NR5-C next`](docs/design/title-neural-renderer-north-star.md)
+[`From-scratch title neural renderer; NR5-A through NR5-E accepted; NR6 next`](docs/design/title-neural-renderer-north-star.md)
 ([implementation plan](docs/design/title-neural-renderer-implementation-plan.md))
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.

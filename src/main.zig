@@ -1888,6 +1888,7 @@ const App = struct {
     neural_capture_camera_program: ?neural_capture_camera.Program = null,
     neural_evaluation_fixture_enabled: bool = false,
     neural_target_fixture_enabled: bool = false,
+    neural_trial_fixture_enabled: bool = false,
     neural_evaluation_resize_frame: ?u64 = null,
 
     simulation: *sandbox_host.Placement,
@@ -2342,33 +2343,52 @@ const App = struct {
     }
 
     fn configureNeuralRendering(self: *App, environ_map: anytype) !void {
-        const model_path = environ_map.get("INCINERATOR_NR_MODEL");
+        const trial_bundle_root = environ_map.get("INCINERATOR_NR_TRIAL_BUNDLE");
         const capture_root = environ_map.get("INCINERATOR_NR_CAPTURE_ROOT");
         const target_frame_root = environ_map.get("INCINERATOR_NR_TARGET_FRAME_ROOT");
         const lab_requested = if (environ_map.get("INCINERATOR_NR_LAB")) |value|
             std.mem.eql(u8, value, "1") or std.ascii.eqlIgnoreCase(value, "true")
         else
             false;
+        const trial_fixture_requested = if (environ_map.get("INCINERATOR_NR_TRIAL_FIXTURE")) |value|
+            std.mem.eql(u8, value, "1") or std.ascii.eqlIgnoreCase(value, "true")
+        else
+            false;
+        if (trial_fixture_requested) {
+            if (trial_bundle_root == null) return error.NeuralTrialFixtureRequiresBundle;
+            if (target_frame_root != null) return error.NeuralTrialFixtureConflictsWithTargetExport;
+            self.neural_evaluation_fixture_enabled = false;
+            self.neural_target_fixture_enabled = true;
+            self.neural_trial_fixture_enabled = true;
+        }
         if (target_frame_root != null) {
             if (!build_options.validation_mode) return error.NeuralTargetFrameValidationOnly;
             if (capture_root == null) return error.NeuralTargetFrameRequiresCapture;
             self.neural_evaluation_fixture_enabled = false;
             self.neural_target_fixture_enabled = true;
         }
-        if (model_path == null and capture_root == null and target_frame_root == null and
+        if (trial_bundle_root == null and capture_root == null and target_frame_root == null and
             !lab_requested and
             !self.neural_evaluation_fixture_enabled) return;
-        if (model_path) |path| if (!std.fs.path.isAbsolute(path)) {
-            return error.NeuralModelPathMustBeAbsolute;
+        if (trial_bundle_root) |path| if (!std.fs.path.isAbsolute(path)) {
+            return error.NeuralTrialBundlePathMustBeAbsolute;
         };
 
         var neural: ?neural_rendering_host.Owner = null;
-        if (model_path) |path| {
+        if (trial_bundle_root) |path| {
             neural = try neural_rendering_host.Owner.init(
                 self.io,
+                std.heap.page_allocator,
                 &self.gpu_renderer,
                 path,
             );
+            // The interactive comparison keeps the conventional scene in the
+            // main window while inference feeds the Neural Input / Output
+            // tool. The automated trial fixture explicitly exercises the
+            // optional scene-presentation override as part of acceptance.
+            if (trial_fixture_requested) {
+                _ = neural.?.setPresentationEnabled(true);
+            }
         }
         errdefer if (neural) |*owner| owner.deinit(&self.gpu_renderer);
         var neural_inputs = try neural_input_host.Owner.init(
@@ -2445,17 +2465,18 @@ const App = struct {
         if (self.neural_rendering) |*owner| {
             const diagnostics = owner.diagnostics();
             std.debug.print(
-                "NEURAL_RENDERER_POC model_loaded={} enabled={} model={s} capture={s}\n",
+                "NR5_E_RUNTIME model_loaded={} enabled={} bundle={s} fixture={} paired_capture={s}\n",
                 .{
                     diagnostics.model_loaded,
                     diagnostics.enabled,
-                    model_path.?,
+                    trial_bundle_root.?,
+                    self.neural_trial_fixture_enabled,
                     capture_root orelse "none",
                 },
             );
             std.debug.print("  N - Toggle neural scene presentation\n", .{});
             if (!diagnostics.model_loaded) {
-                std.debug.print("NEURAL_RENDERER_FALLBACK reason={s}\n", .{diagnostics.last_error});
+                std.debug.print("NR5_E_FALLBACK reason={s}\n", .{diagnostics.last_error});
             }
         } else {
             std.debug.print(
@@ -2569,11 +2590,11 @@ const App = struct {
                     const enabled = neural.toggle();
                     const diagnostics = neural.diagnostics();
                     std.debug.print(
-                        "NEURAL_RENDERER enabled={} model_loaded={} model={s} error={s}\n",
+                        "NR5_E_RUNTIME enabled={} model_loaded={} bundle={s} error={s}\n",
                         .{
                             enabled,
                             diagnostics.model_loaded,
-                            neural.model_path orelse "capture-only",
+                            diagnostics.bundle_root,
                             diagnostics.last_error,
                         },
                     );
@@ -6636,7 +6657,7 @@ const App = struct {
                 const forward = self.game_camera.getForward();
                 const up = camera.Camera.getUp();
                 const target_state = neural_target_fixture.sequenceState(
-                    self.frame_timer.total_frames,
+                    self.neuralTargetFixtureFrame(),
                 );
                 try target_frames.record(&self.neural_inputs.?, .{
                     .position = .{
@@ -6651,12 +6672,25 @@ const App = struct {
             }
         }
         if (self.neural_rendering) |*neural| {
-            if (try neural.readbackAndPredict(
-                &self.gpu_renderer,
-                self.simulation.inspection().tickIndex(),
-                self.frame_timer.total_frames,
-                false,
-            )) |_| {}
+            neural.readbackAndPredict(&self.neural_inputs.?);
+            const diagnostics = neural.diagnostics();
+            self.developer.recordNeuralRendering(.{
+                .enabled = diagnostics.enabled,
+                .output_ready = diagnostics.output_ready,
+                .manifest_digest = diagnostics.manifest_digest[0..],
+                .checkpoint_digest = diagnostics.checkpoint_digest,
+                .source_tick = diagnostics.last_source_tick,
+                .source_frame = diagnostics.last_source_frame,
+                .presented_source_frame = diagnostics.last_presented_source_frame,
+                .readbacks = diagnostics.readbacks,
+                .predictions = diagnostics.predictions,
+                .failures = diagnostics.failures,
+                .inference_ms = diagnostics.last_inference_ms,
+                .pipeline_mean_ms = diagnostics.mean_staged_pipeline_ms,
+                .pipeline_maximum_ms = diagnostics.maximum_staged_pipeline_ms,
+                .unknown_semantic_pixels = diagnostics.last_unknown_semantic_pixels,
+                .unknown_instance_pixels = diagnostics.last_unknown_instance_pixels,
+            });
         }
     }
 
@@ -7609,7 +7643,7 @@ const App = struct {
 
     fn drawNeuralTargetFixture(self: *App, view_projection: zm.Mat) !u64 {
         if (!self.neural_target_fixture_enabled) return 0;
-        const plans = neural_target_fixture.plans(self.frame_timer.total_frames);
+        const plans = neural_target_fixture.plans(self.neuralTargetFixtureFrame());
         for (plans) |plan| {
             const gpu_mesh: *const mesh.Mesh = switch (plan.mesh) {
                 .cube => &self.block_mesh,
@@ -7653,6 +7687,14 @@ const App = struct {
             });
         }
         return @intCast(plans.len);
+    }
+
+    fn neuralTargetFixtureFrame(self: *const App) u64 {
+        if (!self.neural_trial_fixture_enabled) return self.frame_timer.total_frames;
+        const sequence_frames = neural_target_fixture.segment_frame_span *
+            neural_target_fixture.segment_count;
+        return neural_target_fixture.sequence_start_frame +
+            self.frame_timer.total_frames % sequence_frames;
     }
 
     fn applyNeuralEvaluationResize(self: *App) !void {
@@ -7955,7 +7997,7 @@ const App = struct {
     /// Render the current frame using SDL3 GPU API
     /// `alpha` is the interpolation factor (0.0 to 1.0) for smooth visuals.
     fn render(self: *App, alpha: f32) !RenderResult {
-        if (self.neural_rendering) |*neural| try neural.prepareFrame(&self.gpu_renderer);
+        if (self.neural_rendering) |*neural| neural.prepareFrame(&self.gpu_renderer);
         // Streamed submissions are independent of the frame command buffer.
         // Poll fences without waiting, then submit at most one bounded batch.
         var stream_gpu_profile = self.beginHostProfile(
@@ -8115,7 +8157,7 @@ const App = struct {
                 .target_height = engine.neural_rendering.target_height,
                 .global_controls = if (self.neural_target_fixture_enabled)
                     neural_target_fixture.sequenceState(
-                        self.frame_timer.total_frames,
+                        self.neuralTargetFixtureFrame(),
                     ).global_controls
                 else
                     .{},
@@ -9473,8 +9515,26 @@ const App = struct {
             const diagnostics = neural.diagnostics();
             neural_view.model_loaded = diagnostics.model_loaded;
             neural_view.model_enabled = diagnostics.enabled;
+            neural_view.model_output_ready = diagnostics.output_ready;
+            neural_view.model_bundle_root = diagnostics.bundle_root;
+            neural_view.model_checkpoint_digest = diagnostics.checkpoint_digest;
+            neural_view.model_manifest_digest = diagnostics.manifest_digest;
+            neural_view.model_readbacks = diagnostics.readbacks;
             neural_view.model_predictions = diagnostics.predictions;
+            neural_view.model_failures = diagnostics.failures;
+            neural_view.model_last_source_tick = diagnostics.last_source_tick;
+            neural_view.model_last_source_frame = diagnostics.last_source_frame;
+            neural_view.model_last_presented_source_frame = diagnostics.last_presented_source_frame;
+            neural_view.model_unknown_semantic_pixels = diagnostics.last_unknown_semantic_pixels;
+            neural_view.model_unknown_instance_pixels = diagnostics.last_unknown_instance_pixels;
             neural_view.model_inference_ms = diagnostics.last_inference_ms;
+            neural_view.model_pipeline_mean_ms = diagnostics.mean_staged_pipeline_ms;
+            neural_view.model_pipeline_maximum_ms = diagnostics.maximum_staged_pipeline_ms;
+            if (diagnostics.output_ready) neural_view.model_output = .{
+                .binding = diagnostics.output.binding,
+                .width = diagnostics.output.width,
+                .height = diagnostics.output.height,
+            };
             if (neural_view.last_error.len == 0) {
                 neural_view.last_error = diagnostics.last_error;
             }
@@ -10432,7 +10492,52 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                 inputs.diagnostics()
             else
                 return error.NeuralEvaluationInputHostUnavailable;
-            if (app.neural_target_fixture_enabled) {
+            if (app.neural_trial_fixture_enabled) {
+                const model_diagnostics = if (app.neural_rendering) |*neural|
+                    neural.diagnostics()
+                else
+                    return error.NeuralTrialModelHostUnavailable;
+                if (!model_diagnostics.model_loaded or
+                    !model_diagnostics.output_ready or
+                    model_diagnostics.predictions == 0 or
+                    model_diagnostics.failures != 0 or
+                    model_diagnostics.last_source_frame <
+                        model_diagnostics.last_presented_source_frame)
+                {
+                    return error.NeuralTrialRuntimeAcceptanceFailed;
+                }
+                if (init.environ_map.get("INCINERATOR_NR_TRIAL_EVIDENCE_ROOT")) |root| {
+                    try app.neural_rendering.?.writeEvaluationEvidence(root);
+                }
+                std.debug.print(
+                    "NR5_E_TRIAL_SMOKE_RESULT frames={d} ticks={d} " ++
+                        "fixture_draws={d} neural_draws={d} readbacks={d} " ++
+                        "predictions={d} failures={d} inference_ms={d:.3} " ++
+                        "pipeline_mean_ms={d:.3} pipeline_max_ms={d:.3} " ++
+                        "source_frame={d} presented_source_frame={d} " ++
+                        "unknown_semantic={d} unknown_instance={d} " ++
+                        "fixture_fingerprint={s} virtual_render_hz={d} gpu_driver={s}\n",
+                    .{
+                        summary.ready_frames,
+                        app.simulation.inspection().tickIndex() -| app.validation_tick_origin,
+                        neural_target_fixture.draw_count,
+                        diagnostics.draw_count,
+                        model_diagnostics.readbacks,
+                        model_diagnostics.predictions,
+                        model_diagnostics.failures,
+                        model_diagnostics.last_inference_ms,
+                        model_diagnostics.mean_staged_pipeline_ms,
+                        model_diagnostics.maximum_staged_pipeline_ms,
+                        model_diagnostics.last_source_frame,
+                        model_diagnostics.last_presented_source_frame,
+                        model_diagnostics.last_unknown_semantic_pixels,
+                        model_diagnostics.last_unknown_instance_pixels,
+                        neural_target_fixture.source_fingerprint,
+                        config.virtual_render_hz,
+                        shader_assets.driver,
+                    },
+                );
+            } else if (app.neural_target_fixture_enabled) {
                 const target_diagnostics = app.neural_target_frames.?.diagnostics();
                 std.debug.print(
                     "NR4_TARGET_SMOKE_RESULT frames={d} ticks={d} " ++

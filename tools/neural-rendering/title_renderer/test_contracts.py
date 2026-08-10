@@ -8,9 +8,16 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from title_renderer.contracts import CHANNELS, inspect_corpus_metadata
+from title_renderer.contracts import CHANNELS, INPUT_EXTENT, TARGET_EXTENT, inspect_corpus_metadata
 from title_renderer.coverage import collect
 from title_renderer.io import sha256_file
+from title_renderer.trial_bundle import (
+    CHANNELS as TRIAL_CHANNELS,
+    CONTINUOUS_PLANES as TRIAL_CONTINUOUS_PLANES,
+    GLOBAL_CONTROLS as TRIAL_GLOBAL_CONTROLS,
+    INPUT_EXTENT as TRIAL_INPUT_EXTENT,
+    TARGET_EXTENT as TRIAL_TARGET_EXTENT,
+)
 
 
 SEMANTICS_AND_MATERIALS = (
@@ -186,6 +193,16 @@ def build_fixture(root: Path, *, test_in_review: bool = False) -> Path:
 
 
 class CoverageContracts(unittest.TestCase):
+    def test_nr5_e_trial_bundle_uses_the_active_fixed_working_extent(self) -> None:
+        self.assertEqual(list(INPUT_EXTENT), TRIAL_INPUT_EXTENT)
+        self.assertEqual(list(TARGET_EXTENT), TRIAL_TARGET_EXTENT)
+        self.assertEqual(list(CHANNELS), TRIAL_CHANNELS)
+        self.assertEqual(len(TRIAL_CONTINUOUS_PLANES), 11)
+        self.assertEqual(
+            TRIAL_GLOBAL_CONTROLS,
+            ["sun_strength", "world_strength", "local_light_strength", "emissive_strength"],
+        )
+
     def test_coverage_accepts_scoped_fixture_without_opening_test_pixels(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             corpus = build_fixture(Path(temporary))

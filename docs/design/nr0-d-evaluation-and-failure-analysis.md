@@ -230,7 +230,7 @@ Closeout verification passed the NR0-C 3-test and NR0-D 4-test Python suites,
 the two neural shader tests, and the full editor and non-editor repository
 suites. A fresh installed Metal fixture smoke rendered 1,200 frames, 300
 simulation ticks, 23 fixture plans and 25 neural-input draws, exposed live
-aligned input buffers in the Neural Rendering Lab, and shut down cleanly.
+aligned input buffers in the Neural Input / Output window, and shut down cleanly.
 
 The next actual model work is one bounded spatial failure-correction experiment
 using this fixture as held-out evaluation: broaden training coverage for thin

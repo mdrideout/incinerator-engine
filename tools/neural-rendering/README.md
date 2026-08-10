@@ -185,26 +185,17 @@ or rejected run is immutable. Verify its retained digests and gates read-only:
 "$PYTHON" tools/neural-rendering/inspect_nr0_experiment.py <absolute-run-root>
 ```
 
-## Try the native proof
+## Historical NR-0001 native proof
 
-The model path is an explicit developer experiment path, not content selection
-or promotion. It must be absolute. With the NR-0001 artifact produced above:
+NR-0001 previously used the explicit `INCINERATOR_NR_MODEL` path to close the
+first native loop. That greenfield-only adapter has been removed rather than
+retained as compatibility surface. Its executed evidence remains valid history,
+but the old command is intentionally no longer runnable.
 
-```sh
-MODEL="$INCINERATOR_NR_ROOT/runs/nr0-engine-coreml-20260805-a/spatial-upscaler.mlpackage"
-INCINERATOR_NR_MODEL="$MODEL" zig build run -Deditor=true
-```
-
-The neural scene starts enabled. Press `N` to compare it with the conventional
-renderer. UI, editor chrome, and diagnostic overlays remain conventionally
-rendered in either mode. Startup rejection or prediction failure selects the
-conventional scene and emits `NEURAL_RENDERER_FALLBACK`; shutdown emits the
-prediction, failure, Core ML, and staged-pipeline measurements.
-
-This proof uses a blocking GPU readback, CPU tensor conversion, and GPU upload.
-That path exists only to close and measure the loop. It is not the future
-GPU-resident NR0 runtime and no artifact produced by these commands belongs in
-`models/neural-rendering/` without the explicit promotion phase.
+Use the NR5-E commands below for the current six-channel title-model trial. It
+retains the same explicit `N` comparison and conventional UI boundary while
+adding exact ABI/preprocessing validation, model lineage, incident evidence,
+and a fail-closed external bundle.
 
 ## NR0-D stress evaluation and failure analysis
 
@@ -495,7 +486,7 @@ reuse, provenance drift, incomplete targets, corruption, and identity
 mismatch. Repeated conditioning inside one sequence is valid temporal context,
 not split leakage. `corpus/review/` is display-only and never training input.
 
-## NR4-E and NR5-A/B title-renderer framework
+## NR4-E and NR5-A through NR5-E title-renderer framework
 
 The cold contract suite imports no training dependency:
 
@@ -556,3 +547,117 @@ PYTHONPATH=tools/neural-rendering python3 \
   --disposition accepted \
   --review '<specific complete visual-review conclusion>'
 ```
+
+Authorize and train NR5-C without opening test pixels:
+
+```sh
+PYTHONPATH=tools/neural-rendering python3 \
+  tools/neural-rendering/title_renderer/authorize_held_out.py \
+  --corpus "$INCINERATOR_NR_ROOT/experiments/nr4-d-corpus-20260808-b/corpus" \
+  --nr4-e-acceptance "$INCINERATOR_NR_ROOT/experiments/nr4-e-coverage-20260809-b/acceptance.json" \
+  --nr5-b-run "$INCINERATOR_NR_ROOT/experiments/nr5-b-controlled-overfit-20260809-c" \
+  --repository "$PWD" \
+  --output <new-absolute-entry-root>
+
+PYTHONPATH=tools/neural-rendering "$NR_PYTHON" \
+  tools/neural-rendering/title_renderer/train_held_out.py \
+  --corpus "$INCINERATOR_NR_ROOT/experiments/nr4-d-corpus-20260808-b/corpus" \
+  --authorization <absolute-entry-root>/acceptance.json \
+  --configuration "$PWD/experiments/neural-rendering/nr-0005-structural-title-renderer/nr5-c-held-out.json" \
+  --repository "$PWD" \
+  --output <new-absolute-held-out-run>
+```
+
+Inspect every validation sheet before opening test. The selected checkpoint is
+immutable; test may then open exactly once. Repeating the same command is an
+intentional guard proof: it must fail before pixel decoding and write the
+separate `test-reopen-rejection.json` evidence owner.
+
+```sh
+PYTHONPATH=tools/neural-rendering "$NR_PYTHON" \
+  tools/neural-rendering/title_renderer/evaluate_selected.py \
+  --run <absolute-held-out-run> \
+  --corpus "$INCINERATOR_NR_ROOT/experiments/nr4-d-corpus-20260808-b/corpus" \
+  --split test
+
+# Execute once more and require rejection.
+PYTHONPATH=tools/neural-rendering "$NR_PYTHON" \
+  tools/neural-rendering/title_renderer/evaluate_selected.py \
+  --run <absolute-held-out-run> \
+  --corpus "$INCINERATOR_NR_ROOT/experiments/nr4-d-corpus-20260808-b/corpus" \
+  --split test
+```
+
+NR5-D requires a newly executed native corpus, not the NR4-D images or model
+outputs. Regenerate through the NR4-D verification command above into a new
+root, then evaluate only its stress split:
+
+```sh
+PYTHONPATH=tools/neural-rendering "$NR_PYTHON" \
+  tools/neural-rendering/title_renderer/evaluate_selected.py \
+  --run <absolute-held-out-run> \
+  --corpus <new-native-corpus-root>/corpus \
+  --split stress
+
+PYTHONPATH=tools/neural-rendering python3 \
+  tools/neural-rendering/title_renderer/finalize_candidate.py \
+  --run <absolute-held-out-run> \
+  --disposition accepted \
+  --review '<specific complete validation/test/stress visual-review conclusion>'
+
+PYTHONPATH=tools/neural-rendering "$NR_PYTHON" \
+  tools/neural-rendering/title_renderer/measure_candidate.py \
+  --run <absolute-held-out-run> \
+  --stress-corpus <new-native-corpus-root>/corpus
+
+zig build inspect-title-renderer-candidate -- <absolute-held-out-run>
+```
+
+The measurement is explicitly append-only and post-conclusion. It verifies the
+export across every fresh stress frame and records offline MPS timing and a
+representative forward/backward process peak; it does not retrofit a missing
+training-process RSS value or make the candidate promotion eligible.
+
+## NR5-E interactive spatial trial
+
+Export the immutable selected checkpoint into a new absent external trial
+root, then inspect the complete package before any engine run:
+
+```sh
+export INCINERATOR_NR_ROOT="$HOME/Library/Application Support/Incinerator/neural-rendering"
+export NR_PYTHON="$INCINERATOR_NR_ROOT/envs/nr0-poc/bin/python"
+export NR5_C_RUN="$INCINERATOR_NR_ROOT/experiments/nr5-c-held-out-20260810-b"
+export NR5_E_BUNDLE="$INCINERATOR_NR_ROOT/trial-bundles/nr5-e-spatial-20260810-b"
+
+PYTHONPATH=tools/neural-rendering "$NR_PYTHON" \
+  tools/neural-rendering/title_renderer/export_trial_bundle.py \
+  --run "$NR5_C_RUN" \
+  --repository "$PWD" \
+  --output "$NR5_E_BUNDLE"
+
+zig build inspect-nr5-e-trial-bundle -- "$NR5_E_BUNDLE"
+zig build verify-nr5-e-trial -Deditor=true -- "$NR5_E_BUNDLE"
+```
+
+The export adapts only unsupported Core ML graph operations at the fixed active
+extent and verifies numerical agreement; it does not train or mutate the
+checkpoint. The bundle records the exact model, ABI, preprocessing,
+vocabularies, controls, source lineage, files, and digests. It remains external
+and explicitly unpromoted.
+
+For the interactive in-distribution comparison:
+
+```sh
+INCINERATOR_NR_TRIAL_BUNDLE="$NR5_E_BUNDLE" \
+INCINERATOR_NR_TRIAL_FIXTURE=1 \
+  zig build run -Deditor=true
+```
+
+Press `N` to compare conventional and neural presentation. The Neural
+Rendering Lab displays the native output, all six source targets, exact bundle
+and checkpoint identity, source/presented-frame lineage, unknown-category
+counts, inference timing, staged-pipeline timing, and failures. Omitting
+`INCINERATOR_NR_TRIAL_FIXTURE=1` runs the playable sandbox with the model, but
+that is intentionally out-of-distribution diagnostic evidence and not a
+generalization claim. Incident metric streams record `kind:"neural_rendering"`
+so a human anomaly retains the exact model and frame state.

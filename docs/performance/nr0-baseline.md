@@ -1,9 +1,9 @@
 # NR0 Neural Rendering Performance Baseline
 
 **Status:** NR-0001, NR0-A/B foundation, NR0-C/D, NR-0003, NR4-A/B/C/D, and
-NR5-A/B offline work measured; full installed runtime baseline open
+NR5-A through NR5-E measured; promoted installed-runtime baseline open
 
-**Date:** 2026-08-08
+**Date:** 2026-08-10
 
 Record the first accepted baseline here. Do not copy performance from research
 papers into the Incinerator result table.
@@ -262,3 +262,48 @@ exposed visible ringing and training oscillation, motivating the measured
 capacity increase, annealed learning rate, lowest-loss selection, immutable
 configuration snapshot, and complete 18-frame visual evidence in accepted run
 `nr5-b-controlled-overfit-20260809-c`.
+
+## NR5-C/D held-out and native-stress measurements
+
+These remain offline PyTorch/MPS experiment measurements, not installed engine
+inference or a shipping budget. The canonical result is
+`nr5-c-held-out-20260810-b`; the native stress corpus was freshly generated as
+`nr5-d-native-stress-corpus-20260810-a`.
+
+| Item | Result |
+|---|---|
+| Model/cohort | 448,175 parameters; 36 train, 18 validation, 18 sealed-test, and 36 fresh stress frames at direct `160×90 → 400×225` |
+| Training | 180 declared epochs; validation selected epoch 175; 349.955 seconds MPS wall time |
+| Validation quality | Model linear-HDR MAE 0.010291 vs bilinear 0.468340; median inference 9.106 ms, p95 10.742 ms |
+| One-open test quality | Model linear-HDR MAE 0.016277 vs bilinear 0.424593; median inference 8.532 ms, p95 28.867 ms including cold outlier |
+| Fresh stress quality | Model linear-HDR MAE 0.011826 vs bilinear 0.502818; semantic boundary 0.034780 vs 0.280980; instance boundary 0.074701 vs 0.336319 |
+| Supplemental stress inference | 6.983 ms median, 10.862 ms p95, 125.516 ms maximum; cold MPS compilation outlier retained |
+| Checkpoint/export | 5,438,663-byte selected checkpoint; 1,868,420-byte TorchScript candidate; zero mean/maximum disagreement across all 36 stress frames |
+| Process memory | 1,027,063,808-byte peak RSS while loading corpus/checkpoint/export and executing full stress inference plus a representative forward/backward step |
+| Training memory limitation | Canonical training ended before RSS instrumentation; the actual training-process peak is unknown and is not reconstructed from the supplemental measurement |
+
+The timings exclude engine rasterization, GPU texture ownership, composition,
+post/UI, presentation, and fallback transitions. They demonstrate local proof
+feasibility only. Visible edge smoothing and chromatic ringing remain quality
+limitations regardless of the low aggregate errors.
+
+## NR5-E live Core ML trial measurements
+
+These measurements describe the explicit external trial bundle and current
+blocking evaluation path. They are not an installed model, frame-rate target,
+or shipping inference design.
+
+| Item | Result |
+|---|---|
+| Live cohort | 48 Metal frames; six `160×90` engine targets; direct `400×225` model output |
+| Correctness | 48 readbacks, 48 predictions, zero inference failures, zero unknown semantic pixels, zero unknown instance pixels |
+| Core ML agreement | Float32 MLProgram maximum absolute error `0.00001955`, mean absolute error `0.00000017` against the export wrapper |
+| Warm acceptance timing | Last inference `11.281 ms`; staged pipeline mean `33.475 ms`; staged maximum `77.716 ms` |
+| Cold behavior | First-use Core ML compilation outlier near `1052 ms` retained from the preceding cold run |
+| Presentation | One-frame-delayed output with explicit `N` conventional/neural toggle and automatic conventional fallback |
+| Current cost owners | Blocking GPU readback, CPU preprocessing, Core ML inference, CPU display transform, upload, and one-frame staging |
+
+The warm inference is compatible with interactive proof use on the target Mac,
+while the staged mean explains the observed roughly 24–27 FPS product run. NR6
+must measure temporal quality before optimizing this transport. It must not
+erase source/presented-frame lineage or silently replace the fallback contract.

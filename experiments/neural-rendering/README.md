@@ -37,9 +37,11 @@ Implemented numbered experiments:
   accepted; NR4-D's 108-pair technical corpus gate passes; NR4-E accepts it
   for the initial NR5-A/B scope with explicit broader gaps.
 - [`nr-0005-structural-title-renderer/`](nr-0005-structural-title-renderer/README.md):
-  cohesive from-scratch framework and controlled 18-frame overfit accepted;
-  exact random-origin lineage, full visual evidence, and deterministic
-  baselines retained; NR5-C held-out reconstruction is next.
+  cohesive from-scratch framework, controlled overfit, held-out selection,
+  single sealed-test opening, branch ablations, fresh native stress evaluation,
+  exact export verification, and the live Core ML interactive spatial trial
+  accepted. It authorizes NR6 temporal research but remains an external,
+  unpromoted known-fixture candidate.
 
 Once tooling exists, each committed experiment directory should contain only
 the information needed to reproduce and review intent:

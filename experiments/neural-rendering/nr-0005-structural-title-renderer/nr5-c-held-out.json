@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "experiment": "NR-0005",
+  "stage": "held_out_structural_reconstruction",
+  "train_splits": ["overfit", "train"],
+  "selection_split": "validation",
+  "test_policy": "open exactly once only after immutable validation selection",
+  "device": "mps",
+  "initialization_seed": 2026081001,
+  "training_seed": 2026081002,
+  "epochs": 180,
+  "batch_size": 1,
+  "validate_every_epochs": 5,
+  "model": {
+    "name": "nr5_spatial_title_renderer_v2_split_structural_resampling",
+    "features": 48,
+    "low_blocks": 6,
+    "output_blocks": 3,
+    "semantic_embedding": 4,
+    "instance_embedding": 8,
+    "output_width": 400,
+    "output_height": 225
+  },
+  "optimizer": {
+    "name": "AdamW",
+    "learning_rate": 0.0007,
+    "weight_decay": 0.00001
+  },
+  "scheduler": {
+    "name": "CosineAnnealingLR",
+    "minimum_learning_rate": 0.00001
+  },
+  "selection_metric": "validation linear_hdr_mae",
+  "ablations": ["appearance_only", "no_semantic", "no_instance", "no_globals"],
+  "pretrained_weights": false,
+  "promotion_eligible": false
+}

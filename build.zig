@@ -2104,6 +2104,54 @@ pub fn build(b: *std.Build) void {
     );
     inspect_title_renderer_run_step.dependOn(&inspect_title_renderer_run.step);
 
+    const inspect_title_renderer_candidate = b.addSystemCommand(&.{
+        "python3",
+        b.pathFromRoot("tools/neural-rendering/title_renderer/inspect_candidate.py"),
+    });
+    inspect_title_renderer_candidate.setEnvironmentVariable(
+        "PYTHONPATH",
+        b.pathFromRoot("tools/neural-rendering"),
+    );
+    if (b.args) |args| inspect_title_renderer_candidate.addArgs(args);
+    const inspect_title_renderer_candidate_step = b.step(
+        "inspect-title-renderer-candidate",
+        "Validate external NR5-C/D evidence: zig build inspect-title-renderer-candidate -- <absolute-run-root>",
+    );
+    inspect_title_renderer_candidate_step.dependOn(&inspect_title_renderer_candidate.step);
+
+    const inspect_nr5_e_trial_bundle = b.addSystemCommand(&.{
+        "python3",
+        b.pathFromRoot("tools/neural-rendering/title_renderer/inspect_trial_bundle.py"),
+    });
+    inspect_nr5_e_trial_bundle.setEnvironmentVariable(
+        "PYTHONPATH",
+        b.pathFromRoot("tools/neural-rendering"),
+    );
+    if (b.args) |args| inspect_nr5_e_trial_bundle.addArgs(args);
+    const inspect_nr5_e_trial_bundle_step = b.step(
+        "inspect-nr5-e-trial-bundle",
+        "Validate an external NR5-E Core ML trial bundle: zig build inspect-nr5-e-trial-bundle -- <absolute-bundle-root>",
+    );
+    inspect_nr5_e_trial_bundle_step.dependOn(&inspect_nr5_e_trial_bundle.step);
+
+    const verify_nr5_e_trial = b.addSystemCommand(&.{
+        "sh",
+        b.pathFromRoot("tools/verify_nr5_e_trial.sh"),
+    });
+    verify_nr5_e_trial.addFileArg(validation_exe.getEmittedBin());
+    verify_nr5_e_trial.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    if (b.args) |args| verify_nr5_e_trial.addArgs(args);
+    verify_nr5_e_trial.step.dependOn(&install_cooked_fixture.step);
+    verify_nr5_e_trial.step.dependOn(&install_fixture_provenance.step);
+    verify_nr5_e_trial.step.dependOn(&install_cooked_east.step);
+    verify_nr5_e_trial.step.dependOn(&install_east_provenance.step);
+    verify_nr5_e_trial.step.dependOn(&install_cooked_catalog.step);
+    const verify_nr5_e_trial_step = b.step(
+        "verify-nr5-e-trial",
+        "Run the live six-channel NR5-E Core ML graphical acceptance: zig build verify-nr5-e-trial -- <absolute-bundle-root>",
+    );
+    verify_nr5_e_trial_step.dependOn(&verify_nr5_e_trial.step);
+
     const verify_nr0_ab = b.addSystemCommand(&.{
         "sh",
         b.pathFromRoot("tools/verify_nr0_ab.sh"),

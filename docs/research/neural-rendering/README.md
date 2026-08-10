@@ -1,10 +1,10 @@
 # Neural Rendering Research
 
 **Status:** Active research supporting accepted ADR-025 and ADR-026; NR0-A
-through NR0-D, NR-0004, and NR5-A/B accepted; NR5-C and NR0-E through NR0-G
-open
+through NR0-D, NR-0004, and NR5-A through NR5-E accepted; NR6 and NR0-E
+through NR0-G open
 
-**Last reviewed:** 2026-08-08
+**Last reviewed:** 2026-08-10
 
 This directory preserves the evidence and reasoning behind Incinerator's
 game-specific neural-rendering track. It is research input, not a runtime
@@ -41,8 +41,13 @@ NR4-D's 108-pair technical corpus gate passes from the explicit native
 `160×90 → 400×225` contract, and NR4-E accepts it for the initial structural
 scope with explicit broader gaps. NR5-A/B then prove repository-owned random
 initialization, immutable lineage, direct linear-HDR learning, and controlled
-reconstruction across all 18 overfit frames. NR5-C held-out reconstruction is
-next. Artifacts at other extents remain historical only.
+reconstruction across all 18 overfit frames. NR5-C/D preserve those gains on
+18 validation frames, one sealed 18-frame test opening, and a newly captured
+36-frame stress cohort. Exact export agreement and all declared ablations pass;
+visual review retains localized edge smoothing/ringing. NR5-E proves live
+Core ML execution from the same engine ABI with explicit fallback and evidence,
+and permits NR6 temporal work only. Artifacts at other extents remain
+historical only.
 
 Research may compare broad techniques. Implementation choices enter the
 engine only through an ADR or an amendment to ADR-025, an executable vertical

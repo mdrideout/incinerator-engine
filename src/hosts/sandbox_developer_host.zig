@@ -656,6 +656,48 @@ pub const Owner = opaque {
         return capture.runPath();
     }
 
+    pub const NeuralRuntimeSnapshot = struct {
+        enabled: bool,
+        output_ready: bool,
+        manifest_digest: []const u8,
+        checkpoint_digest: []const u8,
+        source_tick: u64,
+        source_frame: u64,
+        presented_source_frame: u64,
+        readbacks: u64,
+        predictions: u64,
+        failures: u64,
+        inference_ms: f64,
+        pipeline_mean_ms: f64,
+        pipeline_maximum_ms: f64,
+        unknown_semantic_pixels: u64,
+        unknown_instance_pixels: u64,
+    };
+
+    pub fn recordNeuralRendering(
+        self: *Owner,
+        runtime: NeuralRuntimeSnapshot,
+    ) void {
+        const capture = ownerState(self).incident orelse return;
+        capture.recordNeuralRendering(
+            runtime.enabled,
+            runtime.output_ready,
+            runtime.manifest_digest,
+            runtime.checkpoint_digest,
+            runtime.source_tick,
+            runtime.source_frame,
+            runtime.presented_source_frame,
+            runtime.readbacks,
+            runtime.predictions,
+            runtime.failures,
+            runtime.inference_ms,
+            runtime.pipeline_mean_ms,
+            runtime.pipeline_maximum_ms,
+            runtime.unknown_semantic_pixels,
+            runtime.unknown_instance_pixels,
+        );
+    }
+
     pub const IncidentBenchmarkSnapshot = struct {
         enabled: bool = false,
         queue_high_water: u16 = 0,

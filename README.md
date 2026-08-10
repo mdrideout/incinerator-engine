@@ -113,8 +113,16 @@ schema 4, and target-frame schema v4. Its two-run still and 18-frame gates
 pass. Four presentation-owned frame-global controls resolve the only observed
 ambiguity for 16 bytes per frame and no new raster target. NR4-E accepts the 6
 whole-sequence/108-pair corpus for the initial structural scope. NR5-A/B accept
-the cohesive random-origin framework and controlled 18-frame overfit; NR5-C
-held-out reconstruction is next. Other target extents remain excluded and
+the cohesive random-origin framework and controlled 18-frame overfit. NR5-C/D
+accept the first known-fixture held-out structural candidate after
+validation-only selection, one sealed-test opening, branch ablations, a newly
+captured 36-frame native stress cohort, exact all-stress TorchScript agreement,
+and complete visual review. NR5-E runs that exact checkpoint through a validated
+external Core ML bundle from the engine's live six-channel input, with an
+interactive native comparison, explicit fallback, editor and incident
+diagnostics, and retained graphical evidence. The result authorizes NR6 causal
+temporal research but remains external, visibly imperfect, unpromoted, and
+ineligible for runtime selection. Other target extents remain excluded and
 deferred.
 Broader Steam/public-service infrastructure remains deferred.
 

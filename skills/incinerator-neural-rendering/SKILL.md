@@ -97,8 +97,10 @@ current producer, consumer, inspector, report, and baseline must reject foreign
 extents. Never reduce or reuse an earlier high-resolution target as current
 training, comparison, preview, metric, or acceptance material.
 
-Use the Neural Rendering Lab for live schema, shader, history, identity,
-render, model, and capture state. Use these tools for external evidence:
+Use the Neural Input / Output window for the native live appearance/output
+comparison and its collapsible schema, shader, history, identity, render,
+model, capture, and auxiliary-input diagnostics. Use these tools for external
+evidence:
 
 ```sh
 zig build inspect-nr0-capture -- <capture-root> [<capture-root> ...]
@@ -214,8 +216,19 @@ NR4-E accepts that corpus only for the initial structural scope at
 NR5-A and NR5-B then accept the cohesive random-origin framework and controlled
 overfit at
 `~/Library/Application Support/Incinerator/neural-rendering/experiments/nr5-b-controlled-overfit-20260809-c`.
-Its test pixels remain sealed. NR5-C is the active phase; select only on
-validation, open test once, and do not claim temporal or promotion readiness.
+NR5-C/D are accepted at
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/nr5-c-held-out-20260810-b`:
+validation selected the checkpoint, test opened once, a real second attempt was
+rejected, and a fresh 36-frame native stress corpus passed. Inspect with
+`zig build inspect-title-renderer-candidate -- <absolute-run-root>`. NR5-E then
+accepts the explicit external trial bundle at
+`~/Library/Application Support/Incinerator/neural-rendering/trial-bundles/nr5-e-spatial-20260810-b`.
+Inspect it with `zig build inspect-nr5-e-trial-bundle -- <absolute-bundle-root>`
+and run its graphical gate with
+`zig build verify-nr5-e-trial -Deditor=true -- <absolute-bundle-root>`. It is a
+live evaluation path, not promotion or installed content. NR6 is the active
+phase. Do not claim title-wide, temporal, promotion, installed-runtime, or
+art-complete readiness from NR-0005.
 
 ## Validation and handoff
 

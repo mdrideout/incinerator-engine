@@ -2,9 +2,9 @@
   "schema": 1,
   "experiment": "NR-0005",
   "title": "from-scratch structural title renderer",
-  "status": "nr5_a_and_nr5_b_accepted",
-  "current_phase": "NR5-C",
-  "current_gate": "held_out_structural_reconstruction",
+  "status": "nr5_a_through_nr5_e_accepted_unpromoted",
+  "current_phase": "NR6",
+  "current_gate": "causal_temporal_contract",
   "working_resolution": {
     "input_extent": [160, 90],
     "target_extent": [400, 225],
@@ -13,7 +13,7 @@
   "learned_origin": "repository-owned random initialization and title-owned paired corpus only",
   "pretrained_weights": false,
   "promotion_eligible": false,
-  "test_policy": "sealed until validation selection in NR5-C",
+  "test_policy": "opened exactly once after immutable NR5-C validation selection; rejected reopen recorded",
   "phase_evidence": {
     "NR5-A": {
       "status": "accepted",
@@ -40,6 +40,62 @@
         "localized smoothing in severe near-edge views",
         "localized chromatic ringing at near-edge and high-emissive boundaries"
       ]
+    },
+    "NR5-C": {
+      "status": "accepted_known_fixture_held_out",
+      "external_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr5-c-held-out-20260810-b",
+      "train_frames": 36,
+      "validation_frames": 18,
+      "test_frames": 18,
+      "parameters": 448175,
+      "selected_epoch": 175,
+      "training_duration_ms": 349955.14487475157,
+      "validation_linear_hdr_mae": 0.010291160498228338,
+      "validation_bilinear_linear_hdr_mae": 0.4683403952254189,
+      "test_linear_hdr_mae": 0.016277371905744076,
+      "test_bilinear_linear_hdr_mae": 0.42459283934699166,
+      "test_pixels_opened_once": true,
+      "reopen_rejected_before_pixels": true,
+      "checkpoint_sha256": "c0a98dae0ae49712e32b966bb78bb129b2fc340b247faaed90e6dcec3ae4b19a",
+      "promotion_authorized": false
+    },
+    "NR5-D": {
+      "status": "accepted_authorizes_nr6",
+      "stress_corpus_root": "~/Library/Application Support/Incinerator/neural-rendering/experiments/nr5-d-native-stress-corpus-20260810-a",
+      "stress_corpus_manifest_sha256": "8a0e48e2349fc47cce4fc7926c704b42e53009d72961ff1c390ba04245978325",
+      "stress_frames": 36,
+      "stress_linear_hdr_mae": 0.011825892311106954,
+      "stress_bilinear_linear_hdr_mae": 0.5028177756402228,
+      "stress_export_maximum_absolute_error": 0.0,
+      "offline_mps_inference_median_ms": 6.982833379879594,
+      "offline_mps_inference_p95_ms": 10.861989692784846,
+      "representative_forward_backward_peak_rss_bytes": 1027063808,
+      "complete_visual_review": true,
+      "next_phase_authorized": "NR6",
+      "promotion_authorized": false,
+      "known_failures": [
+        "localized smoothing at emissive, glass, and high-contrast boundaries",
+        "localized chromatic ringing in severe near-edge and high/top-down views",
+        "one procedural fixture does not establish title-wide generalization"
+      ]
+    },
+    "NR5-E": {
+      "status": "accepted_external_interactive_trial_unpromoted",
+      "trial_bundle_root": "~/Library/Application Support/Incinerator/neural-rendering/trial-bundles/nr5-e-spatial-20260810-b",
+      "bundle_manifest_sha256": "96122d89ddd360c1e9c2840b81273dde62d8c4587b87e04575c75d88f10a5be8",
+      "tool_source_snapshots": 8,
+      "checkpoint_sha256": "c0a98dae0ae49712e32b966bb78bb129b2fc340b247faaed90e6dcec3ae4b19a",
+      "coreml_maximum_absolute_error": 0.00001955,
+      "coreml_mean_absolute_error": 0.00000017,
+      "graphical_frames": 48,
+      "predictions": 48,
+      "inference_failures": 0,
+      "unknown_semantic_pixels": 0,
+      "unknown_instance_pixels": 0,
+      "warm_last_inference_ms": 11.281,
+      "warm_staged_pipeline_mean_ms": 33.475,
+      "warm_staged_pipeline_maximum_ms": 77.716,
+      "promotion_authorized": false
     }
   }
 }

@@ -81,17 +81,18 @@ class SpatialTitleRenderer(nn.Module):
             low = block(low)
         output_size = (self.config.output_height, self.config.output_width)
         low = functional.interpolate(low, size=output_size, mode="bilinear", align_corners=False)
-        structural_low = torch.cat(
-            (
-                continuous[:, 3:4],
-                continuous[:, 4:7],
-                continuous[:, 10:11],
-                semantic_features,
-                instance_features,
-            ),
-            dim=1,
+        structural_continuous = functional.interpolate(
+            torch.cat((continuous[:, 3:4], continuous[:, 4:7], continuous[:, 10:11]), dim=1),
+            size=output_size,
+            mode="bilinear",
+            align_corners=False,
         )
-        structural = functional.interpolate(structural_low, size=output_size, mode="nearest-exact")
+        structural_categorical = functional.interpolate(
+            torch.cat((semantic_features, instance_features), dim=1),
+            size=output_size,
+            mode="nearest-exact",
+        )
+        structural = torch.cat((structural_continuous, structural_categorical), dim=1)
         structural = self.structural_encoder(structural)
         fused = functional.silu(self.fusion(torch.cat((low, structural), dim=1)))
         for block in self.output_blocks:

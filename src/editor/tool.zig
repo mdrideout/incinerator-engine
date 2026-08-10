@@ -304,6 +304,12 @@ pub const NeuralTextureView = struct {
     height: u32,
 };
 
+pub const NeuralOutputView = struct {
+    binding: *const anyopaque,
+    width: u32,
+    height: u32,
+};
+
 pub const NeuralView = struct {
     available: bool = false,
     schema_version: u16 = 0,
@@ -321,8 +327,22 @@ pub const NeuralView = struct {
     render_failures: u64 = 0,
     model_loaded: bool = false,
     model_enabled: bool = false,
+    model_output_ready: bool = false,
+    model_bundle_root: []const u8 = "",
+    model_checkpoint_digest: []const u8 = "",
+    model_manifest_digest: [64]u8 = @splat(0),
+    model_readbacks: u64 = 0,
     model_predictions: u64 = 0,
+    model_failures: u64 = 0,
+    model_last_source_tick: u64 = 0,
+    model_last_source_frame: u64 = 0,
+    model_last_presented_source_frame: u64 = 0,
+    model_unknown_semantic_pixels: u64 = 0,
+    model_unknown_instance_pixels: u64 = 0,
     model_inference_ms: f64 = 0,
+    model_pipeline_mean_ms: f64 = 0,
+    model_pipeline_maximum_ms: f64 = 0,
+    model_output: ?NeuralOutputView = null,
     capture_active: bool = false,
     capture_root: []const u8 = "",
     capture_cohort: []const u8 = "",
