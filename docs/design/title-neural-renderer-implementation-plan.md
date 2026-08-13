@@ -14,6 +14,9 @@ NR6 causal temporal work remains deferred
 **Rich-fidelity roadmap:**
 [Rich Fidelity Roadmap](rich-fidelity-roadmap.md)
 
+**Next spatial-quality plan:**
+[RF9 Spatial Quality Expansion](rf9-spatial-quality-expansion.md)
+
 **Decisions:**
 [ADR-025](../adr/025-game-specific-neural-rendering-boundary.md) and
 [ADR-026](../adr/026-from-scratch-title-neural-renderer.md)

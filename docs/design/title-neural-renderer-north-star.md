@@ -19,6 +19,9 @@ trial accepted externally and unpromoted while NR6 remains deferred
 **Rich-fidelity roadmap:**
 [Rich Fidelity Roadmap](rich-fidelity-roadmap.md)
 
+**Next spatial-quality plan:**
+[RF9 Spatial Quality Expansion](rf9-spatial-quality-expansion.md)
+
 ## Product outcome
 
 Incinerator will provide a repeatable training and runtime framework through
