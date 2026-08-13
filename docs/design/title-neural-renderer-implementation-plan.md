@@ -1,12 +1,18 @@
 # Title Neural Renderer Implementation Plan
 
-**Status:** NR-0004 and NR5-A through NR5-E accepted; NR6 causal temporal
-renderer is next
+**Status:** NR-0004 and NR5-A through NR5-E accepted; RF0 through RF5 accepted;
+RF6 and RF7 retained as historical spatial evidence; RF8 direct
+`160×90 → 640×360` spatial-sharpness/live-presentation trial accepted
+externally and unpromoted;
+NR6 causal temporal work remains deferred
 
-**Date:** 2026-08-10
+**Date:** 2026-08-12
 
 **North star:**
 [Title Neural Renderer North Star](title-neural-renderer-north-star.md)
+
+**Rich-fidelity roadmap:**
+[Rich Fidelity Roadmap](rich-fidelity-roadmap.md)
 
 **Decisions:**
 [ADR-025](../adr/025-game-specific-neural-rendering-boundary.md) and
@@ -46,9 +52,13 @@ not be used as title-training truth. NR4-A adds one exact, rights-clean,
 high-fidelity Cycles still plus identity/depth/normal evidence and its visual
 direction was human-accepted at its historical extent. NR4-B extends that
 adapter through six causally isolated moving segments and a two-run technical
-proof. That acceptance does not carry into the active cohort. Native target
-re-acceptance, ambiguity-driven controls, corpus assembly, and coverage
-acceptance remain open.
+proof. NR4-C then regenerated and accepted the self-contained native
+`160×90 → 400×225` cohort with the minimal observed global controls. NR4-D/E
+assembled and accepted the 108-pair corpus for the declared structural scope.
+NR5-A through NR5-E trained, selected, stress-tested, exported, and exercised
+the resulting known-fixture spatial candidate without promoting it. RF0 now
+starts a distinct real-sandbox visual foundation rather than expanding that
+fixture in place.
 
 ## Non-negotiable boundaries
 
@@ -200,11 +210,20 @@ not reorganized merely for uniformity.
 | 8 | NR5-C held-out structural renderer | **Accepted** | NR5-B | Structure and material gains survive held-out views |
 | 9 | NR5-D ablation and candidate conclusion | **Accepted; NR6 authorized; unpromoted** | NR5-C | NR-0005 accepted or rejected, never auto-promoted |
 | 10 | NR5-E interactive spatial trial | **Accepted; external and unpromoted** | NR5-D | Live six-channel Core ML inference, comparison, fallback, identity, timing, incident, and graphical evidence pass |
-| 11 | NR6 causal temporal renderer | Next | NR5-E | Motion, reset, drift, and responsiveness pass without losing the trial boundary |
-| 12 | NR7 learned-detail residual | Conditional | Measured NR6 richness ceiling | Richness improves without structural substitution |
-| 13 | NR0-E explicit promotion | Blocked | Promotion-worthy candidate | Immutable source-preserving selection |
-| 14 | NR0-F installed macOS runtime | Blocked | NR0-E | Exact GPU-resident bundle and fallback behavior |
-| 15 | NR0-G acceptance and audit | Blocked | NR0-F | End-to-end accepted or rejected with evidence |
+| 11 | RF0 sandbox visual foundation | **Complete** | NR5-E evaluation boundary | Real default sandbox has a bounded, readable character/vehicle/environment/material vocabulary with clean ownership |
+| 12 | RF1 exact cheap/rich profiles | **Complete** | RF0 | One immutable 49-draw presentation produces exact native `160×90 → 400×225` pairs |
+| 13 | RF2 environment and surface richness | **Complete** | RF1 | Environmental material families pass exact paired review |
+| 14 | RF3 character and NPC richness | **Complete** | RF2 | T-shaped actors have explicit fabric/skin/state-rich target truth without identity or pose substitution |
+| 15 | RF4 vehicle richness | **Complete** | RF3 | Vehicle materials and articulation remain exact across paired motion |
+| 16 | RF5 lighting and local-effect richness | **Accepted** | RF4 | Explicit lighting/effect controls produce responsive rich target truth |
+| 17 | RF6 cumulative rich spatial conclusion | **Technical complete; superseded by RF7 resolution decision** | RF5 human approval | Fresh corpus, random-origin held-out conclusion, sealed test, stress, export, and live external trial pass without promotion |
+| 18 | RF7 direct 800×450 spatial fidelity | **Accepted external live trial; unpromoted** | RF6 evidence and product resolution decision | 108 fresh native `160×90 → 800×450` pairs, one direct learned 5× path, held-out selection, single-open test, stress, exact export, and 48/48 live predictions passed; no 400×225 stage |
+| 19 | RF8 direct 640×360 spatial sharpness and fixed presentation | **Accepted external live trial; unpromoted** | RF7 live quality evidence and product 16:9 decision | 108 fresh native `160×90 → 640×360` pairs; stronger native-output reconstruction/loss/selection; validation/test/stress pass; exact Core ML export; 48/48 Metal predictions; centered unscaled 640×360 main presentation; source-only neural debug pane; no retired-resolution pixels |
+| 20 | NR6 causal temporal renderer | Deferred | Accepted RF8 spatial problem | Motion, reset, drift, and responsiveness pass against the accepted rich spatial problem |
+| 21 | NR7 learned-detail residual | Conditional | Measured NR6 richness ceiling | Richness improves without structural substitution |
+| 22 | NR0-E explicit promotion | Blocked | Promotion-worthy candidate | Immutable source-preserving selection |
+| 23 | NR0-F installed macOS runtime | Blocked | NR0-E | Exact GPU-resident bundle and fallback behavior |
+| 24 | NR0-G acceptance and audit | Blocked | NR0-F | End-to-end accepted or rejected with evidence |
 
 ## NR-0004 — High-fidelity target and corpus foundation
 
@@ -706,6 +725,29 @@ conventional fallback, Neural Input / Output native comparison and collapsible
 lineage/timing diagnostics, and incident metric linkage. Full evidence and commands are recorded in
 [`../validation/nr5-e-interactive-spatial-trial.md`](../validation/nr5-e-interactive-spatial-trial.md).
 
+## RF0 through RF6 — Rich-fidelity product track
+
+This is a distinct content/presentation track rather than an NR5 appendix. It
+first improves the real conventional sandbox, then adds one fidelity kind at a
+time through authored intent, cheap render, rich target, paired capture, and
+target review. RF6 performs cumulative spatial training, live comparison, and
+incident evaluation only after the RF5 target direction is accepted.
+
+RF0 builds the bounded sandbox visual foundation. RF1 proves exact cheap/rich
+profiles from one immutable engine-submitted evaluation event using the same
+catalog. RF2 through RF5 cover
+environment surfaces, characters/NPCs, vehicles, and lighting/local effects.
+RF6 selected and evaluated the historical cumulative rich spatial candidate at
+`400×225`. RF7 replaces the active resolution contract with native `160×90`
+cheap input to one direct native `800×450` target/output. `400×225` has no RF7
+training, model, comparison, export, or runtime role. Normal-window pixels
+remain human-facing output, not training material.
+
+The exact ownership, phase gates, non-goals, and validation sequence are in the
+[Rich Fidelity Roadmap](rich-fidelity-roadmap.md). Do not build a general scene
+graph, asset editor, importer, shader graph, or training-only look-alike map in
+order to complete this work.
+
 ## NR-0006 — Causal temporal title renderer
 
 1. Define the exact history contract before adding state: inputs, feature/output
@@ -900,11 +942,12 @@ NR4-A and the NR4-B technical implementation are complete:
 6. **Complete:** product-owner acceptance of the moving target and alignment
    direction.
 
-**Current phase:** NR6 begins from the accepted but unpromoted NR-0005 spatial
-checkpoint and the NR5-E evaluation boundary. Define history ownership,
-reprojection, rejection, lifecycle, and reset contracts before adding state;
-recapture native temporal cohorts and compare causal output against
-NR-0005/no-history and deterministic baselines. The localized smoothing/ringing
-recorded by NR5-C/D remains an explicit input to the evaluation and cannot be
-hidden by temporal accumulation. No promotion or installed runtime selection is
-authorized.
+**Current phase:** RF0 through RF5 are accepted and RF6-A through RF6-F are
+technically complete without modifying or promoting the NR5-E model. The fresh
+RF6 candidate passes validation-only selection, one sealed-test opening, fresh
+stress, exact export, and the live Core ML/Metal gate. Product-owner interactive
+review remains; see
+[RF6 validation](../validation/rf6-cumulative-rich-spatial.md). NR6
+history/reprojection/reset work remains deferred until that review and begins
+with measured temporal-need characterization. No promotion or installed runtime
+selection is authorized.

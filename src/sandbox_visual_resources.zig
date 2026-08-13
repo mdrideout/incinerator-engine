@@ -46,6 +46,7 @@ pub const SandboxVisualResources = struct {
     character_mesh: mesh.Mesh,
     vehicle_chassis_mesh: mesh.Mesh,
     vehicle_wheel_mesh: mesh.Mesh,
+    visual_part_mesh: mesh.Mesh,
 
     pub fn init(
         device: *c.SDL_GPUDevice,
@@ -67,16 +68,20 @@ pub const SandboxVisualResources = struct {
         errdefer vehicle_chassis_mesh.deinit();
         var vehicle_wheel_mesh = try primitives.createWheelCylinder(device);
         errdefer vehicle_wheel_mesh.deinit();
+        var visual_part_mesh = try primitives.createSolidCube(device);
+        errdefer visual_part_mesh.deinit();
         return .{
             .crate_mesh = crate_mesh,
             .crate_texture = crate_texture,
             .character_mesh = character_mesh,
             .vehicle_chassis_mesh = vehicle_chassis_mesh,
             .vehicle_wheel_mesh = vehicle_wheel_mesh,
+            .visual_part_mesh = visual_part_mesh,
         };
     }
 
     pub fn deinit(self: *SandboxVisualResources) void {
+        self.visual_part_mesh.deinit();
         self.vehicle_wheel_mesh.deinit();
         self.vehicle_chassis_mesh.deinit();
         self.character_mesh.deinit();

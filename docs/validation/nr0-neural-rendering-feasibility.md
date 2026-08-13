@@ -1,9 +1,12 @@
 # NR0 Neural Rendering Feasibility Validation Ledger
 
 **Status:** NR0-A through NR0-D, NR-0004, and NR5-A through NR5-E accepted;
-NR6 and NR0-E through NR0-G open
+RF0 through RF5 accepted; RF6 and RF7 retained as historical evidence; RF8
+direct `160×90 → 640×360` spatial-sharpness/live-presentation trial accepted
+externally and unpromoted; NR6 and NR0-E through NR0-G
+open
 
-**Date:** 2026-08-10
+**Date:** 2026-08-11
 
 This ledger will record executed evidence for
 [the NR0 plan](../design/nr0-neural-rendering-feasibility.md). Documentation and
@@ -24,6 +27,9 @@ directory scaffolding are not implementation acceptance.
 | Held-out title reconstruction | Fixed entry authorization, validation-only selection, one sealed-test opening, branch ablations, complete visual evidence | **NR5-C accepted for the known fixture:** validation MAE 0.010291 vs 0.468340 bilinear; test MAE 0.016277 vs 0.424593; a real reopen was rejected before pixels; localized edge smoothing/ringing remains |
 | Structural candidate conclusion | Fresh native stress capture, worst-frame review, export verification, timing/memory measurements, explicit disposition | **NR5-D accepted; NR6 authorized; unpromoted:** 36 stress frames pass at MAE 0.011826 vs 0.502818 bilinear; all-stress TorchScript agreement exact; visual limitations and one-fixture scope retained |
 | Interactive spatial trial | Explicit external bundle, exact live six-channel preprocessing, Core ML agreement, graphical comparison, fallback, identity/timing/incident evidence | **NR5-E accepted; external and unpromoted:** 48/48 live predictions with zero failures or unknown category pixels; native cheap/neural visual evidence reviewed; known blur/ringing retained |
+| Cumulative rich spatial candidate | Fresh RF0–RF5 corpus, random-origin fit, validation-only selection, sealed test, fresh stress, ablations, exact export, and live trial | **RF6 technical gate passed; external, unpromoted, and superseded by RF7's resolution decision:** 108 fresh pairs; validation MAE 0.010470 vs 0.451187 bilinear; test opened once at MAE 0.015084; stress MAE 0.012028; 48/48 live predictions pass |
+| Direct 800×450 spatial candidate | Fresh native 800×450 truth, one direct learned 5× model, color-fidelity losses, validation-only selection, single-open test, stress, exact export, and live trial | **RF7 accepted as external and unpromoted:** 108 fresh `160×90 → 800×450` pairs; validation/test/stress MAE 0.011649/0.016473/0.013500; Core ML max error 0.00003147; 48/48 live predictions pass; no 400×225 stage |
+| Direct 640×360 spatial-sharpness candidate | Fresh native 640×360 truth, one direct learned uniform 4× model, native-grid refinement, sharpness/color losses, spatial-quality validation selection, single-open test, stress, exact export, centered unscaled live trial | **RF8 accepted as external and unpromoted:** 108 wholly fresh `160×90 → 640×360` pairs; validation/test/stress MAE `0.010595`/`0.015272`/`0.012508`; Core ML max error `0.00003123`; 48/48 Metal predictions pass; no 400×225 or 800×450 pixels |
 | Promotion | Source-preserving transactional copy, digest/schema verification, exact selection | Not started |
 | Runtime | Installed Apple Silicon inference with GPU-owned textures and visible model identity | Preliminary explicit-path Core ML proof passed; blocking CPU staging and no promoted bundle prevent acceptance |
 | Fallback | Missing/rejected model, resize, cut, device/inference failure, and recovery | Missing-model conventional fallback passed; remaining transitions open |
@@ -351,8 +357,32 @@ outlier near `1052 ms` remains recorded.
 The accepted external bundle, command set, evidence location, exact digests,
 runtime boundary, and remaining limitations are recorded in
 [the NR5-E validation record](nr5-e-interactive-spatial-trial.md). NR5-E proves
-the complete evaluation path but does not promote the candidate. NR6 remains
-next.
+the complete evaluation path but does not promote the candidate. Its NR6
+authorization remains valid, but the rich-fidelity roadmap deliberately runs
+RF0 through RF6 first so temporal work addresses the real sandbox vocabulary.
+
+## RF6 cumulative rich spatial candidate
+
+RF6 applies the accepted RF0–RF5 target direction to a completely new data and
+model lineage. Its six whole sequences contain 108 newly rendered native pairs;
+no earlier target pixels or checkpoints participate. The 448,359-parameter
+candidate was selected at epoch 175 using validation only, after which the
+18-frame sealed test opened once and a real reopen was rejected before pixels.
+A separately regenerated 36-frame stress cohort then passed.
+
+The full model measures `0.010470` validation linear-HDR MAE versus `0.451187`
+bilinear, `0.015084` on sealed test versus `0.399686`, and `0.012028` on fresh
+stress versus `0.487823`. Appearance-only and no-instance ablations fail
+materially; no-global and no-semantic branches also lose. Complete visual
+review retains localized glass/emissive/thin-edge ringing and softening.
+
+The external Core ML trial produced 48 predictions from 48 live Metal
+readbacks with zero failures and zero unknown category pixels. Exact roots,
+digests, runtime measurements, review commands, and the remaining
+product-owner interactive gate are in
+[the RF6 validation record](rf6-cumulative-rich-spatial.md). This is technical
+spatial acceptance, not promotion, installed content, temporal acceptance, or
+title-wide coverage.
 
 ## Acceptance conclusion
 

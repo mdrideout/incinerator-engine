@@ -16,15 +16,17 @@ path from an evaluated export to selected game content.
    `docs/design/title-neural-renderer-north-star.md` completely.
 3. For NR-0004 or later title-renderer implementation, read
    `docs/design/title-neural-renderer-implementation-plan.md` completely.
-4. Read `docs/design/nr0-neural-rendering-feasibility.md` and, for capture or
+4. For RF0-RF6 visual-content, paired-profile, or rich-spatial work, read
+   `docs/design/rich-fidelity-roadmap.md` completely.
+5. Read `docs/design/nr0-neural-rendering-feasibility.md` and, for capture or
    quality work, `docs/design/nr0-neural-rendering-evaluation-scene.md`.
-5. For model/input decisions, read the relevant files under
+6. For model/input decisions, read the relevant files under
    `docs/research/neural-rendering/`; do not treat research numbers as engine
    measurements.
-6. For experiment work, read `experiments/neural-rendering/README.md`.
-7. For tooling or promotion work, read `tools/neural-rendering/README.md` and
+7. For experiment work, read `experiments/neural-rendering/README.md`.
+8. For tooling or promotion work, read `tools/neural-rendering/README.md` and
    `models/neural-rendering/README.md`.
-8. For an acceptance or performance claim, read the NR0 validation ledger and
+9. For an acceptance or performance claim, read the NR0 validation ledger and
    performance baseline first.
 
 Check repository status and current code before acting. Planned filenames in
@@ -81,18 +83,18 @@ exists.
 
 ## Current native input and target contract
 
-The active input ABI is `incinerator.neural-input.v3`: six native `160×90`
+The active input ABI is `incinerator.neural-input.v5`: six native `160×90`
 RGBA8 appearance, linear-depth, world-normal, motion, semantic, and instance
 targets plus four frame-global float32 lighting/material controls. Capture
-schema 4 requires an absolute absent root plus explicit cohort, sequence, and
+schema 6 requires an absolute absent root plus explicit cohort, sequence, and
 camera-path ownership. It stores only native inputs; it does not emit a
 conventional product target. PPM images and contact sheets are debug/UI
 derivatives only.
 
 The active offline target package is
-`incinerator.nr4.blender-target-frame.v4`. It declares a direct native
-`400×225` Cycles target and the exact top-left pixel-center 5:2 mapping:
-`((target_index + 0.5) * 2 / 5) - 0.5`, with clamp border behavior. Every
+`incinerator.nr4.blender-target-frame.v6`. It declares a direct native
+`640×360` Cycles target and the exact uniform top-left pixel-center 4:1 mapping
+on both axes: `((target_index + 0.5) / 4) - 0.5`, with clamp border behavior. Every
 current producer, consumer, inspector, report, and baseline must reject foreign
 extents. Never reduce or reuse an earlier high-resolution target as current
 training, comparison, preview, metric, or acceptance material.
@@ -190,7 +192,8 @@ accepted the synchronized moving target direction. The immutable external
 review field retains its original pending state; the committed experiment
 disposition records the subsequent acceptance.
 
-NR4-C is accepted. Its native technical still and 18-frame sequence gates pass
+NR4-C is accepted historical evidence. Its native technical still and
+18-frame sequence gates passed
 at `160×90 → 400×225`, and the product owner accepted the target/alignment
 direction. Input schema v3, capture schema 4, and target-frame schema v4 add
 four presentation-owned frame-global float32 lighting/material controls. Their
@@ -202,11 +205,14 @@ motion alignment. NR4-A/B artifacts remain immutable
 historical adapter/correspondence evidence only. Exclude their target pixels,
 metrics, and acceptance from current generation, training, comparison,
 preview, and acceptance. Current evidence roots are recorded in the NR-0004
-README and validation ledger. Other output extents are deferred.
+README and validation ledger. RF7 later superseded that resolution with direct
+native `160×90 → 800×450`; RF8 now owns the active direct native
+`160×90 → 640×360` contract. Both older extents remain immutable history only
+and must not enter RF8 training, comparison, export, or runtime output.
 
 Preserve or deliberately advance the 17-plane engine ABI as one cohort; RGB is
-only the stock baseline adapter. Begin controls at `160×90` and use `400×225`
-for a structural channel only after a measured ablation justifies the cost. Do
+only the stock baseline adapter. Begin controls at `160×90`; RF7 adds no
+structural raster at another extent. RF8 preserves that rule. Do
 not train on the current flat conventional target or a stock hallucinated
 output and call it truth. LTX weights remain a licensed comparison baseline
 only. NR4-D's technical gate passes with six whole sequences and 108 pairs at
@@ -226,9 +232,33 @@ accepts the explicit external trial bundle at
 Inspect it with `zig build inspect-nr5-e-trial-bundle -- <absolute-bundle-root>`
 and run its graphical gate with
 `zig build verify-nr5-e-trial -Deditor=true -- <absolute-bundle-root>`. It is a
-live evaluation path, not promotion or installed content. NR6 is the active
-phase. Do not claim title-wide, temporal, promotion, installed-runtime, or
-art-complete readiness from NR-0005.
+live evaluation path, not promotion or installed content. RF0 through RF5 are
+accepted, and RF6-A through RF6-F are technically complete at
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/rf6-held-out-20260811T032650Z`
+with the external trial at
+`~/Library/Application Support/Incinerator/neural-rendering/trial-bundles/rf6-rich-spatial-20260811T034154Z`.
+Read `docs/validation/rf6-cumulative-rich-spatial.md` before interpreting or
+extending that historical result. RF7 also remains historical; RF8 owns the
+active spatial resolution contract. NR6 remains authorized but deferred.
+Do not claim title-wide, temporal, promotion, installed-runtime, or
+art-complete readiness from NR-0005 or RF6.
+
+RF8 is the active spatial cohort. Read
+`experiments/neural-rendering/rf8-direct-640x360-spatial-sharpness/README.md` before
+capture, corpus, training, export, or runtime work. It uses fresh native
+`160×90` schema-v5 inputs and direct native `640×360` target-frame-v6 truth,
+one learned uniform 4× model, and the existing explicit external Core ML trial
+seam. Never insert, derive, supervise, compare, export, or present a `400×225`
+or `800×450` image in RF8. Temporal modeling remains deferred until the direct spatial result has
+been evaluated live.
+
+RF8's external corpus and run lineage use the
+`rf8-direct-640x360-*-20260812-*` roots beneath
+`~/Library/Application Support/Incinerator/neural-rendering/`. Inspect the full
+disposition, metrics, limitations, and live command in
+`docs/validation/rf8-direct-640x360-spatial-sharpness.md`. It remains
+unpromoted and does not authorize installed content,
+temporal claims, or title-wide readiness.
 
 ## Validation and handoff
 

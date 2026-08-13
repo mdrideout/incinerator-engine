@@ -19,7 +19,7 @@ from title_renderer.authorize_held_out import SCOPE
 from title_renderer.dataset import TitleCorpusDataset
 from title_renderer.evaluation import evaluate, model_output, synchronize
 from title_renderer.io import atomic_json, create_absent_absolute, environment_record, load_json, repository_record, require_existing_absolute, sha256_file
-from title_renderer.metrics import loss_terms
+from title_renderer.metrics import ReconstructionLossConfig, loss_terms
 from title_renderer.models import SpatialTitleRendererConfig, create_spatial_model
 
 
@@ -50,6 +50,10 @@ def main() -> None:
             raise ValueError("unsupported NR5-C configuration")
         if configuration.get("train_splits") != ["overfit", "train"] or configuration.get("selection_split") != "validation":
             raise ValueError("NR5-C split ownership drifted")
+        selection_metric = str(configuration.get("selection_metric", ""))
+        if selection_metric != "validation spatial_quality_score":
+            raise ValueError("held-out selection must use the declared RF8 spatial-quality score")
+        loss_config = ReconstructionLossConfig(**configuration.get("loss", {}))
         initialization_seed = int(configuration["initialization_seed"])
         training_seed = int(configuration["training_seed"])
         random.seed(training_seed)
@@ -137,7 +141,14 @@ def main() -> None:
                 coverage = batch["target_coverage"].to(device)
                 optimizer.zero_grad(set_to_none=True)
                 prediction = model(continuous, semantic, instance, controls)
-                loss, _terms = loss_terms(prediction, target, semantic, instance, coverage)
+                loss, _terms = loss_terms(
+                    prediction,
+                    target,
+                    semantic,
+                    instance,
+                    coverage,
+                    loss_config,
+                )
                 loss.backward()
                 optimizer.step()
                 total += float(loss.detach())
@@ -152,15 +163,22 @@ def main() -> None:
             }
             if epoch == 1 or epoch % int(configuration["validate_every_epochs"]) == 0 or epoch == int(configuration["epochs"]):
                 selected_evaluation = evaluate(model, validation_loader, device)
-                validation_mae = float(selected_evaluation["metrics"]["model"]["linear_hdr_mae"])
+                validation_metrics = selected_evaluation["metrics"]["model"]
+                validation_mae = float(validation_metrics["linear_hdr_mae"])
+                validation_score = float(validation_metrics["spatial_quality_score"])
                 record["validation_linear_hdr_mae"] = validation_mae
-                if validation_mae < best_metric:
-                    best_metric = validation_mae
+                record["validation_spatial_quality_score"] = validation_score
+                if validation_score < best_metric:
+                    best_metric = validation_score
                     selected_epoch = epoch
                     selected_state = copy.deepcopy(model.state_dict())
                     selected_optimizer = copy.deepcopy(optimizer.state_dict())
                     selected_scheduler = copy.deepcopy(scheduler.state_dict())
-                print(f"epoch={epoch} train_loss={record['training_loss']:.8f} validation_mae={validation_mae:.8f}", flush=True)
+                print(
+                    f"epoch={epoch} train_loss={record['training_loss']:.8f} "
+                    f"validation_mae={validation_mae:.8f} validation_spatial_quality={validation_score:.8f}",
+                    flush=True,
+                )
             history.append(record)
         training_duration_ms = (time.perf_counter() - started) * 1000.0
         model.load_state_dict(selected_state)
@@ -196,6 +214,9 @@ def main() -> None:
             "model_beats_bilinear_hdr": model_metrics["linear_hdr_mae"] < bilinear_metrics["linear_hdr_mae"],
             "model_beats_bilinear_semantic_boundary": model_metrics["semantic_boundary_mae"] < bilinear_metrics["semantic_boundary_mae"],
             "model_beats_bilinear_instance_boundary": model_metrics["instance_boundary_mae"] < bilinear_metrics["instance_boundary_mae"],
+            "model_beats_bilinear_spatial_quality": model_metrics["spatial_quality_score"] < bilinear_metrics["spatial_quality_score"],
+            "model_beats_bilinear_laplacian": model_metrics["laplacian_mae"] < bilinear_metrics["laplacian_mae"],
+            "model_beats_bilinear_local_contrast": model_metrics["local_contrast_mae"] < bilinear_metrics["local_contrast_mae"],
             "full_model_beats_appearance_only": model_metrics["linear_hdr_mae"] < appearance_metrics["linear_hdr_mae"],
             "all_metrics_finite": all(np.isfinite(value) for owner in validation["metrics"].values() for value in owner.values()),
             "test_pixels_opened": False,
@@ -238,7 +259,12 @@ def main() -> None:
             "repository": repository_record(repository), "train_dataset": "dataset/train.json", "train_dataset_sha256": dataset_sha256,
             "validation_dataset": "dataset/validation.json", "validation_dataset_sha256": sha256_file(output / "dataset" / "validation.json"),
             "initializer": initializer, "checkpoint": checkpoint, "checkpoint_audit": checkpoint_audit, "parameter_count": parameter_count,
-            "selected_epoch": selected_epoch, "selected_validation_linear_hdr_mae": best_metric, "training_duration_ms": training_duration_ms, "history": history,
+            "selected_epoch": selected_epoch,
+            "selection_metric": selection_metric,
+            "selected_validation_spatial_quality_score": best_metric,
+            "selected_validation_linear_hdr_mae": model_metrics["linear_hdr_mae"],
+            "training_duration_ms": training_duration_ms,
+            "history": history,
             "validation": "evaluation/validation/evaluation.json", "validation_sha256": sha256_file(validation_path),
             "export": "export/export.json", "export_sha256": sha256_file(export_manifest), "environment": "environment.json", "environment_sha256": sha256_file(environment_path),
             "tool_sources": source_records, "external_pretrained_weights": False, "test_pixels_opened": False, "promotion_eligible": False,
@@ -248,7 +274,10 @@ def main() -> None:
     except Exception as error:
         atomic_json(output / "failure.json", {"schema": 1, "phase": "NR5-C", "error": str(error)})
         raise
-    print(f"NR5_C_VALIDATION_SELECTED passed={automated_gate_passed} epoch={selected_epoch} validation_mae={best_metric:.8f} output={output}")
+    print(
+        f"NR5_C_VALIDATION_SELECTED passed={automated_gate_passed} epoch={selected_epoch} "
+        f"validation_spatial_quality={best_metric:.8f} output={output}"
+    )
 
 
 if __name__ == "__main__":

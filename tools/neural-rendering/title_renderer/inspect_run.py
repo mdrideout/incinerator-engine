@@ -7,6 +7,7 @@ import argparse
 from pathlib import Path
 
 from title_renderer.io import load_json, sha256_file
+from title_renderer.coverage import INITIAL_STRUCTURAL_SCOPE, RF6_SCOPE, RF7_SCOPE, RF8_SCOPE
 
 
 def inspect(root: Path) -> dict:
@@ -35,8 +36,7 @@ def inspect(root: Path) -> dict:
     if (
         authorization.get("status") != "accepted"
         or authorization.get("model_training_authorized") is not True
-        or authorization.get("authorization_scope")
-        != "NR5-A framework and NR5-B controlled spatial overfit"
+        or authorization.get("authorization_scope") not in (INITIAL_STRUCTURAL_SCOPE, RF6_SCOPE, RF7_SCOPE, RF8_SCOPE)
         or authorization.get("sealed_test_pixels_opened") is not False
         or authorization.get("corpus_manifest_sha256") != dataset.get("corpus_manifest_sha256")
     ):

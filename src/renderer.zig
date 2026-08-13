@@ -52,6 +52,9 @@ const VertexPNU = mesh_module.VertexPNU;
 const VertexFormat = mesh_module.VertexFormat;
 const OwnedTexture = texture_module.OwnedTexture;
 
+pub const product_scene_width: u32 = 640;
+pub const product_scene_height: u32 = 360;
+
 /// MVP matrix uniform data sent to vertex shader.
 /// Uses [16]f32 layout for direct compatibility with zmath's matToArr().
 pub const Uniforms = extern struct {
@@ -133,6 +136,30 @@ const PresentationOverride = struct {
     width: u32,
     height: u32,
 };
+
+const CenteredBlit = struct {
+    source_x: u32,
+    source_y: u32,
+    destination_x: u32,
+    destination_y: u32,
+    width: u32,
+    height: u32,
+};
+
+fn centeredUnscaledBlit(source_width: u32, source_height: u32, destination_width: u32, destination_height: u32) CenteredBlit {
+    std.debug.assert(source_width != 0 and source_height != 0);
+    std.debug.assert(destination_width != 0 and destination_height != 0);
+    const width = @min(source_width, destination_width);
+    const height = @min(source_height, destination_height);
+    return .{
+        .source_x = (source_width - width) / 2,
+        .source_y = (source_height - height) / 2,
+        .destination_x = (destination_width - width) / 2,
+        .destination_y = (destination_height - height) / 2,
+        .width = width,
+        .height = height,
+    };
+}
 
 /// Diagnostic-only graphics capability. Both pipelines are created and
 /// released transactionally; a renderer remains healthy when the pair is
@@ -390,24 +417,26 @@ pub const Renderer = struct {
             try injectInitFailure(failure_point, .after_pipelines);
         }
 
-        // Get initial window size for depth buffer
-        var w: c_int = 0;
-        var h: c_int = 0;
-        if (!c.SDL_GetWindowSizeInPixels(window, &w, &h) or w <= 0 or h <= 0) {
-            std.debug.print("SDL_GetWindowSizeInPixels failed or returned an empty drawable: {s}\n", .{c.SDL_GetError()});
-            return error.InvalidDrawableSize;
-        }
-        const width: u32 = @intCast(w);
-        const height: u32 = @intCast(h);
-
-        // Create depth texture (same size as window)
-        const depth_texture = createDepthTexture(device, depth_format, width, height) orelse {
+        // Product scene resolution is independent of the window. Resizing the
+        // drawable changes only the amount of black surround, never scene
+        // pixels, camera projection, or neural-output scaling.
+        const depth_texture = createDepthTexture(
+            device,
+            depth_format,
+            product_scene_width,
+            product_scene_height,
+        ) orelse {
             std.debug.print("Failed to create depth texture: {s}\n", .{c.SDL_GetError()});
             return error.DepthTextureCreationFailed;
         };
         errdefer c.SDL_ReleaseGPUTexture(device, depth_texture);
 
-        const scene_texture = createSceneTexture(device, swapchain_format, width, height) orelse {
+        const scene_texture = createSceneTexture(
+            device,
+            swapchain_format,
+            product_scene_width,
+            product_scene_height,
+        ) orelse {
             std.debug.print("Failed to create product scene texture: {s}\n", .{c.SDL_GetError()});
             return error.SceneTextureCreationFailed;
         };
@@ -460,13 +489,13 @@ pub const Renderer = struct {
             .physics_debug_pipelines = physics_debug_pipelines,
             .depth_target = .{
                 .texture = depth_texture,
-                .width = width,
-                .height = height,
+                .width = product_scene_width,
+                .height = product_scene_height,
             },
             .scene_target = .{
                 .texture = scene_texture,
-                .width = width,
-                .height = height,
+                .width = product_scene_width,
+                .height = product_scene_height,
             },
             .default_sampler = default_sampler,
             .placeholder_texture = placeholder_texture,
@@ -587,19 +616,7 @@ pub const Renderer = struct {
             return error.InvalidSwapchainSize;
         }
 
-        // Step 3: Recreate the paired product-scene targets transactionally
-        // when the drawable changes. Neither target can advance alone.
-        if (swapchain_width != self.depth_target.width or swapchain_height != self.depth_target.height or
-            swapchain_width != self.scene_target.width or swapchain_height != self.scene_target.height)
-        {
-            self.resizeSceneTargets(swapchain_width, swapchain_height) catch |err| {
-                std.debug.print("Failed to recreate product scene targets: {s}\n", .{c.SDL_GetError()});
-                try retireAcquiredSwapchain(cmd);
-                return err;
-            };
-        }
-
-        // Step 4: Render product color offscreen. The final drawable is
+        // Step 3: Render product color offscreen. The final drawable is
         // reserved for the resolved scene plus conventional UI/diagnostics.
         const color_target = c.SDL_GPUColorTargetInfo{
             .texture = self.scene_target.texture,
@@ -887,32 +904,35 @@ pub const Renderer = struct {
                 .width = self.scene_target.width,
                 .height = self.scene_target.height,
             };
+            const region = centeredUnscaledBlit(
+                source.width,
+                source.height,
+                self.current_swapchain_width,
+                self.current_swapchain_height,
+            );
             c.SDL_BlitGPUTexture(self.current_cmd.?, &c.SDL_GPUBlitInfo{
                 .source = .{
                     .texture = source.texture,
                     .mip_level = 0,
                     .layer_or_depth_plane = 0,
-                    .x = 0,
-                    .y = 0,
-                    .w = source.width,
-                    .h = source.height,
+                    .x = region.source_x,
+                    .y = region.source_y,
+                    .w = region.width,
+                    .h = region.height,
                 },
                 .destination = .{
                     .texture = swapchain,
                     .mip_level = 0,
                     .layer_or_depth_plane = 0,
-                    .x = 0,
-                    .y = 0,
-                    .w = self.current_swapchain_width,
-                    .h = self.current_swapchain_height,
+                    .x = region.destination_x,
+                    .y = region.destination_y,
+                    .w = region.width,
+                    .h = region.height,
                 },
-                .load_op = c.SDL_GPU_LOADOP_DONT_CARE,
+                .load_op = c.SDL_GPU_LOADOP_CLEAR,
                 .clear_color = .{ .r = 0, .g = 0, .b = 0, .a = 1 },
                 .flip_mode = c.SDL_FLIP_NONE,
-                .filter = if (self.presentation_override == null)
-                    c.SDL_GPU_FILTER_NEAREST
-                else
-                    c.SDL_GPU_FILTER_LINEAR,
+                .filter = c.SDL_GPU_FILTER_NEAREST,
                 .cycle = false,
                 .padding1 = 0,
                 .padding2 = 0,
@@ -1015,30 +1035,18 @@ pub const Renderer = struct {
         _ = c.SDL_GetWindowSize(self.window, &w, &h);
         return .{ .width = w, .height = h };
     }
-
-    fn resizeSceneTargets(self: *Renderer, width: u32, height: u32) !void {
-        const next_depth = createDepthTexture(
-            self.device,
-            self.depth_format,
-            width,
-            height,
-        ) orelse return error.DepthTextureCreationFailed;
-        errdefer c.SDL_ReleaseGPUTexture(self.device, next_depth);
-        const next_scene = createSceneTexture(
-            self.device,
-            self.swapchain_format,
-            width,
-            height,
-        ) orelse return error.SceneTextureCreationFailed;
-
-        const previous_depth = self.depth_target.texture;
-        const previous_scene = self.scene_target.texture;
-        self.depth_target = .{ .texture = next_depth, .width = width, .height = height };
-        self.scene_target = .{ .texture = next_scene, .width = width, .height = height };
-        c.SDL_ReleaseGPUTexture(self.device, previous_depth);
-        c.SDL_ReleaseGPUTexture(self.device, previous_scene);
-    }
 };
+
+test "centered fixed scene preserves native pixels in larger and smaller drawables" {
+    try std.testing.expectEqual(
+        CenteredBlit{ .source_x = 0, .source_y = 0, .destination_x = 480, .destination_y = 270, .width = 640, .height = 360 },
+        centeredUnscaledBlit(640, 360, 1600, 900),
+    );
+    try std.testing.expectEqual(
+        CenteredBlit{ .source_x = 120, .source_y = 30, .destination_x = 0, .destination_y = 0, .width = 400, .height = 300 },
+        centeredUnscaledBlit(640, 360, 400, 300),
+    );
+}
 
 // ============================================================================
 // Pipeline Creation

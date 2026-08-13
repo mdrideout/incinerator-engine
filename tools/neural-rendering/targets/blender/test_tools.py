@@ -30,8 +30,8 @@ from sequence_contract import (
 
 def frame_package() -> dict:
     return {
-        "schema": 4,
-        "schema_name": "incinerator.nr4.blender-target-frame.v4",
+        "schema": 6,
+        "schema_name": "incinerator.nr4.blender-target-frame.v6",
         "status": "complete",
         "frame_id": "fixture-frame-00000001",
         "sequence": "fixture",
@@ -40,11 +40,18 @@ def frame_package() -> dict:
         "presentation_frame": 1,
         "interpolation_alpha": 0.0,
         "input_extent": [160, 90],
-        "target_extent": [400, 225],
+        "target_extent": [640, 360],
         "sampling_map": {
-            "scale_numerator": 5,
-            "scale_denominator": 2,
-            "target_center_to_source_index": "((target_index + 0.5) * 2 / 5) - 0.5",
+            "x": {
+                "scale_numerator": 4,
+                "scale_denominator": 1,
+                "target_center_to_source_index": "((target_x + 0.5) / 4) - 0.5",
+            },
+            "y": {
+                "scale_numerator": 4,
+                "scale_denominator": 1,
+                "target_center_to_source_index": "((target_y + 0.5) / 4) - 0.5",
+            },
             "border": "clamp",
         },
         "exposure": 1.0,
@@ -209,8 +216,8 @@ class Nr4TargetToolTests(unittest.TestCase):
     def test_frame_package_requires_exact_rational_pixel_center_mapping(self) -> None:
         package = frame_package()
         validate_frame_package(package)
-        package["sampling_map"]["scale_numerator"] = 2
-        with self.assertRaisesRegex(ValueError, "exact 5:2"):
+        package["sampling_map"]["x"]["scale_numerator"] = 2
+        with self.assertRaisesRegex(ValueError, "exact axis-specific"):
             validate_frame_package(package)
 
     def test_instance_rgba_decodes_little_endian_and_coverage(self) -> None:
@@ -289,7 +296,7 @@ class Nr4TargetToolTests(unittest.TestCase):
                 source.write_bytes(b"P6\n1 1\n255\n\x00\x00\x00")
                 from PIL import Image
 
-                Image.new("RGB", (400, 225), (index * 32, 0, 0)).save(target)
+                Image.new("RGB", (640, 360), (index * 32, 0, 0)).save(target)
                 records.append(
                     {
                         "split": split,

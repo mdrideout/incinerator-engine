@@ -1,0 +1,51 @@
+{
+  "schema": 1,
+  "experiment": "RF7",
+  "stage": "held_out_structural_reconstruction",
+  "train_splits": ["overfit", "train"],
+  "selection_split": "validation",
+  "test_policy": "open exactly once only after immutable validation selection",
+  "device": "mps",
+  "initialization_seed": 2026081107,
+  "training_seed": 2026081108,
+  "epochs": 220,
+  "batch_size": 1,
+  "validate_every_epochs": 5,
+  "model": {
+    "name": "rf7_direct_800x450_spatial_v1",
+    "features": 64,
+    "low_blocks": 8,
+    "output_blocks": 3,
+    "semantic_embedding": 8,
+    "instance_embedding": 16,
+    "refinement_features": 32,
+    "direct_scale": 5,
+    "output_width": 800,
+    "output_height": 450
+  },
+  "loss": {
+    "reconstruction": 1.0,
+    "log_luminance": 0.2,
+    "chroma": 0.15,
+    "multiscale_color": 0.1,
+    "gradient": 0.08,
+    "high_frequency": 0.08,
+    "semantic_edge": 0.04,
+    "instance_edge": 0.04,
+    "geometry": 0.04,
+    "negative_radiance": 0.01
+  },
+  "optimizer": {
+    "name": "AdamW",
+    "learning_rate": 0.0005,
+    "weight_decay": 0.00001
+  },
+  "scheduler": {
+    "name": "CosineAnnealingLR",
+    "minimum_learning_rate": 0.00001
+  },
+  "selection_metric": "validation linear_hdr_mae",
+  "ablations": ["appearance_only", "no_semantic", "no_instance", "no_globals"],
+  "pretrained_weights": false,
+  "promotion_eligible": false
+}

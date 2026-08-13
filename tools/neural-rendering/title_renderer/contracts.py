@@ -10,12 +10,12 @@ from .io import load_json, read_ndjson, sha256_file
 
 CORPUS_SCHEMA = 1
 FRAME_SCHEMA = 1
-CAPTURE_SCHEMA = 4
-TARGET_FRAME_SCHEMA = "incinerator.nr4.blender-target-frame.v4"
-INPUT_SCHEMA_VERSION = 3
-INPUT_SCHEMA_NAME = "incinerator.neural-input.v3"
+CAPTURE_SCHEMA = 6
+TARGET_FRAME_SCHEMA = "incinerator.nr4.blender-target-frame.v6"
+INPUT_SCHEMA_VERSION = 5
+INPUT_SCHEMA_NAME = "incinerator.neural-input.v5"
 INPUT_EXTENT = (160, 90)
-TARGET_EXTENT = (400, 225)
+TARGET_EXTENT = (640, 360)
 GLOBAL_CONTROL_SCHEMA = "incinerator.neural-frame-global.v1"
 CHANNELS = (
     "appearance",
@@ -55,7 +55,7 @@ def inspect_corpus_metadata(root: Path, *, verify_training_artifacts: bool) -> d
     manifest = load_json(manifest_path)
     if manifest.get("schema") != CORPUS_SCHEMA or manifest.get("status") != "complete":
         raise ValueError("title corpus is incomplete or has an unsupported schema")
-    if manifest.get("purpose") != "self-contained native 160x90 to direct 400x225 paired corpus":
+    if manifest.get("purpose") != "self-contained native 160x90 to direct 640x360 paired corpus":
         raise ValueError("title corpus purpose drifted")
     rights = manifest.get("rights")
     if not isinstance(rights, dict) or any(

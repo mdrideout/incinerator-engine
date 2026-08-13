@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from nr4_common import artifact, atomic_json, create_absent, read_ndjson
+from nr4_common import TARGET_EXTENT, artifact, atomic_json, create_absent, read_ndjson
 
 
 def build_report(corpus_root: Path, output: Path) -> dict:
@@ -27,8 +27,7 @@ def build_report(corpus_root: Path, output: Path) -> dict:
         for frame in (ordered[0], ordered[len(ordered) // 2], ordered[-1]):
             selections.append(frame)
 
-    panel_width = 400
-    panel_height = 225
+    panel_width, panel_height = TARGET_EXTENT
     label_height = 24
     row_height = panel_height + label_height
     sheet = Image.new("RGB", (panel_width * 2, row_height * len(selections)), (16, 20, 26))

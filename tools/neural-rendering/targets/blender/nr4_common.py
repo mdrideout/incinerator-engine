@@ -12,10 +12,10 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-TARGET_FRAME_SCHEMA = 4
-TARGET_FRAME_SCHEMA_NAME = "incinerator.nr4.blender-target-frame.v4"
+TARGET_FRAME_SCHEMA = 6
+TARGET_FRAME_SCHEMA_NAME = "incinerator.nr4.blender-target-frame.v6"
 TARGET_RUN_SCHEMA = 1
-CAPTURE_SCHEMA = 4
+CAPTURE_SCHEMA = 6
 GLOBAL_CONTROL_SCHEMA = "incinerator.neural-frame-global.v1"
 GLOBAL_CONTROL_ENCODING = "float32 little-endian"
 GLOBAL_CONTROL_ORDER = (
@@ -25,11 +25,18 @@ GLOBAL_CONTROL_ORDER = (
     "emissive_strength",
 )
 INPUT_EXTENT = [160, 90]
-TARGET_EXTENT = [400, 225]
+TARGET_EXTENT = [640, 360]
 SAMPLING_MAP = {
-    "scale_numerator": 5,
-    "scale_denominator": 2,
-    "target_center_to_source_index": "((target_index + 0.5) * 2 / 5) - 0.5",
+    "x": {
+        "scale_numerator": 4,
+        "scale_denominator": 1,
+        "target_center_to_source_index": "((target_x + 0.5) / 4) - 0.5",
+    },
+    "y": {
+        "scale_numerator": 4,
+        "scale_denominator": 1,
+        "target_center_to_source_index": "((target_y + 0.5) / 4) - 0.5",
+    },
     "border": "clamp",
 }
 SHAPES = {"box", "wheel_x", "capsule_y"}
@@ -198,9 +205,9 @@ def validate_frame_package(package: dict[str, Any]) -> None:
     if positive_extent(package.get("input_extent"), "target-frame input extent") != INPUT_EXTENT:
         raise ValueError("target-frame input extent is not native 160x90")
     if positive_extent(package.get("target_extent"), "target-frame target extent") != TARGET_EXTENT:
-        raise ValueError("target-frame target extent is not native 400x225")
+        raise ValueError("target-frame target extent is not native 640x360")
     if package.get("sampling_map") != SAMPLING_MAP:
-        raise ValueError("target-frame sampling map is not the exact 5:2 pixel-center contract")
+        raise ValueError("target-frame sampling map is not the exact axis-specific pixel-center contract")
     coordinates = package.get("coordinate_system")
     if coordinates != {
         "world": "right-handed +Y up -Z forward",

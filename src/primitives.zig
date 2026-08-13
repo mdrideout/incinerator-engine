@@ -96,6 +96,15 @@ pub fn createCube(device: *c.SDL_GPUDevice) !Mesh {
     return Mesh.init(device, &cube_vertices);
 }
 
+/// Create a neutral unit cube whose final color is supplied by the draw.
+/// Product visual catalogs use this mesh for explicit multipart silhouettes;
+/// the rainbow cube remains useful for orientation/debug fixtures.
+pub fn createSolidCube(device: *c.SDL_GPUDevice) !Mesh {
+    var vertices = cube_vertices;
+    for (&vertices) |*vertex| vertex.color = .{ 1, 1, 1 };
+    return Mesh.init(device, &vertices);
+}
+
 // ============================================================================
 // Wheel Cylinder
 // ============================================================================

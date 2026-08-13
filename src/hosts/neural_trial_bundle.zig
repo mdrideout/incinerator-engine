@@ -1,4 +1,4 @@
-//! Fail-closed loader for an external, immutable NR5-E evaluation bundle.
+//! Fail-closed loader for an external, immutable spatial evaluation bundle.
 //!
 //! A trial bundle is deliberately not installed game content. The graphical
 //! developer host receives one absolute root, validates its exact ABI and
@@ -9,7 +9,7 @@ const std = @import("std");
 const engine = @import("incinerator_engine");
 
 const contract = engine.neural_rendering;
-const kind = "incinerator.nr5-e.coreml-trial-bundle";
+const kind = "incinerator.rf8.coreml-direct-spatial-trial-bundle";
 const status = "trial_only_unpromoted";
 const model_package = "model.mlpackage";
 const continuous_plane_count = 11;
@@ -84,7 +84,7 @@ const Manifest = struct {
     source_candidate: SourceCandidate,
 
     fn validate(self: Manifest) !void {
-        if (self.schema != 1 or
+        if (self.schema != 3 or
             !std.mem.eql(u8, self.kind, kind) or
             !std.mem.eql(u8, self.status, status) or
             self.promotion_authorized or

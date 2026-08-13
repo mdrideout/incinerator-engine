@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build strict native 160x90 -> 400x225 display baselines for one NR4-C pair."""
+"""Build strict native 160x90 -> 640x360 display baselines for one direct pair."""
 
 from __future__ import annotations
 
@@ -92,9 +92,9 @@ def main() -> None:
     if capture.get("input_size") != INPUT_EXTENT:
         raise ValueError("NR4-C baseline input is not native 160x90")
     if capture.get("paired_target_size") != TARGET_EXTENT:
-        raise ValueError("NR4-C capture does not declare a native 400x225 target")
+        raise ValueError("capture does not declare a native 640x360 target")
     if target_manifest.get("extent") != TARGET_EXTENT:
-        raise ValueError("NR4-C direct target is not native 400x225")
+        raise ValueError("direct target is not native 640x360")
 
     capture_root = capture_path.parent.parent
     appearance = next(
@@ -115,7 +115,7 @@ def main() -> None:
         started = time.perf_counter_ns()
         image = source.resize(tuple(TARGET_EXTENT), resampler)
         resize_ns = time.perf_counter_ns() - started
-        path = output / f"baseline-{name}-400x225.png"
+        path = output / f"baseline-{name}-640x360.png"
         image.save(path)
         artifacts.append(artifact(path, output))
         baseline_images[name] = image
@@ -132,17 +132,17 @@ def main() -> None:
 
     cards = [
         card(source, "INPUT native 160x90 (centered, no resize)", native=True),
-        card(baseline_images["nearest"], "INPUT UI zoom 2.5x nearest (not training material)"),
-        card(target, "TARGET direct Cycles 400x225"),
-        card(baseline_images["nearest"], "BASELINE nearest 160x90 -> 400x225"),
-        card(baseline_images["bilinear"], "BASELINE bilinear 160x90 -> 400x225"),
-        card(baseline_images["bicubic"], "BASELINE bicubic 160x90 -> 400x225"),
+        card(baseline_images["nearest"], "INPUT UI zoom 4x nearest (not training material)"),
+        card(target, "TARGET direct Cycles 640x360"),
+        card(baseline_images["nearest"], "BASELINE nearest 160x90 -> 640x360"),
+        card(baseline_images["bilinear"], "BASELINE bilinear 160x90 -> 640x360"),
+        card(baseline_images["bicubic"], "BASELINE bicubic 160x90 -> 640x360"),
     ]
     card_width, card_height = cards[0].size
     report = Image.new("RGB", (card_width * 3, card_height * 2), (10, 12, 16))
     for index, image in enumerate(cards):
         report.paste(image, ((index % 3) * card_width, (index // 3) * card_height))
-    report_path = output / "native-160x90-to-400x225-review.png"
+    report_path = output / "native-160x90-to-640x360-review.png"
     report.save(report_path)
     artifacts.append(artifact(report_path, output))
     atomic_json(
@@ -150,13 +150,13 @@ def main() -> None:
         {
             "schema": 1,
             "status": "complete",
-            "phase": "NR4-C",
+            "phase": "RF7-B",
             "frame_id": capture["frame_id"],
             "input_extent": INPUT_EXTENT,
             "target_extent": TARGET_EXTENT,
             "training_material": {
                 "input": "capture appearance channel at native 160x90",
-                "target": "direct Cycles OpenEXR at native 400x225",
+                "target": "direct Cycles OpenEXR at native 640x360",
                 "ui_zoom_and_baselines_excluded": True,
             },
             "model_output": "absent until NR5",

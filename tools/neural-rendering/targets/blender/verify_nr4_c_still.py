@@ -50,7 +50,7 @@ def main() -> None:
             "schema": 1,
             "status": "complete",
             "phase": "NR4-C-still",
-            "review": "product_owner_accepted_native_160x90_to_400x225_direction_2026-08-08",
+            "review": "product_owner_preapproved_native_160x90_to_640x360_direction_2026-08-11",
             "runs": ["run-a/run.json", "run-b/run.json"],
             "reproducibility": "reproducibility.json",
         },

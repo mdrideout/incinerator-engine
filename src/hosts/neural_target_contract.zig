@@ -6,14 +6,16 @@
 
 const std = @import("std");
 
-pub const schema_version: u16 = 4;
-pub const schema_name = "incinerator.nr4.blender-target-frame.v4";
+pub const schema_version: u16 = 6;
+pub const schema_name = "incinerator.nr4.blender-target-frame.v6";
 pub const input_width: u32 = 160;
 pub const input_height: u32 = 90;
-pub const target_width: u32 = 400;
-pub const target_height: u32 = 225;
-pub const scale_numerator: u32 = 5;
-pub const scale_denominator: u32 = 2;
+pub const target_width: u32 = 640;
+pub const target_height: u32 = 360;
+pub const horizontal_scale_numerator: u32 = 4;
+pub const horizontal_scale_denominator: u32 = 1;
+pub const vertical_scale_numerator: u32 = 4;
+pub const vertical_scale_denominator: u32 = 1;
 
 pub const Shape = enum {
     box,

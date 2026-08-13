@@ -1,7 +1,7 @@
 # NR0 Neural Rendering Performance Baseline
 
-**Status:** NR-0001, NR0-A/B foundation, NR0-C/D, NR-0003, NR4-A/B/C/D, and
-NR5-A through NR5-E measured; promoted installed-runtime baseline open
+**Status:** NR-0001, NR0-A/B foundation, NR0-C/D, NR-0003, NR4-A/B/C/D,
+NR5-A through NR5-E, and RF6 measured; promoted installed-runtime baseline open
 
 **Date:** 2026-08-10
 
@@ -307,3 +307,70 @@ The warm inference is compatible with interactive proof use on the target Mac,
 while the staged mean explains the observed roughly 24–27 FPS product run. NR6
 must measure temporal quality before optimizing this transport. It must not
 erase source/presented-frame lineage or silently replace the fallback contract.
+
+## RF6 rich spatial trial measurements
+
+RF6 reuses the accepted NR5 trainer and external Core ML trial components with
+a new corpus, random initializer, checkpoint, and bundle. These measurements
+describe that RF6 execution; they do not supersede the historical NR5-E record
+or establish a shipping budget.
+
+| Item | Result |
+|---|---|
+| Model | 448,359 parameters; epoch 175 selected using validation only |
+| Held-out training | 335.238 s on the declared Apple Silicon host |
+| Offline validation | 7.252 ms median, 9.803 ms p95 full-frame PyTorch inference |
+| Supplemental stress MPS | 8.119 ms median, 11.517 ms p95, 142.184 ms maximum cold outlier retained |
+| Supplemental process memory | 1,020,002,304-byte peak RSS for corpus/checkpoint/export load plus full stress inference and one representative forward/backward step |
+| Core ML agreement | 0.00000978 maximum absolute error, 0.000000148 mean absolute error |
+| Live correctness | 48 readbacks, 48 predictions, zero inference failures, zero unknown semantic pixels, zero unknown instance pixels |
+| Live timing | 10.551 ms last inference; 37.344 ms staged mean; 147.036 ms staged maximum |
+
+The staged path still includes blocking GPU readback, CPU preprocessing,
+Core ML inference, CPU display transform, upload, and one-frame delay. RF6's
+current objective is visual fidelity and correspondence, so these costs remain
+measured technical debt rather than an excuse to change the model or evidence
+contract prematurely.
+
+## RF7 direct 800×450 spatial trial measurements
+
+RF7 replaces the active resolution contract with one direct native
+`160×90 → 800×450` model. There is no `400×225` model stage or image in this
+cohort. These are local M2 Max proof measurements, not a shipping budget.
+
+| Item | Result |
+|---|---|
+| Model | 1,245,147 parameters; one learned 5× projection; epoch 215 selected using validation only |
+| Held-out training | 481.565 s on MPS; fresh random initializer; 36 train frames |
+| Offline validation | MAE 0.011649 vs bilinear 0.451924; chroma MAE 0.003439; 18.751 ms median and 21.432 ms p95 PyTorch inference |
+| Sealed test | One opening; MAE 0.016473 vs bilinear 0.400546; the second attempt was rejected before pixels |
+| Stress | 36 frames; MAE 0.013500 vs bilinear 0.488446; semantic/instance boundary and full-vs-appearance gates pass |
+| Core ML agreement | 0.00003147 maximum absolute error; 0.000000135 mean absolute error |
+| Live correctness | 48 readbacks, 48 predictions, zero failures, zero unknown semantic pixels, zero unknown instance pixels |
+| Live timing | First gate: 19.631 ms last inference, 107.024 ms staged mean, 795.496 ms cold maximum; retained warm run: 15.768 ms, 91.127 ms, and 124.023 ms respectively |
+
+RF7 prioritizes spatial fidelity, color, and live inspectability. The staged
+cost remains owned by blocking readback, CPU preprocessing/display transform,
+inference, upload, and one-frame presentation delay. Fine high-contrast edge
+noise and the narrow fixture corpus remain quality/coverage debt independent of
+transport performance.
+
+## RF8 direct 640×360 spatial-sharpness trial measurements
+
+RF8 replaces the active resolution contract with one exact 16:9 uniform-4×
+native `160×90 → 640×360` model. It contains no `400×225` or `800×450` image.
+The fixed product scene is 640×360 and is centered
+without scaling inside the resizable window; black surround is intentional.
+
+| Item | Result |
+|---|---|
+| Model | 1,060,987 parameters; native-output refinement; epoch 235 selected on validation spatial-quality score |
+| Held-out training | 1,159.566 s on MPS; fresh random initializer; 36 train frames |
+| Offline validation | MAE 0.010595 vs bilinear 0.451715; spatial score 0.023531 vs 0.477380; 22.741 ms median and 24.129 ms p95 |
+| Sealed test | One opening; MAE 0.015272 vs bilinear 0.400307; spatial score 0.032047 vs 0.426868; second attempt rejected before pixels |
+| Stress | 36 frames; MAE 0.012508 vs bilinear 0.488265; spatial score 0.025943 vs 0.509952; all color/boundary/Laplacian/local-contrast gates pass |
+| TorchScript agreement | Exact on all 36 stress frames |
+| Core ML agreement | 0.00003123 maximum absolute error; 0.00000014 mean absolute error |
+| Supplemental MPS | 22.172 ms median, 22.699 ms p95, 142.380 ms retained cold maximum; 2,137,178,112-byte representative forward/backward process peak RSS |
+| Live correctness | 48 readbacks, 48 predictions, zero failures, zero unknown semantic pixels, zero unknown instance pixels |
+| Live timing | 18.704 ms last inference; 70.529 ms staged mean; 126.573 ms staged maximum |

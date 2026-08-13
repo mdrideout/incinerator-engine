@@ -27,7 +27,7 @@ pub fn draw(input: *const tool.NeuralInput) void {
             if (zgui.button(if (view.model_enabled)
                 "Use conventional presentation"
             else
-                "Use NR5-E neural presentation", .{}))
+                "Use neural presentation", .{}))
             {
                 input.requests.toggleModel();
             }
@@ -57,18 +57,13 @@ fn drawPrimaryFrames(view: *const tool.NeuralView) void {
     } else {
         zgui.textColored(.{ 1, 0.25, 0.25, 1 }, "Appearance input unavailable", .{});
     }
-
-    zgui.spacing();
-    zgui.text("Neural renderer output", .{});
     if (view.model_output) |output| {
-        zgui.text("Native resolution: {d} x {d}", .{ output.width, output.height });
-        drawTexture(output.binding, output.width, output.height);
         zgui.text(
-            "Source frame {d}; presented source frame {d}",
-            .{ view.model_last_source_frame, view.model_last_presented_source_frame },
+            "Main neural presentation: {d} x {d} centered, unscaled",
+            .{ output.width, output.height },
         );
     } else if (!view.model_loaded) {
-        zgui.textWrapped("No NR5-E trial model is loaded; the main view remains conventional.", .{});
+        zgui.textWrapped("No external trial model is loaded; the main view remains conventional.", .{});
     } else {
         zgui.textWrapped("The model has not produced a displayable output; the main view remains conventional.", .{});
     }

@@ -90,13 +90,14 @@ NR0 paired-capture or visual-quality acceptance:
 
 ## Native multi-channel input capture
 
-The product now renders `incinerator.neural-input.v2` as six direct `160×90`
+The product now renders `incinerator.neural-input.v5` as six direct `160×90`
 RGBA8 targets: appearance, linear depth, world normal, motion, semantic, and
-instance. Capture schema 3 stores only those native inputs. It does not capture
+instance. Capture schema 6 stores only those native inputs. It does not capture
 or derive a conventional product target. High-fidelity truth is owned by the
-separate direct `400×225` target adapter. Every raw buffer, debug PPM, stable
+separate direct native `640×360` target adapter. Every raw buffer, debug PPM, stable
 presentation identity, matrix, frame/tick, effect value, source, content,
-schema, shader revision, and exact 5:2 mapping is recorded and hashed.
+schema, shader revision, and exact uniform 4:1 mapping on both axes is recorded
+and hashed.
 
 Every capture root must be absolute and absent. Cohort, sequence, and camera
 path are mandatory. Adjacent frames from one sequence belong to one cohort;
@@ -404,7 +405,113 @@ PYTHONPATH=tools/neural-rendering/targets/blender \
 Start human review with `acceptance.json`, `reproducibility.json`, and
 `run-a/evaluation/reports/nr4-c-native-sequence-review.png`.
 
-## NR4-C native working resolution status
+RF5 reuses this proven native producer with the shared rich-fidelity catalog.
+Its two-run gate records technical completion without inheriting NR4's earlier
+human art-direction approval:
+
+```sh
+export INCINERATOR_NR_ROOT="$HOME/Library/Application Support/Incinerator/neural-rendering"
+NR_PYTHON="$INCINERATOR_NR_ROOT/envs/nr0-poc/bin/python"
+BLENDER="$INCINERATOR_NR_ROOT/envs/nr4-blender/apps/Blender-4.5.12.app/Contents/MacOS/Blender"
+OUTPUT="$INCINERATOR_NR_ROOT/experiments/rf5-native-$(date -u +%Y%m%dT%H%M%SZ)"
+
+zig build install-validation -Deditor=true --summary failures
+PYTHONPATH=tools/neural-rendering/targets/blender \
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/verify_rf5.py \
+  --validation "$PWD/zig-out/libexec/incinerator/incinerator_validation" \
+  --content-root "$PWD/zig-out/share/incinerator/content" \
+  --repo "$PWD" \
+  --blender "$BLENDER" \
+  --output "$OUTPUT"
+```
+
+Review `acceptance.json`, the primary still sheet, and the primary sequence
+sheet before authorizing RF6. RF5 does not train or promote a model.
+
+## RF6 cumulative rich-spatial campaign
+
+RF6 reuses the established NR4 native corpus schema and NR5 random-origin
+training/evaluation owners, but manufactures a new corpus and a new model
+lineage from the accepted RF0–RF5 catalog. Generate the fresh whole-sequence
+corpus with:
+
+```sh
+export INCINERATOR_NR_ROOT="$HOME/Library/Application Support/Incinerator/neural-rendering"
+NR_PYTHON="$INCINERATOR_NR_ROOT/envs/nr0-poc/bin/python"
+BLENDER="$INCINERATOR_NR_ROOT/envs/nr4-blender/apps/Blender-4.5.12.app/Contents/MacOS/Blender"
+OUTPUT="$INCINERATOR_NR_ROOT/experiments/rf6-corpus-$(date -u +%Y%m%dT%H%M%SZ)"
+
+zig build install-validation -Deditor=true --summary failures
+PYTHONPATH=tools/neural-rendering/targets/blender \
+  "$NR_PYTHON" tools/neural-rendering/targets/blender/verify_rf6_corpus.py \
+  --validation "$PWD/zig-out/libexec/incinerator/incinerator_validation" \
+  --content-root "$PWD/zig-out/share/incinerator/content" \
+  --repo "$PWD" \
+  --blender "$BLENDER" \
+  --output "$OUTPUT"
+```
+
+The wrapper records RF6 ownership while retaining the proven fail-closed NR4-D
+component schema. It always renders new source inputs and direct targets; it
+does not copy RF5 review pixels or the earlier NR4 corpus. Continue through the
+documented coverage, controlled-fit, held-out, sealed-test, stress, export, and
+trial commands using the RF6 configurations under
+`experiments/neural-rendering/rf6-cumulative-rich-spatial/`.
+
+The accepted technical execution is inspectable without opening or mutating
+its source run:
+
+```sh
+export INCINERATOR_NR_ROOT="$HOME/Library/Application Support/Incinerator/neural-rendering"
+export RF6_RUN="$INCINERATOR_NR_ROOT/experiments/rf6-held-out-20260811T032650Z"
+export RF6_BUNDLE="$INCINERATOR_NR_ROOT/trial-bundles/rf6-rich-spatial-20260811T034154Z"
+
+zig build inspect-title-renderer-candidate -- "$RF6_RUN"
+zig build inspect-nr5-e-trial-bundle -- "$RF6_BUNDLE"
+zig build verify-nr5-e-trial -Deditor=true -- "$RF6_BUNDLE"
+
+INCINERATOR_NR_TRIAL_BUNDLE="$RF6_BUNDLE" \
+INCINERATOR_NR_TRIAL_FIXTURE=1 \
+  zig build run -Deditor=true
+```
+
+The existing `NR5-*` command and schema names below are reusable component
+owners, not claims that RF6 reused NR5 pixels or weights. RF6 supplied a fresh
+corpus, random lineage, checkpoint, conclusion, and bundle through those
+interfaces. Read
+`docs/validation/rf6-cumulative-rich-spatial.md` for exact roots, measurements,
+visual limitations, and the remaining product-owner review.
+
+## RF8 active direct working resolution and presentation
+
+RF8 is the active cohort: native `160×90` deterministic inputs map directly to
+native `640×360` high-fidelity Cycles truth through one learned uniform 4×
+model. There is no `400×225` or `800×450` intermediate image, supervision
+target, comparison source, or runtime handoff. The committed experiment definition is
+`experiments/neural-rendering/rf8-direct-640x360-spatial-sharpness/`; generated corpora,
+runs, checkpoints, exports, and review sheets remain under explicit external
+artifact roots.
+
+Preview the accepted external RF8 bundle with:
+
+```sh
+RF8_BUNDLE="$HOME/Library/Application Support/Incinerator/neural-rendering/trial-bundles/rf8-direct-640x360-20260812-a"
+
+zig build inspect-nr5-e-trial-bundle -- "$RF8_BUNDLE"
+zig build verify-nr5-e-trial -Deditor=true -- "$RF8_BUNDLE"
+
+INCINERATOR_NR_TRIAL_BUNDLE="$RF8_BUNDLE" \
+INCINERATOR_NR_TRIAL_FIXTURE=1 \
+  zig build run -Deditor=true
+```
+
+The Neural Input / Output tool presents only the native `160×90` source. The
+neural result owns the fixed `640×360` main scene when enabled. Press `N` to
+toggle the main presentation. The renderer never stretches that scene: larger
+windows receive centered black surround and smaller windows receive a centered
+crop. The bundle remains explicit, external, and unpromoted.
+
+## NR4-C historical working-resolution evidence
 
 NR4-C advances the engine/input/capture cohort together; existing NR4-A/B
 commands and artifacts remain historical and are not accepted as sources for
@@ -427,9 +534,9 @@ The implemented validation sequence is:
    dataset decode time, and process/GPU memory on the M2 Max; and
 6. only then run one-at-a-time control-resolution and ambiguity ablations.
 
-The producer, inspector, reports, and tests landed as one cohort. Tools reject
+The producer, inspector, reports, and tests landed as one historical cohort. Tools reject
 foreign extents and do not generate cross-resolution references. Other output
-extents are deferred. The current external technical roots are recorded in the
+extents were deferred at that phase. Its external technical roots are recorded in the
 NR-0004 experiment README and validation ledger. Human review is accepted.
 
 Audit semantic conditioning without mutating a proof root:

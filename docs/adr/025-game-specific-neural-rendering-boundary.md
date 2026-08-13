@@ -215,6 +215,37 @@ cohort:
 - all generated data remains external and no model, checkpoint, or runtime
   bundle is created by this gate.
 
+RF7 subsequently supersedes the active resolution cohort without changing the
+architectural ownership in this ADR:
+
+- `incinerator.neural-input.v4` and capture schema 5 retain six native
+  `160×90` channels plus the four frame-global controls;
+- `incinerator.nr4.blender-target-frame.v5` renders truth directly at native
+  `800×450` with one exact 5:1 pixel-center mapping;
+- one random-origin title model maps `160×90` directly to `800×450`; no
+  `400×225` image is an input, target, intermediate, comparison, export
+  handoff, or runtime output;
+- the fresh 108-pair corpus, validation-only selection, one test opening,
+  stress evaluation, Core ML agreement, and 48-frame Metal trial pass; and
+- the resulting bundle remains explicit external trial state, unpromoted and
+  ineligible for implicit runtime selection.
+
+RF8 subsequently supersedes only the active spatial resolution and
+presentation contract, preserving the same authority and promotion boundary:
+
+- `incinerator.neural-input.v5` and capture schema 6 retain the six native
+  `160×90` channels plus four frame-global controls;
+- `incinerator.nr4.blender-target-frame.v6` renders fresh truth directly at
+  native `640×360`, with exact uniform 4:1 pixel-center mapping on both axes;
+- one random-origin title model maps `160×90` directly to `640×360`, with
+  native-output refinement and spatial-quality loss/selection; neither
+  `400×225` nor `800×450` pixels may enter its lineage;
+- the product scene is a fixed native `640×360` target centered without
+  stretching; larger windows receive black surround, while editor/UI chrome
+  remains conventional and outside neural inference; and
+- the Neural Input / Output tool shows the `160×90` source only because the
+  selected neural result is evaluated in the main presentation.
+
 NR0 still owes a promotion-worthy candidate, transactional promotion,
 GPU-resident inference adapter, installed bundle validation, full end-to-end
 performance evidence, and final human acceptance. The NR0-D result reinforces

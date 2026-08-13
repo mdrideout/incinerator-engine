@@ -113,7 +113,7 @@ def inspect(root: Path) -> dict:
     baseline = load_json(baseline_root / "baselines.json")
     if sha256_file(baseline_root / "baselines.json") != run["evaluation"]["baseline_manifest_sha256"]:
         raise ValueError("native baseline manifest is stale")
-    if baseline.get("input_extent") != [160, 90] or baseline.get("target_extent") != [400, 225]:
+    if baseline.get("input_extent") != [160, 90] or baseline.get("target_extent") != [640, 360]:
         raise ValueError("native still baseline contains a foreign extent")
     verify_artifacts(baseline_root, baseline["artifacts"])
     report_path = root / run["evaluation"]["report"]

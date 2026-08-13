@@ -9,7 +9,7 @@ import unittest
 from pathlib import Path
 
 from title_renderer.contracts import CHANNELS, INPUT_EXTENT, TARGET_EXTENT, inspect_corpus_metadata
-from title_renderer.coverage import collect
+from title_renderer.coverage import RF6_SCOPE, collect
 from title_renderer.io import sha256_file
 from title_renderer.trial_bundle import (
     CHANNELS as TRIAL_CHANNELS,
@@ -91,9 +91,9 @@ def target_package(sequence: str, camera_path: str, segment: str, index: int) ->
             }
         )
     return {
-        "schema_name": "incinerator.nr4.blender-target-frame.v4",
+        "schema_name": "incinerator.nr4.blender-target-frame.v6",
         "input_extent": [160, 90],
-        "target_extent": [400, 225],
+        "target_extent": [640, 360],
         "sequence": sequence,
         "camera_path": camera_path,
         "effect_seed": 0,
@@ -179,7 +179,7 @@ def build_fixture(root: Path, *, test_in_review: bool = False) -> Path:
     manifest = {
         "schema": 1,
         "status": "complete",
-        "purpose": "self-contained native 160x90 to direct 400x225 paired corpus",
+        "purpose": "self-contained native 160x90 to direct 640x360 paired corpus",
         "rights": {"external_art": False, "learned_denoiser": False, "pretrained_weights": False},
         "sequence_count": len(sequences),
         "frame_count": len(records),
@@ -211,6 +211,12 @@ class CoverageContracts(unittest.TestCase):
             self.assertFalse(result["corpus"]["test_pixels_opened"])
             test_record = next(record for record in result["corpus"]["split_sequences"]["test"])
             self.assertEqual(test_record, "sequence-3")
+
+    def test_rf6_coverage_requires_the_rich_material_families(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            corpus = build_fixture(Path(temporary))
+            with self.assertRaisesRegex(ValueError, "required_fixture_materials_present"):
+                collect(corpus, RF6_SCOPE)
 
     def test_test_pixels_in_review_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:

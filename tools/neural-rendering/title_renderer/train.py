@@ -26,7 +26,8 @@ from title_renderer.io import (
     require_existing_absolute,
     sha256_file,
 )
-from title_renderer.metrics import BASELINES, comparison_sheet, loss_terms, metrics, overview_sheet, resize_baseline
+from title_renderer.metrics import BASELINES, ReconstructionLossConfig, comparison_sheet, loss_terms, metrics, overview_sheet, resize_baseline
+from title_renderer.coverage import INITIAL_STRUCTURAL_SCOPE, RF6_SCOPE, RF7_SCOPE, RF8_SCOPE
 from title_renderer.models import SpatialTitleRendererConfig, create_spatial_model
 
 
@@ -157,16 +158,16 @@ def main() -> None:
     device = select_device(str(configuration["device"]))
     try:
         coverage_acceptance = load_json(coverage_acceptance_path)
+        authorization_scope = coverage_acceptance.get("authorization_scope")
         if (
             coverage_acceptance.get("schema") != 1
-            or coverage_acceptance.get("phase") != "NR4-E"
+            or coverage_acceptance.get("phase") not in ("NR4-E", "RF6-A", "RF7-A", "RF8-A")
             or coverage_acceptance.get("status") != "accepted"
             or coverage_acceptance.get("model_training_authorized") is not True
-            or coverage_acceptance.get("authorization_scope")
-            != "NR5-A framework and NR5-B controlled spatial overfit"
+            or authorization_scope not in (INITIAL_STRUCTURAL_SCOPE, RF6_SCOPE, RF7_SCOPE, RF8_SCOPE)
             or coverage_acceptance.get("sealed_test_pixels_opened") is not False
         ):
-            raise ValueError("NR5-B requires the accepted, sealed NR4-E authorization scope")
+            raise ValueError("controlled fit requires an accepted sealed corpus authorization")
         coverage_root = coverage_acceptance_path.parent
         for path_key, digest_key in (
             ("coverage", "coverage_sha256"),
@@ -198,6 +199,7 @@ def main() -> None:
         coverage_snapshot = output / "dataset" / "nr4-e-acceptance.json"
         coverage_snapshot.write_bytes(coverage_acceptance_path.read_bytes())
         model_config = SpatialTitleRendererConfig(**configuration["model"])
+        loss_config = ReconstructionLossConfig(**configuration.get("loss", {}))
         model = create_spatial_model(
             model_config,
             semantic_categories=len(dataset.specification.semantic_vocabulary),
@@ -265,7 +267,14 @@ def main() -> None:
                 target_coverage = batch["target_coverage"].to(device)
                 optimizer.zero_grad(set_to_none=True)
                 result = model(continuous, semantic, instance, controls)
-                loss, terms = loss_terms(result, target, semantic, instance, target_coverage)
+                loss, terms = loss_terms(
+                    result,
+                    target,
+                    semantic,
+                    instance,
+                    target_coverage,
+                    loss_config,
+                )
                 loss.backward()
                 optimizer.step()
                 accumulators["loss"] = accumulators.get("loss", 0.0) + float(loss.detach())

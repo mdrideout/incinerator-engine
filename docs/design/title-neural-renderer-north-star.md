@@ -1,9 +1,11 @@
 # Incinerator Title Neural Renderer North Star
 
 **Status:** Accepted product direction; NR-0004 and NR5-A through NR5-E
-accepted; NR6 causal temporal reconstruction is next
+accepted; RF0 through RF5 accepted; RF6 and RF7 retained as historical spatial
+evidence; RF8 direct `160×90 → 640×360` spatial-sharpness/live-presentation
+trial accepted externally and unpromoted while NR6 remains deferred
 
-**Date:** 2026-08-10
+**Date:** 2026-08-12
 
 **Decision:**
 [ADR-026](../adr/026-from-scratch-title-neural-renderer.md)
@@ -13,6 +15,9 @@ accepted; NR6 causal temporal reconstruction is next
 
 **Implementation plan:**
 [Title Neural Renderer Implementation Plan](title-neural-renderer-implementation-plan.md)
+
+**Rich-fidelity roadmap:**
+[Rich Fidelity Roadmap](rich-fidelity-roadmap.md)
 
 ## Product outcome
 
@@ -39,22 +44,18 @@ lineage.
 
 ### Working resolution strategy
 
-NR4-C through the first NR5 proof use one self-contained 16:9 cohort: a `160×90`
-cheap appearance/control baseline and a `400×225` high-fidelity output target.
-This is a deliberate 2.5× linear reconstruction with 6.25× as many output
-pixels, not an integer-scale shortcut. It keeps capture, target rendering,
-training, ablation, and visual iteration local and fast while exercising both
-resolution reconstruction and the title-specific material/lighting
-transformation.
+RF8 owns one direct 16:9 cohort: native `160×90` cheap deterministic inputs and
+a native `640×360` high-fidelity target. The model performs one learned,
+uniform `4×` spatial and appearance transformation. There is no `400×225` or
+`800×450` reconstruction,
+supervision image, auxiliary target, comparison source, or runtime handoff.
 
-Every active target is rendered directly at `400×225`. Every input, target,
-baseline, model output, review image, metric, acceptance decision, and runtime
-proof is derived from this native cohort. No image rendered at another
+Every active RF8 target is rendered directly at `640×360`. Every input,
+target, baseline, model output, review image, metric, acceptance decision, and
+runtime proof is derived from that native pair. No image rendered at another
 resolution is reduced, enlarged, compared, used as a visual reference, or
-allowed into training or acceptance. Earlier NR4-A/B artifacts remain archived
-technical history only; the native `400×225` still and moving sequence must be
-generated and accepted again on their own terms. Output resolutions beyond
-`400×225` are deferred and have no role in the current plan.
+allowed into RF8 training or acceptance. NR4 through RF7 artifacts remain
+immutable historical evidence only and cannot supply RF8 pixels or metrics.
 
 This is the guiding test for every future choice:
 
@@ -235,10 +236,11 @@ real ambiguity:
 - deterministic effect kind, phase, and responsive mask; and
 - exposure, grade, weather, and time-of-day controls.
 
-The next working appearance baseline is `160×90` and its target is `400×225`.
-Controls begin at `160×90`; a structural control may use `400×225` only when a
-measured ablation shows that the extra raster/storage cost resolves an observed
-failure. The data contract records each channel independently.
+The active working appearance baseline is `160×90` and its direct target is
+`640×360`. Controls begin at `160×90`; RF8 has no auxiliary structural raster
+at another extent. A future schema may add one only when a measured ablation
+shows that its raster/storage cost resolves an observed failure. The data
+contract records each channel independently.
 
 ### Target inputs and rights
 
@@ -454,12 +456,37 @@ without changing world state.
 **Exit:** structure and identity are faithful and the model learns a material/
 lighting improvement from title data without external weights.
 
+### RF0 through RF8 — Rich-fidelity product track
+
+Improve the actual default sandbox before adding learned history. RF0 builds a
+small, explicit conventional visual vocabulary: T-shaped characters, a basic
+multipart vehicle, a built-environment kit, and basic textures/materials. RF1
+then proves that one immutable engine-submitted event using that same catalog
+can drive a `160×90` cheap profile and a direct native `400×225` rich profile.
+RF2 through RF5 add
+environment, character, vehicle, and lighting/effect richness as separate
+vertical fidelity kinds. RF6 records the historical `400×225` candidate. RF7
+records the historical direct native `800×450` trial. RF8 regenerates direct
+native `640×360` truth and trains one direct learned uniform 4× spatial
+candidate with stronger native-grid reconstruction and spatial selection.
+
+This is an independent product/content track, not NR5-F and not a generic scene
+or object-authoring system. RF0 through RF5 close authored intent, exact paired
+capture, and target review one kind at a time. RF6 then established the first
+cumulative spatial evidence; RF8 owns the active resolution and live trial.
+See the
+[Rich Fidelity Roadmap](rich-fidelity-roadmap.md).
+
+**Exit:** a materially richer spatial candidate works against the real default
+sandbox vocabulary and is worth temporal stabilization.
+
 ### NR-0006 — Causal temporal title renderer
 
 - Add engine-guided feature/history reprojection and rejection.
 - Train on motion, disocclusion, effects, cuts, resize, and invalid history.
 - Reuse the NR0-D scenario and metric definitions, recapturing every evaluated
-  frame natively at `160×90 → 400×225`.
+  frame natively at the then-accepted spatial contract; currently
+  `160×90 → 640×360`.
 
 **Exit:** temporal output is stable, responsive, independently resettable, and
 better than the spatial candidate on declared sequences.
@@ -490,7 +517,15 @@ ablations. Complete visual review still finds localized smoothing and chromatic
 ringing at emissive, glass, and high-contrast edges. NR5-E then proves the
 engine's live six-channel input can drive that exact checkpoint through an
 explicit Core ML bundle with comparison, fallback, model/frame diagnostics,
-incident linkage, and graphical evidence. NR6 is next: define the causal
-history/reprojection/reset contract and determine whether temporal conditioning
-improves stability without hiding those spatial limitations. The NR-0005
-checkpoint and trial bundle remain external and unpromoted.
+incident linkage, and graphical evidence.
+
+RF0 through RF5 are accepted and RF6-A through RF6-F are technically complete.
+RF6 manufactured a fresh cumulative corpus, trained from new random
+initializers, selected on validation, opened the sealed test once, evaluated a
+fresh stress cohort, and exercised an external live Core ML trial. The model
+remains external and unpromoted; product-owner interactive review is the final
+RF6 gate. NR6 begins with temporal-need characterization only after that gate,
+using RF6's observed motion and history failures rather than assumed model
+complexity. The NR-0005 checkpoint and trial bundle remain external, immutable,
+and are not ancestors of the RF6 candidate. See
+[RF6 validation](../validation/rf6-cumulative-rich-spatial.md).

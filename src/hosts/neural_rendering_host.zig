@@ -332,9 +332,17 @@ pub const Owner = struct {
         );
         defer self.allocator.free(cheap_rgb);
         for (0..contract.target_height) |y| {
-            const source_y = contract.nearestSourceIndex(@intCast(y), contract.cheap_height);
+            const source_y = contract.nearestSourceIndex(
+                @intCast(y),
+                contract.target_height,
+                contract.cheap_height,
+            );
             for (0..contract.target_width) |x| {
-                const source_x = contract.nearestSourceIndex(@intCast(x), contract.cheap_width);
+                const source_x = contract.nearestSourceIndex(
+                    @intCast(x),
+                    contract.target_width,
+                    contract.cheap_width,
+                );
                 const source = (@as(usize, source_y) * contract.cheap_width + source_x) * 4;
                 const destination = (y * contract.target_width + x) * 3;
                 @memcpy(cheap_rgb[destination..][0..3], appearance[source..][0..3]);
@@ -372,13 +380,13 @@ pub const Owner = struct {
             );
         }
         try self.writePpm(root, "appearance-160x90.ppm", contract.cheap_width, contract.cheap_height, appearance_rgb);
-        try self.writePpm(root, "cheap-nearest-400x225.ppm", contract.target_width, contract.target_height, cheap_rgb);
-        try self.writePpm(root, "neural-400x225.ppm", contract.target_width, contract.target_height, neural_rgb);
-        try self.writePpm(root, "comparison-cheap-left-neural-right-800x225.ppm", contract.target_width * 2, contract.target_height, comparison_rgb);
+        try self.writePpm(root, "cheap-nearest-640x360.ppm", contract.target_width, contract.target_height, cheap_rgb);
+        try self.writePpm(root, "neural-640x360.ppm", contract.target_width, contract.target_height, neural_rgb);
+        try self.writePpm(root, "comparison-cheap-left-neural-right-1280x360.ppm", contract.target_width * 2, contract.target_height, comparison_rgb);
         const snapshot = self.diagnostics();
         const report = try std.json.Stringify.valueAlloc(self.allocator, .{
             .schema = @as(u16, 1),
-            .phase = "NR5-E",
+            .phase = "RF8-G",
             .status = "complete",
             .training_eligible = false,
             .promotion_authorized = false,
@@ -398,9 +406,9 @@ pub const Owner = struct {
             .unknown_instance_pixels = snapshot.last_unknown_instance_pixels,
             .files = [_][]const u8{
                 "appearance-160x90.ppm",
-                "cheap-nearest-400x225.ppm",
-                "neural-400x225.ppm",
-                "comparison-cheap-left-neural-right-800x225.ppm",
+                "cheap-nearest-640x360.ppm",
+                "neural-640x360.ppm",
+                "comparison-cheap-left-neural-right-1280x360.ppm",
             },
         }, .{ .whitespace = .indent_2 });
         defer self.allocator.free(report);

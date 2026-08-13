@@ -18,8 +18,10 @@ comptime {
     std.debug.assert(contract.cheap_height == target.input_height);
     std.debug.assert(contract.target_width == target.target_width);
     std.debug.assert(contract.target_height == target.target_height);
-    std.debug.assert(contract.scale_numerator == target.scale_numerator);
-    std.debug.assert(contract.scale_denominator == target.scale_denominator);
+    std.debug.assert(contract.horizontal_scale_numerator == target.horizontal_scale_numerator);
+    std.debug.assert(contract.horizontal_scale_denominator == target.horizontal_scale_denominator);
+    std.debug.assert(contract.vertical_scale_numerator == target.vertical_scale_numerator);
+    std.debug.assert(contract.vertical_scale_denominator == target.vertical_scale_denominator);
 }
 
 pub const Config = struct {
@@ -178,7 +180,7 @@ pub const Owner = struct {
                 "  \"source\": {{\"revision\":\"{s}\",\"dirty\":{},\"dirty_fingerprint\":\"{s}\",\"content_sha256\":\"{s}\",\"input_schema\":\"{s}\",\"shader_fingerprint\":\"{s}\"}},\n" ++
                 "  \"coordinate_system\": {{\"world\":\"right-handed +Y up -Z forward\",\"matrix_storage\":\"zmath row-major row-vector\",\"image_origin\":\"top-left\",\"sample\":\"pixel-center\"}},\n" ++
                 "  \"input_extent\": [{d},{d}],\n  \"target_extent\": [{d},{d}],\n" ++
-                "  \"sampling_map\": {{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_index + 0.5) * 2 / 5) - 0.5\",\"border\":\"clamp\"}},\n" ++
+                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 4) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 4) - 0.5\"}},\"border\":\"clamp\"}},\n" ++
                 "  \"exposure\": {d},\n  \"effect_seed\": {d},\n",
             .{
                 target.schema_version,
@@ -202,8 +204,10 @@ pub const Owner = struct {
                 contract.cheap_height,
                 contract.target_width,
                 contract.target_height,
-                contract.scale_numerator,
-                contract.scale_denominator,
+                contract.horizontal_scale_numerator,
+                contract.horizontal_scale_denominator,
+                contract.vertical_scale_numerator,
+                contract.vertical_scale_denominator,
                 frame.exposure,
                 frame.effect_seed,
             },
@@ -359,12 +363,12 @@ pub const Owner = struct {
         defer allocating.deinit();
         try allocating.writer.print(
             "{{\n  \"schema\": {d},\n  \"schema_name\": \"{s}\",\n  \"status\": \"{s}\",\n" ++
-                "  \"purpose\": \"native 160x90 input lineage for direct native 400x225 Blender target pairs\",\n" ++
+                "  \"purpose\": \"native 160x90 input lineage for direct native 640x360 Blender target pairs\",\n" ++
                 "  \"source_revision\": \"{s}\",\n  \"source_dirty\": {},\n  \"source_dirty_fingerprint\": \"{s}\",\n" ++
                 "  \"content_sha256\": \"{s}\",\n  \"scene_id\": \"{s}\",\n  \"scene_fingerprint\": \"{s}\",\n" ++
                 "  \"capture_root\": \"{s}\",\n  \"sequence\": \"{s}\",\n  \"camera_path\": \"{s}\",\n" ++
                 "  \"input_extent\": [{d},{d}],\n  \"target_extent\": [{d},{d}],\n" ++
-                "  \"sampling_map\": {{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_index + 0.5) * 2 / 5) - 0.5\",\"border\":\"clamp\"}},\n" ++
+                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 4) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 4) - 0.5\"}},\"border\":\"clamp\"}},\n" ++
                 "  \"global_control_schema\": {{\"name\":\"{s}\",\"encoding\":\"{s}\",\"order\":[\"sun_strength\",\"world_strength\",\"local_light_strength\",\"emissive_strength\"],\"count\":{d}}},\n" ++
                 "  \"selection\": {{\"start_frame\":{d},\"frame_stride\":{d},\"requested_frames\":{d}}},\n" ++
                 "  \"recorded_frames\": {d},\n  \"failures\": {d},\n  \"frame_index\": \"frames.ndjson\"\n}}\n",
@@ -385,8 +389,10 @@ pub const Owner = struct {
                 contract.cheap_height,
                 contract.target_width,
                 contract.target_height,
-                contract.scale_numerator,
-                contract.scale_denominator,
+                contract.horizontal_scale_numerator,
+                contract.horizontal_scale_denominator,
+                contract.vertical_scale_numerator,
+                contract.vertical_scale_denominator,
                 contract.global_control_schema_name,
                 contract.global_control_encoding,
                 contract.global_control_count,

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Produce the NR4-E factual coverage ledger and scoped corpus decision."""
+"""Produce a factual, scoped native-corpus coverage authorization."""
 
 from __future__ import annotations
 
@@ -29,6 +29,12 @@ from title_renderer.io import (
 
 INITIAL_STRUCTURAL_SCOPE = "NR5-A framework and NR5-B controlled spatial overfit"
 PRODUCT_APPROVAL = "product_owner_approved_nr4_d_review_sheet_2026_08_09"
+RF6_SCOPE = "RF6 cumulative rich spatial controlled fit and held-out reconstruction"
+RF6_PRODUCT_APPROVAL = "product_owner_approved_rf5_rich_target_2026_08_10"
+RF7_SCOPE = "RF7 direct 160x90 to native 640x360 spatial fidelity reconstruction"
+RF7_PRODUCT_APPROVAL = "product_owner_preapproved_direct_160x90_to_640x360_review_2026_08_11"
+RF8_SCOPE = "RF8 direct 160x90 to native 640x360 spatial sharpness reconstruction"
+RF8_PRODUCT_APPROVAL = "product_owner_approved_direct_160x90_to_640x360_sharpness_2026_08_12"
 
 
 def _range(values: list[float]) -> dict[str, float | None]:
@@ -44,7 +50,7 @@ def _sorted_counter(counter: Counter[str]) -> dict[str, int]:
     return {name: counter[name] for name in sorted(counter)}
 
 
-def collect(corpus_root: Path) -> dict[str, Any]:
+def collect(corpus_root: Path, scope: str = INITIAL_STRUCTURAL_SCOPE) -> dict[str, Any]:
     inspected = inspect_corpus_metadata(corpus_root, verify_training_artifacts=True)
     root: Path = inspected["root"]
     manifest: dict[str, Any] = inspected["manifest"]
@@ -165,6 +171,8 @@ def collect(corpus_root: Path) -> dict[str, Any]:
     }
     required_semantics = {"environment", "vehicle", "character", "npc", "carryable", "crate"}
     required_materials = {"asphalt", "sidewalk", "masonry", "glass", "emissive", "painted_metal", "rubber"}
+    if scope in (RF6_SCOPE, RF7_SCOPE):
+        required_materials.update(("fabric", "skin", "cardboard"))
     checks = {
         # Every package was already fail-closed against both native extents by
         # inspect_corpus_metadata. Requiring one read per record makes that
@@ -184,10 +192,10 @@ def collect(corpus_root: Path) -> dict[str, Any]:
     }
     if not all(checks.values()):
         failed = ", ".join(name for name, passed in checks.items() if not passed)
-        raise ValueError(f"NR4-E initial structural-scope coverage failed: {failed}")
+        raise ValueError(f"native corpus coverage failed: {failed}")
 
     known_gaps = [
-        "one procedural urban-corner scene and one fixed 26-identity fixture; no title-wide location or asset diversity",
+        f"one procedural urban-corner scene and one fixed {len(stable_keys)}-identity fixture; no title-wide location or asset diversity",
         "no skeletal animation, cloth, hair, deformation, destruction, attachment replacement, or topology changes",
         "no weather, time-of-day traversal, exposure/grade traversal, atmosphere, smoke, fire, particles, or responsive effect phase",
         "no populated crowd, multiple vehicles, broad character variation, vegetation, terrain, interiors, or long-distance vistas",
@@ -196,9 +204,9 @@ def collect(corpus_root: Path) -> dict[str, Any]:
     ]
     return {
         "schema": 1,
-        "phase": "NR4-E",
+        "phase": "RF8-A" if scope == RF8_SCOPE else ("RF7-A" if scope == RF7_SCOPE else ("RF6-A" if scope == RF6_SCOPE else "NR4-E")),
         "status": "accepted_for_initial_structural_scope",
-        "scope": INITIAL_STRUCTURAL_SCOPE,
+        "scope": scope,
         "corpus": {
             "root": str(root),
             "manifest": str(inspected["manifest_path"]),
@@ -256,7 +264,7 @@ def collect(corpus_root: Path) -> dict[str, Any]:
         "known_gaps": known_gaps,
         "decision": {
             "disposition": "accepted",
-            "accepted_for": INITIAL_STRUCTURAL_SCOPE,
+            "accepted_for": scope,
             "not_accepted_for": [
                 "title-wide visual generalization",
                 "causal temporal renderer training",
@@ -274,13 +282,13 @@ def markdown(coverage: dict[str, Any]) -> str:
     segment_names = ", ".join(coverage["motion_occlusion_and_resets"]["segments"])
     gaps = "\n".join(f"- {gap}" for gap in coverage["known_gaps"])
     checks = "\n".join(f"- `{name}`: {'pass' if passed else 'fail'}" for name, passed in coverage["checks"].items())
-    return f"""# NR4-E Coverage Ledger
+    return f"""# {coverage['phase']} Coverage Ledger
 
 **Disposition:** Accepted for {coverage['scope']} only
 
 **Corpus:** `{coverage['corpus']['root']}`
 
-**Native cohort:** {coverage['corpus']['frames']} pairs across {coverage['corpus']['sequences']} whole sequences, `160×90 → 400×225`
+**Native cohort:** {coverage['corpus']['frames']} pairs across {coverage['corpus']['sequences']} whole sequences, `160×90 → {coverage['corpus']['target_extent'][0]}×{coverage['corpus']['target_extent'][1]}`
 
 ## Coverage facts
 
@@ -304,10 +312,10 @@ def markdown(coverage: dict[str, Any]) -> str:
 
 ## Decision
 
-NR-0004 is accepted as the exact rights-clean data foundation for NR5-A and
-NR5-B. This does not establish title-wide coverage, authorize temporal or
-learned-detail training, or select/promote a runtime model. Those claims require
-new native cohorts targeted at their actual consumers.
+This exact rights-clean corpus is accepted only for the scope named above. It
+does not establish title-wide coverage, authorize temporal or learned-detail
+training, or select/promote a runtime model. Those claims require new native
+cohorts targeted at their actual consumers.
 """
 
 
@@ -316,13 +324,25 @@ def main() -> None:
     parser.add_argument("--corpus", required=True, type=Path)
     parser.add_argument("--output", required=True, type=Path)
     parser.add_argument("--repository", required=True, type=Path)
-    parser.add_argument("--product-approval", required=True, choices=(PRODUCT_APPROVAL,))
+    parser.add_argument(
+        "--product-approval",
+        required=True,
+        choices=(PRODUCT_APPROVAL, RF6_PRODUCT_APPROVAL, RF7_PRODUCT_APPROVAL, RF8_PRODUCT_APPROVAL),
+    )
     args = parser.parse_args()
     corpus = require_existing_absolute(args.corpus, "--corpus")
     repository = require_existing_absolute(args.repository, "--repository")
     output = create_absent_absolute(args.output, "--output")
     try:
-        coverage = collect(corpus)
+        if args.product_approval == RF8_PRODUCT_APPROVAL:
+            scope, phase, experiment = RF8_SCOPE, "RF8-A", "RF8"
+        elif args.product_approval == RF7_PRODUCT_APPROVAL:
+            scope, phase, experiment = RF7_SCOPE, "RF7-A", "RF7"
+        elif args.product_approval == RF6_PRODUCT_APPROVAL:
+            scope, phase, experiment = RF6_SCOPE, "RF6-A", "RF6"
+        else:
+            scope, phase, experiment = INITIAL_STRUCTURAL_SCOPE, "NR4-E", "NR-0004"
+        coverage = collect(corpus, scope)
         atomic_json(output / "coverage.json", coverage)
         (output / "coverage.md").write_text(markdown(coverage), encoding="utf-8")
         environment_path = output / "environment.json"
@@ -350,10 +370,10 @@ def main() -> None:
             )
         acceptance = {
             "schema": 1,
-            "phase": "NR4-E",
-            "experiment": "NR-0004",
+            "phase": phase,
+            "experiment": experiment,
             "status": "accepted",
-            "accepted_for": INITIAL_STRUCTURAL_SCOPE,
+            "accepted_for": scope,
             "product_approval": args.product_approval,
             "corpus_manifest_sha256": coverage["corpus"]["manifest_sha256"],
             "coverage": "coverage.json",
@@ -366,14 +386,14 @@ def main() -> None:
             "repository": repository_record(repository),
             "sealed_test_pixels_opened": False,
             "model_training_authorized": True,
-            "authorization_scope": INITIAL_STRUCTURAL_SCOPE,
+            "authorization_scope": scope,
         }
         atomic_json(output / "acceptance.json", acceptance)
     except Exception:
-        atomic_json(output / "failure.json", {"schema": 1, "phase": "NR4-E", "status": "failed"})
+        atomic_json(output / "failure.json", {"schema": 1, "phase": "coverage", "status": "failed"})
         raise
     print(
-        f"NR4_E_COVERAGE_ACCEPTED frames={coverage['corpus']['frames']} "
+        f"CORPUS_COVERAGE_ACCEPTED phase={coverage['phase']} frames={coverage['corpus']['frames']} "
         f"sequences={coverage['corpus']['sequences']} output={output}"
     )
 

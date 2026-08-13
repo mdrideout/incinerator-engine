@@ -106,7 +106,7 @@ pub const Scene = struct {
             .unavailable => return,
             .ready => {},
         }
-        const size = self.gpu.getWindowSize();
+        const size = self.gpu.getProductSceneExtent();
         const aspect = @as(f32, @floatFromInt(size.width)) /
             @as(f32, @floatFromInt(size.height));
         if (self.ownedVehiclePresentation(client, now_ns)) |owned| {

@@ -40,6 +40,7 @@ const mesh = @import("mesh.zig");
 const texture = @import("texture.zig");
 const primitives = @import("primitives.zig");
 const sandbox_visual_resources = @import("sandbox_visual_resources.zig");
+const sandbox_visual_composition = @import("sandbox_visual_composition.zig");
 const district_contract = @import("district_contract");
 const district_feature_contract = @import("district_feature_contract");
 const district_streaming_host = @import("hosts/district_streaming_host.zig");
@@ -7646,7 +7647,7 @@ const App = struct {
         const plans = neural_target_fixture.plans(self.neuralTargetFixtureFrame());
         for (plans) |plan| {
             const gpu_mesh: *const mesh.Mesh = switch (plan.mesh) {
-                .cube => &self.block_mesh,
+                .cube => &self.visuals.visual_part_mesh,
                 .wheel => &self.visuals.vehicle_wheel_mesh,
                 .capsule => &self.visuals.character_mesh,
             };
@@ -7746,6 +7747,17 @@ const App = struct {
             .semantic = semantic,
             .part = part,
         };
+    }
+
+    fn replicatedNeuralPartIdentity(
+        entity: sandbox_host.ReplicatedEntityId,
+        semantic: engine.neural_rendering.SemanticClass,
+        part: engine.neural_rendering.SemanticPart,
+        ordinal: u16,
+    ) engine.neural_rendering.DrawIdentity {
+        var result = replicatedNeuralIdentity(entity, semantic, part);
+        result.ordinal = ordinal;
+        return result;
     }
 
     fn fixtureNeuralIdentity(
@@ -8039,10 +8051,11 @@ const App = struct {
             },
         }
 
-        // Calculate aspect ratio from window dimensions
-        const window_size = self.gpu_renderer.getWindowSize();
-        const aspect_ratio = @as(f32, @floatFromInt(window_size.width)) /
-            @as(f32, @floatFromInt(window_size.height));
+        // Gameplay projection follows the fixed product scene, not the
+        // resizable window surrounding it.
+        const scene_extent = self.gpu_renderer.getProductSceneExtent();
+        const aspect_ratio = @as(f32, @floatFromInt(scene_extent.width)) /
+            @as(f32, @floatFromInt(scene_extent.height));
 
         var scene_extraction_profile = self.beginHostProfile(
             .scene_extraction,
@@ -8380,39 +8393,29 @@ const App = struct {
         }
 
         for (vehicle_draws) |draw| {
-            const chassis_mesh = try self.visuals.resolve(
+            _ = try self.visuals.resolve(
                 draw.chassis_mesh,
                 draw.chassis_material,
             );
-            const chassis_scale = zm.scaling(
-                draw.chassis_half_extents[0] * 2,
-                draw.chassis_half_extents[1] * 2,
-                draw.chassis_half_extents[2] * 2,
-            );
-            const chassis_rotation = zm.quatToMat(zm.f32x4(
-                draw.chassis_pose.rotation[0],
-                draw.chassis_pose.rotation[1],
-                draw.chassis_pose.rotation[2],
-                draw.chassis_pose.rotation[3],
-            ));
-            const chassis_translation = zm.translation(
-                draw.chassis_pose.position[0],
-                draw.chassis_pose.position[1],
-                draw.chassis_pose.position[2],
-            );
-            try self.drawPresentationMesh(
-                replicatedNeuralIdentity(
-                    draw.entity,
-                    .vehicle,
-                    .vehicle_chassis,
-                ),
-                chassis_mesh,
-                chassis_mesh.diffuse_texture,
-                .{ 1, 1, 1, 1 },
-                zm.mul(zm.mul(chassis_scale, chassis_rotation), chassis_translation),
-                view_proj,
-            );
-            scene_draw_calls +|= 1;
+            for (sandbox_visual_composition.vehicleBodyPlans(
+                draw.chassis_half_extents,
+                draw.chassis_pose,
+            )) |part| {
+                try self.drawPresentationMesh(
+                    replicatedNeuralPartIdentity(
+                        draw.entity,
+                        .vehicle,
+                        .vehicle_chassis,
+                        part.ordinal,
+                    ),
+                    &self.visuals.visual_part_mesh,
+                    null,
+                    part.color,
+                    part.model,
+                    view_proj,
+                );
+                scene_draw_calls +|= 1;
+            }
 
             for (draw.wheels) |wheel| {
                 const wheel_mesh = try self.visuals.resolve(wheel.mesh, wheel.material);
@@ -8451,27 +8454,28 @@ const App = struct {
         }
 
         for (character_draws) |draw| {
-            const character_mesh = try self.visuals.resolve(draw.mesh, draw.material);
-            const rotation = zm.quatToMat(zm.f32x4(
-                draw.pose.rotation[0],
-                draw.pose.rotation[1],
-                draw.pose.rotation[2],
-                draw.pose.rotation[3],
-            ));
-            const translation = zm.translation(
-                draw.pose.position[0],
-                draw.pose.position[1],
-                draw.pose.position[2],
-            );
-            try self.drawPresentationMesh(
-                replicatedNeuralIdentity(draw.entity, .character, .whole),
-                character_mesh,
-                null,
+            _ = try self.visuals.resolve(draw.mesh, draw.material);
+            for (sandbox_visual_composition.characterPlans(
+                draw.radius,
+                draw.half_height,
+                draw.pose,
                 draw.combat.body_color,
-                zm.mul(rotation, translation),
-                view_proj,
-            );
-            scene_draw_calls +|= 1;
+            )) |part| {
+                try self.drawPresentationMesh(
+                    replicatedNeuralPartIdentity(
+                        draw.entity,
+                        .character,
+                        .whole,
+                        part.ordinal,
+                    ),
+                    &self.visuals.visual_part_mesh,
+                    null,
+                    part.color,
+                    part.model,
+                    view_proj,
+                );
+                scene_draw_calls +|= 1;
+            }
             const health_bar_draw_calls = self.drawCombatHealthBar(
                 draw.pose.position,
                 draw.radius + draw.half_height + 0.25,
@@ -8492,27 +8496,28 @@ const App = struct {
         // optional sight/range/leash/route overlay arrives separately through
         // the bounded developer-debug geometry path.
         for (npc_draws) |draw| {
-            const npc_mesh = try self.visuals.resolve(draw.mesh, draw.material);
-            const rotation = zm.quatToMat(zm.f32x4(
-                draw.pose.rotation[0],
-                draw.pose.rotation[1],
-                draw.pose.rotation[2],
-                draw.pose.rotation[3],
-            ));
-            const translation = zm.translation(
-                draw.pose.position[0],
-                draw.pose.position[1],
-                draw.pose.position[2],
-            );
-            try self.drawPresentationMesh(
-                replicatedNeuralIdentity(draw.entity, .npc, .whole),
-                npc_mesh,
-                null,
+            _ = try self.visuals.resolve(draw.mesh, draw.material);
+            for (sandbox_visual_composition.characterPlans(
+                draw.radius,
+                draw.half_height,
+                draw.pose,
                 draw.combat.entity.body_color,
-                zm.mul(rotation, translation),
-                view_proj,
-            );
-            scene_draw_calls +|= 1;
+            )) |part| {
+                try self.drawPresentationMesh(
+                    replicatedNeuralPartIdentity(
+                        draw.entity,
+                        .npc,
+                        .whole,
+                        part.ordinal,
+                    ),
+                    &self.visuals.visual_part_mesh,
+                    null,
+                    part.color,
+                    part.model,
+                    view_proj,
+                );
+                scene_draw_calls +|= 1;
+            }
             const health_bar_draw_calls = self.drawCombatHealthBar(
                 draw.pose.position,
                 draw.radius + draw.half_height + 0.25,
@@ -11055,6 +11060,8 @@ test "all engine module tests are discovered" {
     std.testing.refAllDecls(@import("camera.zig"));
     std.testing.refAllDecls(@import("sandbox_controls.zig"));
     std.testing.refAllDecls(@import("sandbox_visual_resources.zig"));
+    std.testing.refAllDecls(@import("sandbox_visual_catalog.zig"));
+    std.testing.refAllDecls(@import("sandbox_visual_composition.zig"));
     std.testing.refAllDecls(@import("editor/tool.zig"));
     std.testing.refAllDecls(district_streaming_host);
     std.testing.refAllDecls(@import("input.zig"));

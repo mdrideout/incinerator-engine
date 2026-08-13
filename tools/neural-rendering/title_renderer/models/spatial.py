@@ -1,4 +1,4 @@
-"""First two-branch random-initialized spatial title renderer."""
+"""Direct random-initialized 160x90 to 640x360 spatial title renderer."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import torch
 from torch import nn
 from torch.nn import functional
 
-from title_renderer.contracts import TARGET_EXTENT
+from title_renderer.contracts import INPUT_EXTENT, TARGET_EXTENT
 from title_renderer.dataset import CONTINUOUS_PLANES, GLOBAL_CONTROLS
 
 
@@ -24,12 +24,13 @@ class ResidualBlock(nn.Module):
 
 @dataclass(frozen=True)
 class SpatialTitleRendererConfig:
-    name: str = "nr5_spatial_title_renderer_v1"
+    name: str = "rf8_direct_spatial_title_renderer_v2"
     features: int = 32
     low_blocks: int = 4
-    output_blocks: int = 2
+    output_blocks: int = 6
     semantic_embedding: int = 4
     instance_embedding: int = 8
+    refinement_features: int = 48
     output_width: int = TARGET_EXTENT[0]
     output_height: int = TARGET_EXTENT[1]
 
@@ -38,12 +39,16 @@ class SpatialTitleRendererConfig:
 
 
 class SpatialTitleRenderer(nn.Module):
-    """Low-resolution context plus target-grid structural reconstruction."""
+    """Low-resolution conditioning followed by one direct learned native output."""
 
     def __init__(self, config: SpatialTitleRendererConfig, semantic_categories: int, instance_categories: int) -> None:
         super().__init__()
         if semantic_categories <= 0 or instance_categories <= 0:
             raise ValueError("categorical vocabularies must include background")
+        if (config.output_width, config.output_height) != TARGET_EXTENT:
+            raise ValueError("spatial title renderer requires the direct native 160x90 to 640x360 contract")
+        if config.features <= 0 or config.refinement_features <= 0:
+            raise ValueError("spatial title renderer feature counts must be positive")
         self.config = config
         self.semantic_categories = semantic_categories
         self.instance_categories = instance_categories
@@ -51,7 +56,7 @@ class SpatialTitleRenderer(nn.Module):
         self.instance_embedding = nn.Embedding(instance_categories, config.instance_embedding)
         low_channels = len(CONTINUOUS_PLANES) + len(GLOBAL_CONTROLS) + config.semantic_embedding + config.instance_embedding
         self.low_encoder = nn.Conv2d(low_channels, config.features, 5, padding=2)
-        self.low_blocks = nn.ModuleList(ResidualBlock(config.features) for _ in range(config.low_blocks))
+        self.context_blocks = nn.ModuleList(ResidualBlock(config.features) for _ in range(config.low_blocks))
         structural_channels = 1 + 3 + 1 + config.semantic_embedding + config.instance_embedding
         structural_features = max(8, config.features // 2)
         self.structural_encoder = nn.Sequential(
@@ -60,8 +65,18 @@ class SpatialTitleRenderer(nn.Module):
             nn.Conv2d(structural_features, structural_features, 3, padding=1),
         )
         self.fusion = nn.Conv2d(config.features + structural_features, config.features, 3, padding=1)
-        self.output_blocks = nn.ModuleList(ResidualBlock(config.features) for _ in range(config.output_blocks))
-        self.output = nn.Conv2d(config.features, 3, 3, padding=1)
+        self.direct_projection = nn.Conv2d(config.features, config.refinement_features, 3, padding=1)
+        self.output_structural_projection = nn.Conv2d(
+            structural_features,
+            config.refinement_features,
+            3,
+            padding=1,
+        )
+        self.output_fusion = nn.Conv2d(config.refinement_features * 2, config.refinement_features, 3, padding=1)
+        self.output_blocks = nn.ModuleList(
+            ResidualBlock(config.refinement_features) for _ in range(config.output_blocks)
+        )
+        self.output = nn.Conv2d(config.refinement_features, 3, 3, padding=1)
 
     def forward(
         self,
@@ -77,24 +92,34 @@ class SpatialTitleRenderer(nn.Module):
         )
         low = torch.cat((continuous, semantic_features, instance_features, controls), dim=1)
         low = functional.silu(self.low_encoder(low))
-        for block in self.low_blocks:
+        for block in self.context_blocks:
             low = block(low)
+        structural = self.structural_encoder(
+            torch.cat(
+                (
+                    continuous[:, 3:4],
+                    continuous[:, 4:7],
+                    continuous[:, 10:11],
+                    semantic_features,
+                    instance_features,
+                ),
+                dim=1,
+            )
+        )
+        fused = functional.silu(self.fusion(torch.cat((low, structural), dim=1)))
         output_size = (self.config.output_height, self.config.output_width)
-        low = functional.interpolate(low, size=output_size, mode="bilinear", align_corners=False)
-        structural_continuous = functional.interpolate(
-            torch.cat((continuous[:, 3:4], continuous[:, 4:7], continuous[:, 10:11]), dim=1),
+        appearance_features = functional.interpolate(
+            self.direct_projection(fused),
             size=output_size,
             mode="bilinear",
             align_corners=False,
         )
-        structural_categorical = functional.interpolate(
-            torch.cat((semantic_features, instance_features), dim=1),
+        structural_features = functional.interpolate(
+            self.output_structural_projection(structural),
             size=output_size,
-            mode="nearest-exact",
+            mode="nearest",
         )
-        structural = torch.cat((structural_continuous, structural_categorical), dim=1)
-        structural = self.structural_encoder(structural)
-        fused = functional.silu(self.fusion(torch.cat((low, structural), dim=1)))
+        fused = functional.silu(self.output_fusion(torch.cat((appearance_features, structural_features), dim=1)))
         for block in self.output_blocks:
             fused = block(fused)
         base = functional.interpolate(continuous[:, :3], size=output_size, mode="bilinear", align_corners=False)

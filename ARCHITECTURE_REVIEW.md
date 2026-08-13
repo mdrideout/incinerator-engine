@@ -7,11 +7,19 @@ incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
 automated Metal/product acceptance are current. No open P0/P1 architectural
 finding blocks the final S13 human walkthrough. The parallel neural-rendering
 track has accepted NR0-A through NR0-D, NR-0004, and NR5-A through NR5-E plus
-the NR-0003 external comparison. NR6 causal temporal reconstruction is next.
-ADR-025 owns the presentation/promotion boundary; ADR-026 and the title neural
-renderer north star require title-owned random-initialization training.
+the NR-0003 external comparison. RF0 through RF5 establish the shared sandbox
+visual catalog and exact rich-target cohort. RF6's fresh random-origin
+candidate, sealed evaluation, stress conclusion, and external live Core ML
+trial remain historical `400×225` evidence. RF7's accepted direct native
+`160×90 → 800×450` trial is historical as well. RF8 owns the active direct
+`160×90 → 640×360` uniform-4× spatial and fixed-presentation contract; it uses
+fresh truth and stronger native-grid/spatial-quality training without a retired
+intermediate image. NR6 remains deferred. ADR-025 owns the
+presentation/promotion boundary;
+ADR-026 and the title neural renderer north star require title-owned
+random-initialization training.
 
-**Last reviewed:** 2026-08-10
+**Last reviewed:** 2026-08-12
 
 **Scope:** Current post-S13 architecture, its demonstrated strengths, its
 remaining structural pressure before another product or service slice, and the
@@ -40,7 +48,8 @@ accepted from-scratch title neural-renderer direction
 → [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 
 **Parallel core-rendering track:**
-[`NR0-A through NR0-D, NR-0004, and NR5-A through NR5-E accepted; NR6 next`](docs/design/title-neural-renderer-north-star.md)
+[`NR0-A through NR0-D, NR-0004, NR5-A through NR5-E, RF0 through RF5, and RF7 external live trial accepted`](docs/design/title-neural-renderer-north-star.md)
+([rich-fidelity roadmap](docs/design/rich-fidelity-roadmap.md))
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 

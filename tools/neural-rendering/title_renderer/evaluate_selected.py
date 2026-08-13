@@ -96,6 +96,9 @@ def main() -> None:
         "model_beats_bilinear_hdr": full["linear_hdr_mae"] < bilinear["linear_hdr_mae"],
         "model_beats_bilinear_semantic_boundary": full["semantic_boundary_mae"] < bilinear["semantic_boundary_mae"],
         "model_beats_bilinear_instance_boundary": full["instance_boundary_mae"] < bilinear["instance_boundary_mae"],
+        "model_beats_bilinear_spatial_quality": full["spatial_quality_score"] < bilinear["spatial_quality_score"],
+        "model_beats_bilinear_laplacian": full["laplacian_mae"] < bilinear["laplacian_mae"],
+        "model_beats_bilinear_local_contrast": full["local_contrast_mae"] < bilinear["local_contrast_mae"],
         "full_model_beats_appearance_only": full["linear_hdr_mae"] < appearance["linear_hdr_mae"],
         "all_metrics_finite": all(np.isfinite(value) for owner in result["metrics"].values() for value in owner.values()),
     }

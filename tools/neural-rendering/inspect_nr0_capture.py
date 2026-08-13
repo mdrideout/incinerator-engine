@@ -20,7 +20,7 @@ CHANNELS = (
     "instance",
 )
 INPUT_EXTENT = (160, 90)
-PAIRED_TARGET_EXTENT = (400, 225)
+PAIRED_TARGET_EXTENT = (640, 360)
 RAW_CHANNEL_BYTES = INPUT_EXTENT[0] * INPUT_EXTENT[1] * 4
 RAW_CHANNEL_BYTES_PER_FRAME = len(CHANNELS) * RAW_CHANNEL_BYTES
 GLOBAL_CONTROL_SCHEMA = "incinerator.neural-frame-global.v1"
@@ -136,7 +136,7 @@ def load_capture(root: Path) -> dict:
     if not root.is_absolute():
         raise ValueError(f"capture root must be absolute: {root}")
     capture = json.loads((root / "capture.json").read_text())
-    if capture["schema"] != 4:
+    if capture["schema"] != 6:
         raise ValueError(f"unsupported capture schema in {root}")
     if capture["status"] != "complete":
         raise ValueError(f"capture is not complete: {root}")
@@ -145,14 +145,21 @@ def load_capture(root: Path) -> dict:
     if tuple(capture.get("input_size", ())) != INPUT_EXTENT:
         raise ValueError(f"capture input extent is not native 160x90: {root}")
     if tuple(capture.get("paired_target_size", ())) != PAIRED_TARGET_EXTENT:
-        raise ValueError(f"capture paired target extent is not native 400x225: {root}")
+        raise ValueError(f"capture paired target extent is not native 640x360: {root}")
     if capture.get("sampling_map") != {
-        "scale_numerator": 5,
-        "scale_denominator": 2,
-        "target_center_to_source_index": "((target_index + 0.5) * 2 / 5) - 0.5",
+        "x": {
+            "scale_numerator": 4,
+            "scale_denominator": 1,
+            "target_center_to_source_index": "((target_x + 0.5) / 4) - 0.5",
+        },
+        "y": {
+            "scale_numerator": 4,
+            "scale_denominator": 1,
+            "target_center_to_source_index": "((target_y + 0.5) / 4) - 0.5",
+        },
         "border": "clamp",
     }:
-        raise ValueError(f"capture sampling map is not the native 5:2 contract: {root}")
+        raise ValueError(f"capture sampling map is not the native axis-specific contract: {root}")
     capture_timing = capture.get("input_raster_timing")
     if not isinstance(capture_timing, dict) or any(
         not isinstance(capture_timing.get(name), int) or capture_timing[name] < 0

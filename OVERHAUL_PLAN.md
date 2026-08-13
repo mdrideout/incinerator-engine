@@ -19,12 +19,21 @@ initial structural scope, and NR5-A/B accept the random-origin framework and
 controlled overfit. NR5-C/D accept the known-fixture held-out structural
 candidate and fresh native stress conclusion without promoting it. NR5-E
 accepts the external live Core ML spatial trial, comparison, fallback, and
-diagnostics without promoting it; NR6 causal temporal reconstruction is next.
-Other target extents are deferred.
+diagnostics without promoting it. RF0 through RF5 implement the bounded sandbox
+visual vocabulary and exact low/high target families. RF6's fresh 108-pair
+corpus, random-origin controlled and held-out training, one sealed-test
+opening, fresh stress, exact export, and live Core ML/Metal trial are
+retained as technically complete historical `400×225` evidence. RF7 replaces
+that historical contract with one direct native `160×90 → 800×450` path. Its 108
+fresh pairs, random-origin controlled and held-out training, single-open test,
+stress, exact Core ML export, and 48/48 live predictions pass without promotion
+or a `400×225` intermediate. RF8 now owns the active direct native
+`160×90 → 640×360` exact-16:9 uniform-4× cohort, stronger spatial reconstruction
+gate, and fixed centered 640×360 product presentation. NR6 causal work remains deferred.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-08-10
+**Last reviewed:** 2026-08-12
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -48,8 +57,9 @@ Other target extents are deferred.
 → [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 
 **Parallel core-rendering track:**
-[`From-scratch title neural renderer; NR5-A through NR5-E accepted; NR6 next`](docs/design/title-neural-renderer-north-star.md)
-([implementation plan](docs/design/title-neural-renderer-implementation-plan.md))
+[`From-scratch title neural renderer; NR5-A through NR5-E, RF0 through RF5, and RF7 external live trial accepted`](docs/design/title-neural-renderer-north-star.md)
+([rich-fidelity roadmap](docs/design/rich-fidelity-roadmap.md),
+[implementation plan](docs/design/title-neural-renderer-implementation-plan.md))
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
 

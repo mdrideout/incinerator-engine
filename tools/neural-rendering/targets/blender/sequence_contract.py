@@ -23,8 +23,17 @@ FRAMES = tuple(START_FRAME + index * FRAME_STRIDE for index in range(FRAME_COUNT
 EXPECTED_TRANSFORM_CHANGES = {
     "camera_motion": set(),
     "object_motion": {
-        "vehicle-chassis",
-        "vehicle-cabin",
+        "lower-body",
+        "hood",
+        "cabin",
+        "windshield",
+        "rear-window",
+        "left-window",
+        "right-window",
+        "front-bumper",
+        "rear-bumper",
+        "left-headlight",
+        "right-headlight",
         "wheel-front-left",
         "wheel-front-right",
         "wheel-rear-left",
@@ -37,7 +46,14 @@ EXPECTED_TRANSFORM_CHANGES = {
         "wheel-rear-left",
         "wheel-rear-right",
     },
-    "occlusion_disocclusion": {"npc"},
+    "occlusion_disocclusion": {
+        "npc/left-leg",
+        "npc/right-leg",
+        "npc/torso",
+        "npc/shoulder-arm-bar",
+        "npc/head",
+        "npc/facing-marker",
+    },
     "lighting_effect": set(),
 }
 EXPECTED_MATERIAL_CHANGES = {
@@ -46,7 +62,12 @@ EXPECTED_MATERIAL_CHANGES = {
     "near_edge": set(),
     "wheel_articulation": set(),
     "occlusion_disocclusion": set(),
-    "lighting_effect": {"emissive-sign", "lamp-head"},
+    "lighting_effect": {
+        "emissive-sign",
+        "lamp-head",
+        "left-headlight",
+        "right-headlight",
+    },
 }
 CAMERA_SEGMENTS = {"camera_motion", "near_edge"}
 EXPECTED_GLOBAL_CONTROL_CHANGES = {

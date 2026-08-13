@@ -1,0 +1,35 @@
+{
+  "schema": 1,
+  "experiment": "RF6",
+  "stage": "controlled_spatial_overfit",
+  "splits": ["overfit"],
+  "device": "mps",
+  "initialization_seed": 2026081101,
+  "training_seed": 2026081102,
+  "epochs": 240,
+  "batch_size": 1,
+  "log_every_epochs": 10,
+  "model": {
+    "name": "rf6_cumulative_rich_spatial_v1",
+    "features": 48,
+    "low_blocks": 6,
+    "output_blocks": 3,
+    "semantic_embedding": 4,
+    "instance_embedding": 8,
+    "output_width": 400,
+    "output_height": 225
+  },
+  "optimizer": {
+    "name": "AdamW",
+    "learning_rate": 0.0007,
+    "weight_decay": 0.00001
+  },
+  "scheduler": {
+    "name": "CosineAnnealingLR",
+    "minimum_learning_rate": 0.00001
+  },
+  "target": "direct native scene-linear float32 400x225 Cycles RGB",
+  "learned_origin": "new repository-owned random initialization only",
+  "pretrained_weights": false,
+  "test_policy": "sealed; zero pixels opened"
+}

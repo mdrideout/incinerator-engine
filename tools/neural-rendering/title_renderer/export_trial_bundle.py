@@ -24,36 +24,11 @@ from title_renderer.trial_bundle import CHANNELS, CONTINUOUS_PLANES, GLOBAL_CONT
 
 
 class CoreMLExportModel(nn.Module):
-    """Fixed-shape, numerically identical lowering of the accepted model.
-
-    Core ML 9 does not lower PyTorch's ``nearest-exact`` operator. At this
-    fixed working extent, nearest-exact is exactly two constant index gathers.
-    No learned tensor is changed, and export proves zero wrapper error before
-    converting the graph.
-    """
+    """Fixed-shape, numerically identical direct native model lowering."""
 
     def __init__(self, source: nn.Module) -> None:
         super().__init__()
         self.source = source
-        input_width, input_height = INPUT_EXTENT
-        output_width, output_height = TARGET_EXTENT
-        self.register_buffer(
-            "nearest_y",
-            torch.tensor(
-                [int((index + 0.5) * input_height / output_height) for index in range(output_height)],
-                dtype=torch.int64,
-            ),
-        )
-        self.register_buffer(
-            "nearest_x",
-            torch.tensor(
-                [int((index + 0.5) * input_width / output_width) for index in range(output_width)],
-                dtype=torch.int64,
-            ),
-        )
-
-    def nearest_exact(self, value: torch.Tensor) -> torch.Tensor:
-        return torch.index_select(torch.index_select(value, 2, self.nearest_y), 3, self.nearest_x)
 
     def forward(
         self,
@@ -68,19 +43,36 @@ class CoreMLExportModel(nn.Module):
         controls = global_controls[:, :, None, None] * torch.ones_like(continuous[:, :1])
         low = torch.cat((continuous, semantic_features, instance_features, controls), dim=1)
         low = functional.silu(model.low_encoder(low))
-        for block in model.low_blocks:
+        for block in model.context_blocks:
             low = block(low)
+        structural = model.structural_encoder(
+            torch.cat(
+                (
+                    continuous[:, 3:4],
+                    continuous[:, 4:7],
+                    continuous[:, 10:11],
+                    semantic_features,
+                    instance_features,
+                ),
+                dim=1,
+            )
+        )
+        fused = functional.silu(model.fusion(torch.cat((low, structural), dim=1)))
         output_size = (TARGET_EXTENT[1], TARGET_EXTENT[0])
-        low = functional.interpolate(low, size=output_size, mode="bilinear", align_corners=False)
-        structural_continuous = functional.interpolate(
-            torch.cat((continuous[:, 3:4], continuous[:, 4:7], continuous[:, 10:11]), dim=1),
+        appearance_features = functional.interpolate(
+            model.direct_projection(fused),
             size=output_size,
             mode="bilinear",
             align_corners=False,
         )
-        structural_categorical = self.nearest_exact(torch.cat((semantic_features, instance_features), dim=1))
-        structural = model.structural_encoder(torch.cat((structural_continuous, structural_categorical), dim=1))
-        fused = functional.silu(model.fusion(torch.cat((low, structural), dim=1)))
+        structural_features = functional.interpolate(
+            model.output_structural_projection(structural),
+            size=output_size,
+            mode="nearest",
+        )
+        fused = functional.silu(
+            model.output_fusion(torch.cat((appearance_features, structural_features), dim=1))
+        )
         for block in model.output_blocks:
             fused = block(fused)
         base = functional.interpolate(continuous[:, :3], size=output_size, mode="bilinear", align_corners=False)
@@ -222,7 +214,7 @@ def main() -> None:
             },
             "input": {
                 "schema_name": INPUT_SCHEMA,
-                "schema_version": 3,
+                "schema_version": 5,
                 "extent": INPUT_EXTENT,
                 "channels": CHANNELS,
                 "continuous_planes": CONTINUOUS_PLANES,

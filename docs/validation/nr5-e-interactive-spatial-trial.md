@@ -109,11 +109,26 @@ also completed cleanly. Its live metric stream contains 232
 pixels. `zig build inspect-incident` accepted all 1,678 records, four windows,
 52 visuals, replay, and handoff with no warnings.
 
+## RF6/RF7 follow-on reuse
+
+RF6 deliberately reuses this external trial component without changing its
+schema or pretending it is a new runtime owner. The fresh RF6 checkpoint and
+bundle pass the same loader, Core ML conversion, live six-channel input,
+fallback, diagnostics, and retained-image gates. RF6-specific corpus lineage,
+quality metrics, bundle identity, runtime measurements, and remaining human
+review are recorded in
+[RF6 cumulative rich spatial validation](rf6-cumulative-rich-spatial.md).
+RF7 then advances the schemas and output extent as one coordinated cohort while
+retaining the same explicit external loader, fallback, diagnostics, and
+evidence ownership. Its direct `160×90 → 800×450` execution is recorded in
+[RF7 direct 800×450 spatial validation](rf7-direct-800x450-spatial.md).
+
 ## Disposition
 
 NR5-E is accepted because it proves a real engine-to-model-to-Metal path and a
 human-reviewable comparison before further model complexity. It does not make
 the checkpoint title-wide, temporal, art-complete, performance-ready,
-promotion-eligible, or selected runtime content. NR6 remains the next research
-phase and must preserve this exact fallback, identity, evidence, and explicit
-selection boundary while adding causal history.
+promotion-eligible, or selected runtime content. It authorizes NR6 research,
+but RF7 now owns the accepted direct spatial live trial and NR6 remains
+deferred. Any later temporal phase must preserve this exact fallback, identity,
+evidence, and explicit selection boundary.

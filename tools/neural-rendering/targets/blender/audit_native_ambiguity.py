@@ -156,7 +156,7 @@ def audit(root: Path) -> dict:
         "phase": "NR4-C",
         "source_run": str(root),
         "input_extent": [160, 90],
-        "target_extent": [400, 225],
+        "target_extent": [640, 360],
         "method": "ablate the four presentation-owned frame-global float32 controls against exact native raw-channel/component hashes and declared target-package owners; a motion-only history side effect does not represent lighting/material conditioning; display differences are observations, not thresholds",
         "baseline_ambiguous_segments": sorted(baseline_ambiguous_segments),
         "ambiguous_segments": sorted(candidate_ambiguous_segments),

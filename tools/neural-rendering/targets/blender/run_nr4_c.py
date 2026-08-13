@@ -73,7 +73,7 @@ def main() -> None:
             "status": "partial",
             "phase": args.phase,
             "purpose": (
-                "native 160x90 inputs paired with direct native 400x225 Cycles "
+                "native 160x90 inputs paired with direct native 640x360 Cycles "
                 + ("targets across six causal segments" if causal_proof else "corpus targets")
             ),
             "cohort": args.cohort,
@@ -283,11 +283,11 @@ def main() -> None:
             "cohort": args.cohort,
             "sequence_id": args.sequence,
             "camera_path": args.camera_path,
-            "purpose": "native 160x90 inputs paired only with direct native 400x225 Cycles targets",
+            "purpose": "native 160x90 inputs paired only with direct native 640x360 Cycles targets",
             "working_resolution": {
                 "input_extent": [160, 90],
-                "target_extent": [400, 225],
-                "linear_scale": "5:2",
+                "target_extent": [640, 360],
+                "linear_scale": "x=4:1,y=4:1",
                 "foreign_extent_policy": "rejected",
             },
             "repository": git_record(repo),
@@ -312,8 +312,8 @@ def main() -> None:
                 "causal_audit_sha256": sha256_file(causal_path) if causal_proof else None,
                 "report_root": str(report_root.relative_to(output)),
                 "report_manifest_sha256": sha256_file(report_manifest),
-                "overview": str((report_root / "nr4-c-native-sequence-review.png").relative_to(output)),
-                "overview_sha256": sha256_file(report_root / "nr4-c-native-sequence-review.png"),
+                "overview": str((report_root / "direct-160x90-to-640x360-sequence-review.png").relative_to(output)),
+                "overview_sha256": sha256_file(report_root / "direct-160x90-to-640x360-sequence-review.png"),
             },
             "evidence_bytes": {
                 "native_input_capture": tree_bytes(capture_root),

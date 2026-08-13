@@ -8,12 +8,12 @@ from typing import Any
 from title_renderer.io import load_json, sha256_file
 
 
-TRIAL_BUNDLE_SCHEMA = 1
-TRIAL_BUNDLE_KIND = "incinerator.nr5-e.coreml-trial-bundle"
+TRIAL_BUNDLE_SCHEMA = 3
+TRIAL_BUNDLE_KIND = "incinerator.rf8.coreml-direct-spatial-trial-bundle"
 MODEL_PACKAGE = "model.mlpackage"
-INPUT_SCHEMA = "incinerator.neural-input.v3"
+INPUT_SCHEMA = "incinerator.neural-input.v5"
 INPUT_EXTENT = [160, 90]
-TARGET_EXTENT = [400, 225]
+TARGET_EXTENT = [640, 360]
 CONTINUOUS_PLANES = [
     "appearance_linear.r",
     "appearance_linear.g",
@@ -85,7 +85,7 @@ def inspect(root: Path) -> dict[str, Any]:
     input_contract = manifest.get("input", {})
     if (
         input_contract.get("schema_name") != INPUT_SCHEMA
-        or input_contract.get("schema_version") != 3
+        or input_contract.get("schema_version") != 5
         or input_contract.get("extent") != INPUT_EXTENT
         or input_contract.get("channels") != CHANNELS
         or input_contract.get("continuous_planes") != CONTINUOUS_PLANES

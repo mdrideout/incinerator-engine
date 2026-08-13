@@ -122,8 +122,23 @@ external Core ML bundle from the engine's live six-channel input, with an
 interactive native comparison, explicit fallback, editor and incident
 diagnostics, and retained graphical evidence. The result authorizes NR6 causal
 temporal research but remains external, visibly imperfect, unpromoted, and
-ineligible for runtime selection. Other target extents remain excluded and
-deferred.
+ineligible for runtime selection. RF0 through RF5 add the shared bounded
+sandbox catalog and exact environment, character, vehicle, and lighting target
+families. RF6 applies those accepted targets to a fresh random-origin
+candidate: 108 native pairs, validation-only selection, one sealed-test
+opening, fresh stress, exact export, and a 48-frame live Core ML/Metal trial all
+pass as historical `400×225` evidence. RF7 supersedes the active cohort with a
+single direct learned `160×90 → 800×450` path: 108 fresh pairs,
+validation-only selection, one test opening, stress, exact Core ML export, and
+48/48 live Metal predictions pass. It contains no `400×225` intermediate and
+remains external and unpromoted. RF8 now owns the active contract: direct native
+`160×90 → 640×360`, exact 16:9 and uniform 4× correspondence, stronger
+native-grid reconstruction and spatial-quality selection, and a fixed centered
+640×360 main scene with black surround rather than window stretching. Its
+debug pane shows only the native source because neural output owns the main
+presentation. Neither historical `400×225` nor `800×450` pixels can enter RF8.
+NR6 stays deferred. See the [RF7 historical validation](docs/validation/rf7-direct-800x450-spatial.md)
+and [RF8 validation](docs/validation/rf8-direct-640x360-spatial-sharpness.md).
 Broader Steam/public-service infrastructure remains deferred.
 
 ## Toolchain Cohort

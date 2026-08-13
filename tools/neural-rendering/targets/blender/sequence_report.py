@@ -8,7 +8,7 @@ from pathlib import Path
 
 from PIL import Image, ImageDraw
 
-from nr4_common import artifact, atomic_json, create_absent, load_json, read_ppm
+from nr4_common import TARGET_EXTENT, artifact, atomic_json, create_absent, load_json, read_ppm
 from sequence_contract import SEGMENTS, SAMPLES_PER_SEGMENT
 
 
@@ -72,14 +72,14 @@ def main() -> None:
         raise ValueError("NR4-C report received an unexpected frame count")
 
     artifacts = []
-    overview_cell = (400, 225)
+    overview_cell = tuple(TARGET_EXTENT)
     overview = Image.new(
         "RGB",
         (overview_cell[0] * SAMPLES_PER_SEGMENT * 2, (overview_cell[1] + 30) * len(SEGMENTS)),
         (12, 14, 18),
     )
     for segment_index, segment in enumerate(SEGMENTS):
-        detail_cell = (400, 225)
+        detail_cell = tuple(TARGET_EXTENT)
         detail = Image.new(
             "RGB",
             (detail_cell[0] * SAMPLES_PER_SEGMENT, (detail_cell[1] + 30) * 4),
@@ -116,18 +116,18 @@ def main() -> None:
         detail_path = output / f"segment-{segment_index:02d}-{segment}.png"
         detail.save(detail_path)
         artifacts.append(artifact(detail_path, output))
-    overview_path = output / "nr4-c-native-sequence-review.png"
+    overview_path = output / "direct-160x90-to-640x360-sequence-review.png"
     overview.save(overview_path)
     artifacts.insert(0, artifact(overview_path, output))
     manifest = {
         "schema": 1,
         "status": "complete",
-        "phase": "NR4-C",
+        "phase": "RF7-B",
         "sequence_manifest": str(sequence_path),
         "frame_count": len(frames),
         "segments": list(SEGMENTS),
-        "layout": "UI-only overview: six causal rows, three samples, 160x90 appearance nearest-zoomed to 400x225 beside the direct native 400x225 target; detail: appearance, target, source identity, alignment",
-        "training_material_policy": "reports and resized UI cells are excluded; only native 160x90 captured channels and direct native 400x225 target artifacts are eligible",
+        "layout": "UI-only overview: six causal rows, three samples, 160x90 appearance nearest-zoomed to 640x360 beside the direct native 640x360 target; detail: appearance, target, source identity, alignment",
+        "training_material_policy": "reports and resized UI cells are excluded; only native 160x90 captured channels and direct native 640x360 target artifacts are eligible",
         "artifacts": artifacts,
     }
     atomic_json(output / "report.json", manifest)

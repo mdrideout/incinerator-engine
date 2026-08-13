@@ -203,7 +203,7 @@ pub const Owner = struct {
         var summary = std.Io.Writer.Allocating.init(self.allocator);
         defer summary.deinit();
         try summary.writer.print(
-            "{{\"schema\":4,\"frame_id\":\"{s}-frame-{d:0>8}\",\"cohort\":\"{s}\",\"sequence\":\"{s}\",\"camera_path\":\"{s}\",\"authority_tick\":{d},\"presentation_frame\":{d},\"frame_manifest\":\"frames/frame-{d:0>8}.json\"}}\n",
+            "{{\"schema\":5,\"frame_id\":\"{s}-frame-{d:0>8}\",\"cohort\":\"{s}\",\"sequence\":\"{s}\",\"camera_path\":\"{s}\",\"authority_tick\":{d},\"presentation_frame\":{d},\"frame_manifest\":\"frames/frame-{d:0>8}.json\"}}\n",
             .{
                 self.config.sequence,
                 frame.presentation_frame,
@@ -402,12 +402,12 @@ pub const Owner = struct {
         defer allocating.deinit();
         const writer = &allocating.writer;
         try writer.print(
-            "{{\n  \"schema\": 4,\n  \"input_schema\": {{\"version\": {d}, \"name\": \"{s}\", \"fingerprint\": \"{s}\"}},\n" ++
+            "{{\n  \"schema\": 6,\n  \"input_schema\": {{\"version\": {d}, \"name\": \"{s}\", \"fingerprint\": \"{s}\"}},\n" ++
                 "  \"shader_fingerprint\": \"{s}\", \"shader_sha256\": \"{s}\",\n  \"frame_id\": \"{s}-frame-{d:0>8}\",\n" ++
                 "  \"cohort\": \"{s}\", \"sequence\": \"{s}\", \"camera_path\": \"{s}\",\n" ++
                 "  \"authority_tick\": {d}, \"presentation_frame\": {d}, \"interpolation_alpha\": {d},\n" ++
                 "  \"input_size\": [{d}, {d}], \"paired_target_size\": [{d}, {d}],\n" ++
-                "  \"sampling_map\": {{\"scale_numerator\": {d}, \"scale_denominator\": {d}, \"target_center_to_source_index\": \"((target_index + 0.5) * 2 / 5) - 0.5\", \"border\": \"clamp\"}},\n" ++
+                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 4) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 4) - 0.5\"}},\"border\":\"clamp\"}},\n" ++
                 "  \"coordinate_system\": {{\"world\": \"right-handed +Y up -Z forward\", \"image_origin\": \"top-left\", \"sample\": \"pixel-center\"}},\n" ++
                 "  \"camera\": {{\"near\": {d}, \"far\": {d}, \"jitter_pixels\": [{d}, {d}], \"history_reset\": \"{s}\", \"view\": ",
             .{
@@ -428,8 +428,10 @@ pub const Owner = struct {
                 contract.cheap_height,
                 contract.target_width,
                 contract.target_height,
-                contract.scale_numerator,
-                contract.scale_denominator,
+                contract.horizontal_scale_numerator,
+                contract.horizontal_scale_denominator,
+                contract.vertical_scale_numerator,
+                contract.vertical_scale_denominator,
                 frame.near,
                 frame.far,
                 frame.jitter_pixels[0],
@@ -523,12 +525,12 @@ pub const Owner = struct {
         defer allocating.deinit();
         const writer = &allocating.writer;
         try writer.print(
-            "{{\n  \"schema\": 4,\n  \"status\": \"{s}\",\n  \"purpose\": \"native presentation-only neural inputs and frame-global controls for direct 400x225 offline target pairing\",\n" ++
+            "{{\n  \"schema\": 6,\n  \"status\": \"{s}\",\n  \"purpose\": \"native presentation-only neural inputs and frame-global controls for direct 640x360 offline target pairing\",\n" ++
                 "  \"platform\": \"macos-aarch64-metal\",\n  \"input_schema\": {{\"version\": {d}, \"name\": \"{s}\", \"fingerprint\": \"{s}\"}},\n" ++
                 "  \"shader_fingerprint\": \"{s}\",\n  \"shader_sha256\": \"{s}\",\n  \"source_revision\": \"{s}\",\n  \"source_dirty\": {},\n  \"source_dirty_fingerprint\": \"{s}\",\n" ++
                 "  \"content_digest\": \"{s}\",\n  \"cohort\": \"{s}\",\n  \"sequence\": \"{s}\",\n  \"camera_path\": \"{s}\",\n" ++
                 "  \"input_size\": [{d}, {d}],\n  \"paired_target_size\": [{d}, {d}],\n" ++
-                "  \"sampling_map\": {{\"scale_numerator\": {d}, \"scale_denominator\": {d}, \"target_center_to_source_index\": \"((target_index + 0.5) * 2 / 5) - 0.5\", \"border\": \"clamp\"}},\n",
+                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 4) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 4) - 0.5\"}},\"border\":\"clamp\"}},\n",
             .{
                 @tagName(status),
                 contract.schema_version,
@@ -547,8 +549,10 @@ pub const Owner = struct {
                 contract.cheap_height,
                 contract.target_width,
                 contract.target_height,
-                contract.scale_numerator,
-                contract.scale_denominator,
+                contract.horizontal_scale_numerator,
+                contract.horizontal_scale_denominator,
+                contract.vertical_scale_numerator,
+                contract.vertical_scale_denominator,
             },
         );
         try writer.print(

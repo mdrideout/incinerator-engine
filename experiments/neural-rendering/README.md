@@ -41,7 +41,30 @@ Implemented numbered experiments:
   single sealed-test opening, branch ablations, fresh native stress evaluation,
   exact export verification, and the live Core ML interactive spatial trial
   accepted. It authorizes NR6 temporal research but remains an external,
-  unpromoted known-fixture candidate.
+  unpromoted known-fixture candidate. RF0 through RF5 of the repository's
+  rich-fidelity roadmap are now accepted; RF6 applies the same framework to
+  that richer vocabulary before later temporal work.
+- [`rf6-cumulative-rich-spatial/`](rf6-cumulative-rich-spatial/README.md):
+  product-track application of the established corpus, random-origin training,
+  held-out evaluation, export, and external live-trial framework to the
+  RF0–RF5 rich sandbox vocabulary. RF6-A through RF6-F are technically
+  complete with a fresh 108-pair corpus, random-origin held-out candidate,
+  sealed test, fresh stress cohort, and live Core ML trial. Product-owner
+  review was superseded by the RF7 resolution decision; this is never a
+  model-promotion owner.
+- [`rf7-direct-800x450-spatial/`](rf7-direct-800x450-spatial/README.md): historical
+  direct native `160×90 → 800×450` spatial-fidelity cohort. It renders fresh
+  native `800×450` truth, trains one learned 5× model from random
+  initialization, and targets the existing live Core ML comparison path. It
+  contains no `400×225` intermediate, supervision, comparison, or runtime
+  image; product visual review is pre-approved for autonomous completion.
+- [`rf8-direct-640x360-spatial-sharpness/`](rf8-direct-640x360-spatial-sharpness/README.md):
+  active direct native `160×90 → 640×360` spatial-fidelity cohort. It preserves
+  exact 16:9 geometry and a uniform 4× mapping, renders wholly fresh native
+  truth, adds native-grid reconstruction capacity and explicit spatial-quality
+  losses/selection, and drives the centered unscaled live presentation. The
+  retired `400×225` and `800×450` images have no RF8 training, comparison,
+  export, or runtime role.
 
 Once tooling exists, each committed experiment directory should contain only
 the information needed to reproduce and review intent:
