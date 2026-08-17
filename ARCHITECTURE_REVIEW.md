@@ -5,25 +5,19 @@ foundation now includes S12 semantic navigation and the implemented S13
 authored-population/activity slice. Protocol 15, snapshot 14, replay 16,
 incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
 automated Metal/product acceptance are current. No open P0/P1 architectural
-finding blocks the final S13 human walkthrough. The parallel neural-rendering
-track has accepted NR0-A through NR0-D, NR-0004, and NR5-A through NR5-E plus
-the NR-0003 external comparison. RF0 through RF5 establish the shared sandbox
-visual catalog and exact rich-target cohort. RF6's fresh random-origin
-candidate, sealed evaluation, stress conclusion, and external live Core ML
-trial remain historical `400×225` evidence. RF7's accepted direct native
-`160×90 → 800×450` trial is historical as well. RF8 owns the active direct
-`160×90 → 640×360` uniform-4× spatial and fixed-presentation contract; it uses
-fresh truth and stronger native-grid/spatial-quality training without a retired
-intermediate image. NR6 remains deferred. ADR-025 owns the
-presentation/promotion boundary;
-ADR-026 and the title neural renderer north star require title-owned
-random-initialization training.
+finding blocks the final S12/S13 human walkthrough. The neural-rendering proof
+is retained through RF10 as external technical evidence, but no learned model
+is promoted, installed, or selected. The product owner paused that track
+indefinitely on 2026-08-17. Deterministic rendering is the active direction;
+the shared RF0-RF5 sandbox visual catalog is useful conventional-renderer input,
+not an authorization to continue neural work. ADR-025 and ADR-026 remain
+preserved boundary policy for an explicit future restart.
 
-**Last reviewed:** 2026-08-12
+**Last reviewed:** 2026-08-17
 
 **Scope:** Current post-S13 architecture, its demonstrated strengths, its
-remaining structural pressure before another product or service slice, and the
-accepted from-scratch title neural-renderer direction
+remaining structural pressure before another product or service slice, the
+active deterministic-rendering direction, and the retained paused neural proof
 
 **Related roadmap:** [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md)
 
@@ -47,9 +41,11 @@ accepted from-scratch title neural-renderer direction
 → [`S12 automated acceptance complete; human walkthrough pending`](docs/validation/s12-destination-driven-navigation.md)
 → [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 
-**Parallel core-rendering track:**
-[`NR0-A through NR0-D, NR-0004, NR5-A through NR5-E, RF0 through RF5, and RF7 external live trial accepted`](docs/design/title-neural-renderer-north-star.md)
-([rich-fidelity roadmap](docs/design/rich-fidelity-roadmap.md))
+**Active rendering direction:**
+[`DR1 playable deterministic visual fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
+
+**Paused experimental rendering track:**
+[`RF10 retained externally and unpromoted`](docs/design/neural-rendering-pause.md)
 
 **Completed cleanup record:** [`CLEANUP_PLAN.md`](CLEANUP_PLAN.md)
 
@@ -152,14 +148,15 @@ The accepted foundation remains:
    projections or submit typed requests; they are not parallel authorities.
 6. Shared infrastructure is extracted only from demonstrated consumers and
    retains domain-specific policy at its edge.
-7. A future game-specific neural renderer is presentation infrastructure: it
-   consumes immutable versioned raster inputs, never becomes authority, and
-   loads only a deliberately promoted immutable game-content bundle while the
-   conventional render remains available as fallback.
-8. Promotion-eligible neural-renderer weights and learned dependencies are
-   title-specific, trained from random initialization on title-owned paired
-   data, and reproducible through the engine's training framework. External
-   models are research comparisons only.
+7. The conventional deterministic renderer is the active product renderer and
+   consumes only immutable presentation snapshots. It must remain independently
+   playable, observable, and testable without a learned model or experiment
+   artifact.
+8. The paused neural renderer remains presentation infrastructure only. If the
+   product owner explicitly restarts it, it may consume immutable versioned
+   raster inputs and only a deliberately promoted immutable content bundle;
+   promotion-eligible weights remain title-specific, random-initialized, and
+   trained on title-owned paired data. External models remain comparisons.
 
 The accepted multiplayer refinement is:
 
@@ -299,6 +296,7 @@ claim.
 | A-F058 | The installed six-node line and triangle presentation cannot exercise alternate routes, topology replanning, or human-readable navigation diagnosis | P1 | S12 playable evaluation | Resolved for the bounded slice: the installed 16-node/32-edge urban block has two transactional seam gates, visible blockers, six destinations, Navigation Lab, independent overlays, and schema-4 route evidence. Human walkthrough remains the acceptance checkpoint, not an architecture implementation gap |
 | A-F059 | The conventional renderer lacked a versioned neural-input ABI, paired-capture path, runtime inference owner, and promoted-model content contract; adding these directly to `renderer.zig` would conflate renderer, experiment, content, and history lifecycles | P1 | NR0 game-specific neural-rendering feasibility slice | Resolved at the foundation level by ADR-025 and accepted NR0-A through NR0-D: engine-owned input/capture/evaluation hosts and external experiment ownership are separate. Promotion and the final GPU-resident runtime remain intentionally blocked on a worthy title model. |
 | A-F060 | A visually rich pretrained video model could redirect the engine toward external checkpoints, fine-tuning, appearance-only conditioning, or pseudo-targets instead of the intended reproducible game-owned renderer | P1 | Post-NR-0003 strategy correction | Resolved by ADR-026 and the title neural renderer north star: learned product components start from declared random initialization on title-owned exact pairs; NR-0003 is comparison evidence only; NR4-A is human-accepted and NR4-B now proves the exact rights-clean direction over motion. |
+| A-F061 | Ordinary macOS graphical binaries still compile/link the dormant Core ML adapter and neural-input shaders even though no learned bundle is installed or selected | P2 | Before distribution, secondary-platform work, or a measured default-build/runtime problem | Open but non-blocking for the current macOS developer product: runtime activation is explicit through neural-only environment inputs and returns before allocating neural hosts by default. Do not add a speculative compatibility layer while the track is paused; first measure binary/build/platform cost, then either keep the direct macOS linkage or add one explicit build exclusion. |
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,

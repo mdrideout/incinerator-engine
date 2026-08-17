@@ -2380,6 +2380,13 @@ const App = struct {
             return error.NeuralTrialBundlePathMustBeAbsolute;
         };
 
+        // Fixed scene pixels belong to the explicitly activated experiment,
+        // not to the ordinary deterministic product renderer.
+        self.gpu_renderer.setFixedSceneExtent(
+            renderer.neural_experiment_scene_width,
+            renderer.neural_experiment_scene_height,
+        );
+
         var neural: ?neural_rendering_host.Owner = null;
         if (trial_bundle_root) |path| {
             neural = try neural_rendering_host.Owner.init(
@@ -2851,7 +2858,13 @@ const App = struct {
                 actions.jump_pressed = tick == progress.stage_enter_tick +| 30;
             },
             .return_west => actions.move = .{ -1, 0 },
-            .await_player_death, .complete => {},
+            .await_player_death => self.approachIncidentHostile(
+                &actions,
+                tick,
+                progress.stage_enter_tick,
+                false,
+            ),
+            .complete => {},
             .respawn => {
                 actions.respawn_pressed = (tick -| progress.stage_enter_tick) % 30 == 1;
             },
@@ -2882,47 +2895,62 @@ const App = struct {
                             };
                         }
                     }
-                } else {
-                    actions.melee_pressed = (tick -| progress.stage_enter_tick) % 30 == 1;
-                    const npcs = self.simulation.presentation().npcs(0);
-                    for (npcs) |npc| {
-                        if (npc.population_member !=
-                            s11_hostile_population_member.value)
-                        {
-                            continue;
-                        }
-                        if (self.simulation.player().focusPosition()) |position| {
-                            const target = npc.pose.position;
-                            const delta = [2]f32{
-                                target[0] - position[0],
-                                target[2] - position[2],
-                            };
-                            const desired_yaw = std.math.atan2(delta[0], -delta[1]);
-                            const yaw_delta = engine.transform.normalizeFacingYaw(
-                                desired_yaw - self.game_camera.yaw,
-                            ) catch 0;
-                            // Convert the exact desired turn into the ordinary
-                            // mouse-look input domain consumed by Camera.rotate.
-                            actions.look_delta[0] = yaw_delta / self.game_camera.look_sensitivity;
-                            const distance_squared = delta[0] * delta[0] + delta[1] * delta[1];
-                            if (distance_squared > 2.25) {
-                                const inverse = 1.0 / @sqrt(distance_squared);
-                                const world_x = delta[0] * inverse;
-                                const world_z = delta[1] * inverse;
-                                const sine = @sin(self.game_camera.yaw);
-                                const cosine = @cos(self.game_camera.yaw);
-                                actions.move = .{
-                                    world_x * cosine + world_z * sine,
-                                    world_x * sine - world_z * cosine,
-                                };
-                            }
-                        }
-                        break;
-                    }
-                }
+                } else self.approachIncidentHostile(
+                    &actions,
+                    tick,
+                    progress.stage_enter_tick,
+                    true,
+                );
             },
         }
         return actions;
+    }
+
+    /// Drive the scripted player toward the explicitly authored hostile P01.
+    /// Population activity can move P01 beyond its perception radius while the
+    /// earlier carry/vehicle/district stages run. Waiting motionless therefore
+    /// tested a coincidental meeting, not the promised combat journey.
+    fn approachIncidentHostile(
+        self: *const App,
+        actions: *sandbox_controls.FrameSample,
+        tick: u64,
+        stage_enter_tick: u64,
+        attack: bool,
+    ) void {
+        if (attack) actions.melee_pressed = (tick -| stage_enter_tick) % 30 == 1;
+        const position = self.simulation.player().focusPosition() orelse return;
+        for (self.simulation.presentation().npcs(0)) |npc| {
+            if (npc.population_member != s11_hostile_population_member.value or
+                npc.life_state != .alive)
+            {
+                continue;
+            }
+            const target = npc.pose.position;
+            const delta = [2]f32{
+                target[0] - position[0],
+                target[2] - position[2],
+            };
+            const desired_yaw = std.math.atan2(delta[0], -delta[1]);
+            const yaw_delta = engine.transform.normalizeFacingYaw(
+                desired_yaw - self.game_camera.yaw,
+            ) catch 0;
+            // Convert the exact desired turn into the ordinary mouse-look input
+            // domain consumed by Camera.rotate.
+            actions.look_delta[0] = yaw_delta / self.game_camera.look_sensitivity;
+            const distance_squared = delta[0] * delta[0] + delta[1] * delta[1];
+            if (distance_squared > 2.25) {
+                const inverse = 1.0 / @sqrt(distance_squared);
+                const world_x = delta[0] * inverse;
+                const world_z = delta[1] * inverse;
+                const sine = @sin(self.game_camera.yaw);
+                const cosine = @cos(self.game_camera.yaw);
+                actions.move = .{
+                    world_x * cosine + world_z * sine,
+                    world_x * sine - world_z * cosine,
+                };
+            }
+            return;
+        }
     }
 
     fn observeIncidentJourney(

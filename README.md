@@ -83,62 +83,27 @@ then
 and [`S13 performance baseline`](docs/performance/s13-baseline.md). S13
 implementation and automated acceptance are complete; its ordinary-product
 human walkthrough remains before full phase acceptance.
-The engine also has an accepted parallel neural-rendering direction with its
-first deliberately unpromoted proof of concept implemented.
-[ADR-025](docs/adr/025-game-specific-neural-rendering-boundary.md)
-keeps the deterministic game authoritative, treats the model as a
-presentation-only capability, separates mutable experiment runs from runtime,
-and permits only an explicitly promoted immutable model bundle to become game
-content. [ADR-026](docs/adr/026-from-scratch-title-neural-renderer.md) requires
-every promotion-eligible learned component to be title-specific and trained
-from random initialization on title-owned paired data. See the
+The repository also retains a completed neural-rendering proof-of-concept
+lineage through RF10. RF10 proved a direct native
+`256×144 → 1280×720` Core ML/Metal trial, but it remains external, unpromoted,
+and is not installed or selected as game content. On 2026-08-17 the product
+owner paused neural-rendering implementation indefinitely and returned product
+focus to the conventional deterministic renderer. The existing boundary still
+matters: [ADR-025](docs/adr/025-game-specific-neural-rendering-boundary.md)
+keeps learned output presentation-only, and
+[ADR-026](docs/adr/026-from-scratch-title-neural-renderer.md) governs any
+explicit future restart. The authoritative current disposition is the
+[neural-rendering pause](docs/design/neural-rendering-pause.md); the detailed
 [north star](docs/design/title-neural-renderer-north-star.md),
-[implementation plan](docs/design/title-neural-renderer-implementation-plan.md),
-[research index](docs/research/neural-rendering/README.md), and
-[NR0 feasibility plan](docs/design/nr0-neural-rendering-feasibility.md). The
-preliminary 80x45-to-320x180 path proved native Core ML and explicit fallback.
-Historical NR0-C adds the first `incinerator.neural-input.v1` model: 17 planes at
-400x225, a 51,888-parameter 4x spatial residual network, disjoint camera-cohort
-selection/test, human comparison, and an FP16 Core ML export. It is an external
-unpromoted candidate; the installed adapter remains a disposable blocking
-proof and no model is selected as game content or shipped. NR-0003 retains
-LTX-Video 2B only as an external comparison: it proves the target Mac can run
-a rich video prior near 1.5 FPS at 512x288 while demonstrating that
-appearance-only generation substitutes authored geometry. NR-0004 now has a
-human-accepted exact still plus a technically complete 18-frame, six-segment
-Blender/Cycles moving proof with paired identity/depth evidence and two-run
-reproducibility. NR4-C has regenerated and accepted that direction as a
-self-contained native `160×90 → 400×225` cohort using input schema v3, capture
-schema 4, and target-frame schema v4. Its two-run still and 18-frame gates
-pass. Four presentation-owned frame-global controls resolve the only observed
-ambiguity for 16 bytes per frame and no new raster target. NR4-E accepts the 6
-whole-sequence/108-pair corpus for the initial structural scope. NR5-A/B accept
-the cohesive random-origin framework and controlled 18-frame overfit. NR5-C/D
-accept the first known-fixture held-out structural candidate after
-validation-only selection, one sealed-test opening, branch ablations, a newly
-captured 36-frame native stress cohort, exact all-stress TorchScript agreement,
-and complete visual review. NR5-E runs that exact checkpoint through a validated
-external Core ML bundle from the engine's live six-channel input, with an
-interactive native comparison, explicit fallback, editor and incident
-diagnostics, and retained graphical evidence. The result authorizes NR6 causal
-temporal research but remains external, visibly imperfect, unpromoted, and
-ineligible for runtime selection. RF0 through RF5 add the shared bounded
-sandbox catalog and exact environment, character, vehicle, and lighting target
-families. RF6 applies those accepted targets to a fresh random-origin
-candidate: 108 native pairs, validation-only selection, one sealed-test
-opening, fresh stress, exact export, and a 48-frame live Core ML/Metal trial all
-pass as historical `400×225` evidence. RF7 supersedes the active cohort with a
-single direct learned `160×90 → 800×450` path: 108 fresh pairs,
-validation-only selection, one test opening, stress, exact Core ML export, and
-48/48 live Metal predictions pass. It contains no `400×225` intermediate and
-remains external and unpromoted. RF8 now owns the active contract: direct native
-`160×90 → 640×360`, exact 16:9 and uniform 4× correspondence, stronger
-native-grid reconstruction and spatial-quality selection, and a fixed centered
-640×360 main scene with black surround rather than window stretching. Its
-debug pane shows only the native source because neural output owns the main
-presentation. Neither historical `400×225` nor `800×450` pixels can enter RF8.
-NR6 stays deferred. See the [RF7 historical validation](docs/validation/rf7-direct-800x450-spatial.md)
-and [RF8 validation](docs/validation/rf8-direct-640x360-spatial-sharpness.md).
+[historical implementation plan](docs/design/title-neural-renderer-implementation-plan.md),
+and [research index](docs/research/neural-rendering/README.md) remain preserved
+evidence, not an active backlog. The next rendering phase is the
+[DR1 playable deterministic visual-fidelity slice](docs/design/dr1-playable-deterministic-visual-fidelity.md).
+The combined-tree
+[deterministic-rendering resumption audit](docs/validation/deterministic-rendering-resumption.md)
+passes and records the correction that restored the ordinary product from an
+RF10-fixed centered viewport to the full drawable. The final S12/S13
+product-owner walkthrough remains before DR1 begins.
 Broader Steam/public-service infrastructure remains deferred.
 
 ## Toolchain Cohort
@@ -767,6 +732,9 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`S13 Population Evaluation World`](docs/design/s13-population-evaluation-world.md)
 - [`S13 Automated Acceptance Record`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 - [`S13 Performance Baseline`](docs/performance/s13-baseline.md)
+- [`Neural Rendering Product-Track Pause`](docs/design/neural-rendering-pause.md)
+- [`Deterministic Rendering Resumption Audit`](docs/validation/deterministic-rendering-resumption.md)
+- [`DR1 Playable Deterministic Visual Fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 

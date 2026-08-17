@@ -52,8 +52,11 @@ const VertexPNU = mesh_module.VertexPNU;
 const VertexFormat = mesh_module.VertexFormat;
 const OwnedTexture = texture_module.OwnedTexture;
 
-pub const product_scene_width: u32 = 640;
-pub const product_scene_height: u32 = 360;
+/// Fixed conventional-scene extent retained only for an explicitly activated
+/// neural-rendering experiment. Ordinary deterministic presentation follows
+/// the drawable extent.
+pub const neural_experiment_scene_width: u32 = 640;
+pub const neural_experiment_scene_height: u32 = 360;
 
 /// MVP matrix uniform data sent to vertex shader.
 /// Uses [16]f32 layout for direct compatibility with zmath's matToArr().
@@ -130,6 +133,23 @@ const SceneTarget = struct {
     width: u32,
     height: u32,
 };
+
+const SceneExtent = struct {
+    width: u32,
+    height: u32,
+};
+
+const SceneExtentMode = union(enum) {
+    drawable,
+    fixed: SceneExtent,
+};
+
+fn resolvedSceneExtent(mode: SceneExtentMode, drawable: SceneExtent) SceneExtent {
+    return switch (mode) {
+        .drawable => drawable,
+        .fixed => |extent| extent,
+    };
+}
 
 const PresentationOverride = struct {
     texture: *c.SDL_GPUTexture,
@@ -300,6 +320,7 @@ pub const Renderer = struct {
     current_swapchain_width: u32 = 0,
     current_swapchain_height: u32 = 0,
     presentation_override: ?PresentationOverride = null,
+    scene_extent_mode: SceneExtentMode = .drawable,
 
     /// Initialize the GPU renderer for a window.
     /// This creates the GPU device and graphics pipeline.
@@ -417,14 +438,14 @@ pub const Renderer = struct {
             try injectInitFailure(failure_point, .after_pipelines);
         }
 
-        // Product scene resolution is independent of the window. Resizing the
-        // drawable changes only the amount of black surround, never scene
-        // pixels, camera projection, or neural-output scaling.
+        // The first frame replaces this bootstrap allocation with the actual
+        // drawable extent. An explicitly activated neural experiment can pin
+        // the scene to this historical fixed extent before rendering starts.
         const depth_texture = createDepthTexture(
             device,
             depth_format,
-            product_scene_width,
-            product_scene_height,
+            neural_experiment_scene_width,
+            neural_experiment_scene_height,
         ) orelse {
             std.debug.print("Failed to create depth texture: {s}\n", .{c.SDL_GetError()});
             return error.DepthTextureCreationFailed;
@@ -434,8 +455,8 @@ pub const Renderer = struct {
         const scene_texture = createSceneTexture(
             device,
             swapchain_format,
-            product_scene_width,
-            product_scene_height,
+            neural_experiment_scene_width,
+            neural_experiment_scene_height,
         ) orelse {
             std.debug.print("Failed to create product scene texture: {s}\n", .{c.SDL_GetError()});
             return error.SceneTextureCreationFailed;
@@ -489,13 +510,13 @@ pub const Renderer = struct {
             .physics_debug_pipelines = physics_debug_pipelines,
             .depth_target = .{
                 .texture = depth_texture,
-                .width = product_scene_width,
-                .height = product_scene_height,
+                .width = neural_experiment_scene_width,
+                .height = neural_experiment_scene_height,
             },
             .scene_target = .{
                 .texture = scene_texture,
-                .width = product_scene_width,
-                .height = product_scene_height,
+                .width = neural_experiment_scene_width,
+                .height = neural_experiment_scene_height,
             },
             .default_sampler = default_sampler,
             .placeholder_texture = placeholder_texture,
@@ -572,6 +593,51 @@ pub const Renderer = struct {
         return self.physics_debug_pipelines != null;
     }
 
+    /// Pin the product scene only for an explicitly activated rendering
+    /// experiment whose contracts require stable source pixels.
+    pub fn setFixedSceneExtent(self: *Renderer, width: u32, height: u32) void {
+        std.debug.assert(width != 0 and height != 0);
+        std.debug.assert(self.current_cmd == null and self.current_render_pass == null);
+        self.scene_extent_mode = .{ .fixed = .{ .width = width, .height = height } };
+    }
+
+    fn ensureSceneExtent(self: *Renderer, extent: SceneExtent) !void {
+        if (self.scene_target.width == extent.width and
+            self.scene_target.height == extent.height and
+            self.depth_target.width == extent.width and
+            self.depth_target.height == extent.height) return;
+
+        const next_depth = createDepthTexture(
+            self.device,
+            self.depth_format,
+            extent.width,
+            extent.height,
+        ) orelse return error.DepthTextureCreationFailed;
+        errdefer c.SDL_ReleaseGPUTexture(self.device, next_depth);
+
+        const next_scene = createSceneTexture(
+            self.device,
+            self.swapchain_format,
+            extent.width,
+            extent.height,
+        ) orelse return error.SceneTextureCreationFailed;
+
+        const previous_depth = self.depth_target.texture;
+        const previous_scene = self.scene_target.texture;
+        self.depth_target = .{
+            .texture = next_depth,
+            .width = extent.width,
+            .height = extent.height,
+        };
+        self.scene_target = .{
+            .texture = next_scene,
+            .width = extent.width,
+            .height = extent.height,
+        };
+        c.SDL_ReleaseGPUTexture(self.device, previous_depth);
+        c.SDL_ReleaseGPUTexture(self.device, previous_scene);
+    }
+
     // ========================================================================
     // Frame Rendering
     // ========================================================================
@@ -615,6 +681,15 @@ pub const Renderer = struct {
             try retireAcquiredSwapchain(cmd);
             return error.InvalidSwapchainSize;
         }
+
+        const scene_extent = resolvedSceneExtent(
+            self.scene_extent_mode,
+            .{ .width = swapchain_width, .height = swapchain_height },
+        );
+        self.ensureSceneExtent(scene_extent) catch |err| {
+            try retireAcquiredSwapchain(cmd);
+            return err;
+        };
 
         // Step 3: Render product color offscreen. The final drawable is
         // reserved for the resolved scene plus conventional UI/diagnostics.
@@ -1049,6 +1124,15 @@ test "centered fixed scene preserves native pixels in larger and smaller drawabl
     try std.testing.expectEqual(
         CenteredBlit{ .source_x = 0, .source_y = 0, .destination_x = 160, .destination_y = 90, .width = 1280, .height = 720 },
         centeredUnscaledBlit(1280, 720, 1600, 900),
+    );
+}
+
+test "ordinary scene extent follows drawable while experiments remain fixed" {
+    const drawable = SceneExtent{ .width = 1600, .height = 900 };
+    try std.testing.expectEqual(drawable, resolvedSceneExtent(.drawable, drawable));
+    try std.testing.expectEqual(
+        SceneExtent{ .width = 640, .height = 360 },
+        resolvedSceneExtent(.{ .fixed = .{ .width = 640, .height = 360 } }, drawable),
     );
 }
 

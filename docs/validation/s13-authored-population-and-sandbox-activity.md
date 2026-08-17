@@ -707,6 +707,27 @@ Metal population smokes. Performance remains a separate `ReleaseFast`
 measurement so this broad correctness aggregate does not needlessly optimize
 and relink every inherited executable.
 
+### 2026-08-17 deterministic-rendering resumption revalidation
+
+After RF10 was integrated and the neural track was paused, the current
+combined tree was revalidated rather than assuming the earlier S13 result
+still applied. The first run found that the incident walkthrough waited
+motionless for P01 to approach after population activity had moved it outside
+perception. The scripted player now approaches the stable authored hostile
+through ordinary input in both await-death and fight stages.
+
+The corrected current aggregate passed `265/265` build steps and `341/341`
+tests. All five incident-hardening profiles, installed 240/40 Hz population,
+installed 240/80 Hz combat visibility, real listen/dedicated processes,
+interaction faults, replay, extracted source, headless, package, and install
+boundaries pass. A separate native run also found and corrected RF10's fixed
+`640×360` scene extent leaking into the inactive deterministic product. Full
+evidence is recorded in the
+[deterministic-rendering resumption audit](deterministic-rendering-resumption.md).
+
+This revalidation does not convert automated evidence into the pending human
+S12/S13 perceptual acceptance checkpoint.
+
 ### Cleanup and architecture audit
 
 The audit confirms:
