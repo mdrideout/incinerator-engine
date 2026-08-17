@@ -1,8 +1,8 @@
 # ADR-026: From-Scratch Title-Specific Neural Renderer
 
-**Status:** Accepted
+**Status:** Accepted; implementation paused after RF10
 
-**Date:** 2026-08-08
+**Date:** 2026-08-17
 
 **Boundary:**
 [ADR-025](025-game-specific-neural-rendering-boundary.md)
@@ -12,6 +12,9 @@
 
 **Implementation plan:**
 [`../design/title-neural-renderer-implementation-plan.md`](../design/title-neural-renderer-implementation-plan.md)
+
+**Current portfolio status:**
+[Neural Rendering Product-Track Pause](../design/neural-rendering-pause.md)
 
 ## Context
 

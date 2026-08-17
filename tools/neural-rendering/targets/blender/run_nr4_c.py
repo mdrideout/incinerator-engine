@@ -38,6 +38,17 @@ def main() -> None:
         default="nr4-native-urban-corner-causal-motion-0001",
     )
     parser.add_argument("--camera-path", default="nr4-sequence")
+    parser.add_argument(
+        "--fixture-variant",
+        choices=(
+            "urban-day",
+            "copper-evening",
+            "wet-night",
+            "urban-copper-material",
+            "urban-wet-material",
+        ),
+        default="urban-day",
+    )
     args = parser.parse_args()
     validation = require_file(args.validation, "installed validation binary")
     blender = require_file(args.blender, "pinned Blender binary")
@@ -73,12 +84,13 @@ def main() -> None:
             "status": "partial",
             "phase": args.phase,
             "purpose": (
-                "native 160x90 inputs paired with direct native 640x360 Cycles "
+                "native 256x144 inputs paired with direct native 1280x720 Cycles "
                 + ("targets across six causal segments" if causal_proof else "corpus targets")
             ),
             "cohort": args.cohort,
             "sequence": args.sequence,
             "camera_path": args.camera_path,
+            "fixture_variant": args.fixture_variant,
             "repository": git_record(repo),
             "tool_sources": tool_sources,
             "platform": platform.platform(),
@@ -98,6 +110,7 @@ def main() -> None:
             "INCINERATOR_NR_COHORT": args.cohort,
             "INCINERATOR_NR_SEQUENCE": args.sequence,
             "INCINERATOR_NR_CAMERA_PATH": args.camera_path,
+            "INCINERATOR_NR_FIXTURE_VARIANT": args.fixture_variant,
         }
     )
     run_command(
@@ -153,6 +166,8 @@ def main() -> None:
                 str(blender),
                 "--background",
                 "--factory-startup",
+                "--python-exit-code",
+                "1",
                 "--python",
                 str(tools / "render_target.py"),
                 "--",
@@ -283,10 +298,10 @@ def main() -> None:
             "cohort": args.cohort,
             "sequence_id": args.sequence,
             "camera_path": args.camera_path,
-            "purpose": "native 160x90 inputs paired only with direct native 640x360 Cycles targets",
+            "purpose": "native 256x144 inputs paired only with direct native 1280x720 Cycles targets",
             "working_resolution": {
-                "input_extent": [160, 90],
-                "target_extent": [640, 360],
+                "input_extent": [256, 144],
+                "target_extent": [1280, 720],
                 "linear_scale": "x=4:1,y=4:1",
                 "foreign_extent_policy": "rejected",
             },
@@ -312,8 +327,8 @@ def main() -> None:
                 "causal_audit_sha256": sha256_file(causal_path) if causal_proof else None,
                 "report_root": str(report_root.relative_to(output)),
                 "report_manifest_sha256": sha256_file(report_manifest),
-                "overview": str((report_root / "direct-160x90-to-640x360-sequence-review.png").relative_to(output)),
-                "overview_sha256": sha256_file(report_root / "direct-160x90-to-640x360-sequence-review.png"),
+                "overview": str((report_root / "direct-256x144-to-1280x720-sequence-review.png").relative_to(output)),
+                "overview_sha256": sha256_file(report_root / "direct-256x144-to-1280x720-sequence-review.png"),
             },
             "evidence_bytes": {
                 "native_input_capture": tree_bytes(capture_root),

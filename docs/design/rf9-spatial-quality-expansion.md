@@ -1,6 +1,7 @@
 # RF9 Spatial Quality Expansion
 
-**Status:** Planned; RF8 remains the accepted external spatial baseline
+**Status:** Implemented as a complete external technical trial; unpromoted;
+product review superseded by the RF10 native-720p resolution decision
 
 **Date:** 2026-08-12
 
@@ -219,14 +220,14 @@ identity, color responsiveness, edges, or deterministic repeatability.
 
 | Phase | Status | Purpose | Exit gate |
 |---|---|---|---|
-| RF9-A | Planned | Freeze baseline and build failure atlas | Every RF8 defect is localized by frame, region, visual kind, likely owner, and metric; no test pixels opened |
-| RF9-B | Planned | Audit and improve native targets | Accepted `640x360` targets are visibly sharper and retain exact correspondence; filtering/denoising/material decisions are recorded |
-| RF9-C | Planned | Expand scene and state coverage | Coverage matrix spans declared cameras, layouts, materials, actors, vehicles, interactions, and lighting causes with whole-sequence split ownership |
-| RF9-D | Planned | Resolve input ambiguity | Each proposed conditioning channel has a controlled fixture and ablation; only proven channels advance the schema as one greenfield cohort |
-| RF9-E | Planned | Learn multi-scale direct reconstruction | One direct `160x90 -> 640x360` feature-reconstruction candidate beats the RF8 architecture on validation and complete visual evidence without new artifacts |
-| RF9-F | Planned | Measure capacity and detail sampling | Validation establishes whether capacity or spatial sampling is limiting; one configuration is selected without opening test |
-| RF9-G | Conditional | Add title-trained detail residual | Execute only if the selected deterministic model remains perceptually smooth; richness improves without structural substitution |
-| RF9-H | Planned | Seal conclusion and playable trial | Test opens once, fresh stress passes, export agrees, live Core ML trial works, and human review records the spatial disposition |
+| RF9-A | Complete | Freeze baseline and build failure atlas | RF8 softness, ringing, edge, material, and coverage failures are classified without opening RF9 test pixels |
+| RF9-B | Complete | Audit and improve native targets | Fresh native `640x360` targets are sharper, exactly paired, and accepted for this technical campaign |
+| RF9-C | Complete | Expand scene and state coverage | Seventeen whole sequences and 306 frames span five fixture variants and five immutable split roles |
+| RF9-D | Complete; palette accepted | Resolve input ambiguity | Exact cheap-input ambiguity pairs prove the material-palette signal; the full model improves validation chroma and spatial score |
+| RF9-E | Complete; learned path rejected | Learn multi-scale direct reconstruction | Learned pyramid worsened validation spatial and Laplacian error, so bilinear refinement remains selected |
+| RF9-F | Complete; simpler model retained | Measure capacity and detail sampling | Wider context, deeper output refinement, and detail-focused sampling did not beat the selected validation baseline |
+| RF9-G | Complete; residual rejected | Add title-trained detail residual | The authorized residual degraded high-frequency and boundary evidence and was not selected |
+| RF9-H | Complete technical trial | Seal conclusion and playable trial | Test opened once, independent stress passed, export agreed, and Core ML ran graphically; product approval and promotion remain false |
 
 ## Phase details
 
@@ -331,7 +332,10 @@ state and repeatable rendering remain mandatory.
 
 1. Freeze one validation-selected checkpoint and its complete lineage.
 2. Open the sealed test exactly once and prove a second opening is rejected.
-3. Manufacture and evaluate a fresh stress cohort after selection.
+3. Evaluate a separately held stress cohort after selection. RF9 manufactured
+   and sealed that cohort with the corpus before training, then kept it out of
+   all fitting and selection. Future campaigns may manufacture an additional
+   post-selection cohort when a new unrepresented cause is discovered.
 4. Verify export agreement and create an explicit external, unpromoted Core ML
    trial bundle.
 5. Exercise the playable fixture and default sandbox where supported, including
@@ -432,7 +436,15 @@ RF9-A failure atlas
   -> RF9-H sealed conclusion and live trial
 ```
 
-The next implementation action is RF9-A, not a larger model. It establishes
-whether each visible defect belongs to target content, missing data, missing
-conditioning, or the reconstruction architecture before more training cost or
-model capacity is introduced.
+RF9 is concluded as an external technical trial. The only accepted model-side
+change is explicit material-palette conditioning. The selected candidate keeps
+the simpler bilinear-refinement architecture with `1,062,587` parameters;
+learned reconstruction, added capacity, detail-focused sampling, and the detail
+residual are rejected by validation evidence.
+
+The full disposition, immutable artifact roots, numerical results, live proof,
+and remaining visual limitations are recorded in
+[RF9 Spatial Quality Expansion Validation](../validation/rf9-spatial-quality-expansion.md).
+The product owner subsequently chose the fresh RF10 `256x144 -> 1280x720`
+cohort instead of promoting or extending this output. RF9 remains immutable
+technical evidence, not an RF10 pixel or weight ancestor.

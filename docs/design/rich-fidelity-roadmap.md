@@ -2,9 +2,14 @@
 
 **Status:** RF0 through RF5 accepted; RF6 and RF7 retained as historical
 evidence; RF8 direct `160×90 → 640×360` spatial-sharpness/live-presentation
-trial accepted externally and unpromoted
+trial accepted externally and unpromoted; RF9 historical; RF10 native
+`256×144 → 1280×720` trial accepted as the external, unpromoted stopping point;
+implementation paused indefinitely
 
-**Date:** 2026-08-12
+**Date:** 2026-08-17
+
+**Track status:**
+[Neural Rendering Product-Track Pause](neural-rendering-pause.md)
 
 **Neural-rendering direction:**
 [Title Neural Renderer North Star](title-neural-renderer-north-star.md)
@@ -17,6 +22,10 @@ trial accepted externally and unpromoted
 [ADR-026](../adr/026-from-scratch-title-neural-renderer.md)
 
 ## Decision
+
+This roadmap is retained as historical rationale and evidence. It does not
+authorize more implementation while the neural-rendering track is paused.
+Deterministic rendering is the active product focus.
 
 Incinerator will treat richer visual content as a dedicated **RF** product
 track. It is not NR5-F, an incidental target-fixture improvement, or a reason
@@ -39,7 +48,7 @@ structure, surface identity, and material intent to produce a substantially
 nicer aligned target. The title renderer can then learn the declared
 `160×90` cheap input to direct native `400×225` rich-target transformation.
 
-## Why this is the next phase
+## Historical rationale for the RF track
 
 NR5-E proves the complete interactive path, but only for a narrow procedural
 fixture. Adding history now would optimize temporal behavior around a visual
@@ -53,10 +62,9 @@ content changes the more important questions first:
 - Which failures come from insufficient deterministic conditioning rather than
   missing temporal history?
 
-NR6 remains authorized by the NR5 result, but it is deliberately deferred
-until the richer spatial mapping has passed. Temporal modeling will then
-stabilize the visuals the game actually wants rather than the current proof
-fixture.
+At that point NR6 was authorized by the NR5 result but deliberately deferred
+until richer spatial mapping passed. This rationale led through RF10; it does
+not authorize NR6 now that the product track is paused.
 
 ## Resolution and training truth
 
@@ -64,17 +72,18 @@ The default product window may continue to render conventionally at its normal
 display extent for human play and debugging. Those pixels are not training
 truth.
 
-The active RF8 paired-training contract is:
+The currently implemented RF9 paired-training contract is `160×90 →
+640×360`. The next clean RF10 cohort is:
 
 ```text
 same immutable presentation event
-  ├─ cheap profile: 160×90 deterministic neural inputs
-  └─ rich profile: 640×360 direct native high-fidelity target
+  ├─ cheap profile: 256×144 deterministic neural inputs
+  └─ rich profile: 1280×720 direct native high-fidelity target
 ```
 
-- No `400×225`, `800×450`, or `1600×900` frame is a target, source, intermediate, or
-  art-direction reference for this cohort.
-- No larger or smaller frame is resampled to create a `640×360` target.
+- No earlier RF pixel is a target, source, intermediate, or art-direction
+  reference for this cohort.
+- No larger or smaller frame is resampled to create a `1280×720` target.
 - The low and high profiles share the same camera, transforms, visibility,
   stable object/part identities, and gameplay state.
 - The rich profile may add deterministic material, lighting, and declared
@@ -157,6 +166,8 @@ building a full scene-authoring system in advance.
 | RF6 | **Technical complete; superseded by RF7 resolution decision** | Fresh 108-pair corpus; random-origin controlled and held-out training; validation-only selection; one test opening; fresh stress; exact export; 48-frame live Core ML/Metal trial; no promotion |
 | RF7 | **Accepted external live trial; unpromoted** | 108 fresh direct native `160×90 → 800×450` pairs; one learned 5× model; validation-only selection; one test opening; stress; exact Core ML export; 48/48 live predictions; no `400×225` stage |
 | RF8 | **Accepted external live trial; unpromoted** | 108 fresh direct native `160×90 → 640×360` pairs; uniform 4× mapping; native-grid refinement and sharpness-aware validation selection; single-open test and stress pass; exact Core ML export; 48/48 Metal predictions; centered unscaled main presentation with black surround; no `400×225` or `800×450` pixels |
+| RF9 | **Complete external technical trial; unpromoted** | 306 fresh `160×90 → 640×360` pairs; material-palette conditioning accepted; more complex reconstruction/capacity/detail candidates rejected; sealed test, held stress, export, and live Metal trial pass |
+| RF10 | **Complete; retained external, unpromoted stopping point** | 306 fresh direct native `256×144 → 1280×720` pairs plus 54 newly manufactured post-selection stress frames; exact 5× mapping; 1,062,587-parameter random-origin model; validation-only epoch-110 selection; single-open test; exact Core ML export; 48/48 Metal predictions; native centered 720p presentation; no intermediate rendered image |
 
 ### RF0 — Sandbox visual foundation
 
@@ -358,14 +369,14 @@ question of whether explicit history improves the accepted rich scene.
    exercise the exact live fixture through the Neural Input / Output window,
    fallback, diagnostics, and incident evidence.
 
-The established NR4 corpus and NR5 title-renderer tools remain the component
+The established NR4 corpus and NR5 title-renderer tools remain the historical component
 owners beneath this campaign. RF6 creates new data, initialization, checkpoint,
 evaluation, and trial evidence; it never reuses earlier target pixels or model
-weights. NR6 remains deferred until the RF6 spatial conclusion identifies
-actual temporal failures.
+weights. No further neural phase is authorized while the product track is
+paused.
 
-All six implementation stages now pass. Exact roots, metrics, visual findings,
+All six RF6 implementation stages passed. Exact roots, metrics, visual findings,
 and the interactive command are recorded in
-[RF6 validation](../validation/rf6-cumulative-rich-spatial.md). The remaining
-gate is product-owner review of the live fixture; the candidate remains
-external and unpromoted.
+[RF6 validation](../validation/rf6-cumulative-rich-spatial.md). Later RF7 through
+RF10 cohorts superseded its product-review question. RF10 is the retained
+stopping point; all candidates remain external and unpromoted.

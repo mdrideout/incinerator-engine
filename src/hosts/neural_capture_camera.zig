@@ -26,6 +26,7 @@ pub const Program = enum {
     nr4_corpus_test,
     nr4_corpus_stress_near,
     nr4_corpus_stress_high,
+    rf10_postselect_orbit,
 };
 
 pub fn parse(value: []const u8) !Program {
@@ -45,6 +46,7 @@ pub fn parse(value: []const u8) !Program {
     if (std.mem.eql(u8, value, "nr4-corpus-test")) return .nr4_corpus_test;
     if (std.mem.eql(u8, value, "nr4-corpus-stress-near")) return .nr4_corpus_stress_near;
     if (std.mem.eql(u8, value, "nr4-corpus-stress-high")) return .nr4_corpus_stress_high;
+    if (std.mem.eql(u8, value, "rf10-postselect-orbit")) return .rf10_postselect_orbit;
     return error.InvalidNeuralCaptureCameraPath;
 }
 
@@ -66,6 +68,7 @@ pub fn name(program: Program) []const u8 {
         .nr4_corpus_test => "nr4-corpus-test",
         .nr4_corpus_stress_near => "nr4-corpus-stress-near",
         .nr4_corpus_stress_high => "nr4-corpus-stress-high",
+        .rf10_postselect_orbit => "rf10-postselect-orbit",
     };
 }
 
@@ -208,6 +211,7 @@ pub fn apply(
         .orbit_wide => frame * 0.0035 + 0.7,
         .elevated_sweep => frame * 0.0025 - 0.45,
         .fast_orbit => frame * 0.028,
+        .rf10_postselect_orbit => frame * 0.0045 + 1.35,
         .resize_cycle => frame * 0.006 + 0.25,
         .nr4_sequence, .nr4_corpus_train, .nr4_corpus_validation, .nr4_corpus_test, .nr4_corpus_stress_near, .nr4_corpus_stress_high => unreachable,
         .default_follow => unreachable,
@@ -218,6 +222,7 @@ pub fn apply(
         .orbit_wide => 24.0,
         .elevated_sweep => 18.0,
         .fast_orbit => 18.0,
+        .rf10_postselect_orbit => 22.0,
         .resize_cycle => 20.0,
         .nr4_sequence, .nr4_corpus_train, .nr4_corpus_validation, .nr4_corpus_test, .nr4_corpus_stress_near, .nr4_corpus_stress_high => unreachable,
         .default_follow => unreachable,
@@ -228,6 +233,7 @@ pub fn apply(
         .orbit_wide => 10.0,
         .elevated_sweep => 18.0 + @sin(phase * 0.5) * 4.0,
         .fast_orbit => 6.0,
+        .rf10_postselect_orbit => 8.0,
         .resize_cycle => 7.0,
         .nr4_sequence, .nr4_corpus_train, .nr4_corpus_validation, .nr4_corpus_test, .nr4_corpus_stress_near, .nr4_corpus_stress_high => unreachable,
         .default_follow => unreachable,
@@ -272,6 +278,7 @@ test "capture camera paths have strict names" {
     try std.testing.expectEqual(Program.nr4_sequence, try parse("nr4-sequence"));
     try std.testing.expectEqual(Program.nr4_corpus_train, try parse("nr4-corpus-train"));
     try std.testing.expectEqual(Program.nr4_corpus_stress_high, try parse("nr4-corpus-stress-high"));
+    try std.testing.expectEqual(Program.rf10_postselect_orbit, try parse("rf10-postselect-orbit"));
     try std.testing.expectError(error.InvalidNeuralCaptureCameraPath, parse("metadata-only"));
 }
 

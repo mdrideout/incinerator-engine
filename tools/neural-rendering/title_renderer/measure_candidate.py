@@ -37,14 +37,21 @@ def main() -> None:
     if output.exists():
         raise ValueError("NR5-D supplemental measurements are immutable and already exist")
     run = load_json(root / "run.json")
+    rf9 = run.get("phase") == "RF9-D/F"
+    rf10 = run.get("phase") == "RF10-D/E"
     conclusion_path = root / "conclusion.json"
     conclusion = load_json(conclusion_path)
-    if conclusion.get("status") != "accepted" or conclusion.get("next_phase_authorized") != "NR6":
+    expected_next = "RF10 external native-720p playable trial" if rf10 else ("RF9 external playable trial" if rf9 else "NR6")
+    if conclusion.get("status") != "accepted" or conclusion.get("next_phase_authorized") != expected_next:
         raise ValueError("measurements require an accepted NR5-D conclusion")
-    dataset = TitleCorpusDataset(corpus, ("stress",))
+    training_spec = load_json(root / run["train_dataset"])
+    dataset = TitleCorpusDataset(
+        corpus,
+        ("stress",),
+        reference_specification=training_spec,
+    )
     if dataset.specification.corpus_manifest_sha256 != conclusion["stress_corpus_manifest_sha256"]:
         raise ValueError("measurement corpus differs from the concluded fresh stress cohort")
-    training_spec = load_json(root / run["train_dataset"])
     if (
         dataset.specification.semantic_vocabulary
         != {int(key): value for key, value in training_spec["semantic_vocabulary"].items()}
@@ -101,8 +108,8 @@ def main() -> None:
         output,
         {
             "schema": 1,
-            "experiment": "NR-0005",
-            "phase": "NR5-D",
+            "experiment": "RF10" if rf10 else ("RF9" if rf9 else "NR-0005"),
+            "phase": "RF10-H" if rf10 else ("RF9-H" if rf9 else "NR5-D"),
             "kind": "append_only_post_conclusion_measurements",
             "conclusion_sha256": sha256_file(conclusion_path),
             "checkpoint_sha256": run["checkpoint"]["sha256"],

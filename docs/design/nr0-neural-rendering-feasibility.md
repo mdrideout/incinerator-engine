@@ -1,8 +1,9 @@
 # NR0 Game-Specific Neural Rendering Feasibility Slice
 
-**Status:** In progress; NR0-A through NR0-D complete, NR0-E through NR0-G open
+**Status:** Paused; NR0-A through NR0-D complete; RF10 retained as the accepted
+external, unpromoted stopping point; NR0-E through NR0-G unauthorized
 
-**Date:** 2026-08-08
+**Date:** 2026-08-17
 
 **Platform:** Apple Silicon macOS only
 
@@ -24,6 +25,13 @@
 
 **Validation ledger:**
 [`../validation/nr0-neural-rendering-feasibility.md`](../validation/nr0-neural-rendering-feasibility.md)
+
+**Track status:**
+[Neural Rendering Product-Track Pause](neural-rendering-pause.md)
+
+This document preserves the original feasibility definition and unfinished
+phase descriptions as historical scope. It does not authorize their
+implementation while the track is paused.
 
 ## Goal
 
@@ -203,7 +211,7 @@ composition. See
 [`NR-0003`](../../experiments/neural-rendering/nr-0003-ltxv-2b-distilled/README.md)
 for exact provenance, comparisons, and measurements.
 
-NR-0003 changed the next model step but does not provide its initialization.
+NR-0003 changed the subsequent model step but does not provide its initialization.
 ADR-026 supersedes the provisional IC-LoRA recommendation: external model
 weights remain research evidence only. NR4-A of NR-0004 proves one genuinely
 high-fidelity, exactly aligned title target still and its visual direction is
@@ -215,19 +223,12 @@ trains the first repository-defined structural title renderer from random
 initialization. Appearance RGB alone is not a sufficient long-term control
 contract.
 
-The next working cohort is deliberately smaller: `160×90` cheap appearance and
-default controls reconstruct to a direct native `400×225` rich target. The
-2.5× mapping and target fidelity are validated entirely inside that cohort.
-NR4-A/B remain historical adapter/correspondence evidence, but their target
-pixels, metrics, and acceptance are excluded from active generation, training,
-comparison, preview, and acceptance. The native still and moving direction must
-be generated and accepted again at `400×225`. Other output resolutions are
-deferred.
+Later RF cohorts superseded the historical `160x90 -> 400x225` working cohort.
+RF10 completed the fresh direct native `256x144 -> 1280x720` technical path and
+is the retained external, unpromoted stopping point.
 
-NR0-E remains the next engine phase by numbering, but it is deliberately
-blocked. Nothing should be promoted until a learned candidate preserves the
-authored world, materially improves visual fidelity, and survives the unchanged
-NR0-D failure envelope.
+NR0-E remains the next phase only by historical numbering. It is not an active
+next step and is not authorized while the neural-rendering track is paused.
 
 ### NR0-E — Explicit model promotion
 

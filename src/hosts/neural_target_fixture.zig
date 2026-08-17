@@ -10,10 +10,11 @@ const target = @import("neural_target_contract.zig");
 const catalog = @import("../sandbox_visual_catalog.zig");
 
 pub const source_fingerprint =
-    "rf5-urban-corner-v1|road-sidewalk-curb-masonry-roof-glass-door-sign|" ++
+    "rf9-spatial-quality-v1|road-sidewalk-curb-masonry-roof-glass-door-sign|" ++
     "shared-catalog-t-characters|multipart-vehicle-four-wheels|" ++
     "character-npc-prop|thin-bollards|declared-material-light-responses|" ++
-    "frame-global-sun-world-local-emissive-controls|six-causal-motion-segments|" ++
+    "five-authored-layout-material-variants|exact-material-ambiguity-pairs|" ++
+    "frame-global-sun-world-local-emissive-material-controls|six-causal-motion-segments|" ++
     "rights-clean-procedural";
 pub const center = [3]f32{ 26, 2.6, 0 };
 pub const fixture_identity_base: u64 = 0x4e52_3400_0000_0000;
@@ -25,7 +26,7 @@ pub const sequence_frame_count: u64 = samples_per_segment * segment_count;
 pub const segment_frame_span: u64 = sequence_frame_stride * samples_per_segment;
 
 pub const scene = target.Scene{
-    .id = "rf5-urban-corner-v1",
+    .id = "rf9-urban-day-v1",
     .fingerprint = source_fingerprint,
     .sun_direction = .{ -0.4082483, -0.8164966, -0.4082483 },
     .sun_color = .{ 1.0, 0.91, 0.78 },
@@ -39,9 +40,88 @@ pub const scene = target.Scene{
     .local_light_radius = 1.1,
 };
 
+/// RF9 authored presentation variants manufacture independent layout,
+/// material, and lighting causes plus exact material-ambiguity controls,
+/// without introducing a general scene system.
+pub const Variant = enum {
+    urban_day,
+    copper_evening,
+    wet_night,
+    urban_copper_material,
+    urban_wet_material,
+
+    pub fn parse(value: []const u8) !Variant {
+        if (std.mem.eql(u8, value, "urban-day")) return .urban_day;
+        if (std.mem.eql(u8, value, "copper-evening")) return .copper_evening;
+        if (std.mem.eql(u8, value, "wet-night")) return .wet_night;
+        if (std.mem.eql(u8, value, "urban-copper-material")) return .urban_copper_material;
+        if (std.mem.eql(u8, value, "urban-wet-material")) return .urban_wet_material;
+        return error.UnknownNeuralTargetFixtureVariant;
+    }
+
+    pub fn name(self: Variant) []const u8 {
+        return switch (self) {
+            .urban_day => "urban-day",
+            .copper_evening => "copper-evening",
+            .wet_night => "wet-night",
+            .urban_copper_material => "urban-copper-material",
+            .urban_wet_material => "urban-wet-material",
+        };
+    }
+
+    pub fn palette(self: Variant) f32 {
+        return switch (self) {
+            .urban_day => 0,
+            .copper_evening, .urban_copper_material => 1,
+            .wet_night, .urban_wet_material => 2,
+        };
+    }
+};
+
+pub fn sceneFor(variant: Variant) target.Scene {
+    var result = scene;
+    switch (variant) {
+        .urban_day => {},
+        .copper_evening => {
+            result.id = "rf9-copper-evening-v1";
+            result.fingerprint = source_fingerprint ++ "|rf9-copper-evening-v1";
+            result.sun_color = .{ 1.0, 0.62, 0.34 };
+            result.sun_strength = 2.8;
+            result.world_color = .{ 0.08, 0.055, 0.12 };
+            result.world_strength = 0.22;
+            result.local_light_color = .{ 0.35, 0.58, 1.0 };
+            result.local_light_strength = 900;
+        },
+        .wet_night => {
+            result.id = "rf9-wet-night-v1";
+            result.fingerprint = source_fingerprint ++ "|rf9-wet-night-v1";
+            result.sun_color = .{ 0.42, 0.55, 0.86 };
+            result.sun_strength = 0.85;
+            result.world_color = .{ 0.012, 0.025, 0.065 };
+            result.world_strength = 0.12;
+            result.local_light_color = .{ 1.0, 0.30, 0.08 };
+            result.local_light_strength = 1_800;
+        },
+        .urban_copper_material => {
+            result.id = "rf9-urban-copper-material-v1";
+            result.fingerprint = source_fingerprint ++ "|rf9-urban-copper-material-v1";
+        },
+        .urban_wet_material => {
+            result.id = "rf9-urban-wet-material-v1";
+            result.fingerprint = source_fingerprint ++ "|rf9-urban-wet-material-v1";
+        },
+    }
+    return result;
+}
+
 pub fn contentDigest() [32]u8 {
+    return contentDigestFor(.urban_day);
+}
+
+pub fn contentDigestFor(variant: Variant) [32]u8 {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
     hasher.update(source_fingerprint);
+    hasher.update(variant.name());
     var result: [32]u8 = undefined;
     hasher.final(&result);
     return result;
@@ -82,8 +162,13 @@ const npc_labels = [_][]const u8{
 };
 
 pub fn plans(presentation_frame: u64) [draw_count]Draw {
+    return plansFor(.urban_day, presentation_frame);
+}
+
+pub fn plansFor(variant: Variant, presentation_frame: u64) [draw_count]Draw {
     var result = basePlans();
-    const state = sequenceState(presentation_frame);
+    applyVariant(&result, variant);
+    const state = sequenceStateFor(variant, presentation_frame);
     switch (state.event.segment) {
         .object_motion => translateVehicle(&result, .{
             -2.2 * state.event.progress,
@@ -105,6 +190,65 @@ pub fn plans(presentation_frame: u64) [draw_count]Draw {
         else => {},
     }
     return result;
+}
+
+fn applyVariant(result: *[draw_count]Draw, variant: Variant) void {
+    switch (variant) {
+        .urban_day => {},
+        .copper_evening => {
+            result[2].target_source.transform.scale[0] = 13.5;
+            result[2].target_source.transform.translation[0] += 2.0;
+            result[10].target_source.transform.translation[0] -= 3.0;
+            translateVehicle(result, .{ 4.4, 0, -2.0 });
+            translateNpc(result, .{ -4.2, 0, 3.8 });
+            result[prop_start].target_source.transform.translation[0] -= 7.0;
+            applyCopperMaterials(result);
+        },
+        .wet_night => {
+            result[2].target_source.transform.scale[0] = 10.0;
+            result[2].target_source.transform.translation[0] -= 5.0;
+            result[4].target_source.transform.translation[0] += 4.0;
+            result[5].target_source.transform.translation[0] -= 4.0;
+            translateVehicle(result, .{ -5.0, 0, 4.2 });
+            translateNpc(result, .{ 1.4, 0, 5.6 });
+            result[prop_start + 1].target_source.transform.translation[2] -= 6.0;
+            applyWetMaterials(result, 13);
+        },
+        .urban_copper_material => applyCopperMaterials(result),
+        .urban_wet_material => applyWetMaterials(result, 8),
+    }
+}
+
+fn applyCopperMaterials(result: *[draw_count]Draw) void {
+    for (result) |*draw| switch (draw.target_source.material) {
+        .masonry => {
+            draw.target_source.material_response.pattern_scale = 11;
+            draw.target_source.material_response.bump_strength = 0.48;
+        },
+        .painted_metal => {
+            draw.target_source.material_response.metallic = 0.92;
+            draw.target_source.material_response.roughness = 0.14;
+        },
+        .fabric => draw.target_source.material_response.sheen = 0.48,
+        else => {},
+    };
+}
+
+fn applyWetMaterials(result: *[draw_count]Draw, emissive_strength: f32) void {
+    for (result) |*draw| switch (draw.target_source.material) {
+        .asphalt => {
+            draw.target_source.material_response.roughness = 0.16;
+            draw.target_source.material_response.metallic = 0.12;
+            draw.target_source.material_response.bump_strength = 0.05;
+        },
+        .sidewalk => draw.target_source.material_response.roughness = 0.30,
+        .glass => {
+            draw.target_source.material_response.roughness = 0.025;
+            draw.target_source.material_response.transmission = 0.90;
+        },
+        .emissive => draw.target_source.material_response.emission_strength = emissive_strength,
+        else => {},
+    };
 }
 
 fn basePlans() [draw_count]Draw {
@@ -184,6 +328,10 @@ pub const SequenceState = struct {
 };
 
 pub fn sequenceState(presentation_frame: u64) SequenceState {
+    return sequenceStateFor(.urban_day, presentation_frame);
+}
+
+pub fn sequenceStateFor(variant: Variant, presentation_frame: u64) SequenceState {
     var event = target.SequenceEvent{
         .segment = .still,
         .segment_index = 0,
@@ -214,12 +362,16 @@ pub fn sequenceState(presentation_frame: u64) SequenceState {
             .controlled_change = controlledChange(segment_index),
         };
     }
-    var frame_scene = scene;
+    var frame_scene = sceneFor(variant);
     var global_controls = contract.FrameGlobalControls{
         .sun_strength = frame_scene.sun_strength,
         .world_strength = frame_scene.world_strength,
         .local_light_strength = frame_scene.local_light_strength,
-        .emissive_strength = 8,
+        .emissive_strength = switch (variant) {
+            .urban_day, .copper_evening, .urban_copper_material, .urban_wet_material => 8,
+            .wet_night => 13,
+        },
+        .material_palette = variant.palette(),
     };
     if (event.segment == .lighting_effect) {
         frame_scene.sun_strength = 4.0 - 1.5 * event.progress;
@@ -500,5 +652,50 @@ test "RF5 sequence isolates one authored cause per segment" {
             if (expected_sample == 0) try std.testing.expect(previous != state.event.segment);
         }
         previous_segment = state.event.segment;
+    }
+}
+
+test "RF9 fixture controls agree with variant material intent" {
+    for (std.enums.values(Variant)) |variant| {
+        const state = sequenceStateFor(variant, sequence_start_frame);
+        const draws = plansFor(variant, sequence_start_frame);
+        for (draws) |draw| {
+            if (draw.target_source.material != .emissive) continue;
+            try std.testing.expectEqual(
+                state.global_controls.emissive_strength,
+                draw.target_source.material_response.emission_strength,
+            );
+        }
+    }
+}
+
+test "RF9 material ambiguity fixtures change no cheap spatial or lighting fact" {
+    const reference_scene = sceneFor(.urban_day);
+    const reference_controls = sequenceStateFor(.urban_day, sequence_start_frame).global_controls;
+    for ([_]Variant{ .urban_copper_material, .urban_wet_material }) |variant| {
+        const candidate_scene = sceneFor(variant);
+        try std.testing.expectEqual(reference_scene.sun_direction, candidate_scene.sun_direction);
+        try std.testing.expectEqual(reference_scene.sun_color, candidate_scene.sun_color);
+        try std.testing.expectEqual(reference_scene.sun_strength, candidate_scene.sun_strength);
+        try std.testing.expectEqual(reference_scene.world_color, candidate_scene.world_color);
+        try std.testing.expectEqual(reference_scene.world_strength, candidate_scene.world_strength);
+        try std.testing.expectEqual(reference_scene.local_light_position, candidate_scene.local_light_position);
+        try std.testing.expectEqual(reference_scene.local_light_color, candidate_scene.local_light_color);
+        try std.testing.expectEqual(reference_scene.local_light_strength, candidate_scene.local_light_strength);
+        const candidate_controls = sequenceStateFor(variant, sequence_start_frame).global_controls;
+        try std.testing.expectEqual(reference_controls.sun_strength, candidate_controls.sun_strength);
+        try std.testing.expectEqual(reference_controls.world_strength, candidate_controls.world_strength);
+        try std.testing.expectEqual(reference_controls.local_light_strength, candidate_controls.local_light_strength);
+        try std.testing.expectEqual(reference_controls.emissive_strength, candidate_controls.emissive_strength);
+        try std.testing.expect(reference_controls.material_palette != candidate_controls.material_palette);
+
+        const reference_draws = plansFor(.urban_day, sequence_start_frame);
+        const candidate_draws = plansFor(variant, sequence_start_frame);
+        for (reference_draws, candidate_draws) |reference, candidate| {
+            try std.testing.expectEqual(reference.identity, candidate.identity);
+            try std.testing.expectEqual(reference.mesh, candidate.mesh);
+            try std.testing.expectEqual(reference.base_color, candidate.base_color);
+            try std.testing.expectEqual(reference.target_source.transform, candidate.target_source.transform);
+        }
     }
 }

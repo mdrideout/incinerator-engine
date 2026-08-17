@@ -3,10 +3,15 @@
 **Status:** NR-0004 and NR5-A through NR5-E accepted; RF0 through RF5 accepted;
 RF6 and RF7 retained as historical spatial evidence; RF8 direct
 `160×90 → 640×360` spatial-sharpness/live-presentation trial accepted
-externally and unpromoted;
-NR6 causal temporal work remains deferred
+externally and unpromoted; RF9 technical spatial trial complete and
+unpromoted; RF10 direct `256×144 → 1280×720` external technical trial
+accepted as the external, unpromoted stopping point; implementation paused
+indefinitely; no next neural phase authorized
 
-**Date:** 2026-08-12
+**Date:** 2026-08-17
+
+**Track status:**
+[Neural Rendering Product-Track Pause](neural-rendering-pause.md)
 
 **North star:**
 [Title Neural Renderer North Star](title-neural-renderer-north-star.md)
@@ -14,8 +19,8 @@ NR6 causal temporal work remains deferred
 **Rich-fidelity roadmap:**
 [Rich Fidelity Roadmap](rich-fidelity-roadmap.md)
 
-**Next spatial-quality plan:**
-[RF9 Spatial Quality Expansion](rf9-spatial-quality-expansion.md)
+**Retained spatial cohort:**
+[RF10 Native 720p Spatial Cohort](rf10-native-720p-spatial-cohort.md)
 
 **Decisions:**
 [ADR-025](../adr/025-game-specific-neural-rendering-boundary.md) and
@@ -222,11 +227,13 @@ not reorganized merely for uniformity.
 | 17 | RF6 cumulative rich spatial conclusion | **Technical complete; superseded by RF7 resolution decision** | RF5 human approval | Fresh corpus, random-origin held-out conclusion, sealed test, stress, export, and live external trial pass without promotion |
 | 18 | RF7 direct 800×450 spatial fidelity | **Accepted external live trial; unpromoted** | RF6 evidence and product resolution decision | 108 fresh native `160×90 → 800×450` pairs, one direct learned 5× path, held-out selection, single-open test, stress, exact export, and 48/48 live predictions passed; no 400×225 stage |
 | 19 | RF8 direct 640×360 spatial sharpness and fixed presentation | **Accepted external live trial; unpromoted** | RF7 live quality evidence and product 16:9 decision | 108 fresh native `160×90 → 640×360` pairs; stronger native-output reconstruction/loss/selection; validation/test/stress pass; exact Core ML export; 48/48 Metal predictions; centered unscaled 640×360 main presentation; source-only neural debug pane; no retired-resolution pixels |
-| 20 | NR6 causal temporal renderer | Deferred | Accepted RF8 spatial problem | Motion, reset, drift, and responsiveness pass against the accepted rich spatial problem |
-| 21 | NR7 learned-detail residual | Conditional | Measured NR6 richness ceiling | Richness improves without structural substitution |
-| 22 | NR0-E explicit promotion | Blocked | Promotion-worthy candidate | Immutable source-preserving selection |
-| 23 | NR0-F installed macOS runtime | Blocked | NR0-E | Exact GPU-resident bundle and fallback behavior |
-| 24 | NR0-G acceptance and audit | Blocked | NR0-F | End-to-end accepted or rejected with evidence |
+| 20 | RF9 material-conditioned spatial-quality campaign | **Complete external technical trial; unpromoted** | RF8 | Material-palette conditioning accepted; learned pyramid, added capacity, detail sampling, and detail residual rejected; sealed test, held stress, export, and live Metal trial pass |
+| 21 | RF10 native 720p spatial cohort | **Complete; retained external and unpromoted stopping point** | RF9 conclusion and product resolution decision | Fresh direct `256×144 → 1280×720` ABI, target, corpus, random-origin training, sealed test, post-selection stress, Core ML export, and native centered live trial |
+| 22 | NR6 causal temporal renderer | **Paused; unauthorized** | Explicit product-owner resume and new plan | No implementation while the track is paused |
+| 23 | NR7 learned-detail residual | **Paused; unauthorized** | Explicit product-owner resume and measured need | No implementation while the track is paused |
+| 24 | NR0-E explicit promotion | **Paused; unauthorized** | Explicit product-owner resume and promotion decision | RF10 remains external and unpromoted |
+| 25 | NR0-F installed macOS runtime | **Paused; unauthorized** | Explicit product-owner resume and NR0-E | No installed learned content |
+| 26 | NR0-G acceptance and audit | **Paused; unauthorized** | Explicit product-owner resume and NR0-F | Existing RF10 technical validation remains retained evidence |
 
 ## NR-0004 — High-fidelity target and corpus foundation
 
@@ -933,24 +940,8 @@ At the end of every work package:
 
 ## Immediate implementation sequence
 
-NR4-A and the NR4-B technical implementation are complete:
-
-1. **Complete:** accept the NR4-A target direction and exact still alignment;
-2. **Complete:** advance the adapter-local target package to declared material,
-   local-light, and causal-sequence state;
-3. **Complete:** render six isolated three-sample moving segments;
-4. **Complete:** inspect every frame, produce synchronized reports, and prove
-   exact source/identity/depth recapture across two executions;
-5. **Complete:** record measured Cycles numeric variation and offline cost; and
-6. **Complete:** product-owner acceptance of the moving target and alignment
-   direction.
-
-**Current phase:** RF0 through RF5 are accepted and RF6-A through RF6-F are
-technically complete without modifying or promoting the NR5-E model. The fresh
-RF6 candidate passes validation-only selection, one sealed-test opening, fresh
-stress, exact export, and the live Core ML/Metal gate. Product-owner interactive
-review remains; see
-[RF6 validation](../validation/rf6-cumulative-rich-spatial.md). NR6
-history/reprojection/reset work remains deferred until that review and begins
-with measured temporal-need characterization. No promotion or installed runtime
-selection is authorized.
+There is none. RF10 is complete and retained as the accepted external,
+unpromoted stopping point. The product owner paused neural rendering on
+2026-08-17 to return focus to deterministic rendering. Do not start NR6, NR7,
+promotion, optimization, a new corpus, or another model cohort without an
+explicit resume request and a newly reviewed phase plan.

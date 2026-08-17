@@ -10,7 +10,7 @@ from array import array
 from pathlib import Path
 
 from nr4_common import (
-    CAPTURE_SCHEMA,
+    CAPTURE_ROOT_SCHEMA,
     INPUT_EXTENT,
     TARGET_EXTENT,
     TARGET_FRAME_SCHEMA,
@@ -50,7 +50,7 @@ def inspect(root: Path, expected_phase: str = "NR4-C") -> dict:
     frame_root = root / run["source"]["target_frame_root"]
     capture = load_json(capture_root / "capture.json")
     frame_set = load_json(frame_root / "target-frames.json")
-    if capture.get("schema") != CAPTURE_SCHEMA or capture.get("status") != "complete":
+    if capture.get("schema") != CAPTURE_ROOT_SCHEMA or capture.get("status") != "complete":
         raise ValueError("NR4 source capture is incomplete")
     if frame_set.get("schema") != TARGET_FRAME_SCHEMA or frame_set.get("status") != "complete":
         raise ValueError("NR4 target-frame set is incomplete")

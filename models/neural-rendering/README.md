@@ -1,5 +1,11 @@
 # Promoted Neural Rendering Models
 
+> **Product-track pause (2026-08-17):** Promotion is not authorized. RF10 is
+> retained externally and unpromoted; this directory must remain empty unless
+> the product owner explicitly resumes neural rendering and approves a later
+> promotion transaction. See
+> [`docs/design/neural-rendering-pause.md`](../../docs/design/neural-rendering-pause.md).
+
 This is the source location for deliberately promoted runtime model bundles used
 by the open Incinerator sandbox. It is currently empty: no model has been
 selected, bundled, licensed, or accepted.

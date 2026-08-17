@@ -88,12 +88,13 @@ fn drawDiagnostics(view: *const tool.NeuralView) void {
     zgui.textWrapped("schema fingerprint: {s}", .{view.schema_fingerprint});
     zgui.textWrapped("shader fingerprint: {s}", .{view.shader_fingerprint});
     zgui.text(
-        "global controls: sun {d:.3} world {d:.3} local {d:.3} emissive {d:.3}",
+        "global controls: sun {d:.3} world {d:.3} local {d:.3} emissive {d:.3} palette {d:.0}",
         .{
             view.global_controls.sun_strength,
             view.global_controls.world_strength,
             view.global_controls.local_light_strength,
             view.global_controls.emissive_strength,
+            view.global_controls.material_palette,
         },
     );
     if (view.last_error.len != 0) {
@@ -118,7 +119,7 @@ fn drawDiagnostics(view: *const tool.NeuralView) void {
     }
     zgui.separator();
     zgui.text(
-        "NR5-E trial loaded={} enabled={} output_ready={} readbacks={d} predictions={d} failures={d}",
+        "RF10 trial loaded={} enabled={} output_ready={} readbacks={d} predictions={d} failures={d}",
         .{
             view.model_loaded,
             view.model_enabled,

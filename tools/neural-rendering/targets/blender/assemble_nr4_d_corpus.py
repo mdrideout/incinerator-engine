@@ -80,9 +80,14 @@ def referenced_artifact(root: Path, path: Path, corpus_root: Path) -> dict:
     }
 
 
-def assemble(entries: list[tuple[str, Path]], output: Path) -> dict:
-    if {split for split, _ in entries} != SPLITS:
-        raise ValueError("NR4-D requires separate overfit, train, validation, test, and stress sequences")
+def assemble(entries: list[tuple[str, Path]], output: Path, *, stress_only: bool = False) -> dict:
+    required_splits = {"stress"} if stress_only else SPLITS
+    if {split for split, _ in entries} != required_splits:
+        raise ValueError(
+            "NR4-D stress-only corpora require only stress sequences"
+            if stress_only
+            else "NR4-D requires separate overfit, train, validation, test, and stress sequences"
+        )
     if len({str(path) for _, path in entries}) != len(entries):
         raise ValueError("one source sequence cannot be assigned more than once")
 
@@ -147,10 +152,11 @@ def assemble(entries: list[tuple[str, Path]], output: Path) -> dict:
         first_package = load_json(destination / first_frame["frame_package"])
         first_target_root = destination / first_frame["target_root"]
         first_target = load_json(first_target_root / "target-run.json")
+        engine_source = dict(first_package["source"])
+        package_content_digest = engine_source.pop("content_sha256")
         provenance = {
-            "engine_source": first_package["source"],
+            "engine_source": engine_source,
             "input_schema": capture["input_schema"],
-            "content_digest": capture["content_digest"],
             "shader_fingerprint": capture["shader_fingerprint"],
             "shader_sha256": capture["shader_sha256"],
             "target_configuration_sha256": copied_run["environment"]["configuration_sha256"],
@@ -171,7 +177,11 @@ def assemble(entries: list[tuple[str, Path]], output: Path) -> dict:
             "sequence_manifest_sha256": sha256_file(sequence_manifest_path),
             "source_run": str(source),
             "source_repository": copied_run["repository"],
+            "content_digest": capture["content_digest"],
+            "target_package_content_digest": package_content_digest,
         }
+        if sequence_record["content_digest"] != sequence_record["target_package_content_digest"]:
+            raise ValueError("NR4-D capture and target package content digests disagree")
         sequence_records.append(sequence_record)
 
         for frame in sequence_manifest["frames"]:
@@ -270,8 +280,13 @@ def assemble(entries: list[tuple[str, Path]], output: Path) -> dict:
         "schema": CORPUS_SCHEMA,
         "status": "complete",
         "phase": "NR4-D",
-        "purpose": "self-contained native 160x90 to direct 640x360 paired corpus",
-        "working_resolution": {"input_extent": [160, 90], "target_extent": [640, 360]},
+        "purpose": (
+            "self-contained native 256x144 to direct 1280x720 post-selection stress corpus"
+            if stress_only
+            else "self-contained native 256x144 to direct 1280x720 paired corpus"
+        ),
+        "corpus_role": "post_selection_stress" if stress_only else "primary",
+        "working_resolution": {"input_extent": [256, 144], "target_extent": [1280, 720]},
         "frame_index": "frames.ndjson",
         "frame_count": len(frame_records),
         "sequence_count": len(sequence_records),
@@ -306,8 +321,13 @@ def main() -> None:
         help="SPLIT=/absolute/complete-nr4-d-run; repeat for each whole sequence",
     )
     parser.add_argument("--output", required=True, type=Path)
+    parser.add_argument("--stress-only", action="store_true")
     args = parser.parse_args()
-    manifest = assemble([parse_sequence_arg(value) for value in args.sequence], args.output)
+    manifest = assemble(
+        [parse_sequence_arg(value) for value in args.sequence],
+        args.output,
+        stress_only=args.stress_only,
+    )
     print(
         f"NR4_D_CORPUS_ASSEMBLED sequences={manifest['sequence_count']} "
         f"frames={manifest['frame_count']} root={args.output.resolve()}"

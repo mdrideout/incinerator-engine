@@ -19,17 +19,18 @@ CHANNELS = (
     "semantic",
     "instance",
 )
-INPUT_EXTENT = (160, 90)
-PAIRED_TARGET_EXTENT = (640, 360)
+INPUT_EXTENT = (256, 144)
+PAIRED_TARGET_EXTENT = (1280, 720)
 RAW_CHANNEL_BYTES = INPUT_EXTENT[0] * INPUT_EXTENT[1] * 4
 RAW_CHANNEL_BYTES_PER_FRAME = len(CHANNELS) * RAW_CHANNEL_BYTES
-GLOBAL_CONTROL_SCHEMA = "incinerator.neural-frame-global.v1"
+GLOBAL_CONTROL_SCHEMA = "incinerator.neural-frame-global.v2"
 GLOBAL_CONTROL_ENCODING = "float32 little-endian"
 GLOBAL_CONTROL_ORDER = (
     "sun_strength",
     "world_strength",
     "local_light_strength",
     "emissive_strength",
+    "material_palette",
 )
 RAW_GLOBAL_CONTROL_BYTES = len(GLOBAL_CONTROL_ORDER) * 4
 RAW_TRAINING_BYTES_PER_FRAME = RAW_CHANNEL_BYTES_PER_FRAME + RAW_GLOBAL_CONTROL_BYTES
@@ -136,26 +137,26 @@ def load_capture(root: Path) -> dict:
     if not root.is_absolute():
         raise ValueError(f"capture root must be absolute: {root}")
     capture = json.loads((root / "capture.json").read_text())
-    if capture["schema"] != 6:
+    if capture["schema"] != 8:
         raise ValueError(f"unsupported capture schema in {root}")
     if capture["status"] != "complete":
         raise ValueError(f"capture is not complete: {root}")
     if capture["capture_failures"] != 0:
         raise ValueError(f"capture recorded failures: {root}")
     if tuple(capture.get("input_size", ())) != INPUT_EXTENT:
-        raise ValueError(f"capture input extent is not native 160x90: {root}")
+        raise ValueError(f"capture input extent is not native 256x144: {root}")
     if tuple(capture.get("paired_target_size", ())) != PAIRED_TARGET_EXTENT:
-        raise ValueError(f"capture paired target extent is not native 640x360: {root}")
+        raise ValueError(f"capture paired target extent is not native 1280x720: {root}")
     if capture.get("sampling_map") != {
         "x": {
-            "scale_numerator": 4,
+            "scale_numerator": 5,
             "scale_denominator": 1,
-            "target_center_to_source_index": "((target_x + 0.5) / 4) - 0.5",
+            "target_center_to_source_index": "((target_x + 0.5) / 5) - 0.5",
         },
         "y": {
-            "scale_numerator": 4,
+            "scale_numerator": 5,
             "scale_denominator": 1,
-            "target_center_to_source_index": "((target_y + 0.5) / 4) - 0.5",
+            "target_center_to_source_index": "((target_y + 0.5) / 5) - 0.5",
         },
         "border": "clamp",
     }:
@@ -239,8 +240,8 @@ def load_capture(root: Path) -> dict:
             raise ValueError(f"bad global-control byte count: {controls_path}")
         if sha256(controls_path) != controls.get("raw_sha256"):
             raise ValueError(f"global-control digest mismatch: {controls_path}")
-        raw_control_values = struct.unpack("<4f", controls_path.read_bytes())
-        encoded_json_values = struct.unpack("<4f", struct.pack("<4f", *ordered_values))
+        raw_control_values = struct.unpack("<5f", controls_path.read_bytes())
+        encoded_json_values = struct.unpack("<5f", struct.pack("<5f", *ordered_values))
         if raw_control_values != encoded_json_values:
             raise ValueError(f"global-control JSON/raw mismatch in {summary['frame_id']}")
         frame_timing = frame.get("input_raster_timing")

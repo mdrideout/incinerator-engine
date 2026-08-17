@@ -8,7 +8,13 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from title_renderer.contracts import CHANNELS, INPUT_EXTENT, TARGET_EXTENT, inspect_corpus_metadata
+from title_renderer.contracts import (
+    CHANNELS,
+    INPUT_EXTENT,
+    TARGET_EXTENT,
+    inspect_corpus_metadata,
+    require_sealed_training_authorization,
+)
 from title_renderer.coverage import RF6_SCOPE, collect
 from title_renderer.io import sha256_file
 from title_renderer.trial_bundle import (
@@ -91,9 +97,9 @@ def target_package(sequence: str, camera_path: str, segment: str, index: int) ->
             }
         )
     return {
-        "schema_name": "incinerator.nr4.blender-target-frame.v6",
-        "input_extent": [160, 90],
-        "target_extent": [640, 360],
+        "schema_name": "incinerator.nr4.blender-target-frame.v8",
+        "input_extent": [256, 144],
+        "target_extent": [1280, 720],
         "sequence": sequence,
         "camera_path": camera_path,
         "effect_seed": 0,
@@ -102,6 +108,7 @@ def target_package(sequence: str, camera_path: str, segment: str, index: int) ->
             "world_strength": 0.32,
             "local_light_strength": 550.0,
             "emissive_strength": 8.0,
+            "material_palette": float(index % 3),
         },
         "sequence_event": {
             "segment": segment,
@@ -155,8 +162,8 @@ def build_fixture(root: Path, *, test_in_review: bool = False) -> Path:
             | {"name": name, "format": "rgba8"}
             for name in CHANNELS
         ]
-        controls = artifact(corpus, f"sequences/{sequence}/controls.f32le", bytes(16)) | {
-            "schema_name": "incinerator.neural-frame-global.v1"
+        controls = artifact(corpus, f"sequences/{sequence}/controls.f32le", bytes(20)) | {
+            "schema_name": "incinerator.neural-frame-global.v2"
         }
         target = artifact(corpus, f"sequences/{sequence}/target.exr", b"not-opened-by-contract")
         records.append(
@@ -179,7 +186,7 @@ def build_fixture(root: Path, *, test_in_review: bool = False) -> Path:
     manifest = {
         "schema": 1,
         "status": "complete",
-        "purpose": "self-contained native 160x90 to direct 640x360 paired corpus",
+        "purpose": "self-contained native 256x144 to direct 1280x720 paired corpus",
         "rights": {"external_art": False, "learned_denoiser": False, "pretrained_weights": False},
         "sequence_count": len(sequences),
         "frame_count": len(records),
@@ -193,14 +200,36 @@ def build_fixture(root: Path, *, test_in_review: bool = False) -> Path:
 
 
 class CoverageContracts(unittest.TestCase):
-    def test_nr5_e_trial_bundle_uses_the_active_fixed_working_extent(self) -> None:
+    def test_training_authorization_uses_the_sealed_test_field(self) -> None:
+        authorization = {
+            "status": "accepted",
+            "authorization_scope": "rf9",
+            "sealed_test_pixels_opened": False,
+            "corpus_manifest_sha256": "corpus-digest",
+        }
+        require_sealed_training_authorization(
+            authorization,
+            allowed_scopes=("rf9",),
+            corpus_manifest_sha256="corpus-digest",
+        )
+        legacy_field = dict(authorization)
+        legacy_field.pop("sealed_test_pixels_opened")
+        legacy_field["test_pixels_opened"] = False
+        with self.assertRaisesRegex(ValueError, "exact sealed held-out authorization"):
+            require_sealed_training_authorization(
+                legacy_field,
+                allowed_scopes=("rf9",),
+                corpus_manifest_sha256="corpus-digest",
+            )
+
+    def test_rf10_trial_bundle_uses_the_active_fixed_working_extent(self) -> None:
         self.assertEqual(list(INPUT_EXTENT), TRIAL_INPUT_EXTENT)
         self.assertEqual(list(TARGET_EXTENT), TRIAL_TARGET_EXTENT)
         self.assertEqual(list(CHANNELS), TRIAL_CHANNELS)
         self.assertEqual(len(TRIAL_CONTINUOUS_PLANES), 11)
         self.assertEqual(
             TRIAL_GLOBAL_CONTROLS,
-            ["sun_strength", "world_strength", "local_light_strength", "emissive_strength"],
+            ["sun_strength", "world_strength", "local_light_strength", "emissive_strength", "material_palette"],
         )
 
     def test_coverage_accepts_scoped_fixture_without_opening_test_pixels(self) -> None:

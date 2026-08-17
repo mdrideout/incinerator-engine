@@ -1,9 +1,10 @@
 # ADR-025: Game-Specific Neural Rendering Boundary and Model Promotion
 
 **Status:** Accepted; NR0-A through NR0-D, NR-0004, and NR5-A through NR5-E
-implemented and accepted; full NR0 remains open
+implemented and accepted; RF9 historical; RF10 retained as an accepted external
+native-720p trial; implementation paused and unpromoted
 
-**Date:** 2026-08-07
+**Date:** 2026-08-17
 
 **Platform:** Apple Silicon macOS first
 
@@ -35,6 +36,15 @@ or allowing the model to observe authority internals would erase ownership and
 make runtime results impossible to reproduce.
 
 ## Decision
+
+### Current portfolio decision
+
+The architecture remains accepted, but implementation is paused by product-owner
+decision as recorded in the
+[Neural Rendering Product-Track Pause](../design/neural-rendering-pause.md).
+RF10 is the retained external, unpromoted stopping point. NR6, NR7, promotion,
+and the remaining NR0 delivery work are not authorized while the track is
+paused. Deterministic rendering is the active product focus.
 
 ### Neural rendering is presentation infrastructure
 
@@ -245,6 +255,46 @@ presentation contract, preserving the same authority and promotion boundary:
   remains conventional and outside neural inference; and
 - the Neural Input / Output tool shows the `160×90` source only because the
   selected neural result is evaluated in the main presentation.
+
+RF9 advances that same direct boundary as one greenfield compatibility cohort:
+
+- `incinerator.neural-input.v6`, capture root schema 7, and target-frame v7 add
+  one presentation-owned material-palette control to the existing four global
+  lighting controls;
+- the scalar is justified by byte-identical cheap input pairs whose rich
+  material targets differ, and exposes no gameplay authority or raw asset
+  handle;
+- the direct native `160×90 → 640×360` image contract remains unchanged; and
+- every engine producer, corpus adapter, dataset, model, export, Core ML host,
+  diagnostic, test, and document advances together without a compatibility
+  decoder.
+
+The completed RF9 campaign validates that boundary rather than widening it.
+Material-palette conditioning improved held-out chroma and aggregate spatial
+quality and is retained. Learned pyramid reconstruction, wider context, deeper
+output refinement, detail-focused sampling, and the learned detail residual
+did not beat the simpler validation-selected model and are rejected. The
+result remains an explicit external Core ML trial; it does not alter the
+promotion or installed-content boundary.
+
+RF10 is the implemented clean replacement cohort, not a display-scale
+adjustment:
+
+- all six inputs become native `256×144` and the direct scene-linear output
+  and Cycles target become native `1280×720`;
+- the exact mapping becomes uniform 5:1 on both axes;
+- RF10 retains the presentation-owned material-palette signal but regenerates
+  every source, target, split, initializer, checkpoint, evaluation, export,
+  and trial artifact;
+- no RF9 pixel or learned state enters RF10; and
+- the main scene is presented at native centered `1280×720` without stretching,
+  while UI and diagnostics remain conventional.
+
+The coordinated RF10 cohort passed its target, fresh corpus, controlled fit,
+validation selection, single-open test, post-selection stress, Core ML
+agreement, and graphical Metal gates. It is now the active experimental ABI.
+RF9 bundles are incompatible historical evidence, and RF10 technical
+acceptance does not authorize promotion.
 
 NR0 still owes a promotion-worthy candidate, transactional promotion,
 GPU-resident inference adapter, installed bundle validation, full end-to-end

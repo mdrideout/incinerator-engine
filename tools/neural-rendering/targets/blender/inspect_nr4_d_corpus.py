@@ -46,8 +46,10 @@ def inspect(root: Path) -> dict:
     sequence_splits = {record["sequence"]: record["split"] for record in manifest["sequences"]}
     if len(sequence_splits) != manifest["sequence_count"]:
         raise ValueError("NR4-D sequence identity is duplicated")
-    if set(sequence_splits.values()) != SPLITS:
-        raise ValueError("NR4-D does not contain every required split")
+    role = manifest.get("corpus_role", "primary")
+    expected_splits = {"stress"} if role == "post_selection_stress" else SPLITS
+    if set(sequence_splits.values()) != expected_splits:
+        raise ValueError("NR4-D corpus does not own the splits required by its role")
 
     frame_ids: set[str] = set()
     conditioning_digests: dict[str, tuple[str, str]] = {}

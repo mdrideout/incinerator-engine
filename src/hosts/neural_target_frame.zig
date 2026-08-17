@@ -180,7 +180,7 @@ pub const Owner = struct {
                 "  \"source\": {{\"revision\":\"{s}\",\"dirty\":{},\"dirty_fingerprint\":\"{s}\",\"content_sha256\":\"{s}\",\"input_schema\":\"{s}\",\"shader_fingerprint\":\"{s}\"}},\n" ++
                 "  \"coordinate_system\": {{\"world\":\"right-handed +Y up -Z forward\",\"matrix_storage\":\"zmath row-major row-vector\",\"image_origin\":\"top-left\",\"sample\":\"pixel-center\"}},\n" ++
                 "  \"input_extent\": [{d},{d}],\n  \"target_extent\": [{d},{d}],\n" ++
-                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 4) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 4) - 0.5\"}},\"border\":\"clamp\"}},\n" ++
+                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 5) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 5) - 0.5\"}},\"border\":\"clamp\"}},\n" ++
                 "  \"exposure\": {d},\n  \"effect_seed\": {d},\n",
             .{
                 target.schema_version,
@@ -213,7 +213,7 @@ pub const Owner = struct {
             },
         );
         try writer.print(
-            "  \"global_controls\": {{\"schema_name\":\"{s}\",\"sun_strength\":{d},\"world_strength\":{d},\"local_light_strength\":{d},\"emissive_strength\":{d}}},\n" ++
+            "  \"global_controls\": {{\"schema_name\":\"{s}\",\"sun_strength\":{d},\"world_strength\":{d},\"local_light_strength\":{d},\"emissive_strength\":{d},\"material_palette\":{d}}},\n" ++
                 "  \"sequence_event\": {{\"segment\":\"{s}\",\"segment_index\":{d},\"sample_index\":{d},\"progress\":{d},\"reset\":{},\"controlled_change\":\"{s}\"}},\n" ++
                 "  \"camera\": {{\"position\":",
             .{
@@ -222,6 +222,7 @@ pub const Owner = struct {
                 frame.global_controls.world_strength,
                 frame.global_controls.local_light_strength,
                 frame.global_controls.emissive_strength,
+                frame.global_controls.material_palette,
                 @tagName(event.segment),
                 event.segment_index,
                 event.sample_index,
@@ -363,13 +364,13 @@ pub const Owner = struct {
         defer allocating.deinit();
         try allocating.writer.print(
             "{{\n  \"schema\": {d},\n  \"schema_name\": \"{s}\",\n  \"status\": \"{s}\",\n" ++
-                "  \"purpose\": \"native 160x90 input lineage for direct native 640x360 Blender target pairs\",\n" ++
+                "  \"purpose\": \"native 256x144 input lineage for direct native 1280x720 Blender target pairs\",\n" ++
                 "  \"source_revision\": \"{s}\",\n  \"source_dirty\": {},\n  \"source_dirty_fingerprint\": \"{s}\",\n" ++
                 "  \"content_sha256\": \"{s}\",\n  \"scene_id\": \"{s}\",\n  \"scene_fingerprint\": \"{s}\",\n" ++
                 "  \"capture_root\": \"{s}\",\n  \"sequence\": \"{s}\",\n  \"camera_path\": \"{s}\",\n" ++
                 "  \"input_extent\": [{d},{d}],\n  \"target_extent\": [{d},{d}],\n" ++
-                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 4) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 4) - 0.5\"}},\"border\":\"clamp\"}},\n" ++
-                "  \"global_control_schema\": {{\"name\":\"{s}\",\"encoding\":\"{s}\",\"order\":[\"sun_strength\",\"world_strength\",\"local_light_strength\",\"emissive_strength\"],\"count\":{d}}},\n" ++
+                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 5) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 5) - 0.5\"}},\"border\":\"clamp\"}},\n" ++
+                "  \"global_control_schema\": {{\"name\":\"{s}\",\"encoding\":\"{s}\",\"order\":[\"sun_strength\",\"world_strength\",\"local_light_strength\",\"emissive_strength\",\"material_palette\"],\"count\":{d}}},\n" ++
                 "  \"selection\": {{\"start_frame\":{d},\"frame_stride\":{d},\"requested_frames\":{d}}},\n" ++
                 "  \"recorded_frames\": {d},\n  \"failures\": {d},\n  \"frame_index\": \"frames.ndjson\"\n}}\n",
             .{

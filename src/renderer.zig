@@ -1046,6 +1046,10 @@ test "centered fixed scene preserves native pixels in larger and smaller drawabl
         CenteredBlit{ .source_x = 120, .source_y = 30, .destination_x = 0, .destination_y = 0, .width = 400, .height = 300 },
         centeredUnscaledBlit(640, 360, 400, 300),
     );
+    try std.testing.expectEqual(
+        CenteredBlit{ .source_x = 0, .source_y = 0, .destination_x = 160, .destination_y = 90, .width = 1280, .height = 720 },
+        centeredUnscaledBlit(1280, 720, 1600, 900),
+    );
 }
 
 // ============================================================================

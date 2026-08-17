@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build strict native 160x90 -> 640x360 display baselines for one direct pair."""
+"""Build strict native 256x144 -> 1280x720 display baselines for one direct pair."""
 
 from __future__ import annotations
 
@@ -90,11 +90,11 @@ def main() -> None:
     if capture.get("schema") != CAPTURE_SCHEMA:
         raise ValueError(f"NR4-C baselines require capture schema {CAPTURE_SCHEMA}")
     if capture.get("input_size") != INPUT_EXTENT:
-        raise ValueError("NR4-C baseline input is not native 160x90")
+        raise ValueError("NR4-C baseline input is not native 256x144")
     if capture.get("paired_target_size") != TARGET_EXTENT:
-        raise ValueError("capture does not declare a native 640x360 target")
+        raise ValueError("capture does not declare a native 1280x720 target")
     if target_manifest.get("extent") != TARGET_EXTENT:
-        raise ValueError("direct target is not native 640x360")
+        raise ValueError("direct target is not native 1280x720")
 
     capture_root = capture_path.parent.parent
     appearance = next(
@@ -107,15 +107,15 @@ def main() -> None:
     if source.size != tuple(INPUT_EXTENT) or target.size != tuple(TARGET_EXTENT):
         raise ValueError("NR4-C baseline material contains a foreign extent")
 
-    source.save(output / "input-native-160x90.png")
-    artifacts = [artifact(output / "input-native-160x90.png", output)]
+    source.save(output / "input-native-256x144.png")
+    artifacts = [artifact(output / "input-native-256x144.png", output)]
     baseline_images: dict[str, Image.Image] = {}
     baseline_records = []
     for name, resampler in RESAMPLERS.items():
         started = time.perf_counter_ns()
         image = source.resize(tuple(TARGET_EXTENT), resampler)
         resize_ns = time.perf_counter_ns() - started
-        path = output / f"baseline-{name}-640x360.png"
+        path = output / f"baseline-{name}-1280x720.png"
         image.save(path)
         artifacts.append(artifact(path, output))
         baseline_images[name] = image
@@ -131,18 +131,18 @@ def main() -> None:
         )
 
     cards = [
-        card(source, "INPUT native 160x90 (centered, no resize)", native=True),
+        card(source, "INPUT native 256x144 (centered, no resize)", native=True),
         card(baseline_images["nearest"], "INPUT UI zoom 4x nearest (not training material)"),
-        card(target, "TARGET direct Cycles 640x360"),
-        card(baseline_images["nearest"], "BASELINE nearest 160x90 -> 640x360"),
-        card(baseline_images["bilinear"], "BASELINE bilinear 160x90 -> 640x360"),
-        card(baseline_images["bicubic"], "BASELINE bicubic 160x90 -> 640x360"),
+        card(target, "TARGET direct Cycles 1280x720"),
+        card(baseline_images["nearest"], "BASELINE nearest 256x144 -> 1280x720"),
+        card(baseline_images["bilinear"], "BASELINE bilinear 256x144 -> 1280x720"),
+        card(baseline_images["bicubic"], "BASELINE bicubic 256x144 -> 1280x720"),
     ]
     card_width, card_height = cards[0].size
     report = Image.new("RGB", (card_width * 3, card_height * 2), (10, 12, 16))
     for index, image in enumerate(cards):
         report.paste(image, ((index % 3) * card_width, (index // 3) * card_height))
-    report_path = output / "native-160x90-to-640x360-review.png"
+    report_path = output / "native-256x144-to-1280x720-review.png"
     report.save(report_path)
     artifacts.append(artifact(report_path, output))
     atomic_json(
@@ -155,8 +155,8 @@ def main() -> None:
             "input_extent": INPUT_EXTENT,
             "target_extent": TARGET_EXTENT,
             "training_material": {
-                "input": "capture appearance channel at native 160x90",
-                "target": "direct Cycles OpenEXR at native 640x360",
+                "input": "capture appearance channel at native 256x144",
+                "target": "direct Cycles OpenEXR at native 1280x720",
                 "ui_zoom_and_baselines_excluded": True,
             },
             "model_output": "absent until NR5",

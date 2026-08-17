@@ -35,6 +35,7 @@ GLOBAL_CONTROLS = (
     "world_strength",
     "local_light_strength",
     "emissive_strength",
+    "material_palette",
 )
 
 
@@ -98,11 +99,11 @@ def _identity_coverage(path: Path, extent: tuple[int, int]) -> np.ndarray:
     return (values.reshape(height, width) != 0).astype(np.float32)
 
 
-def _control_values(path: Path) -> tuple[float, float, float, float]:
+def _control_values(path: Path) -> tuple[float, float, float, float, float]:
     raw = path.read_bytes()
-    if len(raw) != 16:
+    if len(raw) != 20:
         raise ValueError(f"global-control payload drifted: {path}")
-    values = struct.unpack("<4f", raw)
+    values = struct.unpack("<5f", raw)
     if not all(np.isfinite(value) for value in values):
         raise ValueError(f"global-control payload is not finite: {path}")
     return values
@@ -119,8 +120,8 @@ class DatasetSpecification:
     continuous_planes: tuple[str, ...]
     semantic_vocabulary: dict[int, int]
     instance_vocabulary: dict[int, int]
-    control_minimum: tuple[float, float, float, float]
-    control_maximum: tuple[float, float, float, float]
+    control_minimum: tuple[float, float, float, float, float]
+    control_maximum: tuple[float, float, float, float, float]
     target_minimum: float
     target_maximum: float
     test_pixels_opened: bool
@@ -157,7 +158,14 @@ def _vocabulary(values: Iterable[np.ndarray]) -> dict[int, int]:
 class TitleCorpusDataset(Dataset):
     """Eager immutable tensor view over explicitly selected whole splits."""
 
-    def __init__(self, corpus_root: Path, splits: tuple[str, ...], *, allow_test: bool = False) -> None:
+    def __init__(
+        self,
+        corpus_root: Path,
+        splits: tuple[str, ...],
+        *,
+        allow_test: bool = False,
+        reference_specification: dict[str, Any] | None = None,
+    ) -> None:
         if not splits:
             raise ValueError("title-renderer dataset must name splits explicitly")
         if "test" in splits and not allow_test:
@@ -172,7 +180,7 @@ class TitleCorpusDataset(Dataset):
             raise ValueError(f"dataset opened undeclared splits: {sorted(unexpected)}")
         semantic_values: list[np.ndarray] = []
         instance_values: list[np.ndarray] = []
-        controls: list[tuple[float, float, float, float]] = []
+        controls: list[tuple[float, float, float, float, float]] = []
         raw_frames: list[dict[str, Any]] = []
         target_minimum = float("inf")
         target_maximum = float("-inf")
@@ -190,11 +198,27 @@ class TitleCorpusDataset(Dataset):
             target_maximum = max(target_maximum, float(target.max()))
             identity = next(item for item in record["target"]["auxiliary"] if item["kind"] == "identity.u32")
             raw_frames.append({"record": record, "arrays": arrays, "target": target, "identity": identity})
-        semantic_vocabulary = _vocabulary(semantic_values)
-        instance_vocabulary = _vocabulary(instance_values)
         control_array = np.asarray(controls, dtype=np.float32)
-        control_minimum = control_array.min(axis=0)
-        control_maximum = control_array.max(axis=0)
+        if reference_specification is None:
+            semantic_vocabulary = _vocabulary(semantic_values)
+            instance_vocabulary = _vocabulary(instance_values)
+            control_minimum = control_array.min(axis=0)
+            control_maximum = control_array.max(axis=0)
+        else:
+            semantic_vocabulary = {
+                int(key): int(value)
+                for key, value in reference_specification["semantic_vocabulary"].items()
+            }
+            instance_vocabulary = {
+                int(key): int(value)
+                for key, value in reference_specification["instance_vocabulary"].items()
+            }
+            observed_semantic = set().union(*(set(int(item) for item in np.unique(value)) for value in semantic_values))
+            observed_instance = set().union(*(set(int(item) for item in np.unique(value)) for value in instance_values))
+            if observed_semantic - set(semantic_vocabulary) or observed_instance - set(instance_vocabulary):
+                raise ValueError("evaluation corpus contains categories absent from the frozen training vocabulary")
+            control_minimum = np.asarray(reference_specification["control_minimum"], dtype=np.float32)
+            control_maximum = np.asarray(reference_specification["control_maximum"], dtype=np.float32)
         self.specification = DatasetSpecification(
             corpus_root=str(self.root),
             corpus_manifest_sha256=sha256_file(self.root / "corpus.json"),

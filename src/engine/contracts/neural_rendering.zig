@@ -6,29 +6,29 @@
 
 const std = @import("std");
 
-pub const schema_version: u16 = 5;
-pub const schema_name = "incinerator.neural-input.v5";
+pub const schema_version: u16 = 7;
+pub const schema_name = "incinerator.neural-input.v7";
 pub const schema_fingerprint =
-    "nr5|rgba8|160x90|paired-target-640x360|scale-x-4:1|scale-y-4:1|appearance-srgb|depth-view-linear-0.1-250|" ++
+    "nr7|rgba8|256x144|paired-target-1280x720|scale-x-5:1|scale-y-5:1|appearance-srgb|depth-view-linear-0.1-250|" ++
     "normal-world|motion-prev-to-current-ndc-2|semantic-palette-v1|instance-rgb24|" ++
-    "global-f32le:sun-strength,world-strength,local-light-strength,emissive-strength|" ++
+    "global-f32le:sun-strength,world-strength,local-light-strength,emissive-strength,material-palette|" ++
     "top-left|pixel-center|reversed-y|no-jitter|exposure-1";
 
-pub const cheap_width: u32 = 160;
-pub const cheap_height: u32 = 90;
-pub const target_width: u32 = 640;
-pub const target_height: u32 = 360;
-pub const horizontal_scale_numerator: u32 = 4;
+pub const cheap_width: u32 = 256;
+pub const cheap_height: u32 = 144;
+pub const target_width: u32 = 1280;
+pub const target_height: u32 = 720;
+pub const horizontal_scale_numerator: u32 = 5;
 pub const horizontal_scale_denominator: u32 = 1;
-pub const vertical_scale_numerator: u32 = 4;
+pub const vertical_scale_numerator: u32 = 5;
 pub const vertical_scale_denominator: u32 = 1;
 pub const near_plane: f32 = 0.1;
 pub const far_plane: f32 = 250.0;
 pub const exposure: f32 = 1.0;
 pub const effect_seed: u64 = 0;
-pub const global_control_schema_name = "incinerator.neural-frame-global.v1";
+pub const global_control_schema_name = "incinerator.neural-frame-global.v2";
 pub const global_control_encoding = "float32 little-endian";
-pub const global_control_count: usize = 4;
+pub const global_control_count: usize = 5;
 pub const global_control_bytes: usize = global_control_count * @sizeOf(f32);
 
 /// Frame-global title presentation intent. These values resolve the measured
@@ -39,6 +39,10 @@ pub const FrameGlobalControls = extern struct {
     world_strength: f32 = 0,
     local_light_strength: f32 = 0,
     emissive_strength: f32 = 0,
+    /// Presentation-owned authored material-palette identity. This resolves
+    /// rich-target ambiguity without exposing gameplay authority or inventing
+    /// a per-pixel material ABI before the product owns one.
+    material_palette: f32 = 0,
 
     pub fn validate(self: FrameGlobalControls) !void {
         for (self.values()) |value| {
@@ -53,6 +57,7 @@ pub const FrameGlobalControls = extern struct {
             self.world_strength,
             self.local_light_strength,
             self.emissive_strength,
+            self.material_palette,
         };
     }
 };
@@ -199,7 +204,7 @@ pub const Frame = struct {
         }
         try self.global_controls.validate();
         if (self.jitter_pixels[0] != 0 or self.jitter_pixels[1] != 0) {
-            return error.NeuralSchemaV5DoesNotSupportJitter;
+            return error.NeuralSchemaV7DoesNotSupportJitter;
         }
     }
 };
@@ -275,7 +280,7 @@ pub fn semanticPalette(class: SemanticClass, part: SemanticPart) [3]u8 {
     };
 }
 
-test "schema v5 frame contract rejects jitter and every foreign extent" {
+test "schema v7 frame contract rejects jitter and every foreign extent" {
     var frame = Frame{
         .authority_tick = 1,
         .presentation_frame = 2,
@@ -285,7 +290,7 @@ test "schema v5 frame contract rejects jitter and every foreign extent" {
     };
     try frame.validate();
     frame.jitter_pixels[0] = 0.25;
-    try std.testing.expectError(error.NeuralSchemaV5DoesNotSupportJitter, frame.validate());
+    try std.testing.expectError(error.NeuralSchemaV7DoesNotSupportJitter, frame.validate());
     frame.jitter_pixels = .{ 0, 0 };
     frame.target_width = 0;
     try std.testing.expectError(error.ForeignNeuralFrameExtent, frame.validate());
@@ -294,39 +299,39 @@ test "schema v5 frame contract rejects jitter and every foreign extent" {
     try std.testing.expectError(error.ForeignNeuralFrameExtent, frame.validate());
 }
 
-test "schema v5 owns exact uniform 160x90 to 640x360 correspondence" {
-    try std.testing.expectEqual(@as(u32, 4), horizontal_scale_numerator);
+test "schema v7 owns exact uniform 256x144 to 1280x720 correspondence" {
+    try std.testing.expectEqual(@as(u32, 5), horizontal_scale_numerator);
     try std.testing.expectEqual(@as(u32, 1), horizontal_scale_denominator);
-    try std.testing.expectEqual(@as(u32, 4), vertical_scale_numerator);
+    try std.testing.expectEqual(@as(u32, 5), vertical_scale_numerator);
     try std.testing.expectEqual(@as(u32, 1), vertical_scale_denominator);
     try std.testing.expectApproxEqAbs(
-        @as(f32, -0.375),
+        @as(f32, -0.4),
         targetCenterToSourceIndexCoordinate(0, target_width, cheap_width),
         1e-6,
     );
     try std.testing.expectApproxEqAbs(
-        @as(f32, 159.375),
-        targetCenterToSourceIndexCoordinate(639, target_width, cheap_width),
+        @as(f32, 255.4),
+        targetCenterToSourceIndexCoordinate(1279, target_width, cheap_width),
         1e-5,
     );
     try std.testing.expectApproxEqAbs(
-        @as(f32, -0.375),
+        @as(f32, -0.4),
         targetCenterToSourceIndexCoordinate(0, target_height, cheap_height),
         1e-6,
     );
     try std.testing.expectApproxEqAbs(
-        @as(f32, 89.375),
-        targetCenterToSourceIndexCoordinate(359, target_height, cheap_height),
+        @as(f32, 143.4),
+        targetCenterToSourceIndexCoordinate(719, target_height, cheap_height),
         1e-5,
     );
     try std.testing.expectEqual(@as(u32, 0), nearestSourceIndex(0, target_width, cheap_width));
     try std.testing.expectEqual(@as(u32, 0), nearestSourceIndex(1, target_width, cheap_width));
-    try std.testing.expectEqual(@as(u32, 0), nearestSourceIndex(3, target_width, cheap_width));
-    try std.testing.expectEqual(@as(u32, 1), nearestSourceIndex(4, target_width, cheap_width));
-    try std.testing.expectEqual(@as(u32, 159), nearestSourceIndex(639, target_width, cheap_width));
+    try std.testing.expectEqual(@as(u32, 0), nearestSourceIndex(4, target_width, cheap_width));
+    try std.testing.expectEqual(@as(u32, 1), nearestSourceIndex(5, target_width, cheap_width));
+    try std.testing.expectEqual(@as(u32, 255), nearestSourceIndex(1279, target_width, cheap_width));
 }
 
-test "schema v5 frame-global controls are exact finite nonnegative float32 values" {
+test "schema v7 frame-global controls are exact finite nonnegative float32 values" {
     const controls = FrameGlobalControls{
         .sun_strength = 4,
         .world_strength = 0.32,
@@ -335,7 +340,7 @@ test "schema v5 frame-global controls are exact finite nonnegative float32 value
     };
     try controls.validate();
     try std.testing.expectEqual(
-        [global_control_count]f32{ 4, 0.32, 550, 8 },
+        [global_control_count]f32{ 4, 0.32, 550, 8, 0 },
         controls.values(),
     );
     var invalid = controls;

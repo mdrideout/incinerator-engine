@@ -203,7 +203,7 @@ pub const Owner = struct {
         var summary = std.Io.Writer.Allocating.init(self.allocator);
         defer summary.deinit();
         try summary.writer.print(
-            "{{\"schema\":5,\"frame_id\":\"{s}-frame-{d:0>8}\",\"cohort\":\"{s}\",\"sequence\":\"{s}\",\"camera_path\":\"{s}\",\"authority_tick\":{d},\"presentation_frame\":{d},\"frame_manifest\":\"frames/frame-{d:0>8}.json\"}}\n",
+            "{{\"schema\":6,\"frame_id\":\"{s}-frame-{d:0>8}\",\"cohort\":\"{s}\",\"sequence\":\"{s}\",\"camera_path\":\"{s}\",\"authority_tick\":{d},\"presentation_frame\":{d},\"frame_manifest\":\"frames/frame-{d:0>8}.json\"}}\n",
             .{
                 self.config.sequence,
                 frame.presentation_frame,
@@ -402,12 +402,12 @@ pub const Owner = struct {
         defer allocating.deinit();
         const writer = &allocating.writer;
         try writer.print(
-            "{{\n  \"schema\": 6,\n  \"input_schema\": {{\"version\": {d}, \"name\": \"{s}\", \"fingerprint\": \"{s}\"}},\n" ++
+            "{{\n  \"schema\": 7,\n  \"input_schema\": {{\"version\": {d}, \"name\": \"{s}\", \"fingerprint\": \"{s}\"}},\n" ++
                 "  \"shader_fingerprint\": \"{s}\", \"shader_sha256\": \"{s}\",\n  \"frame_id\": \"{s}-frame-{d:0>8}\",\n" ++
                 "  \"cohort\": \"{s}\", \"sequence\": \"{s}\", \"camera_path\": \"{s}\",\n" ++
                 "  \"authority_tick\": {d}, \"presentation_frame\": {d}, \"interpolation_alpha\": {d},\n" ++
                 "  \"input_size\": [{d}, {d}], \"paired_target_size\": [{d}, {d}],\n" ++
-                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 4) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 4) - 0.5\"}},\"border\":\"clamp\"}},\n" ++
+                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 5) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 5) - 0.5\"}},\"border\":\"clamp\"}},\n" ++
                 "  \"coordinate_system\": {{\"world\": \"right-handed +Y up -Z forward\", \"image_origin\": \"top-left\", \"sample\": \"pixel-center\"}},\n" ++
                 "  \"camera\": {{\"near\": {d}, \"far\": {d}, \"jitter_pixels\": [{d}, {d}], \"history_reset\": \"{s}\", \"view\": ",
             .{
@@ -446,7 +446,7 @@ pub const Owner = struct {
         } else try writeMatrix(writer, zm.identity());
         try writer.print(
             "}},\n  \"effects\": {{\"seed\": {d}, \"exposure\": {d}}},\n" ++
-                "  \"global_controls\": {{\"schema_name\":\"{s}\",\"encoding\":\"{s}\",\"order\":[\"sun_strength\",\"world_strength\",\"local_light_strength\",\"emissive_strength\"],\"values\":{{\"sun_strength\":{d},\"world_strength\":{d},\"local_light_strength\":{d},\"emissive_strength\":{d}}},\"raw_bytes\":{d},\"raw_path\":\"controls/frame-{d:0>8}.f32le\",\"raw_sha256\":\"{s}\"}},\n" ++
+                "  \"global_controls\": {{\"schema_name\":\"{s}\",\"encoding\":\"{s}\",\"order\":[\"sun_strength\",\"world_strength\",\"local_light_strength\",\"emissive_strength\",\"material_palette\"],\"values\":{{\"sun_strength\":{d},\"world_strength\":{d},\"local_light_strength\":{d},\"emissive_strength\":{d},\"material_palette\":{d}}},\"raw_bytes\":{d},\"raw_path\":\"controls/frame-{d:0>8}.f32le\",\"raw_sha256\":\"{s}\"}},\n" ++
                 "  \"input_raster_timing\": {{\"scope\":\"CPU command encoding only; GPU raster time unavailable\",\"last_command_encoding_ns\":{d},\"lifetime_total_command_encoding_ns\":{d},\"lifetime_maximum_command_encoding_ns\":{d}}},\n" ++
                 "  \"content\": {{\"source_revision\": \"{s}\", \"source_dirty\": {}, \"source_dirty_fingerprint\": \"{s}\", \"content_digest\": \"{s}\"}},\n  \"channels\": [\n",
             .{
@@ -458,6 +458,7 @@ pub const Owner = struct {
                 frame.global_controls.world_strength,
                 frame.global_controls.local_light_strength,
                 frame.global_controls.emissive_strength,
+                frame.global_controls.material_palette,
                 contract.global_control_bytes,
                 frame.presentation_frame,
                 &controls_digest,
@@ -525,12 +526,12 @@ pub const Owner = struct {
         defer allocating.deinit();
         const writer = &allocating.writer;
         try writer.print(
-            "{{\n  \"schema\": 6,\n  \"status\": \"{s}\",\n  \"purpose\": \"native presentation-only neural inputs and frame-global controls for direct 640x360 offline target pairing\",\n" ++
+            "{{\n  \"schema\": 8,\n  \"status\": \"{s}\",\n  \"purpose\": \"native presentation-only neural inputs and frame-global controls for direct 1280x720 offline target pairing\",\n" ++
                 "  \"platform\": \"macos-aarch64-metal\",\n  \"input_schema\": {{\"version\": {d}, \"name\": \"{s}\", \"fingerprint\": \"{s}\"}},\n" ++
                 "  \"shader_fingerprint\": \"{s}\",\n  \"shader_sha256\": \"{s}\",\n  \"source_revision\": \"{s}\",\n  \"source_dirty\": {},\n  \"source_dirty_fingerprint\": \"{s}\",\n" ++
                 "  \"content_digest\": \"{s}\",\n  \"cohort\": \"{s}\",\n  \"sequence\": \"{s}\",\n  \"camera_path\": \"{s}\",\n" ++
                 "  \"input_size\": [{d}, {d}],\n  \"paired_target_size\": [{d}, {d}],\n" ++
-                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 4) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 4) - 0.5\"}},\"border\":\"clamp\"}},\n",
+                "  \"sampling_map\": {{\"x\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_x + 0.5) / 5) - 0.5\"}},\"y\":{{\"scale_numerator\":{d},\"scale_denominator\":{d},\"target_center_to_source_index\":\"((target_y + 0.5) / 5) - 0.5\"}},\"border\":\"clamp\"}},\n",
             .{
                 @tagName(status),
                 contract.schema_version,
@@ -556,7 +557,7 @@ pub const Owner = struct {
             },
         );
         try writer.print(
-            "  \"global_control_schema\": {{\"name\":\"{s}\",\"encoding\":\"{s}\",\"order\":[\"sun_strength\",\"world_strength\",\"local_light_strength\",\"emissive_strength\"],\"count\":{d}}},\n" ++
+            "  \"global_control_schema\": {{\"name\":\"{s}\",\"encoding\":\"{s}\",\"order\":[\"sun_strength\",\"world_strength\",\"local_light_strength\",\"emissive_strength\",\"material_palette\"],\"count\":{d}}},\n" ++
                 "  \"raw_channel_bytes_per_frame\": {d},\n  \"raw_global_control_bytes_per_frame\": {d},\n  \"raw_training_bytes_per_frame\": {d},\n" ++
                 "  \"selection\": {{\"start_frame\": {d}, \"frame_stride\": {d}, \"requested_frames\": {d}}},\n" ++
                 "  \"recorded_frames\": {d},\n  \"capture_failures\": {d},\n" ++

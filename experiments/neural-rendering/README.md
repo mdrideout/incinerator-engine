@@ -1,5 +1,10 @@
 # Neural Rendering Experiments
 
+> **Product-track pause (2026-08-17):** Do not create, run, extend, or promote a
+> neural-rendering experiment without an explicit product-owner request to
+> resume the track. RF10 is the retained external, unpromoted stopping point.
+> See [`docs/design/neural-rendering-pause.md`](../../docs/design/neural-rendering-pause.md).
+
 This directory stores small, reviewable experiment definitions and conclusions.
 It does not store mutable training runs or runtime-selected models.
 
@@ -59,12 +64,23 @@ Implemented numbered experiments:
   contains no `400×225` intermediate, supervision, comparison, or runtime
   image; product visual review is pre-approved for autonomous completion.
 - [`rf8-direct-640x360-spatial-sharpness/`](rf8-direct-640x360-spatial-sharpness/README.md):
-  active direct native `160×90 → 640×360` spatial-fidelity cohort. It preserves
+  historical direct native `160×90 → 640×360` spatial-fidelity cohort. It preserves
   exact 16:9 geometry and a uniform 4× mapping, renders wholly fresh native
   truth, adds native-grid reconstruction capacity and explicit spatial-quality
   losses/selection, and drives the centered unscaled live presentation. The
   retired `400×225` and `800×450` images have no RF8 training, comparison,
   export, or runtime role.
+- [`rf9-spatial-quality-expansion/`](rf9-spatial-quality-expansion/README.md):
+  completed direct native `160×90 → 640×360` material-conditioned campaign.
+  It accepts only material-palette conditioning, rejects the tested learned
+  pyramid/capacity/sampling/detail additions, and completes an external
+  unpromoted Core ML trial.
+- [`rf10-native-720p-spatial/`](rf10-native-720p-spatial/README.md): completed
+  direct native `256×144 → 1280×720` replacement cohort. It regenerated all
+  pixels and learned lineage, uses exact 5× mapping, passed controlled fit,
+  validation-only selection, single-open test, new post-selection stress,
+  exact Core ML export, and Metal runtime acceptance, and remains an external
+  unpromoted trial without an intermediate rendered image.
 
 Once tooling exists, each committed experiment directory should contain only
 the information needed to reproduce and review intent:

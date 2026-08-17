@@ -1,4 +1,4 @@
-//! Adapter-specific source contract for the NR-0004 offline target renderer.
+//! Adapter-specific source contract for the active offline target renderer.
 //!
 //! This is presentation data, not an authority or model-input schema. It is
 //! deliberately local to the host/tool boundary until a second target producer
@@ -6,15 +6,15 @@
 
 const std = @import("std");
 
-pub const schema_version: u16 = 6;
-pub const schema_name = "incinerator.nr4.blender-target-frame.v6";
-pub const input_width: u32 = 160;
-pub const input_height: u32 = 90;
-pub const target_width: u32 = 640;
-pub const target_height: u32 = 360;
-pub const horizontal_scale_numerator: u32 = 4;
+pub const schema_version: u16 = 8;
+pub const schema_name = "incinerator.nr4.blender-target-frame.v8";
+pub const input_width: u32 = 256;
+pub const input_height: u32 = 144;
+pub const target_width: u32 = 1280;
+pub const target_height: u32 = 720;
+pub const horizontal_scale_numerator: u32 = 5;
 pub const horizontal_scale_denominator: u32 = 1;
-pub const vertical_scale_numerator: u32 = 4;
+pub const vertical_scale_numerator: u32 = 5;
 pub const vertical_scale_denominator: u32 = 1;
 
 pub const Shape = enum {
@@ -43,8 +43,8 @@ pub const Pattern = enum {
 };
 
 /// Explicit offline-target material intent. These values are not part of the
-/// runtime neural-input ABI; NR4-C will decide which observed ambiguities need
-/// deterministic model inputs. Keeping them in the target package prevents
+/// runtime neural-input ABI; only measured ambiguity may add deterministic
+/// model inputs. Keeping them in the target package prevents
 /// the Blender script from silently owning title art direction.
 pub const MaterialResponse = struct {
     roughness: f32,

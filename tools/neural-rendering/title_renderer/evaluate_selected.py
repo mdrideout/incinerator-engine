@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Open the selected NR5-C test once, then evaluate NR5-D stress separately."""
+"""Open a selected test once, then evaluate separately owned stress evidence."""
 
 from __future__ import annotations
 
@@ -22,6 +22,7 @@ def main() -> None:
     parser.add_argument("--run", required=True, type=Path)
     parser.add_argument("--corpus", required=True, type=Path)
     parser.add_argument("--split", required=True, choices=("test", "stress"))
+    parser.add_argument("--campaign-selection", type=Path)
     args = parser.parse_args()
     root = args.run.resolve()
     corpus = args.corpus.resolve()
@@ -30,13 +31,33 @@ def main() -> None:
     selection = load_json(root / "selection.json")
     if (
         run.get("schema") != 2
-        or run.get("phase") != "NR5-C"
+        or run.get("phase") not in ("NR5-C", "RF9-D/F", "RF10-D/E")
         or run.get("status") != "validation_selected_pending_test"
         or selection.get("status") != "selected_for_single_test_open"
         or selection.get("run_sha256") != sha256_file(run_path)
         or selection.get("checkpoint_sha256") != run["checkpoint"]["sha256"]
     ):
         raise ValueError("NR5-C run was not validation-selected for evaluation")
+    phase = (
+        "RF10-F"
+        if run.get("phase") == "RF10-D/E"
+        else ("RF9-H" if run.get("phase") == "RF9-D/F" else "NR5-C")
+    )
+    campaign_selection_sha256 = None
+    if phase == "RF9-H":
+        if args.campaign_selection is None:
+            raise ValueError("RF9-H requires the immutable campaign selection")
+        campaign_path = args.campaign_selection.resolve()
+        campaign = load_json(campaign_path)
+        selected = campaign.get("selected") or {}
+        if (
+            campaign.get("status") != "selected_pending_sealed_test"
+            or Path(str(selected.get("root", ""))).resolve() != root
+            or selected.get("checkpoint_sha256") != run["checkpoint"]["sha256"]
+            or campaign.get("sealed_test_pixels_opened") is not False
+        ):
+            raise ValueError("RF9-H campaign selection does not select this exact run")
+        campaign_selection_sha256 = sha256_file(campaign_path)
     if args.split == "test" and (root / "test-opening.json").exists():
         opening_path = root / "test-opening.json"
         rejection_path = root / "test-reopen-rejection.json"
@@ -45,7 +66,7 @@ def main() -> None:
                 rejection_path,
                 {
                     "schema": 1,
-                    "phase": "NR5-C",
+                    "phase": phase,
                     "status": "rejected",
                     "reason": "the sealed test split was already opened by the immutable selected checkpoint",
                     "test_opening_sha256": sha256_file(opening_path),
@@ -61,7 +82,12 @@ def main() -> None:
         raise ValueError(f"evaluation split already exists: {destination}")
     configuration = load_json(root / run["configuration"])
     train_spec = load_json(root / run["train_dataset"])
-    dataset = TitleCorpusDataset(corpus, (args.split,), allow_test=args.split == "test")
+    dataset = TitleCorpusDataset(
+        corpus,
+        (args.split,),
+        allow_test=args.split == "test",
+        reference_specification=train_spec,
+    )
     if (
         dataset.specification.semantic_vocabulary != {int(key): value for key, value in train_spec["semantic_vocabulary"].items()}
         or dataset.specification.instance_vocabulary != {int(key): value for key, value in train_spec["instance_vocabulary"].items()}
@@ -105,7 +131,7 @@ def main() -> None:
     record_path = destination / "evaluation.json"
     record = {
         "schema": 1,
-        "phase": "NR5-C" if args.split == "test" else "NR5-D",
+        "phase": phase,
         "split": args.split,
         "run_sha256": sha256_file(run_path),
         "checkpoint_sha256": run["checkpoint"]["sha256"],
@@ -115,6 +141,7 @@ def main() -> None:
         "automated_gate_passed": all(gates.values()),
         "test_pixels_opened": args.split == "test",
         "promotion_authorized": False,
+        "campaign_selection_sha256": campaign_selection_sha256,
     }
     atomic_json(record_path, record)
     if args.split == "test":
@@ -122,7 +149,7 @@ def main() -> None:
             root / "test-opening.json",
             {
                 "schema": 1,
-                "phase": "NR5-C",
+                "phase": phase,
                 "status": "complete",
                 "policy": "single opening after immutable validation selection",
                 "selection_sha256": sha256_file(root / "selection.json"),
@@ -131,6 +158,7 @@ def main() -> None:
                 "frames_opened": len(dataset),
                 "test_pixels_opened": True,
                 "reopen_guard_installed": True,
+                "campaign_selection_sha256": campaign_selection_sha256,
             },
         )
     else:
@@ -138,7 +166,7 @@ def main() -> None:
             root / "stress-evaluation.json",
             {
                 "schema": 1,
-                "phase": "NR5-D",
+                "phase": phase,
                 "status": "complete",
                 "evaluation": "evaluation/stress/evaluation.json",
                 "evaluation_sha256": sha256_file(record_path),
@@ -146,7 +174,7 @@ def main() -> None:
                 "promotion_authorized": False,
             },
         )
-    print(f"NR5_SELECTED_EVALUATION_COMPLETE split={args.split} passed={all(gates.values())} mae={full['linear_hdr_mae']:.8f} root={root}")
+    print(f"SELECTED_EVALUATION_COMPLETE phase={phase} split={args.split} passed={all(gates.values())} mae={full['linear_hdr_mae']:.8f} root={root}")
 
 
 if __name__ == "__main__":

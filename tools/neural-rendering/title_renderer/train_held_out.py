@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Train and validation-select NR5-C while leaving the test split sealed."""
+"""Train and validation-select a spatial candidate while test remains sealed."""
 
 from __future__ import annotations
 
@@ -16,6 +16,8 @@ from torch.utils.data import DataLoader
 
 from title_renderer.artifacts import audit_checkpoint, save_checkpoint
 from title_renderer.authorize_held_out import SCOPE
+from title_renderer.contracts import require_sealed_training_authorization
+from title_renderer.coverage import RF9_SCOPE, RF10_SCOPE
 from title_renderer.dataset import TitleCorpusDataset
 from title_renderer.evaluation import evaluate, model_output, synchronize
 from title_renderer.io import atomic_json, create_absent_absolute, environment_record, load_json, repository_record, require_existing_absolute, sha256_file
@@ -38,13 +40,11 @@ def main() -> None:
     output = create_absent_absolute(args.output, "--output")
     try:
         authorization = load_json(authorization_path)
-        if (
-            authorization.get("status") != "accepted"
-            or authorization.get("authorization_scope") != SCOPE
-            or authorization.get("test_pixels_opened") is not False
-            or authorization.get("corpus_manifest_sha256") != sha256_file(corpus / "corpus.json")
-        ):
-            raise ValueError("NR5-C requires the exact sealed held-out authorization")
+        require_sealed_training_authorization(
+            authorization,
+            allowed_scopes=(SCOPE, RF9_SCOPE, RF10_SCOPE),
+            corpus_manifest_sha256=sha256_file(corpus / "corpus.json"),
+        )
         configuration = load_json(configuration_path)
         if configuration.get("schema") != 1 or configuration.get("stage") != "held_out_structural_reconstruction":
             raise ValueError("unsupported NR5-C configuration")
@@ -52,7 +52,7 @@ def main() -> None:
             raise ValueError("NR5-C split ownership drifted")
         selection_metric = str(configuration.get("selection_metric", ""))
         if selection_metric != "validation spatial_quality_score":
-            raise ValueError("held-out selection must use the declared RF8 spatial-quality score")
+            raise ValueError("held-out selection must use the declared spatial-quality score")
         loss_config = ReconstructionLossConfig(**configuration.get("loss", {}))
         initialization_seed = int(configuration["initialization_seed"])
         training_seed = int(configuration["training_seed"])
@@ -79,6 +79,8 @@ def main() -> None:
         configuration_snapshot.write_bytes(configuration_path.read_bytes())
         dataset_sha256 = sha256_file(output / "dataset" / "train.json")
         model_configuration = SpatialTitleRendererConfig(**configuration["model"])
+        if model_configuration.detail_residual and loss_config.structural_supervision <= 0:
+            raise ValueError("RF9 detail residual requires direct structural supervision")
         model = create_spatial_model(
             model_configuration,
             semantic_categories=len(train_dataset.specification.semantic_vocabulary),
@@ -140,7 +142,14 @@ def main() -> None:
                 target = batch["target"].to(device)
                 coverage = batch["target_coverage"].to(device)
                 optimizer.zero_grad(set_to_none=True)
-                prediction = model(continuous, semantic, instance, controls)
+                if model_configuration.detail_residual:
+                    structural_prediction, detail_prediction = model.forward_components(
+                        continuous, semantic, instance, controls
+                    )
+                    prediction = structural_prediction + detail_prediction
+                else:
+                    structural_prediction = None
+                    prediction = model(continuous, semantic, instance, controls)
                 loss, _terms = loss_terms(
                     prediction,
                     target,
@@ -149,6 +158,16 @@ def main() -> None:
                     coverage,
                     loss_config,
                 )
+                if structural_prediction is not None:
+                    structural_loss, _structural_terms = loss_terms(
+                        structural_prediction,
+                        target,
+                        semantic,
+                        instance,
+                        coverage,
+                        loss_config,
+                    )
+                    loss = loss + loss_config.structural_supervision * structural_loss
                 loss.backward()
                 optimizer.step()
                 total += float(loss.detach())
@@ -162,7 +181,12 @@ def main() -> None:
                 "duration_ms": (time.perf_counter() - epoch_started) * 1000.0,
             }
             if epoch == 1 or epoch % int(configuration["validate_every_epochs"]) == 0 or epoch == int(configuration["epochs"]):
-                selected_evaluation = evaluate(model, validation_loader, device)
+                selected_evaluation = evaluate(
+                    model,
+                    validation_loader,
+                    device,
+                    include_ablations=False,
+                )
                 validation_metrics = selected_evaluation["metrics"]["model"]
                 validation_mae = float(validation_metrics["linear_hdr_mae"])
                 validation_score = float(validation_metrics["spatial_quality_score"])
@@ -221,9 +245,19 @@ def main() -> None:
             "all_metrics_finite": all(np.isfinite(value) for owner in validation["metrics"].values() for value in owner.values()),
             "test_pixels_opened": False,
         }
+        if authorization.get("authorization_scope") in (RF9_SCOPE, RF10_SCOPE) and model_configuration.use_material_palette:
+            no_palette_metrics = validation["metrics"]["no_material_palette"]
+            gates["material_palette_reduces_validation_error"] = (
+                model_metrics["spatial_quality_score"] < no_palette_metrics["spatial_quality_score"]
+            )
         automated_gate_passed = all(value for name, value in gates.items() if name != "test_pixels_opened") and gates["test_pixels_opened"] is False
         validation_path = output / "evaluation" / "validation" / "evaluation.json"
-        atomic_json(validation_path, {"schema": 1, "phase": "NR5-C", "split": "validation", "evaluation": validation, "gates": gates, "automated_gate_passed": automated_gate_passed})
+        phase = (
+            "RF10-D/E"
+            if authorization.get("authorization_scope") == RF10_SCOPE
+            else ("RF9-D/F" if authorization.get("authorization_scope") == RF9_SCOPE else "NR5-C")
+        )
+        atomic_json(validation_path, {"schema": 1, "phase": phase, "split": "validation", "evaluation": validation, "gates": gates, "automated_gate_passed": automated_gate_passed})
         model_cpu = copy.deepcopy(model).cpu().eval()
         sample = validation_dataset[0]
         inputs = tuple(sample[name].unsqueeze(0) for name in ("continuous", "semantic", "instance", "global_controls"))
@@ -242,7 +276,7 @@ def main() -> None:
         source_paths = [
             Path(__file__).resolve(), Path(__file__).with_name("__init__.py"), Path(__file__).with_name("artifacts.py"),
             Path(__file__).with_name("authorize_held_out.py"), Path(__file__).with_name("contracts.py"), Path(__file__).with_name("dataset.py"),
-            Path(__file__).with_name("evaluation.py"), Path(__file__).with_name("io.py"), Path(__file__).with_name("metrics.py"),
+            Path(__file__).with_name("coverage.py"), Path(__file__).with_name("evaluation.py"), Path(__file__).with_name("io.py"), Path(__file__).with_name("metrics.py"),
             Path(__file__).with_name("models") / "__init__.py", Path(__file__).with_name("models") / "spatial.py",
         ]
         source_records = []
@@ -253,7 +287,10 @@ def main() -> None:
             shutil.copyfile(source, snapshot)
             source_records.append({"repository_path": str(relative), "repository_sha256": sha256_file(source), "snapshot_path": str(snapshot.relative_to(output)), "snapshot_sha256": sha256_file(snapshot), "bytes": snapshot.stat().st_size})
         run = {
-            "schema": 2, "experiment": "NR-0005", "phase": "NR5-C", "status": "validation_selected_pending_test" if automated_gate_passed else "validation_gate_failed",
+            "schema": 2,
+            "experiment": "RF10" if phase.startswith("RF10") else ("RF9" if phase.startswith("RF9") else "NR-0005"),
+            "phase": phase,
+            "status": "validation_selected_pending_test" if automated_gate_passed else "validation_gate_failed",
             "configuration": "configuration.json", "configuration_sha256": sha256_file(configuration_snapshot),
             "authorization": "dataset/authorization.json", "authorization_sha256": sha256_file(authorization_snapshot),
             "repository": repository_record(repository), "train_dataset": "dataset/train.json", "train_dataset_sha256": dataset_sha256,
@@ -270,12 +307,12 @@ def main() -> None:
             "tool_sources": source_records, "external_pretrained_weights": False, "test_pixels_opened": False, "promotion_eligible": False,
         }
         atomic_json(output / "run.json", run)
-        atomic_json(output / "selection.json", {"schema": 1, "phase": "NR5-C", "status": "selected_for_single_test_open" if automated_gate_passed else "not_selected", "run_sha256": sha256_file(output / "run.json"), "checkpoint_sha256": checkpoint["sha256"], "selected_epoch": selected_epoch, "selection_split": "validation", "test_pixels_opened": False})
+        atomic_json(output / "selection.json", {"schema": 1, "phase": phase, "status": "selected_for_single_test_open" if automated_gate_passed else "not_selected", "run_sha256": sha256_file(output / "run.json"), "checkpoint_sha256": checkpoint["sha256"], "selected_epoch": selected_epoch, "selection_split": "validation", "test_pixels_opened": False})
     except Exception as error:
-        atomic_json(output / "failure.json", {"schema": 1, "phase": "NR5-C", "error": str(error)})
+        atomic_json(output / "failure.json", {"schema": 1, "phase": "RF10-D/E", "error": str(error)})
         raise
     print(
-        f"NR5_C_VALIDATION_SELECTED passed={automated_gate_passed} epoch={selected_epoch} "
+        f"{'RF10_E' if phase.startswith('RF10') else 'NR5_C'}_VALIDATION_SELECTED passed={automated_gate_passed} epoch={selected_epoch} "
         f"validation_spatial_quality={best_metric:.8f} output={output}"
     )
 

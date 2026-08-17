@@ -3,10 +3,12 @@
 **Status:** NR0-A through NR0-D, NR-0004, and NR5-A through NR5-E accepted;
 RF0 through RF5 accepted; RF6 and RF7 retained as historical evidence; RF8
 direct `160×90 → 640×360` spatial-sharpness/live-presentation trial accepted
-externally and unpromoted; NR6 and NR0-E through NR0-G
-open
+externally and unpromoted; RF9 historical; RF10 direct native
+`256×144 → 1280×720` technical trial accepted externally and unpromoted;
+RF10 retained as the accepted stopping point; implementation paused and NR6
+through NR0-G unauthorized
 
-**Date:** 2026-08-11
+**Date:** 2026-08-17
 
 This ledger will record executed evidence for
 [the NR0 plan](../design/nr0-neural-rendering-feasibility.md). Documentation and
@@ -30,13 +32,14 @@ directory scaffolding are not implementation acceptance.
 | Cumulative rich spatial candidate | Fresh RF0–RF5 corpus, random-origin fit, validation-only selection, sealed test, fresh stress, ablations, exact export, and live trial | **RF6 technical gate passed; external, unpromoted, and superseded by RF7's resolution decision:** 108 fresh pairs; validation MAE 0.010470 vs 0.451187 bilinear; test opened once at MAE 0.015084; stress MAE 0.012028; 48/48 live predictions pass |
 | Direct 800×450 spatial candidate | Fresh native 800×450 truth, one direct learned 5× model, color-fidelity losses, validation-only selection, single-open test, stress, exact export, and live trial | **RF7 accepted as external and unpromoted:** 108 fresh `160×90 → 800×450` pairs; validation/test/stress MAE 0.011649/0.016473/0.013500; Core ML max error 0.00003147; 48/48 live predictions pass; no 400×225 stage |
 | Direct 640×360 spatial-sharpness candidate | Fresh native 640×360 truth, one direct learned uniform 4× model, native-grid refinement, sharpness/color losses, spatial-quality validation selection, single-open test, stress, exact export, centered unscaled live trial | **RF8 accepted as external and unpromoted:** 108 wholly fresh `160×90 → 640×360` pairs; validation/test/stress MAE `0.010595`/`0.015272`/`0.012508`; Core ML max error `0.00003123`; 48/48 Metal predictions pass; no 400×225 or 800×450 pixels |
+| Direct native 720p spatial candidate | Entirely fresh `256×144 → 1280×720` truth and lineage, exact 5× model, validation-only selection, single-open test, newly manufactured post-selection stress, exact Core ML export, and centered native Metal trial | **RF10 accepted as the retained external, unpromoted stopping point:** 306 corpus pairs plus 54 new stress frames; validation/test/stress MAE `0.012922`/`0.023566`/`0.015925`; Core ML max error `0.00005341`; 48/48 Metal predictions pass; no intermediate rendered image |
 | Promotion | Source-preserving transactional copy, digest/schema verification, exact selection | Not started |
 | Runtime | Installed Apple Silicon inference with GPU-owned textures and visible model identity | Preliminary explicit-path Core ML proof passed; blocking CPU staging and no promoted bundle prevent acceptance |
 | Fallback | Missing/rejected model, resize, cut, device/inference failure, and recovery | Missing-model conventional fallback passed; remaining transitions open |
 | Boundaries | No training dependency or authority/private-gameplay access | NR0-A/B presentation contract and GPU/capture hosts plus NR0-C offline tools pass cold/headless and M5 architecture boundaries; final source audit remains NR0-G |
 | Performance | End-to-end latency, GPU time, frame pacing, and memory on named hardware | NR0-C standalone Core ML and NR0-D offline PyTorch/MPS distributions recorded; installed GPU/frame/residency profile remains NR0-F |
 | Diagnostics | Debug views plus incident evidence for model/history/fallback state | Lab exposes six channels, schema/shader, history, identity collision, model, capture, failure, and timing state; incident integration remains open |
-| Human acceptance | Motion, identity, detail, disocclusion, effects, UI, fallback, and recovery | Not started |
+| Human acceptance | Motion, identity, detail, disocclusion, effects, UI, fallback, and recovery | RF10 accepted as the current stopping point; broader shipping acceptance is paused and not claimed |
 
 ## NR-0003 quality-first video baseline
 

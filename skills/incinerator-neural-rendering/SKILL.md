@@ -1,6 +1,6 @@
 ---
 name: incinerator-neural-rendering
-description: Plan, implement, evaluate, and promote Incinerator Engine game-specific neural rendering trained from random initialization on title-owned paired data while preserving deterministic authority, explicit presentation schemas, experiment provenance, macOS runtime boundaries, conventional fallback, and immutable model selection. Use when work touches neural-rendering research, G-buffer or auxiliary input design, target rendering, paired capture, datasets, training runs, model evaluation/export, model bundles, promotion, runtime inference, temporal history, neural-rendering diagnostics, or NR0 documentation and acceptance.
+description: Honor the Incinerator neural-rendering product-track pause and, only after an explicit product-owner resume request, plan, implement, evaluate, or promote game-specific neural rendering trained from random initialization on title-owned paired data while preserving deterministic authority, provenance, runtime boundaries, fallback, and immutable selection. Use when work touches neural-rendering research, capture, datasets, training, evaluation/export, bundles, runtime inference, temporal history, diagnostics, or acceptance.
 ---
 
 # Incinerator Neural Rendering
@@ -9,24 +9,43 @@ Keep the neural model inside presentation. The deterministic game remains the
 only authority; experiments remain outside the runtime; promotion is the only
 path from an evaluated export to selected game content.
 
+## Product-track pause — hard stop
+
+Neural rendering is paused indefinitely as of 2026-08-17. Read
+`docs/design/neural-rendering-pause.md` before any other neural-rendering
+resource.
+
+Unless the user explicitly asks to resume neural-rendering work, do not mutate
+this track: do not create a phase, capture data, train or optimize a model,
+change a neural schema or runtime, begin NR6/NR7, or promote content. A
+deterministic-rendering task does not implicitly reopen neural work. Preserve
+RF10 as the accepted external, unpromoted stopping point.
+
+Read-only questions and historical inspection are allowed. A direct user
+request to implement new neural-rendering work is a scoped resume request; begin
+by applying the restart gate in the pause document rather than automatically
+continuing the old roadmap.
+
 ## Read before acting
 
-1. Read `docs/adr/025-game-specific-neural-rendering-boundary.md` completely.
-2. Read `docs/adr/026-from-scratch-title-neural-renderer.md` and
+1. Read `docs/design/neural-rendering-pause.md` completely and confirm the user
+   has explicitly reopened the track before making changes.
+2. Read `docs/adr/025-game-specific-neural-rendering-boundary.md` completely.
+3. Read `docs/adr/026-from-scratch-title-neural-renderer.md` and
    `docs/design/title-neural-renderer-north-star.md` completely.
-3. For NR-0004 or later title-renderer implementation, read
+4. For NR-0004 or later title-renderer implementation, read
    `docs/design/title-neural-renderer-implementation-plan.md` completely.
-4. For RF0-RF6 visual-content, paired-profile, or rich-spatial work, read
+5. For RF0-RF10 visual-content, paired-profile, or rich-spatial work, read
    `docs/design/rich-fidelity-roadmap.md` completely.
-5. Read `docs/design/nr0-neural-rendering-feasibility.md` and, for capture or
+6. Read `docs/design/nr0-neural-rendering-feasibility.md` and, for capture or
    quality work, `docs/design/nr0-neural-rendering-evaluation-scene.md`.
-6. For model/input decisions, read the relevant files under
+7. For model/input decisions, read the relevant files under
    `docs/research/neural-rendering/`; do not treat research numbers as engine
    measurements.
-7. For experiment work, read `experiments/neural-rendering/README.md`.
-8. For tooling or promotion work, read `tools/neural-rendering/README.md` and
+8. For experiment work, read `experiments/neural-rendering/README.md`.
+9. For tooling or promotion work, read `tools/neural-rendering/README.md` and
    `models/neural-rendering/README.md`.
-9. For an acceptance or performance claim, read the NR0 validation ledger and
+10. For an acceptance or performance claim, read the NR0 validation ledger and
    performance baseline first.
 
 Check repository status and current code before acting. Planned filenames in
@@ -81,20 +100,21 @@ exists.
 - Advance schemas without compatibility decoders; coordinate every producer,
   consumer, capture, bundle, diagnostic, test, and document in the change.
 
-## Current native input and target contract
+## Retained native input and target contract
 
-The active input ABI is `incinerator.neural-input.v5`: six native `160×90`
+The retained RF10 input ABI is `incinerator.neural-input.v7`: six native `256×144`
 RGBA8 appearance, linear-depth, world-normal, motion, semantic, and instance
-targets plus four frame-global float32 lighting/material controls. Capture
-schema 6 requires an absolute absent root plus explicit cohort, sequence, and
+targets plus five frame-global float32 presentation controls: sun, world,
+local-light, emissive, and authored material-palette intent. Capture root
+schema 8 requires an absolute absent root plus explicit cohort, sequence, and
 camera-path ownership. It stores only native inputs; it does not emit a
 conventional product target. PPM images and contact sheets are debug/UI
 derivatives only.
 
-The active offline target package is
-`incinerator.nr4.blender-target-frame.v6`. It declares a direct native
-`640×360` Cycles target and the exact uniform top-left pixel-center 4:1 mapping
-on both axes: `((target_index + 0.5) / 4) - 0.5`, with clamp border behavior. Every
+The retained offline target package is
+`incinerator.nr4.blender-target-frame.v8`. It declares a direct native
+`1280×720` Cycles target and the exact uniform top-left pixel-center 5:1 mapping
+on both axes: `((target_index + 0.5) / 5) - 0.5`, with clamp border behavior. Every
 current producer, consumer, inspector, report, and baseline must reject foreign
 extents. Never reduce or reuse an earlier high-resolution target as current
 training, comparison, preview, metric, or acceptance material.
@@ -206,13 +226,14 @@ historical adapter/correspondence evidence only. Exclude their target pixels,
 metrics, and acceptance from current generation, training, comparison,
 preview, and acceptance. Current evidence roots are recorded in the NR-0004
 README and validation ledger. RF7 later superseded that resolution with direct
-native `160×90 → 800×450`; RF8 now owns the active direct native
-`160×90 → 640×360` contract. Both older extents remain immutable history only
-and must not enter RF8 training, comparison, export, or runtime output.
+native `160×90 → 800×450`; RF8 and RF9 then used direct native
+`160×90 → 640×360`. RF10 owns the retained direct native
+`256×144 → 1280×720` contract. All older extents remain immutable history only
+and must not enter RF10 training, comparison, export, or runtime output.
 
 Preserve or deliberately advance the 17-plane engine ABI as one cohort; RGB is
-only the stock baseline adapter. Begin controls at `160×90`; RF7 adds no
-structural raster at another extent. RF8 preserves that rule. Do
+only the stock baseline adapter. Begin controls at the native input extent;
+RF10 adds no structural raster at another extent. Do
 not train on the current flat conventional target or a stock hallucinated
 output and call it truth. LTX weights remain a licensed comparison baseline
 only. NR4-D's technical gate passes with six whole sequences and 108 pairs at
@@ -237,20 +258,21 @@ accepted, and RF6-A through RF6-F are technically complete at
 `~/Library/Application Support/Incinerator/neural-rendering/experiments/rf6-held-out-20260811T032650Z`
 with the external trial at
 `~/Library/Application Support/Incinerator/neural-rendering/trial-bundles/rf6-rich-spatial-20260811T034154Z`.
-Read `docs/validation/rf6-cumulative-rich-spatial.md` before interpreting or
-extending that historical result. RF7 also remains historical; RF8 owns the
-active spatial resolution contract. NR6 remains authorized but deferred.
+Read `docs/validation/rf6-cumulative-rich-spatial.md` before interpreting that
+historical result. RF7 through RF9 remain historical. RF10 is the currently
+implemented spatial contract and retained external experiment cohort. NR6 is
+not authorized while the product track is paused.
 Do not claim title-wide, temporal, promotion, installed-runtime, or
 art-complete readiness from NR-0005 or RF6.
 
-RF8 is the active spatial cohort. Read
+RF8 is the frozen comparison spatial cohort. Read
 `experiments/neural-rendering/rf8-direct-640x360-spatial-sharpness/README.md` before
 capture, corpus, training, export, or runtime work. It uses fresh native
-`160×90` schema-v5 inputs and direct native `640×360` target-frame-v6 truth,
+`160×90` historical schema-v5 inputs and direct native `640×360`
+target-frame-v6 truth,
 one learned uniform 4× model, and the existing explicit external Core ML trial
 seam. Never insert, derive, supervise, compare, export, or present a `400×225`
-or `800×450` image in RF8. Temporal modeling remains deferred until the direct spatial result has
-been evaluated live.
+or `800×450` image in RF8. Do not reuse its pixels or weights in RF9.
 
 RF8's external corpus and run lineage use the
 `rf8-direct-640x360-*-20260812-*` roots beneath
@@ -259,6 +281,43 @@ disposition, metrics, limitations, and live command in
 `docs/validation/rf8-direct-640x360-spatial-sharpness.md`. It remains
 unpromoted and does not authorize installed content,
 temporal claims, or title-wide readiness.
+
+RF9 is a completed external technical spatial trial. Read
+`docs/design/rf9-spatial-quality-expansion.md` and
+`docs/validation/rf9-spatial-quality-expansion.md` and
+`experiments/neural-rendering/rf9-spatial-quality-expansion/README.md` before
+acting. It preserves direct native `160×90 → 640×360`, adds only the
+controlled-ablation-proven material-palette scalar, compares learned 2×/2×
+feature reconstruction against RF8-style bilinear refinement, and evaluates
+capacity, detail ownership, and a conditional high-frequency residual without
+using RF8 pixels or weights. The completed evidence retains bilinear refinement
+and rejects learned pyramid reconstruction, added capacity, detail-focused
+sampling, and the detail residual. Generated RF9 data, checkpoints, and bundles
+stay external and unpromoted; product review was superseded by the RF10
+resolution decision. Further neural work is paused.
+
+RF10 is the retained stopping-point cohort. Read
+`docs/design/rf10-native-720p-spatial-cohort.md` and
+`docs/validation/rf10-native-720p-spatial.md` and
+`experiments/neural-rendering/rf10-native-720p-spatial/README.md` before any
+resolution, capture, target, corpus, training, export, or runtime change. It
+replaces the complete learned problem with direct native `256×144 → 1280×720`
+and an exact uniform 5:1 mapping. Reuse RF9 code and factual findings where
+appropriate, but never RF9 pixels, weights, optimizer state, metrics, split
+approval, or review sheets. RF9 is historical and must not be used as the
+active engine ABI or executable comparison trial.
+
+RF10-A through RF10-G are complete and RF10-H is accepted by the product owner
+as the retained external, unpromoted stopping point. The
+accepted external campaign is
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/rf10-native-720p-campaign-20260814T015457Z`.
+Its 1,062,587-parameter Core ML bundle is trial-only and unpromoted. Use
+`zig build inspect-rf10-trial-bundle -- <bundle>` and
+`zig build verify-rf10-trial -- <bundle>` before interpreting it. The remaining
+hands-on review must check the native centered `1280×720` main scene, black
+surround, `N` fallback toggle, and native `256×144` debug source. Do not infer
+promotion, temporal readiness, or title-wide quality from technical
+acceptance.
 
 ## Validation and handoff
 

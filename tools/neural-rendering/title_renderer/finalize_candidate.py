@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Write the immutable NR5-D technical conclusion after complete visual review."""
+"""Write the immutable technical conclusion after complete visual review."""
 
 from __future__ import annotations
 
@@ -21,6 +21,8 @@ def main() -> None:
     if conclusion_path.exists():
         raise ValueError("NR5-D conclusion is immutable and already exists")
     run = load_json(root / "run.json")
+    rf9 = run.get("phase") == "RF9-D/F"
+    rf10 = run.get("phase") == "RF10-D/E"
     validation = load_json(root / run["validation"])
     test_opening = load_json(root / "test-opening.json")
     test_rejection = load_json(root / "test-reopen-rejection.json")
@@ -63,8 +65,8 @@ def main() -> None:
         )
     conclusion = {
         "schema": 1,
-        "experiment": "NR-0005",
-        "phase": "NR5-D",
+        "experiment": "RF10" if rf10 else ("RF9" if rf9 else "NR-0005"),
+        "phase": "RF10-H" if rf10 else ("RF9-H" if rf9 else "NR5-D"),
         "status": args.disposition,
         "review": args.review,
         "run_sha256": sha256_file(root / "run.json"),
@@ -80,7 +82,7 @@ def main() -> None:
         "complete_visual_review": True,
         "test_pixels_opened_once": True,
         "promotion_authorized": False,
-        "next_phase_authorized": "NR6" if args.disposition == "accepted" else None,
+        "next_phase_authorized": ("RF10 external native-720p playable trial" if rf10 else ("RF9 external playable trial" if rf9 else "NR6")) if args.disposition == "accepted" else None,
     }
     atomic_json(conclusion_path, conclusion)
     print(f"NR5_D_FINALIZED disposition={args.disposition} root={root}")

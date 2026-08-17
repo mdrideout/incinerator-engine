@@ -1,7 +1,7 @@
-//! NR5-E interactive spatial-candidate evaluation host for Apple Silicon.
+//! RF10-G interactive spatial-candidate evaluation host for Apple Silicon.
 //!
 //! The host consumes only the engine-owned neural-input render targets. It
-//! validates one immutable external trial bundle, stages the six schema-v3
+//! validates one immutable external trial bundle, stages the six schema-v7
 //! channels through Core ML, and optionally replaces only scene presentation.
 //! Deterministic authority and post-scene UI never enter this boundary.
 
@@ -171,7 +171,7 @@ pub const Owner = struct {
         gpu.clearScenePresentationOverride();
         _ = c.SDL_WaitForGPUIdle(self.device);
         std.debug.print(
-            "NR5_E_RUNTIME_RESULT bundle={s} enabled={} readbacks={d} predictions={d} " ++
+            "RF10_G_RUNTIME_RESULT bundle={s} enabled={} readbacks={d} predictions={d} " ++
                 "failures={d} last_inference_ms={d:.3} staged_pipeline_mean_ms={d:.3} " ++
                 "staged_pipeline_max_ms={d:.3} unknown_semantic={d} unknown_instance={d} error={s}\n",
             .{
@@ -379,14 +379,14 @@ pub const Owner = struct {
                 neural_rgb[cheap_start..][0 .. contract.target_width * 3],
             );
         }
-        try self.writePpm(root, "appearance-160x90.ppm", contract.cheap_width, contract.cheap_height, appearance_rgb);
-        try self.writePpm(root, "cheap-nearest-640x360.ppm", contract.target_width, contract.target_height, cheap_rgb);
-        try self.writePpm(root, "neural-640x360.ppm", contract.target_width, contract.target_height, neural_rgb);
-        try self.writePpm(root, "comparison-cheap-left-neural-right-1280x360.ppm", contract.target_width * 2, contract.target_height, comparison_rgb);
+        try self.writePpm(root, "appearance-256x144.ppm", contract.cheap_width, contract.cheap_height, appearance_rgb);
+        try self.writePpm(root, "cheap-nearest-1280x720.ppm", contract.target_width, contract.target_height, cheap_rgb);
+        try self.writePpm(root, "neural-1280x720.ppm", contract.target_width, contract.target_height, neural_rgb);
+        try self.writePpm(root, "comparison-cheap-left-neural-right-2560x720.ppm", contract.target_width * 2, contract.target_height, comparison_rgb);
         const snapshot = self.diagnostics();
         const report = try std.json.Stringify.valueAlloc(self.allocator, .{
             .schema = @as(u16, 1),
-            .phase = "RF8-G",
+            .phase = "RF10-G",
             .status = "complete",
             .training_eligible = false,
             .promotion_authorized = false,
@@ -405,15 +405,15 @@ pub const Owner = struct {
             .unknown_semantic_pixels = snapshot.last_unknown_semantic_pixels,
             .unknown_instance_pixels = snapshot.last_unknown_instance_pixels,
             .files = [_][]const u8{
-                "appearance-160x90.ppm",
-                "cheap-nearest-640x360.ppm",
-                "neural-640x360.ppm",
-                "comparison-cheap-left-neural-right-1280x360.ppm",
+                "appearance-256x144.ppm",
+                "cheap-nearest-1280x720.ppm",
+                "neural-1280x720.ppm",
+                "comparison-cheap-left-neural-right-2560x720.ppm",
             },
         }, .{ .whitespace = .indent_2 });
         defer self.allocator.free(report);
         try self.writeExclusive(root, "runtime.json", report);
-        std.debug.print("NR5_E_TRIAL_EVIDENCE root={s}\n", .{root});
+        std.debug.print("RF10_G_TRIAL_EVIDENCE root={s}\n", .{root});
     }
 
     fn loadModel(self: *Owner) void {

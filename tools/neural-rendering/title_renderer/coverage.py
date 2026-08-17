@@ -35,6 +35,10 @@ RF7_SCOPE = "RF7 direct 160x90 to native 640x360 spatial fidelity reconstruction
 RF7_PRODUCT_APPROVAL = "product_owner_preapproved_direct_160x90_to_640x360_review_2026_08_11"
 RF8_SCOPE = "RF8 direct 160x90 to native 640x360 spatial sharpness reconstruction"
 RF8_PRODUCT_APPROVAL = "product_owner_approved_direct_160x90_to_640x360_sharpness_2026_08_12"
+RF9_SCOPE = "RF9 multi-layout material-conditioned direct 160x90 to native 640x360 spatial reconstruction"
+RF9_TARGET_GATE = "rf9_a_b_implementing_agent_target_audit_accepted_2026_08_12"
+RF10_SCOPE = "RF10 fresh multi-layout material-conditioned direct 256x144 to native 1280x720 spatial reconstruction"
+RF10_TARGET_GATE = "rf10_a_b_native_720p_target_audit_accepted_2026_08_13"
 
 
 def _range(values: list[float]) -> dict[str, float | None]:
@@ -71,7 +75,7 @@ def collect(corpus_root: Path, scope: str = INITIAL_STRUCTURAL_SCOPE) -> dict[st
     reset_reasons: Counter[str] = Counter()
     sequence_resets = 0
     effect_seeds: set[int] = set()
-    control_tuples: set[tuple[float, float, float, float]] = set()
+    control_tuples: set[tuple[float, float, float, float, float]] = set()
     camera_positions: list[list[float]] = []
     camera_fovs: list[float] = []
     camera_near: list[float] = []
@@ -80,6 +84,7 @@ def collect(corpus_root: Path, scope: str = INITIAL_STRUCTURAL_SCOPE) -> dict[st
     camera_elevations: list[float] = []
     split_frames: Counter[str] = Counter()
     split_sequences: dict[str, set[str]] = defaultdict(set)
+    split_palettes: dict[str, set[float]] = defaultdict(set)
     target_packages_read = 0
 
     for record in records:
@@ -100,12 +105,14 @@ def collect(corpus_root: Path, scope: str = INITIAL_STRUCTURAL_SCOPE) -> dict[st
             sequence_resets += 1
         effect_seeds.add(int(package["effect_seed"]))
         controls = package["global_controls"]
+        split_palettes[split].add(float(controls["material_palette"]))
         control_tuples.add(
             (
                 float(controls["sun_strength"]),
                 float(controls["world_strength"]),
                 float(controls["local_light_strength"]),
                 float(controls["emissive_strength"]),
+                float(controls["material_palette"]),
             )
         )
         camera = package["camera"]
@@ -158,7 +165,7 @@ def collect(corpus_root: Path, scope: str = INITIAL_STRUCTURAL_SCOPE) -> dict[st
     }
     controls_by_name = {
         name: _range([values[index] for values in control_tuples])
-        for index, name in enumerate(("sun_strength", "world_strength", "local_light_strength", "emissive_strength"))
+        for index, name in enumerate(("sun_strength", "world_strength", "local_light_strength", "emissive_strength", "material_palette"))
     }
 
     required_segments = {
@@ -171,7 +178,7 @@ def collect(corpus_root: Path, scope: str = INITIAL_STRUCTURAL_SCOPE) -> dict[st
     }
     required_semantics = {"environment", "vehicle", "character", "npc", "carryable", "crate"}
     required_materials = {"asphalt", "sidewalk", "masonry", "glass", "emissive", "painted_metal", "rubber"}
-    if scope in (RF6_SCOPE, RF7_SCOPE):
+    if scope in (RF6_SCOPE, RF7_SCOPE, RF8_SCOPE, RF9_SCOPE, RF10_SCOPE):
         required_materials.update(("fabric", "skin", "cardboard"))
     checks = {
         # Every package was already fail-closed against both native extents by
@@ -187,15 +194,31 @@ def collect(corpus_root: Path, scope: str = INITIAL_STRUCTURAL_SCOPE) -> dict[st
         "camera_stress_programs_present": {"nr4-corpus-stress-near", "nr4-corpus-stress-high"}.issubset(camera_paths),
         "lighting_controls_vary": len(control_tuples) > 1,
         "history_resets_present": sequence_resets > 0 and bool(reset_reasons),
-        "product_visual_review_approved": True,
+        "target_visual_gate_accepted": True,
         "test_pixels_remain_sealed": inspected["sealed_test_pixels_opened"] is False,
     }
+    if scope in (RF9_SCOPE, RF10_SCOPE):
+        palette_values = {values[4] for values in control_tuples}
+        checks.update(
+            {
+                "multi_scene_variants_present": len(scene_ids) >= 3,
+                "material_palettes_present": len(palette_values) >= 3,
+                "independent_camera_paths_present": len(camera_paths) >= 6,
+                "train_validation_test_each_span_palettes": all(
+                    len(split_palettes[name]) >= 3 for name in ("train", "validation", "test")
+                ),
+            }
+        )
     if not all(checks.values()):
         failed = ", ".join(name for name, passed in checks.items() if not passed)
         raise ValueError(f"native corpus coverage failed: {failed}")
 
     known_gaps = [
-        f"one procedural urban-corner scene and one fixed {len(stable_keys)}-identity fixture; no title-wide location or asset diversity",
+        (
+            f"five authored layout/material variants around one procedural urban-corner product slice and one fixed {len(stable_keys)}-identity fixture; no title-wide location or asset diversity"
+            if scope in (RF9_SCOPE, RF10_SCOPE)
+            else f"one procedural urban-corner scene and one fixed {len(stable_keys)}-identity fixture; no title-wide location or asset diversity"
+        ),
         "no skeletal animation, cloth, hair, deformation, destruction, attachment replacement, or topology changes",
         "no weather, time-of-day traversal, exposure/grade traversal, atmosphere, smoke, fire, particles, or responsive effect phase",
         "no populated crowd, multiple vehicles, broad character variation, vegetation, terrain, interiors, or long-distance vistas",
@@ -204,7 +227,7 @@ def collect(corpus_root: Path, scope: str = INITIAL_STRUCTURAL_SCOPE) -> dict[st
     ]
     return {
         "schema": 1,
-        "phase": "RF8-A" if scope == RF8_SCOPE else ("RF7-A" if scope == RF7_SCOPE else ("RF6-A" if scope == RF6_SCOPE else "NR4-E")),
+        "phase": "RF10-C" if scope == RF10_SCOPE else ("RF9-C/D" if scope == RF9_SCOPE else ("RF8-A" if scope == RF8_SCOPE else ("RF7-A" if scope == RF7_SCOPE else ("RF6-A" if scope == RF6_SCOPE else "NR4-E")))),
         "status": "accepted_for_initial_structural_scope",
         "scope": scope,
         "corpus": {
@@ -268,10 +291,13 @@ def collect(corpus_root: Path, scope: str = INITIAL_STRUCTURAL_SCOPE) -> dict[st
             "not_accepted_for": [
                 "title-wide visual generalization",
                 "causal temporal renderer training",
-                "learned-detail residual training",
                 "runtime promotion or shipping selection",
-            ],
-            "reason": "The corpus covers every declared structural-fixture material, identity, causal change, camera stress, split, rights, and native-resolution contract needed to validate the first framework and controlled overfit. Its explicit gaps prevent broader claims.",
+            ] + ([] if scope in (RF9_SCOPE, RF10_SCOPE) else ["learned-detail residual training"]),
+            "reason": (
+                "The corpus covers the declared spatial reconstruction, controlled material ambiguity, structural identity, camera, stress, split, rights, and native-resolution contracts. Its explicit gaps prevent title-wide or temporal claims."
+                if scope in (RF9_SCOPE, RF10_SCOPE)
+                else "The corpus covers every declared structural-fixture material, identity, causal change, camera stress, split, rights, and native-resolution contract needed to validate the first framework and controlled overfit. Its explicit gaps prevent broader claims."
+            ),
         },
     }
 
@@ -282,13 +308,14 @@ def markdown(coverage: dict[str, Any]) -> str:
     segment_names = ", ".join(coverage["motion_occlusion_and_resets"]["segments"])
     gaps = "\n".join(f"- {gap}" for gap in coverage["known_gaps"])
     checks = "\n".join(f"- `{name}`: {'pass' if passed else 'fail'}" for name, passed in coverage["checks"].items())
+    excluded = ", ".join(coverage["decision"]["not_accepted_for"])
     return f"""# {coverage['phase']} Coverage Ledger
 
 **Disposition:** Accepted for {coverage['scope']} only
 
 **Corpus:** `{coverage['corpus']['root']}`
 
-**Native cohort:** {coverage['corpus']['frames']} pairs across {coverage['corpus']['sequences']} whole sequences, `160×90 → {coverage['corpus']['target_extent'][0]}×{coverage['corpus']['target_extent'][1]}`
+**Native cohort:** {coverage['corpus']['frames']} pairs across {coverage['corpus']['sequences']} whole sequences, `{coverage['corpus']['input_extent'][0]}×{coverage['corpus']['input_extent'][1]} → {coverage['corpus']['target_extent'][0]}×{coverage['corpus']['target_extent'][1]}`
 
 ## Coverage facts
 
@@ -313,9 +340,8 @@ def markdown(coverage: dict[str, Any]) -> str:
 ## Decision
 
 This exact rights-clean corpus is accepted only for the scope named above. It
-does not establish title-wide coverage, authorize temporal or learned-detail
-training, or select/promote a runtime model. Those claims require new native
-cohorts targeted at their actual consumers.
+does not establish or authorize: {excluded}. Those claims require evidence
+targeted at their actual consumers.
 """
 
 
@@ -327,14 +353,18 @@ def main() -> None:
     parser.add_argument(
         "--product-approval",
         required=True,
-        choices=(PRODUCT_APPROVAL, RF6_PRODUCT_APPROVAL, RF7_PRODUCT_APPROVAL, RF8_PRODUCT_APPROVAL),
+        choices=(PRODUCT_APPROVAL, RF6_PRODUCT_APPROVAL, RF7_PRODUCT_APPROVAL, RF8_PRODUCT_APPROVAL, RF9_TARGET_GATE, RF10_TARGET_GATE),
     )
     args = parser.parse_args()
     corpus = require_existing_absolute(args.corpus, "--corpus")
     repository = require_existing_absolute(args.repository, "--repository")
     output = create_absent_absolute(args.output, "--output")
     try:
-        if args.product_approval == RF8_PRODUCT_APPROVAL:
+        if args.product_approval == RF10_TARGET_GATE:
+            scope, phase, experiment = RF10_SCOPE, "RF10-C", "RF10"
+        elif args.product_approval == RF9_TARGET_GATE:
+            scope, phase, experiment = RF9_SCOPE, "RF9-C/D", "RF9"
+        elif args.product_approval == RF8_PRODUCT_APPROVAL:
             scope, phase, experiment = RF8_SCOPE, "RF8-A", "RF8"
         elif args.product_approval == RF7_PRODUCT_APPROVAL:
             scope, phase, experiment = RF7_SCOPE, "RF7-A", "RF7"
@@ -388,6 +418,9 @@ def main() -> None:
             "model_training_authorized": True,
             "authorization_scope": scope,
         }
+        if experiment in ("RF9", "RF10"):
+            acceptance["target_gate_owner"] = "implementing_agent"
+            acceptance["product_owner_review"] = "pending"
         atomic_json(output / "acceptance.json", acceptance)
     except Exception:
         atomic_json(output / "failure.json", {"schema": 1, "phase": "coverage", "status": "failed"})

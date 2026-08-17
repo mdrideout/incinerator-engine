@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Read-only NR5-C/D candidate integrity and phase inspector."""
+"""Read-only spatial-candidate integrity and phase inspector."""
 
 from __future__ import annotations
 
@@ -30,8 +30,10 @@ def inspect(root: Path) -> dict:
     root = root.resolve()
     run_path = root / "run.json"
     run = load_json(run_path)
-    if run.get("schema") != 2 or run.get("phase") != "NR5-C" or run.get("external_pretrained_weights") is not False:
+    if run.get("schema") != 2 or run.get("phase") not in ("NR5-C", "RF9-D/F", "RF10-D/E") or run.get("external_pretrained_weights") is not False:
         raise ValueError("unsupported or foreign NR5-C candidate")
+    rf9 = run.get("phase") == "RF9-D/F"
+    rf10 = run.get("phase") == "RF10-D/E"
     for path_key, digest_key in (
         ("configuration", "configuration_sha256"), ("authorization", "authorization_sha256"),
         ("train_dataset", "train_dataset_sha256"), ("validation_dataset", "validation_dataset_sha256"),
@@ -50,7 +52,7 @@ def inspect(root: Path) -> dict:
     if validation.get("automated_gate_passed") is not True:
         raise ValueError("candidate validation gate failed")
     verify_visual_evidence(root, validation)
-    result = {"phase": "NR5-C", "status": run["status"], "validation_mae": validation["evaluation"]["metrics"]["model"]["linear_hdr_mae"], "test_opened": False}
+    result = {"phase": "RF10-D/E" if rf10 else ("RF9-D/F" if rf9 else "NR5-C"), "status": run["status"], "validation_mae": validation["evaluation"]["metrics"]["model"]["linear_hdr_mae"], "test_opened": False}
     if (root / "test-opening.json").is_file():
         opening = load_json(root / "test-opening.json")
         test_path = verify(root, opening["evaluation"], opening["evaluation_sha256"])
@@ -66,7 +68,7 @@ def inspect(root: Path) -> dict:
         if stress.get("automated_gate_passed") is not True:
             raise ValueError("candidate stress gate failed")
         verify_visual_evidence(root, stress)
-        result.update({"phase": "NR5-D", "stress_mae": stress["evaluation"]["metrics"]["model"]["linear_hdr_mae"]})
+        result.update({"phase": "RF10-F" if rf10 else ("RF9-H" if rf9 else "NR5-D"), "stress_mae": stress["evaluation"]["metrics"]["model"]["linear_hdr_mae"]})
     if (root / "conclusion.json").is_file():
         conclusion = load_json(root / "conclusion.json")
         rejection_path = root / "test-reopen-rejection.json"

@@ -11,11 +11,15 @@ import unittest
 from pathlib import Path
 
 from analyze_target import compact_codes
-from assemble_nr4_d_corpus import claim_sequence_digest, digest_values, parse_sequence_arg
+from assemble_nr4_d_corpus import atomic_ndjson, claim_sequence_digest, digest_values, parse_sequence_arg
 from inspect_nr4_d_corpus import verify_artifact
 from report_nr4_d_corpus import build_report
 from compare_runs import canonical_json_digest, float_difference, normalized_package
-from nr4_common import create_absent, load_json, validate_frame_package
+from nr4_common import atomic_json, create_absent, load_json, validate_frame_package
+from verify_rf10_post_selection_stress import (
+    assert_cross_corpus_digest_disjoint,
+    assert_disjoint_stress_programs,
+)
 from sequence_contract import (
     EXPECTED_MATERIAL_CHANGES,
     EXPECTED_TRANSFORM_CHANGES,
@@ -28,10 +32,13 @@ from sequence_contract import (
 )
 
 
+CHANNELS = ("appearance", "linear-depth", "world-normal", "motion", "semantic", "instance")
+
+
 def frame_package() -> dict:
     return {
-        "schema": 6,
-        "schema_name": "incinerator.nr4.blender-target-frame.v6",
+        "schema": 8,
+        "schema_name": "incinerator.nr4.blender-target-frame.v8",
         "status": "complete",
         "frame_id": "fixture-frame-00000001",
         "sequence": "fixture",
@@ -39,29 +46,30 @@ def frame_package() -> dict:
         "authority_tick": 1,
         "presentation_frame": 1,
         "interpolation_alpha": 0.0,
-        "input_extent": [160, 90],
-        "target_extent": [640, 360],
+        "input_extent": [256, 144],
+        "target_extent": [1280, 720],
         "sampling_map": {
             "x": {
-                "scale_numerator": 4,
+                "scale_numerator": 5,
                 "scale_denominator": 1,
-                "target_center_to_source_index": "((target_x + 0.5) / 4) - 0.5",
+                "target_center_to_source_index": "((target_x + 0.5) / 5) - 0.5",
             },
             "y": {
-                "scale_numerator": 4,
+                "scale_numerator": 5,
                 "scale_denominator": 1,
-                "target_center_to_source_index": "((target_y + 0.5) / 4) - 0.5",
+                "target_center_to_source_index": "((target_y + 0.5) / 5) - 0.5",
             },
             "border": "clamp",
         },
         "exposure": 1.0,
         "effect_seed": 0,
         "global_controls": {
-            "schema_name": "incinerator.neural-frame-global.v1",
+            "schema_name": "incinerator.neural-frame-global.v2",
             "sun_strength": 1.0,
             "world_strength": 0.0,
             "local_light_strength": 20.0,
             "emissive_strength": 0.0,
+            "material_palette": 0.0,
         },
         "sequence_event": {
             "segment": "still",
@@ -267,6 +275,50 @@ class Nr4TargetToolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "pair leakage"):
             claim_sequence_digest(index, "digest", "validation-a", "frame-c", "pair")
 
+    def test_rf10_post_selection_stress_rejects_retained_conditioning(self) -> None:
+        manifest = {
+            "sequences": [
+                {
+                    "split": "test",
+                    "camera_path": "rf10-postselect-orbit",
+                }
+            ]
+        }
+        with self.assertRaisesRegex(ValueError, "reuses retained camera conditioning"):
+            assert_disjoint_stress_programs(manifest)
+
+        manifest["sequences"][0]["camera_path"] = "fast-orbit"
+        assert_disjoint_stress_programs(manifest)
+
+    def test_rf10_cross_corpus_stress_digest_check_is_exact(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            base = root / "base"
+            stress = root / "stress"
+            base.mkdir()
+            stress.mkdir()
+            atomic_json(base / "corpus.json", {"frame_index": "frames.ndjson"})
+            atomic_json(stress / "corpus.json", {"frame_index": "frames.ndjson"})
+            base_record = {
+                "split": "test",
+                "frame_id": "sealed-frame",
+                "conditioning": {"sha256": "conditioning-a"},
+                "pair_sha256": "pair-a",
+            }
+            stress_record = {
+                "split": "stress",
+                "frame_id": "stress-frame",
+                "conditioning": {"sha256": "conditioning-b"},
+                "pair_sha256": "pair-b",
+            }
+            atomic_ndjson(base / "frames.ndjson", [base_record])
+            atomic_ndjson(stress / "frames.ndjson", [stress_record])
+            assert_cross_corpus_digest_disjoint(base, stress)
+            stress_record["conditioning"]["sha256"] = "conditioning-a"
+            atomic_ndjson(stress / "frames.ndjson", [stress_record])
+            with self.assertRaisesRegex(ValueError, "conditioning leakage"):
+                assert_cross_corpus_digest_disjoint(base, stress)
+
     def test_nr4_d_artifact_corruption_and_removal_fail_closed(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -296,7 +348,7 @@ class Nr4TargetToolTests(unittest.TestCase):
                 source.write_bytes(b"P6\n1 1\n255\n\x00\x00\x00")
                 from PIL import Image
 
-                Image.new("RGB", (640, 360), (index * 32, 0, 0)).save(target)
+                Image.new("RGB", (1280, 720), (index * 32, 0, 0)).save(target)
                 records.append(
                     {
                         "split": split,
@@ -353,6 +405,52 @@ class Nr4TargetToolTests(unittest.TestCase):
         package["global_controls"]["local_light_strength"] = 21.0
         with self.assertRaisesRegex(ValueError, "disagrees with scene intent"):
             validate_frame_package(package)
+
+    def test_rf10_material_ambiguity_verifier_requires_one_explicit_cause(self) -> None:
+        from verify_rf10_corpus import verify_material_ambiguity
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            reference = root / "reference"
+            candidate = root / "candidate"
+            for owner, palette, target_bytes in (
+                (reference, 0.0, b"reference-target"),
+                (candidate, 1.0, b"candidate-target"),
+            ):
+                frame_root = owner / "source/capture/frames"
+                target_root = owner / "targets/frame-00000240"
+                frame_root.mkdir(parents=True)
+                target_root.mkdir(parents=True)
+                atomic_json(
+                    frame_root / "frame-00000240.json",
+                    {
+                        "input_size": [256, 144],
+                        "paired_target_size": [1280, 720],
+                        "camera": {"position": [1, 2, 3]},
+                        "effects": {"seed": 0, "exposure": 1},
+                        "global_controls": {"values": {
+                            "sun_strength": 4.0,
+                            "world_strength": 0.32,
+                            "local_light_strength": 550.0,
+                            "emissive_strength": 8.0,
+                            "material_palette": palette,
+                        }},
+                        "channels": [
+                            {"name": name, "raw_sha256": f"same-{name}"}
+                            for name in CHANNELS
+                        ],
+                    },
+                )
+                (target_root / "target.exr").write_bytes(target_bytes)
+            result = verify_material_ambiguity(reference, candidate)
+            self.assertTrue(result["cheap_rasters_identical"])
+            self.assertEqual(result["rich_targets_changed"], 1)
+
+            frame = load_json(candidate / "source/capture/frames/frame-00000240.json")
+            frame["global_controls"]["values"]["emissive_strength"] = 9.0
+            atomic_json(candidate / "source/capture/frames/frame-00000240.json", frame)
+            with self.assertRaisesRegex(ValueError, "changed emissive_strength"):
+                verify_material_ambiguity(reference, candidate)
 
     def test_nr4_c_sequence_has_one_declared_cause_and_control_owner_per_segment(self) -> None:
         packages = sequence_packages()

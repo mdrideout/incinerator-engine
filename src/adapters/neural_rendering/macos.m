@@ -13,8 +13,8 @@
     size_t _semanticCodeCount;
     uint32_t *_instanceCodes;
     size_t _instanceCodeCount;
-    float _controlMinimum[4];
-    float _controlScale[4];
+    float _controlMinimum[5];
+    float _controlScale[5];
 }
 @property(nonatomic, strong) MLModel *model;
 @property(nonatomic, strong) NSURL *compiledURL;
@@ -92,7 +92,7 @@ void *incinerator_nr_model_create(
         }
         box->_semanticCodeCount = semantic_code_count;
         box->_instanceCodeCount = instance_code_count;
-        for (size_t index = 0; index < 4; ++index) {
+        for (size_t index = 0; index < 5; ++index) {
             box->_controlMinimum[index] = control_minimum[index];
             const float range = control_maximum[index] - control_minimum[index];
             box->_controlScale[index] = range > 0.0f ? range : 1.0f;
@@ -201,7 +201,7 @@ bool incinerator_nr_model_predict(
         if (!make_multi_array(&continuous, @[@1, @11, @(input_height), @(input_width)], MLMultiArrayDataTypeFloat32, &error) ||
             !make_multi_array(&semantic, @[@1, @(input_height), @(input_width)], MLMultiArrayDataTypeInt32, &error) ||
             !make_multi_array(&instance, @[@1, @(input_height), @(input_width)], MLMultiArrayDataTypeInt32, &error) ||
-            !make_multi_array(&controls, @[@1, @4], MLMultiArrayDataTypeFloat32, &error)) {
+            !make_multi_array(&controls, @[@1, @5], MLMultiArrayDataTypeFloat32, &error)) {
             write_error(error_text, error_capacity, error.localizedDescription);
             return false;
         }
@@ -236,7 +236,7 @@ bool incinerator_nr_model_predict(
                 box->_instanceCodeCount,
                 &instance_unknown);
         }
-        for (size_t index = 0; index < 4; ++index) {
+        for (size_t index = 0; index < 5; ++index) {
             control_values[index] =
                 (global_controls[index] - box->_controlMinimum[index]) /
                 box->_controlScale[index];

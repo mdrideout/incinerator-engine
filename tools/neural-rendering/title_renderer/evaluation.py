@@ -13,7 +13,7 @@ from torch.utils.data import DataLoader
 from .metrics import BASELINES, comparison_sheet, metrics, overview_sheet, resize_baseline
 
 
-ABLATIONS = ("no_semantic", "no_instance", "no_globals", "appearance_only")
+ABLATIONS = ("no_semantic", "no_instance", "no_material_palette", "no_globals", "appearance_only", "no_detail_residual")
 
 
 def synchronize(device: torch.device) -> None:
@@ -26,12 +26,18 @@ def model_output(model: torch.nn.Module, batch: dict[str, torch.Tensor], device:
     semantic = batch["semantic"].to(device)
     instance = batch["instance"].to(device)
     controls = batch["global_controls"].to(device)
+    if mode == "no_detail_residual":
+        structural, _detail = model.forward_components(continuous, semantic, instance, controls)
+        return structural
     if mode == "no_semantic":
         semantic = torch.zeros_like(semantic)
     elif mode == "no_instance":
         instance = torch.zeros_like(instance)
     elif mode == "no_globals":
         controls = torch.zeros_like(controls)
+    elif mode == "no_material_palette":
+        controls = controls.clone()
+        controls[:, -1] = 0
     elif mode == "appearance_only":
         continuous = torch.cat((continuous[:, :3], torch.zeros_like(continuous[:, 3:])), dim=1)
         semantic = torch.zeros_like(semantic)
@@ -49,8 +55,10 @@ def evaluate(
     *,
     sample_root: Path | None = None,
     overview_path: Path | None = None,
+    include_ablations: bool = True,
 ) -> dict[str, Any]:
-    names = (*BASELINES, "model", *ABLATIONS)
+    ablations = ABLATIONS if include_ablations else ()
+    names = (*BASELINES, "model", *ablations)
     totals: dict[str, dict[str, float]] = {}
     per_frame: list[dict[str, Any]] = []
     inference_ms: list[float] = []
@@ -70,7 +78,7 @@ def evaluate(
             outputs["model"] = model_output(model, batch, device, "model")
             synchronize(device)
             inference_ms.append((time.perf_counter() - started) * 1000.0)
-            for name in ABLATIONS:
+            for name in ablations:
                 outputs[name] = model_output(model, batch, device, name)
             frame_metrics = {name: metrics(value, target, semantic, instance) for name, value in outputs.items()}
             for name in names:
@@ -80,6 +88,8 @@ def evaluate(
             frame_id = str(batch["frame_id"][0])
             per_frame.append({"frame_id": frame_id, "metrics": frame_metrics})
             if sample_root is not None:
+                if not include_ablations:
+                    raise ValueError("visual evidence requires complete model ablations")
                 comparison_sheet(
                     sample_root / f"{index:04d}-{frame_id}.png",
                     frame_id,
@@ -88,7 +98,9 @@ def evaluate(
                         ("appearance only", outputs["appearance_only"][0]),
                         ("no semantic", outputs["no_semantic"][0]),
                         ("no instance", outputs["no_instance"][0]),
+                        ("no material palette", outputs["no_material_palette"][0]),
                         ("no globals", outputs["no_globals"][0]),
+                        ("no detail residual", outputs["no_detail_residual"][0]),
                         ("full model", outputs["model"][0]),
                         ("target", target[0]),
                     ],

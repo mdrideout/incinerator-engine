@@ -1890,6 +1890,7 @@ const App = struct {
     neural_evaluation_fixture_enabled: bool = false,
     neural_target_fixture_enabled: bool = false,
     neural_trial_fixture_enabled: bool = false,
+    neural_target_fixture_variant: neural_target_fixture.Variant = .urban_day,
     neural_evaluation_resize_frame: ?u64 = null,
 
     simulation: *sandbox_host.Placement,
@@ -2347,6 +2348,10 @@ const App = struct {
         const trial_bundle_root = environ_map.get("INCINERATOR_NR_TRIAL_BUNDLE");
         const capture_root = environ_map.get("INCINERATOR_NR_CAPTURE_ROOT");
         const target_frame_root = environ_map.get("INCINERATOR_NR_TARGET_FRAME_ROOT");
+        self.neural_target_fixture_variant = if (environ_map.get("INCINERATOR_NR_FIXTURE_VARIANT")) |value|
+            try neural_target_fixture.Variant.parse(value)
+        else
+            .urban_day;
         const lab_requested = if (environ_map.get("INCINERATOR_NR_LAB")) |value|
             std.mem.eql(u8, value, "1") or std.ascii.eqlIgnoreCase(value, "true")
         else
@@ -2436,7 +2441,7 @@ const App = struct {
                 .sequence = sequence,
                 .camera_path = neural_capture_camera.name(capture_camera_program.?),
                 .content_digest = if (self.neural_target_fixture_enabled)
-                    neural_target_fixture.contentDigest()
+                    neural_target_fixture.contentDigestFor(self.neural_target_fixture_variant)
                 else if (self.neural_evaluation_fixture_enabled)
                     neural_evaluation_fixture.contentDigest()
                 else
@@ -2454,8 +2459,8 @@ const App = struct {
                 .frame_count = capture_count,
                 .sequence = capture_sequence,
                 .camera_path = neural_capture_camera.name(capture_camera_program.?),
-                .content_digest = neural_target_fixture.contentDigest(),
-                .scene = neural_target_fixture.scene,
+                .content_digest = neural_target_fixture.contentDigestFor(self.neural_target_fixture_variant),
+                .scene = neural_target_fixture.sceneFor(self.neural_target_fixture_variant),
             });
         }
         self.neural_rendering = neural;
@@ -2466,7 +2471,7 @@ const App = struct {
         if (self.neural_rendering) |*owner| {
             const diagnostics = owner.diagnostics();
             std.debug.print(
-                "NR5_E_RUNTIME model_loaded={} enabled={} bundle={s} fixture={} paired_capture={s}\n",
+                "RF10_RUNTIME model_loaded={} enabled={} bundle={s} fixture={} paired_capture={s}\n",
                 .{
                     diagnostics.model_loaded,
                     diagnostics.enabled,
@@ -2477,7 +2482,7 @@ const App = struct {
             );
             std.debug.print("  N - Toggle neural scene presentation\n", .{});
             if (!diagnostics.model_loaded) {
-                std.debug.print("NR5_E_FALLBACK reason={s}\n", .{diagnostics.last_error});
+                std.debug.print("RF10_FALLBACK reason={s}\n", .{diagnostics.last_error});
             }
         } else {
             std.debug.print(
@@ -2591,7 +2596,7 @@ const App = struct {
                     const enabled = neural.toggle();
                     const diagnostics = neural.diagnostics();
                     std.debug.print(
-                        "NR5_E_RUNTIME enabled={} model_loaded={} bundle={s} error={s}\n",
+                        "RF10_RUNTIME enabled={} model_loaded={} bundle={s} error={s}\n",
                         .{
                             enabled,
                             diagnostics.model_loaded,
@@ -6657,7 +6662,8 @@ const App = struct {
             if (target_frames.wantsFrame(self.frame_timer.total_frames)) {
                 const forward = self.game_camera.getForward();
                 const up = camera.Camera.getUp();
-                const target_state = neural_target_fixture.sequenceState(
+                const target_state = neural_target_fixture.sequenceStateFor(
+                    self.neural_target_fixture_variant,
                     self.neuralTargetFixtureFrame(),
                 );
                 try target_frames.record(&self.neural_inputs.?, .{
@@ -7644,7 +7650,10 @@ const App = struct {
 
     fn drawNeuralTargetFixture(self: *App, view_projection: zm.Mat) !u64 {
         if (!self.neural_target_fixture_enabled) return 0;
-        const plans = neural_target_fixture.plans(self.neuralTargetFixtureFrame());
+        const plans = neural_target_fixture.plansFor(
+            self.neural_target_fixture_variant,
+            self.neuralTargetFixtureFrame(),
+        );
         for (plans) |plan| {
             const gpu_mesh: *const mesh.Mesh = switch (plan.mesh) {
                 .cube => &self.visuals.visual_part_mesh,
@@ -8169,7 +8178,8 @@ const App = struct {
                 .target_width = engine.neural_rendering.target_width,
                 .target_height = engine.neural_rendering.target_height,
                 .global_controls = if (self.neural_target_fixture_enabled)
-                    neural_target_fixture.sequenceState(
+                    neural_target_fixture.sequenceStateFor(
+                        self.neural_target_fixture_variant,
                         self.neuralTargetFixtureFrame(),
                     ).global_controls
                 else
@@ -10515,7 +10525,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                     try app.neural_rendering.?.writeEvaluationEvidence(root);
                 }
                 std.debug.print(
-                    "NR5_E_TRIAL_SMOKE_RESULT frames={d} ticks={d} " ++
+                    "RF10_TRIAL_SMOKE_RESULT frames={d} ticks={d} " ++
                         "fixture_draws={d} neural_draws={d} readbacks={d} " ++
                         "predictions={d} failures={d} inference_ms={d:.3} " ++
                         "pipeline_mean_ms={d:.3} pipeline_max_ms={d:.3} " ++

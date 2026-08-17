@@ -1,5 +1,11 @@
 # Neural Rendering Offline Tools
 
+> **Product-track pause (2026-08-17):** These tools are retained for
+> reproducibility and a possible deliberate restart. Do not run a new campaign,
+> modify a neural contract, or promote a bundle without an explicit
+> product-owner request to resume neural rendering. See
+> [`docs/design/neural-rendering-pause.md`](../../docs/design/neural-rendering-pause.md).
+
 This directory owns the macOS-local NR0 experiment toolchain. It contains the
 preliminary NR-0001 existing-frame model loop, the accepted NR0-A/B
 multi-channel capture/inspection tools, and the complete NR0-C 17-plane model
@@ -90,9 +96,11 @@ NR0 paired-capture or visual-quality acceptance:
 
 ## Native multi-channel input capture
 
-The product now renders `incinerator.neural-input.v5` as six direct `160×90`
+The product now renders `incinerator.neural-input.v6` as six direct `160×90`
 RGBA8 targets: appearance, linear depth, world normal, motion, semantic, and
-instance. Capture schema 6 stores only those native inputs. It does not capture
+instance, plus five frame-global presentation controls including explicit
+authored material-palette intent. Capture root schema 7 stores only those
+native inputs and controls. It does not capture
 or derive a conventional product target. High-fidelity truth is owned by the
 separate direct native `640×360` target adapter. Every raw buffer, debug PPM, stable
 presentation identity, matrix, frame/tick, effect value, source, content,
@@ -482,9 +490,9 @@ interfaces. Read
 `docs/validation/rf6-cumulative-rich-spatial.md` for exact roots, measurements,
 visual limitations, and the remaining product-owner review.
 
-## RF8 active direct working resolution and presentation
+## RF8 frozen direct working resolution and presentation
 
-RF8 is the active cohort: native `160×90` deterministic inputs map directly to
+RF8 established the frozen comparison cohort: native `160×90` deterministic inputs map directly to
 native `640×360` high-fidelity Cycles truth through one learned uniform 4×
 model. There is no `400×225` or `800×450` intermediate image, supervision
 target, comparison source, or runtime handoff. The committed experiment definition is
@@ -510,6 +518,71 @@ neural result owns the fixed `640×360` main scene when enabled. Press `N` to
 toggle the main presentation. The renderer never stretches that scene: larger
 windows receive centered black surround and smaller windows receive a centered
 crop. The bundle remains explicit, external, and unpromoted.
+
+## RF9 completed spatial-quality trial
+
+RF9 preserves the direct native `160×90 → 640×360` image contract while
+expanding spatial quality by measured cause. Input ABI v6 and target-frame v7
+add one presentation-owned material-palette scalar. Its authorization requires
+paired sequences with byte-identical cheap rasters, camera, geometry, and
+lighting but distinct palette values and rich HDR targets.
+
+The committed campaign definitions live in
+`experiments/neural-rendering/rf9-spatial-quality-expansion/`. The executable
+campaign manufactures a fresh multi-variant corpus, runs validation-only
+conditioning, reconstruction, capacity, and detail-ownership comparisons,
+conditionally trains a separately inspectable high-frequency residual,
+selects once, opens the test once, verifies a real second-open rejection,
+evaluates stress, and exports an explicit unpromoted Core ML trial only after
+complete technical visual review.
+
+The completed campaign is
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/rf9-spatial-campaign-20260813-b`.
+It selects the `1,062,587`-parameter `baseline-full` run. Material-palette
+conditioning is accepted; learned pyramid reconstruction, wider context,
+deeper output refinement, detail-focused sampling, and the learned detail
+residual are rejected. The sealed test opened once, a second opening was
+rejected, independently held stress passed, Core ML conversion agreed, and the
+graphical external trial ran. Product review was superseded by the RF10
+resolution decision and promotion remains false. See
+`docs/validation/rf9-spatial-quality-expansion.md` for exact metrics, artifact
+roots, limitations, and live commands.
+
+## RF10 native 720p spatial trial
+
+RF10 is the retained, paused experimental contract: direct native
+`256×144 → 1280×720` with exact uniform 5× correspondence. Capture, target,
+corpus, model, bundle, macOS adapter, runtime host, presentation, and
+diagnostics advanced together as one greenfield cohort. There is no
+intermediate rendered resolution and no compatibility decoder for RF9.
+
+The campaign completed a fresh 306-frame corpus, random-origin controlled fit,
+validation-only epoch-110 selection, one sealed-test opening, 54 newly
+manufactured post-selection stress frames, exact Core ML export, and a
+48-frame Metal runtime acceptance. The 1,062,587-parameter model remains an
+external unpromoted trial.
+
+Do not run new campaigns, change this contract, or promote the bundle unless the
+product owner explicitly resumes neural rendering. See
+[`docs/design/neural-rendering-pause.md`](../../docs/design/neural-rendering-pause.md).
+
+```sh
+CAMPAIGN="$HOME/Library/Application Support/Incinerator/neural-rendering/experiments/rf10-native-720p-campaign-20260814T015457Z"
+
+zig build inspect-rf10-trial-bundle -- "$CAMPAIGN/trial-bundle"
+zig build verify-rf10-trial -- "$CAMPAIGN/trial-bundle"
+
+INCINERATOR_NR_TRIAL_BUNDLE="$CAMPAIGN/trial-bundle" \
+INCINERATOR_NR_TRIAL_FIXTURE=1 \
+  zig build run -Deditor=true
+```
+
+Press `N` to toggle the centered, unstretched native `1280×720` main scene.
+The Neural Input / Output tool shows the native `256×144` source and bundle
+diagnostics; it does not duplicate the learned output. See
+`docs/design/rf10-native-720p-spatial-cohort.md` for the contract and
+`docs/validation/rf10-native-720p-spatial.md` for exact artifacts, metrics,
+limitations, and rejected harness evidence.
 
 ## NR4-C historical working-resolution evidence
 

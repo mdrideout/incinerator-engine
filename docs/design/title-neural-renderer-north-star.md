@@ -3,9 +3,14 @@
 **Status:** Accepted product direction; NR-0004 and NR5-A through NR5-E
 accepted; RF0 through RF5 accepted; RF6 and RF7 retained as historical spatial
 evidence; RF8 direct `160×90 → 640×360` spatial-sharpness/live-presentation
-trial accepted externally and unpromoted while NR6 remains deferred
+trial accepted externally and unpromoted; RF9 is historical; RF10 native
+`256×144 → 1280×720` trial accepted as the external, unpromoted stopping point;
+implementation paused indefinitely; no next neural phase authorized
 
-**Date:** 2026-08-12
+**Date:** 2026-08-17
+
+**Track status:**
+[Neural Rendering Product-Track Pause](neural-rendering-pause.md)
 
 **Decision:**
 [ADR-026](../adr/026-from-scratch-title-neural-renderer.md)
@@ -19,8 +24,16 @@ trial accepted externally and unpromoted while NR6 remains deferred
 **Rich-fidelity roadmap:**
 [Rich Fidelity Roadmap](rich-fidelity-roadmap.md)
 
-**Next spatial-quality plan:**
-[RF9 Spatial Quality Expansion](rf9-spatial-quality-expansion.md)
+**Retained spatial cohort:**
+[RF10 Native 720p Spatial Cohort](rf10-native-720p-spatial-cohort.md)
+
+## Current portfolio decision
+
+This north star remains the accepted architectural direction, but implementation
+is paused. RF10 is retained intact as the accepted external, unpromoted
+baseline. Deterministic rendering is the active focus. No agent should infer a
+next phase from this document; resumption requires an explicit product-owner
+request and the restart gate in the pause document.
 
 ## Product outcome
 
@@ -47,18 +60,18 @@ lineage.
 
 ### Working resolution strategy
 
-RF8 owns one direct 16:9 cohort: native `160×90` cheap deterministic inputs and
-a native `640×360` high-fidelity target. The model performs one learned,
-uniform `4×` spatial and appearance transformation. There is no `400×225` or
-`800×450` reconstruction,
-supervision image, auxiliary target, comparison source, or runtime handoff.
+The retained experimental RF10 cohort is direct native `256×144 → 1280×720`:
+native deterministic inputs and direct native high-fidelity targets through
+one learned uniform 5× spatial and appearance transformation.
 
-Every active RF8 target is rendered directly at `640×360`. Every input,
-target, baseline, model output, review image, metric, acceptance decision, and
-runtime proof is derived from that native pair. No image rendered at another
-resolution is reduced, enlarged, compared, used as a visual reference, or
-allowed into RF8 training or acceptance. NR4 through RF7 artifacts remain
-immutable historical evidence only and cannot supply RF8 pixels or metrics.
+Every RF10 target is rendered directly at `1280×720`. Every input, target,
+baseline, model output, review image, metric, acceptance decision, and runtime
+proof is derived from the native `256×144 → 1280×720` pair. No image rendered
+at another resolution is reduced, enlarged, compared, used as a visual
+reference, or allowed into RF10 training or acceptance. RF9 supplied only the
+ablation-proven authored material-palette concept; RF10 regenerated every
+pixel, split, initializer, checkpoint, evaluation, and export at the new
+native extents. RF9 and earlier cohorts remain immutable historical evidence.
 
 This is the guiding test for every future choice:
 
@@ -239,11 +252,10 @@ real ambiguity:
 - deterministic effect kind, phase, and responsive mask; and
 - exposure, grade, weather, and time-of-day controls.
 
-The active working appearance baseline is `160×90` and its direct target is
-`640×360`. Controls begin at `160×90`; RF8 has no auxiliary structural raster
-at another extent. A future schema may add one only when a measured ablation
-shows that its raster/storage cost resolves an observed failure. The data
-contract records each channel independently.
+The historical RF8 working appearance baseline was `160×90` with a direct
+`640×360` target. RF10 later replaced the retained experimental contract with
+direct native `256×144 → 1280×720`. No future schema is authorized while the
+track is paused.
 
 ### Target inputs and rights
 
@@ -476,7 +488,11 @@ candidate with stronger native-grid reconstruction and spatial selection.
 This is an independent product/content track, not NR5-F and not a generic scene
 or object-authoring system. RF0 through RF5 close authored intent, exact paired
 capture, and target review one kind at a time. RF6 then established the first
-cumulative spatial evidence; RF8 owns the active resolution and live trial.
+cumulative spatial evidence; RF8 established the current resolution and frozen
+live comparison trial. RF9 then completed the current spatial-quality
+campaign: material-palette conditioning was accepted, while learned pyramid
+reconstruction, added capacity, detail-focused sampling, and the detail
+residual were rejected by held-out evidence.
 See the
 [Rich Fidelity Roadmap](rich-fidelity-roadmap.md).
 
@@ -511,7 +527,7 @@ Then package one exact title model, implement GPU-resident macOS inference and
 the `N` toggle, exercise fallback/history/incident behavior, and complete human
 and architectural acceptance.
 
-## Immediate next action
+## Historical spatial progression
 
 NR5-C/D prove known-fixture held-out spatial reconstruction: selection used
 validation only, the test was opened once, a second open was rejected, and the
@@ -526,9 +542,33 @@ RF0 through RF5 are accepted and RF6-A through RF6-F are technically complete.
 RF6 manufactured a fresh cumulative corpus, trained from new random
 initializers, selected on validation, opened the sealed test once, evaluated a
 fresh stress cohort, and exercised an external live Core ML trial. The model
-remains external and unpromoted; product-owner interactive review is the final
-RF6 gate. NR6 begins with temporal-need characterization only after that gate,
-using RF6's observed motion and history failures rather than assumed model
-complexity. The NR-0005 checkpoint and trial bundle remain external, immutable,
-and are not ancestors of the RF6 candidate. See
+remained external and unpromoted; later RF7 through RF10 work superseded RF6's
+product-review gate. The NR-0005 checkpoint and trial bundle remain external,
+immutable, and are not ancestors of the RF6 candidate. See
 [RF6 validation](../validation/rf6-cumulative-rich-spatial.md).
+
+RF9 is technically complete at
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/rf9-spatial-campaign-20260813-b`.
+Its direct random-origin `160×90 → 640×360` trial accepts only the v6
+material-palette control and retains the simpler `1,062,587`-parameter
+bilinear-refinement model. The learned pyramid, wider context, deeper output,
+detail-focused sampling, and learned detail residual did not win on validation.
+The sealed test opened once, a second opening was rejected, held stress and
+Core ML export passed, and the graphical external trial ran successfully.
+
+Native review still finds softened texture and thin geometry, edge ringing,
+exaggerated emissive/local contrast, and weaker wet-night generalization. RF9
+is therefore an unpromoted technical result, not product-quality approval. The
+product owner selected a clean native `256×144 → 1280×720` replacement rather
+than promoting it.
+
+RF10 is now technically accepted at
+`~/Library/Application Support/Incinerator/neural-rendering/experiments/rf10-native-720p-campaign-20260814T015457Z`.
+It regenerated the complete source/target/learned lineage, retained the
+1,062,587-parameter random-origin topology, selected epoch 110 on validation,
+opened test once, passed newly manufactured disjoint stress, agreed with Core
+ML, and completed 48/48 Metal predictions. The result remains an external
+unpromoted trial with edge softness, fine-detail loss, and occasional
+high-contrast ringing. The product owner accepted it on 2026-08-17 as the
+retained stopping point and paused further neural work. It is not promoted. See
+[RF10 validation](../validation/rf10-native-720p-spatial.md).

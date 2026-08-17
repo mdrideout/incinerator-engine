@@ -27,7 +27,7 @@ from title_renderer.io import (
     sha256_file,
 )
 from title_renderer.metrics import BASELINES, ReconstructionLossConfig, comparison_sheet, loss_terms, metrics, overview_sheet, resize_baseline
-from title_renderer.coverage import INITIAL_STRUCTURAL_SCOPE, RF6_SCOPE, RF7_SCOPE, RF8_SCOPE
+from title_renderer.coverage import INITIAL_STRUCTURAL_SCOPE, RF6_SCOPE, RF7_SCOPE, RF8_SCOPE, RF9_SCOPE, RF10_SCOPE
 from title_renderer.models import SpatialTitleRendererConfig, create_spatial_model
 
 
@@ -147,9 +147,9 @@ def main() -> None:
     output = create_absent_absolute(args.output, "--output")
     configuration = load_json(configuration_path)
     if configuration.get("schema") != 1 or configuration.get("stage") != "controlled_spatial_overfit":
-        raise ValueError("NR5-B requires a controlled_spatial_overfit configuration")
+        raise ValueError("controlled fit requires a controlled_spatial_overfit configuration")
     if configuration.get("splits") != ["overfit"]:
-        raise ValueError("NR5-B may open only the declared overfit split")
+        raise ValueError("controlled fit may open only the declared overfit split")
     initialization_seed = int(configuration["initialization_seed"])
     training_seed = int(configuration["training_seed"])
     random.seed(training_seed)
@@ -159,12 +159,13 @@ def main() -> None:
     try:
         coverage_acceptance = load_json(coverage_acceptance_path)
         authorization_scope = coverage_acceptance.get("authorization_scope")
+        rf10 = authorization_scope == RF10_SCOPE
         if (
             coverage_acceptance.get("schema") != 1
-            or coverage_acceptance.get("phase") not in ("NR4-E", "RF6-A", "RF7-A", "RF8-A")
+            or coverage_acceptance.get("phase") not in ("NR4-E", "RF6-A", "RF7-A", "RF8-A", "RF9-C/D", "RF10-C")
             or coverage_acceptance.get("status") != "accepted"
             or coverage_acceptance.get("model_training_authorized") is not True
-            or authorization_scope not in (INITIAL_STRUCTURAL_SCOPE, RF6_SCOPE, RF7_SCOPE, RF8_SCOPE)
+            or authorization_scope not in (INITIAL_STRUCTURAL_SCOPE, RF6_SCOPE, RF7_SCOPE, RF8_SCOPE, RF9_SCOPE, RF10_SCOPE)
             or coverage_acceptance.get("sealed_test_pixels_opened") is not False
         ):
             raise ValueError("controlled fit requires an accepted sealed corpus authorization")
@@ -196,7 +197,7 @@ def main() -> None:
         dataset_sha256 = sha256_file(output / "dataset" / "dataset.json")
         if coverage_acceptance.get("corpus_manifest_sha256") != dataset.specification.corpus_manifest_sha256:
             raise ValueError("NR4-E authorization does not name this exact corpus manifest")
-        coverage_snapshot = output / "dataset" / "nr4-e-acceptance.json"
+        coverage_snapshot = output / "dataset" / "coverage-acceptance.json"
         coverage_snapshot.write_bytes(coverage_acceptance_path.read_bytes())
         model_config = SpatialTitleRendererConfig(**configuration["model"])
         loss_config = ReconstructionLossConfig(**configuration.get("loss", {}))
@@ -232,7 +233,7 @@ def main() -> None:
         )
         scheduler_config = configuration["scheduler"]
         if scheduler_config.get("name") != "CosineAnnealingLR":
-            raise ValueError("NR5-B currently owns only the declared CosineAnnealingLR recipe")
+                raise ValueError("controlled fit owns only the declared CosineAnnealingLR recipe")
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
             optimizer,
             T_max=int(configuration["epochs"]),
@@ -321,8 +322,9 @@ def main() -> None:
         evaluation = evaluate(model, evaluation_loader, device, output / "evaluation" / "samples")
         sample_sheets = sorted((output / "evaluation" / "samples").glob("*.png"))
         if len(sample_sheets) != len(dataset):
-            raise ValueError("NR5-B visual evidence is not complete")
-        overview_path = output / "evaluation" / "nr5-b-overfit-overview.png"
+            raise ValueError("controlled-fit visual evidence is not complete")
+        overview_name = "rf10-d-controlled-overfit-overview.png" if rf10 else "nr5-b-overfit-overview.png"
+        overview_path = output / "evaluation" / overview_name
         overview_sheet(overview_path, sample_sheets)
         best_baseline = min(BASELINES, key=lambda name: evaluation["metrics"][name]["linear_hdr_mae"])
         model_metrics = evaluation["metrics"]["model"]
@@ -341,7 +343,7 @@ def main() -> None:
         }
         evaluation_record = {
             "schema": 1,
-            "stage": "NR5-B",
+            "stage": "RF10-D" if rf10 else "NR5-B",
             "split": "overfit",
             "best_deterministic_baseline": best_baseline,
             "evaluation": evaluation,
@@ -350,7 +352,7 @@ def main() -> None:
             and gate_checks["test_pixels_opened"] is False,
             "visual_evidence": {
                 "complete_frame_sheets": len(sample_sheets),
-                "overview": "nr5-b-overfit-overview.png",
+                "overview": overview_name,
                 "overview_sha256": sha256_file(overview_path),
                 "training_eligible": False,
             },
@@ -417,17 +419,19 @@ def main() -> None:
                     "bytes": snapshot.stat().st_size,
                 }
             )
+        run_phase = "RF10-D" if rf10 else "NR5-B"
+        run_experiment = "RF10" if rf10 else "NR-0005"
         run = {
             "schema": 1,
-            "experiment": "NR-0005",
-            "phase": "NR5-B",
+            "experiment": run_experiment,
+            "phase": run_phase,
             "status": "pending_visual_review" if evaluation_record["automated_gate_passed"] else "automated_gate_failed",
             "configuration": "configuration.json",
             "configuration_sha256": sha256_file(configuration_snapshot),
             "repository": repository_record(repository),
             "dataset": "dataset/dataset.json",
             "dataset_sha256": dataset_sha256,
-            "coverage_acceptance": "dataset/nr4-e-acceptance.json",
+            "coverage_acceptance": "dataset/coverage-acceptance.json",
             "coverage_acceptance_sha256": sha256_file(coverage_snapshot),
             "coverage_acceptance_source": str(coverage_acceptance_path),
             "parameter_count": parameter_count,
@@ -455,7 +459,7 @@ def main() -> None:
             output / "conclusion.pending.json",
             {
                 "schema": 1,
-                "phase": "NR5-B",
+                "phase": run_phase,
                 "status": "pending_agent_visual_review" if evaluation_record["automated_gate_passed"] else "automated_gate_failed",
                 "run_sha256": sha256_file(output / "run.json"),
                 "automated_gate_passed": evaluation_record["automated_gate_passed"],
@@ -463,10 +467,10 @@ def main() -> None:
             },
         )
     except Exception as error:
-        atomic_json(output / "failure.json", {"schema": 1, "phase": "NR5-B", "status": "failed", "error": str(error)})
+        atomic_json(output / "failure.json", {"schema": 1, "phase": "RF10-D", "status": "failed", "error": str(error)})
         raise
     print(
-        f"NR5_B_TRAIN_COMPLETE status={run['status']} parameters={parameter_count} "
+        f"{'RF10_D' if rf10 else 'NR5_B'}_TRAIN_COMPLETE status={run['status']} parameters={parameter_count} "
         f"model_mae={model_metrics['linear_hdr_mae']:.8f} baseline={best_baseline} "
         f"baseline_mae={baseline_metrics['linear_hdr_mae']:.8f} output={output}"
     )

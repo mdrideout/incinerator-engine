@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Export an accepted NR5-D checkpoint as an immutable NR5-E Core ML trial bundle."""
+"""Export an accepted spatial checkpoint as an immutable Core ML trial bundle."""
 
 from __future__ import annotations
 
@@ -20,7 +20,7 @@ from title_renderer.dataset import TitleCorpusDataset
 from title_renderer.inspect_candidate import inspect as inspect_candidate
 from title_renderer.io import atomic_json, create_absent_absolute, environment_record, load_json, repository_record, require_existing_absolute, sha256_file
 from title_renderer.models import SpatialTitleRendererConfig, create_spatial_model
-from title_renderer.trial_bundle import CHANNELS, CONTINUOUS_PLANES, GLOBAL_CONTROLS, INPUT_EXTENT, INPUT_SCHEMA, MODEL_PACKAGE, TARGET_EXTENT, TRIAL_BUNDLE_KIND, TRIAL_BUNDLE_SCHEMA, inspect, package_files
+from title_renderer.trial_bundle import CHANNELS, CONTINUOUS_PLANES, GLOBAL_CONTROLS, INPUT_EXTENT, INPUT_SCHEMA, INPUT_SCHEMA_VERSION, MODEL_PACKAGE, TARGET_EXTENT, TRIAL_BUNDLE_KIND, TRIAL_BUNDLE_SCHEMA, inspect, package_files
 
 
 class CoreMLExportModel(nn.Module):
@@ -37,46 +37,7 @@ class CoreMLExportModel(nn.Module):
         instance: torch.Tensor,
         global_controls: torch.Tensor,
     ) -> torch.Tensor:
-        model = self.source
-        semantic_features = model.semantic_embedding(semantic).permute(0, 3, 1, 2)
-        instance_features = model.instance_embedding(instance).permute(0, 3, 1, 2)
-        controls = global_controls[:, :, None, None] * torch.ones_like(continuous[:, :1])
-        low = torch.cat((continuous, semantic_features, instance_features, controls), dim=1)
-        low = functional.silu(model.low_encoder(low))
-        for block in model.context_blocks:
-            low = block(low)
-        structural = model.structural_encoder(
-            torch.cat(
-                (
-                    continuous[:, 3:4],
-                    continuous[:, 4:7],
-                    continuous[:, 10:11],
-                    semantic_features,
-                    instance_features,
-                ),
-                dim=1,
-            )
-        )
-        fused = functional.silu(model.fusion(torch.cat((low, structural), dim=1)))
-        output_size = (TARGET_EXTENT[1], TARGET_EXTENT[0])
-        appearance_features = functional.interpolate(
-            model.direct_projection(fused),
-            size=output_size,
-            mode="bilinear",
-            align_corners=False,
-        )
-        structural_features = functional.interpolate(
-            model.output_structural_projection(structural),
-            size=output_size,
-            mode="nearest",
-        )
-        fused = functional.silu(
-            model.output_fusion(torch.cat((appearance_features, structural_features), dim=1))
-        )
-        for block in model.output_blocks:
-            fused = block(fused)
-        base = functional.interpolate(continuous[:, :3], size=output_size, mode="bilinear", align_corners=False)
-        return base + model.output(fused)
+        return self.source(continuous, semantic, instance, global_controls)
 
 
 def vocabulary(value: dict[str, int]) -> list[dict[str, int]]:
@@ -97,10 +58,10 @@ def main() -> None:
     candidate = inspect_candidate(run_root)
     conclusion_path = run_root / "conclusion.json"
     conclusion = load_json(conclusion_path)
-    if candidate.get("phase") != "NR5-D" or candidate.get("status") != "accepted":
-        raise ValueError("NR5-E export requires the accepted NR5-D candidate")
+    if candidate.get("phase") != "RF10-F" or candidate.get("status") != "accepted":
+        raise ValueError("RF10-G export requires an accepted RF10-F candidate")
     if conclusion.get("promotion_authorized") is not False:
-        raise ValueError("NR5-E cannot export a promotion-ambiguous candidate")
+        raise ValueError("RF10-G cannot export a promotion-ambiguous candidate")
     output = create_absent_absolute(args.output, "--output")
     try:
         run = load_json(run_root / "run.json")
@@ -191,7 +152,7 @@ def main() -> None:
         manifest = {
             "schema": TRIAL_BUNDLE_SCHEMA,
             "kind": TRIAL_BUNDLE_KIND,
-            "phase": "NR5-E",
+            "phase": "RF10-G" if candidate.get("phase") == "RF10-F" else "NR5-E",
             "status": "trial_only_unpromoted",
             "promotion_authorized": False,
             "purpose": "interactive spatial-candidate evaluation; never runtime game content",
@@ -214,7 +175,7 @@ def main() -> None:
             },
             "input": {
                 "schema_name": INPUT_SCHEMA,
-                "schema_version": 5,
+                "schema_version": INPUT_SCHEMA_VERSION,
                 "extent": INPUT_EXTENT,
                 "channels": CHANNELS,
                 "continuous_planes": CONTINUOUS_PLANES,
@@ -254,10 +215,10 @@ def main() -> None:
         inspected = inspect(output)
         atomic_json(output / "inspection.json", inspected)
     except Exception as error:
-        atomic_json(output / "failure.json", {"schema": 1, "phase": "NR5-E", "error": str(error)})
+        atomic_json(output / "failure.json", {"schema": 1, "phase": "RF10-G", "error": str(error)})
         raise
     print(
-        "NR5_E_TRIAL_BUNDLE_PASS "
+        "RF10_G_TRIAL_BUNDLE_PASS "
         f"root={output} coreml_max_error={coreml_maximum:.8f} "
         f"coreml_mean_error={coreml_mean:.8f}"
     )

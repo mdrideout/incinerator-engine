@@ -1,4 +1,4 @@
-"""Fail-closed contracts shared by NR4-E and the NR-0005 framework."""
+"""Fail-closed contracts for the active RF10 title-renderer cohort."""
 
 from __future__ import annotations
 
@@ -10,13 +10,13 @@ from .io import load_json, read_ndjson, sha256_file
 
 CORPUS_SCHEMA = 1
 FRAME_SCHEMA = 1
-CAPTURE_SCHEMA = 6
-TARGET_FRAME_SCHEMA = "incinerator.nr4.blender-target-frame.v6"
-INPUT_SCHEMA_VERSION = 5
-INPUT_SCHEMA_NAME = "incinerator.neural-input.v5"
-INPUT_EXTENT = (160, 90)
-TARGET_EXTENT = (640, 360)
-GLOBAL_CONTROL_SCHEMA = "incinerator.neural-frame-global.v1"
+CAPTURE_SCHEMA = 7
+TARGET_FRAME_SCHEMA = "incinerator.nr4.blender-target-frame.v8"
+INPUT_SCHEMA_VERSION = 7
+INPUT_SCHEMA_NAME = "incinerator.neural-input.v7"
+INPUT_EXTENT = (256, 144)
+TARGET_EXTENT = (1280, 720)
+GLOBAL_CONTROL_SCHEMA = "incinerator.neural-frame-global.v2"
 CHANNELS = (
     "appearance",
     "linear-depth",
@@ -26,6 +26,23 @@ CHANNELS = (
     "instance",
 )
 SPLITS = frozenset(("overfit", "train", "validation", "test", "stress"))
+
+
+def require_sealed_training_authorization(
+    authorization: dict[str, Any],
+    *,
+    allowed_scopes: tuple[str, ...],
+    corpus_manifest_sha256: str,
+) -> None:
+    """Fail closed unless an authorization owns this still-sealed corpus."""
+
+    if (
+        authorization.get("status") != "accepted"
+        or authorization.get("authorization_scope") not in allowed_scopes
+        or authorization.get("sealed_test_pixels_opened") is not False
+        or authorization.get("corpus_manifest_sha256") != corpus_manifest_sha256
+    ):
+        raise ValueError("NR5-C requires the exact sealed held-out authorization")
 
 
 def _require_artifact(root: Path, record: dict[str, Any], label: str) -> Path:
@@ -55,7 +72,13 @@ def inspect_corpus_metadata(root: Path, *, verify_training_artifacts: bool) -> d
     manifest = load_json(manifest_path)
     if manifest.get("schema") != CORPUS_SCHEMA or manifest.get("status") != "complete":
         raise ValueError("title corpus is incomplete or has an unsupported schema")
-    if manifest.get("purpose") != "self-contained native 160x90 to direct 640x360 paired corpus":
+    role = manifest.get("corpus_role", "primary")
+    expected_purpose = (
+        "self-contained native 256x144 to direct 1280x720 post-selection stress corpus"
+        if role == "post_selection_stress"
+        else "self-contained native 256x144 to direct 1280x720 paired corpus"
+    )
+    if role not in ("primary", "post_selection_stress") or manifest.get("purpose") != expected_purpose:
         raise ValueError("title corpus purpose drifted")
     rights = manifest.get("rights")
     if not isinstance(rights, dict) or any(
@@ -75,8 +98,9 @@ def inspect_corpus_metadata(root: Path, *, verify_training_artifacts: bool) -> d
         run_path = root / str(sequence.get("root", "")) / "run.json"
         if not run_path.is_file() or sha256_file(run_path) != sequence.get("run_manifest_sha256"):
             raise ValueError(f"title corpus sequence manifest drifted: {name}")
-    if set(split_by_sequence.values()) != SPLITS:
-        raise ValueError("title corpus does not own every declared split")
+    expected_splits = {"stress"} if role == "post_selection_stress" else SPLITS
+    if set(split_by_sequence.values()) != expected_splits:
+        raise ValueError("title corpus does not own the splits required by its role")
     split_manifest = manifest.get("splits")
     if not isinstance(split_manifest, dict) or split_manifest.get("test", {}).get("policy") != "sealed_until_final_evaluation":
         raise ValueError("title corpus test split is not sealed")

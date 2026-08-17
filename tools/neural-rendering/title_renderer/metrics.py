@@ -32,6 +32,8 @@ class ReconstructionLossConfig:
     instance_edge: float = 0.08
     geometry: float = 0.08
     negative_radiance: float = 0.02
+    detail_focus: float = 0.0
+    structural_supervision: float = 0.0
 
     def json(self) -> dict[str, float]:
         return asdict(self)
@@ -131,7 +133,24 @@ def loss_terms(
     configuration: ReconstructionLossConfig | None = None,
 ) -> tuple[torch.Tensor, dict[str, float]]:
     weights = configuration or ReconstructionLossConfig()
-    reconstruction = functional.smooth_l1_loss(output, target, beta=0.02)
+    target_size = (target.shape[2], target.shape[3])
+    semantic_boundary = _dilate(_boundary_mask(semantic, target_size))
+    instance_boundary = _dilate(_boundary_mask(instance, target_size))
+    coverage_edge = _dilate(
+        torch.maximum(
+            functional.pad((target_coverage[:, :, :, 1:] != target_coverage[:, :, :, :-1]).float(), (0, 1, 0, 0)),
+            functional.pad((target_coverage[:, :, 1:, :] != target_coverage[:, :, :-1, :]).float(), (0, 0, 0, 1)),
+        )
+    )
+    target_low = functional.avg_pool2d(target, 5, stride=1, padding=2)
+    target_detail = (target - target_low).abs().mean(dim=1, keepdim=True)
+    detail_scale = target_detail.amax(dim=(2, 3), keepdim=True).clamp_min(1.0e-6)
+    detail_ownership = torch.maximum(
+        torch.maximum(semantic_boundary, instance_boundary),
+        torch.maximum(coverage_edge, target_detail / detail_scale),
+    )
+    reconstruction_pixels = functional.smooth_l1_loss(output, target, beta=0.02, reduction="none")
+    reconstruction = (reconstruction_pixels * (1.0 + weights.detail_focus * detail_ownership)).mean()
     log_luminance = functional.l1_loss(
         torch.log1p(_luminance(output.clamp_min(0.0))),
         torch.log1p(_luminance(target.clamp_min(0.0))),
@@ -139,20 +158,11 @@ def loss_terms(
     chroma = functional.l1_loss(_signed_log(_chroma(output)), _signed_log(_chroma(target)))
     multiscale_color = _multiscale_color(output, target)
     gradient, high_frequency, laplacian, local_contrast = _sharpness_terms(output, target)
-    target_size = (target.shape[2], target.shape[3])
-    semantic_boundary = _dilate(_boundary_mask(semantic, target_size))
-    instance_boundary = _dilate(_boundary_mask(instance, target_size))
     absolute = (output - target).abs().mean(dim=1, keepdim=True)
     semantic_denominator = semantic_boundary.sum().clamp_min(1.0)
     instance_denominator = instance_boundary.sum().clamp_min(1.0)
     semantic_edge = (absolute * semantic_boundary).sum() / semantic_denominator
     instance_edge = (absolute * instance_boundary).sum() / instance_denominator
-    coverage_edge = _dilate(
-        torch.maximum(
-            functional.pad((target_coverage[:, :, :, 1:] != target_coverage[:, :, :, :-1]).float(), (0, 1, 0, 0)),
-            functional.pad((target_coverage[:, :, 1:, :] != target_coverage[:, :, :-1, :]).float(), (0, 0, 0, 1)),
-        )
-    )
     geometry = (absolute * coverage_edge).sum() / coverage_edge.sum().clamp_min(1.0)
     negative_radiance = functional.relu(-output).mean()
     total = (

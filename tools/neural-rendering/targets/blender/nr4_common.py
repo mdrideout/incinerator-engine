@@ -12,30 +12,32 @@ from pathlib import Path
 from typing import Any, Iterable
 
 
-TARGET_FRAME_SCHEMA = 6
-TARGET_FRAME_SCHEMA_NAME = "incinerator.nr4.blender-target-frame.v6"
+TARGET_FRAME_SCHEMA = 8
+TARGET_FRAME_SCHEMA_NAME = "incinerator.nr4.blender-target-frame.v8"
 TARGET_RUN_SCHEMA = 1
-CAPTURE_SCHEMA = 6
-GLOBAL_CONTROL_SCHEMA = "incinerator.neural-frame-global.v1"
+CAPTURE_SCHEMA = 7
+CAPTURE_ROOT_SCHEMA = 8
+GLOBAL_CONTROL_SCHEMA = "incinerator.neural-frame-global.v2"
 GLOBAL_CONTROL_ENCODING = "float32 little-endian"
 GLOBAL_CONTROL_ORDER = (
     "sun_strength",
     "world_strength",
     "local_light_strength",
     "emissive_strength",
+    "material_palette",
 )
-INPUT_EXTENT = [160, 90]
-TARGET_EXTENT = [640, 360]
+INPUT_EXTENT = [256, 144]
+TARGET_EXTENT = [1280, 720]
 SAMPLING_MAP = {
     "x": {
-        "scale_numerator": 4,
+        "scale_numerator": 5,
         "scale_denominator": 1,
-        "target_center_to_source_index": "((target_x + 0.5) / 4) - 0.5",
+        "target_center_to_source_index": "((target_x + 0.5) / 5) - 0.5",
     },
     "y": {
-        "scale_numerator": 4,
+        "scale_numerator": 5,
         "scale_denominator": 1,
-        "target_center_to_source_index": "((target_y + 0.5) / 4) - 0.5",
+        "target_center_to_source_index": "((target_y + 0.5) / 5) - 0.5",
     },
     "border": "clamp",
 }
@@ -174,8 +176,8 @@ def capture_global_control_values(frame: dict[str, Any], capture_root: Path) -> 
         raise ValueError("capture frame global-control artifact is missing")
     if sha256_file(raw_path) != controls.get("raw_sha256"):
         raise ValueError("capture frame global-control artifact digest changed")
-    raw = struct.unpack("<4f", raw_path.read_bytes())
-    normalized = struct.unpack("<4f", struct.pack("<4f", *ordered))
+    raw = struct.unpack("<5f", raw_path.read_bytes())
+    normalized = struct.unpack("<5f", struct.pack("<5f", *ordered))
     if raw != normalized:
         raise ValueError("capture frame global-control JSON/raw values disagree")
     return {name: raw[index] for index, name in enumerate(GLOBAL_CONTROL_ORDER)}
@@ -203,9 +205,9 @@ def validate_frame_package(package: dict[str, Any]) -> None:
     if not Path(package["source_capture_frame"]).is_absolute():
         raise ValueError("target-frame source capture path must be absolute")
     if positive_extent(package.get("input_extent"), "target-frame input extent") != INPUT_EXTENT:
-        raise ValueError("target-frame input extent is not native 160x90")
+        raise ValueError("target-frame input extent is not native 256x144")
     if positive_extent(package.get("target_extent"), "target-frame target extent") != TARGET_EXTENT:
-        raise ValueError("target-frame target extent is not native 640x360")
+        raise ValueError("target-frame target extent is not native 1280x720")
     if package.get("sampling_map") != SAMPLING_MAP:
         raise ValueError("target-frame sampling map is not the exact axis-specific pixel-center contract")
     coordinates = package.get("coordinate_system")

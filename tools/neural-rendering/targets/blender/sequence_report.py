@@ -116,7 +116,7 @@ def main() -> None:
         detail_path = output / f"segment-{segment_index:02d}-{segment}.png"
         detail.save(detail_path)
         artifacts.append(artifact(detail_path, output))
-    overview_path = output / "direct-160x90-to-640x360-sequence-review.png"
+    overview_path = output / "direct-256x144-to-1280x720-sequence-review.png"
     overview.save(overview_path)
     artifacts.insert(0, artifact(overview_path, output))
     manifest = {
@@ -126,8 +126,8 @@ def main() -> None:
         "sequence_manifest": str(sequence_path),
         "frame_count": len(frames),
         "segments": list(SEGMENTS),
-        "layout": "UI-only overview: six causal rows, three samples, 160x90 appearance nearest-zoomed to 640x360 beside the direct native 640x360 target; detail: appearance, target, source identity, alignment",
-        "training_material_policy": "reports and resized UI cells are excluded; only native 160x90 captured channels and direct native 640x360 target artifacts are eligible",
+        "layout": "UI-only overview: six causal rows, three samples, 256x144 appearance nearest-zoomed to 1280x720 beside the direct native 1280x720 target; detail: appearance, target, source identity, alignment",
+        "training_material_policy": "reports and resized UI cells are excluded; only native 256x144 captured channels and direct native 1280x720 target artifacts are eligible",
         "artifacts": artifacts,
     }
     atomic_json(output / "report.json", manifest)

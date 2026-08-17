@@ -1,4 +1,4 @@
-"""Direct random-initialized 160x90 to 640x360 spatial title renderer."""
+"""Direct random-initialized 256x144 to 1280x720 spatial title renderer."""
 
 from __future__ import annotations
 
@@ -24,13 +24,17 @@ class ResidualBlock(nn.Module):
 
 @dataclass(frozen=True)
 class SpatialTitleRendererConfig:
-    name: str = "rf8_direct_spatial_title_renderer_v2"
+    name: str = "rf10_native_720p_spatial_title_renderer_v1"
     features: int = 32
     low_blocks: int = 4
     output_blocks: int = 6
     semantic_embedding: int = 4
     instance_embedding: int = 8
     refinement_features: int = 48
+    reconstruction: str = "bilinear_refinement"
+    scale_blocks: int = 2
+    detail_residual: bool = False
+    use_material_palette: bool = True
     output_width: int = TARGET_EXTENT[0]
     output_height: int = TARGET_EXTENT[1]
 
@@ -46,9 +50,13 @@ class SpatialTitleRenderer(nn.Module):
         if semantic_categories <= 0 or instance_categories <= 0:
             raise ValueError("categorical vocabularies must include background")
         if (config.output_width, config.output_height) != TARGET_EXTENT:
-            raise ValueError("spatial title renderer requires the direct native 160x90 to 640x360 contract")
+            raise ValueError("spatial title renderer requires the direct native 256x144 to 1280x720 contract")
         if config.features <= 0 or config.refinement_features <= 0:
             raise ValueError("spatial title renderer feature counts must be positive")
+        if config.reconstruction not in {"bilinear_refinement", "learned_pyramid"}:
+            raise ValueError(f"unsupported spatial reconstruction: {config.reconstruction}")
+        if config.scale_blocks <= 0:
+            raise ValueError("learned reconstruction requires positive scale-block count")
         self.config = config
         self.semantic_categories = semantic_categories
         self.instance_categories = instance_categories
@@ -65,18 +73,38 @@ class SpatialTitleRenderer(nn.Module):
             nn.Conv2d(structural_features, structural_features, 3, padding=1),
         )
         self.fusion = nn.Conv2d(config.features + structural_features, config.features, 3, padding=1)
-        self.direct_projection = nn.Conv2d(config.features, config.refinement_features, 3, padding=1)
-        self.output_structural_projection = nn.Conv2d(
-            structural_features,
-            config.refinement_features,
-            3,
-            padding=1,
-        )
-        self.output_fusion = nn.Conv2d(config.refinement_features * 2, config.refinement_features, 3, padding=1)
-        self.output_blocks = nn.ModuleList(
-            ResidualBlock(config.refinement_features) for _ in range(config.output_blocks)
-        )
+        if config.reconstruction == "bilinear_refinement":
+            self.direct_projection = nn.Conv2d(config.features, config.refinement_features, 3, padding=1)
+            self.output_structural_projection = nn.Conv2d(
+                structural_features,
+                config.refinement_features,
+                3,
+                padding=1,
+            )
+            self.output_fusion = nn.Conv2d(config.refinement_features * 2, config.refinement_features, 3, padding=1)
+            self.output_blocks = nn.ModuleList(
+                ResidualBlock(config.refinement_features) for _ in range(config.output_blocks)
+            )
+        else:
+            self.scale1_projection = nn.Conv2d(config.features, config.refinement_features * 4, 3, padding=1)
+            self.scale1_structural = nn.Conv2d(structural_features, config.refinement_features, 3, padding=1)
+            self.scale1_fusion = nn.Conv2d(config.refinement_features * 2, config.refinement_features, 3, padding=1)
+            self.scale1_blocks = nn.ModuleList(
+                ResidualBlock(config.refinement_features) for _ in range(config.scale_blocks)
+            )
+            self.scale2_projection = nn.Conv2d(config.refinement_features, config.refinement_features * 4, 3, padding=1)
+            self.scale2_structural = nn.Conv2d(structural_features, config.refinement_features, 3, padding=1)
+            self.scale2_fusion = nn.Conv2d(config.refinement_features * 2, config.refinement_features, 3, padding=1)
+            self.scale2_blocks = nn.ModuleList(
+                ResidualBlock(config.refinement_features) for _ in range(config.output_blocks)
+            )
         self.output = nn.Conv2d(config.refinement_features, 3, 3, padding=1)
+        if config.detail_residual:
+            self.detail = nn.Sequential(
+                nn.Conv2d(config.refinement_features, config.refinement_features, 3, padding=1),
+                nn.SiLU(),
+                nn.Conv2d(config.refinement_features, 3, 3, padding=1),
+            )
 
     def forward(
         self,
@@ -85,8 +113,26 @@ class SpatialTitleRenderer(nn.Module):
         instance: torch.Tensor,
         global_controls: torch.Tensor,
     ) -> torch.Tensor:
+        structural, detail = self.forward_components(
+            continuous,
+            semantic,
+            instance,
+            global_controls,
+        )
+        return structural + detail
+
+    def forward_components(
+        self,
+        continuous: torch.Tensor,
+        semantic: torch.Tensor,
+        instance: torch.Tensor,
+        global_controls: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
         semantic_features = self.semantic_embedding(semantic).permute(0, 3, 1, 2)
         instance_features = self.instance_embedding(instance).permute(0, 3, 1, 2)
+        if not self.config.use_material_palette:
+            global_controls = global_controls.clone()
+            global_controls[:, -1] = 0
         controls = global_controls[:, :, None, None].expand(
             -1, -1, continuous.shape[2], continuous.shape[3]
         )
@@ -108,22 +154,46 @@ class SpatialTitleRenderer(nn.Module):
         )
         fused = functional.silu(self.fusion(torch.cat((low, structural), dim=1)))
         output_size = (self.config.output_height, self.config.output_width)
-        appearance_features = functional.interpolate(
-            self.direct_projection(fused),
-            size=output_size,
-            mode="bilinear",
-            align_corners=False,
-        )
-        structural_features = functional.interpolate(
-            self.output_structural_projection(structural),
-            size=output_size,
-            mode="nearest",
-        )
-        fused = functional.silu(self.output_fusion(torch.cat((appearance_features, structural_features), dim=1)))
-        for block in self.output_blocks:
-            fused = block(fused)
+        if self.config.reconstruction == "bilinear_refinement":
+            appearance_features = functional.interpolate(
+                self.direct_projection(fused),
+                size=output_size,
+                mode="bilinear",
+                align_corners=False,
+            )
+            structural_features = functional.interpolate(
+                self.output_structural_projection(structural),
+                size=output_size,
+                mode="nearest",
+            )
+            fused = functional.silu(self.output_fusion(torch.cat((appearance_features, structural_features), dim=1)))
+            for block in self.output_blocks:
+                fused = block(fused)
+        else:
+            fused = functional.pixel_shuffle(self.scale1_projection(fused), 2)
+            structural_320 = functional.interpolate(structural, scale_factor=2.0, mode="nearest")
+            structural_320 = self.scale1_structural(structural_320)
+            fused = functional.silu(self.scale1_fusion(torch.cat((fused, structural_320), dim=1)))
+            for block in self.scale1_blocks:
+                fused = block(fused)
+            fused = functional.pixel_shuffle(self.scale2_projection(fused), 2)
+            fused = functional.interpolate(fused, size=output_size, mode="bilinear", align_corners=False)
+            structural_output = functional.interpolate(structural, size=output_size, mode="nearest")
+            structural_output = self.scale2_structural(structural_output)
+            fused = functional.silu(self.scale2_fusion(torch.cat((fused, structural_output), dim=1)))
+            for block in self.scale2_blocks:
+                fused = block(fused)
         base = functional.interpolate(continuous[:, :3], size=output_size, mode="bilinear", align_corners=False)
-        return base + self.output(fused)
+        structural_result = base + self.output(fused)
+        if self.config.detail_residual:
+            detail = self.detail(fused)
+            # The optional branch owns local detail, not scene color or
+            # authored geometry. Removing its local mean makes that boundary
+            # explicit and keeps the structural result separately inspectable.
+            detail = detail - functional.avg_pool2d(detail, 5, stride=1, padding=2)
+        else:
+            detail = torch.zeros_like(structural_result)
+        return structural_result, detail
 
 
 def create_spatial_model(

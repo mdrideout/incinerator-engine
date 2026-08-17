@@ -9,7 +9,7 @@ import struct
 from pathlib import Path
 
 from nr4_common import (
-    CAPTURE_SCHEMA,
+    CAPTURE_ROOT_SCHEMA,
     TARGET_FRAME_SCHEMA,
     capture_global_control_values,
     load_json,
@@ -38,7 +38,7 @@ def inspect(root: Path) -> dict:
     alignment_root = root / run["evaluation"]["alignment_root"]
     capture = load_json(capture_root / "capture.json")
     frame_set = load_json(frame_root / "target-frames.json")
-    if capture.get("schema") != CAPTURE_SCHEMA or capture.get("status") != "complete":
+    if capture.get("schema") != CAPTURE_ROOT_SCHEMA or capture.get("status") != "complete":
         raise ValueError("source capture is incomplete")
     if frame_set.get("schema") != TARGET_FRAME_SCHEMA or frame_set.get("status") != "complete":
         raise ValueError("target-frame set is incomplete")
@@ -113,7 +113,7 @@ def inspect(root: Path) -> dict:
     baseline = load_json(baseline_root / "baselines.json")
     if sha256_file(baseline_root / "baselines.json") != run["evaluation"]["baseline_manifest_sha256"]:
         raise ValueError("native baseline manifest is stale")
-    if baseline.get("input_extent") != [160, 90] or baseline.get("target_extent") != [640, 360]:
+    if baseline.get("input_extent") != [256, 144] or baseline.get("target_extent") != [1280, 720]:
         raise ValueError("native still baseline contains a foreign extent")
     verify_artifacts(baseline_root, baseline["artifacts"])
     report_path = root / run["evaluation"]["report"]
