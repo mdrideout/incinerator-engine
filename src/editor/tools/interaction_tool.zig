@@ -15,7 +15,13 @@ const InteractionInput = tool_module.InteractionInput;
 pub const descriptor = tool_module.Descriptor{
     .id = .interaction,
     .name = "Interaction",
-    .enabled_by_default = true,
+    .category = .gameplay,
+    .default_region = .right,
+    .purpose = "Inspect carrier/carryable ownership and submit the same collect/drop command used by gameplay.",
+    .reads = "Immutable carrier, carryable, transaction, and last-outcome projection.",
+    .requests = "Emits typed collect or drop requests through the feature-owned interaction boundary.",
+    .examples = &.{ "carrier=1:2 mode=on_foot", "carryable=1:9 ownership=inventory_held" },
+    .audit_fields = &.{ "authority_tick", "transaction_id", "carrier_id", "carryable_id" },
 };
 
 fn drawIdentity(label: []const u8, id: sandbox_host.PersistentId) void {
@@ -92,9 +98,6 @@ fn drawOutcome(outcome: sandbox_host.InteractionOutcome) void {
 
 pub fn draw(ctx: *const InteractionInput) void {
     const view = ctx.view;
-    zgui.setNextWindowPos(.{ .x = 850, .y = 560, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = 430, .h = 390, .cond = .first_use_ever });
-
     if (zgui.begin("Interaction", .{})) {
         zgui.text(
             "UI mailbox rejected: {d}",

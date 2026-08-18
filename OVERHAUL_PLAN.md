@@ -10,7 +10,8 @@ deferred. The neural-rendering proof completed RF10 as an external, unpromoted
 `256×144 → 1280×720` technical trial. On 2026-08-17 the product owner paused
 that track indefinitely. No learned model is installed or selected as game
 content, and no later neural phase is authorized. Deterministic rendering is
-the active product direction; DR1 is the proposed next playable fidelity slice.
+the active product direction. ED1 structured developer workspace is complete;
+DR1 is the next playable fidelity slice.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
@@ -40,6 +41,10 @@ the active product direction; DR1 is the proposed next playable fidelity slice.
 
 **Active rendering direction:**
 [`DR1 playable deterministic visual fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
+
+**Completed developer-workspace phase:**
+[`ED1 structured developer workspace`](docs/design/ed1-structured-developer-workspace.md)
+([validation](docs/validation/ed1-structured-developer-workspace.md))
 
 **Paused experimental rendering track:**
 [`RF10 retained externally and unpromoted; no neural continuation authorized`](docs/design/neural-rendering-pause.md)
@@ -412,10 +417,10 @@ logical authority and operational lifecycle:
 | Component | Exact current contract | Notes |
 |---|---:|---|
 | Zig | 0.16.0 | Exact archive checksums are enforced in CI; `.zigversion` records the developer contract |
-| SDL | wrapper `0.5.2+SDL3.4.12` at `1b67d371...` | Static linkage selected; target/optimization propagated from the root build |
+| SDL | wrapper `0.5.3+SDL3.4.14` at `fb2d799c...` | Static linkage selected; target/optimization propagated from the root build |
 | Jolt | 5.5.0 at `23dadd0e...` | Built from source through the engine-owned JoltC package |
 | JoltC | `amerkoleci/joltc@52d8c98...` | 32-bit object-layer ABI assertions enabled; single precision; cross-platform determinism explicitly off |
-| zgui | `bfbebed3...` | Lazy and absent when `-Deditor=false`; engine adapter compiles its backend against SDL 3.4.12 headers |
+| zgui | `0b468ccd...` | Lazy and absent when `-Deditor=false`; engine adapter compiles its backend against SDL 3.4.14 headers |
 | zmath / zmesh / zstbi / zflecs | Exact tested commits in `build.zig.zon` | Linkage/features are explicit; Flecs C/Zig ABI options match and `flecs.c` has one owner |
 | shaderc / SPIRV-Cross | vcpkg baseline `cd61e1e...`; shaderc 2026.2; SPIRV-Cross 1.4.350.0 | Exact Apple Silicon macOS GLSL → SPIR-V → MSL and reflection toolchain; secondary-platform manifests are removed |
 
@@ -1894,28 +1899,37 @@ or installed learned content without an explicit product-owner restart. The
 [pause decision](docs/design/neural-rendering-pause.md) is authoritative over
 older historical “next phase” language.
 
-49. [ ] **DR1 — Playable deterministic visual fidelity.** Establish an honest
+49. [x] **ED1 — Structured developer workspace.** Replaced independently
+    positioned editor windows with one docked macOS developer workspace,
+    executable panel metadata and examples, deterministic LLM-addressable
+    startup layouts/panel focus, and an incident-aligned UTC/wall/tick/frame
+    status line. Upgrade only the SDL/zgui cohort required by the phase and
+    preserve the existing typed request and editor-disabled boundaries. See
+    the
+    [phase plan](docs/design/ed1-structured-developer-workspace.md) and
+    [validation record](docs/validation/ed1-structured-developer-workspace.md).
+50. [ ] **DR1 — Playable deterministic visual fidelity.** Establish an honest
     ordinary-product baseline, converge primitive and loaded-model presentation
     on one small deterministic scene-light/material contract, improve the
     existing authored sandbox silhouettes and environment readability, retain
     semantic incident evidence, and validate the S12/S13 gameplay journey on
     native Metal without changing simulation or collision truth. See the
     [phase plan](docs/design/dr1-playable-deterministic-visual-fidelity.md).
-50. [ ] **S14 — Ranged combat vertical slice.** Add one authoritative weapon
+51. [ ] **S14 — Ranged combat vertical slice.** Add one authoritative weapon
     archetype with equip/fire/reload/ammunition state, source-aware damage
     feedback, death integration, replay, reconnect, and impairment coverage.
     Lag compensation remains a measured follow-up rather than an entry
     abstraction.
-51. [ ] **S15 — Content-rich district expansion.** Author a materially larger
+52. [ ] **S15 — Content-rich district expansion.** Author a materially larger
     traversable district cohort with obstacles, destinations, population
     anchors, and streaming/performance evidence. Resolve support-surface
     ownership and select a navmesh/crowd solution only if this content proves
     the fixed graph insufficient.
-52. [ ] **G1 — Open-engine/separate-game boundary.** Before production game
+53. [ ] **G1 — Open-engine/separate-game boundary.** Before production game
     content or distribution, prove a separately built game composition,
     content package, configuration boundary, third-party notices, and licensing
     decision without stabilizing a speculative public runtime ABI.
-53. [ ] **MP7+ — Network productization when the gameplay loop warrants it.**
+54. [ ] **MP7+ — Network productization when the gameplay loop warrants it.**
     Add private Internet/Steam-compatible routing, then dedicated deployment,
     operational security, and public services as separate programs. Do not
     combine NAT/relay, hosting, accounts, matchmaking, anti-cheat, or MMO
@@ -2006,3 +2020,4 @@ older historical “next phase” language.
 | 2026-08-01 | Completed S13 implementation and automated acceptance | Added the twelve-member authored product roster, sixteen-member real-Jolt placement cohort, stable member/actor-generation lifecycle, explicit roles and hostility, deterministic activity/slot ownership, safe replacement, protocol/snapshot/replay/incident cohort break, Population Lab, schema-5 evidence, installed 240/40 Hz Metal proofs, paired incident-cost measurement, and a `verify-s13` aggregate. Removed the standalone replacement/product-encounter path, resolved A-F035/A-F037 for declared scope, and retained 64 only as synthetic logic/projection pressure. Final ordinary-product human walkthrough remains before full S13 acceptance. |
 | 2026-08-05 | Accepted and scaffolded the NR0 game-specific neural-rendering direction | ADR-025 separates deterministic authority, presentation-only neural inputs/runtime, mutable external experiment runs, and deliberately promoted immutable game-content bundles. Added the July 2026 research record, feasibility and evaluation-scene plans, experiment/tool/model/fixture boundaries, empty validation/performance ledgers, and a repository-owned agent skill. No renderer code, training dependency, model weight, or runtime acceptance is claimed. |
 | 2026-08-17 | Paused neural rendering after RF10 and completed deterministic-product resumption audit | Integrated the completed RF10 history without promoting or installing a learned model; made the pause authoritative; restored the inactive conventional scene from RF10's centered fixed `640×360` extent to the full drawable; repaired the incident journey's coincidental hostile encounter; passed 286/286 repository steps with 987/987 tests and the 265/265 S13 aggregate with 341/341 tests; recorded DR1 as the next proposed product slice. Final S12/S13 product-owner walkthrough remains. |
+| 2026-08-17 | Completed ED1 structured developer workspace | Replaced per-tool placement with one docked main-window workspace and central product passthrough; added complete executable metadata for all twelve panels, deterministic presets/exact startup panels/focus/guide, incident-aligned UTC/wall/tick/frame identity, and exact SDL 3.4.14/current-zgui pins; four installed Metal layout launches and an editor-inclusive incident capture passed; the final editor-enabled aggregate passes 288/288 steps with 991/991 tests and the editor-disabled aggregate passes 285/285 with 991/991, including install, package, replay, validation, and headless boundaries. DR1 is next. |

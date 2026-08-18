@@ -7,6 +7,7 @@ const renderer_module = @import("../renderer.zig");
 const input = @import("../input.zig");
 const sdl = @import("../sdl.zig");
 const tool = @import("tool.zig");
+const workspace = @import("editor_workspace");
 
 pub const AuthoringCrateView = tool.AuthoringCrateView;
 pub const AuthoringFeedbackStatus = tool.AuthoringFeedbackStatus;
@@ -25,6 +26,8 @@ pub const Editor = struct {
     }
 
     pub fn deinit(_: *Editor) void {}
+
+    pub fn configureStartup(_: *Editor, _: workspace.StartupConfig) void {}
 
     pub fn processEvent(_: *Editor, _: anytype) EventRoute {
         return .{};

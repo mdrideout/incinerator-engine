@@ -23,6 +23,7 @@ const camera = @import("../camera.zig");
 const input = @import("../input.zig");
 const sdl = @import("../sdl.zig");
 const editor_contract = @import("../editor/tool.zig");
+const editor_workspace = @import("editor_workspace");
 const incident_capture = @import("incident_capture.zig");
 const incident_contract = @import("../engine/incident.zig");
 const incident_screenshot = @import("../incident_screenshot.zig");
@@ -231,6 +232,15 @@ fn profileNowNs() u64 {
     return c.SDL_GetTicksNS();
 }
 
+fn wallNowMs(io: std.Io) i64 {
+    const nanoseconds = std.Io.Clock.Timestamp.now(io, .real).raw.nanoseconds;
+    const milliseconds = @divFloor(nanoseconds, std.time.ns_per_ms);
+    return std.math.cast(i64, milliseconds) orelse if (milliseconds < 0)
+        std.math.minInt(i64)
+    else
+        std.math.maxInt(i64);
+}
+
 fn profilePhase(phase: engine.Phase) developer_profile.Phase {
     return switch (phase) {
         .commands => .runtime_commands,
@@ -355,6 +365,7 @@ const PhysicsDebugCpuStorage = struct {
 
 const State = struct {
     allocator: std.mem.Allocator,
+    io: std.Io,
     editor: editor.Editor,
     controller: developer_controls.Controller = .{},
     control_requests: developer_controls.RequestBuffer = .{},
@@ -544,6 +555,7 @@ pub const Owner = opaque {
 
         state.* = .{
             .allocator = allocator,
+            .io = io,
             .editor = editor.Editor.init(
                 window,
                 gpu_renderer.getDevice(),
@@ -624,6 +636,13 @@ pub const Owner = opaque {
 
     pub fn editorVisible(self: *const Owner) bool {
         return ownerStateConst(self).editor.isVisible();
+    }
+
+    pub fn configureEditor(
+        self: *Owner,
+        config: editor_workspace.StartupConfig,
+    ) void {
+        ownerState(self).editor.configureStartup(config);
     }
 
     /// Route the graphical acceptance flag through the same SDL event boundary
@@ -1294,6 +1313,7 @@ pub const Owner = opaque {
         else
             incident_contract.View{};
         state.editor.draw(gpu_renderer, .{
+            .wall_unix_ms = wallNowMs(state.io),
             .camera = frame.camera,
             .frame_timer = frame.frame_timer,
             .developer = .{

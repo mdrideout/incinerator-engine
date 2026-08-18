@@ -17,6 +17,7 @@
 //! tool identities explicitly.
 
 const std = @import("std");
+const workspace = @import("editor_workspace");
 
 // Forward declarations for engine types
 const Camera = @import("../camera.zig").Camera;
@@ -463,6 +464,7 @@ pub const PopulationInput = struct {
 /// One-frame observations and fixed request sinks, grouped by concern. This is
 /// the composition/editor boundary; tools never receive App or Simulation.
 pub const FrameInput = struct {
+    wall_unix_ms: i64,
     camera: *const Camera,
     frame_timer: *const FrameTimer,
     developer: DeveloperInput,
@@ -483,38 +485,18 @@ pub const FrameInput = struct {
 /// Explicit identity for the statically composed sandbox editor tools. Draw
 /// dispatch remains in editor.zig so state is owned by an Editor value instead
 /// of hidden behind module globals or self-referential pointers.
-pub const ToolId = enum {
-    stats,
-    camera,
-    render,
-    diagnostics,
-    gameplay_inspector,
-    navigation_lab,
-    population_lab,
-    incident_capture,
-    physics_debug,
-    crate_authoring,
-    interaction,
-    neural_rendering_lab,
-};
-
-pub const Descriptor = struct {
-    id: ToolId,
-    name: [:0]const u8,
-    enabled_by_default: bool = true,
-};
+pub const ToolId = workspace.ToolId;
+pub const Descriptor = workspace.Descriptor;
 
 /// Runtime visibility state for one statically registered tool.
 pub const Tool = struct {
-    id: ToolId,
-    name: [:0]const u8,
+    descriptor: Descriptor,
     enabled: bool = true,
 
     pub fn init(descriptor: Descriptor) Tool {
         return .{
-            .id = descriptor.id,
-            .name = descriptor.name,
-            .enabled = descriptor.enabled_by_default,
+            .descriptor = descriptor,
+            .enabled = workspace.PanelMask.fromPreset(.gameplay).contains(descriptor.id),
         };
     }
 
@@ -529,8 +511,17 @@ pub const Tool = struct {
 
 test "Tool toggle works" {
     var registered_tool = Tool{
-        .id = .stats,
-        .name = "Test Tool",
+        .descriptor = .{
+            .id = .stats,
+            .name = "Test Tool",
+            .category = .performance,
+            .default_region = .bottom,
+            .purpose = "Test purpose",
+            .reads = "Test input",
+            .requests = "No requests",
+            .examples = &.{"fps=120"},
+            .audit_fields = &.{"presentation_frame"},
+        },
         .enabled = true,
     };
 
@@ -545,9 +536,15 @@ test "Tool initializes from immutable descriptor" {
     const registered_tool = Tool.init(.{
         .id = .camera,
         .name = "Camera",
-        .enabled_by_default = false,
+        .category = .rendering,
+        .default_region = .right,
+        .purpose = "Inspect the product camera",
+        .reads = "Camera frame projection",
+        .requests = "No requests",
+        .examples = &.{"yaw=0.5"},
+        .audit_fields = &.{"presentation_frame"},
     });
-    try std.testing.expectEqual(ToolId.camera, registered_tool.id);
-    try std.testing.expectEqualStrings("Camera", registered_tool.name);
+    try std.testing.expectEqual(ToolId.camera, registered_tool.descriptor.id);
+    try std.testing.expectEqualStrings("Camera", registered_tool.descriptor.name);
     try std.testing.expect(!registered_tool.enabled);
 }

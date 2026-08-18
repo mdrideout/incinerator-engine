@@ -57,11 +57,11 @@ The foundational versions form one compatibility cohort:
 | Component | Contract |
 |---|---|
 | Zig | `0.16.0` exact in `.zigversion` and `build.zig.zon` |
-| SDL | SDL `3.4.12` through `castholm/SDL` wrapper `0.5.2`, commit `1b67d371a531ecb0499d4b80a865631c299f472a` |
+| SDL | SDL `3.4.14` through `castholm/SDL` wrapper `0.5.3`, commit `fb2d799c4778832a34ccb3739e40dded700684bd` |
 | Physics | Jolt Physics `5.5.0` (`23dadd0e603f1b321142d4c74df07fce85064989`) through JoltC (`52d8c98df523f449eb3e01b1060a0fde052970d1`) and the adapted wrapper based on `c7ff571d475ae4ef26e327e6ffcd81f158e93d97` |
 | Other Zig wrappers | Exact development commits/hashes in `build.zig.zon`, with feature/linkage/ABI options fixed in `build.zig` |
 
-These dependencies are upgraded and validated as a cohort, not independently under an “or later” promise. The physics adapter fixes the ABI policy: 32-bit object layers, single-precision world coordinates, exceptions disabled, and compile-time JoltC ABI assertions enabled. Flecs C and Zig bindings receive the same explicit debug, allocator, precision, addon, and layout options, with the imported module as the single owner of `flecs.c`. The engine compiles zgui's SDL3 GPU backend against the same SDL 3.4.12 headers as the linked runtime instead of zgui's older transitive SDL snapshot.
+These dependencies are upgraded and validated as a cohort, not independently under an “or later” promise. The physics adapter fixes the ABI policy: 32-bit object layers, single-precision world coordinates, exceptions disabled, and compile-time JoltC ABI assertions enabled. Flecs C and Zig bindings receive the same explicit debug, allocator, precision, addon, and layout options, with the imported module as the single owner of `flecs.c`. The engine compiles zgui's SDL3 GPU backend against the same SDL 3.4.14 headers as the linked runtime instead of zgui's transitive SDL snapshot.
 
 ### Platform priority and graphics backends
 

@@ -44,6 +44,10 @@ active deterministic-rendering direction, and the retained paused neural proof
 **Active rendering direction:**
 [`DR1 playable deterministic visual fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
 
+**Completed developer-workspace phase:**
+[`ED1 structured developer workspace`](docs/design/ed1-structured-developer-workspace.md)
+([validation](docs/validation/ed1-structured-developer-workspace.md))
+
 **Paused experimental rendering track:**
 [`RF10 retained externally and unpromoted`](docs/design/neural-rendering-pause.md)
 

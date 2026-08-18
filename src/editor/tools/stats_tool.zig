@@ -24,7 +24,13 @@ const FrameTimer = @import("../../timing.zig").FrameTimer;
 pub const descriptor = tool_module.Descriptor{
     .id = .stats,
     .name = "Stats",
-    .enabled_by_default = true,
+    .category = .performance,
+    .default_region = .bottom,
+    .purpose = "Inspect render cadence, fixed-tick cadence, and recent frame-time shape.",
+    .reads = "FrameTimer presentation timing accumulated by the visual host.",
+    .requests = "Read-only; emits no authority or presentation requests.",
+    .examples = &.{ "fps=120.0 frame_ms=8.33", "ticks_per_frame=0..1" },
+    .audit_fields = &.{ "presentation_frame", "frame_delta_ms" },
 };
 
 // ============================================================================
@@ -42,11 +48,6 @@ pub const State = struct {
 // ============================================================================
 
 pub fn draw(state: *State, frame_timer: *const FrameTimer) void {
-    // Set initial window size and position (first time only)
-    // The struct fields include the condition for when to apply
-    zgui.setNextWindowPos(.{ .x = 10, .y = 30, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = 280, .h = 180, .cond = .first_use_ever });
-
     // Begin window - the "Stats" title matches our tool name
     if (zgui.begin("Stats", .{
         .flags = .{

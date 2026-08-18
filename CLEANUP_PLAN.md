@@ -329,7 +329,7 @@ are not part of this inventory.
 | Non-graphical tools | Installed replay/save tools and build-only cook, verification, S7/S8 measurement, and M3 soak products exercise narrow contracts without becoming runtime services |
 | Content | Self-authored conformance fixtures and cooked outputs remain; the engine repository contains no game-owned demo art or active `assets/models` tree |
 
-The active dependency cohort is exact Zig 0.16.0, SDL 3.4.12, Jolt 5.5/JoltC,
+The active dependency cohort is exact Zig 0.16.0, SDL 3.4.14, Jolt 5.5/JoltC,
 and exact tested Zig wrappers. Only native Apple Silicon macOS is accepted by
 the top-level build.
 

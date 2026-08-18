@@ -17,7 +17,13 @@ const EntityRef = engine.gameplay_trace.EntityRef;
 pub const descriptor = tool_module.Descriptor{
     .id = .gameplay_inspector,
     .name = "Gameplay Inspector",
-    .enabled_by_default = true,
+    .category = .gameplay,
+    .default_region = .left,
+    .purpose = "Trace an entity across authority, replication, presentation, relevance, vitals, and navigation.",
+    .reads = "Immutable GameplayView and bounded semantic gameplay trace.",
+    .requests = "Emits bounded trace freeze, resume, clear, and selection requests only.",
+    .examples = &.{ "npc 1:12:3 authority=present draw=present", "health=75/100 relevance=full_world" },
+    .audit_fields = &.{ "wall_unix_ms", "authority_tick", "presentation_frame", "persistent_id", "replicated_entity" },
 };
 
 pub const State = struct {
@@ -171,9 +177,6 @@ pub fn draw(
     state: *State,
     ctx: *const GameplayInput,
 ) void {
-    zgui.setNextWindowPos(.{ .x = 850, .y = 30, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = 560, .h = 700, .cond = .first_use_ever });
-
     if (zgui.begin("Gameplay Inspector", .{})) {
         const view = ctx.view;
         const entities = view.entitySlice();

@@ -12,7 +12,13 @@ const tool_module = @import("../tool.zig");
 pub const descriptor = tool_module.Descriptor{
     .id = .population_lab,
     .name = "Population Lab",
-    .enabled_by_default = true,
+    .category = .world,
+    .default_region = .left,
+    .purpose = "Inspect stable authored population identity, role, activity, slot contention, and replacement.",
+    .reads = "Population catalog, member/slot records, diagnostics, gameplay projection, and visualization state.",
+    .requests = "Emits bounded population/navigation visualization requests only.",
+    .examples = &.{ "member=P03 role=worker activity=commute", "slot=depot_bench owner=P07" },
+    .audit_fields = &.{ "authority_tick", "population_member", "activity_revision", "persistent_id" },
 };
 
 pub const State = struct {
@@ -82,8 +88,6 @@ pub fn draw(
     state: *State,
     ctx: *const tool_module.PopulationInput,
 ) void {
-    zgui.setNextWindowPos(.{ .x = 570, .y = 380, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = 610, .h = 650, .cond = .first_use_ever });
     if (zgui.begin("Population Lab", .{})) {
         const view = ctx.view;
         if (view.diagnostics) |diagnostics| {

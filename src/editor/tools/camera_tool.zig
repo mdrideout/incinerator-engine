@@ -36,8 +36,14 @@ const Camera = @import("../../camera.zig").Camera;
 /// Users can enable it from the Tools menu when needed.
 pub const descriptor = tool_module.Descriptor{
     .id = .camera,
-    .name = "Camera", // Window title and menu item name
-    .enabled_by_default = false, // Start hidden - enable from Tools menu
+    .name = "Camera",
+    .category = .rendering,
+    .default_region = .right,
+    .purpose = "Inspect the product camera pose, orientation, field of view, and basis vectors.",
+    .reads = "Immutable Camera projection supplied for the current presentation frame.",
+    .requests = "Read-only; camera control remains normal product input.",
+    .examples = &.{ "yaw=0.000 pitch=-0.250", "position=(0.0, 3.0, 10.0)" },
+    .audit_fields = &.{ "presentation_frame", "camera_yaw", "camera_pitch" },
 };
 
 // ============================================================================
@@ -62,24 +68,6 @@ fn radiansToDegrees(radians: f32) f32 {
 // retained widget tree like in HTML/CSS or traditional GUI frameworks.
 
 pub fn draw(camera: *const Camera) void {
-    // ========================================================================
-    // Window Setup
-    // ========================================================================
-    // setNextWindowPos/Size only apply to the NEXT window created.
-    // The `cond = .first_use_ever` means these only apply the first time
-    // the window is opened - after that, ImGui remembers user's position.
-
-    zgui.setNextWindowPos(.{
-        .x = 10,
-        .y = 220, // Below the Stats window (which is at y=30, height ~180)
-        .cond = .first_use_ever,
-    });
-    zgui.setNextWindowSize(.{
-        .w = 280,
-        .h = 300, // Taller than Stats since we have more info
-        .cond = .first_use_ever,
-    });
-
     // ========================================================================
     // Begin Window
     // ========================================================================

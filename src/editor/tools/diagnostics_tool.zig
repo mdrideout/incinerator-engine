@@ -10,7 +10,13 @@ const DeveloperInput = tool_module.DeveloperInput;
 pub const descriptor = tool_module.Descriptor{
     .id = .diagnostics,
     .name = "Diagnostics",
-    .enabled_by_default = true,
+    .category = .diagnostics,
+    .default_region = .bottom,
+    .purpose = "Inspect runtime, session, streaming, queue, and immutable first-fault diagnostics.",
+    .reads = "DeveloperSnapshot plus the bounded authority diagnostic journal.",
+    .requests = "Emits bounded developer-control and diagnostic capture requests.",
+    .examples = &.{ "authority_tick=1422", "fault=phase/system/error or none" },
+    .audit_fields = &.{ "wall_unix_ms", "authority_tick", "presentation_frame", "journal_sequence" },
 };
 
 fn drawQueue(label: [:0]const u8, queue: anytype) void {
@@ -69,8 +75,6 @@ fn diagnosticCodeLabel(code: engine.diagnostic_contracts.Code) []const u8 {
 }
 
 pub fn draw(ctx: *const DeveloperInput) void {
-    zgui.setNextWindowPos(.{ .x = 300, .y = 30, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = 540, .h = 640, .cond = .first_use_ever });
     if (zgui.begin("Diagnostics", .{})) {
         const snapshot = ctx.snapshot;
         const simulation = snapshot.simulation;

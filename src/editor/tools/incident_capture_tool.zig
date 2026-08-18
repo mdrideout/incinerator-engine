@@ -12,7 +12,13 @@ const incident = @import("../../engine/incident.zig");
 pub const descriptor = tool_module.Descriptor{
     .id = .incident_capture,
     .name = "Incident Capture",
-    .enabled_by_default = true,
+    .category = .diagnostics,
+    .default_region = .bottom,
+    .purpose = "Flag anomalies, annotate evidence, inspect recorder health, and prepare an LLM handoff.",
+    .reads = "Immutable incident run health, anomaly lifecycle, paths, and evidence capability matrix.",
+    .requests = "Emits bounded flag, save-note, handoff, clipboard, and folder requests.",
+    .examples = &.{ "anomaly=6 status=complete", "run=~/Library/Logs/Incinerator/runs/..." },
+    .audit_fields = &.{ "wall_unix_ms", "authority_tick", "presentation_frame", "anomaly_id" },
 };
 
 pub const State = struct {
@@ -61,9 +67,6 @@ fn request(ctx: *const tool_module.IncidentInput, value: incident.Request) void 
 }
 
 pub fn draw(state: *State, ctx: *const tool_module.IncidentInput) void {
-    zgui.setNextWindowPos(.{ .x = 300, .y = 380, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = 560, .h = 360, .cond = .first_use_ever });
-
     if (zgui.begin("Incident Capture", .{})) {
         const view = ctx.view;
         if (!view.health.enabled) {

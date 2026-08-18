@@ -33,16 +33,16 @@
     // internet connectivity.
     .dependencies = .{
         .sdl = .{
-            .url = "git+https://github.com/castholm/SDL.git#1b67d371a531ecb0499d4b80a865631c299f472a",
-            .hash = "sdl-0.5.2+3.4.12-SDL--qPKpwHc40bqAlYs7W9pXJVyLwsGDNa4shNXbOZr",
+            .url = "git+https://github.com/castholm/SDL.git#fb2d799c4778832a34ccb3739e40dded700684bd",
+            .hash = "sdl-0.5.3+3.4.14-SDL--v4eqAGuIKFsspMVxBxZf1OIEmmH-yHDdEl9ZRdX",
             .lazy = true,
         },
         .joltc = .{
             .path = "third_party/joltc-zig",
         },
         .zgui = .{
-            .url = "git+https://github.com/zig-gamedev/zgui.git#bfbebed372723d1f585f86fc0a550232b3427f4d",
-            .hash = "zgui-0.6.0-dev--L6sZJhIbgAjWdK5h6xuVUrsOcD-RdqEOEPf03Zgi4mF",
+            .url = "git+https://github.com/zig-gamedev/zgui.git#0b468ccdc30d85f7fe72308791f2583344b62103",
+            .hash = "zgui-0.6.0-dev--L6sZCtHbgC6H4Y4LaZUaRYqouHWdeOpHmLhm4OHYiKz",
             .lazy = true,
         },
         .zmath = .{

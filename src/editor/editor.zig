@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const zgui = @import("zgui");
+const workspace = @import("editor_workspace");
 
 const sdl = @import("../sdl.zig");
 const input = @import("../input.zig");
@@ -37,6 +38,7 @@ pub const SaveFeedbackStatus = tool.SaveFeedbackStatus;
 pub const SaveFeedback = tool.SaveFeedback;
 pub const CrateAuthoringView = tool.CrateAuthoringView;
 pub const InteractionView = tool.InteractionView;
+pub const StartupConfig = workspace.StartupConfig;
 
 /// Semantic editor routing for an SDL event. This reports only shortcuts that
 /// the editor reserves; ImGui capture is queried independently.
@@ -69,6 +71,10 @@ pub const Editor = struct {
     navigation_lab: navigation_lab_tool.State = .{},
     population_lab: population_lab_tool.State = .{},
     incident_capture: incident_capture_tool.State = .{},
+    layout: workspace.LayoutPreset = .gameplay,
+    layout_pending: bool = true,
+    pending_focus: ?workspace.ToolId = workspace.defaultFocus(.gameplay),
+    show_workspace_guide: bool = false,
 
     /// Initialize the owned editor after the renderer has claimed its window.
     pub fn init(
@@ -86,6 +92,24 @@ pub const Editor = struct {
     pub fn deinit(self: *Editor) void {
         self.backend.deinit();
         self.* = .{};
+    }
+
+    /// Apply one validated process-start workspace request. The editor stores
+    /// only the resolved preset, mask, focus, and guide state; it never retains
+    /// process argument slices.
+    pub fn configureStartup(self: *Editor, config: StartupConfig) void {
+        self.layout = config.layout;
+        const mask = config.exact_panels orelse
+            workspace.PanelMask.fromPreset(config.layout);
+        for (&self.tools) |*registered_tool| {
+            registered_tool.enabled = mask.contains(registered_tool.descriptor.id);
+        }
+        self.pending_focus = config.focus orelse if (config.exact_panels == null)
+            workspace.defaultFocus(config.layout)
+        else
+            null;
+        self.show_workspace_guide = config.show_guide;
+        self.layout_pending = true;
     }
 
     /// Forward every event to ImGui, then reserve only explicit editor keys.
@@ -157,16 +181,21 @@ pub const Editor = struct {
             return;
         }
 
-        self.drawMainMenuBar();
+        self.drawWorkspace(&frame);
         for (&self.tools) |*registered_tool| {
             if (registered_tool.enabled) {
+                if (self.pending_focus == registered_tool.descriptor.id) {
+                    zgui.setNextWindowFocus();
+                    self.pending_focus = null;
+                }
                 self.drawTool(
-                    registered_tool.id,
+                    registered_tool.descriptor.id,
                     &frame,
                     &gpu_renderer.render_settings,
                 );
             }
         }
+        if (self.show_workspace_guide) self.drawWorkspaceGuide();
         if (self.show_demo_window) zgui.showDemoWindow(&self.show_demo_window);
         self.backend.render(cmd, swapchain_texture);
     }
@@ -222,24 +251,180 @@ pub const Editor = struct {
         }
     }
 
+    fn drawWorkspace(self: *Editor, frame: *const FrameInput) void {
+        self.drawMainMenuBar();
+
+        const viewport = zgui.getMainViewport();
+        const work_pos = viewport.getWorkPos();
+        const work_size = viewport.getWorkSize();
+        zgui.setNextWindowPos(.{ .x = work_pos[0], .y = work_pos[1], .cond = .always });
+        zgui.setNextWindowSize(.{ .w = work_size[0], .h = work_size[1], .cond = .always });
+        zgui.setNextWindowViewport(viewport.getId());
+        zgui.pushStyleVar1f(.{ .idx = .window_rounding, .v = 0 });
+        zgui.pushStyleVar1f(.{ .idx = .window_border_size, .v = 0 });
+        zgui.pushStyleVar2f(.{ .idx = .window_padding, .v = .{ 0, 0 } });
+        defer zgui.popStyleVar(.{ .count = 3 });
+
+        if (zgui.begin("##incinerator_workspace", .{ .flags = .{
+            .no_title_bar = true,
+            .no_resize = true,
+            .no_move = true,
+            .no_collapse = true,
+            .no_background = true,
+            .no_saved_settings = true,
+            .no_bring_to_front_on_focus = true,
+            .no_nav_focus = true,
+            .no_docking = true,
+        } })) {
+            const status_height: f32 = 26;
+            const available = zgui.getContentRegionAvail();
+            const dock_size = .{ available[0], @max(@as(f32, 0), available[1] - status_height) };
+            const dock_pos = zgui.getCursorScreenPos();
+            const dockspace_id = zgui.dockSpace(
+                "IncineratorWorkspaceDockspace",
+                dock_size,
+                .{
+                    .passthru_central_node = true,
+                    .no_docking_over_central_node = true,
+                },
+            );
+            if (self.layout_pending and dock_size[0] > 0 and dock_size[1] > 0) {
+                self.buildDockLayout(dockspace_id, dock_pos, dock_size);
+                self.layout_pending = false;
+            }
+
+            if (zgui.beginChild("##workspace_status", .{
+                .h = status_height,
+                .child_flags = .{ .frame_style = true },
+                .window_flags = .{ .no_scrollbar = true },
+            })) {
+                const utc = workspace.formatUtcWallMs(frame.wall_unix_ms);
+                zgui.text(
+                    "UTC {s}  |  wall_unix_ms={d}  |  tick={d}  |  frame={d}  |  layout={s}",
+                    .{
+                        utc.slice(),
+                        frame.wall_unix_ms,
+                        frame.gameplay.view.authority_tick,
+                        frame.gameplay.view.presentation_frame,
+                        @tagName(self.layout),
+                    },
+                );
+            }
+            zgui.endChild();
+        }
+        zgui.end();
+    }
+
+    fn buildDockLayout(
+        self: *Editor,
+        dockspace_id: zgui.Ident,
+        dock_pos: [2]f32,
+        dock_size: [2]f32,
+    ) void {
+        zgui.dockBuilderRemoveNode(dockspace_id);
+        _ = zgui.dockBuilderAddNode(dockspace_id, .{ .dock_space = true });
+        zgui.dockBuilderSetNodePos(dockspace_id, dock_pos);
+        zgui.dockBuilderSetNodeSize(dockspace_id, dock_size);
+
+        var center = dockspace_id;
+        var left: zgui.Ident = 0;
+        var right: zgui.Ident = 0;
+        var bottom: zgui.Ident = 0;
+        _ = zgui.dockBuilderSplitNode(center, .left, 0.22, &left, &center);
+        _ = zgui.dockBuilderSplitNode(center, .right, 0.25, &right, &center);
+        _ = zgui.dockBuilderSplitNode(center, .down, 0.28, &bottom, &center);
+
+        for (self.tools) |registered_tool| {
+            const node = switch (registered_tool.descriptor.default_region) {
+                .left => left,
+                .right => right,
+                .bottom => bottom,
+            };
+            zgui.dockBuilderDockWindow(registered_tool.descriptor.name, node);
+        }
+        zgui.dockBuilderDockWindow("Workspace Guide", right);
+        zgui.dockBuilderFinish(dockspace_id);
+    }
+
+    fn applyLayout(self: *Editor, preset: workspace.LayoutPreset) void {
+        self.layout = preset;
+        const mask = workspace.PanelMask.fromPreset(preset);
+        for (&self.tools) |*registered_tool| {
+            registered_tool.enabled = mask.contains(registered_tool.descriptor.id);
+        }
+        self.pending_focus = workspace.defaultFocus(preset);
+        self.layout_pending = true;
+    }
+
+    fn drawWorkspaceGuide(self: *Editor) void {
+        if (zgui.begin("Workspace Guide", .{ .popen = &self.show_workspace_guide })) {
+            zgui.textWrapped(
+                "Panels read immutable frame projections. Any mutation leaves through the request boundary named below.",
+                .{},
+            );
+            zgui.separator();
+            zgui.text("Startup examples", .{});
+            zgui.bulletText("--editor-layout=navigation --editor-focus=navigation_lab", .{});
+            zgui.bulletText("--editor-layout=incident --editor-guide", .{});
+            zgui.bulletText("--editor-panels=gameplay_inspector,diagnostics,incident_capture", .{});
+
+            for (self.tools) |registered_tool| {
+                const descriptor = registered_tool.descriptor;
+                zgui.separatorText(descriptor.name);
+                zgui.textDisabled(
+                    "id={s}  category={s}  region={s}  availability={s}",
+                    .{
+                        @tagName(descriptor.id),
+                        @tagName(descriptor.category),
+                        @tagName(descriptor.default_region),
+                        @tagName(descriptor.availability),
+                    },
+                );
+                zgui.textWrapped("{s}", .{descriptor.purpose});
+                zgui.textWrapped("Reads: {s}", .{descriptor.reads});
+                zgui.textWrapped("Requests: {s}", .{descriptor.requests});
+                zgui.text("Examples", .{});
+                for (descriptor.examples) |example| zgui.bulletText("{s}", .{example});
+                zgui.text("Audit identity", .{});
+                for (descriptor.audit_fields) |field| zgui.bulletText("{s}", .{field});
+            }
+        }
+        zgui.end();
+    }
+
     fn drawMainMenuBar(self: *Editor) void {
         if (!zgui.beginMainMenuBar()) return;
         defer zgui.endMainMenuBar();
 
-        if (zgui.beginMenu("Tools", true)) {
+        if (zgui.beginMenu("Workspace", true)) {
+            inline for (std.meta.tags(workspace.LayoutPreset)) |preset| {
+                if (zgui.menuItem(@tagName(preset), .{
+                    .selected = self.layout == preset,
+                })) self.applyLayout(preset);
+            }
+            zgui.separator();
+            if (zgui.menuItem("Reapply layout", .{})) self.layout_pending = true;
+            if (zgui.menuItem("Workspace Guide", .{
+                .selected = self.show_workspace_guide,
+            })) self.show_workspace_guide = !self.show_workspace_guide;
+            zgui.endMenu();
+        }
+
+        if (zgui.beginMenu("Panels", true)) {
             for (&self.tools) |*registered_tool| {
-                if (zgui.menuItem(registered_tool.name, .{
+                if (zgui.menuItem(registered_tool.descriptor.name, .{
                     .selected = registered_tool.enabled,
                 })) {
                     registered_tool.toggle();
+                    if (registered_tool.enabled) {
+                        self.pending_focus = registered_tool.descriptor.id;
+                    }
                 }
-            }
-            zgui.separator();
-            if (zgui.menuItem("ImGui Demo", .{
-                .shortcut = "F2",
-                .selected = self.show_demo_window,
-            })) {
-                self.show_demo_window = !self.show_demo_window;
+                if (zgui.isItemHovered(.{}) and zgui.beginTooltip()) {
+                    zgui.textDisabled("{s}", .{@tagName(registered_tool.descriptor.id)});
+                    zgui.textWrapped("{s}", .{registered_tool.descriptor.purpose});
+                    zgui.endTooltip();
+                }
             }
             zgui.endMenu();
         }
@@ -255,6 +440,17 @@ pub const Editor = struct {
             if (zgui.menuItem("Hide Editor", .{ .shortcut = "F1" })) {
                 self.visible = false;
             }
+            zgui.endMenu();
+        }
+
+        if (zgui.beginMenu("Help", true)) {
+            if (zgui.menuItem("Workspace Guide", .{
+                .selected = self.show_workspace_guide,
+            })) self.show_workspace_guide = !self.show_workspace_guide;
+            if (zgui.menuItem("ImGui Demo", .{
+                .shortcut = "F2",
+                .selected = self.show_demo_window,
+            })) self.show_demo_window = !self.show_demo_window;
             zgui.endMenu();
         }
     }
@@ -302,8 +498,9 @@ fn drawHiddenHint() void {
 test "tool registry contains every tool identity exactly once" {
     var seen = [_]bool{false} ** std.meta.tags(tool.ToolId).len;
     for (default_tools) |registered_tool| {
-        const index = @intFromEnum(registered_tool.id);
+        const index = @intFromEnum(registered_tool.descriptor.id);
         try std.testing.expect(!seen[index]);
+        try std.testing.expect(registered_tool.descriptor.isComplete());
         seen[index] = true;
     }
     for (seen) |present| try std.testing.expect(present);
@@ -324,6 +521,44 @@ test "editor runtime and tool state belong to each value" {
     try std.testing.expectEqual(@as(usize, 0), second.stats.history_index);
     try std.testing.expect(!second.crate_authoring.dirty);
     try std.testing.expect(second.gameplay_inspector.selected == null);
+}
+
+test "startup configuration owns exact panel visibility and focus" {
+    var value = Editor{};
+    var exact = workspace.PanelMask{};
+    exact.set(.diagnostics, true);
+    exact.set(.incident_capture, true);
+    value.configureStartup(.{
+        .layout = .incident,
+        .layout_explicit = true,
+        .exact_panels = exact,
+        .focus = .incident_capture,
+        .show_guide = true,
+    });
+
+    for (value.tools) |registered_tool| {
+        const expected = registered_tool.descriptor.id == .diagnostics or
+            registered_tool.descriptor.id == .incident_capture;
+        try std.testing.expectEqual(expected, registered_tool.enabled);
+    }
+    try std.testing.expectEqual(workspace.ToolId.incident_capture, value.pending_focus.?);
+    try std.testing.expect(value.show_workspace_guide);
+    try std.testing.expect(value.layout_pending);
+}
+
+test "exact startup panel selection has no unrelated preset focus" {
+    var value = Editor{};
+    var exact = workspace.PanelMask{};
+    exact.set(.diagnostics, true);
+    value.configureStartup(.{ .exact_panels = exact });
+
+    try std.testing.expect(value.pending_focus == null);
+    for (value.tools) |registered_tool| {
+        try std.testing.expectEqual(
+            registered_tool.descriptor.id == .diagnostics,
+            registered_tool.enabled,
+        );
+    }
 }
 
 test "owned editor event routing mutates only its receiver" {

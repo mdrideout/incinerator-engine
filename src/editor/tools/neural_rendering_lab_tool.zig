@@ -7,12 +7,17 @@ const tool = @import("../tool.zig");
 pub const descriptor = tool.Descriptor{
     .id = .neural_rendering_lab,
     .name = "Neural Input / Output",
-    .enabled_by_default = true,
+    .category = .experimental,
+    .default_region = .right,
+    .purpose = "Retained readout for the paused neural-rendering proof; not part of active deterministic workspaces.",
+    .reads = "Immutable retained neural input/output and trial diagnostics when explicitly available.",
+    .requests = "Retained presentation-toggle request; neural implementation remains product-owner paused.",
+    .examples = &.{ "available=false", "model_enabled=false output_ready=false" },
+    .audit_fields = &.{ "authority_tick", "presentation_frame", "model_checkpoint_digest" },
+    .availability = .paused,
 };
 
 pub fn draw(input: *const tool.NeuralInput) void {
-    zgui.setNextWindowPos(.{ .x = 1110, .y = 40, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = 460, .h = 720, .cond = .first_use_ever });
     if (zgui.begin("Neural Input / Output", .{})) {
         const view = input.view;
         if (!view.available) {

@@ -97,7 +97,13 @@ explicit future restart. The authoritative current disposition is the
 [north star](docs/design/title-neural-renderer-north-star.md),
 [historical implementation plan](docs/design/title-neural-renderer-implementation-plan.md),
 and [research index](docs/research/neural-rendering/README.md) remain preserved
-evidence, not an active backlog. The next rendering phase is the
+evidence, not an active backlog. The
+[ED1 structured developer workspace](docs/design/ed1-structured-developer-workspace.md)
+is complete and organizes the existing ImGui tools into a deterministic docked
+workspace with descriptive panel metadata, LLM-addressable startup layouts,
+and incident-aligned time identity; see its
+[validation record](docs/validation/ed1-structured-developer-workspace.md).
+The next implementation phase is the
 [DR1 playable deterministic visual-fidelity slice](docs/design/dr1-playable-deterministic-visual-fidelity.md).
 The combined-tree
 [deterministic-rendering resumption audit](docs/validation/deterministic-rendering-resumption.md)
@@ -113,10 +119,10 @@ These versions are one tested compatibility cohort and should be upgraded togeth
 | Component | Pinned version | Integration |
 |---|---|---|
 | Zig | `0.16.0` exact | Recorded in `.zigversion`; enforced by the build guard (the package manifest records the same minimum floor) |
-| SDL | `3.4.12` | `castholm/SDL` wrapper `0.5.2` at an exact commit |
+| SDL | `3.4.14` | `castholm/SDL` wrapper `0.5.3` at an exact commit |
 | Jolt Physics | `5.5.0` | Engine-owned JoltC build package with exact Jolt, JoltC, and Zig wrapper commits |
 | Flecs | Exact development commit | `zflecs` wrapper pinned with an explicit ABI/feature cohort and one C-source owner |
-| ImGui | Exact development commit | Optional `zgui` editor; its SDL3 backend is compiled by the engine against the selected SDL 3.4.12 headers |
+| ImGui | Exact development commit | Optional `zgui` editor; its SDL3 backend is compiled by the engine against the selected SDL 3.4.14 headers |
 | GameNetworkingSockets | `1.5.1` exact commit | Open-source direct-IP transport behind an engine-owned C ABI shim; Steamworks remains optional and absent |
 
 The complete dependency identities live in `build.zig.zon` and [`third_party/joltc-zig/README.md`](third_party/joltc-zig/README.md). Dependency features that affect linkage, ABI, or compiled capabilities are selected explicitly; they are not inherited silently from wrapper defaults. The shared simulation build graph generates the replay cohort from those pins and physics limits, and an automatic verifier rejects manifest drift. Flecs is compiled as private ECS storage with only the OS API implementation addon, excluding its HTTP, REST, script, metrics, module, and pipeline surfaces. Jolt's cross-platform deterministic build mode is deliberately disabled. The future network model is an authoritative server, not client lockstep; enabling that mode would need a measured requirement and performance evaluation.
@@ -524,7 +530,21 @@ distances are 9 m and 12 m respectively.
 | F9 / Fn+F9 | Optional shortcut when macOS delivers the function key to SDL |
 | Command+Shift+9 | Optional alternate anomaly shortcut |
 
-Open the editor with F1, then use **Tools → Physics Debug & Profiler**. Its
+The editor now opens as one docked developer workspace around the central game
+view. Use **Workspace** to select a task layout, **Panels** to toggle individual
+tools, and **Help → Workspace Guide** to inspect each panel's purpose, source
+data, typed request boundary, example values, and audit identities. Automated
+or LLM-guided visual sessions can select the initial workspace explicitly:
+
+```bash
+zig build run -- --editor-layout=navigation --editor-focus=navigation_lab --editor-guide
+zig build run -- --editor-panels=gameplay_inspector,diagnostics,incident_capture --editor-focus=incident_capture
+```
+
+The persistent bottom bar shows UTC, `wall_unix_ms`, authority tick,
+presentation frame, and active layout so screenshots align with incident
+evidence. Open the editor with F1, then use
+**Panels → Physics Debug & Profiler**. Its
 master switch and category checkboxes control bounded shapes, bounds, contacts,
 centers of mass, and velocity evidence. The same panel shows persistent Metal
 upload/draw state, visible capacity loss, fixed phase spans, and per-frame
@@ -536,7 +556,7 @@ The **bounds** category also draws active 16 m streamed district cells and NPC
 navigation targets/routes. A red NPC target reports 120 ticks of potential
 no-progress; it is diagnostic telemetry and does not alter authority.
 
-**Tools → Gameplay Inspector** explains the selected local player or NPC across
+**Panels → Gameplay Inspector** explains the selected local player or NPC across
 its durable/replicated identity, authority and presentation pose, health/life,
 encounter deadline, separation, last action disposition, and filtered causal
 trace. Trace freeze, resume, and clear are bounded developer requests; durable
@@ -547,9 +567,9 @@ plain-language health, damage, attack, cooldown, death, respawn, and rejected
 action feedback. A dead player remains visible in red until respawn, rather
 than disappearing as an implicit representation of authority teardown.
 
-Every Debug product run records a bounded schema-4 diagnostic bundle under
+Every Debug product run records a bounded schema-5 diagnostic bundle under
 `~/Library/Logs/Incinerator/runs`. Press Command+Option+I near an anomaly (or
-use F9/Fn+F9 when macOS actually delivers it), then open **Tools → Incident
+use F9/Fn+F9 when macOS actually delivers it), then open **Panels → Incident
 Capture**, add a note, and click **Save note + Copy for LLM**. The note is
 persisted before the handoff is refreshed and copied. The clipboard contains the
 run path, current health, anomaly index, and evidence limits—not a giant JSON
@@ -616,7 +636,7 @@ mkdir -p /tmp/incinerator-saves
 zig build run -Deditor=true -- --save-root=/tmp/incinerator-saves
 ```
 
-Open **Tools → Crate Authoring**, select the available crate, edit its draft
+Open **Panels → Crate Authoring**, select the available crate, edit its draft
 position, and use **Apply position**, **Undo**, **Redo**, and **Save**. The tool
 only sees immutable records and emits typed requests that the host applies
 after UI drawing. The committed slot is
@@ -624,7 +644,7 @@ after UI drawing. The committed slot is
 producer and one fixed slot; CLI/automation routing, autosave, migration, and
 multiple writers are future work.
 
-Open **Tools → Interaction** to inspect the immutable carryable/holder state
+Open **Panels → Interaction** to inspect the immutable carryable/holder state
 and emit the same typed collect/drop requests used by F. A carryable is either
 owned by one district, held by one character, or dormant because its owner is
 unloaded; it never has both a world body and a holder. Pressing E while carrying
@@ -734,6 +754,8 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`S13 Performance Baseline`](docs/performance/s13-baseline.md)
 - [`Neural Rendering Product-Track Pause`](docs/design/neural-rendering-pause.md)
 - [`Deterministic Rendering Resumption Audit`](docs/validation/deterministic-rendering-resumption.md)
+- [`ED1 Structured Developer Workspace`](docs/design/ed1-structured-developer-workspace.md)
+- [`ED1 Structured Developer Workspace Validation`](docs/validation/ed1-structured-developer-workspace.md)
 - [`DR1 Playable Deterministic Visual Fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory

@@ -23,7 +23,13 @@ const RenderSettings = renderer_module.RenderSettings;
 pub const descriptor = tool_module.Descriptor{
     .id = .render,
     .name = "Render",
-    .enabled_by_default = true,
+    .category = .rendering,
+    .default_region = .right,
+    .purpose = "Inspect and change conventional presentation-only renderer settings.",
+    .reads = "The renderer-owned RenderSettings value borrowed for this frame.",
+    .requests = "Mutates only borrowed presentation settings; never gameplay authority.",
+    .examples = &.{ "wireframe=false", "textures=true" },
+    .audit_fields = &.{ "presentation_frame", "render_mode" },
 };
 
 // ============================================================================
@@ -31,10 +37,6 @@ pub const descriptor = tool_module.Descriptor{
 // ============================================================================
 
 pub fn draw(render_settings: *RenderSettings) void {
-    // Set initial window position and size
-    zgui.setNextWindowPos(.{ .x = 10, .y = 450, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = 200, .h = 120, .cond = .first_use_ever });
-
     if (zgui.begin("Render", .{
         .flags = .{
             .no_collapse = false,

@@ -12,7 +12,13 @@ const tool_module = @import("../tool.zig");
 pub const descriptor = tool_module.Descriptor{
     .id = .navigation_lab,
     .name = "Navigation Lab",
-    .enabled_by_default = true,
+    .category = .world,
+    .default_region = .left,
+    .purpose = "Inspect semantic NPC destinations, route lineage, recovery state, and authored gates.",
+    .reads = "NavigationLabView plus NPC navigation fields from GameplayView.",
+    .requests = "Emits typed destination and evaluation-gate requests through a fixed buffer.",
+    .examples = &.{ "destination=transit_yard status=moving", "route_revision=4 topology_revision=2" },
+    .audit_fields = &.{ "authority_tick", "persistent_id", "route_digest", "topology_revision" },
 };
 
 pub const State = struct {
@@ -49,8 +55,6 @@ pub fn draw(
     state: *State,
     ctx: *const tool_module.NavigationInput,
 ) void {
-    zgui.setNextWindowPos(.{ .x = 40, .y = 380, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = 510, .h = 470, .cond = .first_use_ever });
     if (zgui.begin("Navigation Lab", .{})) {
         zgui.text(
             "Topology revision {d} | mailbox rejected {d}",

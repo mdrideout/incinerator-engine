@@ -24,7 +24,13 @@ const ProfilePhaseSummary = struct {
 pub const descriptor = tool_module.Descriptor{
     .id = .physics_debug,
     .name = "Physics Debug & Profiler",
-    .enabled_by_default = false,
+    .category = .rendering,
+    .default_region = .right,
+    .purpose = "Inspect collision geometry, spatial ownership overlays, and focused runtime profile spans.",
+    .reads = "Immutable developer visualization snapshot and bounded profile rings.",
+    .requests = "Emits typed visualization enable/category/selection/profile requests.",
+    .examples = &.{ "collision_shapes=true contacts=false", "frame_cpu_ms=4.20" },
+    .audit_fields = &.{ "authority_tick", "presentation_frame", "profile_frame", "persistent_id" },
 };
 
 fn request(ctx: *const VisualizationInput, value: developer_visualization.Request) void {
@@ -245,8 +251,6 @@ fn drawProfileSummary(ctx: *const VisualizationInput) void {
 }
 
 pub fn draw(ctx: *const VisualizationInput) void {
-    zgui.setNextWindowPos(.{ .x = 850, .y = 30, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = 600, .h = 700, .cond = .first_use_ever });
     if (zgui.begin("Physics Debug & Profiler", .{})) {
         const snapshot = ctx.snapshot;
 

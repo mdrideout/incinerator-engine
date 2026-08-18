@@ -465,6 +465,17 @@ pub fn build(b: *std.Build) void {
         "sandbox_host_contracts",
         sandbox_host_contracts_module,
     );
+    const editor_workspace_module = b.createModule(.{
+        .root_source_file = b.path("src/editor/workspace.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addClientImport(
+        exe,
+        validation_exe,
+        "editor_workspace",
+        editor_workspace_module,
+    );
     const sandbox_invocation_module = b.createModule(.{
         .root_source_file = b.path("src/hosts/sandbox_invocation.zig"),
         .target = target,
@@ -473,6 +484,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "incinerator_engine", .module = mod },
             .{ .name = "content", .module = content_module },
             .{ .name = "save_slots", .module = save_slots_module },
+            .{ .name = "editor_workspace", .module = editor_workspace_module },
         },
     });
     addClientImport(
@@ -564,7 +576,7 @@ pub fn build(b: *std.Build) void {
             .use_32bit_draw_idx = false,
             .disable_obsolete = true,
             // The engine owns the backend compilation below so it can use the
-            // same SDL 3.4.12 headers as the runtime library. Upstream zgui's
+            // same SDL 3.4.14 headers as the runtime library. Upstream zgui's
             // sdl3_gpu option currently pulls an independent SDL 3.2 snapshot.
             .backend = .no_backend,
         }) orelse return;
@@ -3640,6 +3652,16 @@ pub fn build(b: *std.Build) void {
     );
     sandbox_invocation_test_step.dependOn(&run_sandbox_invocation_tests.step);
 
+    const editor_workspace_tests = b.addTest(.{
+        .root_module = editor_workspace_module,
+    });
+    const run_editor_workspace_tests = b.addRunArtifact(editor_workspace_tests);
+    const editor_workspace_test_step = b.step(
+        "test-editor-workspace",
+        "Run renderer-neutral editor workspace identity and startup tests",
+    );
+    editor_workspace_test_step.dependOn(&run_editor_workspace_tests.step);
+
     const sandbox_host_contracts_tests = b.addTest(.{
         .root_module = sandbox_host_contracts_module,
     });
@@ -3995,6 +4017,7 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_sandbox_controls_tests.step);
     test_step.dependOn(&run_sandbox_product_population_host_tests.step);
     test_step.dependOn(&run_sandbox_invocation_tests.step);
+    test_step.dependOn(&run_editor_workspace_tests.step);
     test_step.dependOn(&run_sandbox_host_contracts_tests.step);
     test_step.dependOn(&run_developer_controls_tests.step);
     test_step.dependOn(&run_developer_diagnostics_tests.step);

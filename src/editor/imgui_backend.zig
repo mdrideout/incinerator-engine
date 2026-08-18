@@ -41,6 +41,10 @@ pub const Backend = struct {
 
         // Initialize zgui (creates ImGui context)
         zgui.init(std.heap.page_allocator);
+        // ED1 uses one dockspace inside the main SDL window. Platform
+        // multi-viewports remain disabled so the product keeps one window and
+        // one SDL GPU presentation owner.
+        zgui.io.setConfigFlags(.{ .dock_enable = true });
 
         // Configure ImGui style for a dark, professional look
         const style = zgui.getStyle();

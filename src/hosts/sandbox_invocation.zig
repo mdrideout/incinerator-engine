@@ -8,6 +8,7 @@ const std = @import("std");
 const engine = @import("incinerator_engine");
 const content = @import("content");
 const save_slots = @import("save_slots");
+const editor_workspace = @import("editor_workspace");
 
 /// Validated save-root value published by the invocation boundary. Graphical
 /// composition does not need to import the concrete storage adapter merely to
@@ -201,6 +202,9 @@ pub fn parseProgramMode(args: anytype) !ProgramMode {
             if (save_root_seen) return error.DuplicateArgument;
             _ = try SaveRootPath.parse(arg["--save-root=".len..]);
             save_root_seen = true;
+        } else if (editor_workspace.isStartupArgument(arg)) {
+            // Parsed and validated independently by parseEditorStartup so
+            // developer presentation cannot alter product-mode selection.
         } else {
             return error.UnknownArgument;
         }
@@ -358,6 +362,8 @@ pub fn parseProductMode(args: anytype) !ProductMode {
             if (save_root_seen) return error.DuplicateArgument;
             _ = try SaveRootPath.parse(arg["--save-root=".len..]);
             save_root_seen = true;
+        } else if (editor_workspace.isStartupArgument(arg)) {
+            // Parsed and validated independently from incident/product mode.
         } else {
             return error.UnknownArgument;
         }
@@ -390,6 +396,10 @@ pub fn parseProductMode(args: anytype) !ProductMode {
         .{ .incident_replay = path }
     else
         .normal;
+}
+
+pub fn parseEditorStartup(args: anytype) !editor_workspace.StartupConfig {
+    return editor_workspace.parseStartup(args);
 }
 
 pub fn parseContentRootOverride(args: anytype) !?content.ContentRootPath {
@@ -494,6 +504,21 @@ test "product mode accepts only product invocation options" {
         "--verify-install",
         "--content-root=/tmp/incinerator-content",
     })) == .verify_install);
+    try std.testing.expect((try parseProductMode(&[_][]const u8{
+        "incinerator",
+        "--editor-layout=incident",
+        "--editor-focus=incident_capture",
+        "--editor-guide",
+    })) == .normal);
+    const editor_startup = try parseEditorStartup(&[_][]const u8{
+        "incinerator",
+        "--editor-layout=incident",
+        "--editor-focus=incident_capture",
+        "--editor-guide",
+    });
+    try std.testing.expectEqual(editor_workspace.LayoutPreset.incident, editor_startup.layout);
+    try std.testing.expectEqual(editor_workspace.ToolId.incident_capture, editor_startup.focus.?);
+    try std.testing.expect(editor_startup.show_guide);
     try std.testing.expectError(
         error.ConflictingProgramModes,
         parseProductMode(&[_][]const u8{

@@ -15,7 +15,13 @@ const AuthoringInput = tool_module.AuthoringInput;
 pub const descriptor = tool_module.Descriptor{
     .id = .crate_authoring,
     .name = "Crate Authoring",
-    .enabled_by_default = true,
+    .category = .authoring,
+    .default_region = .right,
+    .purpose = "Relocate the selected persistent crate and commit the authoritative sandbox save slot.",
+    .reads = "Immutable crate authoring session, selection, feedback, and save projection.",
+    .requests = "Emits typed begin/apply/cancel/undo/redo/save requests through the authoring boundary.",
+    .examples = &.{ "crate=1:4 revision=7", "save=committed slot=sandbox" },
+    .audit_fields = &.{ "authority_tick", "persistent_id", "transaction_id", "authoring_revision" },
 };
 
 pub const State = struct {
@@ -137,9 +143,6 @@ fn drawSaveFeedback(feedback: tool_module.SaveFeedback) void {
 pub fn draw(state: *State, ctx: *const AuthoringInput) void {
     const view = ctx.view;
     state.synchronize(view);
-
-    zgui.setNextWindowPos(.{ .x = 850, .y = 30, .cond = .first_use_ever });
-    zgui.setNextWindowSize(.{ .w = 430, .h = 520, .cond = .first_use_ever });
 
     if (zgui.begin("Crate Authoring", .{})) {
         const session = view.session;

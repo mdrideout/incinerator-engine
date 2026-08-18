@@ -1,19 +1,27 @@
 # ADR-003: Editor Architecture and Tool System
 
-**Status:** Accepted, implemented, and amended for owned editor state
+**Status:** Accepted, implemented, and amended for the ED1 workspace
 **Date:** 2025-12-05
-**Amended:** 2026-07-13
+**Amended:** 2026-08-17
 **Decision Makers:** Matt, Claude
 
 > The tool-oriented editor remains accepted. The 2026 overhaul amendments
 > replace the old backend-default and “editor consumes events first”
 > assumptions, and replace process-global editor/tool state with one `Editor`
 > value owned by the visual host. The engine compiles the exact-pinned zgui SDL3
-> GPU sources against its selected SDL 3.4.12 headers, passes the actual
+> GPU sources against its selected SDL 3.4.14 headers, passes the actual
 > swapchain format to ImGui, maintains physical input independently, and gates
 > gameplay with ImGui `WantCapture*`. The prototype Scene/Gizmo tools and their
 > direct world mutation were removed at S0 closure. Authoring returns only
 > through persistent IDs and typed feature commands.
+
+> ED1 retains Dear ImGui and the tool-first boundary, but replaces accidental
+> independent window placement with one editor-owned docked workspace. Every
+> panel has stable descriptive metadata, deterministic layout/startup identity,
+> and incident-aligned wall/tick/frame correlation. ImGui platform
+> multi-viewports remain disabled and the central deterministic scene remains
+> product-renderer-owned. The accepted phased contract is
+> [`ED1 Structured Developer Workspace`](../design/ed1-structured-developer-workspace.md).
 
 ## Context
 
@@ -37,7 +45,7 @@ We use **Dear ImGui** through the **zgui** Zig wrapper with the **SDL3 GPU backe
 
 The root build requests zgui without an upstream backend, then the engine-owned
 `tools/build/zgui_sdl3_gpu.zig` adapter compiles the pinned ImGui, SDL3, and
-SDL GPU backend sources against the same SDL 3.4.12 headers
+SDL GPU backend sources against the same SDL 3.4.14 headers
 and target options as the renderer. This avoids a wrapper-owned SDL header split.
 
 ### Architecture: Tool-First Pattern
@@ -49,6 +57,7 @@ src/
 ├── editor/
 │   ├── editor.zig           # Main orchestrator
 │   ├── imgui_backend.zig    # SDL3 GPU backend wrapper
+│   ├── workspace.zig        # Renderer-neutral panel IDs, presets, and parser
 │   ├── tool.zig             # Tool interface definition
 │   └── tools/
 │       ├── stats_tool.zig   # FPS, frame time
@@ -71,25 +80,38 @@ their runtime visibility and state, then dispatches typed draw functions:
 pub const Descriptor = struct {
     id: ToolId,
     name: [:0]const u8,
-    enabled_by_default: bool = true,
+    category: Category,
+    default_region: Region,
+    purpose: []const u8,
+    reads: []const u8,
+    requests: []const u8,
+    examples: []const []const u8,
+    audit_fields: []const []const u8,
+    availability: Availability = .active,
 };
 ```
 
 ### Shared Context
 
-Tools receive one-frame borrows through `EditorContext`. Engine/authority data
-is immutable; mutations leave through bounded typed request buffers. Renderer
-settings are borrowed for the current draw only and are never retained:
+Tools receive one-frame borrows through the concern-grouped `FrameInput`.
+Engine/authority data is immutable; mutations leave through bounded typed
+request buffers. Renderer settings are borrowed for the current draw only and
+are never retained. The developer host acquires one wall timestamp for the
+frame so panels do not call platform clocks independently:
 
 ```zig
-pub const EditorContext = struct {
+pub const FrameInput = struct {
+    wall_unix_ms: i64,
     camera: *const Camera,
     frame_timer: *const FrameTimer,
-    developer_snapshot: *const DeveloperSnapshot,
-    control_requests: *ControlRequestBuffer,
-    render_settings: *RenderSettings,
-    wants_mouse: bool = false,
-    wants_keyboard: bool = false,
+    developer: DeveloperInput,
+    visualization: VisualizationInput,
+    authoring: AuthoringInput,
+    interaction: InteractionInput,
+    navigation: NavigationInput,
+    population: PopulationInput,
+    gameplay: GameplayInput,
+    incident: IncidentInput,
 };
 ```
 
@@ -107,10 +129,34 @@ const default_tools = [_]Tool{
 ```
 
 This is intentional over auto-discovery because:
+
 - You see exactly what's included
 - Control over render order
 - Compile errors if a tool is missing
 - Easy to enable/disable tools
+
+### Structured workspace
+
+The editor owns one full-main-viewport dockspace. Left, right, and bottom dock
+regions organize the statically registered panels while a passthrough central
+node leaves the product-rendered scene visible and playable. The workspace
+registry—not each tool—owns initial placement. ImGui platform multi-viewports
+remain disabled.
+
+Deterministic startup presets and exact panel selection are parsed outside
+product-mode selection:
+
+```text
+--editor-layout=<gameplay|navigation|population|rendering|incident|minimal|all>
+--editor-panels=<tool-id,tool-id,...>
+--editor-focus=<tool-id>
+--editor-guide
+```
+
+The guide, Panels menu, startup parser, and registry tests consume the same
+stable descriptors. The persistent status bar displays UTC, `wall_unix_ms`,
+authority tick, presentation frame, and active layout using incident-schema
+time meanings.
 
 ### Conditional Compilation
 

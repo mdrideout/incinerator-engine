@@ -9809,6 +9809,7 @@ pub fn main(init: std.process.Init) !void {
 
 fn productMain(init: std.process.Init, args: anytype) !void {
     const mode = try parseProductMode(args);
+    const editor_startup = try sandbox_invocation.parseEditorStartup(args);
     const configured_content_root = try parseContentRootOverride(args);
     const resolved_content_root = try sandbox_invocation.resolveContentRoot(
         init.io,
@@ -9862,6 +9863,7 @@ fn productMain(init: std.process.Init, args: anytype) !void {
         incident_runs_root,
         hardening_profile,
     );
+    app.developer.configureEditor(editor_startup);
     var app_deinitialized = false;
     defer if (!app_deinitialized) app.deinit();
     try app.configureNeuralRendering(init.environ_map);
@@ -10017,6 +10019,7 @@ fn initValidationAppWithProfile(
 
 fn validationMain(init: std.process.Init, args: anytype) !void {
     const mode = try parseProgramMode(args);
+    const editor_startup = try sandbox_invocation.parseEditorStartup(args);
     // Content configuration is outside every non-content smoke's capability
     // boundary. Inherited development-shell values, including malformed ones,
     // must not prevent diagnostics/window/init-only installed gates from
@@ -10108,6 +10111,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         resolved_content_root,
         configured_save_root,
     );
+    app.developer.configureEditor(editor_startup);
     if (mode == .nr0_evaluation_smoke) {
         app.neural_evaluation_fixture_enabled = true;
     }
