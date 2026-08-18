@@ -181,10 +181,16 @@ pub const Editor = struct {
             return;
         }
 
+        // Newly docked windows can override a same-frame focus request as
+        // their tabs appear. Preserve the requested panel through the layout
+        // frame and focus it on the following stable frame.
+        const layout_was_pending = self.layout_pending;
         self.drawWorkspace(&frame);
         for (&self.tools) |*registered_tool| {
             if (registered_tool.enabled) {
-                if (self.pending_focus == registered_tool.descriptor.id) {
+                if (!layout_was_pending and
+                    self.pending_focus == registered_tool.descriptor.id)
+                {
                     zgui.setNextWindowFocus();
                     self.pending_focus = null;
                 }
@@ -223,7 +229,7 @@ pub const Editor = struct {
         switch (id) {
             .stats => stats_tool.draw(&self.stats, frame.frame_timer),
             .camera => camera_tool.draw(frame.camera),
-            .render => render_tool.draw(render_settings),
+            .render => render_tool.draw(render_settings, &frame.render),
             .diagnostics => diagnostics_tool.draw(&frame.developer),
             .gameplay_inspector => gameplay_inspector_tool.draw(
                 &self.gameplay_inspector,

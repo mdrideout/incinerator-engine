@@ -477,6 +477,10 @@ fn materialForSurface(surface: catalog.Surface) target.Material {
         .emissive => .emissive,
         .fabric_primary, .fabric_secondary => .fabric,
         .skin => .skin,
+        // DR1 conventional-only surfaces do not enter the retained neural
+        // fixture catalogs. Keep the paused fixture total without teaching it
+        // a second material vocabulary.
+        else => .painted_metal,
     };
 }
 

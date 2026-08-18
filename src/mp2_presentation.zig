@@ -6,5 +6,6 @@ pub const renderer = @import("renderer.zig");
 pub const primitives = @import("primitives.zig");
 pub const mesh = @import("mesh.zig");
 pub const camera = @import("camera.zig");
+pub const visual_catalog = @import("sandbox_visual_catalog.zig");
 
 pub const c = sdl.c;

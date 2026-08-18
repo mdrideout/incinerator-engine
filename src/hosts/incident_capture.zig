@@ -792,7 +792,7 @@ const Writer = struct {
         self.queue.unlock();
         var manifest_writer = std.Io.Writer.fixed(&manifest_buffer);
         try manifest_writer.print(
-            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.14\",\"jolt\":\"5.5.0\",\"protocol\":{d},\"replay\":{d},\"snapshot\":{d}}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true,\"navigation_lineage\":true,\"population_activity\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
+            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.14\",\"jolt\":\"5.5.0\",\"protocol\":{d},\"replay\":{d},\"snapshot\":{d}}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true,\"navigation_lineage\":true,\"population_activity\":true,\"deterministic_render_state\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
             .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), manifest_protocol_cohort, sandbox_replay.schema_cohort, manifest_snapshot_cohort, @tagName(self.hardening_profile), self.write_failure_after_bytes, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, configured_visual_budget, self.budget_bytes - configured_visual_budget, visual_reserved, visual_exhausted, visual_rejections },
         );
         try manifest_writer.print(
@@ -1038,6 +1038,7 @@ pub const Capture = struct {
         runtime_fault: ?engine.runtime.RuntimeFault,
         authority_cycle_fault: ?authority_diagnostics.CycleFault,
         view: *const editor_contract.GameplayView,
+        render_view: *const editor_contract.RenderView,
         input_sample: incident.InputSample,
         camera_yaw: f32,
         camera_pitch: f32,
@@ -1050,6 +1051,7 @@ pub const Capture = struct {
         if (now -| self.last_state_sample_ns >= 250 * std.time.ns_per_ms) {
             self.last_state_sample_ns = now;
             self.recordState(view, camera_yaw, camera_pitch, now);
+            self.recordRenderState(view, render_view, now);
         }
         if (!std.meta.eql(input_sample, self.last_input) or
             now -| self.last_input_sample_ns >= std.time.ns_per_s)
@@ -1241,8 +1243,8 @@ pub const Capture = struct {
             writer.writeAll("\n") catch return false;
         }
         writer.print(
-            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; eight human-visible anchors from -5 through +2 seconds when admitted; a product-only flag frame; a continuous product trail over the same visual window; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times. Timeline windows include immutable runtime phase/system/error and authority-cycle fault ownership when the engine retains a fault.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheel draws under one stable identity. NPC state and navigation transition records include semantic destination, status/reason, exact route revision/digest/nodes, topology revision, physical exclusions, and retry timing. Authored NPC records also include stable population member, role, combat disposition, and activity; action=population records retain transition-only program, slot, deadline, retry, vacancy, and replacement evidence across actor generations. When an external neural trial is active, kind=neural_rendering metrics retain the exact bundle/checkpoint, source and presented frame lineage, timing, failures, and unknown category counts.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"action\":\"navigation\"|\"navigation_status\":\"(blocked|waiting_for_content|structurally_unreachable)\"|\"navigation_reason\":\"physical_obstruction\"' '{s}/streams'\nrg '\"action\":\"population\"|\"population_member\"|\"population_activity_state\"' '{s}/streams'\nrg '\"kind\":\"(runtime_fault|authority_cycle_fault)\"' '{s}/streams'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\nrg '\"kind\":\"neural_rendering\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
-            .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
+            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; eight human-visible anchors from -5 through +2 seconds when admitted; a product-only flag frame; a continuous product trail over the same visual window; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times. Timeline windows include immutable runtime phase/system/error and authority-cycle fault ownership when the engine retains a fault.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheel draws under one stable identity. NPC state and navigation transition records include semantic destination, status/reason, exact route revision/digest/nodes, topology revision, physical exclusions, and retry timing. Authored NPC records also include stable population member, role, combat disposition, and activity; action=population records retain transition-only program, slot, deadline, retry, vacancy, and replacement evidence across actor generations. kind=render_state records identify the conventional renderer, visual schema, scene light, product/debug and normal/color draw paths, plus the last stable semantic part/material identity. When an external neural trial is active, kind=neural_rendering metrics retain the exact bundle/checkpoint, source and presented frame lineage, timing, failures, and unknown category counts.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"action\":\"navigation\"|\"navigation_status\":\"(blocked|waiting_for_content|structurally_unreachable)\"|\"navigation_reason\":\"physical_obstruction\"' '{s}/streams'\nrg '\"action\":\"population\"|\"population_member\"|\"population_activity_state\"' '{s}/streams'\nrg '\"kind\":\"render_state\"|\"render_mode\"|\"last_visual\"' '{s}/streams'\nrg '\"kind\":\"(runtime_fault|authority_cycle_fault)\"' '{s}/streams'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\nrg '\"kind\":\"neural_rendering\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
+            .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
         ) catch return false;
         const handoff_bytes = buffer[0..writer.end];
         self.queue.publishHandoff(handoff_bytes);
@@ -1519,6 +1521,46 @@ pub const Capture = struct {
     fn recordState(self: *Capture, view: *const editor_contract.GameplayView, yaw: f32, pitch: f32, now: u64) void {
         self.recordFormatted(.state, "{{\"schema\":{d},\"kind\":\"camera_state\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"yaw\":{d},\"pitch\":{d},\"entity_count\":{d}}}", .{ incident.schema_version, self.takeSequence(), now, view.authority_tick, view.presentation_frame, yaw, pitch, view.entity_count });
         for (view.entitySlice()) |entity| self.recordEntityState(view, entity, now);
+    }
+
+    fn recordRenderState(
+        self: *Capture,
+        gameplay: *const editor_contract.GameplayView,
+        view: *const editor_contract.RenderView,
+        now: u64,
+    ) void {
+        self.recordFormatted(
+            .state,
+            "{{\"schema\":{d},\"kind\":\"render_state\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"render_mode\":\"{s}\",\"visual_schema\":{d},\"scene_light\":{{\"sun_direction\":[{d},{d},{d}],\"sun_color\":[{d},{d},{d}],\"sun_intensity\":{d},\"ambient_color\":[{d},{d},{d}]}},\"draw_paths\":{{\"lit_product\":{d},\"unlit_product\":{d},\"debug\":{d},\"normal_geometry\":{d},\"color_geometry\":{d}}},\"last_visual\":{{\"semantic\":\"{s}\",\"part\":\"{s}\",\"ordinal\":{d},\"surface\":\"{s}\"}}}}",
+            .{
+                incident.schema_version,
+                self.takeSequence(),
+                now,
+                gameplay.authority_tick,
+                gameplay.presentation_frame,
+                view.mode,
+                view.visual_schema,
+                view.scene_light.sun_direction[0],
+                view.scene_light.sun_direction[1],
+                view.scene_light.sun_direction[2],
+                view.scene_light.sun_color[0],
+                view.scene_light.sun_color[1],
+                view.scene_light.sun_color[2],
+                view.scene_light.sun_intensity,
+                view.scene_light.ambient_color[0],
+                view.scene_light.ambient_color[1],
+                view.scene_light.ambient_color[2],
+                view.frame_stats.lit_product_draws,
+                view.frame_stats.unlit_product_draws,
+                view.frame_stats.debug_draws,
+                view.frame_stats.normal_geometry_draws,
+                view.frame_stats.color_geometry_draws,
+                view.last_semantic,
+                view.last_part,
+                view.last_ordinal,
+                view.last_surface,
+            },
+        );
     }
 
     fn recordEntityState(

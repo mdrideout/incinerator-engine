@@ -13,10 +13,14 @@ layout(location = 1) in vec2 frag_texcoord;
 // Fragment settings uniform buffer
 layout(set = 3, binding = 0) uniform FragmentSettings {
     float use_texture; // 1.0 = use texture, 0.0 = use white
+    float lit;         // 1.0 = scene lighting, 0.0 = exact unlit response
     float _padding1;
     float _padding2;
-    float _padding3;
     vec4 base_color;
+    vec4 emissive;
+    vec4 sun_direction;
+    vec4 sun_color_intensity;
+    vec4 ambient_color;
 } settings;
 
 // Texture sampler (bound at slot 0)
@@ -34,20 +38,18 @@ void main() {
         tex_color = vec4(1.0, 1.0, 1.0, 1.0);
     }
 
-    // Normalize the interpolated normal (interpolation can denormalize it)
-    vec3 normal = normalize(frag_normal);
-
-    // Simple world-space directional light from above-right-front
-    vec3 light_dir = normalize(vec3(0.5, 1.0, 0.3));
-    float ndotl = max(dot(normal, light_dir), 0.0);
-
-    // Ambient + diffuse lighting
-    float ambient = 0.3;
-    float diffuse = 0.7 * ndotl;
-    float lighting = ambient + diffuse;
-
     // The sampler performs sRGB-to-linear conversion for authored base-color
     // textures. Apply the authored linear factor before lighting.
     vec4 material_color = tex_color * settings.base_color;
-    out_color = vec4(material_color.rgb * lighting, material_color.a);
+    vec3 response = material_color.rgb;
+    if (settings.lit > 0.5) {
+        // Normalize interpolated normals defensively. Scene-light direction is
+        // already normalized by the CPU contract.
+        vec3 normal = normalize(frag_normal);
+        float ndotl = max(dot(normal, settings.sun_direction.xyz), 0.0);
+        vec3 diffuse = settings.sun_color_intensity.rgb *
+            settings.sun_color_intensity.a * ndotl;
+        response *= settings.ambient_color.rgb + diffuse;
+    }
+    out_color = vec4(response + settings.emissive.rgb, material_color.a);
 }

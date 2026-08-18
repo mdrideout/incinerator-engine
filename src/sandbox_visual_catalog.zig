@@ -6,8 +6,21 @@
 //! this vocabulary so cheap silhouettes and rich material intent stay aligned.
 
 const std = @import("std");
+const render_contract = @import("render_contract.zig");
 
 pub const Surface = enum {
+    ground,
+    road,
+    sidewalk,
+    building_primary,
+    building_accent,
+    route_landmark,
+    activity_landmark,
+    obstacle,
+    carryable,
+    tire,
+    wheel_marker,
+    health_marker,
     painted_metal,
     glass,
     emissive,
@@ -16,6 +29,58 @@ pub const Surface = enum {
     skin,
     facing_marker,
 };
+
+pub const scene_light = render_contract.SceneLight{
+    .sun_direction = .{ 0.431934, 0.863868, 0.259161 },
+    .sun_color = .{ 1.0, 0.93, 0.82 },
+    .sun_intensity = 0.88,
+    .ambient_color = .{ 0.20, 0.24, 0.31 },
+};
+
+pub fn material(surface: Surface) render_contract.SurfaceMaterial {
+    return switch (surface) {
+        .ground => .{ .base_color = .{ 0.22, 0.29, 0.20, 1 } },
+        .road => .{ .base_color = .{ 0.12, 0.14, 0.17, 1 } },
+        .sidewalk => .{ .base_color = .{ 0.48, 0.47, 0.43, 1 } },
+        .building_primary => .{ .base_color = .{ 0.34, 0.39, 0.46, 1 } },
+        .building_accent => .{ .base_color = .{ 0.56, 0.27, 0.16, 1 } },
+        .route_landmark => .{
+            .base_color = .{ 0.15, 0.48, 0.68, 1 },
+            .emissive = .{ 0.02, 0.08, 0.12 },
+        },
+        .activity_landmark => .{
+            .base_color = .{ 0.76, 0.52, 0.12, 1 },
+            .emissive = .{ 0.08, 0.04, 0.01 },
+        },
+        .obstacle => .{ .base_color = .{ 0.48, 0.18, 0.12, 1 } },
+        .carryable => .{ .base_color = .{ 0.88, 0.68, 0.12, 1 } },
+        .tire => .{ .base_color = .{ 0.055, 0.065, 0.08, 1 } },
+        .wheel_marker => .{
+            .base_color = .{ 0.95, 0.38, 0.06, 1 },
+            .emissive = .{ 0.05, 0.01, 0 },
+        },
+        .health_marker => .{ .base_color = .{ 1, 1, 1, 1 }, .lit = false },
+        .painted_metal => .{ .base_color = .{ 0.10, 0.42, 0.72, 1 } },
+        .glass => .{ .base_color = .{ 0.12, 0.34, 0.48, 1 } },
+        .emissive => .{
+            .base_color = .{ 1.0, 0.78, 0.32, 1 },
+            .emissive = .{ 0.55, 0.32, 0.08 },
+        },
+        .fabric_primary => .{ .base_color = .{ 0.70, 0.78, 0.90, 1 } },
+        .fabric_secondary => .{ .base_color = .{ 0.16, 0.20, 0.28, 1 } },
+        .skin => .{ .base_color = .{ 0.82, 0.62, 0.45, 1 } },
+        .facing_marker => .{
+            .base_color = .{ 0.08, 0.18, 0.35, 1 },
+            .emissive = .{ 0.01, 0.02, 0.05 },
+        },
+    };
+}
+
+pub fn materialTinted(surface: Surface, color: [4]f32) render_contract.SurfaceMaterial {
+    var result = material(surface);
+    result.base_color = color;
+    return result;
+}
 
 pub const Part = struct {
     label: []const u8,
@@ -86,6 +151,8 @@ fn validateCatalog(parts: []const Part) !void {
 }
 
 test "sandbox visual catalogs are explicit valid and stable" {
+    try scene_light.validate();
+    inline for (std.meta.tags(Surface)) |surface| try material(surface).validate();
     try validateCatalog(&character_parts);
     try validateCatalog(&vehicle_parts);
 }

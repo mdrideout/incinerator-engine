@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Validate and summarize an Incinerator schema-4 incident bundle."""
+"""Validate and summarize an Incinerator schema-5 incident bundle."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import json
 from pathlib import Path
 import sys
 
-SCHEMA = 4
+SCHEMA = 5
 TERMINAL = {"complete", "partial"}
 HUMAN_ANCHORS = {
     -5000: "human_m5000ms",
@@ -236,7 +236,11 @@ def main() -> int:
     if not isinstance(capabilities, dict):
         raise ValueError("invalid evidence capability matrix")
     if capabilities.get("navigation_lineage") is not True:
-        raise ValueError("schema-4 evidence lacks exact navigation lineage")
+        raise ValueError("schema-5 evidence lacks exact navigation lineage")
+    if capabilities.get("population_activity") is not True:
+        raise ValueError("schema-5 evidence lacks authored population activity")
+    if capabilities.get("deterministic_render_state") is not True:
+        raise ValueError("schema-5 evidence lacks deterministic render state")
     print("capabilities: " + json.dumps(capabilities, sort_keys=True))
     print("streams: " + ", ".join(f"{name}={count}" for name, count in stream_counts.items()))
     print("record kinds: " + ", ".join(f"{name}={count}" for name, count in sorted(kinds.items())))
@@ -272,6 +276,9 @@ def main() -> int:
         navigation_route_revisions: set[int] = set()
         navigation_topology_revisions: set[int] = set()
         navigation_transition_count = 0
+        population_transition_count = 0
+        population_members: set[int] = set()
+        population_states: dict[str, int] = {}
         navigation_max_replans = 0
         navigation_max_exclusions = 0
         for stream in ("timeline", "state", "input", "metrics"):
@@ -316,7 +323,24 @@ def main() -> int:
                         navigation_topology_revisions.add(
                             int(navigation.get("topology_revision", 0))
                         )
+                if record.get("action") == "population":
+                    population_transition_count += 1
+                    population_value = record.get("population")
+                    if isinstance(population_value, dict):
+                        population_members.add(int(population_value.get("member_id", 0)))
+                        state = str(population_value.get("current_state", "unavailable"))
+                        population_states[state] = population_states.get(state, 0) + 1
                 if entity_kind == "npc":
+                    member_id = record.get("population_member")
+                    if member_id is not None:
+                        population_members.add(int(member_id))
+                    activity_state = str(
+                        record.get("population_activity_state", "unavailable")
+                    )
+                    if activity_state != "unavailable":
+                        population_states[activity_state] = (
+                            population_states.get(activity_state, 0) + 1
+                        )
                     status = str(record.get("navigation_status", "unavailable"))
                     reason = str(record.get("navigation_reason", "unavailable"))
                     trigger = str(record.get("navigation_trigger", "unavailable"))
@@ -389,13 +413,18 @@ def main() -> int:
             f"'statuses': {navigation_statuses}, 'reasons': {navigation_reasons}, "
             f"'triggers': {navigation_triggers}, 'results': {navigation_results}, "
             f"'max_replans': {navigation_max_replans}, "
-            f"'max_exclusions': {navigation_max_exclusions}}}"
+            f"'max_exclusions': {navigation_max_exclusions}}} "
+            f"population={{'transitions': {population_transition_count}, "
+            f"'members': {sorted(population_members)}, "
+            f"'states': {population_states}}}"
         )
     print(f"replay: {'present' if replay.is_file() else 'missing'}")
     print(f"handoff: {'present' if handoff.is_file() else 'missing'}")
     print("next:")
     print(f"  rg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{root}'")
     print(f"  rg '\"kind\":\"developer_shortcut\"' '{root / 'streams'}'")
+    print(f"  rg '\"action\":\"population\"|\"population_member\"|\"population_activity_state\"' '{root / 'streams'}'")
+    print(f"  rg '\"kind\":\"render_state\"|\"render_mode\"|\"last_visual\"' '{root / 'streams'}'")
     print(f"  zig build inspect-incident -- '{root}'")
     print(f"  zig build incident-visual-report -- '{root}' <new-output-folder>")
     print(f"  zig build replay-incident -- '{root}' <absolute-installed-content-root>")

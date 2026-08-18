@@ -17,6 +17,7 @@ const renderer = presentation.renderer;
 const primitives = presentation.primitives;
 const mesh = presentation.mesh;
 const camera_module = presentation.camera;
+const visual_catalog = presentation.visual_catalog;
 
 pub const Scene = struct {
     gpu: renderer.Renderer,
@@ -34,13 +35,14 @@ pub const Scene = struct {
     pub fn init(window: *presentation.c.SDL_Window) !Scene {
         var gpu = try renderer.Renderer.init(window);
         errdefer gpu.deinit();
-        var ground = try primitives.createGroundPlane(gpu.getDevice());
+        try gpu.setSceneLight(visual_catalog.scene_light);
+        var ground = try primitives.createLitGroundPlane(gpu.getDevice());
         errdefer ground.deinit();
-        var character = try primitives.createCharacterCapsule(gpu.getDevice(), 0.4, 0.5);
+        var character = try primitives.createLitCharacterCapsule(gpu.getDevice(), 0.4, 0.5);
         errdefer character.deinit();
-        var cube = try primitives.createCube(gpu.getDevice());
+        var cube = try primitives.createLitCube(gpu.getDevice());
         errdefer cube.deinit();
-        var vehicle_wheel = try primitives.createWheelCylinder(gpu.getDevice());
+        var vehicle_wheel = try primitives.createLitWheelCylinder(gpu.getDevice());
         errdefer vehicle_wheel.deinit();
         return .{
             .gpu = gpu,
@@ -127,7 +129,13 @@ pub const Scene = struct {
         }
         const view_projection = self.camera.getViewProjectionMatrix(aspect);
         self.last_combat_hud = self.localCombatHud(client);
-        self.gpu.drawMesh(&self.ground, zm.identity(), view_projection);
+        self.gpu.drawMeshWithMaterial(
+            &self.ground,
+            null,
+            visual_catalog.material(.ground),
+            zm.identity(),
+            view_projection,
+        );
         for (client.relevantDistrictSlice()) |coord| {
             const build = switch (sandbox_district_recipe.build(
                 .{ .x = coord.x, .z = coord.z },
@@ -159,8 +167,10 @@ pub const Scene = struct {
                     box.pose.position[1],
                     box.pose.position[2],
                 );
-                self.gpu.drawMesh(
+                self.gpu.drawMeshWithMaterial(
                     &self.cube,
+                    null,
+                    visual_catalog.material(.obstacle),
                     zm.mul(zm.mul(scale, rotation), translation),
                     view_projection,
                 );
@@ -190,10 +200,11 @@ pub const Scene = struct {
             self.gpu.drawMeshWithMaterial(
                 &self.character,
                 null,
-                combat.body_color,
+                visual_catalog.materialTinted(.fabric_primary, combat.body_color),
                 zm.mul(rotation, translation),
                 view_projection,
             );
+            self.drawFacingMarker(rotation, translation, view_projection);
             self.drawHealthBar(
                 state.position,
                 1.2,
@@ -233,10 +244,11 @@ pub const Scene = struct {
             self.gpu.drawMeshWithMaterial(
                 &self.character,
                 null,
-                combat.entity.body_color,
+                visual_catalog.materialTinted(.fabric_primary, combat.entity.body_color),
                 zm.mul(rotation, translation),
                 view_projection,
             );
+            self.drawFacingMarker(rotation, translation, view_projection);
             self.drawHealthBar(
                 state.position,
                 1.2,
@@ -261,10 +273,13 @@ pub const Scene = struct {
             self.gpu.drawMeshWithMaterial(
                 &self.cube,
                 null,
-                if (state.driver != null)
-                    .{ 0.95, 0.65, 0.10, 1 }
-                else
-                    .{ 0.25, 0.35, 0.95, 1 },
+                visual_catalog.materialTinted(
+                    .painted_metal,
+                    if (state.driver != null)
+                        .{ 0.95, 0.65, 0.10, 1 }
+                    else
+                        .{ 0.25, 0.35, 0.95, 1 },
+                ),
                 zm.mul(zm.mul(scale, rotation), translation),
                 view_projection,
             );
@@ -290,9 +305,22 @@ pub const Scene = struct {
                     pose.position[1],
                     pose.position[2],
                 );
-                self.gpu.drawMesh(
+                self.gpu.drawMeshWithMaterial(
                     &self.vehicle_wheel,
+                    null,
+                    visual_catalog.material(.tire),
                     zm.mul(zm.mul(wheel_scale, wheel_rotation), wheel_translation),
+                    view_projection,
+                );
+                self.gpu.drawMeshWithMaterial(
+                    &self.cube,
+                    null,
+                    visual_catalog.material(.wheel_marker),
+                    wheelMarkerModel(
+                        wheel_layout.width,
+                        wheel_layout.radius,
+                        pose,
+                    ),
                     view_projection,
                 );
             }
@@ -318,10 +346,13 @@ pub const Scene = struct {
             self.gpu.drawMeshWithMaterial(
                 &self.cube,
                 null,
-                if (state.holder != null)
-                    .{ 0.15, 0.90, 0.95, 1 }
-                else
-                    .{ 0.95, 0.85, 0.15, 1 },
+                visual_catalog.materialTinted(
+                    .carryable,
+                    if (state.holder != null)
+                        .{ 0.15, 0.90, 0.95, 1 }
+                    else
+                        .{ 0.95, 0.85, 0.15, 1 },
+                ),
                 zm.mul(zm.mul(scale, rotation), translation),
                 view_projection,
             );
@@ -337,6 +368,30 @@ pub const Scene = struct {
         }
         self.gpu.endRenderPass();
         try self.gpu.submitFrame();
+    }
+
+    fn drawFacingMarker(
+        self: *Scene,
+        rotation: zm.Mat,
+        translation: zm.Mat,
+        view_projection: zm.Mat,
+    ) void {
+        self.gpu.drawMeshWithMaterial(
+            &self.cube,
+            null,
+            visual_catalog.material(.facing_marker),
+            zm.mul(
+                zm.mul(
+                    zm.mul(
+                        zm.scaling(0.18, 0.10, 0.08),
+                        zm.translation(0, 1.45, -0.42),
+                    ),
+                    rotation,
+                ),
+                translation,
+            ),
+            view_projection,
+        );
     }
 
     fn localCombatHud(
@@ -380,7 +435,7 @@ pub const Scene = struct {
         self.gpu.drawMeshWithMaterial(
             &self.cube,
             null,
-            plan.empty_color,
+            visual_catalog.materialTinted(.health_marker, plan.empty_color),
             zm.mul(
                 zm.mul(zm.scaling(width, height, depth), rotation),
                 zm.translation(position[0], y, position[2]),
@@ -391,7 +446,7 @@ pub const Scene = struct {
         self.gpu.drawMeshWithMaterial(
             &self.cube,
             null,
-            plan.fill_color,
+            visual_catalog.materialTinted(.health_marker, plan.fill_color),
             zm.mul(
                 zm.mul(
                     zm.scaling(geometry.fill_width, height * 1.15, depth * 1.15),
@@ -449,7 +504,7 @@ pub const Scene = struct {
         self.gpu.drawMeshWithMaterial(
             &self.cube,
             null,
-            color,
+            visual_catalog.materialTinted(.health_marker, color),
             zm.mul(
                 zm.scaling(0.16, 0.16, 0.16),
                 zm.translation(
@@ -543,6 +598,30 @@ pub const Scene = struct {
         return self.timeline.commonAlpha(now_ns);
     }
 };
+
+fn wheelMarkerModel(width: f32, radius: f32, pose: anytype) zm.Mat {
+    const rotation = zm.quatToMat(zm.f32x4(
+        pose.rotation[0],
+        pose.rotation[1],
+        pose.rotation[2],
+        pose.rotation[3],
+    ));
+    const translation = zm.translation(
+        pose.position[0],
+        pose.position[1],
+        pose.position[2],
+    );
+    return zm.mul(
+        zm.mul(
+            zm.mul(
+                zm.scaling(width * 1.08, radius * 0.14, radius * 0.72),
+                zm.translation(0, radius * 0.22, 0),
+            ),
+            rotation,
+        ),
+        translation,
+    );
+}
 
 fn participantDriving(
     client: *const session_client.Client,

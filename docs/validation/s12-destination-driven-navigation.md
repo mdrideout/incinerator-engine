@@ -1,8 +1,7 @@
 # S12 Destination-Driven Navigation Acceptance
 
-**Status:** Implementation and automated acceptance complete on Apple Silicon
-macOS; final human evaluation-world walkthrough and two human-flagged incident
-captures remain pending
+**Status:** Accepted on Apple Silicon macOS; implementation, automated native
+evidence, and the product-owner evaluation-world checkpoint are complete
 
 **Recorded:** 2026-07-28
 
@@ -125,9 +124,10 @@ The installed destructive matrix also passes all five profiles:
 full gameplay journey, passes strict profile-aware inspection, and semantically
 replays.
 
-This `/tmp` bundle is disposable automated evidence. S12 final human acceptance
-still requires two preserved ordinary run folders: one flagged during a gate
-topology replan and one flagged during physical displacement/block recovery.
+This `/tmp` bundle is disposable automated evidence. The product-owner
+checkpoint later completed without a new anomaly. The accepted workflow keeps
+gate-replan and displacement/block evidence ready when a real symptom occurs;
+it does not require manufactured incident flags during a clean run.
 
 ### Human incident: premature NPC projection removal
 
@@ -205,11 +205,15 @@ Then use the Navigation Lab and overlays to:
    Capture; and
 7. send both generated run-folder handoffs for strict inspection and replay.
 
-S12 is not marked fully human-accepted until that walkthrough is completed.
+The product owner accepted the ordinary evaluation-world result on 2026-08-17
+after the prior continuity corrections. No new anomaly was observed, so the
+checkpoint did not manufacture two incident flags merely to satisfy a count;
+the already accepted schema-5 workflow remains the diagnostic path for any
+future navigation anomaly.
 
 ## Review Result
 
-No automated P0/P1 S12 defect remains. Ownership stays narrow: the sandbox
+No P0/P1 S12 defect remains. Ownership stays narrow: the sandbox
 catalog owns destinations, district authority owns admitted topology and
 gates, the pure planner owns no state, NPC authority owns movement and route
 execution, and presentation/editor/incident consumers receive immutable

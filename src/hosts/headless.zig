@@ -100,8 +100,7 @@ const OperationalConsumers = struct {
         while (world.pollNpcEncounterCue() != null) self.observational_events +|= 1;
     }
 
-    fn ensureQuiescent(_: *const OperationalConsumers) !void {
-    }
+    fn ensureQuiescent(_: *const OperationalConsumers) !void {}
 
     fn consumeVitalsOutcomes(
         self: *OperationalConsumers,
@@ -144,7 +143,6 @@ const OperationalConsumers = struct {
             return error.UnownedHeadlessFeatureOutcome;
         }
     }
-
 };
 
 fn ownsEncounterDamage(

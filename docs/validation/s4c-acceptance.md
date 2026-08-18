@@ -56,11 +56,10 @@ The visual host owns a fixed three-slot ring for the complete application
 lifetime. Each slot contains one line and one triangle GPU vertex buffer plus
 matching transfer buffers: six GPU and six transfer buffers total. Upload maps
 with `cycle=false`, submits one bounded copy, and acquires a copy fence. The
-host polls fences with `SDL_QueryGPUFence` and never waits in the live path.
-The real frame first uses the ordinary fallible submit path. After every debug
-draw, the host submits one empty command on the same queue and transfers that
-post-submit fence to the slot; this makes optional fence failure distinguishable
-from real frame-submit failure. At most one owned fence exists per slot; when
+host polls fences through the exact SDL-cohort adapter and never waits in the
+live path. The real frame requests one fence from the command buffer containing
+the debug draw and transfers a retained reference to the slot; no later empty
+submission stands in for that work. At most one retained frame fence exists per slot; when
 all slots are busy the new batch is visibly dropped for backpressure and the
 latest completed exact generation remains drawable.
 
@@ -69,7 +68,7 @@ before coplanar lines. The renderer therefore preserves diagnostic line
 evidence without implying alpha blending. Stale, disabled, empty, failed,
 backpressured, or deinitialized generations are typed non-authority statuses.
 
-GPU or post-submit-fence failure disables only the overlay and clears or conservatively
+GPU or frame-fence failure disables only the overlay and clears or conservatively
 retires affected evidence. A fresh typed enable begins a retry epoch even when
 the simulation is paused on the same CPU generation. No per-frame mesh,
 buffer, transfer buffer, or allocator owner is created; copy/frame fence
@@ -103,7 +102,7 @@ profiling workflow; S4-C introduces no generic tracing or telemetry service.
 | Gate | Recorded result | Principal evidence |
 |---|---:|---|
 | physics adapter | **38/38 Debug and ReleaseFast tests pass** | all shapes/categories, optional rigid-listener OOM/create failure, rigid/character/wheel contacts, atomic publication/reset/overflow, 100 toggles, state invariance, descriptor transactions, init failure, repeated worlds |
-| persistent GPU adapter | **24/24 Debug and ReleaseFast tests pass** | fixed-slot saturation, async generation lag, `cycle=false` planning, copy/post-submit fence ownership, enable/fail/retry epochs/deinit lifecycle, bounded ownership/accounting |
+| persistent GPU adapter | **24/24 Debug and ReleaseFast tests pass** | fixed-slot saturation, async generation lag, `cycle=false` planning, copy/exact-frame fence ownership, enable/fail/retry epochs/deinit lifecycle, bounded ownership/accounting |
 | profiler and typed visualization controls | **9/9 tests pass** | fixed spans/frames, wrap/rejection/exhaustion, count saturation, clear semantics, bounded request mailbox |
 | full Debug, editor disabled | **106/106 steps; 420/420 tests pass** | complete project graph and final binary boundary checks |
 | full ReleaseFast, editor disabled | **106/106 steps; 420/420 tests pass** | optimized complete graph and final binary boundary checks |

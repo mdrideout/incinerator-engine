@@ -30,82 +30,6 @@ const Vertex = mesh.Vertex;
 const c = sdl.c;
 
 // ============================================================================
-// Cube
-// ============================================================================
-
-/// A unit cube centered at origin (-0.5 to 0.5 on each axis).
-/// Each face has a different color for easy orientation:
-/// - Front (−Z): Red
-/// - Back (+Z): Cyan
-/// - Left (−X): Green
-/// - Right (+X): Magenta
-/// - Top (+Y): Blue
-/// - Bottom (−Y): Yellow
-const cube_vertices = [_]Vertex{
-    // Front face (facing -Z) - RED
-    .{ .position = .{ -0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-    .{ .position = .{ 0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-    .{ .position = .{ 0.5, 0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-    .{ .position = .{ -0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-    .{ .position = .{ 0.5, 0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-    .{ .position = .{ -0.5, 0.5, -0.5 }, .color = .{ 1.0, 0.0, 0.0 } },
-
-    // Back face (facing +Z) - CYAN
-    .{ .position = .{ 0.5, -0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
-    .{ .position = .{ -0.5, -0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
-    .{ .position = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
-    .{ .position = .{ 0.5, -0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
-    .{ .position = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
-    .{ .position = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 1.0 } },
-
-    // Left face (facing -X) - GREEN
-    .{ .position = .{ -0.5, -0.5, 0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-    .{ .position = .{ -0.5, -0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-    .{ .position = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-    .{ .position = .{ -0.5, -0.5, 0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-    .{ .position = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-    .{ .position = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.0, 1.0, 0.0 } },
-
-    // Right face (facing +X) - MAGENTA
-    .{ .position = .{ 0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
-    .{ .position = .{ 0.5, -0.5, 0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
-    .{ .position = .{ 0.5, 0.5, 0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
-    .{ .position = .{ 0.5, -0.5, -0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
-    .{ .position = .{ 0.5, 0.5, 0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
-    .{ .position = .{ 0.5, 0.5, -0.5 }, .color = .{ 1.0, 0.0, 1.0 } },
-
-    // Top face (facing +Y) - BLUE
-    .{ .position = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
-    .{ .position = .{ 0.5, 0.5, -0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
-    .{ .position = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
-    .{ .position = .{ -0.5, 0.5, -0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
-    .{ .position = .{ 0.5, 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
-    .{ .position = .{ -0.5, 0.5, 0.5 }, .color = .{ 0.0, 0.0, 1.0 } },
-
-    // Bottom face (facing -Y) - YELLOW
-    .{ .position = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
-    .{ .position = .{ 0.5, -0.5, 0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
-    .{ .position = .{ 0.5, -0.5, -0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
-    .{ .position = .{ -0.5, -0.5, 0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
-    .{ .position = .{ 0.5, -0.5, -0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
-    .{ .position = .{ -0.5, -0.5, -0.5 }, .color = .{ 1.0, 1.0, 0.0 } },
-};
-
-/// Create a unit cube centered at origin.
-pub fn createCube(device: *c.SDL_GPUDevice) !Mesh {
-    return Mesh.init(device, &cube_vertices);
-}
-
-/// Create a neutral unit cube whose final color is supplied by the draw.
-/// Product visual catalogs use this mesh for explicit multipart silhouettes;
-/// the rainbow cube remains useful for orientation/debug fixtures.
-pub fn createSolidCube(device: *c.SDL_GPUDevice) !Mesh {
-    var vertices = cube_vertices;
-    for (&vertices) |*vertex| vertex.color = .{ 1, 1, 1 };
-    return Mesh.init(device, &vertices);
-}
-
-// ============================================================================
 // Wheel Cylinder
 // ============================================================================
 
@@ -116,7 +40,7 @@ pub const wheel_vertex_count: usize = wheel_triangle_count * 3;
 /// Generate a centered unit wheel cylinder. Its axle is +X, matching the
 /// engine physics contract; callers scale X by wheel width and Y/Z by wheel
 /// diameter. One orange segment makes rotation visible in the debug sandbox.
-pub fn wheelCylinderVertices() [wheel_vertex_count]Vertex {
+fn wheelCylinderScaffold() [wheel_vertex_count]Vertex {
     const half_extent: f32 = 0.5;
     const left_center = [3]f32{ -half_extent, 0, 0 };
     const right_center = [3]f32{ half_extent, 0, 0 };
@@ -156,11 +80,6 @@ pub fn wheelCylinderVertices() [wheel_vertex_count]Vertex {
     return vertices;
 }
 
-pub fn createWheelCylinder(device: *c.SDL_GPUDevice) !Mesh {
-    const vertices = wheelCylinderVertices();
-    return Mesh.init(device, &vertices);
-}
-
 fn appendWheelTriangle(
     vertices: *[wheel_vertex_count]Vertex,
     cursor: *usize,
@@ -188,7 +107,7 @@ pub const capsule_vertex_count: usize = capsule_triangle_count * 3;
 
 /// Generate the gameplay capsule at its authored physical dimensions with its
 /// foot at Y=0. A blue forward stripe makes yaw visible.
-pub fn characterCapsuleVertices(
+fn characterCapsuleScaffold(
     radius: f32,
     half_height: f32,
 ) [capsule_vertex_count]Vertex {
@@ -262,20 +181,6 @@ pub fn characterCapsuleVertices(
     return vertices;
 }
 
-pub fn createCharacterCapsule(
-    device: *c.SDL_GPUDevice,
-    radius: f32,
-    half_height: f32,
-) !Mesh {
-    if (!std.math.isFinite(radius) or radius <= 0 or
-        !std.math.isFinite(half_height) or half_height <= 0)
-    {
-        return error.InvalidCapsuleDimensions;
-    }
-    const vertices = characterCapsuleVertices(radius, half_height);
-    return Mesh.init(device, &vertices);
-}
-
 fn fillCapsuleRing(ring: *[capsule_segments][3]f32, radius: f32, y: f32) void {
     for (0..capsule_segments) |segment| {
         const angle = std.math.tau *
@@ -308,61 +213,15 @@ fn capsuleColor(segment: usize) [3]f32 {
 }
 
 // ============================================================================
-// Ground Plane (Checkerboard)
+// Normal-bearing Product Primitives (VertexPNU format)
 // ============================================================================
-
-/// Create a checkerboard ground plane - classic debug pattern.
-/// Grid is centered at origin in XZ plane, facing up (+Y).
-/// Uses 1 unit = 1 meter convention. Each tile is 2m for good visibility.
-/// 32x32 tiles = 64m x 64m coverage (no scaling needed).
-pub fn createGroundPlane(device: *c.SDL_GPUDevice) !Mesh {
-    const grid_size = 32; // 32x32 tiles for good coverage
-    const tile_size: f32 = 2.0; // 2 meters per tile (good for visibility)
-    const half_grid: f32 = @as(f32, grid_size) * tile_size / 2.0;
-
-    // Colors: light gray and dark gray for classic checkerboard
-    const color_a = [3]f32{ 0.7, 0.7, 0.7 }; // Light
-    const color_b = [3]f32{ 0.3, 0.3, 0.3 }; // Dark
-
-    // 6 vertices per tile (2 triangles)
-    var vertices: [grid_size * grid_size * 6]Vertex = undefined;
-    var idx: usize = 0;
-
-    for (0..grid_size) |zi| {
-        for (0..grid_size) |xi| {
-            const x: f32 = @as(f32, @floatFromInt(xi)) * tile_size - half_grid;
-            const z: f32 = @as(f32, @floatFromInt(zi)) * tile_size - half_grid;
-
-            // Checkerboard pattern: alternate based on sum of indices
-            const color = if ((xi + zi) % 2 == 0) color_a else color_b;
-
-            // Two triangles for this tile
-            vertices[idx + 0] = .{ .position = .{ x, 0, z }, .color = color };
-            vertices[idx + 1] = .{ .position = .{ x + tile_size, 0, z }, .color = color };
-            vertices[idx + 2] = .{ .position = .{ x + tile_size, 0, z + tile_size }, .color = color };
-            vertices[idx + 3] = .{ .position = .{ x, 0, z }, .color = color };
-            vertices[idx + 4] = .{ .position = .{ x + tile_size, 0, z + tile_size }, .color = color };
-            vertices[idx + 5] = .{ .position = .{ x, 0, z + tile_size }, .color = color };
-            idx += 6;
-        }
-    }
-
-    return Mesh.init(device, &vertices);
-}
-
-// ============================================================================
-// Textured Debug Primitives (VertexPNU format)
-// ============================================================================
-// These primitives have UV coordinates for texture mapping.
-// Use with checkerboard textures for classic physics debug visualization.
 
 const VertexPNU = mesh.VertexPNU;
 
-/// Create a textured unit cube with proper UV mapping.
-/// Each face gets UV 0-1, so texture tiles once per face.
-/// Great for debug visualization with checkerboard textures.
+/// Create the shared normal-bearing unit cube used by conventional product
+/// solids. Each face carries complete UVs for optional authored textures.
 /// Uses CCW winding order to match pos_normal_uv pipeline (glTF convention).
-pub fn createTexturedCube(device: *c.SDL_GPUDevice) !Mesh {
+pub fn createLitCube(device: *c.SDL_GPUDevice) !Mesh {
     // Normal vectors for each face
     const n_front = [3]f32{ 0, 0, -1 };
     const n_back = [3]f32{ 0, 0, 1 };
@@ -425,10 +284,130 @@ pub fn createTexturedCube(device: *c.SDL_GPUDevice) !Mesh {
     return Mesh.initTextured(device, &vertices);
 }
 
+pub const lit_ground_grid_size: usize = 32;
+pub const lit_ground_vertex_count: usize = lit_ground_grid_size * lit_ground_grid_size * 6;
+
+/// Create the 64 m product support plane on the normal-bearing geometry path.
+/// Surface color and lighting are supplied explicitly by sandbox composition.
+pub fn litGroundVertices() [lit_ground_vertex_count]VertexPNU {
+    const tile_size: f32 = 2;
+    const half_grid: f32 = @as(f32, lit_ground_grid_size) * tile_size / 2;
+    const normal = [3]f32{ 0, 1, 0 };
+    var vertices: [lit_ground_vertex_count]VertexPNU = undefined;
+    var cursor: usize = 0;
+    for (0..lit_ground_grid_size) |zi| {
+        for (0..lit_ground_grid_size) |xi| {
+            const x: f32 = @as(f32, @floatFromInt(xi)) * tile_size - half_grid;
+            const z: f32 = @as(f32, @floatFromInt(zi)) * tile_size - half_grid;
+            const uv_x: f32 = @floatFromInt(xi);
+            const uv_z: f32 = @floatFromInt(zi);
+            const p0 = VertexPNU{ .position = .{ x, 0, z }, .normal = normal, .texcoord = .{ uv_x, uv_z } };
+            const p1 = VertexPNU{ .position = .{ x + tile_size, 0, z }, .normal = normal, .texcoord = .{ uv_x + 1, uv_z } };
+            const p2 = VertexPNU{ .position = .{ x + tile_size, 0, z + tile_size }, .normal = normal, .texcoord = .{ uv_x + 1, uv_z + 1 } };
+            const p3 = VertexPNU{ .position = .{ x, 0, z + tile_size }, .normal = normal, .texcoord = .{ uv_x, uv_z + 1 } };
+            vertices[cursor] = p0;
+            vertices[cursor + 1] = p2;
+            vertices[cursor + 2] = p1;
+            vertices[cursor + 3] = p0;
+            vertices[cursor + 4] = p3;
+            vertices[cursor + 5] = p2;
+            cursor += 6;
+        }
+    }
+    std.debug.assert(cursor == vertices.len);
+    return vertices;
+}
+
+pub fn createLitGroundPlane(device: *c.SDL_GPUDevice) !Mesh {
+    const vertices = litGroundVertices();
+    return Mesh.initTextured(device, &vertices);
+}
+
+/// Convert the canonical wheel geometry to CCW normal-bearing triangles. A
+/// separate authored spoke is used for exact roll readability.
+pub fn litWheelCylinderVertices() [wheel_vertex_count]VertexPNU {
+    const source = wheelCylinderScaffold();
+    var result: [wheel_vertex_count]VertexPNU = undefined;
+    var triangle: usize = 0;
+    while (triangle < source.len) : (triangle += 3) {
+        const a = source[triangle].position;
+        const b = source[triangle + 2].position;
+        const d = source[triangle + 1].position;
+        const normal = triangleNormal(a, b, d);
+        result[triangle] = .{ .position = a, .normal = normal, .texcoord = .{ 0, 0 } };
+        result[triangle + 1] = .{ .position = b, .normal = normal, .texcoord = .{ 0, 1 } };
+        result[triangle + 2] = .{ .position = d, .normal = normal, .texcoord = .{ 1, 0 } };
+    }
+    return result;
+}
+
+pub fn createLitWheelCylinder(device: *c.SDL_GPUDevice) !Mesh {
+    const vertices = litWheelCylinderVertices();
+    return Mesh.initTextured(device, &vertices);
+}
+
+/// Normal-bearing version of the physical capsule retained by graphical
+/// network clients and semantic visibility fixtures.
+pub fn litCharacterCapsuleVertices(
+    radius: f32,
+    half_height: f32,
+) [capsule_vertex_count]VertexPNU {
+    const source = characterCapsuleScaffold(radius, half_height);
+    var result: [capsule_vertex_count]VertexPNU = undefined;
+    var triangle: usize = 0;
+    while (triangle < source.len) : (triangle += 3) {
+        const a = source[triangle].position;
+        const b = source[triangle + 2].position;
+        const d = source[triangle + 1].position;
+        const normal = triangleNormal(a, b, d);
+        result[triangle] = .{ .position = a, .normal = normal, .texcoord = .{ 0, 0 } };
+        result[triangle + 1] = .{ .position = b, .normal = normal, .texcoord = .{ 0, 1 } };
+        result[triangle + 2] = .{ .position = d, .normal = normal, .texcoord = .{ 1, 0 } };
+    }
+    return result;
+}
+
+pub fn createLitCharacterCapsule(
+    device: *c.SDL_GPUDevice,
+    radius: f32,
+    half_height: f32,
+) !Mesh {
+    const vertices = litCharacterCapsuleVertices(radius, half_height);
+    return Mesh.initTextured(device, &vertices);
+}
+
+fn triangleNormal(a: [3]f32, b: [3]f32, d: [3]f32) [3]f32 {
+    const ab = [3]f32{ b[0] - a[0], b[1] - a[1], b[2] - a[2] };
+    const ad = [3]f32{ d[0] - a[0], d[1] - a[1], d[2] - a[2] };
+    const cross = [3]f32{
+        ab[1] * ad[2] - ab[2] * ad[1],
+        ab[2] * ad[0] - ab[0] * ad[2],
+        ab[0] * ad[1] - ab[1] * ad[0],
+    };
+    const length = @sqrt(cross[0] * cross[0] + cross[1] * cross[1] + cross[2] * cross[2]);
+    std.debug.assert(std.math.isFinite(length) and length > 0.000001);
+    return .{ cross[0] / length, cross[1] / length, cross[2] / length };
+}
+
+test "lit procedural product geometry is finite normal bearing and CCW" {
+    const ground = litGroundVertices();
+    const wheel = litWheelCylinderVertices();
+    const character = litCharacterCapsuleVertices(0.4, 0.5);
+    for (ground ++ wheel ++ character) |vertex| {
+        for (vertex.position ++ vertex.normal ++ vertex.texcoord) |value| {
+            try std.testing.expect(std.math.isFinite(value));
+        }
+        const length_squared = vertex.normal[0] * vertex.normal[0] +
+            vertex.normal[1] * vertex.normal[1] +
+            vertex.normal[2] * vertex.normal[2];
+        try std.testing.expectApproxEqAbs(@as(f32, 1), length_squared, 0.0001);
+    }
+}
+
 test "character capsule geometry is finite and bottom anchored" {
     const radius: f32 = 0.4;
     const half_height: f32 = 0.5;
-    const vertices = characterCapsuleVertices(radius, half_height);
+    const vertices = characterCapsuleScaffold(radius, half_height);
     try std.testing.expectEqual(capsule_vertex_count, vertices.len);
     var minimum_y = std.math.inf(f32);
     var maximum_y = -std.math.inf(f32);
@@ -475,7 +454,7 @@ test "character capsule geometry is finite and bottom anchored" {
 }
 
 test "wheel cylinder geometry follows the canonical axle and winding" {
-    const vertices = wheelCylinderVertices();
+    const vertices = wheelCylinderScaffold();
     try std.testing.expectEqual(wheel_vertex_count, vertices.len);
 
     var minimum = [3]f32{ std.math.inf(f32), std.math.inf(f32), std.math.inf(f32) };

@@ -211,6 +211,7 @@ pub const FrameInput = struct {
     interaction: editor_contract.InteractionInput,
     navigation: editor_contract.NavigationInput,
     population_view: *const editor_contract.PopulationView,
+    render_view: *const editor_contract.RenderView,
     gameplay_view: *const editor_contract.GameplayView,
     neural_view: *const editor_contract.NeuralView,
     incident_input: incident_contract.InputSample = .{},
@@ -1282,6 +1283,7 @@ pub const Owner = opaque {
                 diagnostics_snapshot.simulation.first_fault,
                 authority.sessionDiagnostics().first_cycle_fault,
                 frame.gameplay_view,
+                frame.render_view,
                 frame.incident_input,
                 frame.camera.yaw,
                 frame.camera.pitch,
@@ -1338,6 +1340,7 @@ pub const Owner = opaque {
                 .visualization = &visualization_snapshot,
                 .visualization_requests = &state.visualization_requests,
             },
+            .render = .{ .view = frame.render_view },
             .gameplay = .{
                 .view = frame.gameplay_view,
                 .trace = authority.gameplayTrace(),
@@ -1542,7 +1545,7 @@ pub const Owner = opaque {
     ) void {
         const state = ownerState(self);
         if (state.physics_debug_overlay) |*overlay| if (overlay.needsFrameFence()) {
-            const fence = gpu_renderer.acquirePostSubmissionFence() catch failed: {
+            const fence = gpu_renderer.retainSubmissionFence() catch failed: {
                 overlay.noteFrameFenceFailed();
                 break :failed null;
             };
@@ -1555,6 +1558,30 @@ pub const Owner = opaque {
             if (state.incident) |capture| {
                 semantic.afterSubmission(gpu_renderer, capture);
             }
+        }
+    }
+
+    /// Ask the renderer to fence the exact command buffer that owns this
+    /// frame's asynchronous downloads and debug-buffer reads.
+    pub fn requestFrameSubmissionFence(
+        self: *Owner,
+        gpu_renderer: *renderer.Renderer,
+    ) void {
+        const state = ownerState(self);
+        const physics_needs_fence = if (state.physics_debug_overlay) |*overlay|
+            overlay.needsFrameFence()
+        else
+            false;
+        const screenshots_need_fence = if (state.incident_screenshots) |*screenshots|
+            screenshots.needsSubmissionFence()
+        else
+            false;
+        const semantic_needs_fence = if (state.incident_semantic) |*semantic|
+            semantic.needsSubmissionFence()
+        else
+            false;
+        if (physics_needs_fence or screenshots_need_fence or semantic_needs_fence) {
+            gpu_renderer.requestSubmissionFence();
         }
     }
 

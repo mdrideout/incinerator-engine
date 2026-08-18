@@ -117,7 +117,7 @@ compilation also pass.
 
 - Heap-stable developer-host recorder with fixed typed requests and immutable
   inspector view.
-- Single writer thread and 1,024-job queue; 2,048-byte record ceiling, 4 MiB
+- Single writer thread and 1,024-job queue; 4,096-byte record ceiling, 4 MiB
   stream rotation, a 384 MiB visual lane plus 128 MiB nonvisual reserve,
   explicit high-water/drop/failure state, atomic manifest/handoff/replay/marker
   updates, and 0700/0600 local paths.
@@ -130,7 +130,8 @@ compilation also pass.
 - A 15 FPS 480x270 product-only trail from -5 through +2 seconds, UI-inclusive
   human-visible anchors at every whole second in that window stored at no more
   than 1280x720, a product-only flag frame, and 320x180
-  semantic-ID frame/map use nonblocking Metal fences and explicit
+  semantic-ID frame/map use the exact shared frame-submission fence through
+  nonblocking Metal polling and explicit
   partial-evidence paths. Source and stored dimensions are both indexed.
 - Tri-state authority/replication/presentation/draw membership, five-second
   tombstones, stable incarnation identity, relevance facts, and shared

@@ -2,20 +2,20 @@
 
 **Status:** The Apple Silicon macOS foundation is complete and accepted through
 S11, IV0-IV5, IC0-IC5, and the open-world correction. S12 destination-driven
-navigation and S13 authored population/activity are implemented through
-automated native product acceptance, performance measurement, schema-5
-incident evidence, and cleanup. Their final ordinary-product human walkthrough
-remains pending. Secondary platforms and public multiplayer services remain
+navigation and S13 authored population/activity are accepted through automated
+native product evidence, performance measurement, schema-5 incident evidence,
+cleanup, and the product-owner checkpoint. Secondary platforms and public multiplayer services remain
 deferred. The neural-rendering proof completed RF10 as an external, unpromoted
 `256×144 → 1280×720` technical trial. On 2026-08-17 the product owner paused
 that track indefinitely. No learned model is installed or selected as game
 content, and no later neural phase is authorized. Deterministic rendering is
-the active product direction. ED1 structured developer workspace is complete;
-DR1 is the next playable fidelity slice.
+the active product direction. ED1 structured developer workspace is complete.
+DR1 implementation and agent-native acceptance are complete; its product-owner
+visual walkthrough remains.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-08-17
+**Last reviewed:** 2026-08-18
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -35,9 +35,10 @@ DR1 is the next playable fidelity slice.
 → [`IV0-IV5 interaction validation and observability accepted`](docs/validation/gameplay-interaction-validation-and-observability.md)
 → [`IC0-IC5 incident capture and human closeout accepted`](docs/validation/human-test-incident-capture.md)
 → [`open-world spatial and vehicle-dynamics correction complete`](docs/design/open-world-spatial-diagnostics-and-playability.md)
-→ [`S12 automated acceptance complete; human walkthrough pending`](docs/validation/s12-destination-driven-navigation.md)
-→ [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
+→ [`S12 accepted`](docs/validation/s12-destination-driven-navigation.md)
+→ [`S13 accepted`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 → [`deterministic-rendering resumption audit complete`](docs/validation/deterministic-rendering-resumption.md)
+→ [`DR1 automated and agent-native acceptance complete; product-owner walkthrough pending`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
 
 **Active rendering direction:**
 [`DR1 playable deterministic visual fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
@@ -1847,8 +1848,8 @@ Record evidence rather than relying only on target numbers:
 
 ### Current next product sequence
 
-Finish the remaining human S12 acceptance before starting the ordered future
-recommendations.
+Complete the DR1 product-owner visual walkthrough before beginning the next
+ordered product slice.
 
 47. [x] **S12 — Destination-driven navigation and recovery implementation.**
     Implemented under
@@ -1863,16 +1864,14 @@ recommendations.
     crowd simulation, or a generic behavior tree. Automated acceptance is
     recorded in
     [the S12 validation ledger](docs/validation/s12-destination-driven-navigation.md);
-    its human walkthrough and two incident captures are the remaining phase
-    checkpoint. A first human incident found the historical 20/24 m NPC
+    its product-owner checkpoint is accepted. A first human incident found the historical 20/24 m NPC
     interest cutoff was still active in the small evaluation world. The
     authority now selects typed `full_world` NPC publication consistently for
     solo/listen/dedicated sandbox placements while retaining bounded interest
-    only as an explicit future scale policy; fresh human continuity
-    confirmation remains open.
-48. [ ] **S13 — Authored population and sandbox activity.** Implementation and
-    automated acceptance are complete; the ordinary-product human walkthrough
-    remains. The accepted implementation is recorded under
+    only as an explicit future scale policy.
+48. [x] **S13 — Authored population and sandbox activity.** Implementation,
+    automated acceptance, and the ordinary-product checkpoint are complete.
+    The accepted implementation is recorded under
     [ADR-024](docs/adr/024-authored-population-intent-and-activity-slots.md),
     the
     [phased implementation plan](docs/design/s13-authored-population-and-sandbox-activity.md),
@@ -1908,13 +1907,16 @@ older historical “next phase” language.
     the
     [phase plan](docs/design/ed1-structured-developer-workspace.md) and
     [validation record](docs/validation/ed1-structured-developer-workspace.md).
-50. [ ] **DR1 — Playable deterministic visual fidelity.** Establish an honest
-    ordinary-product baseline, converge primitive and loaded-model presentation
-    on one small deterministic scene-light/material contract, improve the
-    existing authored sandbox silhouettes and environment readability, retain
-    semantic incident evidence, and validate the S12/S13 gameplay journey on
-    native Metal without changing simulation or collision truth. See the
-    [phase plan](docs/design/dr1-playable-deterministic-visual-fidelity.md).
+50. [ ] **DR1 — Playable deterministic visual fidelity.** Implementation and
+    agent-native acceptance are complete; the product-owner visual walkthrough
+    remains before full acceptance. The phase establishes an honest ordinary-
+    product baseline, converges primitive and loaded-model presentation on one
+    small deterministic scene-light/material contract, improves authored
+    sandbox silhouettes/environment readability, adds Render Lab and semantic
+    render evidence, and validates the full S12/S13 gameplay journey on native
+    Metal without changing simulation or collision truth. See the
+    [phase plan](docs/design/dr1-playable-deterministic-visual-fidelity.md) and
+    [validation record](docs/validation/dr1-playable-deterministic-visual-fidelity.md).
 51. [ ] **S14 — Ranged combat vertical slice.** Add one authoritative weapon
     archetype with equip/fire/reload/ammunition state, source-aware damage
     feedback, death integration, replay, reconnect, and impairment coverage.
@@ -2021,3 +2023,4 @@ older historical “next phase” language.
 | 2026-08-05 | Accepted and scaffolded the NR0 game-specific neural-rendering direction | ADR-025 separates deterministic authority, presentation-only neural inputs/runtime, mutable external experiment runs, and deliberately promoted immutable game-content bundles. Added the July 2026 research record, feasibility and evaluation-scene plans, experiment/tool/model/fixture boundaries, empty validation/performance ledgers, and a repository-owned agent skill. No renderer code, training dependency, model weight, or runtime acceptance is claimed. |
 | 2026-08-17 | Paused neural rendering after RF10 and completed deterministic-product resumption audit | Integrated the completed RF10 history without promoting or installing a learned model; made the pause authoritative; restored the inactive conventional scene from RF10's centered fixed `640×360` extent to the full drawable; repaired the incident journey's coincidental hostile encounter; passed 286/286 repository steps with 987/987 tests and the 265/265 S13 aggregate with 341/341 tests; recorded DR1 as the next proposed product slice. Final S12/S13 product-owner walkthrough remains. |
 | 2026-08-17 | Completed ED1 structured developer workspace | Replaced per-tool placement with one docked main-window workspace and central product passthrough; added complete executable metadata for all twelve panels, deterministic presets/exact startup panels/focus/guide, incident-aligned UTC/wall/tick/frame identity, and exact SDL 3.4.14/current-zgui pins; four installed Metal layout launches and an editor-inclusive incident capture passed; the final editor-enabled aggregate passes 288/288 steps with 991/991 tests and the editor-disabled aggregate passes 285/285 with 991/991, including install, package, replay, validation, and headless boundaries. DR1 is next. |
+| 2026-08-18 | Implemented DR1 deterministic visual fidelity through agent-native acceptance | Added one normal-bearing lit product path, explicit renderer-neutral scene light/material contracts, coherent evaluation-world markings and multipart silhouettes, Render Lab, and schema-5 render-state evidence; deleted superseded flat product factories. Native validation exposed and repaired SDL 3.4.14 Metal's inverted fence query plus incorrect later-submission fence ownership, then corrected the long journey's blind-spot combat approach and coasting vehicle script. The repaired 2,256-tick Metal journey enters/re-enters the vehicle, traverses both districts, proves death/respawn and hostile replacement, persists four complete anomalies and replay, and has zero screenshot misses/fence failures. Editor-on/off aggregates pass 995/995 tests. The full S13 closure then caught and repaired stale raw-color use in the graphical network client plus the semantic visibility pass's obsolete position/color requirement; its five Metal incident profiles and real-GNS listen/dedicated encounter processes pass. The product-owner DR1 visual walkthrough remains. |

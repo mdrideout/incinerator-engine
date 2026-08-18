@@ -43,6 +43,7 @@ const shader_assets = @import("shader_assets");
 const sdl = @import("sdl.zig");
 const mesh_module = @import("mesh.zig");
 const texture_module = @import("texture.zig");
+const render_contract = @import("render_contract.zig");
 
 const c = sdl.c;
 const Mesh = mesh_module.Mesh;
@@ -75,8 +76,13 @@ pub const ModelUniforms = extern struct {
 /// Passed as uniform buffer to fragment shader.
 pub const FragmentSettings = extern struct {
     use_texture: f32, // 1.0 = use texture, 0.0 = use white
-    _padding: [3]f32 = .{ 0, 0, 0 }, // Pad to 16 bytes for GPU alignment
+    lit: f32, // 1.0 = scene light, 0.0 = exact unlit material
+    _padding: [2]f32 = .{ 0, 0 }, // Pad to 16 bytes for GPU alignment
     base_color: [4]f32 = .{ 1, 1, 1, 1 },
+    emissive: [4]f32 = .{ 0, 0, 0, 0 },
+    sun_direction: [4]f32,
+    sun_color_intensity: [4]f32,
+    ambient_color: [4]f32,
 };
 
 /// Material tint for authored vertex-color primitives. White preserves the
@@ -87,9 +93,48 @@ pub const PrimitiveFragmentSettings = extern struct {
 };
 
 comptime {
-    std.debug.assert(@sizeOf(FragmentSettings) == 32);
+    std.debug.assert(@sizeOf(FragmentSettings) == 96);
     std.debug.assert(@sizeOf(PrimitiveFragmentSettings) == 16);
 }
+
+pub const SceneLight = render_contract.SceneLight;
+pub const SurfaceMaterial = render_contract.SurfaceMaterial;
+pub const FrameStats = render_contract.FrameStats;
+
+/// Shared completion token for one submitted renderer frame. The renderer
+/// owns one reference until the following submission; every asynchronous
+/// consumer retains its own reference and releases it after observing
+/// completion. This lets the actual download-bearing command buffer own the
+/// SDL fence instead of relying on a later empty command buffer.
+pub const SubmissionFence = struct {
+    device: *c.SDL_GPUDevice,
+    raw: *c.SDL_GPUFence,
+    references: usize = 1,
+
+    pub fn retain(self: *SubmissionFence) *SubmissionFence {
+        self.references = std.math.add(usize, self.references, 1) catch unreachable;
+        return self;
+    }
+
+    pub fn signaled(self: *const SubmissionFence) bool {
+        return sdl.gpuFenceSignaled(self.device, self.raw);
+    }
+
+    pub fn release(self: *SubmissionFence) void {
+        std.debug.assert(self.references != 0);
+        self.references -= 1;
+        if (self.references != 0) return;
+        c.SDL_ReleaseGPUFence(self.device, self.raw);
+        std.heap.page_allocator.destroy(self);
+    }
+};
+
+const bootstrap_scene_light = SceneLight{
+    .sun_direction = .{ 0, 1, 0 },
+    .sun_color = .{ 1, 1, 1 },
+    .sun_intensity = 0.7,
+    .ambient_color = .{ 0.3, 0.3, 0.3 },
+};
 
 /// Render settings that can be toggled at runtime.
 /// These control debug visualization modes.
@@ -304,6 +349,8 @@ pub const Renderer = struct {
 
     // Runtime render settings (wireframe, textures, etc.)
     render_settings: RenderSettings = .{},
+    scene_light: SceneLight = bootstrap_scene_light,
+    frame_stats: FrameStats = .{},
 
     // Depth buffer for proper 3D rendering (closer pixels occlude farther ones)
     depth_target: DepthTarget,
@@ -321,6 +368,8 @@ pub const Renderer = struct {
     current_swapchain_height: u32 = 0,
     presentation_override: ?PresentationOverride = null,
     scene_extent_mode: SceneExtentMode = .drawable,
+    submission_fence_requested: bool = false,
+    last_submission_fence: ?*SubmissionFence = null,
 
     /// Initialize the GPU renderer for a window.
     /// This creates the GPU device and graphics pipeline.
@@ -539,6 +588,19 @@ pub const Renderer = struct {
         c.SDL_DestroyGPUDevice(self.device);
     }
 
+    pub fn setSceneLight(self: *Renderer, light: SceneLight) !void {
+        try light.validate();
+        self.scene_light = light;
+    }
+
+    pub fn sceneLight(self: *const Renderer) SceneLight {
+        return self.scene_light;
+    }
+
+    pub fn frameStats(self: *const Renderer) FrameStats {
+        return self.frame_stats;
+    }
+
     /// Retire any partially recorded swapchain frame and wait for the device
     /// before an application releases GPU resources owned outside Renderer.
     /// This blocking operation is teardown-only; the live frame path remains
@@ -560,6 +622,8 @@ pub const Renderer = struct {
                 .{c.SDL_GetError()},
             );
         }
+        if (self.last_submission_fence) |fence| fence.release();
+        self.last_submission_fence = null;
     }
 
     /// Get the GPU device (needed for creating meshes).
@@ -676,6 +740,7 @@ pub const Renderer = struct {
             return .unavailable;
         }
         const acquired_swapchain = swapchain_texture.?;
+        self.frame_stats = .{};
 
         if (swapchain_width == 0 or swapchain_height == 0) {
             try retireAcquiredSwapchain(cmd);
@@ -762,7 +827,10 @@ pub const Renderer = struct {
         self.drawMeshWithMaterial(
             m,
             m.diffuse_texture,
-            .{ 1, 1, 1, 1 },
+            if (m.vertex_format == .pos_normal_uv)
+                SurfaceMaterial.tinted(.{ 1, 1, 1, 1 })
+            else
+                SurfaceMaterial.unlit(.{ 1, 1, 1, 1 }),
             model,
             view_projection,
         );
@@ -773,7 +841,7 @@ pub const Renderer = struct {
         self: *Renderer,
         m: *const Mesh,
         diffuse_texture: ?Texture,
-        base_color: [4]f32,
+        material: SurfaceMaterial,
         model: zm.Mat,
         view_projection: zm.Mat,
     ) void {
@@ -783,6 +851,7 @@ pub const Renderer = struct {
         };
 
         const cmd = self.current_cmd orelse return;
+        material.validate() catch unreachable;
 
         // =====================================================================
         // Step 1: Bind the correct pipeline based on vertex format and settings
@@ -825,7 +894,7 @@ pub const Renderer = struct {
         switch (m.vertex_format) {
             .pos_color => {
                 const frag_settings = PrimitiveFragmentSettings{
-                    .base_color = base_color,
+                    .base_color = material.base_color,
                 };
                 c.SDL_PushGPUFragmentUniformData(
                     cmd,
@@ -850,7 +919,32 @@ pub const Renderer = struct {
                 // Push fragment settings (texture toggle)
                 const frag_settings = FragmentSettings{
                     .use_texture = if (self.render_settings.show_textures) 1.0 else 0.0,
-                    .base_color = base_color,
+                    .lit = if (material.lit) 1.0 else 0.0,
+                    .base_color = material.base_color,
+                    .emissive = .{
+                        material.emissive[0],
+                        material.emissive[1],
+                        material.emissive[2],
+                        0,
+                    },
+                    .sun_direction = .{
+                        self.scene_light.sun_direction[0],
+                        self.scene_light.sun_direction[1],
+                        self.scene_light.sun_direction[2],
+                        0,
+                    },
+                    .sun_color_intensity = .{
+                        self.scene_light.sun_color[0],
+                        self.scene_light.sun_color[1],
+                        self.scene_light.sun_color[2],
+                        self.scene_light.sun_intensity,
+                    },
+                    .ambient_color = .{
+                        self.scene_light.ambient_color[0],
+                        self.scene_light.ambient_color[1],
+                        self.scene_light.ambient_color[2],
+                        0,
+                    },
                 };
                 c.SDL_PushGPUFragmentUniformData(cmd, 0, &frag_settings, @sizeOf(FragmentSettings));
             },
@@ -883,6 +977,15 @@ pub const Renderer = struct {
         } else {
             // Non-indexed rendering: Every 3 vertices form a triangle
             c.SDL_DrawGPUPrimitives(render_pass, m.vertex_count, 1, 0, 0);
+        }
+        if (material.lit) {
+            self.frame_stats.lit_product_draws +|= 1;
+        } else {
+            self.frame_stats.unlit_product_draws +|= 1;
+        }
+        switch (m.vertex_format) {
+            .pos_normal_uv => self.frame_stats.normal_geometry_draws +|= 1,
+            .pos_color => self.frame_stats.color_geometry_draws +|= 1,
         }
     }
 
@@ -924,6 +1027,7 @@ pub const Renderer = struct {
 
         // Draw lines (every 2 vertices form a line segment)
         c.SDL_DrawGPUPrimitives(render_pass, vertex_count, 1, 0, 0);
+        self.frame_stats.debug_draws +|= 1;
     }
 
     /// Draw debug triangles with the given MVP matrix.
@@ -964,6 +1068,7 @@ pub const Renderer = struct {
 
         // Draw triangles
         c.SDL_DrawGPUPrimitives(render_pass, vertex_count, 1, 0, 0);
+        self.frame_stats.debug_draws +|= 1;
     }
 
     /// End just the render pass (without submitting).
@@ -1027,36 +1132,55 @@ pub const Renderer = struct {
             self.current_swapchain = null;
             self.current_swapchain_width = 0;
             self.current_swapchain_height = 0;
+            self.submission_fence_requested = false;
         }
 
-        if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
+        if (self.last_submission_fence) |fence| fence.release();
+        self.last_submission_fence = null;
+
+        if (self.submission_fence_requested) {
+            const shared = std.heap.page_allocator.create(SubmissionFence) catch |err| {
+                // The acquired command buffer still must be consumed even if
+                // allocating its shared completion token fails.
+                if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
+                    std.debug.print("SDL_SubmitGPUCommandBuffer failed: {s}\n", .{c.SDL_GetError()});
+                    return error.CommandBufferSubmissionFailed;
+                }
+                return err;
+            };
+            errdefer std.heap.page_allocator.destroy(shared);
+            const raw = c.SDL_SubmitGPUCommandBufferAndAcquireFence(cmd) orelse {
+                std.debug.print(
+                    "SDL_SubmitGPUCommandBufferAndAcquireFence failed: {s}\n",
+                    .{c.SDL_GetError()},
+                );
+                return error.CommandBufferSubmissionFenceFailed;
+            };
+            shared.* = .{ .device = self.device, .raw = raw };
+            self.last_submission_fence = shared;
+        } else if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
             std.debug.print("SDL_SubmitGPUCommandBuffer failed: {s}\n", .{c.SDL_GetError()});
             return error.CommandBufferSubmissionFailed;
         }
     }
 
-    /// Enqueue an empty command after a successfully submitted frame and
-    /// return its fence. Same-queue ordering makes this a completion fence for
-    /// every resource read by the preceding frame while keeping frame-submit
-    /// failure distinguishable from optional fence acquisition failure.
-    pub fn acquirePostSubmissionFence(self: *Renderer) !*c.SDL_GPUFence {
+    /// Request a completion fence on the current, real frame submission.
+    /// Multiple renderer-thread consumers share that one exact fence.
+    pub fn requestSubmissionFence(self: *Renderer) void {
+        std.debug.assert(self.current_cmd != null);
+        self.submission_fence_requested = true;
+    }
+
+    /// Retain the exact fence created by the most recent successful frame
+    /// submission. Call only from post-submission renderer-thread hooks.
+    pub fn retainSubmissionFence(self: *Renderer) !*SubmissionFence {
         if (self.current_cmd != null or self.current_render_pass != null) {
             return error.FrameStillInProgress;
         }
-        const cmd = c.SDL_AcquireGPUCommandBuffer(self.device) orelse {
-            std.debug.print(
-                "SDL_AcquireGPUCommandBuffer failed for post-submit fence: {s}\n",
-                .{c.SDL_GetError()},
-            );
-            return error.PostSubmissionFenceCommandAcquireFailed;
-        };
-        return c.SDL_SubmitGPUCommandBufferAndAcquireFence(cmd) orelse {
-            std.debug.print(
-                "SDL_SubmitGPUCommandBufferAndAcquireFence failed for post-submit fence: {s}\n",
-                .{c.SDL_GetError()},
-            );
-            return error.PostSubmissionFenceAcquireFailed;
-        };
+        return if (self.last_submission_fence) |fence|
+            fence.retain()
+        else
+            error.SubmissionFenceNotRequested;
     }
 
     /// Get the swapchain texture for additional render passes (e.g., ImGui overlay).

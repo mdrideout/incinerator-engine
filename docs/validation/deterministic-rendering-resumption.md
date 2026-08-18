@@ -1,7 +1,9 @@
 # Deterministic Rendering Resumption Audit
 
-**Status:** Engine audit and automated acceptance complete; final S12/S13
-product-owner walkthrough pending
+**Status:** Complete; engine audit, automated evidence, and the S12/S13
+product-owner checkpoint are accepted. DR1 implementation and agent-native
+acceptance are complete and tracked separately; its product-owner visual
+walkthrough remains.
 
 **Recorded:** 2026-08-17
 
@@ -32,7 +34,8 @@ checkpoint, training corpus, experiment run, or learned bundle was copied into
 installed game content.
 
 The pause record is authoritative. Historical neural plans remain evidence and
-are not an active backlog. The next rendering proposal is DR1.
+are not an active backlog. DR1 is the implemented deterministic-rendering
+successor to this audit.
 
 ## Default-runtime audit
 
@@ -138,11 +141,9 @@ Agent-controlled native inspection confirmed:
   `respawned` result.
 
 The automated product journeys cover movement, vehicle, carry/drop, combat,
-NPC death/replacement, room placement, and incident capture. They do not
-replace the product owner's perceptual S12/S13 walkthrough. That final
-checkpoint remains honestly pending, especially route readability, population
-activity readability, vehicle feel, camera feel, and anomaly capture during
-unscripted play.
+NPC death/replacement, room placement, and incident capture. The product owner
+accepted the complementary perceptual S12/S13 checkpoint on 2026-08-17 after
+reviewing the ordinary product.
 
 ## Outcome and next step
 
@@ -150,9 +151,8 @@ The deterministic engine boundary is healthy after the two corrections. The
 neural proof changes no authority or source-of-truth decision and supplies no
 reason to redesign gameplay architecture.
 
-After the final S12/S13 product-owner walkthrough, begin DR1 as the next
-playable slice: one conventional lit product-geometry path, explicit small
-light/material contracts, a more readable authored evaluation world, incident
-evidence for render ownership, and native Metal acceptance. Do not resume
-neural work or introduce a generic render graph, PBR framework, or shadow stack
-without DR1 demonstrating a concrete need.
+The S12/S13 checkpoint cleared DR1 to begin. DR1's completed implementation and
+agent-native evidence are recorded in
+[its validation ledger](dr1-playable-deterministic-visual-fidelity.md). Do not
+resume neural work or introduce a generic render graph, PBR framework, or
+shadow stack without a later product slice demonstrating a concrete need.

@@ -1,11 +1,12 @@
 # Incinerator Engine Architecture Review
 
 **Status:** Living assessment; the Apple Silicon macOS gameplay/session
-foundation now includes S12 semantic navigation and the implemented S13
-authored-population/activity slice. Protocol 15, snapshot 14, replay 16,
+foundation now includes accepted S12 semantic navigation and S13 authored
+population/activity. DR1 deterministic visual fidelity is implemented through
+agent-native acceptance. Protocol 15, snapshot 14, replay 16,
 incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
 automated Metal/product acceptance are current. No open P0/P1 architectural
-finding blocks the final S12/S13 human walkthrough. The neural-rendering proof
+finding blocks the DR1 product-owner visual walkthrough. The neural-rendering proof
 is retained through RF10 as external technical evidence, but no learned model
 is promoted, installed, or selected. The product owner paused that track
 indefinitely on 2026-08-17. Deterministic rendering is the active direction;
@@ -13,7 +14,7 @@ the shared RF0-RF5 sandbox visual catalog is useful conventional-renderer input,
 not an authorization to continue neural work. ADR-025 and ADR-026 remain
 preserved boundary policy for an explicit future restart.
 
-**Last reviewed:** 2026-08-17
+**Last reviewed:** 2026-08-18
 
 **Scope:** Current post-S13 architecture, its demonstrated strengths, its
 remaining structural pressure before another product or service slice, the
@@ -24,7 +25,7 @@ active deterministic-rendering direction, and the retained paused neural proof
 **Multiplayer strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
 **Latest automated acceptance:**
-[`docs/validation/s13-authored-population-and-sandbox-activity.md`](docs/validation/s13-authored-population-and-sandbox-activity.md)
+[`docs/validation/dr1-playable-deterministic-visual-fidelity.md`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
 
 **Accepted cohesion contract:**
 [`docs/design/m5-client-authority-cohesion.md`](docs/design/m5-client-authority-cohesion.md)
@@ -38,8 +39,9 @@ active deterministic-rendering direction, and the retained paused neural proof
 → [`IV0-IV5 interaction validation and observability accepted`](docs/validation/gameplay-interaction-validation-and-observability.md)
 → [`IC5 accepted`](docs/validation/human-test-incident-capture.md)
 → [`open-world spatial and vehicle-dynamics correction complete`](docs/design/open-world-spatial-diagnostics-and-playability.md)
-→ [`S12 automated acceptance complete; human walkthrough pending`](docs/validation/s12-destination-driven-navigation.md)
-→ [`S13 automated acceptance complete; human walkthrough pending`](docs/validation/s13-authored-population-and-sandbox-activity.md)
+→ [`S12 accepted`](docs/validation/s12-destination-driven-navigation.md)
+→ [`S13 accepted`](docs/validation/s13-authored-population-and-sandbox-activity.md)
+→ [`DR1 automated and agent-native acceptance complete; product-owner walkthrough pending`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
 
 **Active rendering direction:**
 [`DR1 playable deterministic visual fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
@@ -301,6 +303,7 @@ claim.
 | A-F059 | The conventional renderer lacked a versioned neural-input ABI, paired-capture path, runtime inference owner, and promoted-model content contract; adding these directly to `renderer.zig` would conflate renderer, experiment, content, and history lifecycles | P1 | NR0 game-specific neural-rendering feasibility slice | Resolved at the foundation level by ADR-025 and accepted NR0-A through NR0-D: engine-owned input/capture/evaluation hosts and external experiment ownership are separate. Promotion and the final GPU-resident runtime remain intentionally blocked on a worthy title model. |
 | A-F060 | A visually rich pretrained video model could redirect the engine toward external checkpoints, fine-tuning, appearance-only conditioning, or pseudo-targets instead of the intended reproducible game-owned renderer | P1 | Post-NR-0003 strategy correction | Resolved by ADR-026 and the title neural renderer north star: learned product components start from declared random initialization on title-owned exact pairs; NR-0003 is comparison evidence only; NR4-A is human-accepted and NR4-B now proves the exact rights-clean direction over motion. |
 | A-F061 | Ordinary macOS graphical binaries still compile/link the dormant Core ML adapter and neural-input shaders even though no learned bundle is installed or selected | P2 | Before distribution, secondary-platform work, or a measured default-build/runtime problem | Open but non-blocking for the current macOS developer product: runtime activation is explicit through neural-only environment inputs and returns before allocating neural hosts by default. Do not add a speculative compatibility layer while the track is paused; first measure binary/build/platform cost, then either keep the direct macOS linkage or add one explicit build exclusion. |
+| A-F062 | SDL 3.4.14's Metal backend inverted the documented `SDL_QueryGPUFence` result while screenshot, semantic-ID, and physics-debug consumers also fenced a later empty submission instead of the frame containing their work | P0 | DR1-A native evidence | Resolved at the exact platform/submission boundary: one macOS cohort helper inverts only the pinned 3.4.14 result and names upstream removal commit `b340ddcd7b44511f7b49005ba4a91a3c9907f77e`; the renderer acquires and reference-shares the real frame-submission fence. Foreground native runs restore district residency plus 362/362 trail and 31/31 anchor completions with zero misses/failures, and the final full journey repeats zero failures. |
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,

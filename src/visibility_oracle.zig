@@ -305,7 +305,7 @@ fn validateDraws(draws: []const Draw) !void {
         if (draw.object_id == 0 or draw.object_id > 0x00ff_ffff) {
             return error.InvalidVisibilityObjectId;
         }
-        if (draw.mesh.vertex_format != .pos_color) {
+        if (draw.mesh.vertex_format != .pos_normal_uv) {
             return error.UnsupportedVisibilityVertexFormat;
         }
         for (draws[index + 1 ..]) |other| {
@@ -440,7 +440,7 @@ pub fn createPipeline(
 
     const vertex_buffer = c.SDL_GPUVertexBufferDescription{
         .slot = 0,
-        .pitch = @sizeOf(mesh_module.Vertex),
+        .pitch = @sizeOf(mesh_module.VertexPNU),
         .input_rate = c.SDL_GPU_VERTEXINPUTRATE_VERTEX,
         .instance_step_rate = 0,
     };
@@ -455,7 +455,9 @@ pub fn createPipeline(
             .location = 1,
             .buffer_slot = 0,
             .format = c.SDL_GPU_VERTEXELEMENTFORMAT_FLOAT3,
-            .offset = @offsetOf(mesh_module.Vertex, "color"),
+            // triangle.vert's unused color output gives this validation-only
+            // pass a compact position/normal-compatible vertex contract.
+            .offset = @offsetOf(mesh_module.VertexPNU, "normal"),
         },
     };
     const targets = [_]c.SDL_GPUColorTargetDescription{

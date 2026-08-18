@@ -1126,7 +1126,7 @@ pub const SdlBackend = struct {
     }
 
     pub fn query(self: *SdlBackend, submission: *Submission) bool {
-        return c.SDL_QueryGPUFence(self.device, submission.fence);
+        return sdl.gpuFenceSignaled(self.device, submission.fence);
     }
 
     pub fn releaseSubmission(self: *SdlBackend, submission: *Submission) void {

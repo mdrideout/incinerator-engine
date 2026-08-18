@@ -41,7 +41,7 @@ const Schedule = struct {
 
 const Slot = struct {
     status: Status = .idle,
-    fence: ?*c.SDL_GPUFence = null,
+    fence: ?*renderer.SubmissionFence = null,
     schedule_index: u8 = 0,
     capture_sequence: u64 = 0,
     captured_ns: u64 = 0,
@@ -102,7 +102,7 @@ pub const Owner = struct {
     }
 
     pub fn deinit(self: *Owner) void {
-        if (self.slot.fence) |fence| c.SDL_ReleaseGPUFence(self.device, fence);
+        if (self.slot.fence) |fence| fence.release();
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline);
         c.SDL_ReleaseGPUTransferBuffer(self.device, self.download);
         c.SDL_ReleaseGPUTexture(self.device, self.depth_target);
@@ -226,7 +226,7 @@ pub const Owner = struct {
         capture: *incident_capture.Capture,
     ) void {
         if (self.slot.status != .encoded) return;
-        self.slot.fence = gpu.acquirePostSubmissionFence() catch {
+        self.slot.fence = gpu.retainSubmissionFence() catch {
             const schedule = &self.schedules[self.slot.schedule_index];
             schedule.complete = true;
             capture.noteVisualFailure(schedule.anomaly_id);
@@ -234,6 +234,10 @@ pub const Owner = struct {
             return;
         };
         self.slot.status = .submitted;
+    }
+
+    pub fn needsSubmissionFence(self: *const Owner) bool {
+        return self.slot.status == .encoded;
     }
 
     pub fn drain(self: *Owner, capture: *incident_capture.Capture) void {
@@ -250,8 +254,8 @@ pub const Owner = struct {
     fn poll(self: *Owner, capture: *incident_capture.Capture, now_ns: u64) void {
         if (self.slot.status != .submitted) return;
         const fence = self.slot.fence orelse return;
-        if (!c.SDL_QueryGPUFence(self.device, fence)) return;
-        c.SDL_ReleaseGPUFence(self.device, fence);
+        if (!fence.signaled()) return;
+        fence.release();
         self.slot.fence = null;
         const schedule = &self.schedules[self.slot.schedule_index];
         defer {

@@ -55,20 +55,20 @@ pub const SandboxVisualResources = struct {
     ) !SandboxVisualResources {
         var crate_texture = try texture.createDebugCheckerboard(device);
         errdefer crate_texture.deinit();
-        var crate_mesh = try primitives.createTexturedCube(device);
+        var crate_mesh = try primitives.createLitCube(device);
         errdefer crate_mesh.deinit();
         crate_mesh.diffuse_texture = crate_texture.borrow();
-        var character_mesh = try primitives.createCharacterCapsule(
+        var character_mesh = try primitives.createLitCharacterCapsule(
             device,
             character_radius,
             character_half_height,
         );
         errdefer character_mesh.deinit();
-        var vehicle_chassis_mesh = try primitives.createCube(device);
+        var vehicle_chassis_mesh = try primitives.createLitCube(device);
         errdefer vehicle_chassis_mesh.deinit();
-        var vehicle_wheel_mesh = try primitives.createWheelCylinder(device);
+        var vehicle_wheel_mesh = try primitives.createLitWheelCylinder(device);
         errdefer vehicle_wheel_mesh.deinit();
-        var visual_part_mesh = try primitives.createSolidCube(device);
+        var visual_part_mesh = try primitives.createLitCube(device);
         errdefer visual_part_mesh.deinit();
         return .{
             .crate_mesh = crate_mesh,

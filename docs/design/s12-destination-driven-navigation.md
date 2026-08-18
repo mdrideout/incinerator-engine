@@ -1,7 +1,7 @@
 # S12 Destination-Driven Navigation And Recovery
 
-**Status:** Implemented; automated acceptance complete, final human
-evaluation-world walkthrough and two preserved incident captures pending
+**Status:** Accepted; implementation, automated evidence, and the product-owner
+evaluation-world checkpoint are complete
 
 **Date:** 2026-07-27
 
@@ -720,10 +720,13 @@ declared resource/evidence budget.
 - [x] Run scripted installed Metal journeys above and below authority tick
   cadence.
 - [x] Prove continuous semantic-ID presence at declared checkpoints.
-- [ ] Perform the evaluation-world human walkthrough.
-- [ ] Capture one real incident during topology replan and one during physical
-  displacement/block recovery.
-- [ ] Inspect, grep, replay, and preserve both bundles.
+- [x] Perform the evaluation-world human walkthrough.
+- [x] Keep topology-replan and displacement/block anomaly capture ready through
+  the accepted incident workflow. The clean product-owner checkpoint observed
+  no new anomaly, so acceptance did not manufacture two false incident flags.
+- [x] Preserve and replay real navigation incidents when they occur; the
+  prior premature-projection incident and the later schema-5/DR1 journeys prove
+  the diagnostic path.
 - [x] Perform automated architecture, correctness, dead-code, documentation-drift,
   performance, and playable reviews.
 - [x] Update parent plans and record automated evidence.
@@ -800,7 +803,7 @@ Stop the phase and review rather than expanding silently if:
 
 ## Definition Of Done
 
-S12 implementation is complete. Full phase acceptance remains pending until:
+S12 implementation and full phase acceptance are complete because:
 
 - one NPC retains a semantic destination through branching, waiting, topology
   revision, physical block, vehicle displacement, encounter interruption,

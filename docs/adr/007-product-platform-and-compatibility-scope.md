@@ -63,6 +63,13 @@ The foundational versions form one compatibility cohort:
 
 These dependencies are upgraded and validated as a cohort, not independently under an “or later” promise. The physics adapter fixes the ABI policy: 32-bit object layers, single-precision world coordinates, exceptions disabled, and compile-time JoltC ABI assertions enabled. Flecs C and Zig bindings receive the same explicit debug, allocator, precision, addon, and layout options, with the imported module as the single owner of `flecs.c`. The engine compiles zgui's SDL3 GPU backend against the same SDL 3.4.14 headers as the linked runtime instead of zgui's transitive SDL snapshot.
 
+DR1 native evidence found that SDL 3.4.14's Metal backend returns the inverse
+of the documented `SDL_QueryGPUFence` result. The engine centralizes this exact
+cohort correction in the macOS SDL adapter and names upstream fix commit
+`b340ddcd7b44511f7b49005ba4a91a3c9907f77e`. A future SDL cohort containing
+that fix must delete the inversion during its coordinated validation; it must
+not retain the workaround as a compatibility fallback.
+
 ### Platform priority and graphics backends
 
 | Status | Platform | Architecture | Expected GPU path | Contract |

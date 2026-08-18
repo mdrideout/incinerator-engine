@@ -33,6 +33,7 @@ const sandbox_authoring = @import("sandbox_authoring");
 const sandbox_interaction = @import("sandbox_interaction");
 const population = @import("population_contract");
 const incident = @import("../engine/incident.zig");
+const render_contract = @import("../render_contract.zig");
 
 pub const DeveloperSnapshot = developer_diagnostics.Snapshot(sandbox_host.Diagnostics);
 pub const ProfileSpanView = developer_profile.SpanRing(
@@ -461,6 +462,21 @@ pub const PopulationInput = struct {
     visualization_requests: *developer_visualization.RequestBuffer,
 };
 
+pub const RenderView = struct {
+    mode: []const u8 = render_contract.mode_name,
+    visual_schema: u16 = render_contract.visual_schema_version,
+    scene_light: render_contract.SceneLight,
+    frame_stats: render_contract.FrameStats,
+    last_semantic: []const u8 = "none",
+    last_part: []const u8 = "none",
+    last_ordinal: u16 = 0,
+    last_surface: []const u8 = "none",
+};
+
+pub const RenderInput = struct {
+    view: *const RenderView,
+};
+
 /// One-frame observations and fixed request sinks, grouped by concern. This is
 /// the composition/editor boundary; tools never receive App or Simulation.
 pub const FrameInput = struct {
@@ -473,6 +489,7 @@ pub const FrameInput = struct {
     interaction: InteractionInput,
     navigation: NavigationInput,
     population: PopulationInput,
+    render: RenderInput,
     gameplay: GameplayInput,
     incident: IncidentInput,
     neural: NeuralInput,

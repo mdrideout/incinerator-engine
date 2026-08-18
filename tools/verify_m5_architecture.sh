@@ -590,6 +590,8 @@ client_sources=(
   "$root/src/engine/contracts/replay.zig"
   "$root/src/sdl.zig"
   "$root/src/renderer.zig"
+  "$root/src/render_contract.zig"
+  "$root/src/sandbox_visual_catalog.zig"
   "$root/src/primitives.zig"
   "$root/src/mesh.zig"
   "$root/src/camera.zig"
@@ -611,7 +613,7 @@ client_imports="$({
 })"
 for imported in $client_imports; do
   case "$imported" in
-    ../identity.zig|../transform.zig|contracts/diagnostics.zig|contracts/physics.zig|contracts/physics_debug.zig|contracts/neural_rendering.zig|contracts/rendering.zig|contracts/replay.zig|identity.zig|transform.zig|std|zmath|district_contract|navigation_contract|engine_contracts|incinerator_engine|network_cohort_options|sandbox_district_recipe|sandbox_gameplay_scenarios|shader_assets|session_budgets|session_protocol|combat_presentation|session_client|session_room|room_coordinator|room_ticket|client_scene|replicated_world|session_transport_policy|reconnect_policy|client_clock|gns_direct|mp2_presentation|session_identity|session_prediction|vehicle_prediction|sdl.zig|renderer.zig|primitives.zig|mesh.zig|camera.zig|texture.zig) ;;
+    ../identity.zig|../transform.zig|contracts/diagnostics.zig|contracts/physics.zig|contracts/physics_debug.zig|contracts/neural_rendering.zig|contracts/rendering.zig|contracts/replay.zig|identity.zig|transform.zig|std|zmath|district_contract|navigation_contract|engine_contracts|incinerator_engine|network_cohort_options|sandbox_district_recipe|sandbox_gameplay_scenarios|shader_assets|session_budgets|session_protocol|combat_presentation|session_client|session_room|room_coordinator|room_ticket|client_scene|replicated_world|session_transport_policy|reconnect_policy|client_clock|gns_direct|mp2_presentation|session_identity|session_prediction|vehicle_prediction|sdl.zig|renderer.zig|render_contract.zig|sandbox_visual_catalog.zig|primitives.zig|mesh.zig|camera.zig|texture.zig) ;;
     *) fail "unclassified dependency entered the graphical client closure: $imported" ;;
   esac
 done

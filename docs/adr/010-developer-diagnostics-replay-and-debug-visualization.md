@@ -155,9 +155,10 @@ into fixed concurrent scratch storage; it cannot allocate or touch ECS,
 renderer, editor, or contact settings.
 
 The Metal host owns a fixed slot ring for extracted batches: buffers are
-created once, upload uses `cycle=false`, and copy/post-submit fences are polled
-without waiting. The real frame uses ordinary submission; each debug draw then
-adds one empty same-queue command whose fence guards slot reuse. A busy ring
+created once, upload uses `cycle=false`, and exact copy/frame-submission fences
+are polled without waiting. The real frame acquires one fence from the command
+buffer that contains the debug draw; the slot retains that shared completion
+token until reuse is safe. A busy ring
 visibly drops new evidence while retaining the
 latest completed exact generation; it never creates hidden backing storage.
 Repeated enable/disable starts an explicit retry epoch without reinstalling

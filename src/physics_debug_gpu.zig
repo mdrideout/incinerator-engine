@@ -578,7 +578,7 @@ const SlotResources = struct {
     line_transfer: ?*c.SDL_GPUTransferBuffer = null,
     triangle_transfer: ?*c.SDL_GPUTransferBuffer = null,
     copy_fence: ?*c.SDL_GPUFence = null,
-    frame_fence: ?*c.SDL_GPUFence = null,
+    frame_fence: ?*renderer_module.SubmissionFence = null,
 
     fn releaseResources(self: *SlotResources, device: *c.SDL_GPUDevice) void {
         if (self.triangle_transfer) |transfer| {
@@ -677,7 +677,7 @@ pub const Overlay = struct {
                 slot.copy_fence = null;
             }
             if (slot.frame_fence) |fence| {
-                self.releaseOwnedFence(fence);
+                self.releaseOwnedFrameFence(fence);
                 slot.frame_fence = null;
             }
             slot.releaseResources(self.device);
@@ -709,7 +709,7 @@ pub const Overlay = struct {
             const slot_index: u8 = @intCast(index);
             if (slot.copy_fence) |fence| {
                 saturatingIncrement(&self.metrics.fence_queries);
-                if (c.SDL_QueryGPUFence(self.device, fence)) {
+                if (sdl.gpuFenceSignaled(self.device, fence)) {
                     const completed = self.ring.slots[index];
                     self.releaseOwnedFence(fence);
                     slot.copy_fence = null;
@@ -740,8 +740,8 @@ pub const Overlay = struct {
             }
             if (slot.frame_fence) |fence| {
                 saturatingIncrement(&self.metrics.fence_queries);
-                if (c.SDL_QueryGPUFence(self.device, fence)) {
-                    self.releaseOwnedFence(fence);
+                if (fence.signaled()) {
+                    self.releaseOwnedFrameFence(fence);
                     slot.frame_fence = null;
                     self.ring.frameCompleted(slot_index);
                     result.completed_frames += 1;
@@ -975,21 +975,21 @@ pub const Overlay = struct {
     /// renderer frame that read this slot.
     pub fn noteFrameSubmitted(
         self: *Overlay,
-        fence: *c.SDL_GPUFence,
+        fence: *renderer_module.SubmissionFence,
     ) FrameFenceResult {
         if (self.lifecycle.mode == .deinitialized) {
-            c.SDL_ReleaseGPUFence(self.device, fence);
+            fence.release();
             saturatingIncrement(&self.metrics.unexpected_frame_fences_released);
             return .deinitialized_released;
         }
         const slot_index = self.ring.drawn_slot orelse {
-            c.SDL_ReleaseGPUFence(self.device, fence);
+            fence.release();
             saturatingIncrement(&self.metrics.unexpected_frame_fences_released);
             return .not_needed_released;
         };
         const slot = &self.slots[slot_index];
         if (slot.frame_fence) |older| {
-            self.releaseOwnedFence(older);
+            self.releaseOwnedFrameFence(older);
             slot.frame_fence = null;
             saturatingIncrement(&self.metrics.frame_fences_superseded);
         }
@@ -1008,7 +1008,7 @@ pub const Overlay = struct {
         const slot_index = self.ring.drawn_slot orelse return;
         const slot = &self.slots[slot_index];
         if (slot.frame_fence) |older| {
-            self.releaseOwnedFence(older);
+            self.releaseOwnedFrameFence(older);
             slot.frame_fence = null;
         }
         self.retireSlot(slot_index);
@@ -1136,6 +1136,16 @@ pub const Overlay = struct {
 
     fn releaseOwnedFence(self: *Overlay, fence: *c.SDL_GPUFence) void {
         c.SDL_ReleaseGPUFence(self.device, fence);
+        saturatingIncrement(&self.metrics.fence_releases);
+        std.debug.assert(self.metrics.resources.live_owned_fences > 0);
+        self.metrics.resources.live_owned_fences -= 1;
+    }
+
+    fn releaseOwnedFrameFence(
+        self: *Overlay,
+        fence: *renderer_module.SubmissionFence,
+    ) void {
+        fence.release();
         saturatingIncrement(&self.metrics.fence_releases);
         std.debug.assert(self.metrics.resources.live_owned_fences > 0);
         self.metrics.resources.live_owned_fences -= 1;

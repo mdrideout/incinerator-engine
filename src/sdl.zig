@@ -12,3 +12,12 @@
 pub const c = @cImport({
     @cInclude("SDL3/SDL.h");
 });
+
+/// SDL 3.4.14's Metal backend accidentally implements SDL_QueryGPUFence as
+/// "is busy", the inverse of the documented public API. The correction is
+/// centralized here so every engine fence owner observes the same contract.
+/// Remove the macOS inversion when the exact SDL cohort advances to a release
+/// containing upstream commit b340ddcd7b44511f7b49005ba4a91a3c9907f77e.
+pub fn gpuFenceSignaled(device: *c.SDL_GPUDevice, fence: *c.SDL_GPUFence) bool {
+    return !c.SDL_QueryGPUFence(device, fence);
+}

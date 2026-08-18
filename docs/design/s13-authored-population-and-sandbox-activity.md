@@ -1,7 +1,7 @@
 # S13 Authored Population and Sandbox Activity
 
-**Status:** Implemented; S13-A through S13-H automated acceptance complete,
-final human walkthrough pending
+**Status:** Accepted; S13-A through S13-H implementation, automated evidence,
+and the ordinary product-owner walkthrough are complete
 
 **Date:** 2026-07-28
 
@@ -12,9 +12,9 @@ final human walkthrough pending
 **Evaluation world:**
 [S13 Population Evaluation World](s13-population-evaluation-world.md)
 
-**Entry checkpoint:** Finish and review the remaining S12 human Navigation Lab
-walkthrough and its two preserved incidents. S13 planning may proceed now, but
-implementation does not rewrite or silently waive that checkpoint.
+**Entry checkpoint:** The S12 human Navigation Lab checkpoint is accepted. Its
+clean final walkthrough did not manufacture anomaly flags; real incidents
+continue through the accepted schema-5 evidence workflow.
 
 ## Goal
 
@@ -199,9 +199,8 @@ P0/P1 finding.
 
 ### S13-A — Entry characterization and accepted contract
 
-- [ ] Complete/review the S12 human checkpoint and preserve its two incidents.
-  The developer explicitly authorized S13 to proceed while this human-only
-  checkpoint remains visible and pending.
+- [x] Complete/review the S12 human checkpoint. Preserve real incident evidence
+  rather than manufacturing two anomaly flags during a clean walkthrough.
 - [x] Measure current ordinary-product/encounter, six-anchor physical, and
   64 synthetic baselines before changing population. A credible 16-member
   physical measurement moves to S13-B because the pre-S13 world does not have
@@ -342,7 +341,7 @@ fault profile with exact evidence.
 
 - [x] Run the scripted product journey from the evaluation plan in the ordinary
   `zig build run -Deditor=true` product.
-- [ ] Complete the final human walkthrough in that ordinary product.
+- [x] Complete the final human walkthrough in that ordinary product.
 - [x] Run installed Metal at low/high render cadence while authority remains
   fixed at 60 Hz.
 - [x] Measure ordinary 12-member, physical 16-member, and synthetic 64-NPC

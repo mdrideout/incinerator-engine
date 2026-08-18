@@ -1,7 +1,7 @@
-# Incident bundle schema 4
+# Incident bundle schema 5
 
 All paths are relative to the run folder. Every NDJSON line is one complete
-schema-4 JSON object. The inspector rejects earlier schemas; there is no
+schema-5 JSON object. The inspector rejects earlier schemas; there is no
 fallback.
 
 ## Manifest and health
@@ -26,7 +26,7 @@ the visual lane is full, new images are rejected and counted while typed
 streams, markers, notes, replay, and handoff persistence retain a 128 MiB
 reserve. `handoff_persisted=false` means clipboard text may still be available
 in the running process but `LLM_HANDOFF.md` is not yet durable.
-These fields are required in schema 4; a partial field set is invalid.
+These fields are required in schema 5; a partial field set is invalid.
 
 `hardening_profile=none` is an ordinary run. The five developer-only IC5-G
 profiles deliberately finalize the run as `partial`:
@@ -48,8 +48,9 @@ manufacture ENOSPC.
 
 Read `evidence_capabilities` before assigning a boundary. Current bundles
 declare `full_boundary` separately for characters, NPCs, vehicles, and
-carryables, plus semantic vehicle-part, atomic note/handoff, and exact
-navigation-lineage support. A
+carryables, plus semantic vehicle-part, atomic note/handoff, exact
+navigation-lineage, authored-population, and deterministic-render-state
+support. A
 missing matrix means the bundle predates explicit coverage; report that limit.
 
 ## Anomaly lifecycle and marker
@@ -108,6 +109,14 @@ records. Interpret `reason` through the current navigation transition enum and
 correlate the record with the same NPC stable identity and authority tick.
 Fast route invalidation/replan cycles belong here, not in sampled state.
 
+Authored-population gameplay traces use `action="population"` and are emitted
+only on lifecycle or activity transitions. Their `population` object records
+stable member ID, current actor generation, role and combat disposition,
+program/cursor, activity kind/sequence, previous/current activity state,
+site/slot, deadline, and spawn retry reason. The actor may be null while a
+member is vacant or replacement-pending. Correlate replacement generations by
+member ID rather than assuming one persistent actor exists forever.
+
 `state`: camera and entity samples. Presence values are `present`, `absent`, or
 `unavailable`; never treat unavailable authority inspection as absent. Removed
 entities remain five-second tombstones. Records include stable replicated and
@@ -121,13 +130,17 @@ owner districts, observer position, distance squared, and encounter fact.
 `full_world` is the deliberate current sandbox policy: every NPC in the
 bounded evaluation cohort is published regardless of distance. The bounded
 reasons remain available for a future explicitly selected scale policy.
-Schema-4 NPC records also retain destination ID/name, navigation status and
+Schema-5 NPC records also retain destination ID/name, navigation status and
 reason, last plan trigger/result, route/topology revision, route digest,
 cost/length/active prefix/index, replan count, optional arrival tick, temporary
 physical-exclusion count, and retry tick. `waiting_for_content` means durable
 intent is waiting on residency; `blocked` is a recoverable gate or confirmed
 physical exclusion; `unreachable` is reserved for complete structural
 disconnection. `arrived` is a semantic status, not disappearance permission.
+Authored NPC records additionally retain `population_member`, role, combat
+disposition, activity kind, and activity state. `unavailable` identifies a
+synthetic/non-product NPC or a boundary without population projection; it is
+not equivalent to a vacant authored member.
 Vehicles and currently presentable carryables use a bounded cohort with reasons
 `bounded_world`, `controlled`, or `held`; a carryable intentionally omitted
 with its owning district is `district_dormant`. Their records also include the
@@ -142,6 +155,13 @@ facts but no arbitrary text input.
 `metrics`: frame and recorder health plus screenshot cadence, memory, fence,
 and one-second navigation aggregates for following/waiting/blocked/arrived/
 structurally-unreachable NPCs, replans, exclusions, and route maxima.
+
+`render_state` records in the state stream identify the conventional render
+mode and visual schema, exact scene-light values, lit/unlit product and debug
+draw counts, normal-bearing versus color-geometry counts, and the last stable
+semantic class/part/ordinal/surface selected by presentation. These are sampled
+contract facts, not authority state and not a substitute for the indexed
+product/human/semantic images.
 
 The semantic map has one object ID per draw. A vehicle chassis and its four
 wheels deliberately have distinct object IDs mapped to the same stable vehicle

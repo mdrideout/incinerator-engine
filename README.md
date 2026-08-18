@@ -64,7 +64,8 @@ contact, carry/drop continuity, and schema-4 incident workflow. The default
 product uses a 1600×900 window, wider follow cameras, separated sandbox spawns,
 district/navigation intent overlays, and the measured vehicle profile recorded
 in [`docs/validation/vehicle-dynamics.md`](docs/validation/vehicle-dynamics.md).
-S12 destination-driven NPC navigation and replanning is implemented. S13 now
+S12 destination-driven NPC navigation/replanning and S13 authored population
+are accepted after automated native evidence and the product-owner checkpoint. S13
 builds authored sandbox activity on that boundary: twelve stable population
 members own explicit roles, combat disposition, deterministic cyclic activity,
 exclusive slots, safe generational replacement, and readable Population Lab
@@ -80,9 +81,7 @@ then
 [`S13 authored-population plan`](docs/design/s13-authored-population-and-sandbox-activity.md),
 [`S13 population evaluation world`](docs/design/s13-population-evaluation-world.md),
 [`S13 validation ledger`](docs/validation/s13-authored-population-and-sandbox-activity.md),
-and [`S13 performance baseline`](docs/performance/s13-baseline.md). S13
-implementation and automated acceptance are complete; its ordinary-product
-human walkthrough remains before full phase acceptance.
+and [`S13 performance baseline`](docs/performance/s13-baseline.md).
 The repository also retains a completed neural-rendering proof-of-concept
 lineage through RF10. RF10 proved a direct native
 `256×144 → 1280×720` Core ML/Metal trial, but it remains external, unpromoted,
@@ -103,13 +102,18 @@ is complete and organizes the existing ImGui tools into a deterministic docked
 workspace with descriptive panel metadata, LLM-addressable startup layouts,
 and incident-aligned time identity; see its
 [validation record](docs/validation/ed1-structured-developer-workspace.md).
-The next implementation phase is the
-[DR1 playable deterministic visual-fidelity slice](docs/design/dr1-playable-deterministic-visual-fidelity.md).
+The
+[DR1 playable deterministic visual-fidelity slice](docs/design/dr1-playable-deterministic-visual-fidelity.md)
+is implemented through agent-native acceptance. It provides one explicit lit
+normal-bearing product path, bounded renderer-neutral light/material values, a
+more readable evaluation-world composition, Render Lab, schema-5 render-state
+evidence, and a repaired full native gameplay/incident journey. See the
+[DR1 validation record](docs/validation/dr1-playable-deterministic-visual-fidelity.md).
+The product-owner DR1 visual walkthrough remains before full phase acceptance.
 The combined-tree
 [deterministic-rendering resumption audit](docs/validation/deterministic-rendering-resumption.md)
 passes and records the correction that restored the ordinary product from an
-RF10-fixed centered viewport to the full drawable. The final S12/S13
-product-owner walkthrough remains before DR1 begins.
+RF10-fixed centered viewport to the full drawable.
 Broader Steam/public-service infrastructure remains deferred.
 
 ## Toolchain Cohort
@@ -126,6 +130,13 @@ These versions are one tested compatibility cohort and should be upgraded togeth
 | GameNetworkingSockets | `1.5.1` exact commit | Open-source direct-IP transport behind an engine-owned C ABI shim; Steamworks remains optional and absent |
 
 The complete dependency identities live in `build.zig.zon` and [`third_party/joltc-zig/README.md`](third_party/joltc-zig/README.md). Dependency features that affect linkage, ABI, or compiled capabilities are selected explicitly; they are not inherited silently from wrapper defaults. The shared simulation build graph generates the replay cohort from those pins and physics limits, and an automatic verifier rejects manifest drift. Flecs is compiled as private ECS storage with only the OS API implementation addon, excluding its HTTP, REST, script, metrics, module, and pipeline surfaces. Jolt's cross-platform deterministic build mode is deliberately disabled. The future network model is an authoritative server, not client lockstep; enabling that mode would need a measured requirement and performance evaluation.
+
+The pinned SDL 3.4.14 Metal backend has a known inverted
+`SDL_QueryGPUFence` implementation, fixed upstream after that release. The
+macOS adapter centralizes the cohort-specific inversion and names the exact
+upstream removal commit; renderer consumers share the fence from the real
+download-bearing frame submission. This workaround must be removed, not
+carried forward, when SDL advances to a release containing that fix.
 
 ## Platform Priority
 
@@ -757,6 +768,7 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`ED1 Structured Developer Workspace`](docs/design/ed1-structured-developer-workspace.md)
 - [`ED1 Structured Developer Workspace Validation`](docs/validation/ed1-structured-developer-workspace.md)
 - [`DR1 Playable Deterministic Visual Fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
+- [`DR1 Playable Deterministic Visual Fidelity Validation`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 

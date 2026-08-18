@@ -1,7 +1,7 @@
 # DR1 Playable Deterministic Visual Fidelity
 
-**Status:** Proposed; deterministic-resumption audit complete, final S12/S13
-ordinary-product walkthrough pending
+**Status:** DR1-A through DR1-G implemented with automated and agent-native
+acceptance; product-owner visual walkthrough pending
 
 **Active renderer:** Conventional SDL GPU / Metal
 
@@ -15,9 +15,12 @@ ordinary-product walkthrough pending
 **Baseline evidence:**
 [Deterministic Rendering Resumption Audit](../validation/deterministic-rendering-resumption.md)
 
+**Implementation evidence:**
+[DR1 Validation Record](../validation/dr1-playable-deterministic-visual-fidelity.md)
+
 ## Decision
 
-DR1 is the next rendering slice. It improves the ordinary deterministic product
+DR1 is the implemented deterministic-rendering slice. It improves the ordinary deterministic product
 that people actually play and test. It does not promote, install, train, resume,
 or redesign a learned renderer.
 
@@ -124,6 +127,18 @@ layout merely to carry color. Keep debug lines, fills, grids, and gizmos on the
 unlit vertex-color path so diagnostic colors remain exact and readable.
 
 ## Phase sequence
+
+Implementation state:
+
+| Phase | Result |
+|---|---|
+| DR1-A | Complete |
+| DR1-B | Complete |
+| DR1-C | Complete |
+| DR1-D | Complete |
+| DR1-E | Complete; the grounding gate omitted a shadow pass |
+| DR1-F | Complete |
+| DR1-G | Automated and agent-native acceptance complete; product-owner walkthrough pending |
 
 ### DR1-A — Conventional baseline and independence gate
 
@@ -292,7 +307,7 @@ tests.
 
 ## Documentation and evidence
 
-Implementation creates
+Implementation created
 `docs/validation/dr1-playable-deterministic-visual-fidelity.md` and records:
 
 - the clean-environment baseline command and renderer selection;

@@ -195,9 +195,9 @@ fences without waiting in the live path, draws the latest completed exact genera
 and reports backpressure instead of growing storage. Headless tests consume the
 same extracted batch. CPU storage and rigid-contact capture are optional
 evidence capabilities whose loss cannot prevent authority construction. The
-line/fill graphics pipelines are an optional paired renderer capability; one
-empty same-queue command after ordinary frame submission fences each drawn
-slot. A
+line/fill graphics pipelines are an optional paired renderer capability; each
+drawn slot retains the exact fence from the frame submission that contains its
+draw. A
 separate bounded profile ring records fixed named phase spans and
 draw/upload/resource counts; Instruments and Metal capture remain the deep
 profiling workflow.

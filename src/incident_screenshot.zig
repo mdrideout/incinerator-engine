@@ -42,7 +42,7 @@ const AnchorTag = struct {
 
 const Slot = struct {
     transfer: ?*c.SDL_GPUTransferBuffer = null,
-    fence: ?*c.SDL_GPUFence = null,
+    fence: ?*renderer.SubmissionFence = null,
     status: Status = .free,
     capture_sequence: u64 = 0,
     captured_ns: u64 = 0,
@@ -343,6 +343,12 @@ pub const Owner = struct {
         }
     }
 
+    pub fn needsSubmissionFence(self: *const Owner) bool {
+        return self.pending_trail != null or
+            self.pending_anchor != null or
+            self.pending_event != null;
+    }
+
     fn assignFence(self: *Owner, gpu: *renderer.Renderer, slot: *Slot) void {
         if (self.hardening_profile == .screenshot_fence) {
             slot.status = .free;
@@ -352,7 +358,7 @@ pub const Owner = struct {
             self.stats.missed +|= 1;
             return;
         }
-        const fence = gpu.acquirePostSubmissionFence() catch {
+        const fence = gpu.retainSubmissionFence() catch {
             slot.status = .free;
             slot.anchor_tag = null;
             slot.pin_mask = 0;
@@ -382,7 +388,7 @@ pub const Owner = struct {
         const swapchain = gpu.getSwapchainTexture() orelse return false;
         const extent = gpu.getSwapchainExtent() orelse return false;
         if (slot.fence) |fence| {
-            c.SDL_ReleaseGPUFence(self.device, fence);
+            fence.release();
             slot.fence = null;
         }
         const source_texture = self.anchor_texture orelse return false;
@@ -494,8 +500,8 @@ pub const Owner = struct {
         for (slots) |*slot| {
             if (slot.status != .submitted) continue;
             const fence = slot.fence orelse continue;
-            if (!c.SDL_QueryGPUFence(self.device, fence)) continue;
-            c.SDL_ReleaseGPUFence(self.device, fence);
+            if (!fence.signaled()) continue;
+            fence.release();
             slot.fence = null;
             slot.status = .complete;
             slot.completed_ns = now_ns;
@@ -836,7 +842,7 @@ fn createDownloadBuffer(device: *c.SDL_GPUDevice, bytes: u32) ?*c.SDL_GPUTransfe
 }
 
 fn releaseSlot(device: *c.SDL_GPUDevice, slot: *Slot) void {
-    if (slot.fence) |fence| c.SDL_ReleaseGPUFence(device, fence);
+    if (slot.fence) |fence| fence.release();
     if (slot.transfer) |transfer| c.SDL_ReleaseGPUTransferBuffer(device, transfer);
     slot.* = .{};
 }

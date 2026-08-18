@@ -35,6 +35,16 @@
   distinguish inactive-content waiting from gate/physical blockage, and prove
   that external displacement changes the anchor/route without rewriting the
   authoritative pose.
+- For authored population, follow the stable member ID across actor generation
+  changes. Require transition-only evidence for slot claim, travel, dwell,
+  interruption/resume, vacancy, replacement readiness, and actor rebind;
+  sampled position or color is not proof of population intent. Verify exclusive
+  slot ownership and distinguish placement retry reasons from navigation
+  failure.
+- For deterministic rendering, compare `render_mode`, `visual_schema`, scene
+  light, draw-path counts, and stable semantic part/material identity against
+  actual visual-index timing. A valid render record does not overrule a corrupt
+  or unreadable product image.
 - For input shortcuts, require received -> matched -> queued -> applied.
 - Inspect the continuous product trail and all eight human anchors using actual
   timing. Compare semantic-ID, product-only, and human-visible evidence.

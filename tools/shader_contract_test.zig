@@ -74,7 +74,7 @@ test "SDL GPU shader interfaces and resources match the renderer contract" {
             .input_locations = &.{ 0, 1 },
             .output_locations = &.{0},
             .textures = &.{.{ .set = 2, .binding = 0 }},
-            .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 32 }},
+            .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 96 }},
         },
         .{
             .source = "visibility.frag",

@@ -40,6 +40,7 @@ const mesh = @import("mesh.zig");
 const texture = @import("texture.zig");
 const primitives = @import("primitives.zig");
 const sandbox_visual_resources = @import("sandbox_visual_resources.zig");
+const sandbox_visual_catalog = @import("sandbox_visual_catalog.zig");
 const sandbox_visual_composition = @import("sandbox_visual_composition.zig");
 const district_contract = @import("district_contract");
 const district_feature_contract = @import("district_feature_contract");
@@ -1809,6 +1810,8 @@ const IncidentJourneyStage = enum {
     enter_vehicle,
     drive,
     exit_vehicle,
+    reenter_vehicle,
+    second_exit_vehicle,
     travel_east,
     return_west,
     await_player_death,
@@ -1829,6 +1832,7 @@ const IncidentJourneyProgress = struct {
     resume_after_respawn: ?IncidentJourneyStage = null,
     initial_npc: ?IncidentJourneyNpc = null,
     entered_vehicle: bool = false,
+    reentered_vehicle: bool = false,
     saw_east: bool = false,
     saw_returned_west: bool = false,
     saw_player_dead: bool = false,
@@ -1875,6 +1879,14 @@ const VisibilityOracleState = if (build_options.validation_mode)
 else
     void;
 
+const RenderFrameAudit = struct {
+    valid: bool = false,
+    semantic: engine.neural_rendering.SemanticClass = .background,
+    part: engine.neural_rendering.SemanticPart = .whole,
+    ordinal: u16 = 0,
+    surface: sandbox_visual_catalog.Surface = .ground,
+};
+
 const App = struct {
     io: std.Io,
     window: *c.SDL_Window,
@@ -1892,6 +1904,7 @@ const App = struct {
     neural_trial_fixture_enabled: bool = false,
     neural_target_fixture_variant: neural_target_fixture.Variant = .urban_day,
     neural_evaluation_resize_frame: ?u64 = null,
+    render_frame_audit: RenderFrameAudit = .{},
 
     simulation: *sandbox_host.Placement,
     initial_crate_id: ?sandbox_contracts.PersistentId,
@@ -2071,11 +2084,13 @@ const App = struct {
         );
         errdefer developer.deinit();
 
-        // Create ground plane mesh
-        var ground_mesh = try primitives.createGroundPlane(gpu_renderer.getDevice());
+        try gpu_renderer.setSceneLight(sandbox_visual_catalog.scene_light);
+
+        // Create conventional normal-bearing product geometry.
+        var ground_mesh = try primitives.createLitGroundPlane(gpu_renderer.getDevice());
         errdefer ground_mesh.deinit();
 
-        var block_mesh = try primitives.createCube(gpu_renderer.getDevice());
+        var block_mesh = try primitives.createLitCube(gpu_renderer.getDevice());
         errdefer block_mesh.deinit();
 
         const character_config = sandbox_contracts.CharacterConfig{
@@ -2791,7 +2806,7 @@ const App = struct {
                 actions.carry_pressed =
                     (tick -| progress.stage_enter_tick) % 30 == 1;
             },
-            .enter_vehicle => {
+            .enter_vehicle, .reenter_vehicle => {
                 if (self.simulation.player().focusPosition()) |position| {
                     const vehicles = self.simulation.presentation().vehicles(0);
                     if (vehicles.len != 0) {
@@ -2841,17 +2856,21 @@ const App = struct {
                     }
                 }
             },
-            .exit_vehicle => {
+            .exit_vehicle, .second_exit_vehicle => {
+                // Retain braking while the exit request is admitted so the
+                // unoccupied chassis cannot coast beyond the authored support
+                // plane during the remainder of this long journey.
+                actions.brake = true;
                 actions.interact_pressed = (tick -| progress.stage_enter_tick) % 30 == 1;
             },
             .drive => {
+                const elapsed = tick -| progress.stage_enter_tick;
                 actions.move = .{
-                    if (tick >= progress.stage_enter_tick +| 90) 0.6 else 0,
-                    1,
+                    if (elapsed >= 45 and elapsed < 90) 0.55 else 0,
+                    if (elapsed < 90) 0.75 else 0,
                 };
-                actions.hand_brake = tick >= progress.stage_enter_tick +| 140 and
-                    tick < progress.stage_enter_tick +| 150;
-                actions.brake = tick >= progress.stage_enter_tick +| 150;
+                actions.hand_brake = elapsed >= 90 and elapsed < 105;
+                actions.brake = elapsed >= 90;
             },
             .travel_east => {
                 actions.move = .{ 1, 0 };
@@ -2863,6 +2882,7 @@ const App = struct {
                 tick,
                 progress.stage_enter_tick,
                 false,
+                true,
             ),
             .complete => {},
             .respawn => {
@@ -2900,6 +2920,7 @@ const App = struct {
                     tick,
                     progress.stage_enter_tick,
                     true,
+                    false,
                 );
             },
         }
@@ -2916,8 +2937,8 @@ const App = struct {
         tick: u64,
         stage_enter_tick: u64,
         attack: bool,
+        provoke_until_engaged: bool,
     ) void {
-        if (attack) actions.melee_pressed = (tick -| stage_enter_tick) % 30 == 1;
         const position = self.simulation.player().focusPosition() orelse return;
         for (self.simulation.presentation().npcs(0)) |npc| {
             if (npc.population_member != s11_hostile_population_member.value or
@@ -2925,23 +2946,50 @@ const App = struct {
             {
                 continue;
             }
-            const target = npc.pose.position;
-            const delta = [2]f32{
-                target[0] - position[0],
-                target[2] - position[2],
+            const npc_position = npc.pose.position;
+            const to_npc = [2]f32{
+                npc_position[0] - position[0],
+                npc_position[2] - position[2],
             };
-            const desired_yaw = std.math.atan2(delta[0], -delta[1]);
+            const desired_yaw = std.math.atan2(to_npc[0], -to_npc[1]);
             const yaw_delta = engine.transform.normalizeFacingYaw(
                 desired_yaw - self.game_camera.yaw,
             ) catch 0;
             // Convert the exact desired turn into the ordinary mouse-look input
             // domain consumed by Camera.rotate.
             actions.look_delta[0] = yaw_delta / self.game_camera.look_sensitivity;
-            const distance_squared = delta[0] * delta[0] + delta[1] * delta[1];
-            if (distance_squared > 2.25) {
-                const inverse = 1.0 / @sqrt(distance_squared);
-                const world_x = delta[0] * inverse;
-                const world_z = delta[1] * inverse;
+            const center_distance_squared = to_npc[0] * to_npc[0] + to_npc[1] * to_npc[1];
+            const engaged = npc.encounter_state != .patrolling;
+            if (attack or (provoke_until_engaged and !engaged and
+                center_distance_squared <= 2.25 * 2.25))
+            {
+                actions.melee_pressed = (tick -| stage_enter_tick) % 30 == 1;
+            }
+
+            // Before provoking the hostile, move to the front of its authored
+            // sight cone. Direct center-seeking can leave the player parked
+            // immediately behind a dwelling NPC forever: that is a blind-spot
+            // test, not the promised combat/death journey.
+            const npc_facing_yaw = engine.transform.facingYawFromRotation(
+                npc.pose.rotation,
+            ) catch 0;
+            const approach = if (provoke_until_engaged and !engaged)
+                [2]f32{
+                    npc_position[0] + @sin(npc_facing_yaw) * 1.5,
+                    npc_position[2] - @cos(npc_facing_yaw) * 1.5,
+                }
+            else
+                [2]f32{ npc_position[0], npc_position[2] };
+            const travel = [2]f32{
+                approach[0] - position[0],
+                approach[1] - position[2],
+            };
+            const travel_distance_squared = travel[0] * travel[0] + travel[1] * travel[1];
+            const stop_distance_squared: f32 = if (engaged or attack) 2.25 else 0.16;
+            if (travel_distance_squared > stop_distance_squared) {
+                const inverse = 1.0 / @sqrt(travel_distance_squared);
+                const world_x = travel[0] * inverse;
+                const world_z = travel[1] * inverse;
                 const sine = @sin(self.game_camera.yaw);
                 const cosine = @cos(self.game_camera.yaw);
                 actions.move = .{
@@ -3015,10 +3063,19 @@ const App = struct {
                 progress.entered_vehicle = true;
                 progress.enter(.drive, tick);
             },
-            .drive => if (tick >= progress.stage_enter_tick +| 180) {
+            .drive => if (tick >= progress.stage_enter_tick +| 240) {
                 progress.enter(.exit_vehicle, tick);
             },
             .exit_vehicle => if (progress.entered_vehicle and self.controlled_vehicle_id == null) {
+                progress.enter(.reenter_vehicle, tick);
+            },
+            .reenter_vehicle => if (self.controlled_vehicle_id != null) {
+                progress.reentered_vehicle = true;
+                progress.enter(.second_exit_vehicle, tick);
+            },
+            .second_exit_vehicle => if (progress.reentered_vehicle and
+                self.controlled_vehicle_id == null)
+            {
                 progress.enter(.travel_east, tick);
             },
             .travel_east => if (self.simulation.player().focusPosition()) |position| {
@@ -3161,7 +3218,7 @@ const App = struct {
             progress.handoff_request_tick = tick;
         }
         if (progress.handoff_requested and tick >= progress.handoff_request_tick +| 60) {
-            if (!progress.entered_vehicle or !progress.saw_east or
+            if (!progress.entered_vehicle or !progress.reentered_vehicle or !progress.saw_east or
                 !progress.saw_returned_west or !progress.saw_player_dead or
                 !progress.saw_player_respawned or !progress.saw_npc_dead or
                 !progress.saw_npc_replacement or !progress.resized or
@@ -3174,12 +3231,13 @@ const App = struct {
             }
             std.debug.print(
                 "INCIDENT_JOURNEY_COMPLETE tick={d} flags={d} " ++
-                    "vehicle={} districts={}/{} player={}/{} npc={}/{} " ++
+                    "vehicle={}/{} districts={}/{} player={}/{} npc={}/{} " ++
                     "resize={}/{} window_required={} window_observed={}/{}\n",
                 .{
                     tick,
                     progress.flag_count,
                     progress.entered_vehicle,
+                    progress.reentered_vehicle,
                     progress.saw_east,
                     progress.saw_returned_west,
                     progress.saw_player_dead,
@@ -6678,6 +6736,7 @@ const App = struct {
             self.simulation.inspection().tickIndex(),
             self.frame_timer.total_frames,
         );
+        self.developer.requestFrameSubmissionFence(&self.gpu_renderer);
         try self.gpu_renderer.submitFrame();
         self.developer.afterSuccessfulFrameSubmission(&self.gpu_renderer);
         if (self.neural_capture) |*capture| {
@@ -7576,7 +7635,7 @@ const App = struct {
         self.gpu_renderer.drawMeshWithMaterial(
             &self.block_mesh,
             null,
-            plan.empty_color,
+            sandbox_visual_catalog.materialTinted(.health_marker, plan.empty_color),
             zm.mul(
                 zm.mul(zm.scaling(width, height, depth), rotation),
                 zm.translation(position[0], y, position[2]),
@@ -7587,7 +7646,7 @@ const App = struct {
         self.gpu_renderer.drawMeshWithMaterial(
             &self.block_mesh,
             null,
-            plan.fill_color,
+            sandbox_visual_catalog.materialTinted(.health_marker, plan.fill_color),
             zm.mul(
                 zm.mul(
                     zm.scaling(geometry.fill_width, height * 1.15, depth * 1.15),
@@ -7612,7 +7671,8 @@ const App = struct {
         identity: engine.neural_rendering.DrawIdentity,
         gpu_mesh: *const mesh.Mesh,
         diffuse_texture: ?texture.Texture,
-        base_color: [4]f32,
+        surface: sandbox_visual_catalog.Surface,
+        material: renderer.SurfaceMaterial,
         model: zm.Mat,
         view_projection: zm.Mat,
     ) !void {
@@ -7623,7 +7683,7 @@ const App = struct {
         self.gpu_renderer.drawMeshWithMaterial(
             gpu_mesh,
             diffuse_texture,
-            base_color,
+            material,
             model,
             view_projection,
         );
@@ -7631,10 +7691,17 @@ const App = struct {
             .identity = identity,
             .mesh = gpu_mesh,
             .diffuse_texture = diffuse_texture,
-            .base_color = base_color,
+            .base_color = material.base_color,
             .model = model,
             .view_projection = view_projection,
         });
+        self.render_frame_audit = .{
+            .valid = true,
+            .semantic = identity.semantic,
+            .part = identity.part,
+            .ordinal = identity.ordinal,
+            .surface = surface,
+        };
     }
 
     fn drawNeuralEvaluationFixture(
@@ -7668,7 +7735,8 @@ const App = struct {
                 plan.identity,
                 gpu_mesh,
                 diffuse_texture,
-                plan.base_color,
+                .obstacle,
+                sandbox_visual_catalog.materialTinted(.obstacle, plan.base_color),
                 zm.mul(zm.mul(scale, rotation), translation),
                 view_projection,
             );
@@ -7710,7 +7778,7 @@ const App = struct {
             self.gpu_renderer.drawMeshWithMaterial(
                 gpu_mesh,
                 null,
-                plan.base_color,
+                renderer.SurfaceMaterial.unlit(plan.base_color),
                 model,
                 view_projection,
             );
@@ -7867,7 +7935,7 @@ const App = struct {
         self.gpu_renderer.drawMeshWithMaterial(
             &self.block_mesh,
             null,
-            color,
+            sandbox_visual_catalog.materialTinted(.health_marker, color),
             zm.mul(
                 zm.scaling(0.16, 0.16, 0.16),
                 zm.translation(
@@ -7901,7 +7969,11 @@ const App = struct {
                 },
                 resident_mesh.mesh,
                 scene.materialTexture(resident_mesh.material_index),
-                scene.materialBaseColor(resident_mesh.material_index),
+                .building_primary,
+                sandbox_visual_catalog.materialTinted(
+                    .building_primary,
+                    scene.materialBaseColor(resident_mesh.material_index),
+                ),
                 zm.loadMat(instance.transform[0..]),
                 view_projection,
             );
@@ -8046,6 +8118,7 @@ const App = struct {
     /// Render the current frame using SDL3 GPU API
     /// `alpha` is the interpolation factor (0.0 to 1.0) for smooth visuals.
     fn render(self: *App, alpha: f32) !RenderResult {
+        self.render_frame_audit = .{};
         if (self.neural_rendering) |*neural| neural.prepareFrame(&self.gpu_renderer);
         // Streamed submissions are independent of the frame command buffer.
         // Poll fences without waiting, then submit at most one bounded batch.
@@ -8234,11 +8307,24 @@ const App = struct {
             fixtureNeuralIdentity(1, .environment, 0),
             &self.ground_mesh,
             self.ground_mesh.diffuse_texture,
-            .{ 1, 1, 1, 1 },
+            .ground,
+            sandbox_visual_catalog.material(.ground),
             zm.identity(),
             view_proj,
         );
         scene_draw_calls +|= 1;
+        for (sandbox_visual_composition.environmentPlans()) |part| {
+            try self.drawPresentationMesh(
+                fixtureNeuralIdentity(100 + part.ordinal, .environment, part.ordinal),
+                &self.block_mesh,
+                null,
+                part.surface,
+                part.material,
+                part.model,
+                view_proj,
+            );
+            scene_draw_calls +|= 1;
+        }
         scene_draw_calls +|= try self.drawNeuralEvaluationFixture(view_proj);
         scene_draw_calls +|= try self.drawNeuralTargetFixture(view_proj);
         const draws_block = if (build_options.validation_mode or builtin.is_test)
@@ -8260,7 +8346,8 @@ const App = struct {
                 fixtureNeuralIdentity(2, .environment, 0),
                 &self.block_mesh,
                 self.block_mesh.diffuse_texture,
-                .{ 1, 1, 1, 1 },
+                .obstacle,
+                sandbox_visual_catalog.material(.obstacle),
                 zm.mul(block_scale, block_translation),
                 view_proj,
             );
@@ -8287,7 +8374,8 @@ const App = struct {
                 fixtureNeuralIdentity(10 + gate_index, .environment, 0),
                 &self.block_mesh,
                 self.block_mesh.diffuse_texture,
-                .{ 1, 1, 1, 1 },
+                .route_landmark,
+                sandbox_visual_catalog.material(.route_landmark),
                 zm.mul(gate_scale, gate_translation),
                 view_proj,
             );
@@ -8360,7 +8448,8 @@ const App = struct {
                     ),
                     &self.block_mesh,
                     self.block_mesh.diffuse_texture,
-                    .{ 1, 1, 1, 1 },
+                    .obstacle,
+                    sandbox_visual_catalog.material(.obstacle),
                     zm.mul(zm.mul(scale, rotation), translation),
                     view_proj,
                 );
@@ -8393,7 +8482,8 @@ const App = struct {
                 persistentNeuralIdentity(draw.persistent_id, .crate, .whole, 0),
                 crate_mesh,
                 crate_mesh.diffuse_texture,
-                .{ 1, 1, 1, 1 },
+                .carryable,
+                sandbox_visual_catalog.material(.carryable),
                 model_matrix,
                 view_proj,
             );
@@ -8423,7 +8513,8 @@ const App = struct {
                 replicatedNeuralIdentity(draw.entity, .carryable, .whole),
                 &self.block_mesh,
                 self.block_mesh.diffuse_texture,
-                .{ 1, 1, 1, 1 },
+                .carryable,
+                sandbox_visual_catalog.material(.carryable),
                 zm.mul(zm.mul(scale, rotation), translation),
                 view_proj,
             );
@@ -8448,7 +8539,8 @@ const App = struct {
                     ),
                     &self.visuals.visual_part_mesh,
                     null,
-                    part.color,
+                    part.surface,
+                    part.material,
                     part.model,
                     view_proj,
                 );
@@ -8483,8 +8575,28 @@ const App = struct {
                     replicatedNeuralIdentity(draw.entity, .vehicle, wheel_part),
                     wheel_mesh,
                     wheel_mesh.diffuse_texture,
-                    .{ 1, 1, 1, 1 },
+                    .tire,
+                    sandbox_visual_catalog.material(.tire),
                     zm.mul(zm.mul(wheel_scale, wheel_rotation), wheel_translation),
+                    view_proj,
+                );
+                scene_draw_calls +|= 1;
+                try self.drawPresentationMesh(
+                    replicatedNeuralPartIdentity(
+                        draw.entity,
+                        .vehicle,
+                        wheel_part,
+                        1,
+                    ),
+                    &self.visuals.visual_part_mesh,
+                    null,
+                    .wheel_marker,
+                    sandbox_visual_catalog.material(.wheel_marker),
+                    sandbox_visual_composition.wheelMarkerModel(
+                        wheel.width,
+                        wheel.radius,
+                        wheel.pose,
+                    ),
                     view_proj,
                 );
                 scene_draw_calls +|= 1;
@@ -8508,7 +8620,8 @@ const App = struct {
                     ),
                     &self.visuals.visual_part_mesh,
                     null,
-                    part.color,
+                    part.surface,
+                    part.material,
                     part.model,
                     view_proj,
                 );
@@ -8550,7 +8663,8 @@ const App = struct {
                     ),
                     &self.visuals.visual_part_mesh,
                     null,
-                    part.color,
+                    part.surface,
+                    part.material,
                     part.model,
                     view_proj,
                 );
@@ -9525,6 +9639,24 @@ const App = struct {
             .slots = inspection.populationSlots(),
             .diagnostics = inspection.populationDiagnostics(),
         };
+        const render_stats = self.gpu_renderer.frameStats();
+        const render_view = editor_contract.RenderView{
+            .scene_light = self.gpu_renderer.sceneLight(),
+            .frame_stats = render_stats,
+            .last_semantic = if (self.render_frame_audit.valid)
+                @tagName(self.render_frame_audit.semantic)
+            else
+                "none",
+            .last_part = if (self.render_frame_audit.valid)
+                @tagName(self.render_frame_audit.part)
+            else
+                "none",
+            .last_ordinal = self.render_frame_audit.ordinal,
+            .last_surface = if (self.render_frame_audit.valid)
+                @tagName(self.render_frame_audit.surface)
+            else
+                "none",
+        };
         var neural_view = editor_contract.NeuralView{};
         if (self.neural_inputs) |*inputs| {
             const diagnostics = inputs.diagnostics();
@@ -9615,6 +9747,7 @@ const App = struct {
                     .requests = &self.navigation_requests,
                 },
                 .population_view = &population_view,
+                .render_view = &render_view,
                 .gameplay_view = gameplay_view,
                 .neural_view = &neural_view,
                 .incident_input = .{

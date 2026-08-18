@@ -115,7 +115,9 @@ not reported as a writer failure.
 - A human report now identifies exact process, anomaly, clocks, ticks, frames,
   stream windows, screenshots, recorder health, and replay evidence.
 - File I/O and image encoding leave the render/simulation path. GPU completion
-  is polled; the render loop never waits for a screenshot fence.
+  is polled; the render loop never waits for a screenshot fence. DR1 binds
+  screenshot and semantic downloads to a retained reference on the exact frame
+  submission containing the copy, rather than fencing a later empty command.
 - Queue, disk, line, anomaly, image-slot, replay-envelope, and memory bounds
   are explicit. Missing evidence remains visible.
 - Replay schema cohorts 9 and 10 add vitals and authority-owned NPC replacement

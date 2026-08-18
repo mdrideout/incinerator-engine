@@ -1,7 +1,7 @@
 # S13 Authored Population and Sandbox Activity Validation
 
-**Status:** S13-A through S13-H automated acceptance complete; final human
-walkthrough pending
+**Status:** Accepted; S13-A through S13-H automated evidence and the ordinary
+product-owner walkthrough are complete
 
 **Recorded:** 2026-08-01
 
@@ -22,7 +22,7 @@ walkthrough pending
 | S13-E — safe replacement and separation | Accepted | See below |
 | S13-F — presentation and evidence | Accepted | See below |
 | S13-G — lifecycle closure | Accepted | See below |
-| S13-H — product acceptance and audit | Automated acceptance complete | See below; human walkthrough pending |
+| S13-H — product acceptance and audit | Accepted | See below |
 
 ## S13-A — Entry Characterization and Accepted Contract
 
@@ -761,5 +761,6 @@ sixteen-controller Jolt acceptance replace the invalid 64-overlapping-actor
 premise. The 64 cohort is intentionally retained as logic/projection pressure.
 
 No S13-H P0/P1 finding remains. Implementation and automated acceptance are
-complete. The final human walkthrough in the ordinary product is the only
-remaining acceptance checkpoint.
+complete. The product owner accepted the ordinary product checkpoint on
+2026-08-17 after reviewing the current population scene and developer
+workspace. S13 is fully accepted.
