@@ -139,10 +139,11 @@ pub fn admit(
     defer if (catalog_owned) catalog.deinit();
 
     const catalog_view = catalog.view();
-    if (catalog_view.entries.len != 2) {
+    if (catalog_view.entries.len != sandbox_recipe.installed_coords.len) {
         return .{ .failed = .{ .navigation_route = .wrong_build_count } };
     }
-    var logical_builds: [2]district_contract.DistrictBuild = undefined;
+    var logical_builds: [sandbox_recipe.installed_coords.len]district_contract.DistrictBuild =
+        undefined;
     for (catalog_view.entries, 0..) |entry, entry_index| {
         if (entry.recipe_version != sandbox_recipe.current_recipe_version) {
             return .{ .failed = .{ .incompatible_recipe = .{

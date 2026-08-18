@@ -30,7 +30,7 @@ pub const DigestCategory = replay.Category;
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'R', 'P', 'L', 'A', 'Y' };
 pub const format_version: u16 = 1;
-pub const schema_cohort: u16 = 17;
+pub const schema_cohort: u16 = 18;
 pub const header_size: usize = 64;
 pub const integrity_size: usize = @sizeOf(Digest);
 pub const max_envelope_bytes: usize = 8 * 1024 * 1024;
@@ -46,7 +46,7 @@ pub const max_tick_digests: u32 = 32 * 1024;
 pub const max_world_crates: u32 = 8 * 1024;
 pub const max_world_characters: u32 = 4 * 1024;
 pub const max_world_vehicles: u32 = 2 * 1024;
-pub const max_world_districts: u8 = 2;
+pub const max_world_districts: u8 = 4;
 pub const max_world_interactions: u8 = 1;
 pub const max_world_npcs: u32 = 64;
 pub const max_world_identities: u32 = 16 * 1024;
@@ -3375,7 +3375,7 @@ fn refreshIntegrity(bytes: []u8) void {
 
 test "current simulation cohort pins the exact Jolt worker and capacity configuration" {
     try current_simulation_cohort.validate();
-    try std.testing.expectEqual(@as(u16, 17), current_simulation_cohort.replay_schema);
+    try std.testing.expectEqual(@as(u16, 18), current_simulation_cohort.replay_schema);
     try std.testing.expectEqual(@as(u16, 5), current_simulation_cohort.engine_schedule_cohort);
     try std.testing.expectEqual(
         sandbox_host_contracts.snapshot_schema,
@@ -3732,12 +3732,12 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     try encodeWorldConfig(&world_v7_sizer, world);
     try std.testing.expectEqual(@as(usize, 435), world_v7_sizer.size);
     try std.testing.expectEqual(@as(usize, 296), encodedTickDigestsSize());
-    var world_v7_expected: Digest = undefined;
+    var world_v8_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
-        &world_v7_expected,
-        "5424671b7179f5d47b9c71c9a3021e8983a075b21ba18bc7698e7db9582eabbe",
+        &world_v8_expected,
+        "9ca3e224c65c7b3e7a054e4a2b54f3dbd0d2ce413cfa46482ac515993493cc06",
     );
-    try std.testing.expectEqual(world_v7_expected, try world.fingerprint());
+    try std.testing.expectEqual(world_v8_expected, try world.fingerprint());
 
     const baseline_world_fingerprint = try world.fingerprint();
     var npc_tuning_variants = [_]WorldConfig{world} ** 11;
@@ -3807,15 +3807,15 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     const same = try testContentCohort();
     try std.testing.expectEqual(try content.fingerprint(), try same.fingerprint());
 
-    // Recipe V7 retains the S12 graph while adding the exact S13 activity
-    // destination cohort, intentionally advancing renderer-free construction.
-    var recipe_v7_expected: Digest = undefined;
+    // Recipe V8 installs the exact S15 four-district graph and destination
+    // cohort, intentionally advancing renderer-free construction.
+    var recipe_v8_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
-        &recipe_v7_expected,
-        "0321048006ee00df844d8e3e747a24aca43bdaad7d97531351dadc977a301ba7",
+        &recipe_v8_expected,
+        "046213f89cf004f1be5fdc800107c2d3a407b98534b68b26c90afd15f9cb1b34",
     );
-    const recipe_v7_actual = try content.fingerprint();
-    try std.testing.expectEqualSlices(u8, &recipe_v7_expected, &recipe_v7_actual);
+    const recipe_v8_actual = try content.fingerprint();
+    try std.testing.expectEqualSlices(u8, &recipe_v8_expected, &recipe_v8_actual);
 
     const catalog = try ContentCohort.init(
         "district/catalog",
@@ -3827,7 +3827,7 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     );
     try catalog.validate();
     const catalog_fingerprint = try catalog.fingerprint();
-    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v7_actual));
+    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v8_actual));
 
     var catalog_fixture = try testCapture();
     catalog_fixture.content = catalog;

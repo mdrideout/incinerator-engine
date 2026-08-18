@@ -14,19 +14,15 @@ test "sixteen authored activity spawn and replacement poses remain physically ad
     var physics = try physics_adapter.Physics.init();
     defer physics.deinit();
 
-    const builds = [2]district.DistrictBuild{
-        recipe.build(
-            recipe.navigation_west_coord,
-            recipe.current_recipe_version,
-        ).ready,
-        recipe.build(
-            recipe.navigation_east_coord,
-            recipe.current_recipe_version,
-        ).ready,
-    };
+    var builds: [recipe.installed_coords.len]district.DistrictBuild = undefined;
+    for (recipe.installed_coords, 0..) |coord, index| {
+        builds[index] = recipe.build(coord, recipe.current_recipe_version).ready;
+    }
     var body_count: usize = 0;
-    var bodies: [2 * district.max_static_boxes]physics_adapter.BodyId =
+    var bodies: [1 + recipe.installed_coords.len * district.max_static_boxes]physics_adapter.BodyId =
         undefined;
+    bodies[body_count] = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 50, 1, 50 });
+    body_count += 1;
     for (builds) |build| {
         for (build.boxes()) |box| {
             bodies[body_count] = try physics.createStaticBox(

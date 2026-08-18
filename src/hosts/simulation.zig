@@ -4642,6 +4642,8 @@ test "real Jolt destination replans through the open seam gate and arrives" {
 
     _ = try activateNpcTestDistrict(&simulation, 1, navigation_west_coord);
     _ = try activateNpcTestDistrict(&simulation, 2, navigation_east_coord);
+    _ = try activateNpcTestDistrict(&simulation, 3, sandbox_district_recipe.navigation_northwest_coord);
+    _ = try activateNpcTestDistrict(&simulation, 4, sandbox_district_recipe.navigation_northeast_coord);
     try simulation.submitNpc(.{ .spawn = testNpcSpawn(
         3,
         .{ .coord = navigation_west_coord, .index = 0 },
@@ -4665,7 +4667,7 @@ test "real Jolt destination replans through the open seam gate and arrives" {
     try std.testing.expect(preferred_uses_north_gate);
 
     try std.testing.expect(try simulation.submitNavigationGate(.{
-        .gate = .north,
+        .gate = .south,
         .open = false,
     }));
     try simulation.tick();
@@ -4677,12 +4679,13 @@ test "real Jolt destination replans through the open seam gate and arrives" {
     );
     try std.testing.expect(replanned.navigation_lineage.route_revision >
         preferred.navigation_lineage.route_revision);
-    var uses_south_gate = false;
+    var uses_north_row = false;
     for (replanned.route.plan.slice()) |node| {
-        uses_south_gate = uses_south_gate or
-            (ChunkCoord.eql(node.coord, navigation_west_coord) and node.index == 7);
+        uses_north_row = uses_north_row or
+            ChunkCoord.eql(node.coord, sandbox_district_recipe.navigation_northwest_coord) or
+            ChunkCoord.eql(node.coord, sandbox_district_recipe.navigation_northeast_coord);
     }
-    try std.testing.expect(uses_south_gate);
+    try std.testing.expect(uses_north_row);
 
     var saw_invalidation = false;
     var saw_commit = false;

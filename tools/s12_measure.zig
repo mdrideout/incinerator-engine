@@ -14,6 +14,7 @@ const navigation_planner = @import("navigation_planner");
 const sandbox_contracts = @import("sandbox_host_contracts");
 const sandbox_navigation = @import("sandbox_navigation");
 const simulation = @import("sandbox_simulation");
+const sandbox_recipe = @import("sandbox_district_recipe");
 
 const schema_version: u16 = 1;
 const planner_waves: usize = 4_096;
@@ -314,7 +315,7 @@ fn admitContentCohort(
         .failed => return error.S12InstalledContentAdmissionFailed,
     };
     defer admission.deinit();
-    if (admission.view().entries.len != 2) {
+    if (admission.view().entries.len != sandbox_recipe.installed_coords.len) {
         return error.S12InstalledContentCohortMismatch;
     }
     return admission.contentCohort().fingerprint();

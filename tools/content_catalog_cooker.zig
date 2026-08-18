@@ -163,7 +163,7 @@ fn parseSpec(bytes: []const u8) !ParsedSpec {
             10,
         ) catch return error.InvalidCatalogCoordinate;
         const bundle_key = tokens.next() orelse return error.InvalidCatalogEntry;
-        const dependency = tokens.next() orelse return error.InvalidCatalogEntry;
+        const dependency_list = tokens.next() orelse return error.InvalidCatalogEntry;
         if (tokens.next() != null) return error.InvalidCatalogEntry;
         const index: usize = result.entry_count;
         result.entries[index] = .{
@@ -171,9 +171,26 @@ fn parseSpec(bytes: []const u8) !ParsedSpec {
             .semantic_id = semantic_id,
             .bundle_key = bundle_key,
         };
-        if (!std.mem.eql(u8, dependency, "-")) {
-            result.entries[index].dependency_storage[0] = dependency;
-            result.entries[index].dependency_count = 1;
+        if (!std.mem.eql(u8, dependency_list, "-")) {
+            var dependencies = std.mem.splitScalar(u8, dependency_list, ',');
+            var previous: ?[]const u8 = null;
+            while (dependencies.next()) |dependency| {
+                if (dependency.len == 0 or
+                    result.entries[index].dependency_count ==
+                        content.catalog.max_dependencies_per_entry)
+                {
+                    return error.InvalidCatalogEntryDependencies;
+                }
+                if (previous) |prior| {
+                    if (std.mem.order(u8, prior, dependency) != .lt) {
+                        return error.NonCanonicalCatalogEntryDependencies;
+                    }
+                }
+                const dependency_index: usize = result.entries[index].dependency_count;
+                result.entries[index].dependency_storage[dependency_index] = dependency;
+                result.entries[index].dependency_count += 1;
+                previous = dependency;
+            }
         }
         result.entry_count += 1;
     }
@@ -319,26 +336,27 @@ test "catalog cooker rejects complete logical navigation mismatch" {
 }
 
 test "catalog cooker rejects an incomplete or wrong installed route" {
-    const west = sandbox_recipe.build(
-        sandbox_recipe.navigation_west_coord,
-        sandbox_recipe.current_recipe_version,
-    ).ready;
-    const east = sandbox_recipe.build(
-        sandbox_recipe.navigation_east_coord,
-        sandbox_recipe.current_recipe_version,
-    ).ready;
-    try validateLogicalRoute(&.{ west, east });
+    var installed: [sandbox_recipe.installed_coords.len]district_contract.DistrictBuild = undefined;
+    for (sandbox_recipe.installed_coords, 0..) |coord, index| {
+        installed[index] = sandbox_recipe.build(
+            coord,
+            sandbox_recipe.current_recipe_version,
+        ).ready;
+    }
+    try validateLogicalRoute(&installed);
     try std.testing.expectError(
         error.CookedDistrictLogicalRouteMismatch,
-        validateLogicalRoute(&.{west}),
+        validateLogicalRoute(installed[0..3]),
     );
 
     const uninstalled = sandbox_recipe.build(
         .{ .x = 2, .z = 0 },
         sandbox_recipe.current_recipe_version,
     ).ready;
+    var wrong = installed;
+    wrong[3] = uninstalled;
     try std.testing.expectError(
         error.CookedDistrictLogicalRouteMismatch,
-        validateLogicalRoute(&.{ west, uninstalled }),
+        validateLogicalRoute(&wrong),
     );
 }

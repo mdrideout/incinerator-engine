@@ -1,6 +1,6 @@
 # ADR-024: Authored Population Intent and Activity Slots
 
-**Status:** Accepted and implemented; final human walkthrough pending
+**Status:** Accepted and implemented; product-owner walkthrough complete
 
 **Date:** 2026-07-28
 

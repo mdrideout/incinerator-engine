@@ -13,7 +13,7 @@ const authority_diagnostics = @import("session_authority_diagnostics");
 /// after simulation execution remain visible to the same text, JSON, and UI
 /// consumers as runtime-system faults.
 pub const schema_version: u16 = 5;
-pub const district_stream_slot_count: usize = 2;
+pub const district_stream_slot_count: usize = 4;
 
 pub const ContentWorkerStage = enum {
     idle,
@@ -761,6 +761,8 @@ test "one typed snapshot feeds compact text and structured JSON" {
                 .scene = .{ .index = 2, .generation = 27 },
                 .pending_decoded_scene = true,
             },
+            .{ .coord = .{ .x = 0, .z = 1 }, .state = .idle, .desired_inside = false },
+            .{ .coord = .{ .x = 1, .z = 1 }, .state = .idle, .desired_inside = false },
         }),
         .gpu = null,
         .host_time = .{
@@ -796,7 +798,7 @@ test "one typed snapshot feeds compact text and structured JSON" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         text_value,
-        "district_streams=2 desired=2 transitioning=1 active=1",
+        "district_streams=4 desired=2 transitioning=1 active=1",
     ) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,

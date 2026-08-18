@@ -37,7 +37,7 @@ pub const InitOptions = struct {
     stream_content: bool,
     admit_catalog: bool,
     content_root: ?content.ContentRootPath,
-    /// The current product route contains only two small districts. Keep both
+    /// The current product route contains four small districts. Keep the full
     /// authoritative collision and presentation cohorts resident so ordinary
     /// play cannot outrun asynchronous activation. Validation profiles leave
     /// this false and continue exercising the streaming lifecycle.
@@ -1809,12 +1809,18 @@ test "catalog admission requires each fixed stream coordinate exactly once" {
     const Entry = struct { coord: district_contract.ChunkCoord };
     const west = sandbox_recipe.presentation_policies[west_slot_index].coord;
     const east = sandbox_recipe.presentation_policies[east_slot_index].coord;
+    const northwest = sandbox_recipe.presentation_policies[2].coord;
+    const northeast = sandbox_recipe.presentation_policies[3].coord;
 
     try validateCatalogEntries(&[_]Entry{
         .{ .coord = west },
         .{ .coord = east },
+        .{ .coord = northwest },
+        .{ .coord = northeast },
     });
     try validateCatalogEntries(&[_]Entry{
+        .{ .coord = northeast },
+        .{ .coord = northwest },
         .{ .coord = east },
         .{ .coord = west },
     });
@@ -1827,6 +1833,8 @@ test "catalog admission requires each fixed stream coordinate exactly once" {
         validateCatalogEntries(&[_]Entry{
             .{ .coord = west },
             .{ .coord = west },
+            .{ .coord = northwest },
+            .{ .coord = northeast },
         }),
     );
     try std.testing.expectError(
@@ -1834,6 +1842,8 @@ test "catalog admission requires each fixed stream coordinate exactly once" {
         validateCatalogEntries(&[_]Entry{
             .{ .coord = west },
             .{ .coord = .{ .x = east.x + 1, .z = east.z } },
+            .{ .coord = northwest },
+            .{ .coord = northeast },
         }),
     );
 }

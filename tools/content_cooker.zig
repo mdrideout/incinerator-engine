@@ -13,6 +13,7 @@ const max_source_bytes = 256 * 1024;
 const max_dependency_id_bytes = 64;
 const max_dependencies = 8;
 const dependency_digest_domain = "incinerator.district.cook.dependencies.v1";
+const root_translation_digest_domain = "incinerator.district.cook.root-translation.v1";
 
 const DependencyArgument = struct {
     semantic_id: []const u8,
@@ -25,6 +26,7 @@ const Invocation = struct {
     output_path: []const u8,
     key: content.BundleKey,
     coord: district_contract.ChunkCoord,
+    root_translation: [3]f32,
     dependencies: [max_dependencies]DependencyArgument = undefined,
     dependency_count: u8 = 0,
 
@@ -70,6 +72,7 @@ pub fn main(init: std.process.Init) !void {
         source,
         provenance,
         &invocation.key,
+        invocation.root_translation,
         invocation.dependencySlice(),
     );
 
@@ -95,6 +98,7 @@ pub fn main(init: std.process.Init) !void {
         data,
         invocation.key.bytes(),
         invocation.coord,
+        invocation.root_translation,
         source_digest,
     );
     defer cooked.deinit();
@@ -107,10 +111,10 @@ pub fn main(init: std.process.Init) !void {
 }
 
 fn parseInvocation(args: anytype) !Invocation {
-    if (args.len < 7 or (args.len - 7) % 2 != 0) {
-        return error.ExpectedInputProvenanceOutputKeyCoordinateAndDependencies;
+    if (args.len < 10 or (args.len - 10) % 2 != 0) {
+        return error.ExpectedInputProvenanceOutputKeyCoordinateTranslationAndDependencies;
     }
-    const dependency_count = (args.len - 7) / 2;
+    const dependency_count = (args.len - 10) / 2;
     if (dependency_count > max_dependencies) return error.TooManyCookDependencies;
 
     const input_path: []const u8 = args[1];
@@ -121,6 +125,12 @@ fn parseInvocation(args: anytype) !Invocation {
         return error.InvalidDistrictCoordinate;
     const coord_z = std.fmt.parseInt(i32, args[6], 10) catch
         return error.InvalidDistrictCoordinate;
+    var root_translation: [3]f32 = undefined;
+    for (&root_translation, args[7..10]) |*component, argument| {
+        component.* = std.fmt.parseFloat(f32, argument) catch
+            return error.InvalidRootTranslation;
+        if (!std.math.isFinite(component.*)) return error.InvalidRootTranslation;
+    }
 
     var result = Invocation{
         .input_path = input_path,
@@ -128,11 +138,12 @@ fn parseInvocation(args: anytype) !Invocation {
         .output_path = output_path,
         .key = key,
         .coord = .{ .x = coord_x, .z = coord_z },
+        .root_translation = root_translation,
     };
     var previous_id: ?[]const u8 = null;
     for (0..dependency_count) |index| {
-        const semantic_id: []const u8 = args[7 + index * 2];
-        const bundle_path: []const u8 = args[8 + index * 2];
+        const semantic_id: []const u8 = args[10 + index * 2];
+        const bundle_path: []const u8 = args[11 + index * 2];
         if (!isValidDependencyId(semantic_id)) return error.InvalidDependencySemanticId;
         if (bundle_path.len == 0) return error.InvalidDependencyBundlePath;
         if (previous_id) |previous| {
@@ -195,9 +206,13 @@ fn sourceDigest(
     source: []const u8,
     provenance: []const u8,
     output_key: *const content.BundleKey,
+    root_translation: [3]f32,
     dependency_arguments: []const DependencyArgument,
 ) ![32]u8 {
-    const base = baseSourceDigest(source, provenance);
+    const base = translatedSourceDigest(
+        baseSourceDigest(source, provenance),
+        root_translation,
+    );
     var dependencies: [max_dependencies]HashedDependency = undefined;
     for (dependency_arguments, 0..) |argument, index| {
         const dependency = try loadDependencyIdentity(io, allocator, argument);
@@ -212,6 +227,20 @@ fn sourceDigest(
         dependencies[index] = dependency;
     }
     return deriveDependentSourceDigest(base, dependencies[0..dependency_arguments.len]);
+}
+
+fn translatedSourceDigest(base: [32]u8, translation: [3]f32) [32]u8 {
+    var digest = std.crypto.hash.sha2.Sha256.init(.{});
+    digest.update(root_translation_digest_domain);
+    digest.update(&base);
+    for (translation) |component| {
+        var bytes: [4]u8 = undefined;
+        std.mem.writeInt(u32, &bytes, @bitCast(component), .little);
+        digest.update(&bytes);
+    }
+    var result: [32]u8 = undefined;
+    digest.final(&result);
+    return result;
 }
 
 fn loadDependencyIdentity(
@@ -370,6 +399,7 @@ fn cook(
     data: *cgltf.Data,
     bundle_name: []const u8,
     coord: district_contract.ChunkCoord,
+    root_translation: [3]f32,
     source_digest: [32]u8,
 ) !Cooked {
     if (data.scene == null or data.scenes_count != 1) return error.ExactlyOneDefaultSceneRequired;
@@ -402,6 +432,15 @@ fn cook(
         try appendNode(&result, data, nodes, node_map, root, bundle.none_index);
     }
     for (node_map) |mapped| if (mapped == bundle.none_index) return error.NodesOutsideDefaultScene;
+    for (result.nodes.items) |*node| {
+        if (node.parent != bundle.none_index) continue;
+        inline for (0..3) |axis| {
+            node.local_transform[12 + axis] += root_translation[axis];
+            if (!std.math.isFinite(node.local_transform[12 + axis])) {
+                return error.InvalidTranslatedRootTransform;
+            }
+        }
+    }
 
     const meshes = data.meshes orelse return error.SceneContainsNoMeshes;
     for (meshes[0..data.meshes_count]) |*mesh| try appendMesh(&result, data, mesh);
@@ -739,6 +778,9 @@ test "cooker invocation parses coordinates and strictly sorted dependency pairs"
         "district/s6_east",
         "1",
         "-2",
+        "0",
+        "0",
+        "16",
         "sandbox.foundation",
         "foundation.icdb",
         "sandbox.west",
@@ -747,6 +789,7 @@ test "cooker invocation parses coordinates and strictly sorted dependency pairs"
     const invocation = try parseInvocation(args);
     try std.testing.expectEqual(@as(i32, 1), invocation.coord.x);
     try std.testing.expectEqual(@as(i32, -2), invocation.coord.z);
+    try std.testing.expectEqualDeep([3]f32{ 0, 0, 16 }, invocation.root_translation);
     try std.testing.expectEqualStrings("district/s6_east", invocation.key.bytes());
     try std.testing.expectEqual(@as(usize, 2), invocation.dependencySlice().len);
     try std.testing.expectEqualStrings(
@@ -766,6 +809,9 @@ test "cooker invocation parses coordinates and strictly sorted dependency pairs"
         "district/s3_fixture",
         "0",
         "0",
+        "0",
+        "0",
+        "0",
     };
     const dependency_free = try parseInvocation(no_dependencies);
     try std.testing.expectEqual(@as(usize, 0), dependency_free.dependencySlice().len);
@@ -780,10 +826,11 @@ test "cooker invocation rejects malformed unsorted duplicate and invalid depende
         "district/s6_east",
         "1",
         "0",
+        "0",
         "sandbox.west",
     };
     try std.testing.expectError(
-        error.ExpectedInputProvenanceOutputKeyCoordinateAndDependencies,
+        error.ExpectedInputProvenanceOutputKeyCoordinateTranslationAndDependencies,
         parseInvocation(missing_path),
     );
 
@@ -794,6 +841,9 @@ test "cooker invocation rejects malformed unsorted duplicate and invalid depende
         "district.icdb",
         "district/s6_east",
         "1",
+        "0",
+        "0",
+        "0",
         "0",
         "sandbox.west",
         "west.icdb",
@@ -813,6 +863,9 @@ test "cooker invocation rejects malformed unsorted duplicate and invalid depende
         "district/s6_east",
         "1",
         "0",
+        "0",
+        "0",
+        "0",
         "sandbox.west",
         "west.icdb",
         "sandbox.west",
@@ -831,6 +884,9 @@ test "cooker invocation rejects malformed unsorted duplicate and invalid depende
         "district/s6_east",
         "east",
         "0",
+        "0",
+        "0",
+        "0",
         "Sandbox.West",
         "west.icdb",
     };
@@ -843,6 +899,9 @@ test "cooker invocation rejects malformed unsorted duplicate and invalid depende
         "district.icdb",
         "district/s6_east",
         "1",
+        "0",
+        "0",
+        "0",
         "0",
         "Sandbox.West",
         "west.icdb",
@@ -881,4 +940,13 @@ test "source digest frames dependency count and identities deterministically" {
     changed_identity[1].canonical_identity[0] ^= 1;
     const changed_digest = deriveDependentSourceDigest(base, &changed_identity);
     try std.testing.expect(!std.mem.eql(u8, &first, &changed_digest));
+}
+
+test "root translation participates in source identity" {
+    const base = baseSourceDigest("source bytes", "provenance bytes");
+    const origin = translatedSourceDigest(base, .{ 0, 0, 0 });
+    const north = translatedSourceDigest(base, .{ 0, 0, 16 });
+    const repeated = translatedSourceDigest(base, .{ 0, 0, 16 });
+    try std.testing.expect(!std.mem.eql(u8, &origin, &north));
+    try std.testing.expectEqualSlices(u8, &north, &repeated);
 }

@@ -2013,6 +2013,8 @@ comptime {
 const test_coord = district_contract.ChunkCoord{ .x = 0, .z = -4 };
 const adjacent_coord = district_contract.ChunkCoord{ .x = 1, .z = -4 };
 const third_coord = district_contract.ChunkCoord{ .x = 2, .z = -4 };
+const fourth_coord = district_contract.ChunkCoord{ .x = 3, .z = -4 };
+const fifth_coord = district_contract.ChunkCoord{ .x = 4, .z = -4 };
 const test_assets = Assets{
     .scene = .{ .index = 7, .generation = 2 },
 };
@@ -3076,7 +3078,7 @@ test "navigation access resolves copied route values only for the active generat
     try std.testing.expectEqualDeep(west_ticket, retained_source.ticket);
 }
 
-test "two-slot admission reports duplicate busy capacity and stale tickets structurally" {
+test "bounded admission reports duplicate busy capacity and stale tickets structurally" {
     var runtime = try engine.Runtime.init(std.testing.allocator, .{
         .namespace = 615,
         .fixed_delta_seconds = 1.0 / 120.0,
@@ -3124,8 +3126,10 @@ test "two-slot admission reports duplicate busy capacity and stale tickets struc
         adjacent_coord,
         adjacent_assets,
     );
+    _ = try loadDistrictActive(&feature, &runtime, 205, third_coord, .{});
+    _ = try loadDistrictActive(&feature, &runtime, 206, fourth_coord, .{});
 
-    try feature.requestLoad(205, third_coord, .{});
+    try feature.requestLoad(207, fifth_coord, .{});
     try runtime.tick();
     _ = try expectRejectedReason(
         feature.pollOutcome() orelse return error.MissingOutcome,
@@ -3136,20 +3140,20 @@ test "two-slot admission reports duplicate busy capacity and stale tickets struc
         .coord = test_coord,
         .generation = west_ticket.generation + 100,
     };
-    try feature.unload(206, stale);
+    try feature.unload(208, stale);
     try runtime.tick();
     _ = try expectRejectedReason(
         feature.pollOutcome() orelse return error.MissingOutcome,
         .stale_ticket,
     );
-    try feature.cancelLoad(207, east_ticket);
+    try feature.cancelLoad(209, east_ticket);
     try runtime.tick();
     _ = try expectRejectedReason(
         feature.pollOutcome() orelse return error.MissingOutcome,
         .district_not_loading,
     );
-    try std.testing.expectEqual(@as(usize, 2), feature.count());
-    try std.testing.expectEqual(@as(u8, 6), bodies.live_count);
+    try std.testing.expectEqual(@as(usize, max_districts), feature.count());
+    try std.testing.expectEqual(@as(u8, 12), bodies.live_count);
 }
 
 test "candidate cancellation and failure preserve an active neighbor" {
@@ -3247,7 +3251,13 @@ test "two-record validation and restore rollback are whole-operation transaction
         error.DuplicateDistrictPersistentId,
         validateRecords(TestCanonicalContent, &duplicate_id),
     );
-    const too_many = [_]DistrictV1{ records[0], records[1], records[0] };
+    const too_many = [_]DistrictV1{
+        records[0],
+        records[1],
+        districtRecord(.{ .namespace = 617, .local = 12 }, third_coord),
+        districtRecord(.{ .namespace = 617, .local = 13 }, fourth_coord),
+        districtRecord(.{ .namespace = 617, .local = 14 }, fifth_coord),
+    };
     try std.testing.expectError(
         error.TooManyDistricts,
         validateRecords(TestCanonicalContent, &too_many),
@@ -3289,10 +3299,10 @@ test "two-record validation and restore rollback are whole-operation transaction
     // retry to restore both records.
     bodies.fail_create_call = null;
     try feature.restoreRecords(&records, test_assets);
-    try std.testing.expectEqual(@as(usize, max_districts), feature.count());
+    try std.testing.expectEqual(records.len, feature.count());
     try std.testing.expectEqual(@as(usize, 6), feature.bodyCount());
     try std.testing.expectEqual(@as(u8, 6), bodies.live_count);
-    try std.testing.expectEqual(@as(usize, max_districts), runtime.entityCount());
+    try std.testing.expectEqual(records.len, runtime.entityCount());
     try std.testing.expectEqual(@as(u64, 12), try runtime.nextLocalId());
 }
 
@@ -3327,11 +3337,11 @@ test "restore input order cannot change canonical snapshot extraction or logical
 
         const snapshot = try feature.snapshotRecords(std.testing.allocator);
         defer std.testing.allocator.free(snapshot);
-        try std.testing.expectEqual(@as(usize, max_districts), snapshot.len);
-        @memcpy(snapshot_a[0..], snapshot);
+        try std.testing.expectEqual(east_first.len, snapshot.len);
+        @memcpy(snapshot_a[0..snapshot.len], snapshot);
         const draws = try feature.extract();
-        try std.testing.expectEqual(@as(usize, max_districts), draws.len);
-        @memcpy(draws_a[0..], draws);
+        try std.testing.expectEqual(east_first.len, draws.len);
+        @memcpy(draws_a[0..draws.len], draws);
         var scratch: [max_districts]engine.PersistentId = undefined;
         var writer = engine.contracts.replay.Writer.init();
         try feature.writeLogicalState(&writer, &scratch);
@@ -3359,12 +3369,12 @@ test "restore input order cannot change canonical snapshot extraction or logical
 
     const snapshot_b = try feature.snapshotRecords(std.testing.allocator);
     defer std.testing.allocator.free(snapshot_b);
-    try std.testing.expectEqualSlices(DistrictV1, &snapshot_a, snapshot_b);
+    try std.testing.expectEqualSlices(DistrictV1, snapshot_a[0..east_first.len], snapshot_b);
     try std.testing.expectEqualDeep(test_coord, snapshot_a[0].coord);
     try std.testing.expectEqualDeep(adjacent_coord, snapshot_a[1].coord);
     const draws_b = try feature.extract();
-    try std.testing.expectEqual(@as(usize, max_districts), draws_b.len);
-    for (draws_a, draws_b) |draw_a, draw_b| {
+    try std.testing.expectEqual(east_first.len, draws_b.len);
+    for (draws_a[0..east_first.len], draws_b) |draw_a, draw_b| {
         try std.testing.expectEqualDeep(draw_a, draw_b);
     }
     var scratch_b: [max_districts]engine.PersistentId = undefined;

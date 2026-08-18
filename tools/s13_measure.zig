@@ -58,7 +58,7 @@ const OwnerReport = struct {
 };
 
 const PhysicalReport = struct {
-    members: usize,
+    actors: usize,
     warmup_ticks: usize,
     measured_ticks: usize,
     timing: Distribution,
@@ -140,7 +140,7 @@ pub fn main(init: std.process.Init) !void {
         .optimize = @tagName(builtin.mode),
         .target_arch = @tagName(builtin.target.cpu.arch),
         .target_os = @tagName(builtin.target.os.tag),
-        .methodology = "8192 fixed owner ticks for separate 12/16 authored cohorts with immediate deterministic host acknowledgements; 2048 measured real-Jolt ticks for 16 uniquely placed CharacterVirtual actors after 120 warmup ticks; 4096 bounded 64-command synthetic planning waves; exact protocol-15 full-snapshot wire sizes",
+        .methodology = "8192 fixed owner ticks for separate 12/16 authored cohorts with immediate deterministic host acknowledgements; 2048 measured real-Jolt ticks for 24 uniquely placed activity-slot CharacterVirtual actors after 120 warmup ticks; 4096 bounded 64-command synthetic planning waves; exact protocol-17 full-snapshot wire sizes",
         .ordinary = ordinary,
         .physical_owner = physical_owner,
         .physical_jolt = physical_jolt,
@@ -237,12 +237,14 @@ fn measurePhysical(init: std.process.Init) !PhysicalReport {
     var physics = try physics_adapter.Physics.init();
     defer physics.deinit();
 
-    const builds = [2]district.DistrictBuild{
-        recipe.build(recipe.navigation_west_coord, recipe.current_recipe_version).ready,
-        recipe.build(recipe.navigation_east_coord, recipe.current_recipe_version).ready,
-    };
+    var builds: [recipe.installed_coords.len]district.DistrictBuild = undefined;
+    for (recipe.installed_coords, 0..) |coord, index| {
+        builds[index] = recipe.build(coord, recipe.current_recipe_version).ready;
+    }
     var body_count: usize = 0;
-    var bodies: [2 * district.max_static_boxes]physics_adapter.BodyId = undefined;
+    var bodies: [1 + recipe.installed_coords.len * district.max_static_boxes]physics_adapter.BodyId = undefined;
+    bodies[body_count] = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 50, 1, 50 });
+    body_count += 1;
     for (builds) |build| for (build.boxes()) |box| {
         bodies[body_count] = try physics.createStaticBox(box.pose.position, box.half_extents);
         body_count += 1;
@@ -252,8 +254,8 @@ fn measurePhysical(init: std.process.Init) !PhysicalReport {
     }
 
     var controllers = physics.characterControllers();
-    var handles: [population.max_members]physics_adapter.CharacterId = undefined;
-    var positions: [population.max_members][3]f32 = undefined;
+    var handles: [population.max_activity_slots]physics_adapter.CharacterId = undefined;
+    var positions: [population.max_activity_slots][3]f32 = undefined;
     var placement_rejections: usize = 0;
     for (catalog.activity_slots, 0..) |slot, index| {
         const desc = engine.physics.CharacterDesc{
@@ -269,7 +271,7 @@ fn measurePhysical(init: std.process.Init) !PhysicalReport {
         positions[index] = slot.position;
     }
     if (placement_rejections != 0 or
-        controllers.controllerCount() != population.max_members)
+        controllers.controllerCount() != population.max_activity_slots)
     {
         return error.InvalidS13PhysicalPlacement;
     }
@@ -296,13 +298,13 @@ fn measurePhysical(init: std.process.Init) !PhysicalReport {
     }
     if (separation_violations != 0) return error.S13PhysicalSeparationViolation;
     return .{
-        .members = population.max_members,
+        .actors = population.max_activity_slots,
         .warmup_ticks = physical_warmup_ticks,
         .measured_ticks = physical_ticks,
         .timing = summarize(&samples),
         .static_bodies = body_count,
         .character_virtual_controllers = controllers.controllerCount(),
-        .placement_queries = population.max_members,
+        .placement_queries = population.max_activity_slots,
         .placement_rejections = placement_rejections,
         .separation_violations = separation_violations,
         .max_rss_bytes = maxRssBytes(),
@@ -312,7 +314,7 @@ fn measurePhysical(init: std.process.Init) !PhysicalReport {
 fn stepCharacters(
     physics: *physics_adapter.Physics,
     controllers: *physics_adapter.CharacterControllers,
-    handles: *const [population.max_members]physics_adapter.CharacterId,
+    handles: *const [population.max_activity_slots]physics_adapter.CharacterId,
 ) !void {
     try physics.update(1.0 / 120.0);
     for (handles) |handle| {

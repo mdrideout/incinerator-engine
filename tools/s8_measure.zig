@@ -19,6 +19,7 @@ const district_contract = @import("district_contract");
 const jolt = @import("jolt_physics");
 const content = @import("content");
 const district_content_catalog = @import("district_content_catalog");
+const sandbox_recipe = @import("sandbox_district_recipe");
 
 const schema_version: u32 = 1;
 const fixed_delta_seconds: f32 = 1.0 / 120.0;
@@ -1357,7 +1358,7 @@ fn admitContentCohort(
     init: std.process.Init,
     content_root: content.ContentRootPath,
 ) !sandbox_replay.ContentCohort {
-    // Admission loads both installed bundles, validates their identities and
+    // Admission loads every installed bundle, validates their identities and
     // complete cooked/logical navigation fragments, and validates the joined
     // route before any Flecs world or Jolt authority is constructed.
     var admission = switch (try district_content_catalog.admit(
@@ -1373,13 +1374,13 @@ fn admitContentCohort(
     };
     defer admission.deinit();
     const view = admission.view();
-    if (view.entries.len != 2 or
-        admission.entryForCoordinate(west) == null or
-        admission.entryForCoordinate(east) == null)
-    {
+    if (view.entries.len != sandbox_recipe.installed_coords.len) {
         return error.InstalledS8CatalogSemanticsInvalid;
     }
-    inline for (.{ west, east }) |coord| {
+    for (sandbox_recipe.installed_coords) |coord| {
+        if (admission.entryForCoordinate(coord) == null) {
+            return error.InstalledS8CatalogSemanticsInvalid;
+        }
         const build = try sandbox_contracts.proceduralDistrictBuild(coord);
         try admission.validateLogicalRecord(coord, build.recipe_version, build.checksum);
     }

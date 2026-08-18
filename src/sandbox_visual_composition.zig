@@ -38,6 +38,19 @@ pub const environment_parts = [_]EnvironmentPart{
     .{ .ordinal = 6, .scale = .{ 5.0, 0.045, 2.3 }, .position = .{ 20.5, 0.023, -5.5 }, .surface = .route_landmark },
     .{ .ordinal = 7, .scale = .{ 0.16, 0.055, 5.0 }, .position = .{ 8, 0.029, 0 }, .surface = .route_landmark },
     .{ .ordinal = 8, .scale = .{ 3.5, 0.045, 2.2 }, .position = .{ 12.5, 0.023, 5.8 }, .surface = .building_accent },
+    .{ .ordinal = 9, .scale = .{ 31.0, 0.025, 5.0 }, .position = .{ 8, 0.012, 16 }, .surface = .road },
+    .{ .ordinal = 10, .scale = .{ 31.0, 0.035, 1.4 }, .position = .{ 8, 0.018, 12.75 }, .surface = .sidewalk },
+    .{ .ordinal = 11, .scale = .{ 31.0, 0.035, 1.4 }, .position = .{ 8, 0.018, 19.25 }, .surface = .sidewalk },
+    .{ .ordinal = 12, .scale = .{ 5.0, 0.025, 16.0 }, .position = .{ 0, 0.013, 8 }, .surface = .road },
+    .{ .ordinal = 13, .scale = .{ 1.4, 0.035, 16.0 }, .position = .{ -3.25, 0.019, 8 }, .surface = .sidewalk },
+    .{ .ordinal = 14, .scale = .{ 1.4, 0.035, 16.0 }, .position = .{ 3.25, 0.019, 8 }, .surface = .sidewalk },
+    .{ .ordinal = 15, .scale = .{ 5.0, 0.025, 16.0 }, .position = .{ 16, 0.014, 8 }, .surface = .road },
+    .{ .ordinal = 16, .scale = .{ 1.4, 0.035, 16.0 }, .position = .{ 12.75, 0.020, 8 }, .surface = .sidewalk },
+    .{ .ordinal = 17, .scale = .{ 1.4, 0.035, 16.0 }, .position = .{ 19.25, 0.020, 8 }, .surface = .sidewalk },
+    .{ .ordinal = 18, .scale = .{ 4.5, 0.045, 2.3 }, .position = .{ -5, 0.023, 18.5 }, .surface = .activity_landmark },
+    .{ .ordinal = 19, .scale = .{ 4.5, 0.045, 2.3 }, .position = .{ 4.5, 0.023, 20.5 }, .surface = .building_accent },
+    .{ .ordinal = 20, .scale = .{ 5.5, 0.045, 2.4 }, .position = .{ 20.5, 0.023, 20 }, .surface = .activity_landmark },
+    .{ .ordinal = 21, .scale = .{ 3.8, 0.045, 2.0 }, .position = .{ 14, 0.023, 15.5 }, .surface = .route_landmark },
 };
 
 pub fn environmentPlans() [environment_parts.len]Plan {

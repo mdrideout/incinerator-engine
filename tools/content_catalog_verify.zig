@@ -23,7 +23,7 @@ const HeadlessManifest = struct {
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len != 7) {
+    if (args.len != 9) {
         return error.ExpectedCatalogPairBundlesAndHeadlessManifests;
     }
     const allocator = init.gpa;
@@ -41,62 +41,99 @@ pub fn main(init: std.process.Init) !void {
     };
     defer catalog.deinit();
     const view = catalog.view();
-    if (!std.mem.eql(u8, view.name, "district.catalog") or view.entries.len != 2) {
+    if (!std.mem.eql(u8, view.name, "district.catalog") or
+        view.entries.len != sandbox_recipe.installed_coords.len)
+    {
         return error.UnexpectedCatalogIdentity;
     }
     _ = try view.fingerprint();
 
-    const west_bytes = try read(init, args[3], (content.bundle.Limits{}).max_file_bytes);
-    defer allocator.free(west_bytes);
-    const east_bytes = try read(init, args[4], (content.bundle.Limits{}).max_file_bytes);
-    defer allocator.free(east_bytes);
-    var west = switch (try content.bundle.decode(allocator, west_bytes, .{})) {
+    const southwest_bytes = try read(init, args[3], (content.bundle.Limits{}).max_file_bytes);
+    defer allocator.free(southwest_bytes);
+    const southeast_bytes = try read(init, args[4], (content.bundle.Limits{}).max_file_bytes);
+    defer allocator.free(southeast_bytes);
+    const northwest_bytes = try read(init, args[5], (content.bundle.Limits{}).max_file_bytes);
+    defer allocator.free(northwest_bytes);
+    const northeast_bytes = try read(init, args[6], (content.bundle.Limits{}).max_file_bytes);
+    defer allocator.free(northeast_bytes);
+    var southwest = switch (try content.bundle.decode(allocator, southwest_bytes, .{})) {
         .bundle => |value| value,
         .failed => return error.GeneratedBundleIsInvalid,
     };
-    defer west.deinit();
-    var east = switch (try content.bundle.decode(allocator, east_bytes, .{})) {
+    defer southwest.deinit();
+    var southeast = switch (try content.bundle.decode(allocator, southeast_bytes, .{})) {
         .bundle => |value| value,
         .failed => return error.GeneratedBundleIsInvalid,
     };
-    defer east.deinit();
+    defer southeast.deinit();
+    var northwest = switch (try content.bundle.decode(allocator, northwest_bytes, .{})) {
+        .bundle => |value| value,
+        .failed => return error.GeneratedBundleIsInvalid,
+    };
+    defer northwest.deinit();
+    var northeast = switch (try content.bundle.decode(allocator, northeast_bytes, .{})) {
+        .bundle => |value| value,
+        .failed => return error.GeneratedBundleIsInvalid,
+    };
+    defer northeast.deinit();
 
-    const east_index = view.lookupSemanticId("district.east") orelse
-        return error.MissingEastEntry;
-    const west_index = view.lookupSemanticId("district.west") orelse
-        return error.MissingWestEntry;
-    try verifyEntry(view.entries[east_index], .{ .x = 1, .z = 0 }, east.bundleIdentity());
-    try verifyEntry(view.entries[west_index], .{ .x = 0, .z = 0 }, west.bundleIdentity());
-    if (view.lookupCoordinate(.{ .x = 1, .z = 0 }) != east_index or
-        view.lookupCoordinate(.{ .x = 0, .z = 0 }) != west_index or
-        view.lookupBundleKey("district/s12_world_east") != east_index or
-        view.lookupBundleKey("district/s12_world_west") != west_index)
+    const northeast_index = view.lookupSemanticId("district.northeast") orelse
+        return error.MissingNortheastEntry;
+    const northwest_index = view.lookupSemanticId("district.northwest") orelse
+        return error.MissingNorthwestEntry;
+    const southeast_index = view.lookupSemanticId("district.southeast") orelse
+        return error.MissingSoutheastEntry;
+    const southwest_index = view.lookupSemanticId("district.southwest") orelse
+        return error.MissingSouthwestEntry;
+    try verifyEntry(view.entries[northeast_index], .{ .x = 1, .z = 1 }, northeast.bundleIdentity());
+    try verifyEntry(view.entries[northwest_index], .{ .x = 0, .z = 1 }, northwest.bundleIdentity());
+    try verifyEntry(view.entries[southeast_index], .{ .x = 1, .z = 0 }, southeast.bundleIdentity());
+    try verifyEntry(view.entries[southwest_index], .{ .x = 0, .z = 0 }, southwest.bundleIdentity());
+    if (view.lookupCoordinate(.{ .x = 1, .z = 1 }) != northeast_index or
+        view.lookupCoordinate(.{ .x = 0, .z = 1 }) != northwest_index or
+        view.lookupCoordinate(.{ .x = 1, .z = 0 }) != southeast_index or
+        view.lookupCoordinate(.{ .x = 0, .z = 0 }) != southwest_index or
+        view.lookupBundleKey("district/s15_world_northeast") != northeast_index or
+        view.lookupBundleKey("district/s15_world_northwest") != northwest_index or
+        view.lookupBundleKey("district/s15_world_southeast") != southeast_index or
+        view.lookupBundleKey("district/s15_world_southwest") != southwest_index)
     {
         return error.CatalogLookupDiverged;
     }
-    const east_dependencies = try view.dependencies(east_index);
-    if (east_dependencies.len != 1 or east_dependencies[0] != west_index or
-        (try view.dependencies(west_index)).len != 0)
+    const northeast_dependencies = try view.dependencies(northeast_index);
+    const northwest_dependencies = try view.dependencies(northwest_index);
+    const southeast_dependencies = try view.dependencies(southeast_index);
+    if (northeast_dependencies.len != 2 or
+        northeast_dependencies[0] != northwest_index or
+        northeast_dependencies[1] != southeast_index or
+        northwest_dependencies.len != 1 or northwest_dependencies[0] != southwest_index or
+        southeast_dependencies.len != 1 or southeast_dependencies[0] != southwest_index or
+        (try view.dependencies(southwest_index)).len != 0)
     {
         return error.CatalogDependencyDiverged;
     }
     var closure_storage: [content.catalog.max_entries]u32 = undefined;
-    const required = try view.dependencyClosure(east_index, &closure_storage);
-    if (required.len != 2 or required[0] != east_index or required[1] != west_index) {
+    const required = try view.dependencyClosure(northeast_index, &closure_storage);
+    if (required.len != 4 or required[0] != northeast_index or
+        required[1] != northwest_index or required[2] != southeast_index or
+        required[3] != southwest_index)
+    {
         return error.CatalogDependencyClosureDiverged;
     }
-    const affected = try view.dependentClosure(west_index, &closure_storage);
-    if (affected.len != 2 or affected[0] != east_index or affected[1] != west_index) {
+    const affected = try view.dependentClosure(southwest_index, &closure_storage);
+    if (affected.len != 4 or affected[0] != northeast_index or
+        affected[1] != northwest_index or affected[2] != southeast_index or
+        affected[3] != southwest_index)
+    {
         return error.CatalogAffectedClosureDiverged;
     }
     try verifyHeadlessCohort(
         init,
         catalog.identity(),
         catalog_bytes,
-        west_bytes,
-        east_bytes,
-        args[5],
-        args[6],
+        .{ southwest_bytes, southeast_bytes, northwest_bytes, northeast_bytes },
+        args[7],
+        args[8],
     );
 }
 
@@ -104,8 +141,7 @@ fn verifyHeadlessCohort(
     init: std.process.Init,
     identity: content.catalog.Identity,
     catalog_bytes: []const u8,
-    west_bytes: []const u8,
-    east_bytes: []const u8,
+    district_bytes: [sandbox_recipe.installed_coords.len][]const u8,
     manifest_path: []const u8,
     config_path: []const u8,
 ) !void {
@@ -119,14 +155,6 @@ fn verifyHeadlessCohort(
     );
     defer manifest.deinit();
     const value = manifest.value;
-    if (value.schema_version != 1 or
-        value.catalog_wire_schema != sandbox_recipe.catalog_wire_schema or
-        !std.mem.eql(u8, value.catalog_semantic_id, sandbox_recipe.catalog_semantic_id) or
-        value.districts.len != 2)
-    {
-        return error.HeadlessContentManifestShapeDiverged;
-    }
-
     const cohort = try sandbox_replay.ContentCohort.init(
         identity.name,
         identity.format_version,
@@ -135,6 +163,24 @@ fn verifyHeadlessCohort(
         identity.source_digest,
         identity.integrity_digest,
     );
+    const cohort_hex = std.fmt.bytesToHex(try cohort.fingerprint(), .lower);
+    const catalog_hex = std.fmt.bytesToHex(sha256(catalog_bytes), .lower);
+    std.debug.print("S15 content cohort {s}\nS15 catalog sha256 {s}\n", .{
+        &cohort_hex,
+        &catalog_hex,
+    });
+    for (district_bytes, 0..) |bytes, index| {
+        const digest_hex = std.fmt.bytesToHex(sha256(bytes), .lower);
+        std.debug.print("S15 district[{d}] sha256 {s}\n", .{ index, &digest_hex });
+    }
+    if (value.schema_version != 1 or
+        value.catalog_wire_schema != sandbox_recipe.catalog_wire_schema or
+        !std.mem.eql(u8, value.catalog_semantic_id, sandbox_recipe.catalog_semantic_id) or
+        value.districts.len != sandbox_recipe.installed_coords.len)
+    {
+        return error.HeadlessContentManifestShapeDiverged;
+    }
+
     try expectDigest(
         "content cohort fingerprint",
         try cohort.fingerprint(),
@@ -143,15 +189,27 @@ fn verifyHeadlessCohort(
     try expectDigest("catalog file", sha256(catalog_bytes), value.catalog_file_sha256);
     try expectDistrictDigest(
         value.districts[0],
-        "district.west",
+        "district.southwest",
         .{ .x = 0, .z = 0 },
-        sha256(west_bytes),
+        sha256(district_bytes[0]),
     );
     try expectDistrictDigest(
         value.districts[1],
-        "district.east",
+        "district.southeast",
         .{ .x = 1, .z = 0 },
-        sha256(east_bytes),
+        sha256(district_bytes[1]),
+    );
+    try expectDistrictDigest(
+        value.districts[2],
+        "district.northwest",
+        .{ .x = 0, .z = 1 },
+        sha256(district_bytes[2]),
+    );
+    try expectDistrictDigest(
+        value.districts[3],
+        "district.northeast",
+        .{ .x = 1, .z = 1 },
+        sha256(district_bytes[3]),
     );
 
     const config_bytes = try read(init, config_path, 64 * 1024);

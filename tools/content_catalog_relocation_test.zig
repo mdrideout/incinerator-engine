@@ -17,14 +17,19 @@ pub fn main(init: std.process.Init) !void {
     defer admission.deinit();
 
     const view = admission.view();
-    if (view.entries.len != 2) {
+    if (view.entries.len != 4) {
         return error.InstalledCatalogSemanticsInvalid;
     }
-    const west = try admission.sceneRequest(.{ .x = 0, .z = 0 }, 1);
-    const east = try admission.sceneRequest(.{ .x = 1, .z = 0 }, 2);
-    if (!std.mem.eql(u8, west.key.bytes(), "district/s3_fixture") or
-        !std.mem.eql(u8, east.key.bytes(), "district/s6_east") or
-        west.expected_identity == null or east.expected_identity == null)
+    const southwest = try admission.sceneRequest(.{ .x = 0, .z = 0 }, 1);
+    const southeast = try admission.sceneRequest(.{ .x = 1, .z = 0 }, 2);
+    const northwest = try admission.sceneRequest(.{ .x = 0, .z = 1 }, 3);
+    const northeast = try admission.sceneRequest(.{ .x = 1, .z = 1 }, 4);
+    if (!std.mem.eql(u8, southwest.key.bytes(), "district/s15_world_southwest") or
+        !std.mem.eql(u8, southeast.key.bytes(), "district/s15_world_southeast") or
+        !std.mem.eql(u8, northwest.key.bytes(), "district/s15_world_northwest") or
+        !std.mem.eql(u8, northeast.key.bytes(), "district/s15_world_northeast") or
+        southwest.expected_identity == null or southeast.expected_identity == null or
+        northwest.expected_identity == null or northeast.expected_identity == null)
     {
         return error.InstalledCatalogLookupInvalid;
     }

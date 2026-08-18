@@ -1,0 +1,6 @@
+incinerator-district-catalog-v1
+catalog district.catalog
+entry district.northeast 1 1 district/s15_world_northeast district.northwest,district.southeast
+entry district.northwest 0 1 district/s15_world_northwest district.southwest
+entry district.southeast 1 0 district/s15_world_southeast district.southwest
+entry district.southwest 0 0 district/s15_world_southwest -

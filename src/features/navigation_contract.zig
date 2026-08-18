@@ -13,7 +13,7 @@ pub const Edge = district.NavigationEdge;
 pub const LoadTicket = district.LoadTicket;
 pub const ChunkCoord = district.ChunkCoord;
 pub const max_destination_anchors: usize = 2;
-pub const max_route_nodes: usize = 16;
+pub const max_route_nodes: usize = 4 * district.max_navigation_nodes;
 pub const max_route_edges: usize = max_route_nodes - 1;
 
 /// Stable game-content identity. A destination survives route invalidation,

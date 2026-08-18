@@ -1,9 +1,10 @@
 # Incinerator Multiplayer-First Architecture and Delivery Plan
 
 **Status:** MP0-MP6, M4-M6, S10-S13, IV0-IV5, IC5, the open-world
-corrective, ED1, and DR1 are accepted on Apple Silicon macOS. S14 authoritative
-ranged combat has completed automated acceptance across solo, private-listen,
-and dedicated placement; its ordinary-product walkthrough remains. Public
+corrective, ED1, DR1, and S14 are accepted on Apple Silicon macOS. S15
+content-rich four-district implementation and automated acceptance are
+complete across the same solo, private-listen, and dedicated authority model;
+its human walkthrough remains. Public
 Internet, Steamworks, hosting, and MMO services remain deferred.
 
 **Last reviewed:** 2026-08-18
@@ -26,7 +27,8 @@ Internet, Steamworks, hosting, and MMO services remain deferred.
 → [`S12 accepted`](docs/validation/s12-destination-driven-navigation.md)
 → [`S13 accepted`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 → [`DR1 accepted`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
-→ [`S14 automated acceptance complete; human checkpoint pending`](docs/validation/s14-ranged-combat.md)
+→ [`S14 accepted`](docs/validation/s14-ranged-combat.md)
+→ [`S15 automated acceptance complete; human checkpoint pending`](docs/validation/s15-content-rich-district-expansion.md)
 
 **Accepted decisions:**
 [ADR-016](docs/adr/016-authority-session-topology.md),
@@ -35,8 +37,9 @@ Internet, Steamworks, hosting, and MMO services remain deferred.
 [ADR-019](docs/adr/019-authoritative-npc-encounter-and-replacement.md),
 [ADR-020](docs/adr/020-gameplay-interaction-validation-and-observability.md),
 [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md),
-[ADR-024](docs/adr/024-authored-population-intent-and-activity-slots.md), and
-[ADR-027](docs/adr/027-authoritative-ranged-combat.md)
+[ADR-024](docs/adr/024-authored-population-intent-and-activity-slots.md),
+[ADR-027](docs/adr/027-authoritative-ranged-combat.md), and
+[ADR-028](docs/adr/028-content-rich-four-district-cohort.md)
 
 ## Purpose
 
@@ -789,8 +792,8 @@ hardening remain later programs.
    incident bundles, failure hardening, open traversal, vehicle/NPC contact,
    carry/drop continuity, navigation intent diagnostics, and measured vehicle
    tuning close the current macOS baseline.
-8. **S12 destination-driven navigation — implemented; human acceptance
-   pending.** The existing authority/session/replication model now owns dynamic
+8. **S12 destination-driven navigation — accepted.** The existing
+   authority/session/replication model owns dynamic
    destination resolution and replanning without expanding Steam/NAT/service
    scope. Use
    [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md),
@@ -798,10 +801,9 @@ hardening remain later programs.
    and the [evaluation-world specification](docs/design/s12-navigation-evaluation-world.md)
    with the
    [validation ledger](docs/validation/s12-destination-driven-navigation.md)
-   for review. Follow its human checkpoint with authored population, ranged
-   combat, and richer districts as separate gameplay slices.
-9. **S13 authored population and sandbox activity — implemented; automated
-   acceptance complete and human walkthrough pending.** Stable population
+   for accepted evidence. Authored population, ranged combat, and richer
+   districts remain separate gameplay slices.
+9. **S13 authored population and sandbox activity — accepted.** Stable population
    members, explicit roles/hostility, deterministic cyclic activity, exclusive
    authored slots, safe generational replacement, and population diagnostics
    are implemented under

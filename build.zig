@@ -102,6 +102,7 @@ fn runContentCooker(
     bundle_key: []const u8,
     coord_x: i32,
     coord_z: i32,
+    root_translation: [3]f32,
     dependencies: []const CookDependency,
 ) CookedContent {
     const run = b.addRunArtifact(cooker);
@@ -111,6 +112,9 @@ fn runContentCooker(
     run.addArg(bundle_key);
     run.addArg(b.fmt("{d}", .{coord_x}));
     run.addArg(b.fmt("{d}", .{coord_z}));
+    for (root_translation) |component| {
+        run.addArg(b.fmt("{d}", .{component}));
+    }
     for (dependencies) |dependency| {
         run.addArg(dependency.semantic_id);
         run.addFileArg(dependency.bundle);
@@ -662,6 +666,7 @@ pub fn build(b: *std.Build) void {
         "district/s3_fixture",
         0,
         0,
+        .{ 0, 0, 0 },
         &.{},
     );
     const cooked_fixture_repeat = runContentCooker(
@@ -673,6 +678,7 @@ pub fn build(b: *std.Build) void {
         "district/s3_fixture",
         0,
         0,
+        .{ 0, 0, 0 },
         &.{},
     );
     const cooked_east = runContentCooker(
@@ -684,6 +690,7 @@ pub fn build(b: *std.Build) void {
         "district/s6_east",
         1,
         0,
+        .{ 0, 0, 0 },
         &.{.{
             .semantic_id = "district.west",
             .bundle = cooked_fixture.output,
@@ -698,60 +705,137 @@ pub fn build(b: *std.Build) void {
         "district/s6_east",
         1,
         0,
+        .{ 0, 0, 0 },
         &.{.{
             .semantic_id = "district.west",
             .bundle = cooked_fixture_repeat.output,
         }},
     );
-    const cooked_s12_west = runContentCooker(
+    const cooked_s15_southwest = runContentCooker(
         b,
         content_cooker,
         "fixtures/s12_world_west/district.gltf",
-        "fixtures/s12_world_west/PROVENANCE.md",
-        "s12_world_west.icdb",
-        "district/s12_world_west",
+        "fixtures/s15_world_southwest/PROVENANCE.md",
+        "s15_world_southwest.icdb",
+        "district/s15_world_southwest",
         0,
         0,
+        .{ 0, 0, 0 },
         &.{},
     );
-    const cooked_s12_east = runContentCooker(
+    const cooked_s15_southeast = runContentCooker(
         b,
         content_cooker,
         "fixtures/s12_world_east/district.gltf",
-        "fixtures/s12_world_east/PROVENANCE.md",
-        "s12_world_east.icdb",
-        "district/s12_world_east",
+        "fixtures/s15_world_southeast/PROVENANCE.md",
+        "s15_world_southeast.icdb",
+        "district/s15_world_southeast",
         1,
         0,
+        .{ 0, 0, 0 },
         &.{.{
-            .semantic_id = "district.west",
-            .bundle = cooked_s12_west.output,
+            .semantic_id = "district.southwest",
+            .bundle = cooked_s15_southwest.output,
         }},
     );
-    const cooked_s12_west_repeat = runContentCooker(
+    const cooked_s15_northwest = runContentCooker(
         b,
         content_cooker,
         "fixtures/s12_world_west/district.gltf",
-        "fixtures/s12_world_west/PROVENANCE.md",
-        "s12_world_west_repeat.icdb",
-        "district/s12_world_west",
+        "fixtures/s15_world_northwest/PROVENANCE.md",
+        "s15_world_northwest.icdb",
+        "district/s15_world_northwest",
         0,
-        0,
-        &.{},
+        1,
+        .{ 0, 0, 16 },
+        &.{.{
+            .semantic_id = "district.southwest",
+            .bundle = cooked_s15_southwest.output,
+        }},
     );
-    const cooked_s12_east_repeat = runContentCooker(
+    const cooked_s15_northeast = runContentCooker(
         b,
         content_cooker,
         "fixtures/s12_world_east/district.gltf",
-        "fixtures/s12_world_east/PROVENANCE.md",
-        "s12_world_east_repeat.icdb",
-        "district/s12_world_east",
+        "fixtures/s15_world_northeast/PROVENANCE.md",
+        "s15_world_northeast.icdb",
+        "district/s15_world_northeast",
+        1,
+        1,
+        .{ 0, 0, 16 },
+        &.{
+            .{
+                .semantic_id = "district.northwest",
+                .bundle = cooked_s15_northwest.output,
+            },
+            .{
+                .semantic_id = "district.southeast",
+                .bundle = cooked_s15_southeast.output,
+            },
+        },
+    );
+    const cooked_s15_southwest_repeat = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s12_world_west/district.gltf",
+        "fixtures/s15_world_southwest/PROVENANCE.md",
+        "s15_world_southwest_repeat.icdb",
+        "district/s15_world_southwest",
+        0,
+        0,
+        .{ 0, 0, 0 },
+        &.{},
+    );
+    const cooked_s15_southeast_repeat = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s12_world_east/district.gltf",
+        "fixtures/s15_world_southeast/PROVENANCE.md",
+        "s15_world_southeast_repeat.icdb",
+        "district/s15_world_southeast",
         1,
         0,
+        .{ 0, 0, 0 },
         &.{.{
-            .semantic_id = "district.west",
-            .bundle = cooked_s12_west_repeat.output,
+            .semantic_id = "district.southwest",
+            .bundle = cooked_s15_southwest_repeat.output,
         }},
+    );
+    const cooked_s15_northwest_repeat = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s12_world_west/district.gltf",
+        "fixtures/s15_world_northwest/PROVENANCE.md",
+        "s15_world_northwest_repeat.icdb",
+        "district/s15_world_northwest",
+        0,
+        1,
+        .{ 0, 0, 16 },
+        &.{.{
+            .semantic_id = "district.southwest",
+            .bundle = cooked_s15_southwest_repeat.output,
+        }},
+    );
+    const cooked_s15_northeast_repeat = runContentCooker(
+        b,
+        content_cooker,
+        "fixtures/s12_world_east/district.gltf",
+        "fixtures/s15_world_northeast/PROVENANCE.md",
+        "s15_world_northeast_repeat.icdb",
+        "district/s15_world_northeast",
+        1,
+        1,
+        .{ 0, 0, 16 },
+        &.{
+            .{
+                .semantic_id = "district.northwest",
+                .bundle = cooked_s15_northwest_repeat.output,
+            },
+            .{
+                .semantic_id = "district.southeast",
+                .bundle = cooked_s15_southeast_repeat.output,
+            },
+        },
     );
     const content_catalog_cooker = b.addExecutable(.{
         .name = "incinerator_content_catalog_cooker",
@@ -766,25 +850,35 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    const cooked_s12_catalog = runContentCatalogCooker(
+    const cooked_s15_catalog = runContentCatalogCooker(
         b,
         content_catalog_cooker,
-        "fixtures/s12_world_catalog/catalog.txt",
-        "s12_catalog.icat",
-        &.{ cooked_s12_west.output, cooked_s12_east.output },
+        "fixtures/s15_world_catalog/catalog.txt",
+        "s15_catalog.icat",
+        &.{
+            cooked_s15_southwest.output,
+            cooked_s15_southeast.output,
+            cooked_s15_northwest.output,
+            cooked_s15_northeast.output,
+        },
     );
-    const cooked_s12_catalog_repeat = runContentCatalogCooker(
+    const cooked_s15_catalog_repeat = runContentCatalogCooker(
         b,
         content_catalog_cooker,
-        "fixtures/s12_world_catalog/catalog.txt",
-        "s12_catalog_repeat.icat",
-        &.{ cooked_s12_west_repeat.output, cooked_s12_east_repeat.output },
+        "fixtures/s15_world_catalog/catalog.txt",
+        "s15_catalog_repeat.icat",
+        &.{
+            cooked_s15_southwest_repeat.output,
+            cooked_s15_southeast_repeat.output,
+            cooked_s15_northwest_repeat.output,
+            cooked_s15_northeast_repeat.output,
+        },
     );
     const cook_content_step = b.step(
         "cook-content",
-        "Cook the two self-authored district fixtures and declared dependency closure",
+        "Cook the four self-authored S15 districts and declared dependency closure",
     );
-    cook_content_step.dependOn(cooked_s12_catalog.step);
+    cook_content_step.dependOn(cooked_s15_catalog.step);
     const install_cooked_fixture = b.addInstallFile(
         cooked_fixture.output,
         "share/incinerator/content/district/s3_fixture.icdb",
@@ -797,38 +891,58 @@ pub fn build(b: *std.Build) void {
         cooked_east.output,
         "share/incinerator/content/district/s6_east.icdb",
     );
-    const install_cooked_s12_west = b.addInstallFile(
-        cooked_s12_west.output,
-        "share/incinerator/content/district/s12_world_west.icdb",
+    const install_cooked_s15_southwest = b.addInstallFile(
+        cooked_s15_southwest.output,
+        "share/incinerator/content/district/s15_world_southwest.icdb",
     );
-    const install_s12_west_provenance = b.addInstallFile(
-        b.path("fixtures/s12_world_west/PROVENANCE.md"),
-        "share/incinerator/content/district/s12_world_west.PROVENANCE.md",
+    const install_s15_southwest_provenance = b.addInstallFile(
+        b.path("fixtures/s15_world_southwest/PROVENANCE.md"),
+        "share/incinerator/content/district/s15_world_southwest.PROVENANCE.md",
     );
-    const install_cooked_s12_east = b.addInstallFile(
-        cooked_s12_east.output,
-        "share/incinerator/content/district/s12_world_east.icdb",
+    const install_cooked_s15_southeast = b.addInstallFile(
+        cooked_s15_southeast.output,
+        "share/incinerator/content/district/s15_world_southeast.icdb",
     );
-    const install_s12_east_provenance = b.addInstallFile(
-        b.path("fixtures/s12_world_east/PROVENANCE.md"),
-        "share/incinerator/content/district/s12_world_east.PROVENANCE.md",
+    const install_s15_southeast_provenance = b.addInstallFile(
+        b.path("fixtures/s15_world_southeast/PROVENANCE.md"),
+        "share/incinerator/content/district/s15_world_southeast.PROVENANCE.md",
+    );
+    const install_cooked_s15_northwest = b.addInstallFile(
+        cooked_s15_northwest.output,
+        "share/incinerator/content/district/s15_world_northwest.icdb",
+    );
+    const install_s15_northwest_provenance = b.addInstallFile(
+        b.path("fixtures/s15_world_northwest/PROVENANCE.md"),
+        "share/incinerator/content/district/s15_world_northwest.PROVENANCE.md",
+    );
+    const install_cooked_s15_northeast = b.addInstallFile(
+        cooked_s15_northeast.output,
+        "share/incinerator/content/district/s15_world_northeast.icdb",
+    );
+    const install_s15_northeast_provenance = b.addInstallFile(
+        b.path("fixtures/s15_world_northeast/PROVENANCE.md"),
+        "share/incinerator/content/district/s15_world_northeast.PROVENANCE.md",
     );
     const install_east_provenance = b.addInstallFile(
         b.path("fixtures/s6_east/PROVENANCE.md"),
         "share/incinerator/content/district/s6_east.PROVENANCE.md",
     );
     const install_cooked_catalog = b.addInstallFile(
-        cooked_s12_catalog.output,
+        cooked_s15_catalog.output,
         "share/incinerator/content/district/catalog.icat",
     );
     b.getInstallStep().dependOn(&install_cooked_fixture.step);
     b.getInstallStep().dependOn(&install_fixture_provenance.step);
     b.getInstallStep().dependOn(&install_cooked_east.step);
     b.getInstallStep().dependOn(&install_east_provenance.step);
-    b.getInstallStep().dependOn(&install_cooked_s12_west.step);
-    b.getInstallStep().dependOn(&install_s12_west_provenance.step);
-    b.getInstallStep().dependOn(&install_cooked_s12_east.step);
-    b.getInstallStep().dependOn(&install_s12_east_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_s15_southwest.step);
+    b.getInstallStep().dependOn(&install_s15_southwest_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_s15_southeast.step);
+    b.getInstallStep().dependOn(&install_s15_southeast_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_s15_northwest.step);
+    b.getInstallStep().dependOn(&install_s15_northwest_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_s15_northeast.step);
+    b.getInstallStep().dependOn(&install_s15_northeast_provenance.step);
     b.getInstallStep().dependOn(&install_cooked_catalog.step);
 
     const content_tests = b.addTest(.{ .root_module = content_host_module });
@@ -887,10 +1001,12 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const verify_cooked_catalog = b.addRunArtifact(content_catalog_verify);
-    verify_cooked_catalog.addFileArg(cooked_s12_catalog.output);
-    verify_cooked_catalog.addFileArg(cooked_s12_catalog_repeat.output);
-    verify_cooked_catalog.addFileArg(cooked_s12_west.output);
-    verify_cooked_catalog.addFileArg(cooked_s12_east.output);
+    verify_cooked_catalog.addFileArg(cooked_s15_catalog.output);
+    verify_cooked_catalog.addFileArg(cooked_s15_catalog_repeat.output);
+    verify_cooked_catalog.addFileArg(cooked_s15_southwest.output);
+    verify_cooked_catalog.addFileArg(cooked_s15_southeast.output);
+    verify_cooked_catalog.addFileArg(cooked_s15_northwest.output);
+    verify_cooked_catalog.addFileArg(cooked_s15_northeast.output);
     verify_cooked_catalog.addFileArg(b.path("config/headless-content.json"));
     verify_cooked_catalog.addFileArg(b.path("config/headless.example.json"));
     content_cooker_test_step.dependOn(&verify_cooked_catalog.step);
@@ -901,7 +1017,10 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("tools/content_relocation_test.zig"),
             .target = b.graph.host,
             .optimize = optimize,
-            .imports = &.{.{ .name = "content", .module = content_host_module }},
+            .imports = &.{
+                .{ .name = "content", .module = content_host_module },
+                .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_host_module },
+            },
         }),
     });
     const install_content_relocation_test = b.addInstallArtifact(content_relocation_test, .{
@@ -1096,8 +1215,10 @@ pub fn build(b: *std.Build) void {
         b.getInstallPath(.prefix, "share/incinerator/content"),
     );
     run_content_catalog_relocation.setCwd(.{ .cwd_relative = "/tmp" });
-    run_content_catalog_relocation.step.dependOn(&install_cooked_fixture.step);
-    run_content_catalog_relocation.step.dependOn(&install_cooked_east.step);
+    run_content_catalog_relocation.step.dependOn(&install_cooked_s15_southwest.step);
+    run_content_catalog_relocation.step.dependOn(&install_cooked_s15_southeast.step);
+    run_content_catalog_relocation.step.dependOn(&install_cooked_s15_northwest.step);
+    run_content_catalog_relocation.step.dependOn(&install_cooked_s15_northeast.step);
     run_content_catalog_relocation.step.dependOn(&install_cooked_catalog.step);
     run_content_catalog_relocation.step.dependOn(
         &install_content_catalog_relocation_test.step,
@@ -2328,6 +2449,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "jolt_physics", .module = jolt_physics_module },
             .{ .name = "content", .module = content_module },
             .{ .name = "district_content_catalog", .module = district_content_catalog_module },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
         },
     });
     const s8_measure_exe = b.addExecutable(.{
@@ -4276,6 +4398,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "sandbox_navigation", .module = sandbox_navigation_module },
             .{ .name = "sandbox_simulation", .module = sandbox_simulation_module },
+            .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
         },
     });
     const s12_measure_exe = b.addExecutable(.{
@@ -4418,6 +4541,31 @@ pub fn build(b: *std.Build) void {
     verify_s14_step.dependOn(verify_s14_dedicated_step);
     verify_s14_step.dependOn(verify_s13_step);
     verify_s14_step.dependOn(installed_s14_smoke_step);
+
+    const verify_s15_step = b.step(
+        "verify-s15",
+        "Run complete four-district content, navigation, population, replay, diagnostics, and Metal acceptance",
+    );
+    verify_s15_step.dependOn(content_cooker_test_step);
+    verify_s15_step.dependOn(content_relocation_step);
+    verify_s15_step.dependOn(district_contract_test_step);
+    verify_s15_step.dependOn(district_feature_test_step);
+    verify_s15_step.dependOn(district_content_catalog_test_step);
+    verify_s15_step.dependOn(district_streaming_host_test_step);
+    verify_s15_step.dependOn(navigation_planner_test_step);
+    verify_s15_step.dependOn(sandbox_navigation_test_step);
+    verify_s15_step.dependOn(sandbox_population_catalog_test_step);
+    verify_s15_step.dependOn(sandbox_population_catalog_host_test_step);
+    verify_s15_step.dependOn(sandbox_product_population_host_test_step);
+    verify_s15_step.dependOn(sandbox_simulation_test_step);
+    verify_s15_step.dependOn(simulation_snapshot_test_step);
+    verify_s15_step.dependOn(sandbox_replay_test_step);
+    verify_s15_step.dependOn(session_contract_test_step);
+    verify_s15_step.dependOn(developer_diagnostics_test_step);
+    verify_s15_step.dependOn(verify_incident_hardening_step);
+    verify_s15_step.dependOn(check_validation_step);
+    verify_s15_step.dependOn(verify_source_package_step);
+    verify_s15_step.dependOn(verify_s14_step);
 
     const interaction_validation_audit_command = b.addSystemCommand(&.{
         "bash",

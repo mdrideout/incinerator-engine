@@ -160,21 +160,21 @@ fn isGateEdge(
     target: navigation.NodeRef,
     gate: Gate,
 ) bool {
-    const west_index: u8 = switch (gate) {
-        .north => 6,
-        .south => 7,
+    const west_coord = switch (gate) {
+        .north => recipe.navigation_northwest_coord,
+        .south => recipe.navigation_west_coord,
     };
-    const east_index: u8 = switch (gate) {
-        .north => 0,
-        .south => 6,
+    const east_coord = switch (gate) {
+        .north => recipe.navigation_northeast_coord,
+        .south => recipe.navigation_east_coord,
     };
     const west = navigation.NodeRef{
-        .coord = recipe.navigation_west_coord,
-        .index = west_index,
+        .coord = west_coord,
+        .index = 6,
     };
     const east = navigation.NodeRef{
-        .coord = recipe.navigation_east_coord,
-        .index = east_index,
+        .coord = east_coord,
+        .index = 0,
     };
     return (navigation.NodeRef.eql(source, west) and
         navigation.NodeRef.eql(target, east)) or
@@ -393,7 +393,7 @@ test "canonical preflight access validates exact route without runtime authority
         .coord = recipe.navigation_west_coord,
         .index = 8,
     }) == .invalid_reference);
-    try std.testing.expect(access.resolveEdge(west_start, 1) == .invalid_ordinal);
+    try std.testing.expect(access.resolveEdge(west_start, 2) == .invalid_ordinal);
     try std.testing.expectEqualDeep(
         navigation.ChunkCoord{ .x = 1, .z = 0 },
         try navigation.ownerForPosition(.{ 8, 0, 3 }),

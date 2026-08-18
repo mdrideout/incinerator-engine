@@ -2,19 +2,27 @@
 //!
 //! The reusable district contract owns bounded value types and structural
 //! validation. This module owns the actual world layout, installed
-//! coordinates, recipe cohort, and exact two-district navigation policy.
+//! coordinates, recipe cohort, and exact four-district navigation policy.
 
 const std = @import("std");
 const district = @import("district_contract");
 const navigation = @import("navigation_contract");
 
-pub const current_recipe_version: u32 = 7;
-pub const catalog_semantic_id = "incinerator.s13.population-two-district";
+pub const current_recipe_version: u32 = 8;
+pub const catalog_semantic_id = "incinerator.s15.content-rich-four-district";
 pub const catalog_wire_schema: u16 = 1;
-pub const static_box_count: u8 = 3;
-pub const blocking_proxy_count: u8 = static_box_count - 1;
+pub const static_box_count: u8 = 2;
+pub const blocking_proxy_count: u8 = static_box_count;
 pub const navigation_west_coord = district.ChunkCoord{ .x = 0, .z = 0 };
 pub const navigation_east_coord = district.ChunkCoord{ .x = 1, .z = 0 };
+pub const navigation_northwest_coord = district.ChunkCoord{ .x = 0, .z = 1 };
+pub const navigation_northeast_coord = district.ChunkCoord{ .x = 1, .z = 1 };
+pub const installed_coords = [_]district.ChunkCoord{
+    navigation_west_coord,
+    navigation_east_coord,
+    navigation_northwest_coord,
+    navigation_northeast_coord,
+};
 
 pub const player_plaza = navigation.DestinationId{ .value = 1 };
 pub const depot_forecourt = navigation.DestinationId{ .value = 2 };
@@ -32,7 +40,15 @@ pub const market_terminal_third = navigation.DestinationId{ .value = 13 };
 pub const alley_junction_companion = navigation.DestinationId{ .value = 14 };
 pub const transit_yard_companion = navigation.DestinationId{ .value = 15 };
 pub const east_court = navigation.DestinationId{ .value = 16 };
-pub const destination_count: usize = 16;
+pub const north_plaza_first = navigation.DestinationId{ .value = 17 };
+pub const north_plaza_second = navigation.DestinationId{ .value = 18 };
+pub const civic_court_first = navigation.DestinationId{ .value = 19 };
+pub const civic_court_second = navigation.DestinationId{ .value = 20 };
+pub const station_concourse_first = navigation.DestinationId{ .value = 21 };
+pub const station_concourse_second = navigation.DestinationId{ .value = 22 };
+pub const north_alley_first = navigation.DestinationId{ .value = 23 };
+pub const north_alley_second = navigation.DestinationId{ .value = 24 };
+pub const destination_count: usize = 24;
 
 pub fn resolveDestination(id: navigation.DestinationId) ?navigation.Destination {
     const entry: navigation.Destination = switch (id.value) {
@@ -148,6 +164,62 @@ pub fn resolveDestination(id: navigation.DestinationId) ?navigation.Destination 
             .anchors = .{ nodeRef(navigation_east_coord, 1), .{} },
             .anchor_count = 1,
         },
+        17 => .{
+            .id = north_plaza_first,
+            .position = .{ -6.5, 0, 17.5 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_northwest_coord, 1), .{} },
+            .anchor_count = 1,
+        },
+        18 => .{
+            .id = north_plaza_second,
+            .position = .{ -4.0, 0, 19.5 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_northwest_coord, 2), .{} },
+            .anchor_count = 1,
+        },
+        19 => .{
+            .id = civic_court_first,
+            .position = .{ 3.5, 0, 20.5 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_northwest_coord, 3), .{} },
+            .anchor_count = 1,
+        },
+        20 => .{
+            .id = civic_court_second,
+            .position = .{ 5.8, 0, 19.2 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_northwest_coord, 7), .{} },
+            .anchor_count = 1,
+        },
+        21 => .{
+            .id = station_concourse_first,
+            .position = .{ 19.5, 0, 17.0 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_northeast_coord, 3), .{} },
+            .anchor_count = 1,
+        },
+        22 => .{
+            .id = station_concourse_second,
+            .position = .{ 21.0, 0, 19.0 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_northeast_coord, 4), .{} },
+            .anchor_count = 1,
+        },
+        23 => .{
+            .id = north_alley_first,
+            .position = .{ 13.0, 0, 14.8 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_northeast_coord, 7), .{} },
+            .anchor_count = 1,
+        },
+        24 => .{
+            .id = north_alley_second,
+            .position = .{ 14.8, 0, 16.5 },
+            .arrival_radius = 0.25,
+            .anchors = .{ nodeRef(navigation_northeast_coord, 7), .{} },
+            .anchor_count = 1,
+        },
         else => return null,
     };
     entry.validate() catch return null;
@@ -172,6 +244,14 @@ pub fn destinationName(id: navigation.DestinationId) ?[]const u8 {
         14 => "alley_junction_companion",
         15 => "transit_yard_companion",
         16 => "east_court",
+        17 => "north_plaza_first",
+        18 => "north_plaza_second",
+        19 => "civic_court_first",
+        20 => "civic_court_second",
+        21 => "station_concourse_first",
+        22 => "station_concourse_second",
+        23 => "north_alley_first",
+        24 => "north_alley_second",
         else => null,
     };
 }
@@ -215,17 +295,34 @@ pub const presentation_policies = [_]PresentationPolicy{
         .authority_load_margin = 4,
         .authority_unload_margin = 8,
     },
+    .{
+        .coord = navigation_northwest_coord,
+        .center_xz = .{ 0, district.chunk_span },
+        .half_extent_xz = .{ 8, 8 },
+        .prefetch_load_margin = 24,
+        .prefetch_unload_margin = 28,
+        .authority_load_margin = 4,
+        .authority_unload_margin = 8,
+    },
+    .{
+        .coord = navigation_northeast_coord,
+        .center_xz = .{ district.chunk_span, district.chunk_span },
+        .half_extent_xz = .{ 8, 8 },
+        .prefetch_load_margin = 24,
+        .prefetch_unload_margin = 28,
+        .authority_load_margin = 4,
+        .authority_unload_margin = 8,
+    },
 };
 
 /// Product presentation responsibility for each canonical static box.
 ///
 /// Cooked meshes are authored decoration until a future content schema can
-/// explicitly bind mesh instances to collision. A blocking box therefore
-/// keeps a simple proxy in every residency state. The support surface is
-/// presented by the composition-owned ground mesh and must not be drawn a
-/// second time as a coplanar district proxy.
+/// explicitly bind mesh instances to collision. Every district-owned obstacle
+/// therefore keeps a simple proxy in every residency state. The composition
+/// owns the one continuous flat support body and visual; districts do not
+/// duplicate it.
 pub const StaticBoxPresentation = enum {
-    host_support_surface,
     blocking_proxy,
 };
 
@@ -267,14 +364,10 @@ pub fn presentationPlan(
         .authored_scene_resident = authored_scene_resident,
     };
     for (logical_build.boxes(), 0..) |_, box_index| {
-        switch (staticBoxPresentation(box_index) orelse
-            return error.UnknownDistrictStaticBoxPresentation) {
-            .host_support_surface => {},
-            .blocking_proxy => {
-                plan.proxy_box_indices[plan.proxy_box_count] = @intCast(box_index);
-                plan.proxy_box_count += 1;
-            },
-        }
+        _ = staticBoxPresentation(box_index) orelse
+            return error.UnknownDistrictStaticBoxPresentation;
+        plan.proxy_box_indices[plan.proxy_box_count] = @intCast(box_index);
+        plan.proxy_box_count += 1;
     }
     return plan;
 }
@@ -304,7 +397,7 @@ pub fn capsuleTraversalClear(
     const horizontal_extent = clearance.radius + clearance.margin;
     for (logical_build.boxes(), 0..) |box, box_index| {
         const role = staticBoxPresentation(box_index) orelse return false;
-        if (role != .blocking_proxy) continue;
+        _ = role;
 
         // The installed recipe is intentionally axis-aligned. Reject layout
         // drift conservatively until an oriented-box clearance query is part
@@ -334,8 +427,7 @@ pub fn capsuleTraversalClear(
 
 fn staticBoxPresentation(box_index: usize) ?StaticBoxPresentation {
     return switch (box_index) {
-        0 => .host_support_surface,
-        1, 2 => .blocking_proxy,
+        0, 1 => .blocking_proxy,
         else => null,
     };
 }
@@ -390,36 +482,52 @@ pub fn build(
         .decoded_bytes = district.decodedByteCount(static_box_count, 0, 0),
         .static_box_count = static_box_count,
     };
-    result.static_boxes[0] = .{
-        .pose = .{ .position = .{ origin_x, -0.5, origin_z } },
-        .half_extents = .{ 7.5, 0.5, 7.5 },
-    };
     if (district.ChunkCoord.eql(coord, navigation_west_coord)) {
-        result.static_boxes[1] = .{
+        result.static_boxes[0] = .{
             .pose = .{ .position = .{ 0, 1.0, 4.8 } },
             .half_extents = .{ 1.25, 1.0, 0.5 },
         };
-        result.static_boxes[2] = .{
+        result.static_boxes[1] = .{
             .pose = .{ .position = .{ 0, 0.75, -4.8 } },
             .half_extents = .{ 1.25, 0.75, 0.5 },
         };
         populateWestNavigation(&result);
     } else if (district.ChunkCoord.eql(coord, navigation_east_coord)) {
-        result.static_boxes[1] = .{
+        result.static_boxes[0] = .{
             .pose = .{ .position = .{ 16.0, 1.0, 2.0 } },
             .half_extents = .{ 1.0, 1.0, 0.5 },
         };
-        result.static_boxes[2] = .{
+        result.static_boxes[1] = .{
             .pose = .{ .position = .{ 16.0, 0.75, -2.0 } },
             .half_extents = .{ 1.0, 0.75, 0.5 },
         };
         populateEastNavigation(&result);
-    } else {
+    } else if (district.ChunkCoord.eql(coord, navigation_northwest_coord)) {
+        result.static_boxes[0] = .{
+            .pose = .{ .position = .{ -1.5, 1.25, 18.0 } },
+            .half_extents = .{ 2.0, 1.25, 0.6 },
+        };
         result.static_boxes[1] = .{
+            .pose = .{ .position = .{ 5.5, 0.9, 16.5 } },
+            .half_extents = .{ 0.75, 0.9, 1.5 },
+        };
+        populateNorthwestNavigation(&result);
+    } else if (district.ChunkCoord.eql(coord, navigation_northeast_coord)) {
+        result.static_boxes[0] = .{
+            .pose = .{ .position = .{ 17.0, 1.4, 18.5 } },
+            .half_extents = .{ 1.8, 1.4, 0.7 },
+        };
+        result.static_boxes[1] = .{
+            .pose = .{ .position = .{ 11.0, 1.0, 16.5 } },
+            .half_extents = .{ 0.8, 1.0, 1.0 },
+        };
+        populateNortheastNavigation(&result);
+    } else {
+        result.static_boxes[0] = .{
             .pose = .{ .position = .{ origin_x - 5.5, 1.0, origin_z - 2.0 } },
             .half_extents = .{ 1.0, 1.0, 3.0 },
         };
-        result.static_boxes[2] = .{
+        result.static_boxes[1] = .{
             .pose = .{ .position = .{ origin_x + 3.0, 0.75, origin_z + 4.5 } },
             .half_extents = .{ 2.5, 0.75, 0.75 },
         };
@@ -469,31 +577,31 @@ fn populateWestNavigation(result: *district.DistrictBuild) void {
     std.debug.assert(district.ChunkCoord.eql(result.coord, navigation_west_coord));
     result.navigation_node_count = 8;
     result.navigation_edge_count = 16;
-    result.navigation_nodes[0] = .{ .position = .{ -5, 0, 5 }, .first_edge = 0, .edge_count = 1, .flags = district.navigation_node_terminal };
-    result.navigation_nodes[1] = .{ .position = .{ -5, 0, 3 }, .first_edge = 1, .edge_count = 3 };
-    result.navigation_nodes[2] = .{ .position = .{ -5, 0, -3 }, .first_edge = 4, .edge_count = 2 };
-    result.navigation_nodes[3] = .{ .position = .{ 3, 0, -3 }, .first_edge = 6, .edge_count = 2 };
-    result.navigation_nodes[4] = .{ .position = .{ 2, 0, 3 }, .first_edge = 8, .edge_count = 2 };
-    result.navigation_nodes[5] = .{ .position = .{ 4, 0, 5 }, .first_edge = 10, .edge_count = 2 };
-    result.navigation_nodes[6] = .{ .position = .{ 7, 0, 4 }, .first_edge = 12, .edge_count = 2 };
-    result.navigation_nodes[7] = .{ .position = .{ 7, 0, -3 }, .first_edge = 14, .edge_count = 2 };
+    result.navigation_nodes[0] = .{ .position = .{ -5, 0, 5 }, .first_edge = 0, .edge_count = 2, .flags = district.navigation_node_terminal };
+    result.navigation_nodes[1] = .{ .position = .{ -5, 0, 3 }, .first_edge = 2, .edge_count = 3 };
+    result.navigation_nodes[2] = .{ .position = .{ -5, 0, -3 }, .first_edge = 5, .edge_count = 2 };
+    result.navigation_nodes[3] = .{ .position = .{ 3, 0, -3 }, .first_edge = 7, .edge_count = 2 };
+    result.navigation_nodes[4] = .{ .position = .{ 2, 0, 3 }, .first_edge = 9, .edge_count = 2 };
+    result.navigation_nodes[5] = .{ .position = .{ 4, 0, 5 }, .first_edge = 11, .edge_count = 2 };
+    result.navigation_nodes[6] = .{ .position = .{ 7, 0, 4 }, .first_edge = 13, .edge_count = 2 };
+    result.navigation_nodes[7] = .{ .position = .{ 7, 0, -3 }, .first_edge = 15, .edge_count = 1 };
 
     result.navigation_edges[0] = navEdge(navigation_west_coord, 1, 200);
-    result.navigation_edges[1] = navEdge(navigation_west_coord, 0, 200);
-    result.navigation_edges[2] = navEdge(navigation_west_coord, 2, 600);
-    result.navigation_edges[3] = navEdge(navigation_west_coord, 4, 700);
-    result.navigation_edges[4] = navEdge(navigation_west_coord, 1, 600);
-    result.navigation_edges[5] = navEdge(navigation_west_coord, 3, 800);
-    result.navigation_edges[6] = navEdge(navigation_west_coord, 2, 800);
-    result.navigation_edges[7] = navEdge(navigation_west_coord, 7, 400);
-    result.navigation_edges[8] = navEdge(navigation_west_coord, 1, 700);
-    result.navigation_edges[9] = navEdge(navigation_west_coord, 5, 283);
-    result.navigation_edges[10] = navEdge(navigation_west_coord, 4, 283);
-    result.navigation_edges[11] = navEdge(navigation_west_coord, 6, 316);
-    result.navigation_edges[12] = navEdge(navigation_west_coord, 5, 316);
-    result.navigation_edges[13] = navEdge(navigation_east_coord, 0, 200);
-    result.navigation_edges[14] = navEdge(navigation_west_coord, 3, 400);
-    result.navigation_edges[15] = navEdge(navigation_east_coord, 6, 200);
+    result.navigation_edges[1] = navEdge(navigation_northwest_coord, 0, 600);
+    result.navigation_edges[2] = navEdge(navigation_west_coord, 0, 200);
+    result.navigation_edges[3] = navEdge(navigation_west_coord, 2, 600);
+    result.navigation_edges[4] = navEdge(navigation_west_coord, 4, 700);
+    result.navigation_edges[5] = navEdge(navigation_west_coord, 1, 600);
+    result.navigation_edges[6] = navEdge(navigation_west_coord, 3, 800);
+    result.navigation_edges[7] = navEdge(navigation_west_coord, 2, 800);
+    result.navigation_edges[8] = navEdge(navigation_west_coord, 7, 400);
+    result.navigation_edges[9] = navEdge(navigation_west_coord, 1, 700);
+    result.navigation_edges[10] = navEdge(navigation_west_coord, 5, 283);
+    result.navigation_edges[11] = navEdge(navigation_west_coord, 4, 283);
+    result.navigation_edges[12] = navEdge(navigation_west_coord, 6, 316);
+    result.navigation_edges[13] = navEdge(navigation_west_coord, 5, 316);
+    result.navigation_edges[14] = navEdge(navigation_east_coord, 0, 200);
+    result.navigation_edges[15] = navEdge(navigation_west_coord, 3, 400);
 }
 
 fn populateEastNavigation(result: *district.DistrictBuild) void {
@@ -502,11 +610,11 @@ fn populateEastNavigation(result: *district.DistrictBuild) void {
     result.navigation_edge_count = 16;
     result.navigation_nodes[0] = .{ .position = .{ 9, 0, 4 }, .first_edge = 0, .edge_count = 2 };
     result.navigation_nodes[1] = .{ .position = .{ 13, 0, 4 }, .first_edge = 2, .edge_count = 3 };
-    result.navigation_nodes[2] = .{ .position = .{ 20, 0, 5 }, .first_edge = 5, .edge_count = 1, .flags = district.navigation_node_terminal };
-    result.navigation_nodes[3] = .{ .position = .{ 20, 0, 0 }, .first_edge = 6, .edge_count = 2 };
-    result.navigation_nodes[4] = .{ .position = .{ 20, 0, -4 }, .first_edge = 8, .edge_count = 2 };
-    result.navigation_nodes[5] = .{ .position = .{ 14, 0, -4 }, .first_edge = 10, .edge_count = 2 };
-    result.navigation_nodes[6] = .{ .position = .{ 9, 0, -3 }, .first_edge = 12, .edge_count = 2 };
+    result.navigation_nodes[2] = .{ .position = .{ 20, 0, 5 }, .first_edge = 5, .edge_count = 2, .flags = district.navigation_node_terminal };
+    result.navigation_nodes[3] = .{ .position = .{ 20, 0, 0 }, .first_edge = 7, .edge_count = 2 };
+    result.navigation_nodes[4] = .{ .position = .{ 20, 0, -4 }, .first_edge = 9, .edge_count = 2 };
+    result.navigation_nodes[5] = .{ .position = .{ 14, 0, -4 }, .first_edge = 11, .edge_count = 2 };
+    result.navigation_nodes[6] = .{ .position = .{ 9, 0, -3 }, .first_edge = 13, .edge_count = 1 };
     result.navigation_nodes[7] = .{ .position = .{ 14, 0, 0 }, .first_edge = 14, .edge_count = 2 };
 
     result.navigation_edges[0] = navEdge(navigation_west_coord, 6, 200);
@@ -515,16 +623,78 @@ fn populateEastNavigation(result: *district.DistrictBuild) void {
     result.navigation_edges[3] = navEdge(navigation_east_coord, 2, 707);
     result.navigation_edges[4] = navEdge(navigation_east_coord, 7, 412);
     result.navigation_edges[5] = navEdge(navigation_east_coord, 1, 707);
-    result.navigation_edges[6] = navEdge(navigation_east_coord, 4, 400);
-    result.navigation_edges[7] = navEdge(navigation_east_coord, 7, 600);
-    result.navigation_edges[8] = navEdge(navigation_east_coord, 3, 400);
-    result.navigation_edges[9] = navEdge(navigation_east_coord, 5, 600);
-    result.navigation_edges[10] = navEdge(navigation_east_coord, 4, 600);
-    result.navigation_edges[11] = navEdge(navigation_east_coord, 6, 500);
-    result.navigation_edges[12] = navEdge(navigation_west_coord, 7, 200);
+    result.navigation_edges[6] = navEdge(navigation_northeast_coord, 2, 600);
+    result.navigation_edges[7] = navEdge(navigation_east_coord, 4, 400);
+    result.navigation_edges[8] = navEdge(navigation_east_coord, 7, 600);
+    result.navigation_edges[9] = navEdge(navigation_east_coord, 3, 400);
+    result.navigation_edges[10] = navEdge(navigation_east_coord, 5, 600);
+    result.navigation_edges[11] = navEdge(navigation_east_coord, 4, 600);
+    result.navigation_edges[12] = navEdge(navigation_east_coord, 6, 500);
     result.navigation_edges[13] = navEdge(navigation_east_coord, 5, 500);
     result.navigation_edges[14] = navEdge(navigation_east_coord, 1, 412);
     result.navigation_edges[15] = navEdge(navigation_east_coord, 3, 600);
+}
+
+fn populateNorthwestNavigation(result: *district.DistrictBuild) void {
+    std.debug.assert(district.ChunkCoord.eql(result.coord, navigation_northwest_coord));
+    result.navigation_node_count = 8;
+    result.navigation_edge_count = 16;
+    result.navigation_nodes[0] = .{ .position = .{ -5, 0, 11 }, .first_edge = 0, .edge_count = 2 };
+    result.navigation_nodes[1] = .{ .position = .{ -5, 0, 14 }, .first_edge = 2, .edge_count = 3 };
+    result.navigation_nodes[2] = .{ .position = .{ -5, 0, 21 }, .first_edge = 5, .edge_count = 2, .flags = district.navigation_node_terminal };
+    result.navigation_nodes[3] = .{ .position = .{ 3, 0, 21 }, .first_edge = 7, .edge_count = 2 };
+    result.navigation_nodes[4] = .{ .position = .{ 2, 0, 14 }, .first_edge = 9, .edge_count = 2 };
+    result.navigation_nodes[5] = .{ .position = .{ 4, 0, 11 }, .first_edge = 11, .edge_count = 2 };
+    result.navigation_nodes[6] = .{ .position = .{ 7, 0, 12 }, .first_edge = 13, .edge_count = 2 };
+    result.navigation_nodes[7] = .{ .position = .{ 7, 0, 21 }, .first_edge = 15, .edge_count = 1 };
+
+    result.navigation_edges[0] = navEdge(navigation_west_coord, 0, 600);
+    result.navigation_edges[1] = navEdge(navigation_northwest_coord, 1, 300);
+    result.navigation_edges[2] = navEdge(navigation_northwest_coord, 0, 300);
+    result.navigation_edges[3] = navEdge(navigation_northwest_coord, 2, 700);
+    result.navigation_edges[4] = navEdge(navigation_northwest_coord, 4, 700);
+    result.navigation_edges[5] = navEdge(navigation_northwest_coord, 1, 700);
+    result.navigation_edges[6] = navEdge(navigation_northwest_coord, 3, 800);
+    result.navigation_edges[7] = navEdge(navigation_northwest_coord, 2, 800);
+    result.navigation_edges[8] = navEdge(navigation_northwest_coord, 7, 400);
+    result.navigation_edges[9] = navEdge(navigation_northwest_coord, 1, 700);
+    result.navigation_edges[10] = navEdge(navigation_northwest_coord, 5, 316);
+    result.navigation_edges[11] = navEdge(navigation_northwest_coord, 4, 316);
+    result.navigation_edges[12] = navEdge(navigation_northwest_coord, 6, 316);
+    result.navigation_edges[13] = navEdge(navigation_northwest_coord, 5, 316);
+    result.navigation_edges[14] = navEdge(navigation_northeast_coord, 0, 200);
+    result.navigation_edges[15] = navEdge(navigation_northwest_coord, 3, 400);
+}
+
+fn populateNortheastNavigation(result: *district.DistrictBuild) void {
+    std.debug.assert(district.ChunkCoord.eql(result.coord, navigation_northeast_coord));
+    result.navigation_node_count = 8;
+    result.navigation_edge_count = 16;
+    result.navigation_nodes[0] = .{ .position = .{ 9, 0, 12 }, .first_edge = 0, .edge_count = 2 };
+    result.navigation_nodes[1] = .{ .position = .{ 13, 0, 12 }, .first_edge = 2, .edge_count = 3 };
+    result.navigation_nodes[2] = .{ .position = .{ 20, 0, 11 }, .first_edge = 5, .edge_count = 2 };
+    result.navigation_nodes[3] = .{ .position = .{ 20, 0, 16 }, .first_edge = 7, .edge_count = 2 };
+    result.navigation_nodes[4] = .{ .position = .{ 20, 0, 21 }, .first_edge = 9, .edge_count = 2, .flags = district.navigation_node_terminal };
+    result.navigation_nodes[5] = .{ .position = .{ 14, 0, 21 }, .first_edge = 11, .edge_count = 2 };
+    result.navigation_nodes[6] = .{ .position = .{ 9, 0, 21 }, .first_edge = 13, .edge_count = 1 };
+    result.navigation_nodes[7] = .{ .position = .{ 14, 0, 16 }, .first_edge = 14, .edge_count = 2 };
+
+    result.navigation_edges[0] = navEdge(navigation_northwest_coord, 6, 200);
+    result.navigation_edges[1] = navEdge(navigation_northeast_coord, 1, 400);
+    result.navigation_edges[2] = navEdge(navigation_northeast_coord, 0, 400);
+    result.navigation_edges[3] = navEdge(navigation_northeast_coord, 2, 707);
+    result.navigation_edges[4] = navEdge(navigation_northeast_coord, 7, 565);
+    result.navigation_edges[5] = navEdge(navigation_east_coord, 2, 600);
+    result.navigation_edges[6] = navEdge(navigation_northeast_coord, 1, 707);
+    result.navigation_edges[7] = navEdge(navigation_northeast_coord, 4, 500);
+    result.navigation_edges[8] = navEdge(navigation_northeast_coord, 7, 600);
+    result.navigation_edges[9] = navEdge(navigation_northeast_coord, 3, 500);
+    result.navigation_edges[10] = navEdge(navigation_northeast_coord, 5, 600);
+    result.navigation_edges[11] = navEdge(navigation_northeast_coord, 4, 600);
+    result.navigation_edges[12] = navEdge(navigation_northeast_coord, 6, 500);
+    result.navigation_edges[13] = navEdge(navigation_northeast_coord, 5, 500);
+    result.navigation_edges[14] = navEdge(navigation_northeast_coord, 1, 565);
+    result.navigation_edges[15] = navEdge(navigation_northeast_coord, 3, 600);
 }
 
 fn navEdge(coord: district.ChunkCoord, index: u8, cost: u16) district.NavigationEdge {
@@ -549,7 +719,7 @@ pub const RouteValidationFailure = enum {
 pub fn routeValidationFailure(
     builds: []const district.DistrictBuild,
 ) ?RouteValidationFailure {
-    if (builds.len != 2) return .wrong_build_count;
+    if (builds.len != installed_coords.len) return .wrong_build_count;
     for (builds, 0..) |*candidate, index| {
         if (candidate.validationFailure() != null) return .invalid_build;
         if (candidate.navigation_node_count == 0) return .missing_navigation_fragment;
@@ -559,10 +729,8 @@ pub fn routeValidationFailure(
             }
         }
     }
-    if (findBuildIndex(builds, navigation_west_coord) == null or
-        findBuildIndex(builds, navigation_east_coord) == null)
-    {
-        return .missing_installed_district;
+    for (installed_coords) |coord| {
+        if (findBuildIndex(builds, coord) == null) return .missing_installed_district;
     }
 
     var cross_district_edge_count: usize = 0;
@@ -592,7 +760,8 @@ pub fn routeValidationFailure(
             }
         }
     }
-    if (cross_district_edge_count != 4) return .invalid_cross_district_edge_count;
+    // One reciprocal link crosses each of the four seams in the 2x2 cohort.
+    if (cross_district_edge_count != 8) return .invalid_cross_district_edge_count;
     for (1..destination_count + 1) |value| {
         const destination = resolveDestination(.{ .value = @intCast(value) }) orelse
             return .invalid_destination_catalog;
@@ -605,9 +774,9 @@ pub fn routeValidationFailure(
         }
     }
 
-    var visited = [_]bool{false} ** (2 * district.max_navigation_nodes);
+    var visited = [_]bool{false} ** (installed_coords.len * district.max_navigation_nodes);
     const QueueItem = struct { build_index: u8, node_index: u8 };
-    var queue: [2 * district.max_navigation_nodes]QueueItem = undefined;
+    var queue: [installed_coords.len * district.max_navigation_nodes]QueueItem = undefined;
     var head: usize = 0;
     var tail: usize = 1;
     queue[0] = .{ .build_index = 0, .node_index = 0 };
@@ -696,9 +865,11 @@ test "canonical recipe is deterministic, bounded, and coordinate-specific" {
 test "installed recipe carries one exact connected bidirectional route" {
     const west = build(navigation_west_coord, current_recipe_version).ready;
     const east = build(navigation_east_coord, current_recipe_version).ready;
-    const forward = [_]district.DistrictBuild{ west, east };
+    const northwest = build(navigation_northwest_coord, current_recipe_version).ready;
+    const northeast = build(navigation_northeast_coord, current_recipe_version).ready;
+    const forward = [_]district.DistrictBuild{ west, east, northwest, northeast };
     try validateRoute(&forward);
-    const reverse = [_]district.DistrictBuild{ east, west };
+    const reverse = [_]district.DistrictBuild{ northeast, northwest, east, west };
     try validateRoute(&reverse);
 }
 
@@ -712,11 +883,8 @@ test "resident authored content cannot replace canonical blocker proxies" {
     try std.testing.expectEqual(@as(u8, 2), staged.proxy_box_count);
     try std.testing.expectEqualSlices(u8, staged.proxyBoxIndices(), resident.proxyBoxIndices());
     for (west.boxes(), 0..) |_, box_index| {
-        const role = staticBoxPresentation(box_index).?;
-        try std.testing.expectEqual(
-            role == .blocking_proxy,
-            resident.presentsBlockingBox(box_index),
-        );
+        _ = staticBoxPresentation(box_index).?;
+        try std.testing.expect(resident.presentsBlockingBox(box_index));
     }
 }
 

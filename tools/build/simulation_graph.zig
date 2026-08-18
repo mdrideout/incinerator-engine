@@ -239,12 +239,12 @@ pub fn create(
     );
     const simulation_cohort_options = cohort_options.createModule();
     const network_options = b.addOptions();
-    network_options.addOption(u16, "protocol_revision", 16);
+    network_options.addOption(u16, "protocol_revision", 17);
     network_options.addOption(u64, "build_cohort", networkBuildCohort());
     network_options.addOption(
         u64,
         "content_cohort",
-        std.hash.Wyhash.hash(0x494e_434e, "s14-ranged-combat-content-v1"),
+        std.hash.Wyhash.hash(0x494e_434e, "s15-four-district-content-v1"),
     );
     const network_cohort_options = network_options.createModule();
 

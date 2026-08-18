@@ -109,13 +109,18 @@ normal-bearing product path, bounded renderer-neutral light/material values, a
 more readable evaluation-world composition, Render Lab, schema-5 render-state
 evidence, and a repaired full native gameplay/incident journey. See the
 [DR1 validation record](docs/validation/dr1-playable-deterministic-visual-fidelity.md).
-The product-owner DR1 visual walkthrough is accepted. DR1 is complete. S14 now
+The product-owner DR1 visual walkthrough is accepted. DR1 is complete. S14
 implements one authoritative hitscan handgun across solo, private-listen, and
 dedicated placements with finite ammunition/reload, current-state semantic
 targeting plus Jolt obstruction, vitals-owned damage/death, reconnect/replay,
 client-owned HUD/weapon/tracer presentation, and schema-5 firearm evidence.
-Its focused, two-client real-GNS, and two-rate installed Metal gates pass; the
-ordinary-product human walkthrough is the remaining S14 checkpoint before S15.
+Its focused, two-client real-GNS, two-rate installed Metal, ordinary-product,
+and continuous mouse-look gates pass. S14 is accepted. S15 now expands the
+deterministic sandbox into one exact four-district 2×2 cohort with cross-axis
+navigation, north-row activity, singular flat support ownership, and measured
+four-scene residency.
+Its automated gate, two-rate Metal acceptance, and measured baseline pass; the
+product-owner four-district walkthrough is the remaining S15 checkpoint.
 The combined-tree
 [deterministic-rendering resumption audit](docs/validation/deterministic-rendering-resumption.md)
 passes and records the correction that restored the ordinary product from an
@@ -786,6 +791,11 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`S14 Ranged Combat Vertical Slice`](docs/design/s14-ranged-combat.md)
 - [`ADR-027 Authoritative Ranged Combat`](docs/adr/027-authoritative-ranged-combat.md)
 - [`S14 Ranged Combat Validation`](docs/validation/s14-ranged-combat.md)
+- [`ADR-028 Content-Rich Four-District Sandbox Cohort`](docs/adr/028-content-rich-four-district-cohort.md)
+- [`S15 Content-Rich District Expansion`](docs/design/s15-content-rich-district-expansion.md)
+- [`S15 Four-District Evaluation World`](docs/design/s15-four-district-evaluation-world.md)
+- [`S15 Content-Rich District Validation`](docs/validation/s15-content-rich-district-expansion.md)
+- [`S15 Four-District Performance Baseline`](docs/performance/s15-baseline.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 

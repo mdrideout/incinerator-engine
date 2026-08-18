@@ -1,0 +1,81 @@
+{
+  "schema_version": 1,
+  "benchmark": "s15-content-rich-four-district",
+  "recorded": "2026-08-18",
+  "zig_version": "0.16.0",
+  "optimize": "ReleaseFast",
+  "target_arch": "aarch64",
+  "target_os": "macos",
+  "content": {
+    "cohort_fingerprint": "fcdabbf632de0fd3109a95254f8cb9fcc2749d6481aca18512af0c1a557af503",
+    "catalog_sha256": "078fb96071e65f7040bbaec09c6a45ea32e3567e133b29c5da6d21e6b855434f",
+    "catalog_file_bytes": 824,
+    "bundle_file_bytes": [4364, 4360, 4364, 4360],
+    "resident_scenes": 4,
+    "resident_gpu_bytes": 10112,
+    "staged_cpu_bytes_per_scene": 3888,
+    "resident_gpu_bytes_per_scene": 2528
+  },
+  "navigation": {
+    "request_cohort": 64,
+    "waves": 4096,
+    "queries_per_wave": 8,
+    "total_queries": 32768,
+    "searched_nodes": 679936,
+    "searched_edges": 1343488,
+    "p50_ns": 1427167,
+    "p95_ns": 1503083,
+    "p99_ns": 1521958,
+    "max_ns": 1807250,
+    "p99_ceiling_ns": 4166000,
+    "movement_ticks": 2048,
+    "movement_npcs": 6,
+    "moved_npcs": 6,
+    "arrived_npcs": 5,
+    "blocked_npcs": 0,
+    "route_replans": 12,
+    "teleport_rollbacks": 0,
+    "movement_p99_ns": 55250
+  },
+  "population": {
+    "ordinary_members": 12,
+    "physical_members": 16,
+    "owner_ticks": 8192,
+    "ordinary_owner_p99_ns": 292,
+    "physical_owner_p99_ns": 292,
+    "fixed_owner_bytes": 22120,
+    "workload_heap_allocations": 0,
+    "activity_slot_actors": 24,
+    "static_bodies_in_placement_fixture": 9,
+    "placement_queries": 24,
+    "placement_rejections": 0,
+    "separation_violations": 0,
+    "jolt_p50_ns": 25375,
+    "jolt_p95_ns": 29917,
+    "jolt_p99_ns": 37583,
+    "jolt_max_ns": 133417,
+    "max_rss_bytes": 12550144
+  },
+  "metal_acceptance": [
+    {
+      "virtual_render_hz": 240,
+      "frames": 3840,
+      "authority_ticks": 960,
+      "zero_tick_frames": 2880,
+      "multi_tick_frames": 0,
+      "full_population_frames": 3113,
+      "incomplete_after_full_frames": 0,
+      "peak_npc_draws": 12
+    },
+    {
+      "virtual_render_hz": 40,
+      "frames": 640,
+      "authority_ticks": 960,
+      "zero_tick_frames": 0,
+      "multi_tick_frames": 320,
+      "full_population_frames": 519,
+      "incomplete_after_full_frames": 0,
+      "peak_npc_draws": 12
+    }
+  ]
+}

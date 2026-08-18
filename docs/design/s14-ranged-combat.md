@@ -1,7 +1,7 @@
 # S14 Ranged Combat Vertical Slice
 
-**Status:** Implemented and automated-accepted; product-owner walkthrough
-pending
+**Status:** Accepted; implementation, automated/native evidence, mouse-capture
+follow-up, and product-owner walkthrough complete
 
 **Date:** 2026-08-18
 
@@ -110,11 +110,11 @@ why it hit/missed/rejected, what damage applied, and what was drawn.
 Exit: the slice is playable, observable, replayable, and accepted with no new
 P0/P1 architecture finding.
 
-Implementation and automated acceptance meet this exit contract. The exact
-evidence and four acceptance-discovered repairs are recorded in the
-[S14 validation ledger](../validation/s14-ranged-combat.md). The remaining
-checkpoint is the ordinary-product human walkthrough; S15 does not become
-active until that checkpoint is accepted.
+Implementation, automated/native acceptance, and the ordinary-product
+walkthrough meet this exit contract. The exact evidence and
+acceptance-discovered repairs are recorded in the
+[S14 validation ledger](../validation/s14-ranged-combat.md). S15 was promoted
+after that checkpoint was accepted.
 
 ## Acceptance matrix
 

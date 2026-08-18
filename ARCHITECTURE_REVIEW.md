@@ -2,13 +2,14 @@
 
 **Status:** Living assessment; the Apple Silicon macOS gameplay/session
 foundation now includes accepted S12 semantic navigation and S13 authored
-population/activity. DR1 deterministic visual fidelity is fully accepted, and
-S14 authoritative ranged-combat implementation has completed automated
-acceptance across solo, private-listen, and dedicated placements.
-Protocol 16, snapshot 14, replay 17,
+population/activity. DR1 deterministic visual fidelity and S14 authoritative
+ranged combat are accepted across solo, private-listen, and dedicated
+placements. S15 four-district implementation and automated acceptance are
+complete under ADR-028; its human walkthrough remains. Protocol 17, snapshot
+15, replay 18,
 incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
 automated Metal/product acceptance are current. No open P0/P1 architectural
-finding blocks the S14 human checkpoint or subsequent S15 content expansion.
+finding blocks the S15 human checkpoint.
 The neural-rendering proof
 is retained through RF10 as external technical evidence, but no learned model
 is promoted, installed, or selected. The product owner paused that track
@@ -19,7 +20,7 @@ preserved boundary policy for an explicit future restart.
 
 **Last reviewed:** 2026-08-18
 
-**Scope:** Current post-S14 implementation architecture, its demonstrated strengths, its
+**Scope:** Current S15-entry architecture, its demonstrated strengths, its
 remaining structural pressure before another product or service slice, the
 active deterministic-rendering direction, and the retained paused neural proof
 
@@ -27,8 +28,8 @@ active deterministic-rendering direction, and the retained paused neural proof
 
 **Multiplayer strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
-**Latest automated acceptance:**
-[`docs/validation/s14-ranged-combat.md`](docs/validation/s14-ranged-combat.md)
+**Latest automated validation:**
+[`docs/validation/s15-content-rich-district-expansion.md`](docs/validation/s15-content-rich-district-expansion.md)
 
 **Accepted cohesion contract:**
 [`docs/design/m5-client-authority-cohesion.md`](docs/design/m5-client-authority-cohesion.md)
@@ -45,7 +46,8 @@ active deterministic-rendering direction, and the retained paused neural proof
 → [`S12 accepted`](docs/validation/s12-destination-driven-navigation.md)
 → [`S13 accepted`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 → [`DR1 accepted`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
-→ [`S14 automated acceptance complete; human checkpoint pending`](docs/validation/s14-ranged-combat.md)
+→ [`S14 accepted`](docs/validation/s14-ranged-combat.md)
+→ [`S15 automated acceptance complete; human checkpoint pending`](docs/validation/s15-content-rich-district-expansion.md)
 
 **Active rendering direction:**
 [`DR1 playable deterministic visual fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)

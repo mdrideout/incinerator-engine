@@ -1184,7 +1184,7 @@ const AuthorityCore = struct {
     max_reliable_events_per_connection_tick: u16 = 0,
     used_admission_nonces: [budgets.admission_nonce_history_capacity]UsedAdmissionNonce =
         @splat(.{}),
-    active_districts: [2]bool = @splat(false),
+    active_districts: [sandbox_district_recipe.installed_coords.len]bool = @splat(false),
     ingress: IngressJournal = .{},
     force_snapshot: bool = false,
     defer_replication_this_cycle: bool = false,
@@ -4312,12 +4312,15 @@ const AuthorityCore = struct {
                         return error.DuplicateDistrictActivation;
                     }
                     self.active_districts[district_index] = true;
-                    if (district_index == 1) continue;
-                    try self.simulation.submitDistrict(.{ .request_load = .{
-                        .request_id = districtBootstrapRequestId(1),
-                        .coord = sandbox_district_recipe.navigation_east_coord,
-                        .assets = .{},
-                    } });
+                    const next_index = district_index + 1;
+                    if (next_index < sandbox_district_recipe.installed_coords.len) {
+                        try self.simulation.submitDistrict(.{ .request_load = .{
+                            .request_id = districtBootstrapRequestId(next_index),
+                            .coord = districtBootstrapCoord(next_index),
+                            .assets = .{},
+                        } });
+                    }
+                    if (district_index != 0) continue;
                     const carryable = &self.carryables[0];
                     if (carryable.active or carryable.spawn_pending) {
                         return error.DuplicateCarryableDistrictActivation;
@@ -5079,10 +5082,14 @@ const AuthorityCore = struct {
                 if (self.simulation.tickIndex() < participant.baseline_eligible_tick) continue;
                 var baseline = protocol.RelevanceBaseline{
                     .baseline_id = participant.baseline_id,
-                    .district_count = 1,
+                    .district_count = @intCast(
+                        sandbox_district_recipe.installed_coords.len,
+                    ),
                     .snapshot = full_projection,
                 };
-                baseline.districts[0] = districtCoord(participant.relevance_coord);
+                for (sandbox_district_recipe.installed_coords, 0..) |coord, index| {
+                    baseline.districts[index] = districtCoord(coord);
+                }
                 try self.queue(.{
                     .connection = self.connections[connection_index].transport,
                     .message = .{ .relevance_baseline = baseline },
@@ -7457,8 +7464,9 @@ fn districtCenterPosition(coord: district_contract.ChunkCoord) [3]f32 {
 }
 
 fn authorityDistrictIndex(coord: district_contract.ChunkCoord) ?usize {
-    if (std.meta.eql(coord, sandbox_district_recipe.navigation_west_coord)) return 0;
-    if (std.meta.eql(coord, sandbox_district_recipe.navigation_east_coord)) return 1;
+    for (sandbox_district_recipe.installed_coords, 0..) |candidate, index| {
+        if (std.meta.eql(coord, candidate)) return index;
+    }
     return null;
 }
 
@@ -7855,16 +7863,12 @@ fn districtBootstrapRequestId(index: usize) u64 {
 fn decodeDistrictBootstrapRequestId(value: u64) ?usize {
     if (value & 0xffff_ffff_ffff_ff00 != 0x4d50_3600_0000_0000) return null;
     const raw: u8 = @truncate(value);
-    if (raw == 0 or raw > 2) return null;
+    if (raw == 0 or raw > sandbox_district_recipe.installed_coords.len) return null;
     return raw - 1;
 }
 
 fn districtBootstrapCoord(index: usize) district_contract.ChunkCoord {
-    return switch (index) {
-        0 => sandbox_district_recipe.navigation_west_coord,
-        1 => sandbox_district_recipe.navigation_east_coord,
-        else => unreachable,
-    };
+    return sandbox_district_recipe.installed_coords[index];
 }
 
 fn carryableSpawnRequestId(index: usize, generation: u16) u64 {

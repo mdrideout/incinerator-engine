@@ -1,6 +1,6 @@
 # S12 Navigation Evaluation World
 
-**Status:** Implemented and automatically validated; human walkthrough pending
+**Status:** Accepted; implementation, automated evidence, and human walkthrough complete
 
 **Date:** 2026-07-27
 

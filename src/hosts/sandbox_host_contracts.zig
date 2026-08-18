@@ -44,6 +44,9 @@ pub const district_static_box_count: u32 = sandbox_district_recipe.static_box_co
 pub const district_blocking_proxy_count: u8 = sandbox_district_recipe.blocking_proxy_count;
 pub const navigation_east_coord = sandbox_district_recipe.navigation_east_coord;
 pub const navigation_west_coord = sandbox_district_recipe.navigation_west_coord;
+pub const navigation_northwest_coord = sandbox_district_recipe.navigation_northwest_coord;
+pub const navigation_northeast_coord = sandbox_district_recipe.navigation_northeast_coord;
+pub const installed_district_coords = sandbox_district_recipe.installed_coords;
 pub const player_plaza_destination = sandbox_district_recipe.player_plaza;
 pub const depot_forecourt_destination = sandbox_district_recipe.depot_forecourt;
 pub const south_gate_approach_destination = sandbox_district_recipe.south_gate_approach;
@@ -55,7 +58,7 @@ pub fn destinationName(id: DestinationId) ?[]const u8 {
     return sandbox_district_recipe.destinationName(id);
 }
 pub const npc_capacity = npcs.max_npcs;
-pub const snapshot_schema: u16 = 14;
+pub const snapshot_schema: u16 = 15;
 pub const DistrictPresentationPlan = sandbox_district_recipe.PresentationPlan;
 
 /// Default playable product spawn and the local movement envelope guaranteed
@@ -159,10 +162,10 @@ pub fn validateDefaultCharacterSpawn(config: CharacterConfig) !void {
 /// route after either collision geometry or NPC dimensions change.
 pub fn validateCanonicalNavigationClearance(config: npcs.Config) !void {
     try config.validate();
-    const builds = [_]districts.DistrictBuild{
-        try proceduralDistrictBuild(navigation_west_coord),
-        try proceduralDistrictBuild(navigation_east_coord),
-    };
+    var builds: [installed_district_coords.len]districts.DistrictBuild = undefined;
+    for (installed_district_coords, 0..) |coord, index| {
+        builds[index] = try proceduralDistrictBuild(coord);
+    }
     try sandbox_district_recipe.validateRoute(&builds);
     const clearance = sandbox_district_recipe.CapsuleClearance{
         .radius = config.radius,
@@ -174,22 +177,19 @@ pub fn validateCanonicalNavigationClearance(config: npcs.Config) !void {
             const first: usize = source.first_edge;
             const end = first + source.edge_count;
             for (source_build.navigationEdges()[first..end]) |edge| {
-                const target_build = if (districts.ChunkCoord.eql(
-                    edge.target.coord,
-                    navigation_west_coord,
-                ))
-                    &builds[0]
-                else if (districts.ChunkCoord.eql(
-                    edge.target.coord,
-                    navigation_east_coord,
-                ))
-                    &builds[1]
-                else
+                var target_build: ?*const districts.DistrictBuild = null;
+                for (&builds) |*candidate| {
+                    if (districts.ChunkCoord.eql(candidate.coord, edge.target.coord)) {
+                        target_build = candidate;
+                        break;
+                    }
+                }
+                const resolved_target = target_build orelse
                     return error.CanonicalNavigationTargetMissing;
-                if (edge.target.index >= target_build.navigation_node_count) {
+                if (edge.target.index >= resolved_target.navigation_node_count) {
                     return error.CanonicalNavigationTargetMissing;
                 }
-                const target = target_build.navigation_nodes[edge.target.index];
+                const target = resolved_target.navigation_nodes[edge.target.index];
                 for (builds) |collision_build| {
                     if (!sandbox_district_recipe.capsuleTraversalClear(
                         &collision_build,
@@ -211,7 +211,7 @@ test "graphical sandbox contracts publish values without mutable authority" {
 
     const config = Config{ .namespace = 42 };
     try std.testing.expectEqual(@as(u64, 42), config.namespace);
-    try std.testing.expectEqual(snapshot_schema, @as(u16, 14));
+    try std.testing.expectEqual(snapshot_schema, @as(u16, 15));
 }
 
 test "default playable spawn and initial traversal clear canonical blockers" {

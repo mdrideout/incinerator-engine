@@ -1,4 +1,4 @@
-//! Exact authored population catalog for the two-district sandbox.
+//! Exact authored population catalog for the four-district sandbox.
 //!
 //! This module owns static game content and cold admission only. It owns no
 //! population lifecycle, NPC movement, physics query, session, or rendering.
@@ -9,7 +9,7 @@ const npc = @import("npc_contract");
 const population = @import("population_contract");
 const recipe = @import("sandbox_district_recipe");
 
-pub const catalog_version: u16 = 1;
+pub const catalog_version: u16 = 2;
 pub const ordinary_member_count: usize = 12;
 pub const physical_member_count: usize = 16;
 pub const spawn_separation: f32 = 0.9;
@@ -53,13 +53,13 @@ pub const programs = [_]population.ActivityProgramDefinition{
         .label = "resident-local",
         .steps = .{
             step(1, .visit, 240),
-            step(6, .visit, 180),
+            step(9, .visit, 180),
+            step(10, .visit, 180),
             step(5, .shop, 300),
             step(1, .idle, 180),
             empty_step,
-            empty_step,
         },
-        .step_count = 4,
+        .step_count = 5,
     },
     .{
         .id = programId(2),
@@ -67,38 +67,38 @@ pub const programs = [_]population.ActivityProgramDefinition{
         .steps = .{
             step(8, .idle, 240),
             step(5, .shop, 300),
-            step(6, .visit, 180),
-            empty_step,
+            step(11, .visit, 180),
+            step(12, .visit, 180),
             empty_step,
             empty_step,
         },
-        .step_count = 3,
+        .step_count = 4,
     },
     .{
         .id = programId(3),
         .label = "worker-cross-district",
         .steps = .{
             step(2, .commute, 180),
+            step(11, .commute, 240),
+            step(9, .visit, 180),
             step(7, .commute, 240),
-            step(5, .visit, 180),
             step(2, .commute, 240),
             empty_step,
-            empty_step,
         },
-        .step_count = 4,
+        .step_count = 5,
     },
     .{
         .id = programId(4),
         .label = "visitor-loop",
         .steps = .{
             step(1, .visit, 180),
-            step(4, .idle, 180),
+            step(9, .idle, 180),
+            step(11, .visit, 240),
+            step(12, .visit, 180),
             step(5, .visit, 240),
             step(7, .visit, 180),
-            empty_step,
-            empty_step,
         },
-        .step_count = 4,
+        .step_count = 6,
     },
 };
 
@@ -111,6 +111,10 @@ pub const sites = [_]population.ActivitySiteDefinition{
     site(6, "Alley Junction", recipe.navigation_east_coord, .{ 12, 13, 0 }, 2),
     site(7, "Transit Yard", recipe.navigation_east_coord, .{ 14, 15, 0 }, 2),
     site(8, "East Court", recipe.navigation_east_coord, .{ 16, 0, 0 }, 1),
+    site(9, "North Plaza", recipe.navigation_northwest_coord, .{ 17, 18, 0 }, 2),
+    site(10, "Civic Court", recipe.navigation_northwest_coord, .{ 19, 20, 0 }, 2),
+    site(11, "Station Concourse", recipe.navigation_northeast_coord, .{ 21, 22, 0 }, 2),
+    site(12, "North Alley", recipe.navigation_northeast_coord, .{ 23, 24, 0 }, 2),
 };
 
 pub const activity_slots = [_]population.ActivitySlotDefinition{
@@ -130,6 +134,14 @@ pub const activity_slots = [_]population.ActivitySlotDefinition{
     activitySlot(14, "transit-a", 7, 6, .{ 19.0, 0, -5.7 }, 0, .{ .commute = true, .visit = true }),
     activitySlot(15, "transit-b", 7, 15, .{ 21.5, 0, -5.5 }, backward_yaw, .{ .commute = true, .visit = true }),
     activitySlot(16, "court-a", 8, 16, .{ 12.5, 0, 5.8 }, 0, .{ .idle = true, .visit = true }),
+    activitySlot(17, "north-plaza-a", 9, 17, .{ -6.5, 0, 17.5 }, 0, .{ .visit = true, .idle = true }),
+    activitySlot(18, "north-plaza-b", 9, 18, .{ -4.0, 0, 19.5 }, backward_yaw, .{ .visit = true, .idle = true }),
+    activitySlot(19, "civic-a", 10, 19, .{ 3.5, 0, 20.5 }, 0, .{ .visit = true, .idle = true }),
+    activitySlot(20, "civic-b", 10, 20, .{ 5.8, 0, 19.2 }, backward_yaw, .{ .visit = true, .idle = true }),
+    activitySlot(21, "station-a", 11, 21, .{ 19.5, 0, 17.0 }, 0, .{ .commute = true, .visit = true }),
+    activitySlot(22, "station-b", 11, 22, .{ 21.0, 0, 19.0 }, backward_yaw, .{ .commute = true, .visit = true }),
+    activitySlot(23, "north-alley-a", 12, 23, .{ 13.0, 0, 14.8 }, 0, .{ .shop = true, .visit = true, .idle = true }),
+    activitySlot(24, "north-alley-b", 12, 24, .{ 14.8, 0, 16.5 }, backward_yaw, .{ .shop = true, .visit = true, .idle = true }),
 };
 
 const every_role = population.RoleMask{
@@ -163,22 +175,30 @@ pub const spawn_slots = [_]population.SpawnSlotDefinition{
     spawnSlot(22, "east-10", .{ 22.5, 0, 1.5 }, half_pi, recipe.navigation_east_coord, 3),
     spawnSlot(23, "east-11", .{ 10.0, 0, -6.5 }, 0, recipe.navigation_east_coord, 6),
     spawnSlot(24, "east-12", .{ 13.0, 0, -6.5 }, 0, recipe.navigation_east_coord, 5),
+    spawnSlot(25, "northwest-01", .{ -6.5, 0, 10.0 }, 0, recipe.navigation_northwest_coord, 0),
+    spawnSlot(26, "northwest-02", .{ -3.5, 0, 10.5 }, 0, recipe.navigation_northwest_coord, 0),
+    spawnSlot(27, "northwest-03", .{ 2.0, 0, 22.5 }, backward_yaw, recipe.navigation_northwest_coord, 3),
+    spawnSlot(28, "northwest-04", .{ 6.5, 0, 22.5 }, backward_yaw, recipe.navigation_northwest_coord, 7),
+    spawnSlot(29, "northeast-01", .{ 9.5, 0, 10.0 }, 0, recipe.navigation_northeast_coord, 0),
+    spawnSlot(30, "northeast-02", .{ 12.5, 0, 10.0 }, 0, recipe.navigation_northeast_coord, 1),
+    spawnSlot(31, "northeast-03", .{ 20.0, 0, 23.0 }, backward_yaw, recipe.navigation_northeast_coord, 4),
+    spawnSlot(32, "northeast-04", .{ 22.5, 0, 22.5 }, backward_yaw, recipe.navigation_northeast_coord, 4),
 };
 
 pub const members = [_]population.PopulationMemberDefinition{
     member(1, "P01", .resident, 1, 0, .hostile_to_players, 1, .{ 1, 2, 4, 13, 14, 19, 0, 0 }, 6),
     member(2, "P02", .resident, 1, 1, .passive, 4, .{ 4, 5, 7, 15, 16, 20, 0, 0 }, 6),
-    member(3, "P03", .resident, 1, 2, .passive, 7, .{ 7, 8, 11, 13, 19, 23, 0, 0 }, 6),
-    member(4, "P04", .resident, 2, 0, .passive, 9, .{ 9, 10, 12, 14, 20, 24, 0, 0 }, 6),
-    member(5, "P05", .resident, 2, 1, .passive, 11, .{ 11, 12, 3, 15, 18, 22, 0, 0 }, 6),
+    member(3, "P03", .resident, 1, 2, .passive, 25, .{ 25, 26, 7, 13, 19, 29, 0, 0 }, 6),
+    member(4, "P04", .resident, 2, 0, .passive, 14, .{ 14, 20, 24, 9, 27, 31, 0, 0 }, 6),
+    member(5, "P05", .resident, 2, 1, .passive, 27, .{ 27, 28, 11, 15, 18, 31, 0, 0 }, 6),
     member(6, "P06", .worker, 3, 0, .passive, 2, .{ 2, 5, 6, 16, 17, 24, 0, 0 }, 6),
-    member(7, "P07", .worker, 3, 1, .passive, 5, .{ 5, 6, 10, 13, 17, 23, 0, 0 }, 6),
-    member(8, "P08", .worker, 3, 2, .passive, 13, .{ 13, 16, 17, 2, 6, 9, 0, 0 }, 6),
+    member(7, "P07", .worker, 3, 1, .passive, 26, .{ 26, 28, 5, 13, 17, 29, 0, 0 }, 6),
+    member(8, "P08", .worker, 3, 2, .passive, 29, .{ 29, 30, 13, 2, 6, 25, 0, 0 }, 6),
     member(9, "P09", .worker, 3, 3, .passive, 16, .{ 16, 17, 23, 3, 5, 10, 0, 0 }, 6),
     member(10, "P10", .visitor, 4, 0, .passive, 19, .{ 19, 20, 23, 1, 7, 11, 0, 0 }, 6),
-    member(11, "P11", .visitor, 4, 1, .passive, 21, .{ 21, 22, 18, 4, 8, 12, 0, 0 }, 6),
-    member(12, "P12", .visitor, 4, 2, .passive, 23, .{ 23, 24, 14, 3, 6, 9, 0, 0 }, 6),
-    member(13, "P13", .resident, 1, 3, .passive, 14, .{ 14, 15, 18, 3, 8, 12, 0, 0 }, 6),
+    member(11, "P11", .visitor, 4, 1, .passive, 31, .{ 31, 32, 21, 4, 8, 27, 0, 0 }, 6),
+    member(12, "P12", .visitor, 4, 2, .passive, 32, .{ 32, 30, 23, 3, 6, 25, 0, 0 }, 6),
+    member(13, "P13", .resident, 1, 4, .passive, 3, .{ 3, 14, 18, 27, 30, 12, 0, 0 }, 6),
     member(14, "P14", .resident, 2, 2, .passive, 15, .{ 15, 18, 20, 4, 10, 11, 0, 0 }, 6),
     member(15, "P15", .worker, 3, 0, .passive, 17, .{ 17, 18, 24, 3, 6, 12, 0, 0 }, 6),
     member(16, "P16", .visitor, 4, 3, .passive, 24, .{ 24, 22, 14, 6, 8, 10, 0, 0 }, 6),
@@ -509,8 +529,10 @@ fn validateMembers() !void {
 }
 
 fn knownOwner(owner: npc.ChunkCoord) bool {
-    return district.ChunkCoord.eql(owner, recipe.navigation_west_coord) or
-        district.ChunkCoord.eql(owner, recipe.navigation_east_coord);
+    for (recipe.installed_coords) |coord| {
+        if (district.ChunkCoord.eql(owner, coord)) return true;
+    }
+    return false;
 }
 
 fn buildFor(owner: npc.ChunkCoord) district.DistrictBuild {
@@ -639,30 +661,35 @@ test "canonical population catalog is exact and cold-valid" {
 }
 
 test "authored physical placements are unique and balanced across districts" {
-    var west_count: usize = 0;
-    var east_count: usize = 0;
+    var counts = [_]usize{0} ** recipe.installed_coords.len;
     for (spawn_slots) |slot_definition| {
-        if (district.ChunkCoord.eql(
-            slot_definition.anchor.coord,
-            recipe.navigation_west_coord,
-        )) {
-            west_count += 1;
-        } else if (district.ChunkCoord.eql(
-            slot_definition.anchor.coord,
-            recipe.navigation_east_coord,
-        )) {
-            east_count += 1;
-        } else return error.UnknownSpawnSlotDistrict;
+        var found = false;
+        for (recipe.installed_coords, 0..) |coord, index| {
+            if (!district.ChunkCoord.eql(slot_definition.anchor.coord, coord)) continue;
+            counts[index] += 1;
+            found = true;
+            break;
+        }
+        if (!found) return error.UnknownSpawnSlotDistrict;
     }
-    try std.testing.expectEqual(@as(usize, 12), west_count);
-    try std.testing.expectEqual(@as(usize, 12), east_count);
+    try std.testing.expectEqualSlices(usize, &.{ 12, 12, 4, 4 }, &counts);
 
     var unique_initial = [_]bool{false} ** population.max_spawn_slots;
+    var ordinary_counts = [_]usize{0} ** recipe.installed_coords.len;
     for (members) |definition| {
         const index = definition.initial_spawn_slot.value - 1;
         try std.testing.expect(!unique_initial[index]);
         unique_initial[index] = true;
+        if (!definition.ordinary_product) continue;
+        const slot_definition = spawn_slots[index];
+        for (recipe.installed_coords, 0..) |coord, district_index| {
+            if (district.ChunkCoord.eql(slot_definition.anchor.coord, coord)) {
+                ordinary_counts[district_index] += 1;
+                break;
+            }
+        }
     }
+    try std.testing.expectEqualSlices(usize, &.{ 3, 3, 3, 3 }, &ordinary_counts);
 }
 
 test "only authored P01 is hostile and identity rank is irrelevant" {

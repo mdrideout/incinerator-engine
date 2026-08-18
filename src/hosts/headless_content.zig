@@ -1,7 +1,7 @@
 //! Logical-only admission manifest for the macOS server-shaped product.
 //!
 //! The headless install deliberately omits cooked visual bundles. This small
-//! manifest freezes the exact S6/S8 catalog cohort, district coordinates,
+//! manifest freezes the exact S15 catalog cohort, district coordinates,
 //! logical recipe versions, and source bundle digests needed to reject a
 //! mismatched deployment before authoritative world construction.
 
@@ -12,7 +12,7 @@ const sandbox_recipe = @import("sandbox_district_recipe");
 
 pub const schema_version: u16 = 1;
 pub const max_manifest_bytes: usize = 16 * 1024;
-pub const district_count: usize = 2;
+pub const district_count: usize = sandbox_recipe.installed_coords.len;
 
 pub const District = struct {
     semantic_id: []const u8,
@@ -48,15 +48,27 @@ pub const ManifestV1 = struct {
         }
         try validateDistrict(
             self.districts[0],
-            "district.west",
+            "district.southwest",
             0,
             0,
         );
         try validateDistrict(
             self.districts[1],
-            "district.east",
+            "district.southeast",
             1,
             0,
+        );
+        try validateDistrict(
+            self.districts[2],
+            "district.northwest",
+            0,
+            1,
+        );
+        try validateDistrict(
+            self.districts[3],
+            "district.northeast",
+            1,
+            1,
         );
     }
 
@@ -124,6 +136,8 @@ test "manifest rejects reorder mutation digest mismatch and unknown fields" {
     var districts: [district_count]District = .{
         value.districts[0],
         value.districts[1],
+        value.districts[2],
+        value.districts[3],
     };
     districts[0].coord_x = 7;
     value.districts = &districts;

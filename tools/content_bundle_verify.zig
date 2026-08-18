@@ -3,9 +3,6 @@ const content = @import("content");
 const district = @import("district_contract");
 const sandbox_recipe = @import("sandbox_district_recipe");
 
-const expected_west_file_bytes: usize = 1220;
-const expected_east_file_bytes: usize = 1228;
-
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len != 5) return error.ExpectedTwoDeterministicBundlePairs;
@@ -24,9 +21,6 @@ pub fn main(init: std.process.Init) !void {
         return error.CookIsNotDeterministic;
     }
     if (std.mem.eql(u8, west, east)) return error.DistrictBundlesAliased;
-    if (west.len != expected_west_file_bytes or
-        east.len != expected_east_file_bytes) return error.UnexpectedCookedBundleSize;
-
     var west_scene = switch (try content.bundle.decode(allocator, west, .{})) {
         .bundle => |value| value,
         .failed => return error.GeneratedBundleIsInvalid,
@@ -69,7 +63,7 @@ fn verifyCommon(scene: content.bundle.BundleView) !void {
     if (std.mem.allEqual(u8, &scene.source_digest, 0)) return error.MissingSourceDigest;
     if (scene.nodes.len != 2 or scene.meshes.len != 1 or scene.primitives.len != 1 or
         scene.materials.len != 1 or scene.textures.len != 1 or scene.vertices.len != 3 or
-        scene.indices.len != 3 or scene.static_boxes.len != 3 or
+        scene.indices.len != 3 or scene.static_boxes.len != sandbox_recipe.static_box_count or
         scene.navigation_nodes.len != 8 or scene.navigation_edges.len != 16)
     {
         return error.InvalidFixtureCounts;

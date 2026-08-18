@@ -6,7 +6,7 @@ const std = @import("std");
 const engine = @import("engine_contracts");
 const district_contract = @import("district_contract");
 
-pub const max_districts: usize = 2;
+pub const max_districts: usize = 4;
 pub const max_pending_commands: usize = 16;
 pub const max_outcomes: usize = 32;
 pub const max_events: usize = 16;

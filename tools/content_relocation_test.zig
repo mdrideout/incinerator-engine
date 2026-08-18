@@ -1,5 +1,6 @@
 const std = @import("std");
 const content = @import("content");
+const sandbox_recipe = @import("sandbox_district_recipe");
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
@@ -19,7 +20,8 @@ pub fn main(init: std.process.Init) !void {
             defer scene.deinit();
             const view = scene.view();
             if (view.nodes.len != 2 or view.nodes[0].mesh != 0 or view.nodes[1].mesh != 0 or
-                view.textures.len != 1 or view.static_boxes.len != 3)
+                view.textures.len != 1 or
+                view.static_boxes.len != sandbox_recipe.static_box_count)
             {
                 return error.InstalledContentSemanticsInvalid;
             }

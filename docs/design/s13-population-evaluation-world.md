@@ -1,7 +1,7 @@
 # S13 Population Evaluation World
 
-**Status:** World, runtime population, automated product journey, and
-performance acceptance implemented; human walkthrough pending
+**Status:** Accepted; world, runtime population, automated product journey,
+performance evidence, and human walkthrough complete
 
 **Date:** 2026-07-28
 

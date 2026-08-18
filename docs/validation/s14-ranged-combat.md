@@ -1,7 +1,7 @@
 # S14 Ranged Combat Validation
 
-**Status:** Implementation and automated acceptance complete; product-owner
-walkthrough pending
+**Status:** Accepted; implementation, automated/native evidence, continuous
+mouse-look follow-up, and product-owner promotion are complete
 
 **Started:** 2026-08-18
 
@@ -15,7 +15,7 @@ walkthrough pending
 | S14-B — authority composition | Accepted | Current-state semantic player/NPC hit volumes, Jolt obstruction, stable nearest-target ordering, vitals firearm damage, exact pending-shot correlation, ammo/deadline state, death/vehicle/carry cleanup, and reconnect are authority-tested. |
 | S14-C — client and presentation | Accepted | Solo, listen, and dedicated clients own input sequencing and tick-ordered weapon projection; the ordinary Metal scene draws the handgun and authoritative tracer while HUD/editor surfaces show ammo, mode, cadence, reload, and result state. |
 | S14-D — diagnostics and incident evidence | Accepted | Schema-5 timeline/input/state records expose `kind=firearm`, action sequence, identities/incarnations, ammo, deadlines, ray, impact, damage, death, weapon draw, and tracer draw. The canonical and installed incident-diagnostics skill explains correlation and reproduction. |
-| S14-E — acceptance and cleanup | Automated accepted; human pending | Focused 167-test session/room gate, real-GNS listen/dedicated graphical journeys, two-rate installed Metal journey, inherited M6/MP6/S11/S13/incident/replay/package gates, and clean source audit pass. The ordinary product walkthrough below is the remaining checkpoint. |
+| S14-E — acceptance and cleanup | Accepted | Focused 167-test session/room gate, real-GNS listen/dedicated graphical journeys, two-rate installed Metal journey, inherited M6/MP6/S11/S13/incident/replay/package gates, clean source audit, native continuous mouse-look acceptance, and product-owner promotion pass. |
 
 ## Validation ledger
 
@@ -150,4 +150,5 @@ Then verify:
 6. Open Gameplay Inspector and Incident Capture, flag any anomaly, and confirm
    the bundle contains `kind=firearm` records plus weapon/ray/draw evidence.
 
-Product-owner approval closes S14 and promotes S15 to the active slice.
+The product owner promoted the roadmap to S15 on 2026-08-18 after the
+continuous mouse-look corrective follow-up. S14 is closed.

@@ -1255,12 +1255,29 @@ const S13PopulationSmokeProgress = struct {
     incomplete_after_full_frames: u64 = 0,
     peak_draws: u8 = 0,
     invalid_identity: bool = false,
+    district_seen: [sandbox_contracts.installed_district_coords.len]bool = @splat(false),
+    four_district_frames: u64 = 0,
+    member_seen_south: [population.ordinary_member_count]bool = @splat(false),
+    member_seen_north: [population.ordinary_member_count]bool = @splat(false),
 
     fn observe(
         self: *S13PopulationSmokeProgress,
         draws: []const sandbox_host.NpcDraw,
+        district_draws: []const district_feature_contract.DistrictDraw,
     ) void {
         if (!self.active) return;
+        var district_frame = [_]bool{false} ** sandbox_contracts.installed_district_coords.len;
+        for (district_draws) |draw| {
+            for (sandbox_contracts.installed_district_coords, 0..) |coord, index| {
+                if (!sandbox_contracts.ChunkCoord.eql(draw.build.coord, coord)) continue;
+                district_frame[index] = true;
+                self.district_seen[index] = true;
+                break;
+            }
+        }
+        var complete_district_frame = district_draws.len == district_frame.len;
+        for (district_frame) |present| complete_district_frame = complete_district_frame and present;
+        if (complete_district_frame) self.four_district_frames +|= 1;
         self.peak_draws = @max(
             self.peak_draws,
             std.math.cast(u8, draws.len) orelse std.math.maxInt(u8),
@@ -1277,6 +1294,11 @@ const S13PopulationSmokeProgress = struct {
             if (current[member_index]) self.invalid_identity = true;
             current[member_index] = true;
             self.member_seen[member_index] = true;
+            if (draw.pose.position[2] < 8) {
+                self.member_seen_south[member_index] = true;
+            } else {
+                self.member_seen_north[member_index] = true;
+            }
             switch (draw.population_role) {
                 .resident => self.resident_seen = true,
                 .worker => self.worker_seen = true,
@@ -1308,13 +1330,20 @@ const S13PopulationSmokeProgress = struct {
     ) !void {
         var every_member = true;
         for (self.member_seen) |seen| every_member = every_member and seen;
+        var every_district = true;
+        for (self.district_seen) |seen| every_district = every_district and seen;
+        var cross_axis_member = false;
+        for (self.member_seen_south, self.member_seen_north) |south, north| {
+            cross_axis_member = cross_axis_member or (south and north);
+        }
         const state = diagnostics orelse return error.S13PopulationDiagnosticsMissing;
         if (!every_member or !self.resident_seen or !self.worker_seen or
             !self.visitor_seen or !self.traveling_seen or !self.dwelling_seen or
             !self.waiting_seen or !self.full_cohort_reached or
             self.full_cohort_frames == 0 or self.incomplete_after_full_frames != 0 or
             self.peak_draws != population.ordinary_member_count or
-            self.invalid_identity or state.live != population.ordinary_member_count or
+            self.invalid_identity or !every_district or self.four_district_frames == 0 or
+            !cross_axis_member or state.live != population.ordinary_member_count or
             state.awaiting_spawn != 0 or state.vacant != 0 or
             state.replacement_pending != 0 or state.slot_contentions == 0 or
             state.intents.occupancy != 0 or state.intents.rejected != 0 or
@@ -1328,7 +1357,8 @@ const S13PopulationSmokeProgress = struct {
                     "traveling={} dwelling={} waiting={} full={} full_frames={d} " ++
                     "incomplete_after_full={d} peak_draws={d} invalid_identity={} " ++
                     "live={d} awaiting={d} vacant={d} replacing={d} " ++
-                    "contentions={d} intents={d}/{d} cadence={d}/{d}\n",
+                    "contentions={d} intents={d}/{d} districts={} district_frames={d} " ++
+                    "cross_axis={} cadence={d}/{d}\n",
                 .{
                     every_member,
                     self.resident_seen,
@@ -1349,6 +1379,9 @@ const S13PopulationSmokeProgress = struct {
                     state.slot_contentions,
                     state.intents.occupancy,
                     state.intents.rejected,
+                    every_district,
+                    self.four_district_frames,
+                    cross_axis_member,
                     summary.zero_tick_frames,
                     summary.multi_tick_frames,
                 },
@@ -8498,7 +8531,7 @@ const App = struct {
             if (self.validation.profile == .s2_smoke and self.validation.s2_smoke.entered) {
                 observeS2WheelPresentation(&self.validation.s2_smoke, vehicle_draws);
             }
-            self.validation.s13_population.observe(npc_draws);
+            self.validation.s13_population.observe(npc_draws, district_draws);
         }
         var follow_target: ?[3]f32 = null;
         var follow_distance: f32 = 0;
@@ -8662,8 +8695,8 @@ const App = struct {
         }
         const gate_state = self.simulation.developer().navigationGateState();
         const gate_positions = [_][3]f32{
+            .{ 8, 1, 12 },
             .{ 8, 1, 4 },
-            .{ 8, 1, -3 },
         };
         const gate_open = [_]bool{
             gate_state.north_open,
