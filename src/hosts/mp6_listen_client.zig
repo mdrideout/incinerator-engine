@@ -6,6 +6,7 @@
 
 const std = @import("std");
 const budgets = @import("session_budgets");
+const protocol = @import("session_protocol");
 const listen_room = @import("mp6_listen_room");
 const client_scene = @import("client_scene");
 const presentation = @import("mp2_presentation");
@@ -26,6 +27,7 @@ const Invocation = struct {
     smoke_actions: bool = false,
     s10_attacker: bool = false,
     s11_observer: bool = false,
+    s14_ranged_observer: bool = false,
 };
 
 const App = struct {
@@ -38,6 +40,7 @@ const App = struct {
     vehicle_action_requested: bool = false,
     carry_action_requested: bool = false,
     melee_action_requested: bool = false,
+    weapon_action_requested: ?protocol.WeaponActionKind = null,
     respawn_action_requested: bool = false,
     frame: u64 = 0,
     completed_ticks: u64 = 0,
@@ -63,6 +66,8 @@ const App = struct {
     s11_completion_tick: ?u64 = null,
     s11_last_respawn_request_tick: u64 = 0,
     s11_scenario_start_tick: ?u64 = null,
+    s14_ranged_observer: bool = false,
+    s14_shot_observed: bool = false,
 
     fn init(process_init: std.process.Init, invocation: Invocation) !App {
         const now = try unixSeconds(process_init.io);
@@ -89,6 +94,7 @@ const App = struct {
             .smoke_actions = invocation.smoke_actions,
             .s10_attacker = invocation.s10_attacker,
             .s11_observer = invocation.s11_observer,
+            .s14_ranged_observer = invocation.s14_ranged_observer,
         };
     }
 
@@ -119,6 +125,23 @@ const App = struct {
                 try self.submitActions();
                 try self.room.step(try unixSeconds(self.io));
                 while (self.room.takeCombatFeedback()) |feedback| {
+                    if (self.s14_ranged_observer) switch (feedback) {
+                        .shot => |event| {
+                            self.s14_shot_observed = true;
+                            std.debug.print(
+                                "S14_LISTEN_OBSERVER_SHOT shooter={d}:{d} result={s} target={d}:{d} damage={d}\n",
+                                .{
+                                    event.shooter.index,
+                                    event.shooter.generation,
+                                    @tagName(event.disposition),
+                                    event.target.index,
+                                    event.target.generation,
+                                    event.applied_damage,
+                                },
+                            );
+                        },
+                        else => {},
+                    };
                     self.scene.noteCombatFeedback(&self.room.client, feedback);
                 }
                 self.completed_ticks += 1;
@@ -167,7 +190,13 @@ const App = struct {
                     self.melee_action_requested = true;
                 }
                 if (event.key.scancode == c.SDL_SCANCODE_R and !was_down) {
-                    self.respawn_action_requested = true;
+                    if (self.room.client.avatar_life_state == .dead)
+                        self.respawn_action_requested = true
+                    else
+                        self.weapon_action_requested = .reload;
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_1 and !was_down) {
+                    self.weapon_action_requested = .equip_toggle;
                 }
                 if (event.key.scancode == c.SDL_SCANCODE_P and !was_down) {
                     const enabled = self.scene.toggleVehiclePrediction();
@@ -187,6 +216,8 @@ const App = struct {
             c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
                 if (event.button.button == c.SDL_BUTTON_RIGHT) {
                     self.scene.setLookActive(true);
+                } else if (event.button.button == c.SDL_BUTTON_LEFT) {
+                    self.weapon_action_requested = .fire;
                 }
             },
             c.SDL_EVENT_MOUSE_BUTTON_UP => {
@@ -261,6 +292,10 @@ const App = struct {
         if (self.melee_action_requested) {
             self.melee_action_requested = false;
             try self.room.requestHostMelee();
+        }
+        if (self.weapon_action_requested) |action| {
+            self.weapon_action_requested = null;
+            try self.room.requestHostWeapon(action);
         }
         if (self.respawn_action_requested) {
             self.respawn_action_requested = false;
@@ -419,10 +454,18 @@ const App = struct {
         for (view.memberSlice()) |member| {
             if (!member.local and member.connection == .connected) return;
         }
-        std.debug.print(
-            "S11_LISTEN_OBSERVER_PASS npc_death=true replacement=true\n",
-            .{},
-        );
+        if (self.s14_ranged_observer) {
+            if (!self.s14_shot_observed) return;
+            std.debug.print(
+                "S14_LISTEN_OBSERVER_PASS shot=true npc_death=true replacement=true\n",
+                .{},
+            );
+        } else {
+            std.debug.print(
+                "S11_LISTEN_OBSERVER_PASS npc_death=true replacement=true\n",
+                .{},
+            );
+        }
         self.running = false;
         self.s11_completion_tick = null;
     }
@@ -532,7 +575,7 @@ pub fn main(init: std.process.Init) !void {
     var app = try App.init(init, invocation);
     defer app.deinit();
     std.debug.print(
-        "MP6_LISTEN_READY endpoint={s}:{d} host={d} guest={d} ticket={s} controls=WASD/SPACE/LSHIFT/right-drag look/E enter-exit/F collect-drop/Q melee/R respawn/P prediction/C-L-ESC close\n",
+        "MP6_LISTEN_READY endpoint={s}:{d} host={d} guest={d} ticket={s} controls=WASD/SPACE/LSHIFT/right-drag look/E enter-exit/F collect-drop/Q melee/1 handgun/left-click fire/R reload-respawn/P prediction/C-L-ESC close\n",
         .{
             invocation.config.advertise_host,
             invocation.config.port,
@@ -542,8 +585,13 @@ pub fn main(init: std.process.Init) !void {
         },
     );
     if (invocation.s11_observer) std.debug.print(
-        "S11_SCENARIO_ADAPTER topology=listen role=observer scenario={s} seed={x} deadline_ticks={d}\n",
-        .{ s11_scenario.name, s11_scenario.seed, s11_scenario.deadline_ticks },
+        "{s}_SCENARIO_ADAPTER topology=listen role=observer scenario={s} seed={x} deadline_ticks={d}\n",
+        .{
+            if (invocation.s14_ranged_observer) "S14" else "S11",
+            s11_scenario.name,
+            s11_scenario.seed,
+            s11_scenario.deadline_ticks,
+        },
     );
     try app.run(invocation.max_frames);
 }
@@ -572,6 +620,9 @@ fn parseInvocation(args: []const []const u8) !Invocation {
             result.s10_attacker = true;
         } else if (std.mem.eql(u8, args[index], "--s11-observer")) {
             result.s11_observer = true;
+        } else if (std.mem.eql(u8, args[index], "--s14-observer")) {
+            result.s11_observer = true;
+            result.s14_ranged_observer = true;
         } else if (std.mem.eql(u8, args[index], "--advertise")) {
             index += 1;
             if (index >= args.len or args[index].len == 0) return error.MissingAdvertiseHost;

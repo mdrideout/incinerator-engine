@@ -128,6 +128,27 @@ pub const MeleeAction = struct {
     target_tick: u64,
 };
 
+pub const WeaponActionKind = enum(u8) {
+    equip_toggle = 1,
+    fire = 2,
+    reload = 3,
+};
+
+pub const WeaponAction = struct {
+    session: identity.SessionId,
+    participant: identity.ParticipantId,
+    sequence: identity.ActionSequence,
+    avatar_incarnation: u16,
+    target_tick: u64,
+    kind: WeaponActionKind,
+};
+
+pub const WeaponMode = enum(u8) {
+    holstered = 1,
+    equipped = 2,
+    reloading = 3,
+};
+
 pub const RespawnAction = struct {
     session: identity.SessionId,
     participant: identity.ParticipantId,
@@ -167,6 +188,7 @@ pub const ClientMessage = union(enum) {
     vehicle_action: VehicleAction,
     interaction_action: InteractionAction,
     melee_action: MeleeAction,
+    weapon_action: WeaponAction,
     respawn_action: RespawnAction,
     baseline_ack: BaselineAck,
     snapshot_ack: SnapshotAck,
@@ -184,6 +206,11 @@ pub const Welcome = struct {
     avatar_incarnation: u16,
     life_state: AvatarLifeState,
     melee_ready_tick: u64 = 0,
+    weapon_mode: WeaponMode = .holstered,
+    magazine_ammo: u16 = 0,
+    reserve_ammo: u16 = 0,
+    weapon_ready_tick: u64 = 0,
+    reload_complete_tick: u64 = 0,
     respawn_ready_tick: u64 = 0,
 };
 
@@ -197,6 +224,11 @@ pub const CharacterState = struct {
     health: u16 = 100,
     maximum_health: u16 = 100,
     life_state: AvatarLifeState = .alive,
+    weapon_mode: WeaponMode = .holstered,
+    magazine_ammo: u16 = 0,
+    reserve_ammo: u16 = 0,
+    weapon_ready_tick: u64 = 0,
+    reload_complete_tick: u64 = 0,
 };
 
 /// Compact, engine-neutral wheel presentation projected by authority. The
@@ -486,6 +518,62 @@ pub const MeleeActionResult = struct {
     ready_tick: u64 = 0,
 };
 
+pub const WeaponActionDisposition = enum(u8) {
+    equipped = 1,
+    holstered = 2,
+    fired_hit = 3,
+    fired_miss = 4,
+    reload_started = 5,
+    cooldown = 6,
+    empty = 7,
+    already_full = 8,
+    no_reserve = 9,
+    reloading = 10,
+    not_equipped = 11,
+    dead = 12,
+    wrong_incarnation = 13,
+    invalid_state = 14,
+};
+
+pub const WeaponActionResult = struct {
+    sequence: identity.ActionSequence,
+    authority_tick: u64,
+    action: WeaponActionKind,
+    disposition: WeaponActionDisposition,
+    mode: WeaponMode,
+    magazine_ammo: u16,
+    reserve_ammo: u16,
+    weapon_ready_tick: u64,
+    reload_complete_tick: u64,
+    target: identity.ReplicatedEntityId = .invalid,
+    target_incarnation: u16 = 0,
+    ray_origin: [3]f32 = @splat(0),
+    impact_position: [3]f32 = @splat(0),
+    applied_damage: u16 = 0,
+    remaining_health: u16 = 0,
+    killed: bool = false,
+};
+
+pub const ShotDisposition = enum(u8) {
+    hit = 1,
+    miss = 2,
+};
+
+pub const ShotEvent = struct {
+    shooter: identity.ReplicatedEntityId,
+    shooter_incarnation: u16,
+    sequence: identity.ActionSequence,
+    authority_tick: u64,
+    disposition: ShotDisposition,
+    ray_origin: [3]f32,
+    impact_position: [3]f32,
+    target: identity.ReplicatedEntityId = .invalid,
+    target_incarnation: u16 = 0,
+    applied_damage: u16 = 0,
+    remaining_health: u16 = 0,
+    killed: bool = false,
+};
+
 pub const RespawnActionDisposition = enum(u8) {
     respawned = 1,
     alive = 2,
@@ -529,6 +617,8 @@ pub const ServerMessage = union(enum) {
     vehicle_action_result: VehicleActionResult,
     interaction_action_result: InteractionActionResult,
     melee_action_result: MeleeActionResult,
+    weapon_action_result: WeaponActionResult,
+    shot_event: ShotEvent,
     respawn_action_result: RespawnActionResult,
     life_event: LifeEvent,
     rejected: Rejection,
@@ -555,6 +645,7 @@ const ClientKind = enum(u8) {
     delivery_receipt = 9,
     melee_action = 10,
     respawn_action = 11,
+    weapon_action = 12,
 };
 const ServerKind = enum(u8) {
     welcome = 1,
@@ -567,6 +658,8 @@ const ServerKind = enum(u8) {
     melee_action_result = 8,
     respawn_action_result = 9,
     life_event = 10,
+    weapon_action_result = 11,
+    shot_event = 12,
 };
 
 pub fn encodeClient(message: ClientMessage, storage: []u8) ![]const u8 {
@@ -579,6 +672,7 @@ pub fn encodeClient(message: ClientMessage, storage: []u8) ![]const u8 {
         .vehicle_action => @intFromEnum(ClientKind.vehicle_action),
         .interaction_action => @intFromEnum(ClientKind.interaction_action),
         .melee_action => @intFromEnum(ClientKind.melee_action),
+        .weapon_action => @intFromEnum(ClientKind.weapon_action),
         .respawn_action => @intFromEnum(ClientKind.respawn_action),
         .baseline_ack => @intFromEnum(ClientKind.baseline_ack),
         .snapshot_ack => @intFromEnum(ClientKind.snapshot_ack),
@@ -614,6 +708,14 @@ pub fn encodeClient(message: ClientMessage, storage: []u8) ![]const u8 {
             try encoder.u32Value(value.sequence.value);
             try encoder.u16Value(value.avatar_incarnation);
             try encoder.u64Value(value.target_tick);
+        },
+        .weapon_action => |value| {
+            try encoder.u64Value(value.session.value);
+            try encodeParticipant(&encoder, value.participant);
+            try encoder.u32Value(value.sequence.value);
+            try encoder.u16Value(value.avatar_incarnation);
+            try encoder.u64Value(value.target_tick);
+            try encoder.u8Value(@intFromEnum(value.kind));
         },
         .respawn_action => |value| {
             try encoder.u64Value(value.session.value);
@@ -662,6 +764,17 @@ pub fn decodeClient(bytes: []const u8) !ClientMessage {
             .avatar_incarnation = try decoder.u16Value(),
             .target_tick = try decoder.u64Value(),
         } },
+        .weapon_action => .{ .weapon_action = .{
+            .session = .{ .value = try decoder.u64Value() },
+            .participant = try decodeParticipant(&decoder),
+            .sequence = .{ .value = try decoder.u32Value() },
+            .avatar_incarnation = try decoder.u16Value(),
+            .target_tick = try decoder.u64Value(),
+            .kind = enumFromInt(
+                WeaponActionKind,
+                try decoder.u8Value(),
+            ) catch return error.InvalidEnum,
+        } },
         .respawn_action => .{ .respawn_action = .{
             .session = .{ .value = try decoder.u64Value() },
             .participant = try decodeParticipant(&decoder),
@@ -708,6 +821,8 @@ pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
         .vehicle_action_result => @intFromEnum(ServerKind.vehicle_action_result),
         .interaction_action_result => @intFromEnum(ServerKind.interaction_action_result),
         .melee_action_result => @intFromEnum(ServerKind.melee_action_result),
+        .weapon_action_result => @intFromEnum(ServerKind.weapon_action_result),
+        .shot_event => @intFromEnum(ServerKind.shot_event),
         .respawn_action_result => @intFromEnum(ServerKind.respawn_action_result),
         .life_event => @intFromEnum(ServerKind.life_event),
         .rejected => @intFromEnum(ServerKind.rejected),
@@ -725,6 +840,11 @@ pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
             try encoder.u16Value(value.avatar_incarnation);
             try encoder.u8Value(@intFromEnum(value.life_state));
             try encoder.u64Value(value.melee_ready_tick);
+            try encoder.u8Value(@intFromEnum(value.weapon_mode));
+            try encoder.u16Value(value.magazine_ammo);
+            try encoder.u16Value(value.reserve_ammo);
+            try encoder.u64Value(value.weapon_ready_tick);
+            try encoder.u64Value(value.reload_complete_tick);
             try encoder.u64Value(value.respawn_ready_tick);
         },
         .snapshot => |value| try encodeSnapshot(&encoder, value),
@@ -758,6 +878,38 @@ pub fn encodeServer(message: ServerMessage, storage: []u8) ![]const u8 {
             try encoder.u16Value(value.remaining_health);
             try encoder.u8Value(@intFromBool(value.killed));
             try encoder.u64Value(value.ready_tick);
+        },
+        .weapon_action_result => |value| {
+            try encoder.u32Value(value.sequence.value);
+            try encoder.u64Value(value.authority_tick);
+            try encoder.u8Value(@intFromEnum(value.action));
+            try encoder.u8Value(@intFromEnum(value.disposition));
+            try encoder.u8Value(@intFromEnum(value.mode));
+            try encoder.u16Value(value.magazine_ammo);
+            try encoder.u16Value(value.reserve_ammo);
+            try encoder.u64Value(value.weapon_ready_tick);
+            try encoder.u64Value(value.reload_complete_tick);
+            try encodeReplicatedEntity(&encoder, value.target);
+            try encoder.u16Value(value.target_incarnation);
+            for (value.ray_origin) |component| try encoder.f32Value(component);
+            for (value.impact_position) |component| try encoder.f32Value(component);
+            try encoder.u16Value(value.applied_damage);
+            try encoder.u16Value(value.remaining_health);
+            try encoder.u8Value(@intFromBool(value.killed));
+        },
+        .shot_event => |value| {
+            try encodeReplicatedEntity(&encoder, value.shooter);
+            try encoder.u16Value(value.shooter_incarnation);
+            try encoder.u32Value(value.sequence.value);
+            try encoder.u64Value(value.authority_tick);
+            try encoder.u8Value(@intFromEnum(value.disposition));
+            for (value.ray_origin) |component| try encoder.f32Value(component);
+            for (value.impact_position) |component| try encoder.f32Value(component);
+            try encodeReplicatedEntity(&encoder, value.target);
+            try encoder.u16Value(value.target_incarnation);
+            try encoder.u16Value(value.applied_damage);
+            try encoder.u16Value(value.remaining_health);
+            try encoder.u8Value(@intFromBool(value.killed));
         },
         .respawn_action_result => |value| {
             try encoder.u32Value(value.sequence.value);
@@ -811,6 +963,11 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
             .avatar_incarnation = try decoder.u16Value(),
             .life_state = try enumFromInt(AvatarLifeState, try decoder.u8Value()),
             .melee_ready_tick = try decoder.u64Value(),
+            .weapon_mode = try enumFromInt(WeaponMode, try decoder.u8Value()),
+            .magazine_ammo = try decoder.u16Value(),
+            .reserve_ammo = try decoder.u16Value(),
+            .weapon_ready_tick = try decoder.u64Value(),
+            .reload_complete_tick = try decoder.u64Value(),
             .respawn_ready_tick = try decoder.u64Value(),
         } },
         .snapshot => .{ .snapshot = try decodeSnapshot(&decoder) },
@@ -878,6 +1035,52 @@ pub fn decodeServer(bytes: []const u8) !ServerMessage {
                 else => return error.InvalidBoolean,
             },
             .ready_tick = try decoder.u64Value(),
+        } },
+        .weapon_action_result => .{ .weapon_action_result = .{
+            .sequence = .{ .value = try decoder.u32Value() },
+            .authority_tick = try decoder.u64Value(),
+            .action = enumFromInt(WeaponActionKind, try decoder.u8Value()) catch
+                return error.InvalidEnum,
+            .disposition = enumFromInt(
+                WeaponActionDisposition,
+                try decoder.u8Value(),
+            ) catch return error.InvalidEnum,
+            .mode = enumFromInt(WeaponMode, try decoder.u8Value()) catch
+                return error.InvalidEnum,
+            .magazine_ammo = try decoder.u16Value(),
+            .reserve_ammo = try decoder.u16Value(),
+            .weapon_ready_tick = try decoder.u64Value(),
+            .reload_complete_tick = try decoder.u64Value(),
+            .target = try decodeReplicatedEntity(&decoder),
+            .target_incarnation = try decoder.u16Value(),
+            .ray_origin = .{
+                try decoder.f32Value(), try decoder.f32Value(), try decoder.f32Value(),
+            },
+            .impact_position = .{
+                try decoder.f32Value(), try decoder.f32Value(), try decoder.f32Value(),
+            },
+            .applied_damage = try decoder.u16Value(),
+            .remaining_health = try decoder.u16Value(),
+            .killed = try decodeBool(&decoder),
+        } },
+        .shot_event => .{ .shot_event = .{
+            .shooter = try decodeReplicatedEntity(&decoder),
+            .shooter_incarnation = try decoder.u16Value(),
+            .sequence = .{ .value = try decoder.u32Value() },
+            .authority_tick = try decoder.u64Value(),
+            .disposition = enumFromInt(ShotDisposition, try decoder.u8Value()) catch
+                return error.InvalidEnum,
+            .ray_origin = .{
+                try decoder.f32Value(), try decoder.f32Value(), try decoder.f32Value(),
+            },
+            .impact_position = .{
+                try decoder.f32Value(), try decoder.f32Value(), try decoder.f32Value(),
+            },
+            .target = try decodeReplicatedEntity(&decoder),
+            .target_incarnation = try decoder.u16Value(),
+            .applied_damage = try decoder.u16Value(),
+            .remaining_health = try decoder.u16Value(),
+            .killed = try decodeBool(&decoder),
         } },
         .respawn_action_result => .{ .respawn_action_result = .{
             .sequence = .{ .value = try decoder.u32Value() },
@@ -1016,6 +1219,14 @@ pub fn validateClient(message: ClientMessage) !void {
                 return error.InvalidMeleeAction;
             }
         },
+        .weapon_action => |value| {
+            try value.session.validate();
+            try value.participant.validate();
+            try value.sequence.validate();
+            if (value.avatar_incarnation == 0 or value.target_tick == 0) {
+                return error.InvalidWeaponAction;
+            }
+        },
         .respawn_action => |value| {
             try value.session.validate();
             try value.participant.validate();
@@ -1097,6 +1308,49 @@ pub fn validateServer(message: ServerMessage) !void {
                 value.applied_damage != 0 or value.remaining_health != 0 or value.killed)
             {
                 return error.InvalidMeleeActionResult;
+            }
+        },
+        .weapon_action_result => |value| {
+            try value.sequence.validate();
+            try validateWeaponProjection(
+                value.mode,
+                value.reload_complete_tick,
+            );
+            try validateFiniteComponents(&value.ray_origin);
+            try validateFiniteComponents(&value.impact_position);
+            const fired = value.disposition == .fired_hit or
+                value.disposition == .fired_miss;
+            if (fired and value.action != .fire) {
+                return error.InvalidWeaponActionResult;
+            }
+            if (value.disposition == .fired_hit) {
+                try value.target.validate();
+                if (value.target_incarnation == 0 or value.applied_damage == 0) {
+                    return error.InvalidWeaponActionResult;
+                }
+            } else if (value.target.isValid() or value.target_incarnation != 0 or
+                value.applied_damage != 0 or value.remaining_health != 0 or value.killed)
+            {
+                return error.InvalidWeaponActionResult;
+            }
+        },
+        .shot_event => |value| {
+            try value.shooter.validate();
+            try value.sequence.validate();
+            if (value.shooter_incarnation == 0 or value.authority_tick == 0) {
+                return error.InvalidShotEvent;
+            }
+            try validateFiniteComponents(&value.ray_origin);
+            try validateFiniteComponents(&value.impact_position);
+            if (value.disposition == .hit) {
+                try value.target.validate();
+                if (value.target_incarnation == 0 or value.applied_damage == 0) {
+                    return error.InvalidShotEvent;
+                }
+            } else if (value.target.isValid() or value.target_incarnation != 0 or
+                value.applied_damage != 0 or value.remaining_health != 0 or value.killed)
+            {
+                return error.InvalidShotEvent;
             }
         },
         .respawn_action_result => |value| {
@@ -1295,6 +1549,10 @@ fn validateSnapshot(value: Snapshot) !void {
             character.maximum_health,
             character.life_state,
         );
+        try validateWeaponProjection(
+            character.weapon_mode,
+            character.reload_complete_tick,
+        );
     }
     for (value.vehicleSlice()) |vehicle| {
         try vehicle.entity.validate();
@@ -1378,6 +1636,25 @@ fn validateFiniteComponents(values: []const f32) !void {
     for (values) |value| {
         if (!std.math.isFinite(value)) return error.NonFiniteProjection;
     }
+}
+
+fn validateWeaponProjection(mode: WeaponMode, reload_complete_tick: u64) !void {
+    switch (mode) {
+        .holstered, .equipped => if (reload_complete_tick != 0) {
+            return error.InvalidWeaponProjection;
+        },
+        .reloading => if (reload_complete_tick == 0) {
+            return error.InvalidWeaponProjection;
+        },
+    }
+}
+
+fn decodeBool(decoder: *Decoder) !bool {
+    return switch (try decoder.u8Value()) {
+        0 => false,
+        1 => true,
+        else => error.InvalidBoolean,
+    };
 }
 
 fn validateProjectionQuaternion(value: [4]f32) !void {
@@ -1929,6 +2206,11 @@ fn encodeCharacter(encoder: *Encoder, value: CharacterState) !void {
     try encoder.u16Value(value.health);
     try encoder.u16Value(value.maximum_health);
     try encoder.u8Value(@intFromEnum(value.life_state));
+    try encoder.u8Value(@intFromEnum(value.weapon_mode));
+    try encoder.u16Value(value.magazine_ammo);
+    try encoder.u16Value(value.reserve_ammo);
+    try encoder.u64Value(value.weapon_ready_tick);
+    try encoder.u64Value(value.reload_complete_tick);
 }
 
 fn decodeCharacter(decoder: *Decoder) !CharacterState {
@@ -1945,6 +2227,7 @@ fn decodeCharacter(decoder: *Decoder) !CharacterState {
         .health = 0,
         .maximum_health = 0,
         .life_state = undefined,
+        .weapon_mode = undefined,
     };
     for (&value.position) |*component| component.* = try decoder.f32Value();
     for (&value.velocity) |*component| component.* = try decoder.f32Value();
@@ -1956,6 +2239,14 @@ fn decodeCharacter(decoder: *Decoder) !CharacterState {
         AvatarLifeState,
         try decoder.u8Value(),
     ) catch return error.InvalidEnum;
+    value.weapon_mode = enumFromInt(
+        WeaponMode,
+        try decoder.u8Value(),
+    ) catch return error.InvalidEnum;
+    value.magazine_ammo = try decoder.u16Value();
+    value.reserve_ammo = try decoder.u16Value();
+    value.weapon_ready_tick = try decoder.u64Value();
+    value.reload_complete_tick = try decoder.u64Value();
     return value;
 }
 
@@ -2891,6 +3182,65 @@ test "melee respawn and life messages preserve avatar incarnation" {
         .instigator = .{ .index = 2, .generation = 3 },
     } };
     try std.testing.expectEqualDeep(death, try decodeServer(try encodeServer(death, &bytes)));
+}
+
+test "weapon action result and shot event preserve authoritative evidence" {
+    var bytes: [512]u8 = undefined;
+    const action = ClientMessage{ .weapon_action = .{
+        .session = .{ .value = 9 },
+        .participant = .{ .index = 2, .generation = 3 },
+        .sequence = .{ .value = 13 },
+        .avatar_incarnation = 7,
+        .target_tick = 42,
+        .kind = .fire,
+    } };
+    try std.testing.expectEqualDeep(action, try decodeClient(try encodeClient(action, &bytes)));
+
+    const result = ServerMessage{ .weapon_action_result = .{
+        .sequence = .{ .value = 13 },
+        .authority_tick = 43,
+        .action = .fire,
+        .disposition = .fired_hit,
+        .mode = .equipped,
+        .magazine_ammo = 11,
+        .reserve_ammo = 36,
+        .weapon_ready_tick = 54,
+        .reload_complete_tick = 0,
+        .target = .{ .index = 4, .generation = 7 },
+        .target_incarnation = 7,
+        .ray_origin = .{ 1, 1.4, 2 },
+        .impact_position = .{ 1, 1.4, -2 },
+        .applied_damage = 25,
+        .remaining_health = 75,
+    } };
+    try std.testing.expectEqualDeep(result, try decodeServer(try encodeServer(result, &bytes)));
+
+    const event = ServerMessage{ .shot_event = .{
+        .shooter = .{ .index = 2, .generation = 7 },
+        .shooter_incarnation = 7,
+        .sequence = .{ .value = 13 },
+        .authority_tick = 43,
+        .disposition = .hit,
+        .ray_origin = .{ 1, 1.4, 2 },
+        .impact_position = .{ 1, 1.4, -2 },
+        .target = .{ .index = 4, .generation = 7 },
+        .target_incarnation = 7,
+        .applied_damage = 25,
+        .remaining_health = 75,
+    } };
+    try std.testing.expectEqualDeep(event, try decodeServer(try encodeServer(event, &bytes)));
+
+    var invalid = result;
+    invalid.weapon_action_result.reload_complete_tick = 1;
+    try std.testing.expectError(error.InvalidWeaponProjection, validateServer(invalid));
+    try std.testing.expectError(error.InvalidWeaponAction, validateClient(.{ .weapon_action = .{
+        .session = .{ .value = 9 },
+        .participant = .{ .index = 2, .generation = 3 },
+        .sequence = .{ .value = 14 },
+        .avatar_incarnation = 0,
+        .target_tick = 42,
+        .kind = .fire,
+    } }));
 }
 
 test "snapshot delta carries authoritative health and life changes" {

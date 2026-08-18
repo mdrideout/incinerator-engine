@@ -1,7 +1,7 @@
 # DR1 Playable Deterministic Visual Fidelity Validation
 
-**Status:** DR1-A through DR1-G implementation and agent-native acceptance
-complete on Apple Silicon macOS; product-owner visual walkthrough pending
+**Status:** Accepted on Apple Silicon macOS; implementation, automated/native
+acceptance, agent-native inspection, and product-owner visual walkthrough complete
 
 **Recorded:** 2026-08-18
 
@@ -20,7 +20,7 @@ complete on Apple Silicon macOS; product-owner visual walkthrough pending
 | DR1-D — evaluation-world composition | Accepted | Roads, sidewalks, seam, activity/route landmarks, multipart actors and vehicle |
 | DR1-E — grounding gate | Accepted without a shadow pass | Lit surfaces, low support markings, occlusion, and authored collision masses are readable at the accepted cameras |
 | DR1-F — Render Lab and incident evidence | Accepted | Render Lab, schema-5 `render_state`, capability matrix, strict fresh-agent summary |
-| DR1-G — native acceptance and cleanup | Automated and agent-native acceptance complete | Editor-on/off aggregates, repaired full journey, replay, screenshot and dependency evidence below |
+| DR1-G — native acceptance and cleanup | Accepted | Editor-on/off aggregates, repaired full journey, replay, screenshot and dependency evidence below, and product-owner visual walkthrough |
 
 ## Entry baseline and runtime independence
 
@@ -212,8 +212,9 @@ encounter processes.
 | Native Metal lifecycle, readback, district residency, and replay | Native pass |
 | Character/vehicle/carry/combat/death/replacement journey | Scripted native pass |
 | Render Lab starts focused under the rendering layout | Agent-native screenshot pass |
-| Overall lighting, palette, grounding, motion feel, and surprising artifacts | Product-owner walkthrough pending |
+| Overall lighting, palette, grounding, motion feel, and surprising artifacts | Product-owner accepted the ordinary product on 2026-08-18 |
 
-DR1 implementation is complete. Full phase acceptance remains intentionally
-open until the product owner runs the ordinary product and accepts or flags its
-perceptual result through the normal incident workflow.
+The product owner accepted the ordinary deterministic product after the native
+and agent-native evidence above was complete. No visual anomaly was retained at
+the checkpoint. DR1 is fully accepted; later visual changes are new work rather
+than unfinished DR1 scope.

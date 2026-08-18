@@ -29,6 +29,9 @@ pub const Diagnostics = struct {
     interaction_action_correlations_evicted: u64,
     melee_actions_accepted: u64,
     melee_actions_rejected: u64,
+    weapon_actions_accepted: u64,
+    weapon_actions_rejected: u64,
+    shot_events: u64,
     respawns_accepted: u64,
     respawns_rejected: u64,
     life_events: u64,
@@ -145,6 +148,20 @@ pub const Client = struct {
     ) = .{},
     melee_actions_accepted: u64 = 0,
     melee_actions_rejected: u64 = 0,
+    next_weapon_action: identity.ActionSequence = .{ .value = 1 },
+    pending_weapon_action: ?protocol.WeaponAction = null,
+    retired_weapon_action: ?protocol.WeaponAction = null,
+    weapon_action_results: ResultQueue(
+        protocol.WeaponActionResult,
+        action_result_capacity,
+    ) = .{},
+    shot_event_results: ResultQueue(
+        protocol.ShotEvent,
+        life_event_result_capacity,
+    ) = .{},
+    weapon_actions_accepted: u64 = 0,
+    weapon_actions_rejected: u64 = 0,
+    shot_events: u64 = 0,
     next_respawn_action: identity.ActionSequence = .{ .value = 1 },
     pending_respawn_action: ?protocol.RespawnAction = null,
     retired_respawn_action: ?protocol.RespawnAction = null,
@@ -171,6 +188,12 @@ pub const Client = struct {
     avatar_life_state: ?protocol.AvatarLifeState = null,
     avatar_lifecycle_tick: u64 = 0,
     melee_ready_tick: u64 = 0,
+    weapon_mode: protocol.WeaponMode = .holstered,
+    magazine_ammo: u16 = 0,
+    reserve_ammo: u16 = 0,
+    weapon_ready_tick: u64 = 0,
+    reload_complete_tick: u64 = 0,
+    weapon_state_tick: u64 = 0,
     respawn_ready_tick: u64 = 0,
     baselines_applied: u64 = 0,
     active_baseline_id: u32 = 0,
@@ -249,6 +272,12 @@ pub const Client = struct {
                 self.avatar_life_state = welcome.life_state;
                 self.avatar_lifecycle_tick = welcome.authority_tick;
                 self.melee_ready_tick = welcome.melee_ready_tick;
+                self.weapon_mode = welcome.weapon_mode;
+                self.magazine_ammo = welcome.magazine_ammo;
+                self.reserve_ammo = welcome.reserve_ammo;
+                self.weapon_ready_tick = welcome.weapon_ready_tick;
+                self.reload_complete_tick = welcome.reload_complete_tick;
+                self.weapon_state_tick = welcome.authority_tick;
                 self.respawn_ready_tick = welcome.respawn_ready_tick;
                 if (welcome.life_state == .dead) {
                     self.prediction.clearOwnership();
@@ -287,6 +316,11 @@ pub const Client = struct {
             .vehicle_action_result => |result| try self.receiveVehicleActionResult(result),
             .interaction_action_result => |result| try self.receiveInteractionActionResult(result),
             .melee_action_result => |result| try self.receiveMeleeActionResult(result),
+            .weapon_action_result => |result| try self.receiveWeaponActionResult(result),
+            .shot_event => |event| {
+                try self.shot_event_results.push(event);
+                self.shot_events +|= 1;
+            },
             .respawn_action_result => |result| try self.receiveRespawnActionResult(result),
             .life_event => |event| {
                 try self.life_event_results.push(event);
@@ -318,11 +352,15 @@ pub const Client = struct {
                 self.retired_interaction_action = null;
                 self.pending_melee_action = null;
                 self.retired_melee_action = null;
+                self.pending_weapon_action = null;
+                self.retired_weapon_action = null;
                 self.pending_respawn_action = null;
                 self.retired_respawn_action = null;
                 self.vehicle_action_results.clear();
                 self.interaction_action_results.clear();
                 self.melee_action_results.clear();
+                self.weapon_action_results.clear();
+                self.shot_event_results.clear();
                 self.respawn_action_results.clear();
                 self.life_event_results.clear();
                 self.pending_baseline_ack = null;
@@ -343,6 +381,8 @@ pub const Client = struct {
                     self.retired_interaction_action = null;
                     self.pending_melee_action = null;
                     self.retired_melee_action = null;
+                    self.pending_weapon_action = null;
+                    self.retired_weapon_action = null;
                     self.pending_respawn_action = null;
                     self.retired_respawn_action = null;
                     self.prediction.clearOwnership();
@@ -369,6 +409,8 @@ pub const Client = struct {
             .vehicle_action_result,
             .interaction_action_result,
             .melee_action_result,
+            .weapon_action_result,
+            .shot_event,
             .respawn_action_result,
             .life_event,
             => .gameplay,
@@ -495,6 +537,49 @@ pub const Client = struct {
         return error.UnexpectedMeleeActionResult;
     }
 
+    fn receiveWeaponActionResult(
+        self: *Client,
+        result: protocol.WeaponActionResult,
+    ) !void {
+        if (self.pending_weapon_action) |pending| {
+            if (pending.sequence.value == result.sequence.value) {
+                if (pending.kind != result.action) {
+                    return error.MismatchedWeaponActionResult;
+                }
+                try self.weapon_action_results.push(result);
+                self.pending_weapon_action = null;
+                if (result.authority_tick >= self.weapon_state_tick) {
+                    self.weapon_mode = result.mode;
+                    self.magazine_ammo = result.magazine_ammo;
+                    self.reserve_ammo = result.reserve_ammo;
+                    self.weapon_ready_tick = result.weapon_ready_tick;
+                    self.reload_complete_tick = result.reload_complete_tick;
+                    self.weapon_state_tick = result.authority_tick;
+                }
+                switch (result.disposition) {
+                    .equipped,
+                    .holstered,
+                    .fired_hit,
+                    .fired_miss,
+                    .reload_started,
+                    => self.weapon_actions_accepted +|= 1,
+                    else => self.weapon_actions_rejected +|= 1,
+                }
+                return;
+            }
+        }
+        if (self.retired_weapon_action) |retired| {
+            if (retired.sequence.value == result.sequence.value) {
+                if (retired.kind != result.action) {
+                    return error.MismatchedWeaponActionResult;
+                }
+                self.retired_weapon_action = null;
+                return;
+            }
+        }
+        return error.UnexpectedWeaponActionResult;
+    }
+
     fn receiveRespawnActionResult(self: *Client, result: protocol.RespawnActionResult) !void {
         if (self.pending_respawn_action) |pending| {
             if (pending.sequence.value == result.sequence.value) {
@@ -538,6 +623,10 @@ pub const Client = struct {
         if (self.pending_melee_action) |pending| {
             self.retired_melee_action = pending;
             self.pending_melee_action = null;
+        }
+        if (self.pending_weapon_action) |pending| {
+            self.retired_weapon_action = pending;
+            self.pending_weapon_action = null;
         }
         if (self.pending_respawn_action) |pending| {
             self.retired_respawn_action = pending;
@@ -713,6 +802,36 @@ pub const Client = struct {
         return message;
     }
 
+    pub fn weaponAction(
+        self: *Client,
+        kind: protocol.WeaponActionKind,
+        target_tick: u64,
+    ) !protocol.ClientMessage {
+        if (self.state != .joined) return error.ClientNotJoined;
+        if (self.pending_weapon_action != null) return error.WeaponActionPending;
+        if (!self.weapon_action_results.hasCapacity()) {
+            return error.WeaponActionResultsPending;
+        }
+        if (self.avatar_life_state != .alive) return error.AvatarDead;
+        if (self.ownedVehicle() != null) return error.CannotUseWeaponWhileDriving;
+        if (self.heldCarryable() != null) return error.CannotUseWeaponWhileCarrying;
+        const character = self.ownedCharacter() orelse return error.AvatarUnavailable;
+        if (character.life_state != .alive) return error.AvatarDead;
+        const action = protocol.WeaponAction{
+            .session = self.session,
+            .participant = self.participant,
+            .sequence = self.next_weapon_action,
+            .avatar_incarnation = character.incarnation,
+            .target_tick = target_tick,
+            .kind = kind,
+        };
+        const message = protocol.ClientMessage{ .weapon_action = action };
+        try protocol.validateClient(message);
+        self.next_weapon_action = self.next_weapon_action.next();
+        self.pending_weapon_action = action;
+        return message;
+    }
+
     pub fn respawnAction(self: *Client) !protocol.ClientMessage {
         if (self.state != .joined) return error.ClientNotJoined;
         if (self.pending_respawn_action != null) return error.RespawnActionPending;
@@ -735,6 +854,14 @@ pub const Client = struct {
 
     pub fn takeMeleeActionResult(self: *Client) ?protocol.MeleeActionResult {
         return self.melee_action_results.pop();
+    }
+
+    pub fn takeWeaponActionResult(self: *Client) ?protocol.WeaponActionResult {
+        return self.weapon_action_results.pop();
+    }
+
+    pub fn takeShotEvent(self: *Client) ?protocol.ShotEvent {
+        return self.shot_event_results.pop();
     }
 
     pub fn takeRespawnActionResult(self: *Client) ?protocol.RespawnActionResult {
@@ -851,6 +978,9 @@ pub const Client = struct {
             .interaction_action_correlations_evicted = self.interaction_action_correlations_evicted,
             .melee_actions_accepted = self.melee_actions_accepted,
             .melee_actions_rejected = self.melee_actions_rejected,
+            .weapon_actions_accepted = self.weapon_actions_accepted,
+            .weapon_actions_rejected = self.weapon_actions_rejected,
+            .shot_events = self.shot_events,
             .respawns_accepted = self.respawns_accepted,
             .respawns_rejected = self.respawns_rejected,
             .life_events = self.life_events,
@@ -908,6 +1038,14 @@ pub const Client = struct {
         self.last_acknowledged_input = snapshot.acknowledged_input;
         self.snapshots_applied +|= 1;
         if (self.ownedCharacter()) |character| {
+            if (snapshot.server_tick >= self.weapon_state_tick) {
+                self.weapon_mode = character.weapon_mode;
+                self.magazine_ammo = character.magazine_ammo;
+                self.reserve_ammo = character.reserve_ammo;
+                self.weapon_ready_tick = character.weapon_ready_tick;
+                self.reload_complete_tick = character.reload_complete_tick;
+                self.weapon_state_tick = snapshot.server_tick;
+            }
             if (self.snapshotAdvancesLifecycle(character, snapshot.server_tick)) {
                 self.avatar_incarnation = character.incarnation;
                 self.avatar_entity = character.entity;
@@ -1100,6 +1238,59 @@ test "client owns admission identity and sequenced input" {
     const first = (try client.input(1, .{ 0, 1 }, 0, false)).input;
     const second = (try client.input(2, .{ 0, 1 }, 0, false)).input;
     try std.testing.expect(second.sequence.newerThan(first.sequence));
+}
+
+test "weapon projection advances by authority tick through reload completion" {
+    var client = try joinedTestClient(109);
+    var snapshot = protocol.Snapshot.empty();
+    snapshot.sequence.value = 1;
+    snapshot.server_tick = 10;
+    snapshot.character_count = 1;
+    snapshot.characters[0] = .{
+        .entity = client.avatar_entity,
+        .owner = client.participant,
+        .position = .{ 0, 1, 0 },
+        .velocity = @splat(0),
+        .facing_yaw = 0,
+        .weapon_mode = .equipped,
+        .magazine_ammo = 0,
+        .reserve_ammo = 36,
+    };
+    try client.receive(.{ .snapshot = snapshot });
+
+    const reload = (try client.weaponAction(.reload, 10)).weapon_action;
+    try client.receive(.{ .weapon_action_result = .{
+        .sequence = reload.sequence,
+        .authority_tick = 11,
+        .action = .reload,
+        .disposition = .reload_started,
+        .mode = .reloading,
+        .magazine_ammo = 0,
+        .reserve_ammo = 36,
+        .weapon_ready_tick = 0,
+        .reload_complete_tick = 101,
+    } });
+    try std.testing.expectEqual(protocol.WeaponMode.reloading, client.weapon_mode);
+
+    // A reordered older snapshot may update world presentation, but cannot
+    // roll back the separately tick-ordered weapon projection.
+    snapshot.sequence.value = 2;
+    snapshot.characters[0].weapon_mode = .equipped;
+    try client.receive(.{ .snapshot = snapshot });
+    try std.testing.expectEqual(protocol.WeaponMode.reloading, client.weapon_mode);
+    try std.testing.expectEqual(@as(u64, 11), client.weapon_state_tick);
+
+    snapshot.sequence.value = 3;
+    snapshot.server_tick = 101;
+    snapshot.characters[0].weapon_mode = .equipped;
+    snapshot.characters[0].magazine_ammo = 12;
+    snapshot.characters[0].reserve_ammo = 24;
+    snapshot.characters[0].reload_complete_tick = 0;
+    try client.receive(.{ .snapshot = snapshot });
+    try std.testing.expectEqual(protocol.WeaponMode.equipped, client.weapon_mode);
+    try std.testing.expectEqual(@as(u16, 12), client.magazine_ammo);
+    try std.testing.expectEqual(@as(u16, 24), client.reserve_ammo);
+    try std.testing.expectEqual(@as(u64, 101), client.weapon_state_tick);
 }
 
 test "reliable application delivery is cumulative and duplicate replay is idempotent" {

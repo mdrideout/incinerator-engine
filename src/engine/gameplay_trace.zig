@@ -32,6 +32,7 @@ pub const Kind = enum {
     vehicle_control,
     carry_toggle,
     melee,
+    firearm,
     respawn,
     navigation,
     population,
@@ -140,6 +141,19 @@ pub const PopulationEvidence = struct {
     retry_reason: u8,
 };
 
+pub const WeaponEvidence = struct {
+    action: u8,
+    mode: u8,
+    magazine_ammo: u16,
+    reserve_ammo: u16,
+    weapon_ready_tick: u64,
+    reload_complete_tick: u64,
+    ray_origin: [3]f32 = @splat(0),
+    impact_position: [3]f32 = @splat(0),
+    applied_damage: u16 = 0,
+    killed: bool = false,
+};
+
 /// Small typed payload for the first implementation. Zero-valued absent
 /// fields are distinguished by `fields`; no heap allocation or strings occur
 /// on the capture path.
@@ -176,6 +190,7 @@ pub const Record = struct {
     visible_pixels: u32 = 0,
     navigation: ?NavigationEvidence = null,
     population: ?PopulationEvidence = null,
+    weapon: ?WeaponEvidence = null,
 };
 
 pub const AppendResult = enum {

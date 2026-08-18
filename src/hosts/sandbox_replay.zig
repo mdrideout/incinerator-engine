@@ -30,7 +30,7 @@ pub const DigestCategory = replay.Category;
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'R', 'P', 'L', 'A', 'Y' };
 pub const format_version: u16 = 1;
-pub const schema_cohort: u16 = 16;
+pub const schema_cohort: u16 = 17;
 pub const header_size: usize = 64;
 pub const integrity_size: usize = @sizeOf(Digest);
 pub const max_envelope_bytes: usize = 8 * 1024 * 1024;
@@ -3375,7 +3375,7 @@ fn refreshIntegrity(bytes: []u8) void {
 
 test "current simulation cohort pins the exact Jolt worker and capacity configuration" {
     try current_simulation_cohort.validate();
-    try std.testing.expectEqual(@as(u16, 16), current_simulation_cohort.replay_schema);
+    try std.testing.expectEqual(@as(u16, 17), current_simulation_cohort.replay_schema);
     try std.testing.expectEqual(@as(u16, 5), current_simulation_cohort.engine_schedule_cohort);
     try std.testing.expectEqual(
         sandbox_host_contracts.snapshot_schema,

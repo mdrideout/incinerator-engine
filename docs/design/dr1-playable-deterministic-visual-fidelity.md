@@ -1,7 +1,7 @@
 # DR1 Playable Deterministic Visual Fidelity
 
-**Status:** DR1-A through DR1-G implemented with automated and agent-native
-acceptance; product-owner visual walkthrough pending
+**Status:** Accepted; DR1-A through DR1-G implementation, automated/native
+acceptance, agent-native inspection, and product-owner walkthrough complete
 
 **Active renderer:** Conventional SDL GPU / Metal
 
@@ -138,7 +138,7 @@ Implementation state:
 | DR1-D | Complete |
 | DR1-E | Complete; the grounding gate omitted a shadow pass |
 | DR1-F | Complete |
-| DR1-G | Automated and agent-native acceptance complete; product-owner walkthrough pending |
+| DR1-G | Accepted; automated/native, agent-native, and product-owner acceptance complete |
 
 ### DR1-A — Conventional baseline and independence gate
 

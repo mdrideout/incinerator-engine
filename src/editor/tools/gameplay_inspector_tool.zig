@@ -147,6 +147,19 @@ pub fn drawProductHud(ctx: *const GameplayInput) void {
         } else if (view.melee_remaining_ticks != 0) {
             zgui.text("Melee cooldown: {d} ticks", .{view.melee_remaining_ticks});
         }
+        zgui.text(
+            "Handgun: {s}  ammo {d}/{d}",
+            .{ @tagName(view.weapon_mode), view.magazine_ammo, view.reserve_ammo },
+        );
+        if (view.reload_remaining_ticks != 0) {
+            zgui.textColored(
+                .{ 1, 0.8, 0.15, 1 },
+                "Reloading: {d} ticks",
+                .{view.reload_remaining_ticks},
+            );
+        } else if (view.weapon_remaining_ticks != 0) {
+            zgui.text("Fire cadence: {d} ticks", .{view.weapon_remaining_ticks});
+        }
 
         for (view.entitySlice()) |entity| {
             if (entity.kind != .npc or !entity.attack_windup) continue;

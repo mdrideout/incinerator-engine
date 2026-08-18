@@ -10,8 +10,10 @@ deferred. The neural-rendering proof completed RF10 as an external, unpromoted
 that track indefinitely. No learned model is installed or selected as game
 content, and no later neural phase is authorized. Deterministic rendering is
 the active product direction. ED1 structured developer workspace is complete.
-DR1 implementation and agent-native acceptance are complete; its product-owner
-visual walkthrough remains.
+DR1 implementation, automated/native validation, agent-native inspection, and
+the product-owner visual walkthrough are complete. S14 ranged-combat
+implementation and automated acceptance are complete; its ordinary-product
+human walkthrough is the remaining checkpoint before S15.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
@@ -38,7 +40,8 @@ visual walkthrough remains.
 → [`S12 accepted`](docs/validation/s12-destination-driven-navigation.md)
 → [`S13 accepted`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 → [`deterministic-rendering resumption audit complete`](docs/validation/deterministic-rendering-resumption.md)
-→ [`DR1 automated and agent-native acceptance complete; product-owner walkthrough pending`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
+→ [`DR1 accepted`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
+→ [`S14 automated acceptance complete; human checkpoint pending`](docs/validation/s14-ranged-combat.md)
 
 **Active rendering direction:**
 [`DR1 playable deterministic visual fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
@@ -554,8 +557,11 @@ before dependency resolution.
 | Post-S11 correction | Repair playable movement/facing/blockers/wheels, close discovered route/delivery/headless/product-bootstrap/lifecycle seams, and repeat the macOS evidence matrix | Complete and accepted; later IC5-H/IC5-I evidence and boundary corrections are separately recorded |
 | IC5 | Make human anomaly capture, replay, handoff, and gameplay-boundary evidence trustworthy under ordinary and destructive conditions | Complete and accepted through schema 3, fresh human bundles, installed Metal, replay, failure hardening, and physical gameplay acceptance |
 | Open-world corrective | Preserve traversal and dynamic-object continuity while exposing district/NPC intent and objectively characterizing vehicle handling | Complete and human-accepted; ADR-022 and the vehicle-dynamics report record the current contract |
-| S12 | One NPC retains a semantic destination through branch choice, content waiting, topology revision, physical obstruction, displacement, encounter interruption, restore, replay, and network placement | Implemented; automated focused, performance, schema-4 incident, and installed Metal acceptance pass. Human evaluation-world and two preserved incident captures remain |
-| S13 | Twelve stable authored population members perform role-driven activities, contend for slots, fight, die, and replace safely | Implemented; automated product, schema-5 incident, scale, performance, and Metal acceptance pass. Human walkthrough remains |
+| S12 | One NPC retains a semantic destination through branch choice, content waiting, topology revision, physical obstruction, displacement, encounter interruption, restore, replay, and network placement | Complete and accepted; automated focused, performance, schema-4 incident, installed Metal, evaluation-world, and product-owner evidence pass |
+| S13 | Twelve stable authored population members perform role-driven activities, contend for slots, fight, die, and replace safely | Complete and accepted; automated product, schema-5 incident, scale, performance, Metal, and product-owner evidence pass |
+| ED1 | One structured, metadata-addressable developer workspace replaces scattered overlay tools | Complete and accepted; docked layouts, startup control, incident-aligned time, editor-on/off builds, and product-owner evidence pass |
+| DR1 | The ordinary deterministic product has one readable lit material path, coherent evaluation world, Render Lab, and semantic render evidence | Complete and accepted; native Metal journey, incident evidence, editor-on/off aggregates, and product-owner visual walkthrough pass |
+| S14 | One authoritative finite-ammunition handgun works across solo, listen, and dedicated placements | Implementation and automated acceptance complete; ordinary-product walkthrough pending |
 | NR0 | A paired deterministic scene produces an evaluated title model, explicit promotion, installed macOS inference, truthful fallback, diagnostics, and measured evidence | NR0-A through NR0-D accepted; NR-0001/2 unpromoted, NR-0003 comparison-only; no model selected. ADR-026 requires the next candidate lineage to start from random initialization. |
 
 M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
@@ -1848,8 +1854,8 @@ Record evidence rather than relying only on target numbers:
 
 ### Current next product sequence
 
-Complete the DR1 product-owner visual walkthrough before beginning the next
-ordered product slice.
+DR1 is accepted. S14 ranged-combat implementation and automated acceptance are
+complete; its product-owner walkthrough is the active checkpoint.
 
 47. [x] **S12 — Destination-driven navigation and recovery implementation.**
     Implemented under
@@ -1907,9 +1913,9 @@ older historical “next phase” language.
     the
     [phase plan](docs/design/ed1-structured-developer-workspace.md) and
     [validation record](docs/validation/ed1-structured-developer-workspace.md).
-50. [ ] **DR1 — Playable deterministic visual fidelity.** Implementation and
-    agent-native acceptance are complete; the product-owner visual walkthrough
-    remains before full acceptance. The phase establishes an honest ordinary-
+50. [x] **DR1 — Playable deterministic visual fidelity.** Implementation,
+    automated/native validation, agent-native inspection, and the product-owner
+    visual walkthrough are accepted. The phase establishes an honest ordinary-
     product baseline, converges primitive and loaded-model presentation on one
     small deterministic scene-light/material contract, improves authored
     sandbox silhouettes/environment readability, adds Render Lab and semantic
@@ -1917,11 +1923,18 @@ older historical “next phase” language.
     Metal without changing simulation or collision truth. See the
     [phase plan](docs/design/dr1-playable-deterministic-visual-fidelity.md) and
     [validation record](docs/validation/dr1-playable-deterministic-visual-fidelity.md).
-51. [ ] **S14 — Ranged combat vertical slice.** Add one authoritative weapon
-    archetype with equip/fire/reload/ammunition state, source-aware damage
-    feedback, death integration, replay, reconnect, and impairment coverage.
-    Lag compensation remains a measured follow-up rather than an entry
-    abstraction.
+51. [ ] **S14 — Ranged combat vertical slice.** Implementation and automated
+    acceptance are complete; product-owner walkthrough pending. One
+    authoritative hitscan handgun now owns equip/holster/fire/reload and finite
+    ammunition state across solo/listen/dedicated placement, current-state
+    semantic targets plus Jolt obstruction, vitals damage/death, tick-ordered
+    reconnect projection, accepted-ingress replay, source-aware feedback,
+    schema-5 incident evidence, and graphical Metal acceptance. Lag
+    compensation remains a measured follow-up rather than an entry
+    abstraction. See
+    [ADR-027](docs/adr/027-authoritative-ranged-combat.md), the
+    [phase plan](docs/design/s14-ranged-combat.md), and the
+    [validation ledger](docs/validation/s14-ranged-combat.md).
 52. [ ] **S15 — Content-rich district expansion.** Author a materially larger
     traversable district cohort with obstacles, destinations, population
     anchors, and streaming/performance evidence. Resolve support-surface
@@ -2023,4 +2036,5 @@ older historical “next phase” language.
 | 2026-08-05 | Accepted and scaffolded the NR0 game-specific neural-rendering direction | ADR-025 separates deterministic authority, presentation-only neural inputs/runtime, mutable external experiment runs, and deliberately promoted immutable game-content bundles. Added the July 2026 research record, feasibility and evaluation-scene plans, experiment/tool/model/fixture boundaries, empty validation/performance ledgers, and a repository-owned agent skill. No renderer code, training dependency, model weight, or runtime acceptance is claimed. |
 | 2026-08-17 | Paused neural rendering after RF10 and completed deterministic-product resumption audit | Integrated the completed RF10 history without promoting or installing a learned model; made the pause authoritative; restored the inactive conventional scene from RF10's centered fixed `640×360` extent to the full drawable; repaired the incident journey's coincidental hostile encounter; passed 286/286 repository steps with 987/987 tests and the 265/265 S13 aggregate with 341/341 tests; recorded DR1 as the next proposed product slice. Final S12/S13 product-owner walkthrough remains. |
 | 2026-08-17 | Completed ED1 structured developer workspace | Replaced per-tool placement with one docked main-window workspace and central product passthrough; added complete executable metadata for all twelve panels, deterministic presets/exact startup panels/focus/guide, incident-aligned UTC/wall/tick/frame identity, and exact SDL 3.4.14/current-zgui pins; four installed Metal layout launches and an editor-inclusive incident capture passed; the final editor-enabled aggregate passes 288/288 steps with 991/991 tests and the editor-disabled aggregate passes 285/285 with 991/991, including install, package, replay, validation, and headless boundaries. DR1 is next. |
-| 2026-08-18 | Implemented DR1 deterministic visual fidelity through agent-native acceptance | Added one normal-bearing lit product path, explicit renderer-neutral scene light/material contracts, coherent evaluation-world markings and multipart silhouettes, Render Lab, and schema-5 render-state evidence; deleted superseded flat product factories. Native validation exposed and repaired SDL 3.4.14 Metal's inverted fence query plus incorrect later-submission fence ownership, then corrected the long journey's blind-spot combat approach and coasting vehicle script. The repaired 2,256-tick Metal journey enters/re-enters the vehicle, traverses both districts, proves death/respawn and hostile replacement, persists four complete anomalies and replay, and has zero screenshot misses/fence failures. Editor-on/off aggregates pass 995/995 tests. The full S13 closure then caught and repaired stale raw-color use in the graphical network client plus the semantic visibility pass's obsolete position/color requirement; its five Metal incident profiles and real-GNS listen/dedicated encounter processes pass. The product-owner DR1 visual walkthrough remains. |
+| 2026-08-18 | Completed and accepted DR1 deterministic visual fidelity | Added one normal-bearing lit product path, explicit renderer-neutral scene light/material contracts, coherent evaluation-world markings and multipart silhouettes, Render Lab, and schema-5 render-state evidence; deleted superseded flat product factories. Native validation exposed and repaired SDL 3.4.14 Metal's inverted fence query plus incorrect later-submission fence ownership, then corrected the long journey's blind-spot combat approach and coasting vehicle script. The repaired 2,256-tick Metal journey enters/re-enters the vehicle, traverses both districts, proves death/respawn and hostile replacement, persists four complete anomalies and replay, and has zero screenshot misses/fence failures. Editor-on/off aggregates pass 995/995 tests. The full S13 closure then caught and repaired stale raw-color use in the graphical network client plus the semantic visibility pass's obsolete position/color requirement; its five Metal incident profiles and real-GNS listen/dedicated encounter processes pass. The product owner accepted the visual walkthrough on 2026-08-18. |
+| 2026-08-18 | Completed S14 ranged-combat implementation and automated acceptance | Added a feature-owned finite-ammunition handgun contract, protocol 16/replay 17 cohort break, current-state authority hitscan with semantic player/NPC volumes and Jolt obstruction, vitals-owned firearm damage/death, exact shot correlation, reconnect and accepted-ingress replay, tick-ordered client weapon projection, solo/listen/dedicated manual controls, handgun/tracer/HUD presentation, Gameplay Inspector and schema-5 firearm evidence, and updated incident-diagnostics skill. Acceptance found and repaired stale reload projection, an incomplete MP4 replay mapping, and missing listen-host weapon/shot consumption. Focused 167-test session/room evidence, two-client real-GNS listen/dedicated journeys, two-rate installed Metal depletion/reload/kill/replacement smoke, the 283/283-step `verify-s14` gate with 354/354 tests, and current editor-on/off repository aggregates with 1,003/1,003 tests pass. A native SDL follow-up also proves click-to-capture continuous look, captured gameplay clicks, Escape release, and free-Escape quit. The ordinary-product human walkthrough remains before S14 acceptance and S15 activation. |

@@ -447,6 +447,8 @@ pub const NpcView = struct {
     position: [3]f32,
     velocity: [3]f32,
     facing_yaw: f32,
+    radius: f32,
+    half_height: f32,
     controller_present: bool,
     encounter_locomotion: ?EncounterLocomotion,
     navigation_progress: NavigationProgress,

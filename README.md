@@ -109,7 +109,13 @@ normal-bearing product path, bounded renderer-neutral light/material values, a
 more readable evaluation-world composition, Render Lab, schema-5 render-state
 evidence, and a repaired full native gameplay/incident journey. See the
 [DR1 validation record](docs/validation/dr1-playable-deterministic-visual-fidelity.md).
-The product-owner DR1 visual walkthrough remains before full phase acceptance.
+The product-owner DR1 visual walkthrough is accepted. DR1 is complete. S14 now
+implements one authoritative hitscan handgun across solo, private-listen, and
+dedicated placements with finite ammunition/reload, current-state semantic
+targeting plus Jolt obstruction, vitals-owned damage/death, reconnect/replay,
+client-owned HUD/weapon/tracer presentation, and schema-5 firearm evidence.
+Its focused, two-client real-GNS, and two-rate installed Metal gates pass; the
+ordinary-product human walkthrough is the remaining S14 checkpoint before S15.
 The combined-tree
 [deterministic-rendering resumption audit](docs/validation/deterministic-rendering-resumption.md)
 passes and records the correction that restored the ordinary product from an
@@ -274,6 +280,10 @@ zig build measure-s11 -Deditor=false -Doptimize=ReleaseFast
 # persistence, snapshot, replay, and session closure.
 zig build verify-source-package -Deditor=false --summary all
 
+# Native SDL proof that the first scene click captures without firing, a
+# captured click reaches gameplay, Escape releases, and free Escape quits.
+zig build test-mouse-capture-macos --summary all
+
 # Manual three-terminal multiplayer test. Build/install once, then launch one authority
 # and two graphical clients with distinct development accounts.
 zig build install-mp2
@@ -282,8 +292,9 @@ zig build install-mp2
 ./zig-out/bin/incinerator_mp2_client --connect 127.0.0.1:27020 --account 2
 
 # Client controls: WASD move, Space jump, E enter/exit, F collect/drop,
-# Q melee, R request respawn after death, right mouse + drag to turn/look,
-# Escape quit. While
+# Q melee, R request respawn after death, click the playable area to capture
+# continuous mouse-look, and Escape to release it (or quit while free). Right
+# mouse + drag remains available without capture. While
 # driving, W/S are throttle/reverse, A/D steer, Space brakes, and Left Shift is
 # the hand brake. P toggles vehicle prediction for live A/B comparison. F8
 # manufactures a transport loss and reconnect while playing. Recoverable
@@ -525,15 +536,18 @@ distances are 9 m and 12 m respectively.
 
 | Key | Action |
 |---|---|
-| ESC | Quit |
+| Click playable area | Capture the mouse for continuous turn/look; the first click only captures and does not fire |
+| ESC | Release captured mouse; quit when the mouse is already free |
 | W / A / S / D | Move the character, or throttle/reverse and steer while driving |
 | E | Enter or exit the sandbox vehicle |
 | F | Collect the nearby carryable, or drop it beside the character at any valid world position |
 | Q | Request authoritative melee against the nearest valid target |
-| R | Request authoritative respawn after death and cooldown |
+| 1 | Equip or holster the authoritative handgun |
+| Left mouse | Fire one handgun shot while equipped |
+| R | Reload while alive; request authoritative respawn after death and cooldown |
 | Space | Jump on foot; service brake while driving |
 | Left Shift | Handbrake while driving |
-| Right mouse + drag | Turn/look and orbit the current control target |
+| Right mouse + drag | Turn/look without capturing the mouse |
 | F1 | Toggle editor UI |
 | F2 | Toggle ImGui demo |
 | F3 | Toggle editor input passthrough |
@@ -769,6 +783,9 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`ED1 Structured Developer Workspace Validation`](docs/validation/ed1-structured-developer-workspace.md)
 - [`DR1 Playable Deterministic Visual Fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
 - [`DR1 Playable Deterministic Visual Fidelity Validation`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
+- [`S14 Ranged Combat Vertical Slice`](docs/design/s14-ranged-combat.md)
+- [`ADR-027 Authoritative Ranged Combat`](docs/adr/027-authoritative-ranged-combat.md)
+- [`S14 Ranged Combat Validation`](docs/validation/s14-ranged-combat.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 
@@ -781,9 +798,9 @@ input pump (per frame) -> authority ticks (fixed 60 Hz) -> presentation
 
 Embedded and dedicated placement now share the accepted 60 Hz authority rate;
 rendering remains independently paced and embedded replication remains 20 Hz.
-The embedded product routes character, vehicle, carry, melee, respawn, and NPC
-encounter gameplay through the shared session behavior and consumes replicated
-client state.
+The embedded product routes character, vehicle, carry, melee, firearm,
+respawn, and NPC encounter gameplay through the shared session behavior and
+consumes replicated client state.
 M5 acceptance records the owner, regression, native, package, and independent-
 review evidence.
 

@@ -19,6 +19,8 @@ const npc_encounter_contract = @import("npc_encounter_contract");
 const population_contract = @import("population_contract");
 const sandbox_population_catalog = @import("sandbox_population_catalog");
 const vitals_contract = @import("vitals_contract");
+const ranged_combat_contract = @import("ranged_combat_contract");
+const ranged_combat = @import("ranged_combat");
 const district_contract = @import("district_contract");
 const sandbox_district_recipe = @import("sandbox_district_recipe");
 const sandbox_diagnostics_contract = @import("sandbox_diagnostics_contract");
@@ -71,6 +73,8 @@ const ReplayMessage = union(enum) {
     vehicle_action_result: protocol.VehicleActionResult,
     interaction_action_result: protocol.InteractionActionResult,
     melee_action_result: protocol.MeleeActionResult,
+    weapon_action_result: protocol.WeaponActionResult,
+    shot_event: protocol.ShotEvent,
     respawn_action_result: protocol.RespawnActionResult,
     life_event: protocol.LifeEvent,
 
@@ -79,6 +83,8 @@ const ReplayMessage = union(enum) {
             .vehicle_action_result => |value| .{ .vehicle_action_result = value },
             .interaction_action_result => |value| .{ .interaction_action_result = value },
             .melee_action_result => |value| .{ .melee_action_result = value },
+            .weapon_action_result => |value| .{ .weapon_action_result = value },
+            .shot_event => |value| .{ .shot_event = value },
             .respawn_action_result => |value| .{ .respawn_action_result = value },
             .life_event => |value| .{ .life_event = value },
         };
@@ -246,7 +252,12 @@ const DurableRequestQueue = struct {
 fn ingressClass(message: protocol.ClientMessage) IngressClass {
     return switch (message) {
         .hello, .baseline_ack, .snapshot_ack, .delivery_receipt, .disconnect => .control,
-        .vehicle_action, .interaction_action, .melee_action, .respawn_action => .gameplay,
+        .vehicle_action,
+        .interaction_action,
+        .melee_action,
+        .weapon_action,
+        .respawn_action,
+        => .gameplay,
         .input, .vehicle_input => .input,
     };
 }
@@ -257,6 +268,8 @@ fn reliableMessageReceipted(message: protocol.ServerMessage) bool {
         .vehicle_action_result,
         .interaction_action_result,
         .melee_action_result,
+        .weapon_action_result,
+        .shot_event,
         .respawn_action_result,
         .life_event,
         => true,
@@ -364,6 +377,10 @@ const ParticipantSlot = struct {
     pending_melee_action: ?protocol.MeleeAction = null,
     pending_melee_target: ?vitals_contract.Target = null,
     melee_cooldown_until_tick: u64 = 0,
+    weapon: ranged_combat_contract.State = .{},
+    last_weapon_action: identity.ActionSequence = .{ .value = 0 },
+    pending_weapon_action: ?protocol.WeaponAction = null,
+    pending_weapon_shot: ?PendingShot = null,
     last_respawn_action: identity.ActionSequence = .{ .value = 0 },
     pending_respawn_action: ?protocol.RespawnAction = null,
     interaction_cleanup_pending: bool = false,
@@ -541,6 +558,7 @@ const melee_range: f32 = 2.75;
 const melee_minimum_forward_dot: f32 = 0.2;
 const melee_cooldown_ticks: u64 = budgets.authority_tick_hz / 2;
 const respawn_cooldown_ticks: u64 = budgets.authority_tick_hz * 3;
+const handgun_config = ranged_combat_contract.Config{};
 
 const MeleeTarget = struct {
     kind: vitals_contract.TargetKind,
@@ -548,6 +566,39 @@ const MeleeTarget = struct {
     replicated: identity.ReplicatedEntityId,
     incarnation: u16,
     distance_squared: f32,
+};
+
+const RangedTarget = struct {
+    kind: vitals_contract.TargetKind,
+    persistent: engine.PersistentId,
+    replicated: identity.ReplicatedEntityId,
+    incarnation: u16,
+    hit_fraction: f32,
+};
+
+const ShotRay = struct {
+    origin: [3]f32,
+    endpoint: [3]f32,
+    impact: [3]f32,
+    target: ?RangedTarget,
+};
+
+const PendingShot = struct {
+    target: vitals_contract.Target,
+    replicated: identity.ReplicatedEntityId,
+    origin: [3]f32,
+    impact: [3]f32,
+    authority_tick: u64,
+};
+
+const ShotResolution = struct {
+    origin: [3]f32,
+    impact: [3]f32,
+    target: identity.ReplicatedEntityId = .invalid,
+    target_incarnation: u16 = 0,
+    applied_damage: u16 = 0,
+    remaining_health: u16 = 0,
+    killed: bool = false,
 };
 
 pub const Options = struct {
@@ -971,6 +1022,9 @@ pub const AcceptedIngress = struct {
         interaction_drop = 6,
         melee = 7,
         respawn = 8,
+        weapon_equip_toggle = 9,
+        weapon_fire = 10,
+        weapon_reload = 11,
     };
 
     /// Stable semantic digest with absolute authority ticks rebased to the
@@ -1108,6 +1162,8 @@ const AuthorityCore = struct {
     forced_interaction_cleanup: u64 = 0,
     melee_actions_admitted: u64 = 0,
     melee_hits: u64 = 0,
+    weapon_actions_admitted: u64 = 0,
+    firearm_hits: u64 = 0,
     deaths: u64 = 0,
     respawns: u64 = 0,
     baselines_emitted: u64 = 0,
@@ -1513,6 +1569,8 @@ const AuthorityCore = struct {
                 participant.pending_interaction_action != null or
                 participant.pending_melee_action != null or
                 participant.pending_melee_target != null or
+                participant.pending_weapon_action != null or
+                participant.pending_weapon_shot != null or
                 participant.pending_respawn_action != null or
                 participant.vitals_pending or
                 participant.interaction_cleanup_pending or participant.exit_pending)
@@ -1628,6 +1686,7 @@ const AuthorityCore = struct {
                 action,
             ),
             .melee_action => |action| try self.ingestMeleeAction(connection_index, action),
+            .weapon_action => |action| try self.ingestWeaponAction(connection_index, action),
             .respawn_action => |action| try self.ingestRespawnAction(connection_index, action),
             .baseline_ack => |ack| try self.ingestBaselineAck(connection_index, ack),
             .snapshot_ack => |ack| try self.ingestSnapshotAck(connection_index, ack),
@@ -1812,6 +1871,7 @@ const AuthorityCore = struct {
     }
 
     fn applyFrozenIngress(self: *AuthorityCore) !void {
+        try self.advanceWeaponStates();
         for (self.scratch.slice(), 0..) |envelope, index| {
             if (self.scratch.admission[index] == .discard) {
                 self.rejected_messages +|= 1;
@@ -2219,6 +2279,8 @@ const AuthorityCore = struct {
                 participant.pending_interaction_action != null or
                 participant.pending_melee_action != null or
                 participant.pending_melee_target != null or
+                participant.pending_weapon_action != null or
+                participant.pending_weapon_shot != null or
                 participant.pending_respawn_action != null or
                 participant.vitals_pending or
                 participant.interaction_cleanup_pending or participant.exit_pending)
@@ -2403,6 +2465,8 @@ const AuthorityCore = struct {
             .forced_interaction_cleanup = self.forced_interaction_cleanup,
             .melee_actions_admitted = self.melee_actions_admitted,
             .melee_hits = self.melee_hits,
+            .weapon_actions_admitted = self.weapon_actions_admitted,
+            .firearm_hits = self.firearm_hits,
             .deaths = self.deaths,
             .respawns = self.respawns,
             .baselines_emitted = self.baselines_emitted,
@@ -3123,6 +3187,127 @@ const AuthorityCore = struct {
         self.accepted_messages +|= 1;
     }
 
+    fn ingestWeaponAction(
+        self: *AuthorityCore,
+        connection_index: usize,
+        action: protocol.WeaponAction,
+    ) !void {
+        const participant_index = self.connections[connection_index].participant_index orelse {
+            try self.rejectConnection(connection_index, .unauthorized, false);
+            return;
+        };
+        const participant = &self.participants[participant_index];
+        if (!gameplay_admission.identitiesMatch(
+            self.session,
+            participantId(participant_index, participant.generation),
+            action.session,
+            action.participant,
+        )) {
+            try self.rejectConnection(connection_index, .stale_connection, false);
+            return;
+        }
+        if (!gameplay_admission.actionIsNewer(participant.last_weapon_action, action.sequence)) {
+            return;
+        }
+        participant.last_weapon_action = action.sequence;
+        if (action.avatar_incarnation != participant.avatar_incarnation) {
+            try self.queueWeaponActionResult(participant_index, action, .wrong_incarnation, null);
+            return;
+        }
+        if (participant.lifecycle != .alive or participant.character == null or
+            participant.despawn_pending)
+        {
+            try self.queueWeaponActionResult(participant_index, action, .dead, null);
+            return;
+        }
+        const tick_index = self.simulation.tickIndex();
+        if (action.target_tick < tick_index -| budgets.input_history_ticks or
+            action.target_tick > tick_index +| budgets.max_future_input_ticks)
+        {
+            try self.queueWeaponActionResult(participant_index, action, .invalid_state, null);
+            return;
+        }
+        if (participant.pending_weapon_action != null or
+            participant.pending_weapon_shot != null or participant.vitals_pending or
+            hasPendingVehicleEnter(participant))
+        {
+            try self.queueWeaponActionResult(participant_index, action, .invalid_state, null);
+            return;
+        }
+        const decision = try ranged_combat.apply(
+            &participant.weapon,
+            handgun_config,
+            protocolWeaponAction(action.kind),
+            .{
+                .alive = true,
+                .on_foot = participant.driving_vehicle_index == null,
+                .hands_free = participant.holding_carryable_index == null,
+            },
+            tick_index,
+        );
+        self.force_snapshot = true;
+        if (!decision.admittedShot()) {
+            try self.queueWeaponActionResult(
+                participant_index,
+                action,
+                protocolWeaponDisposition(decision.disposition),
+                null,
+            );
+            if (decision.disposition == .equipped or
+                decision.disposition == .holstered or
+                decision.disposition == .reload_started)
+            {
+                self.recordWeaponIngress(connection_index, participant_index, action);
+                self.weapon_actions_admitted +|= 1;
+                self.accepted_messages +|= 1;
+            }
+            return;
+        }
+
+        self.recordWeaponIngress(connection_index, participant_index, action);
+        const ray = try self.resolveShotRay(participant_index);
+        self.weapon_actions_admitted +|= 1;
+        self.accepted_messages +|= 1;
+        if (ray.target == null) {
+            const miss = ShotResolution{
+                .origin = ray.origin,
+                .impact = ray.impact,
+            };
+            try self.queueWeaponActionResult(participant_index, action, .fired_miss, miss);
+            try self.publishShotEvent(participant_index, action, miss, .miss);
+            return;
+        }
+
+        const selected = ray.target.?;
+        const target = vitals_contract.Target{
+            .kind = selected.kind,
+            .id = selected.persistent,
+            .incarnation = .{ .value = selected.incarnation },
+        };
+        try self.simulation.submitVitals(.{ .damage = .{
+            .source = .{
+                .kind = .player,
+                .id = participant.character.?,
+                .incarnation = .{ .value = participant.avatar_incarnation },
+                .action_sequence = action.sequence.value,
+            },
+            .target = target,
+            .cause = .firearm,
+            .authority_tick = tick_index +| 1,
+            .correlation = weaponDamageCorrelation(participant_index, action.sequence),
+            .base_amount = handgun_config.damage,
+            .ordinal = 1,
+        } });
+        participant.pending_weapon_action = action;
+        participant.pending_weapon_shot = .{
+            .target = target,
+            .replicated = selected.replicated,
+            .origin = ray.origin,
+            .impact = ray.impact,
+            .authority_tick = tick_index +| 1,
+        };
+    }
+
     fn ingestRespawnAction(
         self: *AuthorityCore,
         connection_index: usize,
@@ -3226,6 +3411,128 @@ const AuthorityCore = struct {
             .avatar_incarnation = action.avatar_incarnation,
         });
         self.melee_actions_admitted +|= 1;
+    }
+
+    fn recordWeaponIngress(
+        self: *AuthorityCore,
+        connection_index: usize,
+        participant_index: usize,
+        action: protocol.WeaponAction,
+    ) void {
+        const participant = self.participants[participant_index];
+        self.ingress.append(.{
+            .admitted_tick = self.simulation.tickIndex(),
+            .account = participant.account,
+            .participant = participantId(participant_index, participant.generation),
+            .connection = .{
+                .index = @intCast(connection_index + 1),
+                .generation = self.connections[connection_index].generation,
+            },
+            .sequence = .{ .value = 0 },
+            .action_sequence = action.sequence,
+            .target_tick = action.target_tick,
+            .kind = switch (action.kind) {
+                .equip_toggle => .weapon_equip_toggle,
+                .fire => .weapon_fire,
+                .reload => .weapon_reload,
+            },
+            .move = .{ 0, 0 },
+            .facing_yaw = 0,
+            .jump_pressed = false,
+            .vehicle = .invalid,
+            .vehicle_control = .{ 0, 0, 0, 0 },
+            .avatar_incarnation = action.avatar_incarnation,
+        });
+    }
+
+    fn advanceWeaponStates(self: *AuthorityCore) !void {
+        const tick_index = self.simulation.tickIndex();
+        for (self.participants) |*participant| {
+            if (!participant.active) continue;
+            const advanced = try ranged_combat.advance(
+                &participant.weapon,
+                handgun_config,
+                tick_index,
+            );
+            if (advanced.completed_reload) self.force_snapshot = true;
+        }
+    }
+
+    fn resolveShotRay(self: *AuthorityCore, attacker_index: usize) !ShotRay {
+        const attacker = self.participants[attacker_index];
+        const source = try self.simulation.character(attacker.character.?);
+        const origin = [3]f32{
+            source.position[0],
+            source.position[1] + source.half_height + source.radius,
+            source.position[2],
+        };
+        const direction = [3]f32{ @sin(source.facing_yaw), 0, -@cos(source.facing_yaw) };
+        const endpoint = addScaled(origin, direction, handgun_config.range);
+        const world_fraction = try self.simulation.presentationLineHitFraction(origin, endpoint);
+        var selected: ?RangedTarget = null;
+
+        for (self.participants, 0..) |candidate, index| {
+            if (index == attacker_index or !candidate.active or
+                candidate.lifecycle != .alive or candidate.character == null or
+                candidate.despawn_pending or candidate.vitals_pending or
+                candidate.driving_vehicle_index != null or hasPendingVehicleEnter(&candidate))
+            {
+                continue;
+            }
+            const view = try self.simulation.character(candidate.character.?);
+            const center = [3]f32{
+                view.position[0],
+                view.position[1] + view.half_height + view.radius,
+                view.position[2],
+            };
+            const fraction = raySphereFraction(origin, endpoint, center, view.radius) orelse
+                continue;
+            if (world_fraction != null and world_fraction.? + 0.0001 < fraction) continue;
+            considerRangedTarget(&selected, .{
+                .kind = .player,
+                .persistent = candidate.character.?,
+                .replicated = candidate.replicated,
+                .incarnation = candidate.avatar_incarnation,
+                .hit_fraction = fraction,
+            });
+        }
+        for (self.npcs) |candidate| {
+            if (!candidate.active or candidate.persistent == null or
+                candidate.despawn_pending or candidate.vitals_pending)
+            {
+                continue;
+            }
+            const vital = self.simulation.currentVitals(.npc, candidate.persistent.?) orelse
+                continue;
+            if (vital.life_state != .alive) continue;
+            const view = try self.simulation.npc(candidate.persistent.?);
+            const center = [3]f32{
+                view.position[0],
+                view.position[1] + view.half_height + view.radius,
+                view.position[2],
+            };
+            const fraction = raySphereFraction(origin, endpoint, center, view.radius) orelse
+                continue;
+            if (world_fraction != null and world_fraction.? + 0.0001 < fraction) continue;
+            considerRangedTarget(&selected, .{
+                .kind = .npc,
+                .persistent = candidate.persistent.?,
+                .replicated = candidate.replicated,
+                .incarnation = candidate.generation,
+                .hit_fraction = fraction,
+            });
+        }
+
+        const impact_fraction = if (selected) |target|
+            target.hit_fraction
+        else
+            world_fraction orelse 1;
+        return .{
+            .origin = origin,
+            .endpoint = endpoint,
+            .impact = addScaled(origin, direction, handgun_config.range * impact_fraction),
+            .target = selected,
+        };
     }
 
     fn selectMeleeTarget(
@@ -3761,6 +4068,9 @@ const AuthorityCore = struct {
                             participant.pending_interaction_action = null;
                             participant.pending_melee_action = null;
                             participant.pending_melee_target = null;
+                            participant.pending_weapon_action = null;
+                            participant.pending_weapon_shot = null;
+                            ranged_combat.holster(&participant.weapon);
                             participant.exit_pending = false;
                             participant.interaction_cleanup_pending = false;
                             participant.spawn_pending = false;
@@ -3842,6 +4152,7 @@ const AuthorityCore = struct {
                     };
                     const participant = &self.participants[participant_index];
                     participant.driving_vehicle_index = @intCast(vehicle_index);
+                    ranged_combat.holster(&participant.weapon);
                     clearParticipantInputs(participant);
                     if (participant.pending_vehicle_action) |action| {
                         if (action.kind != .enter) return error.VehicleActionOutcomeMismatch;
@@ -4069,6 +4380,7 @@ const AuthorityCore = struct {
                     const action = participant.pending_interaction_action orelse {
                         if (self.world_bootstrap == .host_managed) {
                             participant.holding_carryable_index = @intCast(carryable_index);
+                            ranged_combat.holster(&participant.weapon);
                             clearParticipantInputs(participant);
                             self.force_snapshot = true;
                             continue;
@@ -4087,6 +4399,7 @@ const AuthorityCore = struct {
                         return error.InteractionActionOutcomeMismatch;
                     }
                     participant.holding_carryable_index = @intCast(carryable_index);
+                    ranged_combat.holster(&participant.weapon);
                     participant.pending_interaction_action = null;
                     clearParticipantInputs(participant);
                     try self.queueInteractionActionResult(participant_index, action, .collected);
@@ -4416,6 +4729,7 @@ const AuthorityCore = struct {
                     participant.lifecycle = .alive;
                     participant.death_tick = 0;
                     participant.death_proxy = null;
+                    try ranged_combat.reset(&participant.weapon, handgun_config);
                     if (participant.pending_respawn_action) |action| {
                         try self.queueRespawnActionResult(
                             participant_index,
@@ -4461,25 +4775,93 @@ const AuthorityCore = struct {
                             damage.proposal.source.id,
                         ) orelse return error.UnknownDamageInstigator;
                         const attacker = &self.participants[attacker_index];
-                        const action = attacker.pending_melee_action orelse
-                            return error.UnexpectedDamageOutcome;
-                        if (damage.proposal.correlation !=
-                            damageCorrelation(attacker_index, action.sequence))
-                        {
-                            return error.DamageCorrelationMismatch;
+                        switch (damage.proposal.cause) {
+                            .melee => {
+                                const action = attacker.pending_melee_action orelse
+                                    return error.UnexpectedDamageOutcome;
+                                if (damage.proposal.correlation !=
+                                    damageCorrelation(attacker_index, action.sequence))
+                                {
+                                    return error.DamageCorrelationMismatch;
+                                }
+                                const pending_target = attacker.pending_melee_target orelse
+                                    return error.UnexpectedDamageOutcome;
+                                if (!std.meta.eql(pending_target, damage.proposal.target)) {
+                                    return error.DamageTargetMismatch;
+                                }
+                                const replicated = self.replicatedVitalsTarget(
+                                    damage.proposal.target,
+                                ) orelse identity.ReplicatedEntityId.invalid;
+                                try self.queueDamageResult(attacker_index, action, replicated, damage);
+                                if (damage.disposition == .applied) self.melee_hits +|= 1;
+                                attacker.pending_melee_action = null;
+                                attacker.pending_melee_target = null;
+                            },
+                            .firearm => {
+                                const action = attacker.pending_weapon_action orelse
+                                    return error.UnexpectedDamageOutcome;
+                                const pending = attacker.pending_weapon_shot orelse
+                                    return error.UnexpectedDamageOutcome;
+                                if (damage.proposal.correlation !=
+                                    weaponDamageCorrelation(attacker_index, action.sequence))
+                                {
+                                    return error.DamageCorrelationMismatch;
+                                }
+                                if (!std.meta.eql(pending.target, damage.proposal.target)) {
+                                    return error.DamageTargetMismatch;
+                                }
+                                const resolution = ShotResolution{
+                                    .origin = pending.origin,
+                                    .impact = pending.impact,
+                                    .target = pending.replicated,
+                                    .target_incarnation = damage.proposal.target.incarnation.value,
+                                    .applied_damage = damage.applied_amount,
+                                    .remaining_health = damage.remaining_health,
+                                    .killed = damage.killed,
+                                };
+                                if (damage.disposition == .applied) {
+                                    try self.queueWeaponActionResult(
+                                        attacker_index,
+                                        action,
+                                        .fired_hit,
+                                        resolution,
+                                    );
+                                    self.firearm_hits +|= 1;
+                                    try self.publishShotEvent(
+                                        attacker_index,
+                                        action,
+                                        resolution,
+                                        .hit,
+                                    );
+                                } else {
+                                    // The shot and ammo spend were already admitted. A
+                                    // semantic target can become invalid before vitals
+                                    // applies the proposal (for example, another shooter
+                                    // killed it earlier in this authority cycle). Preserve
+                                    // that committed shot as a miss instead of manufacturing
+                                    // an action rejection with contradictory target data.
+                                    const miss = ShotResolution{
+                                        .origin = pending.origin,
+                                        .impact = pending.impact,
+                                    };
+                                    try self.queueWeaponActionResult(
+                                        attacker_index,
+                                        action,
+                                        .fired_miss,
+                                        miss,
+                                    );
+                                    try self.publishShotEvent(
+                                        attacker_index,
+                                        action,
+                                        miss,
+                                        .miss,
+                                    );
+                                }
+                                attacker.pending_weapon_action = null;
+                                attacker.pending_weapon_shot = null;
+                            },
+                            .npc_melee => return error.InvalidPlayerDamageCause,
                         }
-                        const pending_target = attacker.pending_melee_target orelse
-                            return error.UnexpectedDamageOutcome;
-                        if (!std.meta.eql(pending_target, damage.proposal.target)) {
-                            return error.DamageTargetMismatch;
-                        }
-                        const replicated = self.replicatedVitalsTarget(
-                            damage.proposal.target,
-                        ) orelse identity.ReplicatedEntityId.invalid;
-                        try self.queueDamageResult(attacker_index, action, replicated, damage);
-                        if (damage.disposition == .applied) self.melee_hits +|= 1;
-                        attacker.pending_melee_action = null;
-                        attacker.pending_melee_target = null;
                     },
                     .npc => {
                         const npc_index = self.findNpcByPersistent(
@@ -4574,6 +4956,9 @@ const AuthorityCore = struct {
                     respawn_cooldown_ticks;
                 participant.retain_after_despawn = true;
                 participant.despawn_pending = true;
+                ranged_combat.holster(&participant.weapon);
+                participant.pending_weapon_action = null;
+                participant.pending_weapon_shot = null;
                 clearParticipantInputs(participant);
                 try self.continueParticipantDespawn(participant_index);
             },
@@ -4850,6 +5235,11 @@ const AuthorityCore = struct {
                 .health = vital.current_health,
                 .maximum_health = vital.maximum_health,
                 .life_state = protocolLifeState(vital.life_state),
+                .weapon_mode = protocolWeaponMode(participant.weapon.mode),
+                .magazine_ammo = participant.weapon.magazine,
+                .reserve_ammo = participant.weapon.reserve,
+                .weapon_ready_tick = participant.weapon.next_fire_tick,
+                .reload_complete_tick = participant.weapon.reload_complete_tick,
             };
             snapshot.character_count += 1;
         }
@@ -5149,6 +5539,13 @@ const AuthorityCore = struct {
             participant.pending_melee_action = null;
             participant.pending_melee_target = null;
             participant.melee_cooldown_until_tick = 0;
+            participant.weapon = .{
+                .magazine = handgun_config.magazine_capacity,
+                .reserve = handgun_config.starting_reserve,
+            };
+            participant.last_weapon_action = .{ .value = 0 };
+            participant.pending_weapon_action = null;
+            participant.pending_weapon_shot = null;
             participant.last_respawn_action = .{ .value = 0 };
             participant.pending_respawn_action = null;
             participant.interaction_cleanup_pending = false;
@@ -5252,6 +5649,11 @@ const AuthorityCore = struct {
                 else
                     .alive,
                 .melee_ready_tick = participant.melee_cooldown_until_tick,
+                .weapon_mode = protocolWeaponMode(participant.weapon.mode),
+                .magazine_ammo = participant.weapon.magazine,
+                .reserve_ammo = participant.weapon.reserve,
+                .weapon_ready_tick = participant.weapon.next_fire_tick,
+                .reload_complete_tick = participant.weapon.reload_complete_tick,
                 .respawn_ready_tick = participant.respawn_available_tick,
             } },
             .delivery = .reliable,
@@ -5318,6 +5720,73 @@ const AuthorityCore = struct {
             .killed = outcome.killed,
             .ready_tick = self.participants[participant_index].melee_cooldown_until_tick,
         } });
+    }
+
+    fn queueWeaponActionResult(
+        self: *AuthorityCore,
+        participant_index: usize,
+        action: protocol.WeaponAction,
+        disposition: protocol.WeaponActionDisposition,
+        resolution: ?ShotResolution,
+    ) !void {
+        const participant = self.participants[participant_index];
+        const shot = resolution orelse ShotResolution{
+            .origin = @splat(0),
+            .impact = @splat(0),
+        };
+        try self.queueGameplayResult(participant_index, .{ .weapon_action_result = .{
+            .sequence = action.sequence,
+            .authority_tick = self.simulation.tickIndex(),
+            .action = action.kind,
+            .disposition = disposition,
+            .mode = protocolWeaponMode(participant.weapon.mode),
+            .magazine_ammo = participant.weapon.magazine,
+            .reserve_ammo = participant.weapon.reserve,
+            .weapon_ready_tick = participant.weapon.next_fire_tick,
+            .reload_complete_tick = participant.weapon.reload_complete_tick,
+            .target = shot.target,
+            .target_incarnation = shot.target_incarnation,
+            .ray_origin = shot.origin,
+            .impact_position = shot.impact,
+            .applied_damage = shot.applied_damage,
+            .remaining_health = shot.remaining_health,
+            .killed = shot.killed,
+        } });
+    }
+
+    fn publishShotEvent(
+        self: *AuthorityCore,
+        shooter_index: usize,
+        action: protocol.WeaponAction,
+        resolution: ShotResolution,
+        disposition: protocol.ShotDisposition,
+    ) !void {
+        const shooter = self.participants[shooter_index];
+        const event = protocol.ShotEvent{
+            .shooter = shooter.replicated,
+            .shooter_incarnation = shooter.avatar_incarnation,
+            .sequence = action.sequence,
+            .authority_tick = self.simulation.tickIndex(),
+            .disposition = disposition,
+            .ray_origin = resolution.origin,
+            .impact_position = resolution.impact,
+            .target = resolution.target,
+            .target_incarnation = resolution.target_incarnation,
+            .applied_damage = resolution.applied_damage,
+            .remaining_health = resolution.remaining_health,
+            .killed = resolution.killed,
+        };
+        for (self.participants, 0..) |participant, participant_index| {
+            if (!participant.active or participant.gameplay_consumer_retired) continue;
+            _ = try self.ensureGameplayCapacityOrRetire(participant_index, 1);
+        }
+        for (self.participants, 0..) |participant, participant_index| {
+            if (!participant.active or participant.gameplay_consumer_retired) continue;
+            self.appendGameplayResultAssumeCapacity(
+                participant_index,
+                .{ .shot_event = event },
+            );
+        }
     }
 
     fn queueRespawnActionResult(
@@ -7211,6 +7680,91 @@ fn protocolLifeState(state: vitals_contract.LifeState) protocol.AvatarLifeState 
     };
 }
 
+fn protocolWeaponMode(mode: ranged_combat_contract.Mode) protocol.WeaponMode {
+    return switch (mode) {
+        .holstered => .holstered,
+        .equipped => .equipped,
+        .reloading => .reloading,
+    };
+}
+
+fn protocolWeaponAction(action: protocol.WeaponActionKind) ranged_combat_contract.Action {
+    return switch (action) {
+        .equip_toggle => .equip_toggle,
+        .fire => .fire,
+        .reload => .reload,
+    };
+}
+
+fn protocolWeaponDisposition(
+    disposition: ranged_combat_contract.Disposition,
+) protocol.WeaponActionDisposition {
+    return switch (disposition) {
+        .equipped => .equipped,
+        .holstered => .holstered,
+        .shot_admitted => unreachable,
+        .reload_started => .reload_started,
+        .cooldown => .cooldown,
+        .empty => .empty,
+        .already_full => .already_full,
+        .no_reserve => .no_reserve,
+        .reloading => .reloading,
+        .not_equipped => .not_equipped,
+        .invalid_state => .invalid_state,
+    };
+}
+
+fn addScaled(origin: [3]f32, direction: [3]f32, distance: f32) [3]f32 {
+    return .{
+        origin[0] + direction[0] * distance,
+        origin[1] + direction[1] * distance,
+        origin[2] + direction[2] * distance,
+    };
+}
+
+fn raySphereFraction(
+    origin: [3]f32,
+    endpoint: [3]f32,
+    center: [3]f32,
+    radius: f32,
+) ?f32 {
+    const direction = [3]f32{
+        endpoint[0] - origin[0],
+        endpoint[1] - origin[1],
+        endpoint[2] - origin[2],
+    };
+    const relative = [3]f32{
+        origin[0] - center[0],
+        origin[1] - center[1],
+        origin[2] - center[2],
+    };
+    const a = dot3(direction, direction);
+    if (a <= 0.000001) return null;
+    const b = 2 * dot3(relative, direction);
+    const c = dot3(relative, relative) - radius * radius;
+    const discriminant = b * b - 4 * a * c;
+    if (discriminant < 0) return null;
+    const root = @sqrt(discriminant);
+    const first = (-b - root) / (2 * a);
+    const second = (-b + root) / (2 * a);
+    if (first >= 0 and first <= 1) return first;
+    if (second >= 0 and second <= 1) return second;
+    return null;
+}
+
+fn dot3(first: [3]f32, second: [3]f32) f32 {
+    return first[0] * second[0] + first[1] * second[1] + first[2] * second[2];
+}
+
+fn considerRangedTarget(selected: *?RangedTarget, candidate: RangedTarget) void {
+    if (selected.* == null or candidate.hit_fraction < selected.*.?.hit_fraction or
+        (candidate.hit_fraction == selected.*.?.hit_fraction and
+            candidate.replicated.index < selected.*.?.replicated.index))
+    {
+        selected.* = candidate;
+    }
+}
+
 fn protocolNpcEncounterState(
     state: npc_encounter_contract.State,
 ) protocol.NpcEncounterState {
@@ -7236,6 +7790,12 @@ fn pendingVitalsView(target: vitals_contract.Target) vitals_contract.View {
 
 fn damageCorrelation(index: usize, sequence: identity.ActionSequence) u64 {
     return 0x5331_3000_0000_0000 |
+        (@as(u64, @intCast(index + 1)) << 32) |
+        @as(u64, sequence.value);
+}
+
+fn weaponDamageCorrelation(index: usize, sequence: identity.ActionSequence) u64 {
+    return 0x5331_3400_0000_0000 |
         (@as(u64, @intCast(index + 1)) << 32) |
         @as(u64, sequence.value);
 }
@@ -7449,6 +8009,139 @@ const CombatVehicleFixture = struct {
         self.authority.deinit();
     }
 };
+
+const RangedCombatFixture = struct {
+    authority: *EmbeddedAuthority,
+    attacker_transport: TransportConnection,
+    target_transport: TransportConnection,
+    attacker: protocol.Welcome,
+    target: protocol.Welcome,
+
+    fn deinit(self: RangedCombatFixture) void {
+        self.authority.deinit();
+    }
+};
+
+const TestWeaponDelivery = struct {
+    result: protocol.WeaponActionResult,
+    shot: ?protocol.ShotEvent,
+};
+
+fn initRangedCombatFixture(namespace: u64) !RangedCombatFixture {
+    const authority = try initTestEmbeddedAuthority(
+        testEmbeddedCoreConfig(namespace, .host_managed),
+        .{},
+        0x84,
+    );
+    errdefer authority.deinit();
+    const session = authority.session();
+    const attacker_transport = TransportConnection{ .value = 841 };
+    const target_transport = TransportConnection{ .value = 842 };
+    _ = try session.openConnection(attacker_transport);
+    try session.ingest(attacker_transport, .{ .hello = .{
+        .account = .{ .value = 841 },
+    } });
+    _ = try session.openConnection(target_transport);
+    try session.ingest(target_transport, .{ .hello = .{
+        .account = .{ .value = 842 },
+    } });
+    try session.tick();
+    var attacker: ?protocol.Welcome = null;
+    var target: ?protocol.Welcome = null;
+    while (takeOutboundForTest(session)) |outbound| switch (outbound.message) {
+        .welcome => |welcome| if (outbound.connection.value == attacker_transport.value) {
+            attacker = welcome;
+        } else if (outbound.connection.value == target_transport.value) {
+            target = welcome;
+        },
+        else => {},
+    };
+    const attacker_welcome = attacker orelse return error.MissingAttackerWelcome;
+    const target_welcome = target orelse return error.MissingTargetWelcome;
+    try authority.characters().spawnParticipant(attacker_transport, .{
+        .request_id = 1,
+        .position = .{ 0, 0, 2 },
+    });
+    try authority.characters().spawnParticipant(target_transport, .{
+        .request_id = 2,
+        .position = .{ 0, 0, -2 },
+    });
+    const core = embeddedAuthorityCore(authority);
+    const attacker_index = @as(usize, attacker_welcome.participant.index) - 1;
+    const target_index = @as(usize, target_welcome.participant.index) - 1;
+    var ready = false;
+    for (0..16) |_| {
+        try session.tick();
+        while (authority.characters().pollOutcome() != null) {}
+        while (takeOutboundForTest(session) != null) {}
+        if (core.participants[attacker_index].lifecycle == .alive and
+            !core.participants[attacker_index].vitals_pending and
+            core.participants[target_index].lifecycle == .alive and
+            !core.participants[target_index].vitals_pending)
+        {
+            ready = true;
+            break;
+        }
+    }
+    if (!ready) return error.RangedCombatFixtureNotReady;
+    try session.ingest(attacker_transport, .{ .input = .{
+        .session = attacker_welcome.session,
+        .participant = attacker_welcome.participant,
+        .sequence = .{ .value = 1 },
+        .target_tick = core.simulation.tickIndex() +| 1,
+        .move = .{ 0, 0 },
+        .facing_yaw = 0,
+        .jump_pressed = false,
+    } });
+    try session.tick();
+    while (takeOutboundForTest(session) != null) {}
+    return .{
+        .authority = authority,
+        .attacker_transport = attacker_transport,
+        .target_transport = target_transport,
+        .attacker = attacker_welcome,
+        .target = target_welcome,
+    };
+}
+
+fn submitWeaponActionForTest(
+    fixture: *RangedCombatFixture,
+    sequence: u32,
+    kind: protocol.WeaponActionKind,
+) !TestWeaponDelivery {
+    const session = fixture.authority.session();
+    const core = embeddedAuthorityCore(fixture.authority);
+    const attacker_index = @as(usize, fixture.attacker.participant.index) - 1;
+    try session.ingest(fixture.attacker_transport, .{ .weapon_action = .{
+        .session = fixture.attacker.session,
+        .participant = fixture.attacker.participant,
+        .sequence = .{ .value = sequence },
+        .avatar_incarnation = core.participants[attacker_index].avatar_incarnation,
+        .target_tick = core.simulation.tickIndex() +| 1,
+        .kind = kind,
+    } });
+    var result: ?protocol.WeaponActionResult = null;
+    var shot: ?protocol.ShotEvent = null;
+    for (0..4) |_| {
+        try session.tick();
+        while (takeOutboundForTest(session)) |outbound| switch (outbound.message) {
+            .weapon_action_result => |value| if (outbound.connection.value == fixture.attacker_transport.value and
+                value.sequence.value == sequence)
+            {
+                result = value;
+            },
+            .shot_event => |value| if (value.sequence.value == sequence and shot == null) {
+                shot = value;
+            },
+            else => {},
+        };
+        if (result != null) break;
+    }
+    return .{
+        .result = result orelse return error.MissingWeaponActionResult,
+        .shot = shot,
+    };
+}
 
 fn initCombatVehicleFixture(
     namespace: u64,
@@ -8960,6 +9653,170 @@ test "authority drops stale input without terminating an unreliable stream" {
     var ingress: [1]AcceptedIngress = undefined;
     try std.testing.expectEqual(@as(usize, 1), authority.copyAcceptedIngress(&ingress));
     try std.testing.expectEqual(@as(u32, 1), ingress[0].sequence.value);
+}
+
+test "authoritative handgun owns hit cadence reload reconnect miss and death" {
+    var fixture = try initRangedCombatFixture(0x454d_4421);
+    defer fixture.deinit();
+    const session = fixture.authority.session();
+    const core = embeddedAuthorityCore(fixture.authority);
+    const attacker_index = @as(usize, fixture.attacker.participant.index) - 1;
+    const target_index = @as(usize, fixture.target.participant.index) - 1;
+
+    const equipped = try submitWeaponActionForTest(&fixture, 1, .equip_toggle);
+    try std.testing.expectEqual(protocol.WeaponActionDisposition.equipped, equipped.result.disposition);
+    try std.testing.expectEqual(protocol.WeaponMode.equipped, equipped.result.mode);
+    try std.testing.expectEqual(handgun_config.magazine_capacity, equipped.result.magazine_ammo);
+    try std.testing.expect(equipped.shot == null);
+
+    const first_hit = try submitWeaponActionForTest(&fixture, 2, .fire);
+    try std.testing.expectEqual(protocol.WeaponActionDisposition.fired_hit, first_hit.result.disposition);
+    try std.testing.expectEqual(handgun_config.damage, first_hit.result.applied_damage);
+    try std.testing.expectEqual(@as(u16, 75), first_hit.result.remaining_health);
+    try std.testing.expectEqual(core.participants[target_index].replicated, first_hit.result.target);
+    try std.testing.expectEqual(
+        protocol.ShotDisposition.hit,
+        (first_hit.shot orelse return error.MissingAuthoritativeShotEvent).disposition,
+    );
+
+    const cooldown = try submitWeaponActionForTest(&fixture, 3, .fire);
+    try std.testing.expectEqual(protocol.WeaponActionDisposition.cooldown, cooldown.result.disposition);
+    try std.testing.expectEqual(@as(u16, 11), cooldown.result.magazine_ammo);
+    try std.testing.expect(cooldown.shot == null);
+
+    const reload = try submitWeaponActionForTest(&fixture, 4, .reload);
+    try std.testing.expectEqual(protocol.WeaponActionDisposition.reload_started, reload.result.disposition);
+    try std.testing.expectEqual(protocol.WeaponMode.reloading, reload.result.mode);
+    try std.testing.expect(reload.result.reload_complete_tick > core.simulation.tickIndex());
+
+    _ = try session.transportClosed(fixture.attacker_transport);
+    try session.tick();
+    while (takeOutboundForTest(session) != null) {}
+    const reconnected_transport = TransportConnection{ .value = 843 };
+    _ = try session.openConnection(reconnected_transport);
+    try session.ingest(reconnected_transport, .{ .hello = .{
+        .account = .{ .value = 841 },
+        .reconnect = fixture.attacker.reconnect,
+    } });
+    try session.tick();
+    var reconnected: ?protocol.Welcome = null;
+    var welcome_delivery_id: u64 = 0;
+    while (takeOutboundForTest(session)) |outbound| switch (outbound.message) {
+        .welcome => |welcome| if (outbound.connection.value == reconnected_transport.value) {
+            reconnected = welcome;
+            welcome_delivery_id = outbound.delivery_id;
+        },
+        else => {},
+    };
+    const reconnected_welcome = reconnected orelse return error.MissingWeaponReconnectWelcome;
+    try std.testing.expectEqual(protocol.WeaponMode.reloading, reconnected_welcome.weapon_mode);
+    try std.testing.expectEqual(@as(u16, 11), reconnected_welcome.magazine_ammo);
+    try std.testing.expectEqual(@as(u16, 36), reconnected_welcome.reserve_ammo);
+    try std.testing.expectEqual(reload.result.reload_complete_tick, reconnected_welcome.reload_complete_tick);
+    fixture.attacker_transport = reconnected_transport;
+    fixture.attacker = reconnected_welcome;
+    try session.ingest(reconnected_transport, .{ .delivery_receipt = .{
+        .session = reconnected_welcome.session,
+        .participant = reconnected_welcome.participant,
+        .lane = .control,
+        .delivery_id = welcome_delivery_id,
+    } });
+    try session.tick();
+    var gameplay_delivery_id: u64 = 0;
+    while (takeOutboundForTest(session)) |outbound| {
+        if (outbound.connection.value == reconnected_transport.value and
+            outbound.lane == .gameplay)
+        {
+            gameplay_delivery_id = @max(gameplay_delivery_id, outbound.delivery_id);
+        }
+    }
+    if (gameplay_delivery_id != 0) {
+        try session.ingest(reconnected_transport, .{ .delivery_receipt = .{
+            .session = reconnected_welcome.session,
+            .participant = reconnected_welcome.participant,
+            .lane = .gameplay,
+            .delivery_id = gameplay_delivery_id,
+        } });
+        try session.tick();
+        while (takeOutboundForTest(session) != null) {}
+    }
+
+    for (0..handgun_config.reload_ticks + 2) |_| {
+        if (core.participants[attacker_index].weapon.mode == .equipped) break;
+        try session.tick();
+        while (takeOutboundForTest(session) != null) {}
+    }
+    try std.testing.expectEqual(ranged_combat_contract.Mode.equipped, core.participants[attacker_index].weapon.mode);
+    try std.testing.expectEqual(@as(u16, 12), core.participants[attacker_index].weapon.magazine);
+    try std.testing.expectEqual(@as(u16, 35), core.participants[attacker_index].weapon.reserve);
+
+    try session.ingest(fixture.attacker_transport, .{ .input = .{
+        .session = fixture.attacker.session,
+        .participant = fixture.attacker.participant,
+        .sequence = .{ .value = 2 },
+        .target_tick = core.simulation.tickIndex() +| 1,
+        .move = .{ 0, 0 },
+        .facing_yaw = std.math.pi,
+        .jump_pressed = false,
+    } });
+    try session.tick();
+    while (takeOutboundForTest(session) != null) {}
+    const miss = try submitWeaponActionForTest(&fixture, 5, .fire);
+    try std.testing.expectEqual(protocol.WeaponActionDisposition.fired_miss, miss.result.disposition);
+    try std.testing.expect(!miss.result.target.isValid());
+    try std.testing.expectEqual(
+        protocol.ShotDisposition.miss,
+        (miss.shot orelse return error.MissingAuthoritativeMissEvent).disposition,
+    );
+
+    try session.ingest(fixture.attacker_transport, .{ .input = .{
+        .session = fixture.attacker.session,
+        .participant = fixture.attacker.participant,
+        .sequence = .{ .value = 3 },
+        .target_tick = core.simulation.tickIndex() +| 1,
+        .move = .{ 0, 0 },
+        .facing_yaw = 0,
+        .jump_pressed = false,
+    } });
+    try session.tick();
+    while (takeOutboundForTest(session) != null) {}
+    var killing_result: ?protocol.WeaponActionResult = null;
+    for (0..3) |shot_index| {
+        while (core.simulation.tickIndex() < core.participants[attacker_index].weapon.next_fire_tick) {
+            try session.tick();
+            while (takeOutboundForTest(session) != null) {}
+        }
+        const delivery = try submitWeaponActionForTest(
+            &fixture,
+            @intCast(6 + shot_index),
+            .fire,
+        );
+        try std.testing.expectEqual(protocol.WeaponActionDisposition.fired_hit, delivery.result.disposition);
+        killing_result = delivery.result;
+    }
+    try std.testing.expect((killing_result orelse return error.MissingKillingShotResult).killed);
+    for (0..3) |_| {
+        if (core.participants[target_index].character == null) break;
+        try session.tick();
+        while (takeOutboundForTest(session) != null) {}
+    }
+    try std.testing.expectEqual(PlayerLifecycle.dead, core.participants[target_index].lifecycle);
+    try std.testing.expect(core.participants[target_index].character == null);
+    try std.testing.expectEqual(@as(u64, 4), core.firearm_hits);
+    var ingress_records: [16]AcceptedIngress = undefined;
+    const ingress_count = session.copyAcceptedIngress(&ingress_records);
+    var equip_records: u8 = 0;
+    var fire_records: u8 = 0;
+    var reload_records: u8 = 0;
+    for (ingress_records[0..ingress_count]) |record| switch (record.kind) {
+        .weapon_equip_toggle => equip_records += 1,
+        .weapon_fire => fire_records += 1,
+        .weapon_reload => reload_records += 1,
+        else => {},
+    };
+    try std.testing.expectEqual(@as(u8, 1), equip_records);
+    try std.testing.expectEqual(@as(u8, 5), fire_records);
+    try std.testing.expectEqual(@as(u8, 1), reload_records);
 }
 
 test "authoritative melee skips driving player targets" {

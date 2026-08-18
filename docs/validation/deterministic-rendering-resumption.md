@@ -1,9 +1,9 @@
 # Deterministic Rendering Resumption Audit
 
 **Status:** Complete; engine audit, automated evidence, and the S12/S13
-product-owner checkpoint are accepted. DR1 implementation and agent-native
-acceptance are complete and tracked separately; its product-owner visual
-walkthrough remains.
+product-owner checkpoint are accepted. DR1 implementation, automated/native
+acceptance, agent-native inspection, and product-owner visual walkthrough are
+complete and tracked separately.
 
 **Recorded:** 2026-08-17
 

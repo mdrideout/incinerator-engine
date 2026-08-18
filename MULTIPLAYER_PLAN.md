@@ -1,11 +1,12 @@
 # Incinerator Multiplayer-First Architecture and Delivery Plan
 
-**Status:** MP0-MP6, M4-M6, S10-S11, IV0-IV5, IC5, the open-world
-corrective, S12 navigation, and S13 authored-population automated acceptance
-are implemented on Apple Silicon macOS. The S13 human walkthrough remains;
-public Internet, Steamworks, hosting, and MMO services remain deferred.
+**Status:** MP0-MP6, M4-M6, S10-S13, IV0-IV5, IC5, the open-world
+corrective, ED1, and DR1 are accepted on Apple Silicon macOS. S14 authoritative
+ranged combat has completed automated acceptance across solo, private-listen,
+and dedicated placement; its ordinary-product walkthrough remains. Public
+Internet, Steamworks, hosting, and MMO services remain deferred.
 
-**Last reviewed:** 2026-08-01
+**Last reviewed:** 2026-08-18
 
 **Current platform:** Apple Silicon macOS only
 
@@ -22,14 +23,20 @@ public Internet, Steamworks, hosting, and MMO services remain deferred.
 → [`IV0-IV5 accepted`](docs/validation/gameplay-interaction-validation-and-observability.md)
 → [`IC5 accepted`](docs/validation/human-test-incident-capture.md)
 → [`open-world corrective complete`](docs/design/open-world-spatial-diagnostics-and-playability.md)
-→ [`S12 automated acceptance complete; human walkthrough pending`](docs/validation/s12-destination-driven-navigation.md)
+→ [`S12 accepted`](docs/validation/s12-destination-driven-navigation.md)
+→ [`S13 accepted`](docs/validation/s13-authored-population-and-sandbox-activity.md)
+→ [`DR1 accepted`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
+→ [`S14 automated acceptance complete; human checkpoint pending`](docs/validation/s14-ranged-combat.md)
 
 **Accepted decisions:**
 [ADR-016](docs/adr/016-authority-session-topology.md),
 [ADR-017](docs/adr/017-network-identity-protocol-and-replication.md),
 [ADR-018](docs/adr/018-gamenetworkingsockets-and-steam-compatible-routing.md),
 [ADR-019](docs/adr/019-authoritative-npc-encounter-and-replacement.md),
-and [ADR-020](docs/adr/020-gameplay-interaction-validation-and-observability.md)
+[ADR-020](docs/adr/020-gameplay-interaction-validation-and-observability.md),
+[ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md),
+[ADR-024](docs/adr/024-authored-population-intent-and-activity-slots.md), and
+[ADR-027](docs/adr/027-authoritative-ranged-combat.md)
 
 ## Purpose
 

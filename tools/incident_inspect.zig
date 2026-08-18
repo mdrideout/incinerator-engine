@@ -16,6 +16,8 @@ const EvidenceCapabilities = struct {
     atomic_note_handoff: bool,
     navigation_lineage: bool,
     population_activity: bool,
+    deterministic_render_state: bool = false,
+    ranged_combat: bool = false,
 };
 
 const Manifest = struct {
@@ -340,13 +342,15 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
         !capabilities.semantic_vehicle_parts or
         !capabilities.atomic_note_handoff or
         !capabilities.navigation_lineage or
-        !capabilities.population_activity)
+        !capabilities.population_activity or
+        !capabilities.deterministic_render_state or
+        !capabilities.ranged_combat)
     {
         return error.InvalidEvidenceCapabilities;
     }
     std.debug.print(
-        "  capabilities characters={s} npcs={s} vehicles={s} carryables={s} vehicle_parts={} atomic_note={} navigation_lineage={} population_activity={}\n",
-        .{ capabilities.characters, capabilities.npcs, capabilities.vehicles, capabilities.carryables, capabilities.semantic_vehicle_parts, capabilities.atomic_note_handoff, capabilities.navigation_lineage, capabilities.population_activity },
+        "  capabilities characters={s} npcs={s} vehicles={s} carryables={s} vehicle_parts={} atomic_note={} navigation_lineage={} population_activity={} deterministic_render_state={} ranged_combat={}\n",
+        .{ capabilities.characters, capabilities.npcs, capabilities.vehicles, capabilities.carryables, capabilities.semantic_vehicle_parts, capabilities.atomic_note_handoff, capabilities.navigation_lineage, capabilities.population_activity, capabilities.deterministic_render_state, capabilities.ranged_combat },
     );
 
     var anomalies: [maximum_anomalies]AnomalySummary = @splat(.{});

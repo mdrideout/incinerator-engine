@@ -77,6 +77,70 @@ pub fn characterPlans(
     return result;
 }
 
+/// Cheap, readable handgun silhouette attached to the character's right hand.
+/// The authority-facing pose owns orientation; this part owns presentation only.
+pub fn handgunPlan(
+    radius: f32,
+    half_height: f32,
+    pose: engine.physics.Pose,
+) Plan {
+    const rotation = poseRotation(pose);
+    const translation = poseTranslation(pose);
+    return .{
+        .ordinal = 100,
+        .surface = .painted_metal,
+        .material = catalog.materialTinted(.painted_metal, .{ 0.09, 0.10, 0.13, 1 }),
+        .model = zm.mul(
+            zm.mul(
+                zm.mul(
+                    zm.scaling(radius * 0.22, radius * 0.16, radius * 0.70),
+                    zm.translation(
+                        radius * 0.92,
+                        (radius + half_height) * 1.15,
+                        -radius * 0.72,
+                    ),
+                ),
+                rotation,
+            ),
+            translation,
+        ),
+    };
+}
+
+pub fn tracerPlan(origin: [3]f32, impact: [3]f32, hit: bool) ?Plan {
+    const delta = [3]f32{
+        impact[0] - origin[0],
+        impact[1] - origin[1],
+        impact[2] - origin[2],
+    };
+    const horizontal = @sqrt(delta[0] * delta[0] + delta[2] * delta[2]);
+    const length = @sqrt(horizontal * horizontal + delta[1] * delta[1]);
+    if (!std.math.isFinite(length) or length <= 0.001) return null;
+    const yaw = std.math.atan2(delta[0], delta[2]);
+    const pitch = -std.math.atan2(delta[1], horizontal);
+    const midpoint = [3]f32{
+        (origin[0] + impact[0]) * 0.5,
+        (origin[1] + impact[1]) * 0.5,
+        (origin[2] + impact[2]) * 0.5,
+    };
+    const color: [4]f32 = if (hit)
+        .{ 1.0, 0.20, 0.06, 1 }
+    else
+        .{ 1.0, 0.82, 0.12, 1 };
+    return .{
+        .ordinal = 0,
+        .surface = .emissive,
+        .material = catalog.materialTinted(.emissive, color),
+        .model = zm.mul(
+            zm.mul(
+                zm.mul(zm.scaling(0.025, 0.025, length * 0.5), zm.rotationX(pitch)),
+                zm.rotationY(yaw),
+            ),
+            zm.translation(midpoint[0], midpoint[1], midpoint[2]),
+        ),
+    };
+}
+
 pub fn vehicleBodyPlans(
     half_extents: [3]f32,
     pose: engine.physics.Pose,

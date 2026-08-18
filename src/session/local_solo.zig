@@ -54,8 +54,13 @@ pub const VehicleActionDisposition = protocol.VehicleActionDisposition;
 pub const InteractionActionKind = protocol.InteractionActionKind;
 pub const InteractionActionDisposition = protocol.InteractionActionDisposition;
 pub const MeleeActionDisposition = protocol.MeleeActionDisposition;
+pub const WeaponActionKind = protocol.WeaponActionKind;
+pub const WeaponActionDisposition = protocol.WeaponActionDisposition;
+pub const WeaponMode = protocol.WeaponMode;
 pub const RespawnActionDisposition = protocol.RespawnActionDisposition;
 pub const MeleeActionResult = protocol.MeleeActionResult;
+pub const WeaponActionResult = protocol.WeaponActionResult;
+pub const ShotEvent = protocol.ShotEvent;
 pub const RespawnActionResult = protocol.RespawnActionResult;
 pub const LifeEvent = protocol.LifeEvent;
 pub const LocalCombatHud = combat_presentation.LocalHud;
@@ -147,6 +152,7 @@ pub const CharacterDraw = struct {
     health: u16,
     maximum_health: u16,
     life_state: protocol.AvatarLifeState,
+    weapon_mode: protocol.WeaponMode,
     combat: combat_presentation.EntityPlan,
 };
 
@@ -358,6 +364,14 @@ const State = struct {
                     self.client.avatar_entity,
                     .{ .melee = result },
                 ),
+                .weapon_action_result => |result| self.combat_presentation_owner.noteFeedback(
+                    self.client.avatar_entity,
+                    .{ .weapon = result },
+                ),
+                .shot_event => |event| self.combat_presentation_owner.noteFeedback(
+                    self.client.avatar_entity,
+                    .{ .shot = event },
+                ),
                 .respawn_action_result => |result| self.combat_presentation_owner.noteFeedback(
                     self.client.avatar_entity,
                     .{ .respawn = result },
@@ -543,6 +557,16 @@ const State = struct {
         self.traceSubmittedClientMessage(message);
     }
 
+    fn requestWeapon(self: *State, action: WeaponActionKind) !void {
+        const target_tick = try std.math.add(u64, self.authority.inspection().tickIndex(), 1);
+        const message = self.client.weaponAction(action, target_tick) catch |err| {
+            self.tracePreflightRejection(.firearm, err);
+            return err;
+        };
+        try self.link.sendFromClient(message);
+        self.traceSubmittedClientMessage(message);
+    }
+
     fn requestRespawn(self: *State) !void {
         const message = self.client.respawnAction() catch |err| {
             self.tracePreflightRejection(.respawn, err);
@@ -708,6 +732,7 @@ const State = struct {
                 .health = character.health,
                 .maximum_health = character.maximum_health,
                 .life_state = character.life_state,
+                .weapon_mode = character.weapon_mode,
                 .combat = combat,
             };
             count += 1;
@@ -891,6 +916,11 @@ const State = struct {
             .incarnation = self.client.avatar_incarnation,
             .life_state = self.client.avatar_life_state,
             .melee_ready_tick = self.client.melee_ready_tick,
+            .weapon_mode = self.client.weapon_mode,
+            .magazine_ammo = self.client.magazine_ammo,
+            .reserve_ammo = self.client.reserve_ammo,
+            .weapon_ready_tick = self.client.weapon_ready_tick,
+            .reload_complete_tick = self.client.reload_complete_tick,
             .respawn_ready_tick = self.client.respawn_ready_tick,
             .character = local_character,
             .owned_vehicle = self.client.ownedVehicle(),
@@ -1149,12 +1179,24 @@ pub const PlayerRole = struct {
         try stateFrom(self.context).requestMelee();
     }
 
+    pub fn requestWeapon(self: PlayerRole, action: WeaponActionKind) !void {
+        try stateFrom(self.context).requestWeapon(action);
+    }
+
     pub fn requestRespawn(self: PlayerRole) !void {
         try stateFrom(self.context).requestRespawn();
     }
 
     pub fn pollMeleeActionResult(self: PlayerRole) ?MeleeActionResult {
         return stateFrom(self.context).client.takeMeleeActionResult();
+    }
+
+    pub fn pollWeaponActionResult(self: PlayerRole) ?WeaponActionResult {
+        return stateFrom(self.context).client.takeWeaponActionResult();
+    }
+
+    pub fn pollShotEvent(self: PlayerRole) ?ShotEvent {
+        return stateFrom(self.context).client.takeShotEvent();
     }
 
     pub fn pollRespawnActionResult(self: PlayerRole) ?RespawnActionResult {
@@ -1195,6 +1237,11 @@ pub const PresentationRole = struct {
 
     pub fn combatHud(self: PresentationRole) LocalCombatHud {
         return stateFrom(self.context).combatHud();
+    }
+
+    pub fn shotTracers(self: PresentationRole) []const combat_presentation.TracerPlan {
+        const state = stateFrom(self.context);
+        return state.combat_presentation_owner.tracerPlans(state.client.world.server_tick);
     }
 
     pub fn lineHitFraction(

@@ -109,6 +109,10 @@ pub fn clientRecord(
             value.correlation_id = action.sequence.value;
             value.kind = .melee;
         },
+        .weapon_action => |action| {
+            value.correlation_id = action.sequence.value;
+            value.kind = .firearm;
+        },
         .respawn_action => |action| {
             value.correlation_id = action.sequence.value;
             value.kind = .respawn;
@@ -169,6 +173,62 @@ pub fn appliedServerRecord(
             value.reason_domain = .protocol_disposition;
             value.fields.health = result.target.isValid();
             value.health = result.remaining_health;
+        },
+        .weapon_action_result => |result| {
+            value.correlation_id = result.sequence.value;
+            value.kind = .firearm;
+            value.target = if (result.target.isValid())
+                replicatedEntity(result.target, result.target_incarnation)
+            else
+                null;
+            value.disposition = switch (result.disposition) {
+                .equipped, .holstered, .reload_started, .fired_hit, .fired_miss => .applied,
+                else => .rejected,
+            };
+            value.reason = @intFromEnum(result.disposition);
+            value.reason_domain = .protocol_disposition;
+            value.fields.health = result.target.isValid();
+            value.health = result.remaining_health;
+            value.fields.deadline = result.weapon_ready_tick != 0 or
+                result.reload_complete_tick != 0;
+            value.deadline_tick = @max(
+                result.weapon_ready_tick,
+                result.reload_complete_tick,
+            );
+            value.weapon = .{
+                .action = @intFromEnum(result.action),
+                .mode = @intFromEnum(result.mode),
+                .magazine_ammo = result.magazine_ammo,
+                .reserve_ammo = result.reserve_ammo,
+                .weapon_ready_tick = result.weapon_ready_tick,
+                .reload_complete_tick = result.reload_complete_tick,
+                .ray_origin = result.ray_origin,
+                .impact_position = result.impact_position,
+                .applied_damage = result.applied_damage,
+                .killed = result.killed,
+            };
+        },
+        .shot_event => |event| {
+            value.correlation_id = event.sequence.value;
+            value.kind = .firearm;
+            value.target = if (event.target.isValid())
+                replicatedEntity(event.target, event.target_incarnation)
+            else
+                null;
+            value.fields.health = event.target.isValid();
+            value.health = event.remaining_health;
+            value.weapon = .{
+                .action = @intFromEnum(protocol.WeaponActionKind.fire),
+                .mode = 0,
+                .magazine_ammo = 0,
+                .reserve_ammo = 0,
+                .weapon_ready_tick = 0,
+                .reload_complete_tick = 0,
+                .ray_origin = event.ray_origin,
+                .impact_position = event.impact_position,
+                .applied_damage = event.applied_damage,
+                .killed = event.killed,
+            };
         },
         .respawn_action_result => |result| {
             value.correlation_id = result.sequence.value;
@@ -295,4 +355,52 @@ test "session trace coalesces small camera increments but retains cumulative tur
         .client,
         .client_submitted,
     ) != null);
+}
+
+test "session trace retains firearm action result and ray correlation" {
+    var movement: MovementState = .{};
+    var vehicle: VehicleState = .{};
+    const action = protocol.ClientMessage{ .weapon_action = .{
+        .session = .{ .value = 1 },
+        .participant = .{ .index = 1, .generation = 1 },
+        .sequence = .{ .value = 19 },
+        .avatar_incarnation = 3,
+        .target_tick = 80,
+        .kind = .fire,
+    } };
+    const submitted = clientRecord(
+        action,
+        &movement,
+        &vehicle,
+        79,
+        null,
+        .client,
+        .client_submitted,
+    ) orelse return error.MissingFirearmSubmissionTrace;
+    try std.testing.expectEqual(engine.gameplay_trace.Kind.firearm, submitted.kind);
+    try std.testing.expectEqual(@as(u64, 19), submitted.correlation_id);
+
+    const result = appliedServerRecord(.{ .weapon_action_result = .{
+        .sequence = .{ .value = 19 },
+        .authority_tick = 80,
+        .action = .fire,
+        .disposition = .fired_hit,
+        .mode = .equipped,
+        .magazine_ammo = 11,
+        .reserve_ammo = 36,
+        .weapon_ready_tick = 92,
+        .reload_complete_tick = 0,
+        .target = .{ .index = 22, .generation = 4 },
+        .target_incarnation = 7,
+        .ray_origin = .{ 1, 2, 3 },
+        .impact_position = .{ 1, 2, -3 },
+        .applied_damage = 25,
+        .remaining_health = 75,
+    } }, 80, null) orelse return error.MissingFirearmResultTrace;
+    try std.testing.expectEqual(engine.gameplay_trace.Kind.firearm, result.kind);
+    try std.testing.expectEqual(@as(u64, 19), result.correlation_id);
+    try std.testing.expectEqual(@as(u16, 75), result.health);
+    try std.testing.expectEqual(@as(u16, 11), result.weapon.?.magazine_ammo);
+    try std.testing.expectEqualDeep([3]f32{ 1, 2, -3 }, result.weapon.?.impact_position);
+    try std.testing.expectEqual(@as(u16, 25), result.weapon.?.applied_damage);
 }

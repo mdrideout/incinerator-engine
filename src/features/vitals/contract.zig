@@ -35,6 +35,7 @@ pub const TargetKind = enum(u8) {
 pub const Cause = enum(u8) {
     melee = 1,
     npc_melee = 2,
+    firearm = 3,
 
     pub fn priority(self: Cause) u8 {
         return @intFromEnum(self);

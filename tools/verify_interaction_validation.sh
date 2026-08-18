@@ -56,7 +56,7 @@ grep -Fq 'const gameplay_scenarios = @import("sandbox_gameplay_scenarios");' \
   "$root/src/hosts/mp2_client.zig" || fail "network client does not use the shared scenario catalog"
 grep -Fq 'const gameplay_scenarios = @import("sandbox_gameplay_scenarios");' \
   "$root/src/hosts/mp6_listen_client.zig" || fail "listen client does not use the shared scenario catalog"
-grep -Fq 'network_options.addOption(u16, "protocol_revision", 15);' \
+grep -Fq 'network_options.addOption(u16, "protocol_revision", 16);' \
   "$root/tools/build/simulation_graph.zig" || fail "wire cohort was not bumped for lifecycle ordering"
 grep -Fq 'PrimitiveFragmentSettings' "$root/shaders/triangle.frag" ||
   fail "primitive material tint shader contract is missing"

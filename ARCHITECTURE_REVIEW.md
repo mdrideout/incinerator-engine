@@ -2,11 +2,14 @@
 
 **Status:** Living assessment; the Apple Silicon macOS gameplay/session
 foundation now includes accepted S12 semantic navigation and S13 authored
-population/activity. DR1 deterministic visual fidelity is implemented through
-agent-native acceptance. Protocol 15, snapshot 14, replay 16,
+population/activity. DR1 deterministic visual fidelity is fully accepted, and
+S14 authoritative ranged-combat implementation has completed automated
+acceptance across solo, private-listen, and dedicated placements.
+Protocol 16, snapshot 14, replay 17,
 incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
 automated Metal/product acceptance are current. No open P0/P1 architectural
-finding blocks the DR1 product-owner visual walkthrough. The neural-rendering proof
+finding blocks the S14 human checkpoint or subsequent S15 content expansion.
+The neural-rendering proof
 is retained through RF10 as external technical evidence, but no learned model
 is promoted, installed, or selected. The product owner paused that track
 indefinitely on 2026-08-17. Deterministic rendering is the active direction;
@@ -16,7 +19,7 @@ preserved boundary policy for an explicit future restart.
 
 **Last reviewed:** 2026-08-18
 
-**Scope:** Current post-S13 architecture, its demonstrated strengths, its
+**Scope:** Current post-S14 implementation architecture, its demonstrated strengths, its
 remaining structural pressure before another product or service slice, the
 active deterministic-rendering direction, and the retained paused neural proof
 
@@ -25,7 +28,7 @@ active deterministic-rendering direction, and the retained paused neural proof
 **Multiplayer strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
 **Latest automated acceptance:**
-[`docs/validation/dr1-playable-deterministic-visual-fidelity.md`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
+[`docs/validation/s14-ranged-combat.md`](docs/validation/s14-ranged-combat.md)
 
 **Accepted cohesion contract:**
 [`docs/design/m5-client-authority-cohesion.md`](docs/design/m5-client-authority-cohesion.md)
@@ -41,7 +44,8 @@ active deterministic-rendering direction, and the retained paused neural proof
 → [`open-world spatial and vehicle-dynamics correction complete`](docs/design/open-world-spatial-diagnostics-and-playability.md)
 → [`S12 accepted`](docs/validation/s12-destination-driven-navigation.md)
 → [`S13 accepted`](docs/validation/s13-authored-population-and-sandbox-activity.md)
-→ [`DR1 automated and agent-native acceptance complete; product-owner walkthrough pending`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
+→ [`DR1 accepted`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
+→ [`S14 automated acceptance complete; human checkpoint pending`](docs/validation/s14-ranged-combat.md)
 
 **Active rendering direction:**
 [`DR1 playable deterministic visual fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
@@ -299,11 +303,13 @@ claim.
 | A-F055 | Vehicle handling had only subjective play evidence, so friction/stability changes could silently trade braking, lateral slip, recovery, and rollover behavior | P1 | First handling correction | Resolved for the current single archetype: explicit backend-neutral tire curves and a real-Jolt 120 Hz rig measure stopping, steady turn, slip, slalom, skid recovery, and rollover; the report and tuning skill preserve accepted tradeoffs |
 | A-F056 | Incident manifests write stale protocol/snapshot literals instead of sourcing the accepted live cohort, so a navigation incident could misidentify the runtime that produced it | P1 | S12-A preflight | Resolved: schema-4 manifests source protocol/replay/snapshot cohort constants, drift tests fail closed, and a fresh protocol-14/replay-14/snapshot-13 bundle passes strict inspection |
 | A-F057 | NPC base intent is a cooked node reference; route results conflate inactive/capacity/disconnected outcomes, and failed displacement recovery may restore an old pose | P1 | S12 destination/recovery contract | Resolved under [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md): semantic destination intent, one pure typed planner, explicit execution status/lineage, collision-aware re-anchoring, confirmed edge exclusions, and a zero-teleport counter replace raw-node/BFS/snap-back behavior |
-| A-F058 | The installed six-node line and triangle presentation cannot exercise alternate routes, topology replanning, or human-readable navigation diagnosis | P1 | S12 playable evaluation | Resolved for the bounded slice: the installed 16-node/32-edge urban block has two transactional seam gates, visible blockers, six destinations, Navigation Lab, independent overlays, and schema-4 route evidence. Human walkthrough remains the acceptance checkpoint, not an architecture implementation gap |
+| A-F058 | The installed six-node line and triangle presentation cannot exercise alternate routes, topology replanning, or human-readable navigation diagnosis | P1 | S12 playable evaluation | Resolved and accepted for the bounded slice: the installed 16-node/32-edge urban block has two transactional seam gates, visible blockers, six destinations, Navigation Lab, independent overlays, schema-4 route evidence, and a completed product-owner walkthrough |
 | A-F059 | The conventional renderer lacked a versioned neural-input ABI, paired-capture path, runtime inference owner, and promoted-model content contract; adding these directly to `renderer.zig` would conflate renderer, experiment, content, and history lifecycles | P1 | NR0 game-specific neural-rendering feasibility slice | Resolved at the foundation level by ADR-025 and accepted NR0-A through NR0-D: engine-owned input/capture/evaluation hosts and external experiment ownership are separate. Promotion and the final GPU-resident runtime remain intentionally blocked on a worthy title model. |
 | A-F060 | A visually rich pretrained video model could redirect the engine toward external checkpoints, fine-tuning, appearance-only conditioning, or pseudo-targets instead of the intended reproducible game-owned renderer | P1 | Post-NR-0003 strategy correction | Resolved by ADR-026 and the title neural renderer north star: learned product components start from declared random initialization on title-owned exact pairs; NR-0003 is comparison evidence only; NR4-A is human-accepted and NR4-B now proves the exact rights-clean direction over motion. |
 | A-F061 | Ordinary macOS graphical binaries still compile/link the dormant Core ML adapter and neural-input shaders even though no learned bundle is installed or selected | P2 | Before distribution, secondary-platform work, or a measured default-build/runtime problem | Open but non-blocking for the current macOS developer product: runtime activation is explicit through neural-only environment inputs and returns before allocating neural hosts by default. Do not add a speculative compatibility layer while the track is paused; first measure binary/build/platform cost, then either keep the direct macOS linkage or add one explicit build exclusion. |
 | A-F062 | SDL 3.4.14's Metal backend inverted the documented `SDL_QueryGPUFence` result while screenshot, semantic-ID, and physics-debug consumers also fenced a later empty submission instead of the frame containing their work | P0 | DR1-A native evidence | Resolved at the exact platform/submission boundary: one macOS cohort helper inverts only the pinned 3.4.14 result and names upstream removal commit `b340ddcd7b44511f7b49005ba4a91a3c9907f77e`; the renderer acquires and reference-shares the real frame-submission fence. Foreground native runs restore district residency plus 362/362 trail and 31/31 anchor completions with zero misses/failures, and the final full journey repeats zero failures. |
+| A-F063 | The engine had no ranged-combat rule owner, authoritative ray/occlusion boundary, finite-ammunition state, or correlated replay/incident contract; allowing clients to name targets would have broken the shared solo/multiplayer source of truth | P1 | S14 ranged combat | Resolved by ADR-027: one backend-neutral handgun feature owns admission/ammo/deadlines, session authority derives current pose and stable semantic/Jolt hit results, vitals owns damage/death, and clients receive only authoritative results/snapshots/events. Protocol, replay, fault, reconnect, incident, Metal, listen, and dedicated gates cover the boundary without lag-compensation or firearms-framework scope. |
+| A-F064 | Reliable weapon results and unreliable snapshots can cross in transit; the first S14 client projection also treated the latest result as permanent HUD state, masking later reload completion, while the private-listen local adapter did not drain weapon/shot feedback | P1 | S14 graphical acceptance | Resolved: weapon results carry the authority tick, client weapon state advances monotonically across result/snapshot lanes, combat presentation treats results as feedback rather than a second state owner, and private-listen host controls/feedback now match the remote graphical client. Regression tests plus real-GNS listen/dedicated observer journeys prove convergence and publication. |
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,

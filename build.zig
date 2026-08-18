@@ -263,6 +263,8 @@ pub fn build(b: *std.Build) void {
     const vitals_feature_module = graph.vitals;
     const npc_encounter_contract_module = graph.npc_encounter_contract;
     const npc_encounter_feature_module = graph.npc_encounter;
+    const ranged_combat_contract_module = graph.ranged_combat_contract;
+    const ranged_combat_feature_module = graph.ranged_combat;
     const population_contract_module = graph.population_contract;
     const sandbox_population_catalog_module = graph.sandbox_population_catalog;
     const sandbox_population_module = graph.sandbox_population;
@@ -520,6 +522,31 @@ pub fn build(b: *std.Build) void {
     }) orelse return;
     const sdl_lib = sdl_dep.artifact("SDL3");
     linkClientLibrary(exe, validation_exe, sdl_lib);
+
+    const mouse_capture_input_module = b.createModule(.{
+        .root_source_file = b.path("src/input.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    mouse_capture_input_module.linkLibrary(sdl_lib);
+    const mouse_capture_acceptance = b.addExecutable(.{
+        .name = "incinerator_mouse_capture_acceptance",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/mouse_capture_acceptance.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{
+                .{ .name = "input", .module = mouse_capture_input_module },
+            },
+        }),
+    });
+    mouse_capture_acceptance.root_module.linkLibrary(sdl_lib);
+    const run_mouse_capture_acceptance = b.addRunArtifact(mouse_capture_acceptance);
+    const test_mouse_capture = b.step(
+        "test-mouse-capture-macos",
+        "Run native click-capture, gameplay-click, Escape-release, and quit acceptance",
+    );
+    test_mouse_capture.dependOn(&run_mouse_capture_acceptance.step);
 
     const district_gpu_registry_module = b.createModule(.{
         .root_source_file = b.path("src/district_gpu_registry.zig"),
@@ -1285,6 +1312,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "session_budgets", .module = session_budgets_module },
+            .{ .name = "session_protocol", .module = session_protocol_module },
             .{ .name = "mp6_listen_room", .module = mp6_listen_room_module },
             .{ .name = "client_scene", .module = client_scene_module },
             .{ .name = "mp2_presentation", .module = mp2_presentation_module },
@@ -1461,6 +1489,30 @@ pub fn build(b: *std.Build) void {
     );
     verify_s11_dedicated_step.dependOn(&verify_s11_dedicated_process.step);
     verify_s11_dedicated_step.dependOn(mp6_host_test_step);
+    const verify_s14_listen_process = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_s14_listen_process.sh"),
+    });
+    verify_s14_listen_process.addFileArg(mp6_listen_client_exe.getEmittedBin());
+    verify_s14_listen_process.addFileArg(mp2_client_exe.getEmittedBin());
+    const verify_s14_listen_step = b.step(
+        "verify-s14-listen",
+        "Run two-client graphical listen authoritative-handgun proof",
+    );
+    verify_s14_listen_step.dependOn(&verify_s14_listen_process.step);
+    verify_s14_listen_step.dependOn(mp6_host_test_step);
+    const verify_s14_dedicated_process = b.addSystemCommand(&.{
+        "bash",
+        b.pathFromRoot("tools/verify_s14_dedicated_process.sh"),
+    });
+    verify_s14_dedicated_process.addFileArg(mp6_server_exe.getEmittedBin());
+    verify_s14_dedicated_process.addFileArg(mp2_client_exe.getEmittedBin());
+    const verify_s14_dedicated_step = b.step(
+        "verify-s14-dedicated",
+        "Run two-client graphical dedicated authoritative-handgun proof",
+    );
+    verify_s14_dedicated_step.dependOn(&verify_s14_dedicated_process.step);
+    verify_s14_dedicated_step.dependOn(mp6_host_test_step);
     const mp6_lifecycle_acceptance_module = b.createModule(.{
         .root_source_file = b.path("tools/mp6_lifecycle_acceptance.zig"),
         .target = target,
@@ -2493,6 +2545,10 @@ pub fn build(b: *std.Build) void {
         "smoke-installed-s13-macos",
         "Run the ordinary twelve-member S13 Metal smoke above/below 60 Hz from /tmp (native Apple Silicon only)",
     );
+    const installed_s14_smoke_step = b.step(
+        "smoke-installed-s14-macos",
+        "Run the authoritative handgun Metal smoke above/below 60 Hz from /tmp (native Apple Silicon only)",
+    );
     const s13_incident_benchmark_step = b.step(
         "benchmark-s13-incident-macos",
         "Measure incident capture in the ordinary S13 Metal product (native Apple Silicon only)",
@@ -2718,6 +2774,30 @@ pub fn build(b: *std.Build) void {
         );
         installed_s13_smoke_below.step.dependOn(&installed_s13_smoke_above.step);
         installed_s13_smoke_step.dependOn(&installed_s13_smoke_below.step);
+
+        const installed_s14_smoke_above = addValidationCommand(b, install_validation_step, &.{
+            installed_validation_path,
+            "--s14-ranged-combat-smoke",
+            "--frames=3840",
+            "--virtual-render-hz=240",
+        });
+        installed_s14_smoke_above.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s14_smoke_above.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s14_smoke_above.step.dependOn(b.getInstallStep());
+        const installed_s14_smoke_below = b.addSystemCommand(&.{
+            installed_validation_path,
+            "--s14-ranged-combat-smoke",
+            "--frames=1280",
+            "--virtual-render-hz=80",
+        });
+        installed_s14_smoke_below.setCwd(.{ .cwd_relative = "/tmp" });
+        installed_s14_smoke_below.removeEnvironmentVariable(
+            "INCINERATOR_CONTENT_ROOT",
+        );
+        installed_s14_smoke_below.step.dependOn(&installed_s14_smoke_above.step);
+        installed_s14_smoke_step.dependOn(&installed_s14_smoke_below.step);
 
         if (incident_capture_enabled) {
             const installed_product_path = b.getInstallPath(.bin, exe.out_filename);
@@ -3231,6 +3311,7 @@ pub fn build(b: *std.Build) void {
         installed_s8_smoke_step.dependOn(&native_only.step);
         installed_s11_smoke_step.dependOn(&native_only.step);
         installed_s13_smoke_step.dependOn(&native_only.step);
+        installed_s14_smoke_step.dependOn(&native_only.step);
         s13_incident_benchmark_step.dependOn(&native_only.step);
         installed_s4_diagnostics_smoke_step.dependOn(&native_only.step);
         installed_s4_replay_smoke_step.dependOn(&native_only.step);
@@ -3384,6 +3465,24 @@ pub fn build(b: *std.Build) void {
     );
     npc_encounter_test_step.dependOn(&run_npc_encounter_contract_tests.step);
     npc_encounter_test_step.dependOn(&run_npc_encounter_feature_tests.step);
+    const ranged_combat_contract_tests = b.addTest(.{
+        .root_module = ranged_combat_contract_module,
+    });
+    const run_ranged_combat_contract_tests = b.addRunArtifact(
+        ranged_combat_contract_tests,
+    );
+    const ranged_combat_feature_tests = b.addTest(.{
+        .root_module = ranged_combat_feature_module,
+    });
+    const run_ranged_combat_feature_tests = b.addRunArtifact(
+        ranged_combat_feature_tests,
+    );
+    const ranged_combat_test_step = b.step(
+        "test-ranged-combat",
+        "Run deterministic authoritative handgun rule tests",
+    );
+    ranged_combat_test_step.dependOn(&run_ranged_combat_contract_tests.step);
+    ranged_combat_test_step.dependOn(&run_ranged_combat_feature_tests.step);
     const driver_contract_tests = b.addTest(.{ .root_module = driver_contract_module });
     const run_driver_contract_tests = b.addRunArtifact(driver_contract_tests);
     const driver_contract_test_step = b.step(
@@ -3993,6 +4092,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_vitals_contract_tests.step);
     test_step.dependOn(&run_vitals_feature_tests.step);
     test_step.dependOn(&run_npc_encounter_contract_tests.step);
+    test_step.dependOn(&run_ranged_combat_contract_tests.step);
+    test_step.dependOn(&run_ranged_combat_feature_tests.step);
     test_step.dependOn(&run_npc_encounter_feature_tests.step);
     test_step.dependOn(&run_driver_contract_tests.step);
     test_step.dependOn(&run_interaction_contract_tests.step);
@@ -4303,6 +4404,20 @@ pub fn build(b: *std.Build) void {
     verify_s13_step.dependOn(check_validation_step);
     verify_s13_step.dependOn(verify_source_package_step);
     verify_s13_step.dependOn(installed_s13_smoke_step);
+
+    const verify_s14_step = b.step(
+        "verify-s14",
+        "Run complete authoritative handgun, replay, network, incident, and Metal acceptance",
+    );
+    verify_s14_step.dependOn(ranged_combat_test_step);
+    verify_s14_step.dependOn(test_m6_transaction_step);
+    verify_s14_step.dependOn(sandbox_replay_test_step);
+    verify_s14_step.dependOn(developer_diagnostics_test_step);
+    verify_s14_step.dependOn(check_mp6_step);
+    verify_s14_step.dependOn(verify_s14_listen_step);
+    verify_s14_step.dependOn(verify_s14_dedicated_step);
+    verify_s14_step.dependOn(verify_s13_step);
+    verify_s14_step.dependOn(installed_s14_smoke_step);
 
     const interaction_validation_audit_command = b.addSystemCommand(&.{
         "bash",

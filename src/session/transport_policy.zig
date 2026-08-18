@@ -23,7 +23,12 @@ pub fn clientClass(message: protocol.ClientMessage) Class {
             .delivery = .unreliable,
             .lane = .input,
         },
-        .vehicle_action, .interaction_action, .melee_action, .respawn_action => .{
+        .vehicle_action,
+        .interaction_action,
+        .melee_action,
+        .weapon_action,
+        .respawn_action,
+        => .{
             .delivery = .reliable,
             .lane = .gameplay,
         },
@@ -80,6 +85,8 @@ pub fn serverClass(message: protocol.ServerMessage) Class {
         .vehicle_action_result,
         .interaction_action_result,
         .melee_action_result,
+        .weapon_action_result,
+        .shot_event,
         .respawn_action_result,
         .life_event,
         => .{

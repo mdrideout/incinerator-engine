@@ -389,6 +389,7 @@ const State = struct {
     window_id: c.SDL_WindowID,
     incident_clipboard: [incident_contract.max_handoff_bytes]u8 = undefined,
     incident_clipboard_publications: u64 = 0,
+    gameplay_mouse_captured: bool = false,
 };
 
 fn ownerState(owner: *Owner) *State {
@@ -637,6 +638,12 @@ pub const Owner = opaque {
 
     pub fn editorVisible(self: *const Owner) bool {
         return ownerStateConst(self).editor.isVisible();
+    }
+
+    pub fn setGameplayMouseCaptured(self: *Owner, captured: bool) void {
+        const state = ownerState(self);
+        state.gameplay_mouse_captured = captured;
+        state.editor.setGameplayMouseCaptured(captured);
     }
 
     pub fn configureEditor(

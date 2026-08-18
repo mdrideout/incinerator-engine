@@ -1358,6 +1358,116 @@ const S13PopulationSmokeProgress = struct {
     }
 };
 
+const S14RangedCombatSmokeProgress = struct {
+    active: bool = false,
+    target_selected: bool = false,
+    target_member: u16 = 0,
+    target_actor: ?engine.PersistentId = null,
+    target_generation: u16 = 0,
+    equipped: bool = false,
+    committed_drain_shots: u8 = 0,
+    cadence_rejected: bool = false,
+    empty_rejected: bool = false,
+    reload_started: bool = false,
+    reload_completed: bool = false,
+    hit_count: u8 = 0,
+    target_killed: bool = false,
+    target_death_drawn: bool = false,
+    target_replaced: bool = false,
+    weapon_drawn: bool = false,
+    tracer_drawn: bool = false,
+    ammo_hud_observed: bool = false,
+    last_fire_request_tick: u64 = 0,
+    last_empty_request_tick: u64 = 0,
+
+    fn observeWeaponResult(
+        self: *S14RangedCombatSmokeProgress,
+        result: sandbox_host.WeaponActionResult,
+    ) void {
+        if (!self.active) return;
+        switch (result.disposition) {
+            .equipped => self.equipped = true,
+            .fired_miss => if (!self.reload_completed) {
+                self.committed_drain_shots +|= 1;
+            },
+            .fired_hit => if (self.reload_completed) {
+                self.hit_count +|= 1;
+                self.target_killed = self.target_killed or result.killed;
+            } else {
+                // The drain phase proves committed ammo consumption. A moving
+                // population member can cross the ray before the physical
+                // blocker, so both committed outcomes advance the phase.
+                self.committed_drain_shots +|= 1;
+            },
+            .cooldown => self.cadence_rejected = true,
+            .empty => self.empty_rejected = true,
+            .reload_started => self.reload_started = true,
+            else => {},
+        }
+    }
+
+    fn observeNpc(self: *S14RangedCombatSmokeProgress, draw: sandbox_host.NpcDraw) void {
+        if (!self.active or draw.population_member != self.target_member) return;
+        if (draw.incarnation == self.target_generation and draw.life_state == .dead) {
+            self.target_death_drawn = true;
+        }
+        if (self.target_killed and draw.incarnation > self.target_generation and
+            draw.life_state == .alive)
+        {
+            self.target_replaced = true;
+        }
+    }
+
+    fn observeHud(
+        self: *S14RangedCombatSmokeProgress,
+        hud: combat_presentation.LocalHud,
+    ) void {
+        if (!self.active or !hud.available) return;
+        self.ammo_hud_observed = self.ammo_hud_observed or
+            hud.weapon_mode != .holstered or hud.magazine_ammo != 0 or
+            hud.reserve_ammo != 0;
+        if (self.reload_started and hud.weapon_mode == .equipped and
+            hud.magazine_ammo > 0 and hud.reload_remaining_ticks == 0)
+        {
+            self.reload_completed = true;
+        }
+    }
+
+    fn requireComplete(self: S14RangedCombatSmokeProgress) !void {
+        if (!self.target_selected or !self.equipped or
+            self.committed_drain_shots != 12 or !self.cadence_rejected or
+            !self.empty_rejected or !self.reload_started or
+            !self.reload_completed or self.hit_count < 4 or
+            !self.target_killed or !self.target_death_drawn or
+            !self.target_replaced or !self.weapon_drawn or !self.tracer_drawn or
+            !self.ammo_hud_observed)
+        {
+            std.debug.print(
+                "S14_RANGED_SMOKE_MISSING target={} equipped={} drain={d} " ++
+                    "cadence={} empty={} reload={}/{} hits={d} killed={} " ++
+                    "death_draw={} replacement={} weapon_draw={} tracer_draw={} hud={}\n",
+                .{
+                    self.target_selected,
+                    self.equipped,
+                    self.committed_drain_shots,
+                    self.cadence_rejected,
+                    self.empty_rejected,
+                    self.reload_started,
+                    self.reload_completed,
+                    self.hit_count,
+                    self.target_killed,
+                    self.target_death_drawn,
+                    self.target_replaced,
+                    self.weapon_drawn,
+                    self.tracer_drawn,
+                    self.ammo_hud_observed,
+                },
+            );
+            return error.S14RangedCombatSmokeEvidenceMissing;
+        }
+    }
+};
+
 const DistrictStreamEvidence = struct {
     correlation: u64 = 0,
     gpu_reserved: ?u64 = null,
@@ -1871,6 +1981,7 @@ const ValidationAppState = if (build_options.validation_mode or builtin.is_test)
     s7_character_actions_enabled: bool = true,
     s11_combat: S11CombatSmokeProgress = .{},
     s13_population: S13PopulationSmokeProgress = .{},
+    s14_ranged_combat: S14RangedCombatSmokeProgress = .{},
     s4_fault_loop_probe: ?*S4FaultLoopProbe = null,
 } else void;
 
@@ -1931,6 +2042,8 @@ const App = struct {
     navigation_next_request_id: u64 = 0x4e41_5600_0000_0001,
     product_feedback: product_feedback.Owner,
     product_presentation_trace: product_presentation_trace.Owner,
+    last_weapon_draw_signature: u64 = 0,
+    last_tracer_draw_signature: u64 = 0,
     product_character_lifecycle: sandbox_product_character_lifecycle.Owner,
     validation: ValidationAppState,
     validation_tick_origin: u64 = 0,
@@ -2253,15 +2366,18 @@ const App = struct {
         std.debug.print(" Tick rate: {d} Hz ({d:.3} ms)\n", .{ timing.TICK_RATE, timing.TICK_DURATION * 1000.0 });
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Controls:\n", .{});
-        std.debug.print("   ESC - Quit\n", .{});
+        std.debug.print("   Click playable area - Capture mouse for continuous look\n", .{});
+        std.debug.print("   ESC - Release captured mouse / quit while mouse is free\n", .{});
         std.debug.print("   WASD - Move character / drive vehicle\n", .{});
         std.debug.print("   E - Enter / exit vehicle\n", .{});
         std.debug.print("   F - Collect / drop carryable\n", .{});
         std.debug.print("   Q - Authoritative melee\n", .{});
-        std.debug.print("   R - Respawn after death / cooldown\n", .{});
+        std.debug.print("   1 - Equip / holster handgun\n", .{});
+        std.debug.print("   Left-click - Fire equipped handgun\n", .{});
+        std.debug.print("   R - Reload / respawn after death\n", .{});
         std.debug.print("   SPACE - Jump / vehicle brake\n", .{});
         std.debug.print("   LEFT SHIFT - Vehicle hand brake\n", .{});
-        std.debug.print("   Right-click + drag - Turn/look\n", .{});
+        std.debug.print("   Right-click + drag - Turn/look without capture\n", .{});
         std.debug.print("   F1 - Toggle editor UI\n", .{});
         std.debug.print("   F2 - Toggle ImGui demo\n", .{});
         std.debug.print("   F3 - Toggle editor input passthrough\n", .{});
@@ -2271,13 +2387,16 @@ const App = struct {
         }
         std.debug.print("===========================================\n\n", .{});
 
+        var input_buffer = input.InputBuffer.init(main_window_id);
+        try input_buffer.attachGameplayMouseWindow(window);
+
         return App{
             .io = io,
             .window = window,
             .gpu_renderer = gpu_renderer,
             .developer = developer,
             .frame_timer = timing.FrameTimer.init(),
-            .input_buffer = input.InputBuffer.init(main_window_id),
+            .input_buffer = input_buffer,
             .simulation = simulation,
             .initial_crate_id = null,
             .initial_character_id = null,
@@ -2322,6 +2441,8 @@ const App = struct {
 
     pub fn deinit(self: *App) void {
         const completed_ticks = self.simulation.inspection().tickIndex();
+
+        self.input_buffer.detachGameplayMouseWindow();
 
         // Errors may unwind after external buffers were encoded into a frame
         // but before normal submission. Retire and drain that work before any
@@ -2612,7 +2733,7 @@ const App = struct {
             );
             defer input_profile.finish(.failure);
             self.input_buffer.beginFrame();
-            running = self.input_buffer.pumpEvents(self.developer.eventSink());
+            running = self.pumpInputEvents();
             if (self.input_buffer.isKeyPressed(input.Key.N)) {
                 if (self.neural_rendering) |*neural| {
                     const enabled = neural.toggle();
@@ -3295,6 +3416,8 @@ const App = struct {
             self.validation.s11_combat = .{ .active = true };
         } else if (scenario == .s13_population) {
             self.validation.s13_population = .{ .active = true };
+        } else if (scenario == .s14_ranged_combat) {
+            self.validation.s14_ranged_combat = .{ .active = true };
         }
         var running = true;
         var retained_runtime_error: ?anyerror = null;
@@ -3321,7 +3444,7 @@ const App = struct {
             // Clear per-frame input state and poll all SDL events.
             // This runs every frame to ensure responsive input.
             self.input_buffer.beginFrame();
-            running = self.input_buffer.pumpEvents(self.developer.eventSink());
+            running = self.pumpInputEvents();
             if (running and
                 self.validation.profile == .sandbox and
                 scenario == .none and
@@ -3495,7 +3618,7 @@ const App = struct {
                         return error.VisualSmokeCratePresentationMissing;
                     }
                     switch (scenario) {
-                        .none, .s3_streaming, .s8_population, .s7_interaction, .s11_combat, .s13_population => {},
+                        .none, .s3_streaming, .s8_population, .s7_interaction, .s11_combat, .s13_population, .s14_ranged_combat => {},
                         .s1_character => if (self.initial_character_id != null) {
                             if (presentation.character_count > 1) {
                                 return error.S1VisualSmokeCharacterPresentationMissing;
@@ -3745,6 +3868,7 @@ const App = struct {
                     summary,
                     config,
                 ),
+                .s14_ranged_combat => try self.validation.s14_ranged_combat.requireComplete(),
                 .s4_physics_debug => try self.validateS4PhysicsDebugSmoke(summary),
             }
             const expected = try smokeExpectation(config);
@@ -3885,7 +4009,7 @@ const App = struct {
 
         while (running) {
             self.input_buffer.beginFrame();
-            running = self.input_buffer.pumpEvents(self.developer.eventSink());
+            running = self.pumpInputEvents();
             if (!running) break;
 
             const now_ns = c.SDL_GetTicksNS();
@@ -3991,6 +4115,17 @@ const App = struct {
 
     /// Apply the canonical main-window suspension policy. Both the normal loop
     /// and the native lifecycle smoke use this path.
+    fn pumpInputEvents(self: *App) bool {
+        self.developer.setGameplayMouseCaptured(
+            self.input_buffer.gameplayMouseLocked(),
+        );
+        const running = self.input_buffer.pumpEvents(self.developer.eventSink());
+        self.developer.setGameplayMouseCaptured(
+            self.input_buffer.gameplayMouseLocked(),
+        );
+        return running;
+    }
+
     fn waitForWindowSuspension(self: *App) bool {
         if (!suspendGameplayForWindowState(&self.input_buffer, &self.action_latch)) {
             return false;
@@ -4015,7 +4150,7 @@ const App = struct {
 
         while (summary.attempted_frames < config.frames) {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
+            if (!self.pumpInputEvents()) {
                 return error.S3StreamingSmokeInterrupted;
             }
             if (self.waitForWindowSuspension()) continue;
@@ -4385,7 +4520,7 @@ const App = struct {
 
         while (summary.attempted_frames < config.frames) {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
+            if (!self.pumpInputEvents()) {
                 return error.S6StreamingSmokeInterrupted;
             }
             if (self.waitForWindowSuspension()) continue;
@@ -4607,7 +4742,7 @@ const App = struct {
 
         smoke_loop: while (summary.attempted_frames < config.frames) {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
+            if (!self.pumpInputEvents()) {
                 return error.S8PopulationSmokeInterrupted;
             }
             if (self.waitForWindowSuspension()) continue;
@@ -4972,7 +5107,7 @@ const App = struct {
 
         while (summary.attempted_frames < config.frames) {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
+            if (!self.pumpInputEvents()) {
                 return error.S7InteractionSmokeInterrupted;
             }
             if (self.waitForWindowSuspension()) continue;
@@ -5411,7 +5546,7 @@ const App = struct {
     fn renderS5SmokeFrame(self: *App, alpha: f32) !FramePresentation {
         for (0..120) |_| {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
+            if (!self.pumpInputEvents()) {
                 return error.S5AuthoringSmokeInterrupted;
             }
             switch (try self.render(alpha)) {
@@ -5859,7 +5994,7 @@ const App = struct {
         self.district_focus_override = s3_smoke_near;
         for (0..s4_smoke_stream_attempt_limit) |_| {
             self.input_buffer.beginFrame();
-            if (!self.input_buffer.pumpEvents(self.developer.eventSink())) {
+            if (!self.pumpInputEvents()) {
                 return error.S4DiagnosticsSmokeInterrupted;
             }
             if (self.waitForWindowSuspension()) continue;
@@ -6104,7 +6239,8 @@ const App = struct {
         if (self.input_buffer.isKeyDown(input.Key.D)) move[0] += 1;
         if (self.input_buffer.isKeyDown(input.Key.S)) move[1] -= 1;
         if (self.input_buffer.isKeyDown(input.Key.W)) move[1] += 1;
-        const looking = self.input_buffer.isMouseButtonDown(input.MouseButton.RIGHT);
+        const looking = self.input_buffer.gameplayMouseLocked() or
+            self.input_buffer.isMouseButtonDown(input.MouseButton.RIGHT);
         try self.action_latch.captureFrame(.{
             .move = move,
             .look_delta = if (looking)
@@ -6115,6 +6251,9 @@ const App = struct {
             .interact_pressed = self.input_buffer.isKeyPressed(input.Key.E),
             .carry_pressed = self.input_buffer.isKeyPressed(input.Key.F),
             .melee_pressed = self.input_buffer.isKeyPressed(input.Key.Q),
+            .weapon_toggle_pressed = self.input_buffer.isKeyPressed(input.Key.NUM_1),
+            .fire_pressed = self.input_buffer.isMouseButtonPressed(input.MouseButton.LEFT),
+            .reload_pressed = self.input_buffer.isKeyPressed(input.Key.R),
             .respawn_pressed = self.input_buffer.isKeyPressed(input.Key.R),
             .brake = self.input_buffer.isKeyDown(input.Key.SPACE),
             .hand_brake = self.input_buffer.isKeyDown(input.Key.LSHIFT),
@@ -6236,6 +6375,7 @@ const App = struct {
                     break :blk result;
                 },
                 .s11_combat => try self.s11ScriptedActions(),
+                .s14_ranged_combat => try self.s14ScriptedActions(),
             }
         else
             self.action_latch.takeTick();
@@ -6254,6 +6394,7 @@ const App = struct {
                 },
                 .s11_combat => try self.submitInteractiveActions(actions),
                 .s13_population => try self.submitInteractiveActions(actions),
+                .s14_ranged_combat => try self.submitInteractiveActions(actions),
             }
         } else {
             try self.submitInteractiveActions(actions);
@@ -6338,7 +6479,8 @@ const App = struct {
                 },
                 .despawned => |id| if ((scenario == .s7_interaction or
                     scenario == .s8_population or
-                    scenario == .s11_combat or scenario == .s13_population) and
+                    scenario == .s11_combat or scenario == .s13_population or
+                    scenario == .s14_ranged_combat) and
                     std.meta.eql(id, self.initial_character_id orelse
                         return error.UnexpectedCharacterBootstrapOutcome))
                 {
@@ -6353,7 +6495,7 @@ const App = struct {
         try self.district_streaming.processOutcomes(self.districtAuthorityPort(), self.frame_timer.total_frames);
         try self.processInteractionOutcomes(validation_composition, scenario);
         if (!validation_composition or scenario == .s11_combat or
-            scenario == .s13_population)
+            scenario == .s13_population or scenario == .s14_ranged_combat)
         {
             try self.processNpcDeveloperObservations();
         }
@@ -6992,13 +7134,31 @@ const App = struct {
         actions: sandbox_controls.TickSample,
     ) !void {
         const tick = self.simulation.inspection().tickIndex();
-        if (actions.respawn_pressed) {
+        const hud = self.simulation.presentation().combatHud();
+        if (actions.respawn_pressed and hud.life_state == .dead) {
             self.simulation.player().requestRespawn() catch |err| {
                 if (!sandbox_controls.isRecoverableSubmissionError(.respawn, err)) return err;
                 self.product_feedback.noteRejected(tick, .respawn, err);
                 return;
             };
             self.product_feedback.noteSubmitted(tick, .respawn);
+            return;
+        }
+        const weapon_action: ?sandbox_host.WeaponActionKind = if (actions.weapon_toggle_pressed)
+            .equip_toggle
+        else if (actions.reload_pressed)
+            .reload
+        else if (actions.fire_pressed)
+            .fire
+        else
+            null;
+        if (weapon_action) |action| {
+            self.simulation.player().requestWeapon(action) catch |err| {
+                if (!sandbox_controls.isRecoverableSubmissionError(.weapon, err)) return err;
+                self.product_feedback.noteRejected(tick, .firearm, err);
+                return;
+            };
+            self.product_feedback.noteSubmitted(tick, .firearm);
             return;
         }
         if (actions.melee_pressed) {
@@ -7380,6 +7540,111 @@ const App = struct {
         return actions;
     }
 
+    fn s14ScriptedActions(self: *App) !sandbox_controls.TickSample {
+        var actions = sandbox_controls.idleTickSample();
+        const progress = &self.validation.s14_ranged_combat;
+        const hud = self.simulation.presentation().combatHud();
+        if (!hud.available or hud.life_state != .alive) return actions;
+        const tick = hud.authority_tick;
+
+        if (hud.weapon_mode == .holstered) {
+            actions.weapon_toggle_pressed = true;
+            return actions;
+        }
+
+        if (progress.committed_drain_shots < 12) {
+            const source = self.simulation.player().focusPosition() orelse return actions;
+            self.game_camera.yaw = try self.s14ClearRayYaw(source);
+            const cadence_probe = progress.committed_drain_shots == 1 and
+                !progress.cadence_rejected;
+            if ((cadence_probe or hud.weapon_remaining_ticks == 0) and
+                tick > progress.last_fire_request_tick)
+            {
+                actions.fire_pressed = true;
+                progress.last_fire_request_tick = tick;
+            }
+            return actions;
+        }
+
+        if (!progress.empty_rejected) {
+            if (tick > progress.last_empty_request_tick) {
+                actions.fire_pressed = true;
+                progress.last_empty_request_tick = tick;
+            }
+            return actions;
+        }
+        if (!progress.reload_started) {
+            actions.reload_pressed = true;
+            return actions;
+        }
+        if (!progress.reload_completed) return actions;
+
+        if (!progress.target_selected) {
+            for (self.simulation.inspection().populationMembers()) |member| {
+                const definition = population_catalog.memberDefinition(member.id) orelse continue;
+                if (definition.combat_disposition != .passive or member.actor == null) continue;
+                progress.target_member = member.id.value;
+                progress.target_actor = member.actor;
+                progress.target_generation = member.actor_generation;
+                progress.target_selected = true;
+                break;
+            }
+            return actions;
+        }
+        if (progress.target_killed) return actions;
+
+        const npc = self.simulation.npcs().view(
+            progress.target_actor orelse return actions,
+        ) catch return actions;
+        const source = self.simulation.player().focusPosition() orelse return actions;
+        const delta_x = npc.position[0] - source[0];
+        const delta_z = npc.position[2] - source[2];
+        const distance_squared = delta_x * delta_x + delta_z * delta_z;
+        self.game_camera.yaw = std.math.atan2(delta_x, -delta_z);
+        if (distance_squared > 18 * 18) {
+            actions.move = .{ 0, 1 };
+        } else if (hud.weapon_remaining_ticks == 0 and
+            tick > progress.last_fire_request_tick)
+        {
+            actions.fire_pressed = true;
+            progress.last_fire_request_tick = tick;
+        }
+        return actions;
+    }
+
+    fn s14ClearRayYaw(self: *App, source: [3]f32) !f32 {
+        // The empty/reload acceptance phase must not provoke the population.
+        // Find a deterministic horizontal ray whose full handgun range clears
+        // every live authored NPC instead of relying on a particular fixture
+        // object to happen to occlude them.
+        const sample_count = 128;
+        const range: f32 = 60;
+        candidate: for (0..sample_count) |sample| {
+            const yaw = -std.math.pi +
+                std.math.tau * @as(f32, @floatFromInt(sample)) / sample_count;
+            const forward = [2]f32{ @sin(yaw), -@cos(yaw) };
+            for (self.simulation.inspection().populationMembers()) |member| {
+                const actor = member.actor orelse continue;
+                const npc = self.simulation.npcs().view(actor) catch continue;
+                const delta = [2]f32{
+                    npc.position[0] - source[0],
+                    npc.position[2] - source[2],
+                };
+                const along = delta[0] * forward[0] + delta[1] * forward[1];
+                if (along <= 0 or along > range) continue;
+                const distance_squared = delta[0] * delta[0] + delta[1] * delta[1];
+                const perpendicular_squared = @max(
+                    @as(f32, 0),
+                    distance_squared - along * along,
+                );
+                const clearance = npc.radius + 0.25;
+                if (perpendicular_squared <= clearance * clearance) continue :candidate;
+            }
+            return yaw;
+        }
+        return error.S14ClearRayUnavailable;
+    }
+
     fn processVehicleOutcomes(
         self: *App,
         comptime validation_composition: bool,
@@ -7394,7 +7659,7 @@ const App = struct {
                     self.initial_vehicle_id = spawned.id;
                 },
                 .rejected => if (validation_composition) switch (scenario) {
-                    .none, .s1_character, .s2_vehicle, .s3_streaming, .s8_population, .s4_physics_debug, .s7_interaction, .s11_combat, .s13_population => return error.ScriptedVehicleCommandRejected,
+                    .none, .s1_character, .s2_vehicle, .s3_streaming, .s8_population, .s4_physics_debug, .s7_interaction, .s11_combat, .s13_population, .s14_ranged_combat => return error.ScriptedVehicleCommandRejected,
                 } else return error.UnexpectedVehicleCommandRejection,
                 .despawned => return error.UnexpectedVehicleBootstrapOutcome,
             }
@@ -7509,6 +7774,47 @@ const App = struct {
                     result.remaining_health,
                     result.killed,
                     result.ready_tick,
+                },
+            );
+        }
+        while (self.simulation.player().pollWeaponActionResult()) |result| {
+            switch (result.disposition) {
+                .equipped, .holstered, .fired_hit, .fired_miss, .reload_started => self.product_feedback.noteApplied(action_tick, .firearm),
+                else => self.product_feedback.noteAuthorityRejected(
+                    action_tick,
+                    .firearm,
+                    result.disposition,
+                ),
+            }
+            if (validation_composition and scenario == .s14_ranged_combat) {
+                self.validation.s14_ranged_combat.observeWeaponResult(result);
+            }
+            std.debug.print(
+                "S14_SOLO_WEAPON action={s} result={s} ammo={d}/{d} damage={d} health={d} killed={} ready_tick={d} reload_tick={d}\n",
+                .{
+                    @tagName(result.action),
+                    @tagName(result.disposition),
+                    result.magazine_ammo,
+                    result.reserve_ammo,
+                    result.applied_damage,
+                    result.remaining_health,
+                    result.killed,
+                    result.weapon_ready_tick,
+                    result.reload_complete_tick,
+                },
+            );
+        }
+        while (self.simulation.player().pollShotEvent()) |event| {
+            std.debug.print(
+                "S14_SOLO_SHOT shooter={d}:{d} sequence={d} result={s} target={d}:{d} damage={d}\n",
+                .{
+                    event.shooter.index,
+                    event.shooter.generation,
+                    event.sequence.value,
+                    @tagName(event.disposition),
+                    event.target.index,
+                    event.target.generation,
+                    event.applied_damage,
                 },
             );
         }
@@ -8180,6 +8486,7 @@ const App = struct {
         const carryable_draws = self.simulation.presentation().carryables(alpha);
         const npc_draws = self.simulation.presentation().npcs(alpha);
         const combat_hud = self.simulation.presentation().combatHud();
+        const shot_tracers = self.simulation.presentation().shotTracers();
         try self.tracePresentationPlan(
             character_draws,
             vehicle_draws,
@@ -8634,6 +8941,61 @@ const App = struct {
                 view_proj,
             );
             scene_draw_calls +|= health_bar_draw_calls;
+            if (draw.weapon_mode != .holstered and draw.life_state == .alive) {
+                const weapon = sandbox_visual_composition.handgunPlan(
+                    draw.radius,
+                    draw.half_height,
+                    draw.pose,
+                );
+                try self.drawPresentationMesh(
+                    replicatedNeuralPartIdentity(
+                        draw.entity,
+                        .character,
+                        .whole,
+                        weapon.ordinal,
+                    ),
+                    &self.visuals.visual_part_mesh,
+                    null,
+                    weapon.surface,
+                    weapon.material,
+                    weapon.model,
+                    view_proj,
+                );
+                scene_draw_calls +|= 1;
+                if ((build_options.validation_mode or builtin.is_test) and
+                    draw.local_player)
+                {
+                    self.validation.s14_ranged_combat.weapon_drawn = true;
+                }
+                const signature = (@as(u64, draw.entity.index) << 32) |
+                    (@as(u64, draw.entity.generation) << 16) |
+                    @intFromEnum(draw.weapon_mode);
+                if (signature != self.last_weapon_draw_signature) {
+                    self.last_weapon_draw_signature = signature;
+                    _ = self.simulation.developer().recordGameplayTrace(.{
+                        .authority_tick = combat_hud.authority_tick,
+                        .presentation_frame = self.frame_timer.total_frames,
+                        .actor = gameplayEntityRef(draw.entity, draw.incarnation),
+                        .source = .renderer,
+                        .stage = .draw_submitted,
+                        .kind = .firearm,
+                        .disposition = .visible,
+                        .fields = .{ .position = true, .state = true },
+                        .position = draw.pose.position,
+                        .state = @intFromEnum(draw.weapon_mode),
+                        .weapon = .{
+                            .action = 0,
+                            .mode = @intFromEnum(draw.weapon_mode),
+                            .magazine_ammo = combat_hud.magazine_ammo,
+                            .reserve_ammo = combat_hud.reserve_ammo,
+                            .weapon_ready_tick = combat_hud.authority_tick +|
+                                combat_hud.weapon_remaining_ticks,
+                            .reload_complete_tick = combat_hud.authority_tick +|
+                                combat_hud.reload_remaining_ticks,
+                        },
+                    });
+                }
+            }
             if (build_options.validation_mode or builtin.is_test) {
                 self.validation.s11_combat.observeCharacter(
                     combat_hud.authority_tick,
@@ -8683,6 +9045,64 @@ const App = struct {
                     draw,
                     health_bar_draw_calls,
                 );
+                self.validation.s14_ranged_combat.observeNpc(draw);
+            }
+        }
+        for (shot_tracers) |tracer| {
+            const plan = sandbox_visual_composition.tracerPlan(
+                tracer.origin,
+                tracer.impact,
+                tracer.hit,
+            ) orelse continue;
+            try self.drawPresentationMesh(
+                replicatedNeuralPartIdentity(
+                    tracer.shooter,
+                    .character,
+                    .whole,
+                    @intCast(200 + tracer.sequence.value % 32),
+                ),
+                &self.visuals.visual_part_mesh,
+                null,
+                plan.surface,
+                plan.material,
+                plan.model,
+                view_proj,
+            );
+            scene_draw_calls +|= 1;
+            if (build_options.validation_mode or builtin.is_test) {
+                self.validation.s14_ranged_combat.tracer_drawn = true;
+            }
+            const signature = (@as(u64, tracer.shooter.index) << 32) |
+                @as(u64, tracer.sequence.value);
+            if (signature != self.last_tracer_draw_signature) {
+                self.last_tracer_draw_signature = signature;
+                _ = self.simulation.developer().recordGameplayTrace(.{
+                    .authority_tick = combat_hud.authority_tick,
+                    .presentation_frame = self.frame_timer.total_frames,
+                    .actor = gameplayEntityRef(
+                        tracer.shooter,
+                        tracer.shooter.generation,
+                    ),
+                    .source = .renderer,
+                    .stage = .draw_submitted,
+                    .kind = .firearm,
+                    .disposition = .visible,
+                    .correlation_id = tracer.sequence.value,
+                    .fields = .{ .position = true },
+                    .position = tracer.impact,
+                    .weapon = .{
+                        .action = @intFromEnum(sandbox_host.WeaponActionKind.fire),
+                        .mode = 0,
+                        .magazine_ammo = combat_hud.magazine_ammo,
+                        .reserve_ammo = combat_hud.reserve_ammo,
+                        .weapon_ready_tick = combat_hud.authority_tick +|
+                            combat_hud.weapon_remaining_ticks,
+                        .reload_complete_tick = combat_hud.authority_tick +|
+                            combat_hud.reload_remaining_ticks,
+                        .ray_origin = tracer.origin,
+                        .impact_position = tracer.impact,
+                    },
+                });
             }
         }
         var combat_hud_marker_draw_calls: u64 = 0;
@@ -8700,6 +9120,7 @@ const App = struct {
                 combat_hud,
                 combat_hud_marker_draw_calls,
             );
+            self.validation.s14_ranged_combat.observeHud(combat_hud);
         }
         self.mergeProfileCounts(.{ .draw_calls = scene_draw_calls });
         scene_draw_profile.finish(.success);
@@ -8973,6 +9394,15 @@ const App = struct {
             .local_maximum_health = hud.maximum_health,
             .local_life_state = gameplayLifeState(hud.life_state),
             .melee_remaining_ticks = hud.melee_remaining_ticks,
+            .weapon_mode = switch (hud.weapon_mode) {
+                .holstered => .holstered,
+                .equipped => .equipped,
+                .reloading => .reloading,
+            },
+            .magazine_ammo = hud.magazine_ammo,
+            .reserve_ammo = hud.reserve_ammo,
+            .weapon_remaining_ticks = hud.weapon_remaining_ticks,
+            .reload_remaining_ticks = hud.reload_remaining_ticks,
             .respawn_remaining_ticks = hud.respawn_remaining_ticks,
             .respawn_instruction_visible = hud.life_state == .dead and
                 hud.respawn_remaining_ticks == 0,
@@ -9488,6 +9918,11 @@ const App = struct {
                     reason,
                     "unknown_melee_disposition",
                 ),
+                .firearm => enumFeedbackReasonName(
+                    sandbox_host.WeaponActionDisposition,
+                    reason,
+                    "unknown_weapon_disposition",
+                ),
                 .respawn => enumFeedbackReasonName(
                     sandbox_host.RespawnActionDisposition,
                     reason,
@@ -9587,14 +10022,24 @@ const App = struct {
             @tagName(value)
         else
             "none";
+        const weapon_result = if (hud.latest_weapon_disposition) |value|
+            @tagName(value)
+        else
+            "none";
         var storage: [512]u8 = undefined;
         const title = std.fmt.bufPrintZ(
             &storage,
-            "Incinerator | HP {d}/{d} {s} | {s} {d}t | melee {d}t/{s} | NPC {s} HP {d}/{d} attack {d}t | action {s}/{s}/{s} | respawn-result {s}",
+            "Incinerator | HP {d}/{d} {s} | handgun {s} {d}/{d} fire {d}t reload {d}t/{s} | {s} {d}t | melee {d}t/{s} | NPC {s} HP {d}/{d} attack {d}t | action {s}/{s}/{s} | respawn-result {s}",
             .{
                 hud.health,
                 hud.maximum_health,
                 damage,
+                @tagName(hud.weapon_mode),
+                hud.magazine_ammo,
+                hud.reserve_ammo,
+                hud.weapon_remaining_ticks,
+                hud.reload_remaining_ticks,
+                weapon_result,
                 respawn,
                 hud.respawn_remaining_ticks,
                 hud.melee_remaining_ticks,
@@ -9763,6 +10208,10 @@ const App = struct {
                     .interact_pressed = self.input_buffer.isKeyPressed(input.Key.E),
                     .carry_pressed = self.input_buffer.isKeyPressed(input.Key.F),
                     .attack_pressed = self.input_buffer.isKeyPressed(input.Key.Q),
+                    .weapon_toggle_pressed = self.input_buffer.isKeyPressed(input.Key.NUM_1),
+                    .fire_pressed = self.input_buffer.isMouseButtonPressed(input.MouseButton.LEFT),
+                    .reload_pressed = self.input_buffer.isKeyPressed(input.Key.R) and
+                        gameplay_view.local_life_state != .dead,
                     .respawn_pressed = self.input_buffer.isKeyPressed(input.Key.R),
                     .jump_pressed = self.input_buffer.isKeyPressed(input.Key.SPACE),
                     .hand_brake = self.input_buffer.isKeyDown(input.Key.LSHIFT),
@@ -10082,6 +10531,7 @@ fn initValidationApp(
         .s4_physics_debug_smoke,
         .s11_combat_smoke,
         .s13_population_smoke,
+        .s14_ranged_combat_smoke,
         => initValidationAppWithProfile(
             io,
             .sandbox,
@@ -10166,6 +10616,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         .s8_population_smoke,
         .s11_combat_smoke,
         .s13_population_smoke,
+        .s14_ranged_combat_smoke,
         .nr0_evaluation_smoke,
         .s4_diagnostics_smoke,
         .s4_physics_debug_smoke,
@@ -10190,6 +10641,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         .s8_population_smoke,
         .s11_combat_smoke,
         .s13_population_smoke,
+        .s14_ranged_combat_smoke,
         .nr0_evaluation_smoke,
         .s4_diagnostics_smoke,
         .s4_physics_debug_smoke,
@@ -10258,6 +10710,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
     var s8_population_smoke_succeeded = false;
     var s11_combat_smoke_succeeded = false;
     var s13_population_smoke_succeeded = false;
+    var s14_ranged_combat_smoke_succeeded = false;
     var nr0_evaluation_smoke_succeeded = false;
     var s4_physics_debug_smoke_succeeded = false;
     var s5_authoring_smoke_succeeded = false;
@@ -10291,6 +10744,9 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
         }
         if (s13_population_smoke_succeeded) {
             std.debug.print("S13_POPULATION_SMOKE_SHUTDOWN status=clean\n", .{});
+        }
+        if (s14_ranged_combat_smoke_succeeded) {
+            std.debug.print("S14_RANGED_COMBAT_SMOKE_SHUTDOWN status=clean\n", .{});
         }
         if (nr0_evaluation_smoke_succeeded) {
             std.debug.print("NR0_EVALUATION_SMOKE_SHUTDOWN status=clean\n", .{});
@@ -10665,6 +11121,38 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                 },
             );
             s13_population_smoke_succeeded = true;
+        },
+        .s14_ranged_combat_smoke => |config| {
+            const summary = try app.runValidation(config, .s14_ranged_combat);
+            const evidence = app.validation.s14_ranged_combat;
+            std.debug.print(
+                "S14_RANGED_COMBAT_SMOKE_RESULT frames={d} ticks={d} " ++
+                    "target={} equipped={} drain={d} cadence={} empty={} " ++
+                    "reload={}/{} hits={d} killed={} death_draw={} " ++
+                    "replacement={} weapon_draw={} tracer_draw={} hud={} " ++
+                    "virtual_render_hz={d} gpu_driver={s}\n",
+                .{
+                    summary.ready_frames,
+                    app.simulation.inspection().tickIndex() -| app.validation_tick_origin,
+                    evidence.target_selected,
+                    evidence.equipped,
+                    evidence.committed_drain_shots,
+                    evidence.cadence_rejected,
+                    evidence.empty_rejected,
+                    evidence.reload_started,
+                    evidence.reload_completed,
+                    evidence.hit_count,
+                    evidence.target_killed,
+                    evidence.target_death_drawn,
+                    evidence.target_replaced,
+                    evidence.weapon_drawn,
+                    evidence.tracer_drawn,
+                    evidence.ammo_hud_observed,
+                    config.virtual_render_hz,
+                    shader_assets.driver,
+                },
+            );
+            s14_ranged_combat_smoke_succeeded = true;
         },
         .nr0_evaluation_smoke => |config| {
             const summary = try app.runValidation(config, .none);

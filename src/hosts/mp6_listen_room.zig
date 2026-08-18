@@ -312,6 +312,22 @@ pub const Runtime = struct {
         ));
     }
 
+    pub fn requestHostWeapon(self: *Runtime, kind: protocol.WeaponActionKind) !void {
+        if (self.client.state != .joined or self.client.pending_weapon_action != null) return;
+        const message = self.client.weaponAction(
+            kind,
+            self.authority.session().diagnostics().tick +| 1,
+        ) catch |err| switch (err) {
+            error.AvatarDead,
+            error.AvatarUnavailable,
+            error.CannotUseWeaponWhileDriving,
+            error.CannotUseWeaponWhileCarrying,
+            => return,
+            else => return err,
+        };
+        try self.host_link.sendFromClient(message);
+    }
+
     pub fn requestHostRespawn(self: *Runtime) !void {
         if (self.client.state != .joined or self.client.pending_respawn_action != null) return;
         try self.host_link.sendFromClient(try self.client.respawnAction());
@@ -549,6 +565,24 @@ pub const Runtime = struct {
                         result.killed,
                     },
                 );
+            }
+            while (self.client.takeWeaponActionResult()) |result| {
+                try self.combat_feedback.push(.{ .weapon = result });
+                std.debug.print(
+                    "S14_LISTEN_HOST_WEAPON action={s} result={s} ammo={d}/{d} damage={d} health={d} killed={}\n",
+                    .{
+                        @tagName(result.action),
+                        @tagName(result.disposition),
+                        result.magazine_ammo,
+                        result.reserve_ammo,
+                        result.applied_damage,
+                        result.remaining_health,
+                        result.killed,
+                    },
+                );
+            }
+            while (self.client.takeShotEvent()) |event| {
+                try self.combat_feedback.push(.{ .shot = event });
             }
             while (self.client.takeRespawnActionResult()) |result| {
                 try self.combat_feedback.push(.{ .respawn = result });

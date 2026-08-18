@@ -50,7 +50,7 @@ Read `evidence_capabilities` before assigning a boundary. Current bundles
 declare `full_boundary` separately for characters, NPCs, vehicles, and
 carryables, plus semantic vehicle-part, atomic note/handoff, exact
 navigation-lineage, authored-population, and deterministic-render-state
-support. A
+support. S14 bundles also declare `ranged_combat=true`. A
 missing matrix means the bundle predates explicit coverage; report that limit.
 
 ## Anomaly lifecycle and marker
@@ -117,6 +117,16 @@ site/slot, deadline, and spawn retry reason. The actor may be null while a
 member is vacant or replacement-pending. Correlate replacement generations by
 member ID rather than assuming one persistent actor exists forever.
 
+Ranged-combat gameplay traces use `kind="firearm"`. Correlate one action by
+actor namespace/local/incarnation and `correlation_id` (the weapon action
+sequence). The record `reason` is the protocol disposition. The optional
+`weapon` object retains action/mode enum values, magazine and reserve counts,
+fire/reload deadlines, ray origin, impact position, applied damage, and killed
+state. The target carries replicated identity plus incarnation when the
+authority hit; health carries the resulting remaining health. A result record
+and the room-wide shot event may share the same action sequence; later draw
+records prove presentation submission rather than a second shot.
+
 `state`: camera and entity samples. Presence values are `present`, `absent`, or
 `unavailable`; never treat unavailable authority inspection as absent. Removed
 entities remain five-second tombstones. Records include stable replicated and
@@ -150,7 +160,9 @@ position, districts, and distance squared.
 `input`: semantic controls and explicit action edges plus only reserved
 developer shortcut candidates. Shortcut stages are `received`, `matched`,
 `queued`, and `applied`; records include SDL/window/focus/key/modifier/repeat
-facts but no arbitrary text input.
+facts but no arbitrary text input. Weapon edges are
+`weapon_toggle_pressed`, `fire_pressed`, and `reload_pressed`; the last retains
+the ordinary alive-reload/dead-respawn input policy.
 
 `metrics`: frame and recorder health plus screenshot cadence, memory, fence,
 and one-second navigation aggregates for following/waiting/blocked/arrived/
@@ -170,7 +182,9 @@ identity, so diagnose the vehicle as a group rather than expecting one entry.
 ## Replay and time vocabulary
 
 `replay/accepted-ingress.icrp` contains cohort-bound accepted authority ingress,
-district completion inputs, and per-tick category digests. Use the replay tool.
+district completion inputs, vitals commands including the firearm cause, and
+per-tick category digests. Use the replay tool. Network weapon action identity
+is also retained in the authority ingress journal and its stable fingerprint.
 
 - `recorder_sequence`: projection order.
 - `monotonic_ns`: same-process cross-stream time.

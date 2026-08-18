@@ -205,6 +205,9 @@ pub const Scene = struct {
                 view_projection,
             );
             self.drawFacingMarker(rotation, translation, view_projection);
+            if (state.weapon_mode != .holstered and state.life_state == .alive) {
+                self.drawHandgun(rotation, translation, view_projection);
+            }
             self.drawHealthBar(
                 state.position,
                 1.2,
@@ -357,6 +360,9 @@ pub const Scene = struct {
                 view_projection,
             );
         }
+        for (self.combat_owner.tracerPlans(client.world.server_tick)) |tracer| {
+            self.drawShotTracer(tracer, view_projection);
+        }
         const combat_hud = self.last_combat_hud.?;
         if (combat_hud.anchor_position) |position| {
             self.drawHudMarkers(
@@ -411,6 +417,11 @@ pub const Scene = struct {
             .incarnation = client.avatar_incarnation,
             .life_state = client.avatar_life_state,
             .melee_ready_tick = client.melee_ready_tick,
+            .weapon_mode = client.weapon_mode,
+            .magazine_ammo = client.magazine_ammo,
+            .reserve_ammo = client.reserve_ammo,
+            .weapon_ready_tick = client.weapon_ready_tick,
+            .reload_complete_tick = client.reload_complete_tick,
             .respawn_ready_tick = client.respawn_ready_tick,
             .character = local_character,
             .owned_vehicle = client.ownedVehicle(),
@@ -457,6 +468,70 @@ pub const Scene = struct {
                     y,
                     position[2] + right[2] * geometry.fill_center_offset,
                 ),
+            ),
+            view_projection,
+        );
+    }
+
+    fn drawHandgun(
+        self: *Scene,
+        rotation: zm.Mat,
+        translation: zm.Mat,
+        view_projection: zm.Mat,
+    ) void {
+        self.gpu.drawMeshWithMaterial(
+            &self.cube,
+            null,
+            visual_catalog.materialTinted(.painted_metal, .{ 0.09, 0.10, 0.13, 1 }),
+            zm.mul(
+                zm.mul(
+                    zm.mul(
+                        zm.scaling(0.09, 0.07, 0.28),
+                        zm.translation(0.37, 1.04, -0.29),
+                    ),
+                    rotation,
+                ),
+                translation,
+            ),
+            view_projection,
+        );
+    }
+
+    fn drawShotTracer(
+        self: *Scene,
+        tracer: combat_presentation.TracerPlan,
+        view_projection: zm.Mat,
+    ) void {
+        const delta = [3]f32{
+            tracer.impact[0] - tracer.origin[0],
+            tracer.impact[1] - tracer.origin[1],
+            tracer.impact[2] - tracer.origin[2],
+        };
+        const horizontal = @sqrt(delta[0] * delta[0] + delta[2] * delta[2]);
+        const length = @sqrt(horizontal * horizontal + delta[1] * delta[1]);
+        if (!std.math.isFinite(length) or length <= 0.001) return;
+        const midpoint = [3]f32{
+            (tracer.origin[0] + tracer.impact[0]) * 0.5,
+            (tracer.origin[1] + tracer.impact[1]) * 0.5,
+            (tracer.origin[2] + tracer.impact[2]) * 0.5,
+        };
+        const color: [4]f32 = if (tracer.hit)
+            .{ 1.0, 0.20, 0.06, 1 }
+        else
+            .{ 1.0, 0.82, 0.12, 1 };
+        self.gpu.drawMeshWithMaterial(
+            &self.cube,
+            null,
+            visual_catalog.materialTinted(.emissive, color),
+            zm.mul(
+                zm.mul(
+                    zm.mul(
+                        zm.scaling(0.025, 0.025, length * 0.5),
+                        zm.rotationX(-std.math.atan2(delta[1], horizontal)),
+                    ),
+                    zm.rotationY(std.math.atan2(delta[0], delta[2])),
+                ),
+                zm.translation(midpoint[0], midpoint[1], midpoint[2]),
             ),
             view_projection,
         );

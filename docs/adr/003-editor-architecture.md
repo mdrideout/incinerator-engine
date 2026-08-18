@@ -251,6 +251,14 @@ that becomes captured stays suppressed until its physical release. Main-window
 focus loss clears held state, while secondary editor-window lifecycle events do
 not masquerade as game-window events.
 
+The central passthrough scene also supports explicit gameplay mouse capture.
+A primary click not consumed by ImGui enters SDL per-window relative mouse mode,
+consumes that first click, and gives gameplay continuous look motion without a
+held button. While captured, mouse events do not mutate ImGui and the workspace
+shows `ESC releases`; Escape releases capture instead of quitting. Escape quits
+only while the mouse is already free. Focus loss, minimization, close, and host
+teardown release capture. Right-button drag remains the uncaptured fallback.
+
 ## Rationale
 
 ### Why Dear ImGui?

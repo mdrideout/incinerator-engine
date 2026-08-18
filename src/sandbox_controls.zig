@@ -14,6 +14,9 @@ pub const FrameSample = struct {
     interact_pressed: bool = false,
     carry_pressed: bool = false,
     melee_pressed: bool = false,
+    weapon_toggle_pressed: bool = false,
+    fire_pressed: bool = false,
+    reload_pressed: bool = false,
     respawn_pressed: bool = false,
     brake: bool = false,
     hand_brake: bool = false,
@@ -27,6 +30,9 @@ pub const TickSample = struct {
     interact_pressed: bool,
     carry_pressed: bool = false,
     melee_pressed: bool = false,
+    weapon_toggle_pressed: bool = false,
+    fire_pressed: bool = false,
+    reload_pressed: bool = false,
     respawn_pressed: bool = false,
     brake: bool,
     hand_brake: bool,
@@ -97,6 +103,7 @@ pub const InteractiveSubmission = enum {
     vehicle_toggle,
     carry_toggle,
     melee,
+    weapon,
     respawn,
 };
 
@@ -133,6 +140,13 @@ pub fn isRecoverableSubmissionError(
             err == error.AvatarDead or
             err == error.AvatarUnavailable or
             err == error.CannotMeleeWhileDriving,
+        .weapon => err == error.ClientNotJoined or
+            err == error.WeaponActionPending or
+            err == error.WeaponActionResultsPending or
+            err == error.AvatarDead or
+            err == error.AvatarUnavailable or
+            err == error.CannotUseWeaponWhileDriving or
+            err == error.CannotUseWeaponWhileCarrying,
         .respawn => err == error.ClientNotJoined or
             err == error.RespawnActionPending or
             err == error.RespawnResultsPending or
@@ -148,6 +162,9 @@ pub const ActionLatch = struct {
     pending_interact: bool = false,
     pending_carry: bool = false,
     pending_melee: bool = false,
+    pending_weapon_toggle: bool = false,
+    pending_fire: bool = false,
+    pending_reload: bool = false,
     pending_respawn: bool = false,
     held_brake: bool = false,
     held_hand_brake: bool = false,
@@ -172,6 +189,9 @@ pub const ActionLatch = struct {
         self.pending_interact = self.pending_interact or sample.interact_pressed;
         self.pending_carry = self.pending_carry or sample.carry_pressed;
         self.pending_melee = self.pending_melee or sample.melee_pressed;
+        self.pending_weapon_toggle = self.pending_weapon_toggle or sample.weapon_toggle_pressed;
+        self.pending_fire = self.pending_fire or sample.fire_pressed;
+        self.pending_reload = self.pending_reload or sample.reload_pressed;
         self.pending_respawn = self.pending_respawn or sample.respawn_pressed;
         self.held_brake = sample.brake;
         self.held_hand_brake = sample.hand_brake;
@@ -185,6 +205,9 @@ pub const ActionLatch = struct {
             .interact_pressed = self.pending_interact,
             .carry_pressed = self.pending_carry,
             .melee_pressed = self.pending_melee,
+            .weapon_toggle_pressed = self.pending_weapon_toggle,
+            .fire_pressed = self.pending_fire,
+            .reload_pressed = self.pending_reload,
             .respawn_pressed = self.pending_respawn,
             .brake = self.held_brake,
             .hand_brake = self.held_hand_brake,
@@ -194,6 +217,9 @@ pub const ActionLatch = struct {
         self.pending_interact = false;
         self.pending_carry = false;
         self.pending_melee = false;
+        self.pending_weapon_toggle = false;
+        self.pending_fire = false;
+        self.pending_reload = false;
         self.pending_respawn = false;
         return result;
     }

@@ -1,12 +1,10 @@
 # Human Test Incident Capture And LLM Diagnostic Handoff
 
-**Status:** Schema-3 visual capture succeeds the completed schema-2 IC5-A
-through IC5-F, IC5-H bounded-object evidence, IC5-I
-budget/playable-boundary correction, and the IC5-G long gameplay/replay, real
-window lifecycle, bounded capture-cost, and deterministic failure-hardening
-gates are complete for the Apple Silicon macOS solo developer product. Only
-the physical shortcut/drop/district/NPC/vehicle human checkpoint remains open
-under the
+**Status:** Accepted for the Apple Silicon macOS solo developer product.
+Schema-3 visual capture, IC5-A through IC5-I, long gameplay/replay, real window
+lifecycle, bounded capture cost, deterministic failure hardening, fresh human
+bundles, and the physical shortcut/drop/district/NPC/vehicle checkpoint pass.
+See the
 [IC5 corrective plan](incident-evidence-reliability-and-boundary-corrections.md)
 
 **Date:** 2026-07-19
@@ -629,9 +627,9 @@ semantic replay left an NPC encounter cue pending. IC5-A through IC5-H in the
 supersede the remaining broad checklist above. Schema-2 IC5-A through IC5-F,
 the IC5-G normal/resize/minimize/rapid-flag/replay journey, paired capture-cost
 measurement, five-profile installed failure matrix, and the IC5-H
-bounded-object/evidence correction are implemented and measured; only the real
-macOS human checkpoint remains open. Historical IC0-IC4 acceptance remains
-recorded rather than rewritten.
+bounded-object/evidence correction are implemented and measured. The later
+real-macOS checkpoint is accepted in the validation record. Historical IC0-IC4
+acceptance remains recorded rather than rewritten.
 
 ## Phase Review Protocol
 

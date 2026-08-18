@@ -75,6 +75,7 @@ pub const Editor = struct {
     layout_pending: bool = true,
     pending_focus: ?workspace.ToolId = workspace.defaultFocus(.gameplay),
     show_workspace_guide: bool = false,
+    gameplay_mouse_captured: bool = false,
 
     /// Initialize the owned editor after the renderer has claimed its window.
     pub fn init(
@@ -114,6 +115,9 @@ pub const Editor = struct {
 
     /// Forward every event to ImGui, then reserve only explicit editor keys.
     pub fn processEvent(self: *Editor, event: *const c.SDL_Event) EventRoute {
+        if (self.gameplay_mouse_captured and isMouseEvent(event.type)) {
+            return .{};
+        }
         _ = self.backend.processEvent(event);
 
         var route = EventRoute{};
@@ -174,6 +178,7 @@ pub const Editor = struct {
 
         gameplay_inspector_tool.drawProductHud(&frame.gameplay);
         incident_capture_tool.drawProductStatus(&frame.incident);
+        if (self.gameplay_mouse_captured) drawGameplayMouseCaptureHint();
 
         if (!self.visible) {
             drawHiddenHint();
@@ -207,6 +212,7 @@ pub const Editor = struct {
     }
 
     pub fn wantsMouse(self: *const Editor) bool {
+        if (self.gameplay_mouse_captured) return false;
         if (!self.visible or self.input_passthrough) return false;
         return self.backend.wantsMouse();
     }
@@ -218,6 +224,19 @@ pub const Editor = struct {
 
     pub fn isVisible(self: *const Editor) bool {
         return self.visible;
+    }
+
+    pub fn setGameplayMouseCaptured(self: *Editor, captured: bool) void {
+        if (captured and !self.gameplay_mouse_captured) {
+            // The acquisition click reached ImGui before the input pump knew
+            // it belonged to the passthrough scene. Explicit releases prevent
+            // a button from remaining logically held while captured mouse
+            // events are intentionally withheld from the editor.
+            zgui.io.addMouseButtonEvent(.left, false);
+            zgui.io.addMouseButtonEvent(.right, false);
+            zgui.io.addMouseButtonEvent(.middle, false);
+        }
+        self.gameplay_mouse_captured = captured;
     }
 
     fn drawTool(
@@ -306,13 +325,17 @@ pub const Editor = struct {
             })) {
                 const utc = workspace.formatUtcWallMs(frame.wall_unix_ms);
                 zgui.text(
-                    "UTC {s}  |  wall_unix_ms={d}  |  tick={d}  |  frame={d}  |  layout={s}",
+                    "UTC {s}  |  wall_unix_ms={d}  |  tick={d}  |  frame={d}  |  layout={s}  |  mouse={s}",
                     .{
                         utc.slice(),
                         frame.wall_unix_ms,
                         frame.gameplay.view.authority_tick,
                         frame.gameplay.view.presentation_frame,
                         @tagName(self.layout),
+                        if (self.gameplay_mouse_captured)
+                            "CAPTURED (Esc releases)"
+                        else
+                            "free (click scene to capture)",
                     },
                 );
             }
@@ -477,6 +500,48 @@ pub const Editor = struct {
         };
     }
 };
+
+fn isMouseEvent(event_type: u32) bool {
+    return switch (event_type) {
+        c.SDL_EVENT_MOUSE_MOTION,
+        c.SDL_EVENT_MOUSE_BUTTON_DOWN,
+        c.SDL_EVENT_MOUSE_BUTTON_UP,
+        c.SDL_EVENT_MOUSE_WHEEL,
+        => true,
+        else => false,
+    };
+}
+
+fn drawGameplayMouseCaptureHint() void {
+    const viewport = zgui.getMainViewport();
+    const work_pos = viewport.getWorkPos();
+    const work_size = viewport.getWorkSize();
+    zgui.setNextWindowPos(.{
+        .x = work_pos[0] + work_size[0] * 0.5,
+        .y = work_pos[1] + 10,
+        .cond = .always,
+        .pivot_x = 0.5,
+        .pivot_y = 0,
+    });
+    zgui.setNextWindowBgAlpha(.{ .alpha = 0.82 });
+    if (zgui.begin("##gameplay_mouse_capture_hint", .{ .flags = .{
+        .no_title_bar = true,
+        .no_resize = true,
+        .no_move = true,
+        .no_collapse = true,
+        .always_auto_resize = true,
+        .no_saved_settings = true,
+        .no_focus_on_appearing = true,
+        .no_nav_focus = true,
+    } })) {
+        zgui.textColored(
+            .{ 0.25, 0.95, 1.0, 1.0 },
+            "MOUSE CAPTURED  |  Move to look  |  ESC releases",
+            .{},
+        );
+    }
+    zgui.end();
+}
 
 fn drawHiddenHint() void {
     zgui.setNextWindowPos(.{ .x = 10, .y = 10, .cond = .always });

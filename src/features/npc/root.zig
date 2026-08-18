@@ -380,6 +380,8 @@ pub fn Feature(comptime Controllers: type, comptime NavigationAccess: type) type
                 .position = logical.position,
                 .velocity = logical.velocity,
                 .facing_yaw = logical.facing_yaw,
+                .radius = self.config.radius,
+                .half_height = self.config.half_height,
                 .controller_present = controller.handle != null,
                 .encounter_locomotion = logical.encounter_locomotion,
                 .navigation_progress = logical.navigation_progress,

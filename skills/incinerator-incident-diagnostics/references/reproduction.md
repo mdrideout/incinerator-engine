@@ -45,6 +45,12 @@
   light, draw-path counts, and stable semantic part/material identity against
   actual visual-index timing. A valid render record does not overrule a corrupt
   or unreadable product image.
+- For ranged combat, require exactly one terminal result per submitted action
+  sequence. Compare avatar incarnation, authoritative weapon mode/ammo/deadline,
+  ray origin/impact, target incarnation, damage/health/death, and client/draw
+  records. Treat `fired_miss` as a committed ammo spend. A tracer without a
+  matching authoritative shot event is presentation divergence; a health
+  change without a matching vitals outcome is authority divergence.
 - For input shortcuts, require received -> matched -> queued -> applied.
 - Inspect the continuous product trail and all eight human anchors using actual
   timing. Compare semantic-ID, product-only, and human-visible evidence.
@@ -56,6 +62,12 @@
 - Require zero unexplained drops/writer failures and account for every missing
   or suspicious artifact.
 - A graphical success cannot override semantic replay divergence.
+
+After a firearm repair, exercise equip/holster, aimed hit, clean miss, cadence
+rejection, empty magazine, reload completion, kill, target replacement,
+death/respawn, reconnect during a weapon deadline, incident capture, semantic
+replay, and a fresh Metal bundle. Use the same action sequence to compare the
+result, room event, and draw; do not substitute a screenshot-only claim.
 
 ## Claim limits
 

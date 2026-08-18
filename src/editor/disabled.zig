@@ -59,6 +59,8 @@ pub const Editor = struct {
         return false;
     }
 
+    pub fn setGameplayMouseCaptured(_: *Editor, _: bool) void {}
+
     fn routeInputEvent(
         context: *anyopaque,
         event: *const sdl.c.SDL_Event,

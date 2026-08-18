@@ -380,6 +380,19 @@ fn verifyAcceptedIngressReplay(
                     .avatar_incarnation = record.avatar_incarnation,
                     .target_tick = record.target_tick,
                 } },
+                .weapon_equip_toggle, .weapon_fire, .weapon_reload => .{ .weapon_action = .{
+                    .session = welcome.session,
+                    .participant = welcome.participant,
+                    .sequence = record.action_sequence,
+                    .avatar_incarnation = record.avatar_incarnation,
+                    .target_tick = record.target_tick,
+                    .kind = switch (record.kind) {
+                        .weapon_equip_toggle => .equip_toggle,
+                        .weapon_fire => .fire,
+                        .weapon_reload => .reload,
+                        else => unreachable,
+                    },
+                } },
                 .respawn => .{ .respawn_action = .{
                     .session = welcome.session,
                     .participant = welcome.participant,

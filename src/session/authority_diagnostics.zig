@@ -77,6 +77,8 @@ pub const Diagnostics = struct {
     forced_interaction_cleanup: u64,
     melee_actions_admitted: u64,
     melee_hits: u64,
+    weapon_actions_admitted: u64,
+    firearm_hits: u64,
     deaths: u64,
     respawns: u64,
     baselines_emitted: u64,

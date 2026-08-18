@@ -10,6 +10,7 @@ const identity = @import("session_identity");
 const protocol = @import("session_protocol");
 
 pub const hit_flash_ticks: u64 = 8;
+pub const shot_tracer_ticks: u64 = 6;
 pub const feedback_capacity: usize = budgets.max_reliable_events_per_tick;
 
 pub const Color = [4]f32;
@@ -110,6 +111,12 @@ pub const LocalHud = struct {
     melee_remaining_ticks: u64,
     respawn_remaining_ticks: u64,
     latest_melee_disposition: ?protocol.MeleeActionDisposition,
+    weapon_mode: protocol.WeaponMode,
+    magazine_ammo: u16,
+    reserve_ammo: u16,
+    weapon_remaining_ticks: u64,
+    reload_remaining_ticks: u64,
+    latest_weapon_disposition: ?protocol.WeaponActionDisposition,
     latest_respawn_disposition: ?protocol.RespawnActionDisposition,
     melee_cooldown_marker: bool,
     respawn_marker: RespawnMarker,
@@ -127,6 +134,11 @@ pub const HudInput = struct {
     incarnation: u16,
     life_state: ?protocol.AvatarLifeState,
     melee_ready_tick: u64,
+    weapon_mode: protocol.WeaponMode = .holstered,
+    magazine_ammo: u16 = 0,
+    reserve_ammo: u16 = 0,
+    weapon_ready_tick: u64 = 0,
+    reload_complete_tick: u64 = 0,
     respawn_ready_tick: u64,
     character: ?protocol.CharacterState = null,
     owned_vehicle: ?protocol.VehicleState = null,
@@ -134,6 +146,8 @@ pub const HudInput = struct {
 
 pub const Feedback = union(enum) {
     melee: protocol.MeleeActionResult,
+    weapon: protocol.WeaponActionResult,
+    shot: protocol.ShotEvent,
     respawn: protocol.RespawnActionResult,
     life: protocol.LifeEvent,
 };
@@ -171,12 +185,29 @@ const Observation = struct {
     flash_until_tick: u64 = 0,
 };
 
+pub const TracerPlan = struct {
+    shooter: identity.ReplicatedEntityId,
+    sequence: identity.ActionSequence,
+    origin: [3]f32,
+    impact: [3]f32,
+    hit: bool,
+};
+
+const TracerObservation = struct {
+    occupied: bool = false,
+    event: protocol.ShotEvent = undefined,
+    visible_until_tick: u64 = 0,
+};
+
 pub const Owner = struct {
     characters: [budgets.max_participants]Observation = @splat(.{}),
     npcs: [budgets.max_npcs]Observation = @splat(.{}),
     latest_melee: ?protocol.MeleeActionResult = null,
+    latest_weapon: ?protocol.WeaponActionResult = null,
     latest_respawn: ?protocol.RespawnActionResult = null,
     latest_life: ?protocol.LifeEvent = null,
+    tracers: [budgets.max_participants]TracerObservation = @splat(.{}),
+    tracer_plans: [budgets.max_participants]TracerPlan = undefined,
     hud_anchor_position: ?[3]f32 = null,
     hud_anchor_tick: u64 = 0,
 
@@ -187,10 +218,13 @@ pub const Owner = struct {
     ) void {
         switch (feedback) {
             .melee => |result| self.latest_melee = result,
+            .weapon => |result| self.latest_weapon = result,
+            .shot => |event| self.noteShot(event),
             .respawn => |result| {
                 self.latest_respawn = result;
                 if (result.disposition == .respawned) {
                     self.latest_melee = null;
+                    self.latest_weapon = null;
                     self.latest_life = null;
                 }
             },
@@ -198,6 +232,50 @@ pub const Owner = struct {
                 self.latest_life = event;
             },
         }
+    }
+
+    fn noteShot(self: *Owner, event: protocol.ShotEvent) void {
+        var free: ?usize = null;
+        for (&self.tracers, 0..) |*entry, index| {
+            if (!entry.occupied) {
+                if (free == null) free = index;
+                continue;
+            }
+            if (std.meta.eql(entry.event.shooter, event.shooter)) {
+                entry.* = .{
+                    .occupied = true,
+                    .event = event,
+                    .visible_until_tick = event.authority_tick +| shot_tracer_ticks,
+                };
+                return;
+            }
+        }
+        const index = free orelse return;
+        self.tracers[index] = .{
+            .occupied = true,
+            .event = event,
+            .visible_until_tick = event.authority_tick +| shot_tracer_ticks,
+        };
+    }
+
+    pub fn tracerPlans(self: *Owner, authority_tick: u64) []const TracerPlan {
+        var count: usize = 0;
+        for (&self.tracers) |*entry| {
+            if (!entry.occupied) continue;
+            if (authority_tick > entry.visible_until_tick) {
+                entry.occupied = false;
+                continue;
+            }
+            self.tracer_plans[count] = .{
+                .shooter = entry.event.shooter,
+                .sequence = entry.event.sequence,
+                .origin = entry.event.ray_origin,
+                .impact = entry.event.impact_position,
+                .hit = entry.event.disposition == .hit,
+            };
+            count += 1;
+        }
+        return self.tracer_plans[0..count];
     }
 
     pub fn characterPlan(
@@ -320,6 +398,8 @@ pub const Owner = struct {
         }
 
         const melee_remaining = melee_ready_tick -| input.authority_tick;
+        const weapon_ready_tick = input.weapon_ready_tick;
+        const reload_complete_tick = input.reload_complete_tick;
         const respawn_remaining = respawn_ready_tick -| input.authority_tick;
         const latest_respawn_disposition = if (self.latest_respawn) |result|
             if (result.incarnation == incarnation) result.disposition else null
@@ -358,6 +438,19 @@ pub const Owner = struct {
             .melee_remaining_ticks = melee_remaining,
             .respawn_remaining_ticks = respawn_remaining,
             .latest_melee_disposition = if (self.latest_melee) |result|
+                result.disposition
+            else
+                null,
+            // State is owned by the client's tick-ordered projection. The
+            // latest action result remains feedback only; retaining its
+            // earlier projection here would mask a later reload-completion
+            // snapshot indefinitely.
+            .weapon_mode = input.weapon_mode,
+            .magazine_ammo = input.magazine_ammo,
+            .reserve_ammo = input.reserve_ammo,
+            .weapon_remaining_ticks = weapon_ready_tick -| input.authority_tick,
+            .reload_remaining_ticks = reload_complete_tick -| input.authority_tick,
+            .latest_weapon_disposition = if (self.latest_weapon) |result|
                 result.disposition
             else
                 null,
@@ -620,6 +713,44 @@ test "local HUD saturates cooldowns and retains no-safe-spawn disposition" {
         respawnMarkerColor(hud.respawn_marker).?,
     );
     try std.testing.expect(!hud.melee_cooldown_marker);
+}
+
+test "local HUD does not let old weapon feedback mask a newer projection" {
+    var owner = Owner{};
+    const avatar = identity.ReplicatedEntityId{ .index = 1, .generation = 1 };
+    owner.noteFeedback(avatar, .{ .weapon = .{
+        .sequence = .{ .value = 4 },
+        .authority_tick = 10,
+        .action = .reload,
+        .disposition = .reload_started,
+        .mode = .reloading,
+        .magazine_ammo = 0,
+        .reserve_ammo = 36,
+        .weapon_ready_tick = 0,
+        .reload_complete_tick = 100,
+    } });
+    const completed = owner.localHud(.{
+        .authority_tick = 100,
+        .avatar = avatar,
+        .incarnation = 1,
+        .life_state = .alive,
+        .melee_ready_tick = 0,
+        .weapon_mode = .equipped,
+        .magazine_ammo = 12,
+        .reserve_ammo = 24,
+        .weapon_ready_tick = 0,
+        .reload_complete_tick = 0,
+        .respawn_ready_tick = 0,
+        .character = testCharacter(avatar, 1, 100),
+    });
+    try std.testing.expectEqual(protocol.WeaponMode.equipped, completed.weapon_mode);
+    try std.testing.expectEqual(@as(u16, 12), completed.magazine_ammo);
+    try std.testing.expectEqual(@as(u16, 24), completed.reserve_ammo);
+    try std.testing.expectEqual(@as(u64, 0), completed.reload_remaining_ticks);
+    try std.testing.expectEqual(
+        protocol.WeaponActionDisposition.reload_started,
+        completed.latest_weapon_disposition.?,
+    );
 }
 
 test "local HUD uses vehicle anchor and retains the last position without an avatar proxy" {

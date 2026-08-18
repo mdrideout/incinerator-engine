@@ -38,6 +38,7 @@ const Invocation = struct {
     s10_smoke_role: S10SmokeRole = .none,
     s11_smoke_role: S11SmokeRole = .none,
     s11_topology: S11Topology = .dedicated,
+    s14_ranged_smoke: bool = false,
 };
 
 const App = struct {
@@ -57,6 +58,7 @@ const App = struct {
     vehicle_action_requested: bool = false,
     interaction_action_requested: bool = false,
     melee_action_requested: bool = false,
+    weapon_action_requested: ?protocol.WeaponActionKind = null,
     respawn_action_requested: bool = false,
     reconnect_requested: bool = false,
     smoke_actions: bool = false,
@@ -85,6 +87,11 @@ const App = struct {
     s11_death_observed: bool = false,
     s11_replacement_observed: bool = false,
     s11_pass_printed: bool = false,
+    s14_ranged_smoke: bool = false,
+    s14_last_weapon_request_tick: u64 = 0,
+    s14_hits: u8 = 0,
+    s14_killed: bool = false,
+    s14_shot_observed: bool = false,
     frame: u64 = 0,
     last_input_tick: u64 = 0,
     clock: client_clock.Clock = .{},
@@ -184,6 +191,7 @@ const App = struct {
             .smoke_actions = invocation.smoke_actions,
             .s10_smoke_role = invocation.s10_smoke_role,
             .s11_smoke_role = invocation.s11_smoke_role,
+            .s14_ranged_smoke = invocation.s14_ranged_smoke,
             .endpoint = endpoint_buffer,
             .endpoint_len = @intCast(endpoint.len),
         };
@@ -215,6 +223,7 @@ const App = struct {
             try self.sendVehicleActionIfRequested();
             try self.sendInteractionActionIfRequested();
             try self.sendMeleeActionIfRequested();
+            try self.sendWeaponActionIfRequested();
             try self.sendRespawnActionIfRequested();
             if (self.client.state == .joined and self.clock.anchored) {
                 const due_tick = self.clock.inputTick(now_ns);
@@ -257,7 +266,13 @@ const App = struct {
                     self.melee_action_requested = true;
                 }
                 if (event.key.scancode == c.SDL_SCANCODE_R and !was_down) {
-                    self.respawn_action_requested = true;
+                    if (self.client.avatar_life_state == .dead)
+                        self.respawn_action_requested = true
+                    else
+                        self.weapon_action_requested = .reload;
+                }
+                if (event.key.scancode == c.SDL_SCANCODE_1 and !was_down) {
+                    self.weapon_action_requested = .equip_toggle;
                 }
                 if (event.key.scancode == c.SDL_SCANCODE_P and !was_down) {
                     const enabled = self.scene.toggleVehiclePrediction();
@@ -284,6 +299,8 @@ const App = struct {
             c.SDL_EVENT_MOUSE_BUTTON_DOWN => {
                 if (event.button.button == c.SDL_BUTTON_RIGHT) {
                     self.scene.setLookActive(true);
+                } else if (event.button.button == c.SDL_BUTTON_LEFT) {
+                    self.weapon_action_requested = .fire;
                 }
             },
             c.SDL_EVENT_MOUSE_BUTTON_UP => {
@@ -439,6 +456,64 @@ const App = struct {
                         result.target.isValid() and clientHasNpc(&self.client, result.target.index, result.target.generation))
                     {
                         self.noteS11NpcDeath(result.target.index, result.target.generation);
+                    }
+                },
+                .weapon_action_result => |result| {
+                    self.scene.noteCombatFeedback(
+                        &self.client,
+                        .{ .weapon = result },
+                    );
+                    _ = self.client.takeWeaponActionResult();
+                    std.debug.print(
+                        "S14_CLIENT_WEAPON action={s} result={s} ammo={d}/{d} damage={d} health={d} killed={}\n",
+                        .{
+                            @tagName(result.action),
+                            @tagName(result.disposition),
+                            result.magazine_ammo,
+                            result.reserve_ammo,
+                            result.applied_damage,
+                            result.remaining_health,
+                            result.killed,
+                        },
+                    );
+                    if (self.s14_ranged_smoke and self.s11_smoke_role == .attacker and
+                        result.disposition == .fired_hit)
+                    {
+                        self.s14_hits +|= 1;
+                        if (result.killed and result.target.isValid() and
+                            clientHasNpc(
+                                &self.client,
+                                result.target.index,
+                                result.target.generation,
+                            ))
+                        {
+                            self.s14_killed = true;
+                            self.noteS11NpcDeath(
+                                result.target.index,
+                                result.target.generation,
+                            );
+                        }
+                    }
+                },
+                .shot_event => |event| {
+                    self.scene.noteCombatFeedback(
+                        &self.client,
+                        .{ .shot = event },
+                    );
+                    _ = self.client.takeShotEvent();
+                    if (self.s14_ranged_smoke) {
+                        self.s14_shot_observed = true;
+                        std.debug.print(
+                            "S14_CLIENT_SHOT shooter={d}:{d} result={s} target={d}:{d} damage={d}\n",
+                            .{
+                                event.shooter.index,
+                                event.shooter.generation,
+                                @tagName(event.disposition),
+                                event.target.index,
+                                event.target.generation,
+                                event.applied_damage,
+                            },
+                        );
                     }
                 },
                 .respawn_action_result => |result| {
@@ -659,6 +734,24 @@ const App = struct {
         ));
     }
 
+    fn sendWeaponActionIfRequested(self: *App) !void {
+        const action = self.weapon_action_requested orelse return;
+        self.weapon_action_requested = null;
+        if (self.client.state != .joined or self.client.pending_weapon_action != null) return;
+        const message = self.client.weaponAction(
+            action,
+            self.client.world.server_tick +| 1,
+        ) catch |err| switch (err) {
+            error.AvatarDead,
+            error.AvatarUnavailable,
+            error.CannotUseWeaponWhileDriving,
+            error.CannotUseWeaponWhileCarrying,
+            => return,
+            else => return err,
+        };
+        try self.sendClientMessage(message);
+    }
+
     fn sendRespawnActionIfRequested(self: *App) !void {
         if (!self.respawn_action_requested) return;
         self.respawn_action_requested = false;
@@ -722,11 +815,36 @@ const App = struct {
             }
             return;
         }
-        if (self.s11_smoke_role != .attacker or self.s11_death_observed or
-            self.client.pending_melee_action != null)
-        {
+        if (self.s11_smoke_role != .attacker or self.s11_death_observed) {
             return;
         }
+        if (self.s14_ranged_smoke) {
+            if (self.client.pending_weapon_action != null or
+                tick < self.s14_last_weapon_request_tick +| 2)
+            {
+                return;
+            }
+            switch (self.client.weapon_mode) {
+                .holstered => self.weapon_action_requested = .equip_toggle,
+                .reloading => return,
+                .equipped => {
+                    if (self.client.magazine_ammo == 0) {
+                        self.weapon_action_requested = .reload;
+                    } else if (tick >= self.client.weapon_ready_tick) {
+                        const distance = nearestLivingNpcDistanceSquared(&self.client) orelse
+                            return;
+                        if (distance <= 18.0 * 18.0) {
+                            self.weapon_action_requested = .fire;
+                        }
+                    }
+                },
+            }
+            if (self.weapon_action_requested != null) {
+                self.s14_last_weapon_request_tick = tick;
+            }
+            return;
+        }
+        if (self.client.pending_melee_action != null) return;
         if (tick < self.client.melee_ready_tick or
             tick < self.s11_last_melee_request_tick +| 5)
         {
@@ -793,10 +911,23 @@ const App = struct {
         {
             return;
         }
-        std.debug.print(
-            "S11_CLIENT_PASS role={s} npc_death=true replacement=true\n",
-            .{@tagName(self.s11_smoke_role)},
-        );
+        if (self.s14_ranged_smoke) {
+            if (!self.s14_shot_observed or
+                (self.s11_smoke_role == .attacker and
+                    (self.s14_hits < 4 or !self.s14_killed)))
+            {
+                return;
+            }
+            std.debug.print(
+                "S14_CLIENT_PASS role={s} hits={d} killed={} shot=true npc_death=true replacement=true\n",
+                .{ @tagName(self.s11_smoke_role), self.s14_hits, self.s14_killed },
+            );
+        } else {
+            std.debug.print(
+                "S11_CLIENT_PASS role={s} npc_death=true replacement=true\n",
+                .{@tagName(self.s11_smoke_role)},
+            );
+        }
         self.s11_pass_printed = true;
         self.running = false;
     }
@@ -964,10 +1095,13 @@ const App = struct {
                 "none"
         else
             "none";
+        const weapon_mode = if (combat_hud) |hud| hud.weapon_mode else self.client.weapon_mode;
+        const magazine_ammo = if (combat_hud) |hud| hud.magazine_ammo else self.client.magazine_ammo;
+        const reserve_ammo = if (combat_hud) |hud| hud.reserve_ammo else self.client.reserve_ammo;
         const npc_impact = encounter_impact_tick -| authority_tick;
         const title = std.fmt.bufPrintZ(
             &title_storage,
-            "Room {s} members {d} ready {d} connected {d} failure {s} | session {s} | HP {d}/{d} {s} respawn {d}t/{s} melee {d}t | NPC {s} HP {d}/{d} impact {d}t | entities {d} | ping {d} ms | age {d}t | net d/f/m {d}/{d}/{d} | mode {s} | carry {s} | pred {s} | correction {d}/{d} max {d:.2}m/{d:.1}deg",
+            "Room {s} members {d} ready {d} connected {d} failure {s} | session {s} | HP {d}/{d} {s} respawn {d}t/{s} melee {d}t | handgun {s} {d}/{d} | NPC {s} HP {d}/{d} impact {d}t | entities {d} | ping {d} ms | age {d}t | net d/f/m {d}/{d}/{d} | mode {s} | carry {s} | pred {s} | correction {d}/{d} max {d:.2}m/{d:.1}deg",
             .{
                 room_state,
                 room_members,
@@ -981,6 +1115,9 @@ const App = struct {
                 respawn_cooldown,
                 respawn_disposition,
                 melee_cooldown,
+                @tagName(weapon_mode),
+                magazine_ammo,
+                reserve_ammo,
                 @tagName(encounter_state),
                 encounter_health,
                 encounter_maximum_health,
@@ -1068,7 +1205,7 @@ pub fn main(init: std.process.Init) !void {
     var app = try App.init(init, invocation);
     defer app.deinit();
     std.debug.print(
-        "MP6_CLIENT_CONNECT endpoint={s} account={d} ticketed={} controls=WASD/SPACE/LSHIFT/right-drag look/E enter-exit/F collect-drop/Q melee/R respawn/P prediction/F8 reconnect/C cancel/L leave/ESC\n",
+        "MP6_CLIENT_CONNECT endpoint={s} account={d} ticketed={} controls=WASD/SPACE/LSHIFT/right-drag look/E enter-exit/F collect-drop/Q melee/1 handgun/left-click fire/R reload-respawn/P prediction/F8 reconnect/C cancel/L leave/ESC\n",
         .{
             app.endpoint[0..app.endpoint_len],
             app.client.account.value,
@@ -1076,8 +1213,9 @@ pub fn main(init: std.process.Init) !void {
         },
     );
     if (invocation.s11_smoke_role != .none) std.debug.print(
-        "S11_SCENARIO_ADAPTER topology={s} role={s} scenario={s} seed={x} deadline_ticks={d}\n",
+        "{s}_SCENARIO_ADAPTER topology={s} role={s} scenario={s} seed={x} deadline_ticks={d}\n",
         .{
+            if (invocation.s14_ranged_smoke) "S14" else "S11",
             @tagName(invocation.s11_topology),
             @tagName(invocation.s11_smoke_role),
             s11_scenario.name,
@@ -1219,6 +1357,14 @@ fn parseInvocation(args: []const []const u8) !Invocation {
             result.s11_smoke_role = .observer;
         } else if (std.mem.eql(u8, args[index], "--s11-listen")) {
             result.s11_topology = .listen;
+        } else if (std.mem.eql(u8, args[index], "--s14-attacker")) {
+            if (result.s11_smoke_role != .none) return error.DuplicateS11SmokeRole;
+            result.s11_smoke_role = .attacker;
+            result.s14_ranged_smoke = true;
+        } else if (std.mem.eql(u8, args[index], "--s14-observer")) {
+            if (result.s11_smoke_role != .none) return error.DuplicateS11SmokeRole;
+            result.s11_smoke_role = .observer;
+            result.s14_ranged_smoke = true;
         } else return error.UnknownArgument;
     }
     return result;

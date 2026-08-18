@@ -69,6 +69,8 @@ pub const Graph = struct {
     vitals: *std.Build.Module,
     npc_encounter_contract: *std.Build.Module,
     npc_encounter: *std.Build.Module,
+    ranged_combat_contract: *std.Build.Module,
+    ranged_combat: *std.Build.Module,
     population_contract: *std.Build.Module,
     sandbox_population_catalog: *std.Build.Module,
     sandbox_population: *std.Build.Module,
@@ -237,12 +239,12 @@ pub fn create(
     );
     const simulation_cohort_options = cohort_options.createModule();
     const network_options = b.addOptions();
-    network_options.addOption(u16, "protocol_revision", 15);
+    network_options.addOption(u16, "protocol_revision", 16);
     network_options.addOption(u64, "build_cohort", networkBuildCohort());
     network_options.addOption(
         u64,
         "content_cohort",
-        std.hash.Wyhash.hash(0x494e_434e, "s11-npc-encounter-content-v1"),
+        std.hash.Wyhash.hash(0x494e_434e, "s14-ranged-combat-content-v1"),
     );
     const network_cohort_options = network_options.createModule();
 
@@ -536,6 +538,20 @@ pub fn create(
             .{ .name = "npc_encounter_contract", .module = npc_encounter_contract },
             .{ .name = "vitals_contract", .module = vitals_contract },
         },
+    });
+    const ranged_combat_contract = b.createModule(.{
+        .root_source_file = b.path("src/features/ranged_combat/contract.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    const ranged_combat = b.createModule(.{
+        .root_source_file = b.path("src/features/ranged_combat/root.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{
+            .name = "ranged_combat_contract",
+            .module = ranged_combat_contract,
+        }},
     });
     const population_contract = b.createModule(.{
         .root_source_file = b.path("src/features/population/contract.zig"),
@@ -928,6 +944,8 @@ pub fn create(
             .{ .name = "population_contract", .module = population_contract },
             .{ .name = "sandbox_population_catalog", .module = sandbox_population_catalog },
             .{ .name = "vitals_contract", .module = vitals_contract },
+            .{ .name = "ranged_combat_contract", .module = ranged_combat_contract },
+            .{ .name = "ranged_combat", .module = ranged_combat },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe },
             .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract },
             .{ .name = "session_budgets", .module = session_budgets },
@@ -976,6 +994,8 @@ pub fn create(
         .vitals = vitals,
         .npc_encounter_contract = npc_encounter_contract,
         .npc_encounter = npc_encounter,
+        .ranged_combat_contract = ranged_combat_contract,
+        .ranged_combat = ranged_combat,
         .population_contract = population_contract,
         .sandbox_population_catalog = sandbox_population_catalog,
         .sandbox_population = sandbox_population,
@@ -1024,7 +1044,7 @@ fn networkBuildCohort() u64 {
         cohort.gns_revision,
         "authority-60hz",
         "snapshot-20hz",
-        "protocol-v12",
+        "protocol-v16",
     }) |part| fingerprint = std.hash.Wyhash.hash(fingerprint, part);
     return fingerprint;
 }

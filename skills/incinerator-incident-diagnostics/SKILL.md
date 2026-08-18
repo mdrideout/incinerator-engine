@@ -1,6 +1,6 @@
 ---
 name: incinerator-incident-diagnostics
-description: Inspect and diagnose schema-5 Incinerator Engine human-test incident folders containing live manifests, deterministic render state, stable authored-population identity and activity transitions, navigation route lineage, anomaly lifecycle events, materialized NDJSON windows, product and human-visible trailing images, semantic-ID evidence, shortcut delivery records, and accepted-ingress replay captures. Use when a tester supplies an incident folder or LLM handoff, flags a visual/gameplay/render/population/navigation/input anomaly, asks what happened near a timestamp, or asks to reproduce and verify a repair.
+description: Inspect and diagnose schema-5 Incinerator Engine human-test incident folders containing live manifests, authoritative ranged-combat evidence, deterministic render state, stable authored-population and navigation lineage, anomaly lifecycle events, materialized NDJSON windows, trailing images, semantic-ID evidence, shortcut delivery records, and accepted-ingress replay captures. Use when a tester supplies an incident folder or LLM handoff, flags a visual/gameplay/firearm/render/population/navigation/input anomaly, asks what happened near a timestamp, or asks to reproduce and verify a repair.
 ---
 
 # Incinerator Incident Diagnostics
@@ -60,7 +60,7 @@ the human handoff only.
 
 - `timeline-window.ndjson`: action disposition, lifecycle, district streaming,
   diagnostic code, immutable `runtime_fault`/`authority_cycle_fault` ownership,
-  correlation, spawn/despawn, authored-population/activity transitions,
+  correlation, firearm decisions/rays/outcomes, spawn/despawn, authored-population/activity transitions,
   navigation route transitions, and anomaly flag.
 - `state-window.ndjson`: tri-state authority/replication/presentation/draw
   membership, tombstones, relevance reason/facts, transforms, vitals,
@@ -95,6 +95,14 @@ For deterministic visual anomalies, search `kind="render_state"` and correlate
 `color_geometry=0` is expected for ordinary product solids; debug geometry may
 use the exact unlit color path. Render state explains the selected contract,
 not whether the resulting image is perceptually correct.
+For ranged combat, search `kind="firearm"` by actor identity and action
+sequence. Reconstruct one chain: semantic `weapon_toggle_pressed`,
+`fire_pressed`, or `reload_pressed`; client submission; terminal authoritative
+disposition; weapon mode/ammunition/deadlines; ray origin and impact; optional
+target identity/incarnation; damage/remaining health/death; client application;
+and weapon/tracer draw. A `fired_miss` is a committed shot and ammo spend, not a
+rejected action. Never infer a hit from a tracer or accept a client-supplied
+target—the authority result and vitals transition are truth.
 Read `manifest.json.evidence_capabilities` before assuming an entity kind has
 full boundary or semantic-part coverage. For vehicles and carryables, follow
 `persistent_id`, bounded-world interest, baseline/snapshot sequence, observer
@@ -136,6 +144,11 @@ vehicle being investigated.
 - A deterministic visual anomaly: assign semantic state/part extraction to
   presentation, material/light selection to sandbox composition, GPU path and
   submission to the renderer, and final UI composition to the developer host.
+- A firearm anomaly: assign equip/cadence/ammo/reload admission to the ranged-
+  combat contract, participant/incarnation/ray/target selection to session
+  authority, health/death to vitals, and muzzle/tracer/impact/HUD readability
+  to presentation. Preserve action sequence and avatar incarnation across the
+  entire claim.
 
 State observed facts, boundary inference, and remaining uncertainty separately.
 
