@@ -14,6 +14,8 @@ const vehicle_settle_ticks: usize = 240;
 const vehicle_drive_ticks: usize = 60;
 const interaction_crossing_limit: usize = 800;
 const npc_progress_limit: usize = 600;
+const two_district_body_count: usize =
+    2 * @as(usize, sandbox_contracts.district_static_box_count);
 
 const Request = struct {
     const crate_spawn: u64 = 1;
@@ -618,7 +620,9 @@ fn runSmokeScenario(
     try tickAndDrain(simulation, state);
     if (state.east_ticket == null) return error.MissingEastDistrictLoadOutcome;
     try progressWorkerUntil(io, simulation, state, .east_activated);
-    if (simulation.districtCount() != 2 or simulation.districtBodyCount() != 6) {
+    if (simulation.districtCount() != 2 or
+        simulation.districtBodyCount() != two_district_body_count)
+    {
         return error.MultiDistrictAuthorityMissing;
     }
 
@@ -777,7 +781,9 @@ fn runSmokeScenario(
     {
         return error.ContentReloadedCarryableOwnershipMismatch;
     }
-    if (simulation.districtCount() != 2 or simulation.districtBodyCount() != 6) {
+    if (simulation.districtCount() != 2 or
+        simulation.districtBodyCount() != two_district_body_count)
+    {
         return error.MultiDistrictAuthorityMissingAfterInteraction;
     }
 }
@@ -938,7 +944,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
                 if (state.active_ticket == null or
                     !sandbox_contracts.LoadTicket.eql(activated.ticket, state.active_ticket.?) or
                     !sandbox_contracts.ChunkCoord.eql(activated.coord, fixture_coord) or
-                    activated.static_box_count != 3)
+                    activated.static_box_count != sandbox_contracts.district_static_box_count)
                 {
                     return error.UnexpectedDistrictOutcome;
                 }
@@ -948,7 +954,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
                 if (state.east_ticket == null or
                     !sandbox_contracts.LoadTicket.eql(activated.ticket, state.east_ticket.?) or
                     !sandbox_contracts.ChunkCoord.eql(activated.coord, .{ .x = 1, .z = 0 }) or
-                    activated.static_box_count != 3)
+                    activated.static_box_count != sandbox_contracts.district_static_box_count)
                 {
                     return error.UnexpectedDistrictOutcome;
                 }
@@ -965,7 +971,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
                         activated.coord,
                         state.interaction_destination.?,
                     ) or
-                    activated.static_box_count != 3)
+                    activated.static_box_count != sandbox_contracts.district_static_box_count)
                 {
                     return error.UnexpectedDistrictOutcome;
                 }

@@ -802,6 +802,8 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`S15 Four-District Performance Baseline`](docs/performance/s15-baseline.md)
 - [`ADR-029 Engine, Game, and Authoring Ownership Boundary`](docs/adr/029-engine-game-authoring-boundary.md)
 - [`EA0-EA5 Engine Authoring Foundation`](docs/design/engine-authoring-foundation.md)
+- [`EA0 Ownership, Identity, and Transaction Boundary`](docs/design/ea0-ownership-identity-transaction-boundary.md)
+- [`EA0 Automated and Native Acceptance`](docs/validation/ea0-ownership-identity-transaction-boundary.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 

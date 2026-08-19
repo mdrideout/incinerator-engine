@@ -645,16 +645,24 @@ const App = struct {
         if (self.s11_smoke_role != .none) {
             const seek_replacement = self.s11_death_observed and
                 self.client.world.server_tick >= self.s11_death_tick +| 360;
+            const target_yaw = nearestLivingNpcYaw(&self.client) orelse
+                self.scene.camera.yaw;
+            const pursue_target = self.s11_smoke_role == .attacker and
+                !self.s11_death_observed and
+                (nearestLivingNpcDistanceSquared(&self.client) orelse 0) >
+                    2.0 * 2.0;
             try self.sendClientMessage(try self.client.input(
                 target_tick,
                 if (seek_replacement)
+                    .{ 0, 1 }
+                else if (pursue_target)
                     .{ 0, 1 }
                 else
                     .{ 0, 0 },
                 if (seek_replacement)
                     std.math.pi / 2.0
                 else
-                    nearestLivingNpcYaw(&self.client) orelse self.scene.camera.yaw,
+                    target_yaw,
                 false,
             ));
             return;

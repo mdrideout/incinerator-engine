@@ -30,7 +30,7 @@ pub const DigestCategory = replay.Category;
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'R', 'P', 'L', 'A', 'Y' };
 pub const format_version: u16 = 1;
-pub const schema_cohort: u16 = 18;
+pub const schema_cohort: u16 = 19;
 pub const header_size: usize = 64;
 pub const integrity_size: usize = @sizeOf(Digest);
 pub const max_envelope_bytes: usize = 8 * 1024 * 1024;
@@ -1603,6 +1603,8 @@ fn encodeCrateCommand(sink: anytype, command: crates.Command) !void {
         .relocate => |relocation| {
             try sink.writeU8(@intFromEnum(CrateCommandTag.relocate));
             try sink.writeU64(relocation.transaction_id);
+            try sink.writeU8(@intFromEnum(relocation.source));
+            try sink.writeU8(@intFromEnum(relocation.scope));
             try encodePersistentId(sink, relocation.id);
             try encodePose(sink, relocation.target_pose);
             switch (relocation.velocity) {
@@ -1870,7 +1872,9 @@ fn validateNormalizedCommand(command: NormalizedCommand) !void {
                 try validateFiniteValues(&impulse.impulse);
             },
             .relocate => |relocation| {
-                if (relocation.transaction_id == 0) return error.InvalidTransactionId;
+                const request = try relocation.authoringRequest();
+                try request.validate();
+                if (request.scope != .session) return error.AuthoringScopeNotSupported;
                 try relocation.id.validate();
                 _ = try relocation.target_pose.normalized();
                 switch (relocation.velocity) {
@@ -2780,6 +2784,14 @@ fn decodeCrateCommand(reader: *Reader) !crates.Command {
         } },
         .relocate => blk: {
             const transaction_id = try reader.readU64();
+            const source = std.enums.fromInt(
+                engine.authoring.Source,
+                try reader.readU8(),
+            ) orelse return error.InvalidAuthoringSource;
+            const scope = std.enums.fromInt(
+                engine.authoring.EditScope,
+                try reader.readU8(),
+            ) orelse return error.InvalidAuthoringScope;
             const id = try decodePersistentId(reader);
             const target_pose = try decodePose(reader);
             const velocity_tag = std.enums.fromInt(
@@ -2800,6 +2812,8 @@ fn decodeCrateCommand(reader: *Reader) !crates.Command {
                 null;
             break :blk .{ .relocate = .{
                 .transaction_id = transaction_id,
+                .source = source,
+                .scope = scope,
                 .id = id,
                 .target_pose = target_pose,
                 .velocity = velocity,
@@ -3259,6 +3273,8 @@ fn testCapture() !TestCapture {
             } } },
             .{ .eligible_tick = 3, .command = .{ .crate = .{ .relocate = .{
                 .transaction_id = 8,
+                .source = .scripted_validation,
+                .scope = .session,
                 .id = second_id,
                 .target_pose = .{
                     .position = .{ 4, 5, -2 },
@@ -3375,7 +3391,7 @@ fn refreshIntegrity(bytes: []u8) void {
 
 test "current simulation cohort pins the exact Jolt worker and capacity configuration" {
     try current_simulation_cohort.validate();
-    try std.testing.expectEqual(@as(u16, 18), current_simulation_cohort.replay_schema);
+    try std.testing.expectEqual(@as(u16, 19), current_simulation_cohort.replay_schema);
     try std.testing.expectEqual(@as(u16, 5), current_simulation_cohort.engine_schedule_cohort);
     try std.testing.expectEqual(
         sandbox_host_contracts.snapshot_schema,
@@ -3434,6 +3450,8 @@ test "current simulation cohort pins the exact Jolt worker and capacity configur
 test "crate relocation command codec preserves policy revision and rejects hostile tags" {
     const command = NormalizedCommand{ .crate = .{ .relocate = .{
         .transaction_id = 91,
+        .source = .local_developer_client,
+        .scope = .session,
         .id = .{ .namespace = 77, .local = 2 },
         .target_pose = .{
             .position = .{ 3, 4, 5 },
@@ -3458,12 +3476,13 @@ test "crate relocation command codec preserves policy revision and rejects hosti
     var invalid_transaction = command;
     invalid_transaction.crate.relocate.transaction_id = 0;
     try std.testing.expectError(
-        error.InvalidTransactionId,
+        error.InvalidAuthoringTransactionId,
         validateNormalizedCommand(invalid_transaction),
     );
 
-    // source + crate tag + transaction + persistent ID + pose
-    const velocity_tag_offset = 1 + 1 + 8 + 16 + (7 * @sizeOf(f32));
+    // command source + crate tag + transaction + authoring source/scope +
+    // persistent ID + pose.
+    const velocity_tag_offset = 1 + 1 + 8 + 2 + 16 + (7 * @sizeOf(f32));
     bytes[velocity_tag_offset] = 0xff;
     var hostile_reader = Reader{ .bytes = bytes[0..sink.cursor] };
     try std.testing.expectError(

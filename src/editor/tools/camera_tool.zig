@@ -23,7 +23,6 @@
 const std = @import("std");
 const zgui = @import("zgui");
 const tool_module = @import("../tool.zig");
-const Camera = @import("../../camera.zig").Camera;
 
 // ============================================================================
 // Tool Definition
@@ -67,7 +66,7 @@ fn radiansToDegrees(radians: f32) f32 {
 // widgets, and they return true if the user interacted with them. There's no
 // retained widget tree like in HTML/CSS or traditional GUI frameworks.
 
-pub fn draw(camera: *const Camera) void {
+pub fn draw(camera: *const tool_module.CameraView) void {
     // ========================================================================
     // Begin Window
     // ========================================================================
@@ -157,14 +156,14 @@ pub fn draw(camera: *const Camera) void {
         zgui.text("Direction Vectors", .{});
         zgui.separator();
 
-        const forward = camera.getForward();
+        const forward = camera.forward;
         zgui.text("  Forward: ({d:.2}, {d:.2}, {d:.2})", .{
             forward[0],
             forward[1],
             forward[2],
         });
 
-        const right = camera.getRight();
+        const right = camera.right;
         zgui.text("  Right:   ({d:.2}, {d:.2}, {d:.2})", .{
             right[0],
             right[1],

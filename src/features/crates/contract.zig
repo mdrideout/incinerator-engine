@@ -49,12 +49,26 @@ pub const RelocationVelocity = union(enum) {
 
 pub const RelocateCrate = struct {
     transaction_id: u64,
+    source: engine.authoring.Source,
+    scope: engine.authoring.EditScope,
     id: engine.PersistentId,
     target_pose: engine.physics.Pose,
     velocity: RelocationVelocity = .zero,
     /// Optimistic authoring concurrency, intentionally independent of ordinary
     /// physics motion. Revision zero is the initial/restored crate revision.
     expected_revision: ?u64 = null,
+
+    pub fn authoringRequest(self: RelocateCrate) !engine.authoring.Request {
+        const expected_revision = self.expected_revision orelse
+            return error.AuthoringExpectedRevisionMissing;
+        return .{
+            .transaction_id = self.transaction_id,
+            .source = self.source,
+            .scope = self.scope,
+            .target = .{ .persistent_entity = self.id },
+            .expected_revision = expected_revision,
+        };
+    }
 };
 
 pub const Command = union(enum) {

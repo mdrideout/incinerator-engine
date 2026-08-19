@@ -19,9 +19,6 @@
 const std = @import("std");
 const workspace = @import("editor_workspace");
 
-// Forward declarations for engine types
-const Camera = @import("../camera.zig").Camera;
-const FrameTimer = @import("../timing.zig").FrameTimer;
 const engine = @import("incinerator_engine");
 const sandbox_host = @import("sandbox_host_contracts");
 const sandbox_replay = @import("sandbox_replay");
@@ -34,6 +31,28 @@ const sandbox_interaction = @import("sandbox_interaction");
 const population = @import("population_contract");
 const incident = @import("../engine/incident.zig");
 const render_contract = @import("../render_contract.zig");
+
+pub const AuthoringChangeEvidence = sandbox_authoring.ChangeEvidence;
+
+pub const CameraView = struct {
+    position: [3]f32,
+    yaw: f32,
+    pitch: f32,
+    fov: f32,
+    near: f32,
+    far: f32,
+    move_speed: f32,
+    look_sensitivity: f32,
+    forward: [3]f32,
+    right: [3]f32,
+};
+
+pub const FrameTimingView = struct {
+    fps: f64,
+    delta_seconds: f64,
+    ticks_this_frame: u32,
+    total_frames: u64,
+};
 
 pub const DeveloperSnapshot = developer_diagnostics.Snapshot(sandbox_host.Diagnostics);
 pub const ProfileSpanView = developer_profile.SpanRing(
@@ -104,6 +123,7 @@ pub const CrateAuthoringView = struct {
     selected_crate: ?AuthoringCrateView = null,
     feedback: AuthoringFeedback = .{},
     save: SaveFeedback = .{},
+    latest_change: ?AuthoringChangeEvidence = null,
     request_rejections: u64 = 0,
 };
 
@@ -486,8 +506,8 @@ pub const RenderInput = struct {
 /// the composition/editor boundary; tools never receive App or Simulation.
 pub const FrameInput = struct {
     wall_unix_ms: i64,
-    camera: *const Camera,
-    frame_timer: *const FrameTimer,
+    camera: *const CameraView,
+    frame_timing: *const FrameTimingView,
     developer: DeveloperInput,
     visualization: VisualizationInput,
     authoring: AuthoringInput,

@@ -246,7 +246,7 @@ pub const Editor = struct {
         render_settings: *renderer_module.RenderSettings,
     ) void {
         switch (id) {
-            .stats => stats_tool.draw(&self.stats, frame.frame_timer),
+            .stats => stats_tool.draw(&self.stats, frame.frame_timing),
             .camera => camera_tool.draw(frame.camera),
             .render => render_tool.draw(render_settings, &frame.render),
             .diagnostics => diagnostics_tool.draw(&frame.developer),

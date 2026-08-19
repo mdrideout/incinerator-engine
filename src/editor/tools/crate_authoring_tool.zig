@@ -121,6 +121,76 @@ fn drawOperationFeedback(feedback: tool_module.AuthoringFeedback) void {
     if (feedback.detail.len != 0) zgui.textWrapped("{s}", .{feedback.detail});
 }
 
+fn drawChangeEvidence(evidence: ?sandbox_authoring.ChangeEvidence) void {
+    zgui.separatorText("Authored-change evidence");
+    const value = evidence orelse {
+        zgui.text("No authored transaction recorded yet", .{});
+        return;
+    };
+    zgui.text(
+        "Run: {d}:{d}",
+        .{
+            value.record.run_id.started_wall_unix_ms,
+            value.record.run_id.nonce,
+        },
+    );
+    zgui.text(
+        "Source/scope: {s}/{s}",
+        .{
+            @tagName(value.record.request.source),
+            @tagName(value.record.request.scope),
+        },
+    );
+    zgui.text(
+        "Transaction/revision: {d} expected {d} committed {?d}",
+        .{
+            value.record.request.transaction_id,
+            value.record.request.expected_revision,
+            value.record.committed_revision,
+        },
+    );
+    zgui.text(
+        "Time: wall {d} ms, tick {?d}, frame {?d}",
+        .{
+            value.record.wall_unix_ms,
+            value.record.authority_tick,
+            value.record.presentation_frame,
+        },
+    );
+    zgui.text("Disposition: {s}", .{@tagName(value.record.disposition)});
+    if (value.record.rejection) |rejection| switch (rejection) {
+        .common => |common| zgui.text("Rejection: {s}", .{@tagName(common)}),
+        .owner => |owner| zgui.text(
+            "Rejection: owner {d}:{d}",
+            .{ owner.domain, owner.code },
+        ),
+    };
+    if (value.before) |before| zgui.text(
+        "Before: ({d:.3}, {d:.3}, {d:.3})",
+        .{
+            before.pose.position[0],
+            before.pose.position[1],
+            before.pose.position[2],
+        },
+    );
+    zgui.text(
+        "Requested: ({d:.3}, {d:.3}, {d:.3})",
+        .{
+            value.requested.target_pose.position[0],
+            value.requested.target_pose.position[1],
+            value.requested.target_pose.position[2],
+        },
+    );
+    if (value.committed) |committed| zgui.text(
+        "Committed: ({d:.3}, {d:.3}, {d:.3})",
+        .{
+            committed.pose.position[0],
+            committed.pose.position[1],
+            committed.pose.position[2],
+        },
+    );
+}
+
 fn drawSaveFeedback(feedback: tool_module.SaveFeedback) void {
     zgui.separatorText("Durable save");
     const color: [4]f32 = switch (feedback.status) {
@@ -277,6 +347,7 @@ pub fn draw(state: *State, ctx: *const AuthoringInput) void {
         }
 
         drawOperationFeedback(view.feedback);
+        drawChangeEvidence(view.latest_change);
         drawSaveFeedback(view.save);
 
         const save_busy = switch (view.save.status) {

@@ -485,6 +485,7 @@ fn run(allocator: std.mem.Allocator, io: std.Io, mode: Mode) !Report {
             1,
             nextSequence(metrics.submitted[0]),
             crate_id,
+            0,
         )) != .shutting_down) {
             return error.M3ShutdownIngressNotClosed;
         }
@@ -1235,6 +1236,7 @@ fn proveProducerSaturation(
         0,
         nextSequence(metrics.submitted[0]),
         crate_id,
+        0,
     )) != .producer_quota_full) {
         return error.M3ProducerQuotaNotEnforced;
     }
@@ -1255,6 +1257,7 @@ fn proveProducerSaturation(
         0,
         nextSequence(metrics.submitted[0]),
         crate_id,
+        0,
     )) != .result_capacity_full) {
         return error.M3ProducerDeliveryReservationNotEnforced;
     }
@@ -1301,6 +1304,7 @@ fn proveProducerSaturation(
         0,
         nextSequence(metrics.submitted[0]),
         crate_id,
+        0,
     )) != .ingress_full) {
         return error.M3ProducerIngressCapacityNotEnforced;
     }
@@ -1327,6 +1331,7 @@ fn proveProducerSaturation(
         0,
         nextSequence(metrics.submitted[0]),
         crate_id,
+        0,
     )) != .transaction_table_full) {
         return error.M3ProducerTransactionCapacityNotEnforced;
     }
@@ -1365,7 +1370,12 @@ fn submitRelocation(
 ) !void {
     const status = authority.submitExternal(
         handle,
-        relocation(producer_index, sequence, crate_id),
+        relocation(
+            producer_index,
+            sequence,
+            crate_id,
+            metrics.submitted[0] + metrics.submitted[1],
+        ),
     );
     if (status != .accepted) return error.M3ExpectedProducerAdmission;
     metrics.submitted[producer_index] += 1;
@@ -1375,10 +1385,13 @@ fn relocation(
     producer_index: usize,
     sequence: u64,
     crate_id: CrateId,
+    expected_revision: u64,
 ) crate_feature.RelocateCrate {
     const offset: f32 = @floatFromInt(sequence % 17);
     return .{
         .transaction_id = transactionId(producer_index, sequence),
+        .source = .scripted_validation,
+        .scope = .session,
         .id = crate_id,
         .target_pose = .{ .position = .{
             offset - 8,
@@ -1386,6 +1399,7 @@ fn relocation(
             if (producer_index == 0) -2 else 2,
         } },
         .velocity = .zero,
+        .expected_revision = expected_revision,
     };
 }
 

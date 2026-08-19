@@ -373,16 +373,22 @@ test "two producers receive exact relocation completions and drain cleanly" {
             external_producers.SubmitStatus.accepted,
             authority.submitExternal(first, .{
                 .transaction_id = 100 + index,
+                .source = .scripted_validation,
+                .scope = .session,
                 .id = spawned.id,
                 .target_pose = .{ .position = .{ @floatFromInt(index), 2, 0 } },
+                .expected_revision = index * 2,
             }),
         );
         try std.testing.expectEqual(
             external_producers.SubmitStatus.accepted,
             authority.submitExternal(second, .{
                 .transaction_id = 200 + index,
+                .source = .scripted_validation,
+                .scope = .session,
                 .id = spawned.id,
                 .target_pose = .{ .position = .{ 0, 2, @floatFromInt(index) } },
+                .expected_revision = index * 2 + 1,
             }),
         );
     }
@@ -390,8 +396,11 @@ test "two producers receive exact relocation completions and drain cleanly" {
         external_producers.SubmitStatus.ingress_full,
         authority.submitExternal(first, .{
             .transaction_id = 999,
+            .source = .scripted_validation,
+            .scope = .session,
             .id = spawned.id,
             .target_pose = .{},
+            .expected_revision = 16,
         }),
     );
 
@@ -431,8 +440,11 @@ test "unowned relocation is retained and permanently closes the save boundary" {
     // violation that the public internal surface rejects.
     try authority.world.submit(.{ .relocate = .{
         .transaction_id = 77,
+        .source = .scripted_validation,
+        .scope = .session,
         .id = .{ .namespace = 8_102, .local = 1 },
         .target_pose = .{},
+        .expected_revision = 0,
     } });
     // Isolate the accounting rule directly: model one already-accepted
     // internal command whose outcome has not reached this composition yet.
@@ -457,8 +469,11 @@ test "unowned relocation is retained and permanently closes the save boundary" {
         external_producers.SubmitStatus.shutting_down,
         authority.submitExternal(producer, .{
             .transaction_id = 78,
+            .source = .scripted_validation,
+            .scope = .session,
             .id = .{ .namespace = 8_102, .local = 1 },
             .target_pose = .{},
+            .expected_revision = 0,
         }),
     );
     try std.testing.expect(!authority.canCommitSave());
@@ -518,8 +533,11 @@ test "internal relocation cannot alias an external producer transaction" {
     };
     const relocation = crate_feature.RelocateCrate{
         .transaction_id = 77,
+        .source = .scripted_validation,
+        .scope = .session,
         .id = id,
         .target_pose = .{ .position = .{ 1, 2, 0 } },
+        .expected_revision = 0,
     };
     try std.testing.expectEqual(
         external_producers.SubmitStatus.accepted,
@@ -620,8 +638,11 @@ test "restored tick exhaustion faults authority and closes producer ingress" {
         external_producers.SubmitStatus.shutting_down,
         authority.submitExternal(producer, .{
             .transaction_id = 1,
+            .source = .scripted_validation,
+            .scope = .session,
             .id = .{ .namespace = config.namespace, .local = 1 },
             .target_pose = .{},
+            .expected_revision = 0,
         }),
     );
     try std.testing.expect(!authority.canCommitSave());

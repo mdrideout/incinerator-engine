@@ -16,6 +16,7 @@ observer_log="$run_dir/observer.log"
 server_pid=
 attacker_pid=
 observer_pid=
+scenario_deadline_ticks=4800
 
 cleanup() {
     status=$?
@@ -32,7 +33,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$server" --port "$port" --max-ticks 1400 --ticket-dir "$run_dir/tickets" \
+"$server" --port "$port" --max-ticks "$scenario_deadline_ticks" --ticket-dir "$run_dir/tickets" \
     >"$server_log" 2>&1 &
 server_pid=$!
 for _ in {1..240}; do

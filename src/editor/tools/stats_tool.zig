@@ -14,7 +14,6 @@
 const std = @import("std");
 const zgui = @import("zgui");
 const tool_module = @import("../tool.zig");
-const FrameTimer = @import("../../timing.zig").FrameTimer;
 
 // ============================================================================
 // Tool Definition
@@ -47,17 +46,17 @@ pub const State = struct {
 // Draw Function
 // ============================================================================
 
-pub fn draw(state: *State, frame_timer: *const FrameTimer) void {
+pub fn draw(state: *State, frame_timing: *const tool_module.FrameTimingView) void {
     // Begin window - the "Stats" title matches our tool name
     if (zgui.begin("Stats", .{
         .flags = .{
             .no_collapse = false, // Allow collapsing
         },
     })) {
-        const timer = frame_timer;
+        const timer = frame_timing;
 
         // Current FPS (large, prominent)
-        const fps = timer.getFps();
+        const fps = timer.fps;
         zgui.text("FPS: ", .{});
         zgui.sameLine(.{});
 
@@ -72,7 +71,7 @@ pub fn draw(state: *State, frame_timer: *const FrameTimer) void {
         zgui.textColored(fps_color, "{d:.1}", .{fps});
 
         // Frame time
-        const frame_time_ms = timer.getDeltaTime() * 1000.0;
+        const frame_time_ms = timer.delta_seconds * 1000.0;
         zgui.text("Frame time: {d:.2} ms", .{frame_time_ms});
 
         // Update frame time history for graph

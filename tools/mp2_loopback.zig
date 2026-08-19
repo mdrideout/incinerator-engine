@@ -597,13 +597,16 @@ fn vehicleMoved(harness: *const Harness) bool {
 
 fn secondPeerEastRelevant(harness: *const Harness) bool {
     const client = &harness.peers[1].client;
-    return client.relevant_district_count == 1 and
-        client.relevant_districts[0].x == 1 and
-        client.relevant_districts[0].z == 0 and
+    var east_present = false;
+    for (client.relevant_districts[0..client.relevant_district_count]) |coord| {
+        east_present = east_present or (coord.x == 1 and coord.z == 0);
+    }
+    return client.relevant_district_count == budgets.product_relevant_districts_per_client and
+        east_present and
         client.world.character_count == 1 and
         client.world.vehicle_count == 1 and
         client.world.carryable_count == 1 and
-        client.world.npc_count != 0;
+        client.world.npc_count == budgets.product_npcs;
 }
 
 fn npcProjectionReady(harness: *const Harness) bool {

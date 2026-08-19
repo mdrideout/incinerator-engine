@@ -8,6 +8,9 @@ const std = @import("std");
 pub const contracts = @import("engine_contracts");
 pub const identity = contracts.identity;
 pub const transform = contracts.transform;
+pub const assets = contracts.assets;
+pub const authoring = contracts.authoring;
+pub const developer_endpoint = contracts.developer_endpoint;
 pub const diagnostic_contracts = contracts.diagnostics;
 pub const physics = contracts.physics;
 pub const physics_debug = contracts.physics_debug;
@@ -22,6 +25,8 @@ pub const gameplay_trace = @import("engine/gameplay_trace.zig");
 pub const runtime = @import("engine/runtime.zig");
 
 pub const PersistentId = identity.PersistentId;
+pub const AssetId = assets.AssetId;
+pub const AuthoringTarget = authoring.AuthoringTarget;
 pub const Pose = transform.Pose;
 pub const Runtime = runtime.Runtime;
 pub const RuntimeConfig = runtime.Config;
@@ -36,6 +41,9 @@ pub const BoundedQueue = bounded_queue.BoundedQueue;
 test "public engine surface remains coherent" {
     std.testing.refAllDecls(identity);
     std.testing.refAllDecls(transform);
+    std.testing.refAllDecls(assets);
+    std.testing.refAllDecls(authoring);
+    std.testing.refAllDecls(developer_endpoint);
     std.testing.refAllDecls(diagnostic_contracts);
     std.testing.refAllDecls(physics);
     std.testing.refAllDecls(physics_debug);

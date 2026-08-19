@@ -1,6 +1,7 @@
 # Engine Authoring Foundation
 
-**Status:** Approved roadmap; implementation not started
+**Status:** Approved roadmap; EA0 implementation candidate complete and
+awaiting product-owner review; EA1-EA5 not started
 
 **Date:** 2026-08-18
 
@@ -69,6 +70,12 @@ object model:
 ## Phase Sequence
 
 ### EA0 — Ownership, identity, and transaction boundary
+
+Implementation status: candidate complete on 2026-08-19; automated, installed,
+native Metal, architecture, dead-code, and documentation gates pass. The
+product-owner manual checkpoint remains before EA1. See the
+[EA0 implementation plan](ea0-ownership-identity-transaction-boundary.md) and
+[validation ledger](../validation/ea0-ownership-identity-transaction-boundary.md).
 
 - Accept ADR-029 and classify current renderer/content/vehicle/map/editor code.
 - Define engine-runtime, engine-tooling, game-runtime/content, and game-tooling

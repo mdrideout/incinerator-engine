@@ -36,7 +36,12 @@ else
 const c = sdl.c;
 
 pub const Snapshot = developer_diagnostics.Snapshot(sandbox_contracts.Diagnostics);
-const Export = developer_diagnostics.Export(sandbox_contracts.Diagnostics);
+const Export = struct {
+    schema: u16 = developer_diagnostics.schema_version,
+    snapshot: Snapshot,
+    entries: []const engine.diagnostic_contracts.Entry,
+    authored_change: ?editor_contract.AuthoringChangeEvidence = null,
+};
 pub const ProfileSpanView = developer_profile.SpanRing(
     developer_profile.default_span_capacity,
 ).BorrowedView;
@@ -214,6 +219,8 @@ pub const FrameInput = struct {
     render_view: *const editor_contract.RenderView,
     gameplay_view: *const editor_contract.GameplayView,
     neural_view: *const editor_contract.NeuralView,
+    authored_change: ?editor_contract.AuthoringChangeEvidence = null,
+    developer_endpoint: ?engine.developer_endpoint.Discovery = null,
     incident_input: incident_contract.InputSample = .{},
 };
 
@@ -915,6 +922,25 @@ pub const Owner = opaque {
         frame_timer: *const timing.FrameTimer,
         include_district_streams: bool,
     ) !Snapshot {
+        return self.snapshotWithAuthoring(
+            authority,
+            streaming,
+            frame_timer,
+            include_district_streams,
+            null,
+            null,
+        );
+    }
+
+    pub fn snapshotWithAuthoring(
+        self: *const Owner,
+        authority: AuthorityPort,
+        streaming: StreamingDiagnosticsPort,
+        frame_timer: *const timing.FrameTimer,
+        include_district_streams: bool,
+        authored_change: ?engine.authoring.AuthoredChange,
+        developer_endpoint: ?engine.developer_endpoint.Discovery,
+    ) !Snapshot {
         const state = ownerStateConst(self);
         const controller = state.controller.snapshot();
         const journal_stats = authority.journal().stats();
@@ -948,6 +974,8 @@ pub const Owner = opaque {
                 .frozen = journal_stats.frozen,
                 .trigger_armed = journal_stats.trigger_armed,
             },
+            .authored_change = authored_change,
+            .developer_endpoint = developer_endpoint,
         };
     }
 
@@ -1014,6 +1042,8 @@ pub const Owner = opaque {
         streaming: StreamingDiagnosticsPort,
         frame_timer: *const timing.FrameTimer,
         include_district_streams: bool,
+        authored_change: ?editor_contract.AuthoringChangeEvidence,
+        developer_endpoint: ?engine.developer_endpoint.Discovery,
         requests: []const developer_diagnostics.Request,
     ) void {
         for (requests) |request| switch (request) {
@@ -1026,6 +1056,8 @@ pub const Owner = opaque {
                 streaming,
                 frame_timer,
                 include_district_streams,
+                authored_change,
+                developer_endpoint,
             ) catch |err| {
                 _ = authority.record(.{
                     .severity = .warning,
@@ -1061,6 +1093,8 @@ pub const Owner = opaque {
         streaming: StreamingDiagnosticsPort,
         frame_timer: *const timing.FrameTimer,
         include_district_streams: bool,
+        authored_change: ?editor_contract.AuthoringChangeEvidence,
+        developer_endpoint: ?engine.developer_endpoint.Discovery,
     ) !void {
         const json = try self.diagnosticsJsonAlloc(
             std.heap.page_allocator,
@@ -1068,6 +1102,8 @@ pub const Owner = opaque {
             streaming,
             frame_timer,
             include_district_streams,
+            authored_change,
+            developer_endpoint,
         );
         defer std.heap.page_allocator.free(json);
         std.debug.print("S4_DIAGNOSTICS_JSON {s}\n", .{json});
@@ -1080,17 +1116,22 @@ pub const Owner = opaque {
         streaming: StreamingDiagnosticsPort,
         frame_timer: *const timing.FrameTimer,
         include_district_streams: bool,
+        authored_change: ?editor_contract.AuthoringChangeEvidence,
+        developer_endpoint: ?engine.developer_endpoint.Discovery,
     ) ![]u8 {
         var entry_storage: [engine.runtime.DiagnosticJournal.capacity]engine.diagnostic_contracts.Entry = undefined;
         const entries = authority.journal().copyChronological(&entry_storage);
         return developer_diagnostics.formatJsonAlloc(allocator, Export{
-            .snapshot = try self.snapshot(
+            .snapshot = try self.snapshotWithAuthoring(
                 authority,
                 streaming,
                 frame_timer,
                 include_district_streams,
+                if (authored_change) |change| change.record else null,
+                developer_endpoint,
             ),
             .entries = entries,
+            .authored_change = authored_change,
         });
     }
 
@@ -1276,11 +1317,13 @@ pub const Owner = opaque {
             state.visualization_requests.clear();
             state.neural_requests.clear();
         }
-        const diagnostics_snapshot = try self.snapshot(
+        const diagnostics_snapshot = try self.snapshotWithAuthoring(
             authority,
             streaming,
             frame.frame_timer,
             frame.include_district_streams,
+            if (frame.authored_change) |change| change.record else null,
+            frame.developer_endpoint,
         );
         const visualization_snapshot = self.visualizationSnapshot();
         if (state.incident) |capture| {
@@ -1295,6 +1338,7 @@ pub const Owner = opaque {
                 frame.camera.yaw,
                 frame.camera.pitch,
                 @floatCast(frame.frame_timer.getDeltaTime() * 1000.0),
+                frame.authored_change,
             );
             if (state.incident_screenshots) |*screenshots| {
                 const health = screenshots.health();
@@ -1321,10 +1365,34 @@ pub const Owner = opaque {
             capture.snapshot(state.incident_requests.rejected)
         else
             incident_contract.View{};
+        const forward = frame.camera.getForward();
+        const right = frame.camera.getRight();
+        const camera_view = editor_contract.CameraView{
+            .position = .{
+                frame.camera.position[0],
+                frame.camera.position[1],
+                frame.camera.position[2],
+            },
+            .yaw = frame.camera.yaw,
+            .pitch = frame.camera.pitch,
+            .fov = frame.camera.fov,
+            .near = frame.camera.near,
+            .far = frame.camera.far,
+            .move_speed = frame.camera.move_speed,
+            .look_sensitivity = frame.camera.look_sensitivity,
+            .forward = .{ forward[0], forward[1], forward[2] },
+            .right = .{ right[0], right[1], right[2] },
+        };
+        const frame_timing_view = editor_contract.FrameTimingView{
+            .fps = frame.frame_timer.getFps(),
+            .delta_seconds = frame.frame_timer.getDeltaTime(),
+            .ticks_this_frame = frame.frame_timer.ticks_this_frame,
+            .total_frames = frame.frame_timer.total_frames,
+        };
         state.editor.draw(gpu_renderer, .{
             .wall_unix_ms = wallNowMs(state.io),
-            .camera = frame.camera,
-            .frame_timer = frame.frame_timer,
+            .camera = &camera_view,
+            .frame_timing = &frame_timing_view,
             .developer = .{
                 .snapshot = &diagnostics_snapshot,
                 .journal = authority.journal().borrowedChronological(),
@@ -1372,6 +1440,8 @@ pub const Owner = opaque {
             streaming,
             frame.frame_timer,
             frame.include_district_streams,
+            frame.authored_change,
+            frame.developer_endpoint,
             state.diagnostic_requests.slice(),
         );
         self.applyGameplayTraceRequests(

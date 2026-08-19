@@ -9,6 +9,8 @@ const std = @import("std");
 const engine = @import("incinerator_engine");
 const crates = @import("crate_contract");
 
+pub const CrateOutcome = crates.Outcome;
+
 pub const default_history_capacity: usize = 64;
 pub const request_capacity: usize = 16;
 
@@ -27,6 +29,8 @@ pub const PendingSummary = struct {
     kind: OperationKind,
     transaction_id: u64,
     id: engine.PersistentId,
+    request: engine.authoring.Request,
+    requested: RelocateRequest,
 };
 
 pub const Snapshot = struct {
@@ -92,6 +96,114 @@ pub const RequestBuffer = struct {
 
 pub const ObserveResult = enum { unrelated, applied, rejected };
 
+pub const ObservationContext = struct {
+    run_id: engine.authoring.RunId,
+    wall_unix_ms: i64,
+    authority_tick: ?u64,
+    presentation_frame: ?u64,
+};
+
+/// Crate-owned typed authored-change evidence. The generic record supplies
+/// stable correlation and timing while these fields retain the actual concrete
+/// values instead of converting them into a property bag.
+pub const ChangeEvidence = struct {
+    record: engine.authoring.AuthoredChange,
+    operation: OperationKind,
+    id: engine.PersistentId,
+    requested: RelocateRequest,
+    before: ?engine.physics.BodyState = null,
+    committed: ?engine.physics.BodyState = null,
+    owner_rejection: ?crates.RejectionReason = null,
+    actual_revision: ?u64 = null,
+
+    pub fn init(
+        pending: PendingSummary,
+        outcome: crates.Outcome,
+        context: ObservationContext,
+    ) !ChangeEvidence {
+        const requested_digest = try digestRelocateRequest(pending.requested);
+        var result = ChangeEvidence{
+            .record = .{
+                .run_id = context.run_id,
+                .request = pending.request,
+                .committed_revision = null,
+                .wall_unix_ms = context.wall_unix_ms,
+                .authority_tick = context.authority_tick,
+                .presentation_frame = context.presentation_frame,
+                .disposition = .rejected,
+                .rejection = .{ .common = .invalid_request },
+                .values = .{ .requested = requested_digest },
+            },
+            .operation = pending.kind,
+            .id = pending.id,
+            .requested = pending.requested,
+        };
+
+        switch (outcome) {
+            .relocated => |relocated| {
+                if (relocated.transaction_id != pending.transaction_id or
+                    !std.meta.eql(relocated.id, pending.id))
+                {
+                    return error.UnrelatedAuthoringEvidence;
+                }
+                result.before = try relocated.before.normalized();
+                result.committed = try relocated.after.normalized();
+                result.record.committed_revision = relocated.committed_revision;
+                result.record.disposition = .accepted;
+                result.record.rejection = null;
+                result.record.values.before = try digestBodyState(result.before.?);
+                result.record.values.committed = try digestBodyState(result.committed.?);
+            },
+            .rejected => |rejected| {
+                if (rejected.command != .relocate or
+                    rejected.transaction_id == null or
+                    rejected.transaction_id.? != pending.transaction_id or
+                    rejected.id == null or !std.meta.eql(rejected.id.?, pending.id))
+                {
+                    return error.UnrelatedAuthoringEvidence;
+                }
+                result.owner_rejection = rejected.reason;
+                result.actual_revision = rejected.actual_revision;
+                result.record.rejection = .{ .common = switch (rejected.reason) {
+                    .capacity_reached => .owner_busy,
+                    .crate_not_found, .not_owned => .target_not_found,
+                    .state_conflict => .stale_revision,
+                } };
+            },
+            else => return error.UnrelatedAuthoringEvidence,
+        }
+        try result.record.validate();
+        return result;
+    }
+
+    pub fn rejectedBeforeOwnerOutcome(
+        pending: PendingSummary,
+        rejection: engine.authoring.CommonRejection,
+        context: ObservationContext,
+    ) !ChangeEvidence {
+        const result = ChangeEvidence{
+            .record = .{
+                .run_id = context.run_id,
+                .request = pending.request,
+                .committed_revision = null,
+                .wall_unix_ms = context.wall_unix_ms,
+                .authority_tick = context.authority_tick,
+                .presentation_frame = context.presentation_frame,
+                .disposition = .rejected,
+                .rejection = .{ .common = rejection },
+                .values = .{
+                    .requested = try digestRelocateRequest(pending.requested),
+                },
+            },
+            .operation = pending.kind,
+            .id = pending.id,
+            .requested = pending.requested,
+        };
+        try result.record.validate();
+        return result;
+    }
+};
+
 /// Monotonic transaction source owned by the composition. Sharing one source
 /// prevents correlation aliases if a later composition adds multiple
 /// producers, but it does not route outcomes by itself. The visual host keeps
@@ -121,6 +233,8 @@ pub fn Controller(comptime history_capacity: usize) type {
             kind: OperationKind,
             transaction_id: u64,
             id: engine.PersistentId,
+            request: engine.authoring.Request,
+            requested: RelocateRequest,
             prune_identity_after_outcome: bool = false,
         };
 
@@ -147,6 +261,8 @@ pub fn Controller(comptime history_capacity: usize) type {
                     .kind = pending.kind,
                     .transaction_id = pending.transaction_id,
                     .id = pending.id,
+                    .request = pending.request,
+                    .requested = pending.requested,
                 } else null,
                 .undo_count = @intCast(self.undo_len),
                 .redo_count = @intCast(self.redo_len),
@@ -201,6 +317,8 @@ pub fn Controller(comptime history_capacity: usize) type {
             }
             return self.begin(.edit, .{
                 .transaction_id = try self.transactions.take(),
+                .source = .ui,
+                .scope = .session,
                 .id = request.id,
                 .target_pose = request.target_pose,
                 .velocity = request.velocity,
@@ -216,6 +334,8 @@ pub fn Controller(comptime history_capacity: usize) type {
             self.selected = change.id;
             return self.begin(.undo, .{
                 .transaction_id = transaction_id,
+                .source = .ui,
+                .scope = .session,
                 .id = change.id,
                 .target_pose = change.before.pose,
                 .velocity = .{ .exact = change.before.velocity },
@@ -231,6 +351,8 @@ pub fn Controller(comptime history_capacity: usize) type {
             self.selected = change.id;
             return self.begin(.redo, .{
                 .transaction_id = transaction_id,
+                .source = .ui,
+                .scope = .session,
                 .id = change.id,
                 .target_pose = change.after.pose,
                 .velocity = .{ .exact = change.after.velocity },
@@ -339,10 +461,17 @@ pub fn Controller(comptime history_capacity: usize) type {
             kind: OperationKind,
             relocation: crates.RelocateCrate,
         ) crates.Command {
+            const request = relocation.authoringRequest() catch unreachable;
             self.pending = .{
                 .kind = kind,
                 .transaction_id = relocation.transaction_id,
                 .id = relocation.id,
+                .request = request,
+                .requested = .{
+                    .id = relocation.id,
+                    .target_pose = relocation.target_pose,
+                    .velocity = relocation.velocity,
+                },
             };
             return .{ .relocate = relocation };
         }
@@ -415,6 +544,50 @@ fn validateRelocateRequest(request: RelocateRequest) !void {
         .preserve, .zero => {},
         .exact => |velocity| try velocity.validate(),
     }
+}
+
+fn digestRelocateRequest(request: RelocateRequest) !engine.assets.Digest {
+    var writer = engine.contracts.replay.Writer.init();
+    writer.writeBytes("incinerator.crate-relocate-request.v1");
+    writer.writeU64(request.id.namespace);
+    writer.writeU64(request.id.local);
+    try writePoseDigest(&writer, request.target_pose);
+    switch (request.velocity) {
+        .preserve => writer.writeU8(1),
+        .zero => writer.writeU8(2),
+        .exact => |velocity| {
+            writer.writeU8(3);
+            try writeVelocityDigest(&writer, velocity);
+        },
+    }
+    return writer.final();
+}
+
+fn digestBodyState(raw: engine.physics.BodyState) !engine.assets.Digest {
+    const state = try raw.normalized();
+    var writer = engine.contracts.replay.Writer.init();
+    writer.writeBytes("incinerator.crate-body-state.v1");
+    try writePoseDigest(&writer, state.pose);
+    try writeVelocityDigest(&writer, state.velocity);
+    return writer.final();
+}
+
+fn writePoseDigest(
+    writer: *engine.contracts.replay.Writer,
+    raw: engine.physics.Pose,
+) !void {
+    const pose = try raw.normalized();
+    for (pose.position) |value| try writer.writeF32(value);
+    for (pose.rotation) |value| try writer.writeF32(value);
+}
+
+fn writeVelocityDigest(
+    writer: *engine.contracts.replay.Writer,
+    velocity: engine.physics.Velocity,
+) !void {
+    try velocity.validate();
+    for (velocity.linear) |value| try writer.writeF32(value);
+    for (velocity.angular) |value| try writer.writeF32(value);
 }
 
 fn removeIdentity(items: []ChangeSet, id: engine.PersistentId) usize {
@@ -491,6 +664,73 @@ test "edit undo redo use one correlated semantic command and revision chain" {
     try std.testing.expectEqual(@as(u16, 1), snapshot.undo_count);
     try std.testing.expectEqual(@as(u16, 0), snapshot.redo_count);
     try std.testing.expect(snapshot.pending == null);
+}
+
+test "crate evidence retains generic audit fields and concrete values" {
+    const id = engine.PersistentId{ .namespace = 7, .local = 30 };
+    var transactions = TransactionSequencer{};
+    var controller = Controller(2).init(&transactions);
+    try controller.select(id);
+    const before = testState(0, 2);
+    const after = testState(5, 0);
+    const command = try controller.beginEdit(.{
+        .id = id,
+        .target_pose = after.pose,
+        .velocity = .zero,
+    }, 0);
+    const pending = controller.snapshot().pending.?;
+    const outcome = relocatedOutcome(command, before, after, 1);
+    const evidence = try ChangeEvidence.init(pending, outcome, .{
+        .run_id = .{ .started_wall_unix_ms = 1_700_000_000_000, .nonce = 7 },
+        .wall_unix_ms = 1_700_000_000_100,
+        .authority_tick = 3,
+        .presentation_frame = 9,
+    });
+    try evidence.record.validate();
+    try std.testing.expectEqual(engine.authoring.Source.ui, evidence.record.request.source);
+    try std.testing.expectEqual(engine.authoring.EditScope.session, evidence.record.request.scope);
+    try std.testing.expectEqual(engine.authoring.Disposition.accepted, evidence.record.disposition);
+    try std.testing.expectEqual(@as(?u64, 1), evidence.record.committed_revision);
+    try std.testing.expectEqualDeep(before, evidence.before.?);
+    try std.testing.expectEqualDeep(after, evidence.committed.?);
+    try std.testing.expect(evidence.record.values.before != null);
+    try std.testing.expect(evidence.record.values.requested != null);
+    try std.testing.expect(evidence.record.values.committed != null);
+}
+
+test "crate evidence maps stale revision to typed rejected record" {
+    const id = engine.PersistentId{ .namespace = 7, .local = 31 };
+    var transactions = TransactionSequencer{};
+    var controller = Controller(2).init(&transactions);
+    try controller.select(id);
+    const command = try controller.beginEdit(.{
+        .id = id,
+        .target_pose = testState(5, 0).pose,
+    }, 2);
+    const pending = controller.snapshot().pending.?;
+    const evidence = try ChangeEvidence.init(pending, .{ .rejected = .{
+        .command = .relocate,
+        .reason = .state_conflict,
+        .transaction_id = command.relocate.transaction_id,
+        .id = id,
+        .expected_revision = 2,
+        .actual_revision = 3,
+    } }, .{
+        .run_id = .{ .started_wall_unix_ms = 1_700_000_000_000, .nonce = 8 },
+        .wall_unix_ms = 1_700_000_000_100,
+        .authority_tick = 4,
+        .presentation_frame = null,
+    });
+    try evidence.record.validate();
+    try std.testing.expectEqual(engine.authoring.Disposition.rejected, evidence.record.disposition);
+    try std.testing.expectEqual(
+        engine.authoring.CommonRejection.stale_revision,
+        evidence.record.rejection.?.common,
+    );
+    try std.testing.expectEqual(crates.RejectionReason.state_conflict, evidence.owner_rejection.?);
+    try std.testing.expectEqual(@as(?u64, 3), evidence.actual_revision);
+    try std.testing.expect(evidence.before == null);
+    try std.testing.expect(evidence.committed == null);
 }
 
 test "multi-level same-crate undo and redo follow the identity revision" {

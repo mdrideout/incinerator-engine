@@ -10013,7 +10013,11 @@ test "full-world NPC policy projects the sandbox cohort across district seams" {
     const participant_index = @as(usize, welcome.participant.index) - 1;
 
     var npcs_ready = false;
-    for (0..32) |_| {
+    // Authored population bootstrap crosses the asynchronous content worker.
+    // Match the established automatic-fixture settle window above and yield
+    // between ticks so a cold, highly parallel build does not starve the
+    // worker while this test spins the authority.
+    for (0..256) |_| {
         try authority.tick();
         while (takeOutboundForTest(authority) != null) {}
         for (core.npcs[0..budgets.product_npcs]) |npc| {
@@ -10023,6 +10027,7 @@ test "full-world NPC policy projects the sandbox cohort across district seams" {
             }
         }
         if (npcs_ready and core.participants[participant_index].character != null) break;
+        std.Thread.yield() catch {};
     }
     try std.testing.expect(npcs_ready);
 

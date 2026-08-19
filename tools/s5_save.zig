@@ -20,6 +20,8 @@ const smoke_boundary_slot_id = "s8-npc-waiting";
 const smoke_content_unloaded_slot_id = "s7-content-unloaded";
 const app_slot_id = "sandbox";
 const smoke_namespace: u64 = 0x5335_5341_5645;
+const one_district_body_count: usize = sandbox_contracts.district_static_box_count;
+const two_district_body_count: usize = 2 * one_district_body_count;
 const smoke_target_pose = engine.physics.Pose{
     .position = .{ 6, 3, -2 },
     .rotation = .{ 0, 0.70710677, 0, 0.70710677 },
@@ -129,7 +131,13 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
 
     const west_ticket = try loadDistrict(init.io, &world, 10, .{ .x = 0, .z = 0 });
     var east_ticket = try loadDistrict(init.io, &world, 11, .{ .x = 1, .z = 0 });
-    if (world.districtCount() != 2 or world.districtBodyCount() != 6) {
+    if (world.districtCount() != 2 or
+        world.districtBodyCount() != two_district_body_count)
+    {
+        std.debug.print(
+            "save smoke district authority mismatch: districts={d} bodies={d}\n",
+            .{ world.districtCount(), world.districtBodyCount() },
+        );
         return error.MultiDistrictSaveAuthorityMissing;
     }
 
@@ -509,9 +517,9 @@ fn verifySmokeOwnershipSlot(
                 npc.state != .active or
                 !npc.controller_present or
                 world.districtCount() != 2 or
-                world.districtBodyCount() != 6 or
+                world.districtBodyCount() != two_district_body_count or
                 world.entityCount() != 6 or
-                world.bodyCount() != 8)
+                world.bodyCount() != 6)
             {
                 return error.RestoredHeldInteractionStateMismatch;
             }
@@ -522,9 +530,9 @@ fn verifySmokeOwnershipSlot(
                 npc.state != .waiting_at_boundary or
                 !npc.controller_present or
                 world.districtCount() != 1 or
-                world.districtBodyCount() != 3 or
+                world.districtBodyCount() != one_district_body_count or
                 world.entityCount() != 5 or
-                world.bodyCount() != 5)
+                world.bodyCount() != 4)
             {
                 return error.RestoredWaitingNpcStateMismatch;
             }
@@ -535,9 +543,9 @@ fn verifySmokeOwnershipSlot(
                 npc.state != .dormant or
                 npc.controller_present or
                 world.districtCount() != 1 or
-                world.districtBodyCount() != 3 or
+                world.districtBodyCount() != one_district_body_count or
                 world.entityCount() != 5 or
-                world.bodyCount() != 6)
+                world.bodyCount() != 5)
             {
                 return error.RestoredContentUnloadedInteractionStateMismatch;
             }

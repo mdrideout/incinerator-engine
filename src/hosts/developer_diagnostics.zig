@@ -170,6 +170,46 @@ pub const JournalSummary = struct {
     trigger_armed: bool,
 };
 
+fn formatAuthoringAlloc(
+    allocator: std.mem.Allocator,
+    change: ?engine.authoring.AuthoredChange,
+) ![]u8 {
+    const value = change orelse
+        return allocator.dupe(u8, "authoring=none");
+    return std.fmt.allocPrint(
+        allocator,
+        "authoring={s} transaction={d} source={s} scope={s} " ++
+            "expected_revision={d} committed_revision={?d} tick={?d} frame={?d}",
+        .{
+            @tagName(value.disposition),
+            value.request.transaction_id,
+            @tagName(value.request.source),
+            @tagName(value.request.scope),
+            value.request.expected_revision,
+            value.committed_revision,
+            value.authority_tick,
+            value.presentation_frame,
+        },
+    );
+}
+
+fn formatDeveloperEndpointAlloc(
+    allocator: std.mem.Allocator,
+    discovery: ?engine.developer_endpoint.Discovery,
+) ![]u8 {
+    const value = discovery orelse
+        return allocator.dupe(u8, "developer_endpoint=absent");
+    return std.fmt.allocPrint(
+        allocator,
+        "developer_endpoint={s} protocol={d} schemas={d}",
+        .{
+            @tagName(value.lifecycle),
+            value.protocol_cohort,
+            value.schema_count,
+        },
+    );
+}
+
 pub const Request = union(enum) {
     arm_freeze: engine.diagnostics.FreezeMatch,
     disarm_freeze,
@@ -223,6 +263,11 @@ pub fn Snapshot(comptime SimulationDiagnostics: type) type {
         /// than fabricate a zero-time visual frame.
         host_time: ?HostTime,
         journal: JournalSummary,
+        /// Latest immutable generic record. Concrete feature/tool snapshots
+        /// retain their typed values next to this cross-owner projection.
+        authored_change: ?engine.authoring.AuthoredChange = null,
+        /// Discovery metadata only. EA0 deliberately supplies no transport.
+        developer_endpoint: ?engine.developer_endpoint.Discovery = null,
     };
 }
 
@@ -557,10 +602,27 @@ pub fn formatTextAlloc(
         snapshot.authority_session,
     );
     defer allocator.free(authority_text);
+    const authoring_text = try formatAuthoringAlloc(
+        allocator,
+        snapshot.authored_change,
+    );
+    defer allocator.free(authoring_text);
+    const endpoint_text = try formatDeveloperEndpointAlloc(
+        allocator,
+        snapshot.developer_endpoint,
+    );
+    defer allocator.free(endpoint_text);
     const subsystem_text = try std.fmt.allocPrint(
         allocator,
-        "{s} {s} {s} {s}",
-        .{ district_streams_text, npc_text, npc_encounter_text, authority_text },
+        "{s} {s} {s} {s} {s} {s}",
+        .{
+            district_streams_text,
+            npc_text,
+            npc_encounter_text,
+            authority_text,
+            authoring_text,
+            endpoint_text,
+        },
     );
     defer allocator.free(subsystem_text);
     if (snapshot.simulation.first_fault) |fault| {

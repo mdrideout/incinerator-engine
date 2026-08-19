@@ -779,7 +779,9 @@ fn validateCommand(command: Command) !void {
             }
         },
         .relocate => |relocation| {
-            if (relocation.transaction_id == 0) return error.InvalidTransactionId;
+            const request = try relocation.authoringRequest();
+            try request.validate();
+            if (request.scope != .session) return error.AuthoringScopeNotSupported;
             try relocation.id.validate();
             _ = try relocation.target_pose.normalized();
             switch (relocation.velocity) {
@@ -837,6 +839,8 @@ fn writeRelocation(
     relocation: RelocateCrate,
 ) !void {
     writer.writeU64(relocation.transaction_id);
+    writer.writeU8(@intFromEnum(relocation.source));
+    writer.writeU8(@intFromEnum(relocation.scope));
     writePersistentId(writer, relocation.id);
     try writePose(writer, relocation.target_pose);
     switch (relocation.velocity) {
@@ -1832,6 +1836,8 @@ test "relocation velocity policies commit exact change sets without interpolatio
     }).normalized();
     try feature.enqueue(.{ .relocate = .{
         .transaction_id = 101,
+        .source = .scripted_validation,
+        .scope = .session,
         .id = id,
         .target_pose = preserve_pose,
         .velocity = .preserve,
@@ -1869,6 +1875,8 @@ test "relocation velocity policies commit exact change sets without interpolatio
     const zero_pose = engine.physics.Pose{ .position = .{ 30, 31, 32 } };
     try feature.enqueue(.{ .relocate = .{
         .transaction_id = 102,
+        .source = .scripted_validation,
+        .scope = .session,
         .id = id,
         .target_pose = zero_pose,
         .velocity = .zero,
@@ -1894,6 +1902,8 @@ test "relocation velocity policies commit exact change sets without interpolatio
     }).normalized();
     try feature.enqueue(.{ .relocate = .{
         .transaction_id = 103,
+        .source = .scripted_validation,
+        .scope = .session,
         .id = id,
         .target_pose = exact_pose,
         .velocity = .{ .exact = exact_velocity },
@@ -1940,30 +1950,39 @@ test "relocation validates transaction pose velocity and optimistic revision" {
     };
 
     try std.testing.expectError(
-        error.InvalidTransactionId,
+        error.InvalidAuthoringTransactionId,
         feature.enqueue(.{ .relocate = .{
             .transaction_id = 0,
+            .source = .scripted_validation,
+            .scope = .session,
             .id = id,
             .target_pose = .{},
+            .expected_revision = 0,
         } }),
     );
     try std.testing.expectError(
         error.DegenerateQuaternion,
         feature.enqueue(.{ .relocate = .{
             .transaction_id = 1,
+            .source = .scripted_validation,
+            .scope = .session,
             .id = id,
             .target_pose = .{ .rotation = .{ 0, 0, 0, 0 } },
+            .expected_revision = 0,
         } }),
     );
     try std.testing.expectError(
         error.NonFinitePhysicsValue,
         feature.enqueue(.{ .relocate = .{
             .transaction_id = 1,
+            .source = .scripted_validation,
+            .scope = .session,
             .id = id,
             .target_pose = .{},
             .velocity = .{ .exact = .{
                 .linear = .{ std.math.nan(f32), 0, 0 },
             } },
+            .expected_revision = 0,
         } }),
     );
     try std.testing.expectEqual(@as(u32, 0), feature.diagnostics().commands.occupancy);
@@ -1971,6 +1990,8 @@ test "relocation validates transaction pose velocity and optimistic revision" {
     const body_before = bodies.states[0];
     try feature.enqueue(.{ .relocate = .{
         .transaction_id = 77,
+        .source = .scripted_validation,
+        .scope = .session,
         .id = id,
         .target_pose = .{ .position = .{ 99, 98, 97 } },
         .expected_revision = 9,
@@ -2020,8 +2041,11 @@ test "relocation rejects deleted and non-crate identities without stale body acc
     const non_crate_id = try runtime.identity(foreign_runtime_id);
     try feature.enqueue(.{ .relocate = .{
         .transaction_id = 1,
+        .source = .scripted_validation,
+        .scope = .session,
         .id = non_crate_id,
         .target_pose = .{ .position = .{ 1, 2, 3 } },
+        .expected_revision = 0,
     } });
     try feature.enqueue(.{ .spawn = .{ .request_id = 2, .pose = .{} } });
     try runtime.tick();
@@ -2040,8 +2064,11 @@ test "relocation rejects deleted and non-crate identities without stale body acc
     // at commit, so it cannot retain or dereference the destroyed body handle.
     try feature.enqueue(.{ .relocate = .{
         .transaction_id = 3,
+        .source = .scripted_validation,
+        .scope = .session,
         .id = spawned_id,
         .target_pose = .{ .position = .{ 9, 9, 9 } },
+        .expected_revision = 0,
     } });
     try feature.enqueue(.{ .despawn = .{ .id = spawned_id } });
     try runtime.tick();
@@ -2093,6 +2120,8 @@ test "relocation adapter failure leaves body and revision unchanged" {
     bodies.fail_relocate = true;
     try feature.enqueue(.{ .relocate = .{
         .transaction_id = 1,
+        .source = .scripted_validation,
+        .scope = .session,
         .id = id,
         .target_pose = .{ .position = .{ 10, 20, 30 } },
         .expected_revision = 0,
@@ -2152,6 +2181,8 @@ test "relocation revision exhaustion fails before adapter mutation" {
     const exhausted_body_before = exhausted_bodies.states[0];
     try exhausted_feature.enqueue(.{ .relocate = .{
         .transaction_id = 2,
+        .source = .scripted_validation,
+        .scope = .session,
         .id = exhausted_id,
         .target_pose = .{ .position = .{ 8, 8, 8 } },
         .expected_revision = std.math.maxInt(u64),
@@ -2198,6 +2229,8 @@ test "queued and staged relocations remain pending and affect logical digest" {
 
     try feature.enqueue(.{ .relocate = .{
         .transaction_id = 19,
+        .source = .scripted_validation,
+        .scope = .session,
         .id = id,
         .target_pose = .{ .position = .{ 3, 4, 5 } },
         .velocity = .preserve,

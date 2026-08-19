@@ -1,6 +1,7 @@
 # ADR-029: Engine, Game, and Authoring Ownership Boundary
 
-**Status:** Accepted; EA0-EA5 implementation pending
+**Status:** Accepted; EA0 implementation candidate complete and awaiting
+product-owner review; EA1-EA5 pending
 
 **Date:** 2026-08-18
 

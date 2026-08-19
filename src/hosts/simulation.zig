@@ -2977,6 +2977,8 @@ test "captured exact crate relocation replays and reports tick two crate diverge
 
         try simulation.submit(.{ .relocate = .{
             .transaction_id = 61,
+            .source = .scripted_validation,
+            .scope = .session,
             .id = id,
             .target_pose = target_pose,
             .velocity = .{ .exact = target_velocity },

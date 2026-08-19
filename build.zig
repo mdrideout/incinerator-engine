@@ -1280,6 +1280,7 @@ pub fn build(b: *std.Build) void {
             .{ .name = "session_protocol", .module = session_protocol_module },
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
+            .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
         },
     });
     if (editor_gui_module) |module| {
@@ -2085,6 +2086,36 @@ pub fn build(b: *std.Build) void {
         "Reject visual imports from the headless source graph",
     );
     verify_headless_boundary_step.dependOn(&verify_headless_boundary.step);
+
+    const ea0_ownership_exe = b.addExecutable(.{
+        .name = "ea0_ownership_boundary",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/ea0_ownership_boundary.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const verify_ea0_ownership = b.addRunArtifact(ea0_ownership_exe);
+    verify_ea0_ownership.setCwd(b.path("."));
+    const verify_ea0_ownership_step = b.step(
+        "verify-ea0-ownership",
+        "Enforce the EA0 engine/game runtime/tooling ownership manifest",
+    );
+    verify_ea0_ownership_step.dependOn(&verify_ea0_ownership.step);
+
+    const ea0_ownership_tests = b.addTest(.{
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/ea0_ownership_boundary.zig"),
+            .target = b.graph.host,
+            .optimize = optimize,
+        }),
+    });
+    const run_ea0_ownership_tests = b.addRunArtifact(ea0_ownership_tests);
+    const test_ea0_ownership_step = b.step(
+        "test-ea0-ownership",
+        "Run EA0 ownership-policy negative tests",
+    );
+    test_ea0_ownership_step.dependOn(&run_ea0_ownership_tests.step);
 
     const headless_linkage_exe = b.addExecutable(.{
         .name = "headless_linkage_test",
@@ -4196,6 +4227,8 @@ pub fn build(b: *std.Build) void {
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
+    test_step.dependOn(verify_ea0_ownership_step);
+    test_step.dependOn(&run_ea0_ownership_tests.step);
     test_step.dependOn(verify_m5_architecture_step);
     test_step.dependOn(verify_m6_architecture_step);
     test_step.dependOn(verify_mp6_architecture_step);

@@ -8,6 +8,7 @@ const builtin = @import("builtin");
 const build_options = @import("build_options");
 const engine = @import("incinerator_engine");
 const sandbox_replay = @import("sandbox_replay");
+const sandbox_authoring = @import("sandbox_authoring");
 const sandbox_host_contracts = @import("sandbox_host_contracts");
 const session_protocol = @import("session_protocol");
 const authority_diagnostics = @import("session_authority_diagnostics");
@@ -792,7 +793,7 @@ const Writer = struct {
         self.queue.unlock();
         var manifest_writer = std.Io.Writer.fixed(&manifest_buffer);
         try manifest_writer.print(
-            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.14\",\"jolt\":\"5.5.0\",\"protocol\":{d},\"replay\":{d},\"snapshot\":{d}}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true,\"navigation_lineage\":true,\"population_activity\":true,\"deterministic_render_state\":true,\"ranged_combat\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
+            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.14\",\"jolt\":\"5.5.0\",\"protocol\":{d},\"replay\":{d},\"snapshot\":{d}}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true,\"navigation_lineage\":true,\"population_activity\":true,\"deterministic_render_state\":true,\"ranged_combat\":true,\"authored_changes\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
             .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), manifest_protocol_cohort, sandbox_replay.schema_cohort, manifest_snapshot_cohort, @tagName(self.hardening_profile), self.write_failure_after_bytes, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, configured_visual_budget, self.budget_bytes - configured_visual_budget, visual_reserved, visual_exhausted, visual_rejections },
         );
         try manifest_writer.print(
@@ -860,6 +861,12 @@ const ActiveAnomaly = struct {
     semantic_id_present: bool = false,
 };
 
+const AuthoredChangeKey = struct {
+    run_started_wall_unix_ms: i64,
+    run_nonce: u64,
+    transaction_id: engine.authoring.TransactionId,
+};
+
 pub const Capture = struct {
     allocator: std.mem.Allocator,
     io: std.Io,
@@ -876,6 +883,7 @@ pub const Capture = struct {
     last_diagnostic_sequence: u64 = 0,
     runtime_fault_recorded: bool = false,
     authority_cycle_fault_recorded: bool = false,
+    last_authored_change: ?AuthoredChangeKey = null,
     last_state_sample_ns: u64 = 0,
     last_input_sample_ns: u64 = 0,
     last_metrics_sample_ns: u64 = 0,
@@ -1043,11 +1051,13 @@ pub const Capture = struct {
         camera_yaw: f32,
         camera_pitch: f32,
         frame_time_ms: f32,
+        authored_change: ?sandbox_authoring.ChangeEvidence,
     ) void {
         const now = monotonicNowNs(self.io);
         self.drainGameplay(gameplay, now);
         self.drainDiagnostics(diagnostics, now);
         self.recordRetainedFaults(runtime_fault, authority_cycle_fault, now);
+        if (authored_change) |change| self.recordAuthoredChange(change, now);
         if (now -| self.last_state_sample_ns >= 250 * std.time.ns_per_ms) {
             self.last_state_sample_ns = now;
             self.recordState(view, camera_yaw, camera_pitch, now);
@@ -1065,6 +1075,239 @@ pub const Capture = struct {
             self.recordMetrics(view, frame_time_ms, now);
         }
         self.finishPostRoll(now);
+    }
+
+    fn recordAuthoredChange(
+        self: *Capture,
+        evidence: sandbox_authoring.ChangeEvidence,
+        now: u64,
+    ) void {
+        const change = evidence.record;
+        const key = AuthoredChangeKey{
+            .run_started_wall_unix_ms = change.run_id.started_wall_unix_ms,
+            .run_nonce = change.run_id.nonce,
+            .transaction_id = change.request.transaction_id,
+        };
+        if (self.last_authored_change) |last| {
+            if (std.meta.eql(last, key)) return;
+        }
+
+        var target_namespace: u64 = 0;
+        var target_local: u64 = 0;
+        var member_namespace: u64 = 0;
+        var member_local: u64 = 0;
+        const target_kind: []const u8 = switch (change.request.target) {
+            .persistent_entity => |id| target: {
+                target_namespace = id.namespace;
+                target_local = id.local;
+                break :target "persistent_entity";
+            },
+            .asset => |id| target: {
+                target_namespace = id.namespace;
+                target_local = id.local;
+                break :target "asset";
+            },
+            .asset_member => |member| target: {
+                target_namespace = member.asset.namespace;
+                target_local = member.asset.local;
+                member_namespace = member.member.namespace;
+                member_local = member.member.local;
+                break :target "asset_member";
+            },
+        };
+
+        var rejection_kind: []const u8 = "none";
+        var rejection_name: []const u8 = "";
+        var owner_rejection_domain: u32 = 0;
+        var owner_rejection_code: u32 = 0;
+        if (change.rejection) |rejection| switch (rejection) {
+            .common => |common| {
+                rejection_kind = "common";
+                rejection_name = @tagName(common);
+            },
+            .owner => |owner| {
+                rejection_kind = "owner";
+                owner_rejection_domain = owner.domain;
+                owner_rejection_code = owner.code;
+            },
+        };
+
+        var durable_namespace: u64 = 0;
+        var durable_local: u64 = 0;
+        var durable_digest: [64]u8 = @splat(0);
+        var durable_digest_len: usize = 0;
+        if (change.durable_commit) |commit| {
+            durable_namespace = commit.asset.namespace;
+            durable_local = commit.asset.local;
+            durable_digest = std.fmt.bytesToHex(commit.digest, .lower);
+            durable_digest_len = durable_digest.len;
+        }
+        const before_digest = if (change.values.before) |digest|
+            std.fmt.bytesToHex(digest, .lower)
+        else
+            [_]u8{0} ** 64;
+        const requested_digest = if (change.values.requested) |digest|
+            std.fmt.bytesToHex(digest, .lower)
+        else
+            [_]u8{0} ** 64;
+        const committed_digest = if (change.values.committed) |digest|
+            std.fmt.bytesToHex(digest, .lower)
+        else
+            [_]u8{0} ** 64;
+
+        var requested_linear: [3]f32 = .{ 0, 0, 0 };
+        var requested_angular: [3]f32 = .{ 0, 0, 0 };
+        const requested_velocity_kind: []const u8 = switch (evidence.requested.velocity) {
+            .preserve => "preserve",
+            .zero => "zero",
+            .exact => |velocity| exact: {
+                requested_linear = velocity.linear;
+                requested_angular = velocity.angular;
+                break :exact "exact";
+            },
+        };
+        const before = evidence.before orelse engine.physics.BodyState{};
+        const committed = evidence.committed orelse engine.physics.BodyState{};
+
+        const sequence = self.takeSequence();
+        var line_buffer: [max_line_bytes]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&line_buffer);
+        writer.print(
+            "{{\"schema\":{d},\"kind\":\"authored_change\",\"recorder_sequence\":{d}," ++
+                "\"monotonic_ns\":{d},\"run_started_wall_unix_ms\":{d},\"run_nonce\":{d}," ++
+                "\"wall_unix_ms\":{d},\"authority_tick\":{?d},\"presentation_frame\":{?d}," ++
+                "\"transaction_id\":{d},\"source\":\"{s}\",\"scope\":\"{s}\"," ++
+                "\"target_kind\":\"{s}\",\"target_namespace\":{d},\"target_local\":{d}," ++
+                "\"member_namespace\":{d},\"member_local\":{d}," ++
+                "\"expected_revision\":{d},\"committed_revision\":{?d}," ++
+                "\"disposition\":\"{s}\",\"rejection_kind\":\"{s}\"," ++
+                "\"rejection\":\"{s}\",\"owner_rejection_domain\":{d}," ++
+                "\"owner_rejection_code\":{d},\"operation\":\"{s}\"," ++
+                "\"owner_rejection\":\"{s}\",\"actual_revision\":{?d},",
+            .{
+                incident.schema_version,
+                sequence,
+                now,
+                change.run_id.started_wall_unix_ms,
+                change.run_id.nonce,
+                change.wall_unix_ms,
+                change.authority_tick,
+                change.presentation_frame,
+                change.request.transaction_id,
+                @tagName(change.request.source),
+                @tagName(change.request.scope),
+                target_kind,
+                target_namespace,
+                target_local,
+                member_namespace,
+                member_local,
+                change.request.expected_revision,
+                change.committed_revision,
+                @tagName(change.disposition),
+                rejection_kind,
+                rejection_name,
+                owner_rejection_domain,
+                owner_rejection_code,
+                @tagName(evidence.operation),
+                if (evidence.owner_rejection) |reason| @tagName(reason) else "",
+                evidence.actual_revision,
+            },
+        ) catch {
+            self.noteDropped();
+            return;
+        };
+        writer.print(
+            "\"requested_pose\":[{d},{d},{d},{d},{d},{d},{d}]," ++
+                "\"requested_velocity_kind\":\"{s}\",\"requested_linear_velocity\":[{d},{d},{d}]," ++
+                "\"requested_angular_velocity\":[{d},{d},{d}],\"before_present\":{},",
+            .{
+                evidence.requested.target_pose.position[0],
+                evidence.requested.target_pose.position[1],
+                evidence.requested.target_pose.position[2],
+                evidence.requested.target_pose.rotation[0],
+                evidence.requested.target_pose.rotation[1],
+                evidence.requested.target_pose.rotation[2],
+                evidence.requested.target_pose.rotation[3],
+                requested_velocity_kind,
+                requested_linear[0],
+                requested_linear[1],
+                requested_linear[2],
+                requested_angular[0],
+                requested_angular[1],
+                requested_angular[2],
+                evidence.before != null,
+            },
+        ) catch {
+            self.noteDropped();
+            return;
+        };
+        writer.print(
+            "\"before_pose\":[{d},{d},{d},{d},{d},{d},{d}]," ++
+                "\"before_linear_velocity\":[{d},{d},{d}],\"before_angular_velocity\":[{d},{d},{d}]," ++
+                "\"committed_present\":{},",
+            .{
+                before.pose.position[0],
+                before.pose.position[1],
+                before.pose.position[2],
+                before.pose.rotation[0],
+                before.pose.rotation[1],
+                before.pose.rotation[2],
+                before.pose.rotation[3],
+                before.velocity.linear[0],
+                before.velocity.linear[1],
+                before.velocity.linear[2],
+                before.velocity.angular[0],
+                before.velocity.angular[1],
+                before.velocity.angular[2],
+                evidence.committed != null,
+            },
+        ) catch {
+            self.noteDropped();
+            return;
+        };
+        writer.print(
+            "\"committed_pose\":[{d},{d},{d},{d},{d},{d},{d}]," ++
+                "\"committed_linear_velocity\":[{d},{d},{d}]," ++
+                "\"committed_angular_velocity\":[{d},{d},{d}],",
+            .{
+                committed.pose.position[0],
+                committed.pose.position[1],
+                committed.pose.position[2],
+                committed.pose.rotation[0],
+                committed.pose.rotation[1],
+                committed.pose.rotation[2],
+                committed.pose.rotation[3],
+                committed.velocity.linear[0],
+                committed.velocity.linear[1],
+                committed.velocity.linear[2],
+                committed.velocity.angular[0],
+                committed.velocity.angular[1],
+                committed.velocity.angular[2],
+            },
+        ) catch {
+            self.noteDropped();
+            return;
+        };
+        writer.print(
+            "\"before_sha256\":\"{s}\",\"requested_sha256\":\"{s}\"," ++
+                "\"committed_sha256\":\"{s}\",\"durable_asset_namespace\":{d}," ++
+                "\"durable_asset_local\":{d},\"durable_sha256\":\"{s}\"}}",
+            .{
+                before_digest[0..if (change.values.before != null) before_digest.len else 0],
+                requested_digest[0..if (change.values.requested != null) requested_digest.len else 0],
+                committed_digest[0..if (change.values.committed != null) committed_digest.len else 0],
+                durable_namespace,
+                durable_local,
+                durable_digest[0..durable_digest_len],
+            },
+        ) catch {
+            self.noteDropped();
+            return;
+        };
+        if (!self.enqueueLine(.timeline, sequence, line_buffer[0..writer.end])) {
+            return;
+        }
+        self.last_authored_change = key;
     }
 
     pub fn flag(
@@ -1243,8 +1486,8 @@ pub const Capture = struct {
             writer.writeAll("\n") catch return false;
         }
         writer.print(
-            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; eight human-visible anchors from -5 through +2 seconds when admitted; a product-only flag frame; a continuous product trail over the same visual window; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times. Timeline windows include immutable runtime phase/system/error and authority-cycle fault ownership when the engine retains a fault.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheels under one stable identity. NPC state and navigation transition records include semantic destination, status/reason, exact route lineage, topology revision, physical exclusions, and retry timing. Authored NPC records also include stable population member, role, combat disposition, and activity across actor generations. Firearm records use kind=firearm and correlate action sequence, shooter/target identity and incarnation, disposition, weapon mode, ammunition, deadlines, ray origin, impact position, damage, death, and draw submission. kind=render_state records identify the conventional renderer, visual schema, scene light, product/debug and normal/color draw paths, plus the last stable semantic part/material identity.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"action\":\"navigation\"|\"navigation_status\":\"(blocked|waiting_for_content|structurally_unreachable)\"|\"navigation_reason\":\"physical_obstruction\"' '{s}/streams'\nrg '\"action\":\"population\"|\"population_member\"|\"population_activity_state\"' '{s}/streams'\nrg '\"kind\":\"firearm\"|\"weapon\":|\"fire_pressed\":true|\"weapon_toggle_pressed\":true|\"reload_pressed\":true' '{s}/streams'\nrg '\"kind\":\"render_state\"|\"render_mode\"|\"last_visual\"' '{s}/streams'\nrg '\"kind\":\"(runtime_fault|authority_cycle_fault)\"' '{s}/streams'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
-            .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
+            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; eight human-visible anchors from -5 through +2 seconds when admitted; a product-only flag frame; a continuous product trail over the same visual window; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times. Timeline windows include immutable runtime phase/system/error and authority-cycle fault ownership when the engine retains a fault.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheels under one stable identity. NPC state and navigation transition records include semantic destination, status/reason, exact route lineage, topology revision, physical exclusions, and retry timing. Authored NPC records also include stable population member, role, combat disposition, and activity across actor generations. Firearm records use kind=firearm and correlate action sequence, shooter/target identity and incarnation, disposition, weapon mode, ammunition, deadlines, ray origin, impact position, damage, death, and draw submission. kind=render_state records identify the conventional renderer, visual schema, scene light, product/debug and normal/color draw paths, plus the last stable semantic part/material identity. kind=authored_change records source, scope, stable target, optimistic revisions, typed crate values, outcome/rejection, time correlation, and SHA-256 value digests.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"action\":\"navigation\"|\"navigation_status\":\"(blocked|waiting_for_content|structurally_unreachable)\"|\"navigation_reason\":\"physical_obstruction\"' '{s}/streams'\nrg '\"action\":\"population\"|\"population_member\"|\"population_activity_state\"' '{s}/streams'\nrg '\"kind\":\"firearm\"|\"weapon\":|\"fire_pressed\":true|\"weapon_toggle_pressed\":true|\"reload_pressed\":true' '{s}/streams'\nrg '\"kind\":\"render_state\"|\"render_mode\"|\"last_visual\"' '{s}/streams'\nrg '\"kind\":\"authored_change\"|\"transaction_id\"|\"expected_revision\"' '{s}/streams'\nrg '\"kind\":\"(runtime_fault|authority_cycle_fault)\"' '{s}/streams'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
+            .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
         ) catch return false;
         const handoff_bytes = buffer[0..writer.end];
         self.queue.publishHandoff(handoff_bytes);
@@ -2122,6 +2365,71 @@ test "handoff is available to clipboard before durable writer completion" {
     try std.testing.expect(queue.handoff_ready);
     try std.testing.expect(!queue.handoff_persisted);
     try std.testing.expectEqualStrings("bounded handoff", queue.handoff.slice());
+}
+
+test "authored changes retain typed values and are recorded once per transaction" {
+    var capture = Capture{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .writer = undefined,
+    };
+    const id = engine.PersistentId{ .namespace = 9, .local = 3 };
+    const request = sandbox_authoring.RelocateRequest{
+        .id = id,
+        .target_pose = .{ .position = .{ 4, 5, 6 } },
+    };
+    const pending = sandbox_authoring.PendingSummary{
+        .kind = .edit,
+        .transaction_id = 41,
+        .id = id,
+        .request = .{
+            .transaction_id = 41,
+            .source = .ui,
+            .scope = .session,
+            .target = .{ .persistent_entity = id },
+            .expected_revision = 7,
+        },
+        .requested = request,
+    };
+    const evidence = try sandbox_authoring.ChangeEvidence.rejectedBeforeOwnerOutcome(
+        pending,
+        .owner_unavailable,
+        .{
+            .run_id = .{ .started_wall_unix_ms = 1, .nonce = 2 },
+            .wall_unix_ms = 3,
+            .authority_tick = 8,
+            .presentation_frame = 12,
+        },
+    );
+
+    capture.recordAuthoredChange(evidence, 98);
+    capture.recordAuthoredChange(evidence, 99);
+    const job = capture.queue.pop() orelse return error.AuthoredChangeRecordMissing;
+    const line = switch (job) {
+        .line => |value| value,
+        else => return error.UnexpectedIncidentJob,
+    };
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        line.slice(),
+        "\"kind\":\"authored_change\"",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        line.slice(),
+        "\"transaction_id\":41",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        line.slice(),
+        "\"requested_pose\":[4,5,6",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        line.slice(),
+        "\"rejection\":\"owner_unavailable\"",
+    ) != null);
+    try std.testing.expect(capture.queue.pop() == null);
 }
 
 test "retained fault records name runtime system and authority stage once" {

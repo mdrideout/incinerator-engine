@@ -1396,6 +1396,7 @@ const S14RangedCombatSmokeProgress = struct {
     target_selected: bool = false,
     target_member: u16 = 0,
     target_actor: ?engine.PersistentId = null,
+    target_entity: ?sandbox_host.ReplicatedEntityId = null,
     target_generation: u16 = 0,
     equipped: bool = false,
     committed_drain_shots: u8 = 0,
@@ -1405,6 +1406,8 @@ const S14RangedCombatSmokeProgress = struct {
     reload_completed: bool = false,
     hit_count: u8 = 0,
     target_killed: bool = false,
+    target_draw_observed: bool = false,
+    target_draw_generation: u16 = 0,
     target_death_drawn: bool = false,
     target_replaced: bool = false,
     weapon_drawn: bool = false,
@@ -1424,8 +1427,13 @@ const S14RangedCombatSmokeProgress = struct {
                 self.committed_drain_shots +|= 1;
             },
             .fired_hit => if (self.reload_completed) {
-                self.hit_count +|= 1;
-                self.target_killed = self.target_killed or result.killed;
+                const target = self.target_entity orelse return;
+                if (std.meta.eql(result.target, target) and
+                    result.target_incarnation == self.target_generation)
+                {
+                    self.hit_count +|= 1;
+                    self.target_killed = self.target_killed or result.killed;
+                }
             } else {
                 // The drain phase proves committed ammo consumption. A moving
                 // population member can cross the ray before the physical
@@ -1441,6 +1449,10 @@ const S14RangedCombatSmokeProgress = struct {
 
     fn observeNpc(self: *S14RangedCombatSmokeProgress, draw: sandbox_host.NpcDraw) void {
         if (!self.active or draw.population_member != self.target_member) return;
+        if (!self.target_draw_observed and draw.life_state == .alive) {
+            self.target_draw_observed = true;
+            self.target_draw_generation = draw.incarnation;
+        }
         if (draw.incarnation == self.target_generation and draw.life_state == .dead) {
             self.target_death_drawn = true;
         }
@@ -1478,7 +1490,8 @@ const S14RangedCombatSmokeProgress = struct {
             std.debug.print(
                 "S14_RANGED_SMOKE_MISSING target={} equipped={} drain={d} " ++
                     "cadence={} empty={} reload={}/{} hits={d} killed={} " ++
-                    "death_draw={} replacement={} weapon_draw={} tracer_draw={} hud={}\n",
+                    "draw={}:{d} death_draw={} replacement={} " ++
+                    "weapon_draw={} tracer_draw={} hud={}\n",
                 .{
                     self.target_selected,
                     self.equipped,
@@ -1489,6 +1502,8 @@ const S14RangedCombatSmokeProgress = struct {
                     self.reload_completed,
                     self.hit_count,
                     self.target_killed,
+                    self.target_draw_observed,
+                    self.target_draw_generation,
                     self.target_death_drawn,
                     self.target_replaced,
                     self.weapon_drawn,
@@ -2031,6 +2046,28 @@ const RenderFrameAudit = struct {
     surface: sandbox_visual_catalog.Surface = .ground,
 };
 
+fn authoringWallNowMs(io: std.Io) i64 {
+    const nanoseconds = std.Io.Clock.Timestamp.now(io, .real).raw.nanoseconds;
+    const milliseconds = @divFloor(nanoseconds, std.time.ns_per_ms);
+    return std.math.cast(i64, milliseconds) orelse if (milliseconds < 0)
+        std.math.minInt(i64)
+    else
+        std.math.maxInt(i64);
+}
+
+fn makeAuthoringRunId(io: std.Io) engine.authoring.RunId {
+    const nanoseconds = std.Io.Clock.Timestamp.now(io, .real).raw.nanoseconds;
+    const wall_ms = authoringWallNowMs(io);
+    const nonce = if (nanoseconds > 0)
+        std.math.cast(u64, nanoseconds) orelse @as(u64, @bitCast(wall_ms))
+    else
+        @as(u64, @bitCast(wall_ms));
+    return .{
+        .started_wall_unix_ms = wall_ms,
+        .nonce = if (nonce == 0) 1 else nonce,
+    };
+}
+
 const App = struct {
     io: std.Io,
     window: *c.SDL_Window,
@@ -2064,6 +2101,8 @@ const App = struct {
     authoring_controller: sandbox_authoring.DefaultController,
     authoring_requests: sandbox_authoring.RequestBuffer,
     authoring_feedback: editor_contract.AuthoringFeedback,
+    authoring_run_id: engine.authoring.RunId,
+    latest_authoring_change: ?sandbox_authoring.ChangeEvidence,
     interaction_spawn_enabled: bool,
     interaction_spawn_submitted: bool,
     interaction_transactions: sandbox_interaction.TransactionSequencer,
@@ -2170,6 +2209,8 @@ const App = struct {
         incident_runs_root: ?[]const u8,
         incident_hardening_profile: incident_capture.HardeningProfile,
     ) !App {
+        const authoring_run_id = makeAuthoringRunId(io);
+        try authoring_run_id.validate();
         // Initialize SDL3 with video subsystem
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
             std.debug.print("SDL_Init failed: {s}\n", .{c.SDL_GetError()});
@@ -2443,6 +2484,8 @@ const App = struct {
             ),
             .authoring_requests = .{},
             .authoring_feedback = .{},
+            .authoring_run_id = authoring_run_id,
+            .latest_authoring_change = null,
             .interaction_spawn_enabled = profile == .sandbox,
             .interaction_spawn_submitted = false,
             .interaction_transactions = .{},
@@ -3045,13 +3088,12 @@ const App = struct {
             .fight_npc => {
                 if (progress.saw_npc_dead) {
                     if (self.simulation.player().focusPosition()) |position| {
-                        // This reachable point keeps the player outside the
-                        // configured eight-metre safety radius while the
-                        // parked vehicle occludes the first west replacement
-                        // candidate. Do not keep driving into a boundary to
-                        // manufacture occlusion: that makes the camera spend
-                        // the evidence window pressed against collision.
-                        const safe = [2]f32{ 1, -4 };
+                        // The S15 catalog distributes replacement candidates
+                        // across all four districts. Move to the open northwest
+                        // edge so the player is outside the configured safety
+                        // radius and visibility window instead of suppressing
+                        // every valid replacement while waiting to observe one.
+                        const safe = [2]f32{ -6.5, 22.5 };
                         const delta = [2]f32{
                             safe[0] - position[0],
                             safe[1] - position[2],
@@ -3273,7 +3315,16 @@ const App = struct {
         progress: *IncidentJourneyProgress,
     ) !bool {
         const tick = self.simulation.inspection().tickIndex();
-        if (tick > progress.stage_enter_tick +| 1_200 or tick > 3_600) {
+        // Killing the authored hostile and observing its population replacement
+        // are two distinct lifecycle proofs. Once death is observed, measure
+        // the remaining fight stage from that transition instead of consuming
+        // the replacement window while the scripted player closes and fights.
+        const stage_timeout_origin = if (progress.stage == .fight_npc and
+            progress.saw_npc_dead)
+            progress.npc_dead_tick
+        else
+            progress.stage_enter_tick;
+        if (tick > stage_timeout_origin +| 1_200 or tick > 3_600) {
             const population_diagnostics =
                 self.simulation.developer().diagnostics().population orelse
                 return error.PopulationDiagnosticsMissing;
@@ -6061,12 +6112,27 @@ const App = struct {
     }
 
     fn developerSnapshot(self: *App) !DeveloperSnapshot {
-        return self.developer.snapshot(
+        return self.developer.snapshotWithAuthoring(
             self.developerAuthorityPort(),
             self.developerStreamingPort(),
             &self.frame_timer,
             self.includeDeveloperDistrictStreams(),
+            if (self.latest_authoring_change) |change| change.record else null,
+            self.developerEndpointDiscovery(),
         );
+    }
+
+    fn developerEndpointDiscovery(
+        self: *const App,
+    ) engine.developer_endpoint.Discovery {
+        return .{
+            .lifecycle = if (build_options.editor_enabled)
+                .declared
+            else
+                .disabled,
+            .run_id = self.authoring_run_id,
+            .protocol_cohort = 1,
+        };
     }
 
     fn includeDeveloperDistrictStreams(self: *const App) bool {
@@ -6249,6 +6315,8 @@ const App = struct {
             self.developerStreamingPort(),
             &self.frame_timer,
             self.includeDeveloperDistrictStreams(),
+            self.latest_authoring_change,
+            self.developerEndpointDiscovery(),
             requests,
         );
     }
@@ -6263,6 +6331,8 @@ const App = struct {
             self.developerStreamingPort(),
             &self.frame_timer,
             self.includeDeveloperDistrictStreams(),
+            self.latest_authoring_change,
+            self.developerEndpointDiscovery(),
         );
     }
 
@@ -6452,7 +6522,7 @@ const App = struct {
                     if (observed == .unrelated or pending == null) {
                         return error.UnexpectedAuthoringOutcome;
                     }
-                    self.recordAuthoringOutcome(pending.?, observed, null);
+                    try self.recordAuthoringOutcome(pending.?, outcome, observed, null);
                 },
                 .rejected => |rejected| {
                     if (rejected.command != .relocate) {
@@ -6463,7 +6533,12 @@ const App = struct {
                     if (observed == .unrelated or pending == null) {
                         return error.UnexpectedAuthoringOutcome;
                     }
-                    self.recordAuthoringOutcome(pending.?, observed, rejected.reason);
+                    try self.recordAuthoringOutcome(
+                        pending.?,
+                        outcome,
+                        observed,
+                        rejected.reason,
+                    );
                 },
                 .despawned => |id| {
                     self.authoring_controller.invalidateIdentity(id);
@@ -6588,6 +6663,7 @@ const App = struct {
             .selected_crate = selected,
             .feedback = self.authoring_feedback,
             .save = self.editorSaveFeedback(),
+            .latest_change = self.latest_authoring_change,
             .request_rejections = self.authoring_requests.rejected,
         };
     }
@@ -6705,9 +6781,15 @@ const App = struct {
     fn recordAuthoringOutcome(
         self: *App,
         pending: sandbox_authoring.PendingSummary,
+        outcome: sandbox_authoring.CrateOutcome,
         observed: sandbox_authoring.ObserveResult,
         rejection_reason: ?sandbox_contracts.RejectionReason,
-    ) void {
+    ) !void {
+        self.latest_authoring_change = try sandbox_authoring.ChangeEvidence.init(
+            pending,
+            outcome,
+            self.authoringObservationContext(),
+        );
         _ = self.advanceAuthoringFeedback();
         self.authoring_feedback = .{
             .sequence = self.authoring_feedback.sequence,
@@ -6755,7 +6837,15 @@ const App = struct {
     ) !void {
         self.simulation.crates().submit(command) catch |err| {
             const relocation = command.relocate;
+            const pending = self.authoring_controller.snapshot().pending orelse
+                return error.AuthoringPendingEvidenceMissing;
             _ = self.authoring_controller.submissionFailed(relocation.transaction_id);
+            self.latest_authoring_change =
+                try sandbox_authoring.ChangeEvidence.rejectedBeforeOwnerOutcome(
+                    pending,
+                    .owner_unavailable,
+                    self.authoringObservationContext(),
+                );
             _ = self.advanceAuthoringFeedback();
             self.authoring_feedback = .{
                 .sequence = self.authoring_feedback.sequence,
@@ -6766,6 +6856,17 @@ const App = struct {
                 .detail = @errorName(err),
             };
             return err;
+        };
+    }
+
+    fn authoringObservationContext(
+        self: *const App,
+    ) sandbox_authoring.ObservationContext {
+        return .{
+            .run_id = self.authoring_run_id,
+            .wall_unix_ms = authoringWallNowMs(self.io),
+            .authority_tick = self.simulation.inspection().tickIndex(),
+            .presentation_frame = self.frame_timer.total_frames,
         };
     }
 
@@ -7616,15 +7717,43 @@ const App = struct {
             for (self.simulation.inspection().populationMembers()) |member| {
                 const definition = population_catalog.memberDefinition(member.id) orelse continue;
                 if (definition.combat_disposition != .passive or member.actor == null) continue;
+                const actor = member.actor.?;
+                const entity = self.simulation.inspection().replicatedId(actor) orelse continue;
                 progress.target_member = member.id.value;
-                progress.target_actor = member.actor;
+                progress.target_actor = actor;
+                progress.target_entity = entity;
                 progress.target_generation = member.actor_generation;
                 progress.target_selected = true;
                 break;
             }
             return actions;
         }
-        if (progress.target_killed) return actions;
+        if (progress.target_killed) {
+            // Replacement admission suppresses visible pop-in near the player.
+            // Move to this target's validated observation point so the proof
+            // observes the complete death and replacement lifecycle instead
+            // of idling on the defeated actor.
+            if (self.simulation.player().focusPosition()) |position| {
+                const safe = [2]f32{ 1, -4 };
+                const delta = [2]f32{
+                    safe[0] - position[0],
+                    safe[1] - position[2],
+                };
+                const distance_squared = delta[0] * delta[0] + delta[1] * delta[1];
+                if (distance_squared > 1) {
+                    const inverse = 1.0 / @sqrt(distance_squared);
+                    const world_x = delta[0] * inverse;
+                    const world_z = delta[1] * inverse;
+                    const sine = @sin(self.game_camera.yaw);
+                    const cosine = @cos(self.game_camera.yaw);
+                    actions.move = .{
+                        world_x * cosine + world_z * sine,
+                        world_x * sine - world_z * cosine,
+                    };
+                }
+            }
+            return actions;
+        }
 
         const npc = self.simulation.npcs().view(
             progress.target_actor orelse return actions,
@@ -10228,6 +10357,8 @@ const App = struct {
                 .render_view = &render_view,
                 .gameplay_view = gameplay_view,
                 .neural_view = &neural_view,
+                .authored_change = self.latest_authoring_change,
+                .developer_endpoint = self.developerEndpointDiscovery(),
                 .incident_input = .{
                     .move_forward = self.input_buffer.isKeyDown(input.Key.W),
                     .move_backward = self.input_buffer.isKeyDown(input.Key.S),

@@ -276,6 +276,8 @@ const SyntheticProducers = struct {
                 const offset: f32 = @floatFromInt(sequence % 17);
                 if (authority.submitExternal(handle, .{
                     .transaction_id = transaction_id,
+                    .source = .scripted_validation,
+                    .scope = .session,
                     .id = id,
                     .target_pose = .{ .position = .{
                         offset - 8,
@@ -283,6 +285,7 @@ const SyntheticProducers = struct {
                         if (producer_index == 0) -2 else 2,
                     } },
                     .velocity = .zero,
+                    .expected_revision = self.submitted[0] + self.submitted[1],
                 }) != .accepted) {
                     return error.HeadlessSyntheticAdmissionFailed;
                 }
