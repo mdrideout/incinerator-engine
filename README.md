@@ -119,8 +119,12 @@ and continuous mouse-look gates pass. S14 is accepted. S15 now expands the
 deterministic sandbox into one exact four-district 2×2 cohort with cross-axis
 navigation, north-row activity, singular flat support ownership, and measured
 four-scene residency.
-Its automated gate, two-rate Metal acceptance, and measured baseline pass; the
-product-owner four-district walkthrough is the remaining S15 checkpoint.
+Its automated gate, two-rate Metal acceptance, measured baseline, and
+product-owner four-district walkthrough pass. S15 is accepted. The active
+[Engine Authoring Foundation](docs/design/engine-authoring-foundation.md)
+sequences practical materials/textures, vehicle archetypes and local AI tuning,
+authored lighting, game-owned map construction, and the separately built game
+proof under [ADR-029](docs/adr/029-engine-game-authoring-boundary.md).
 The combined-tree
 [deterministic-rendering resumption audit](docs/validation/deterministic-rendering-resumption.md)
 passes and records the correction that restored the ordinary product from an
@@ -796,6 +800,8 @@ contracts, backend adapters, and explicit host composition roots. See:
 - [`S15 Four-District Evaluation World`](docs/design/s15-four-district-evaluation-world.md)
 - [`S15 Content-Rich District Validation`](docs/validation/s15-content-rich-district-expansion.md)
 - [`S15 Four-District Performance Baseline`](docs/performance/s15-baseline.md)
+- [`ADR-029 Engine, Game, and Authoring Ownership Boundary`](docs/adr/029-engine-game-authoring-boundary.md)
+- [`EA0-EA5 Engine Authoring Foundation`](docs/design/engine-authoring-foundation.md)
 - [`macOS Runtime Readiness Record`](docs/validation/macos-readiness.md)
 - the complete [`docs/adr`](docs/adr) directory
 
@@ -841,8 +847,9 @@ proximity policy in the host while exercising the complete lifecycle:
 - `VehicleFeature` owns typed spawn/enter/drive/exit/despawn commands, explicit
   driver authority, logical vehicle records, and chassis/four-wheel extraction
   through backend-neutral vehicle and driver ports;
-- `DistrictFeature` owns two bounded asynchronous logical lifecycle slots over
-  one worker, up to two persistent district entities, transactional static-body ownership, typed
+- `DistrictFeature` owns the current four-entry asynchronous logical lifecycle
+  cohort over one worker, up to four persistent district entities,
+  transactional static-body ownership, typed
   outcomes/events, and renderer-neutral extraction through loader/static-body
   ports; the real worker publishes only fixed plain data and never touches
   Runtime, Flecs, Jolt, SDL, or renderer state;
@@ -868,7 +875,7 @@ proximity policy in the host while exercising the complete lifecycle:
   automatic room population. The installed S8 graphical smoke uses one actor
   to prove route/residency lifecycle; dedicated scale measurements retain the
   complete 64-NPC/65-controller capacity claim;
-- a private snapshot module owns the current `SnapshotV11` value, canonical
+- a private snapshot module owns the current schema-15 snapshot value, canonical
   codec, cold preflight, cross-feature identity validation, and exact
   build/world fingerprints; the live sandbox authority owns transactional
   capture/restoration of feature-owned tuning, relationships, district,

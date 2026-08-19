@@ -1,10 +1,10 @@
 # Incinerator Multiplayer-First Architecture and Delivery Plan
 
-**Status:** MP0-MP6, M4-M6, S10-S13, IV0-IV5, IC5, the open-world
-corrective, ED1, DR1, and S14 are accepted on Apple Silicon macOS. S15
-content-rich four-district implementation and automated acceptance are
-complete across the same solo, private-listen, and dedicated authority model;
-its human walkthrough remains. Public
+**Status:** MP0-MP6, M4-M6, S10-S15, IV0-IV5, IC5, the open-world
+corrective, ED1, and DR1 are accepted on Apple Silicon macOS. EA0-EA5 now
+strengthen assets, authoring, vehicle archetypes, lighting, maps, and the
+engine/game boundary without changing the accepted solo, private-listen, and
+dedicated authority model. Public
 Internet, Steamworks, hosting, and MMO services remain deferred.
 
 **Last reviewed:** 2026-08-18
@@ -28,7 +28,8 @@ Internet, Steamworks, hosting, and MMO services remain deferred.
 → [`S13 accepted`](docs/validation/s13-authored-population-and-sandbox-activity.md)
 → [`DR1 accepted`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
 → [`S14 accepted`](docs/validation/s14-ranged-combat.md)
-→ [`S15 automated acceptance complete; human checkpoint pending`](docs/validation/s15-content-rich-district-expansion.md)
+→ [`S15 accepted`](docs/validation/s15-content-rich-district-expansion.md)
+→ [`EA0-EA5 Engine Authoring Foundation active`](docs/design/engine-authoring-foundation.md)
 
 **Accepted decisions:**
 [ADR-016](docs/adr/016-authority-session-topology.md),
@@ -38,8 +39,9 @@ Internet, Steamworks, hosting, and MMO services remain deferred.
 [ADR-020](docs/adr/020-gameplay-interaction-validation-and-observability.md),
 [ADR-023](docs/adr/023-semantic-destinations-and-navigation-recovery.md),
 [ADR-024](docs/adr/024-authored-population-intent-and-activity-slots.md),
-[ADR-027](docs/adr/027-authoritative-ranged-combat.md), and
-[ADR-028](docs/adr/028-content-rich-four-district-cohort.md)
+[ADR-027](docs/adr/027-authoritative-ranged-combat.md),
+[ADR-028](docs/adr/028-content-rich-four-district-cohort.md), and
+[ADR-029](docs/adr/029-engine-game-authoring-boundary.md)
 
 ## Purpose
 
@@ -658,8 +660,9 @@ NPC displacement retains its current route intent through collision rebasing,
 and vehicle handling has an objective real-Jolt characterization surface. S12
 now proves semantic destinations, bounded replanning, topology gates,
 displacement recovery, persistence/replay/fault placement, and schema-4
-evidence through the same authority model. Its human walkthrough is next, not
-additional transport or service infrastructure.
+evidence through the same authority model. S12-S15 are now human-accepted.
+EA0-EA5 build concrete engine authoring and game-separation capabilities next;
+additional transport or service infrastructure remains deferred.
 
 ## Transport and Service Decision
 

@@ -1,6 +1,6 @@
 # S15 Content-Rich District Expansion
 
-**Status:** Implementation and automated acceptance complete; human walkthrough pending
+**Status:** Accepted; implementation, automated/native evidence, and human walkthrough complete
 
 **Decision:**
 [ADR-028](../adr/028-content-rich-four-district-cohort.md)

@@ -1,6 +1,7 @@
 # S15 Content-Rich District Expansion Validation
 
-**Status:** Automated acceptance complete; product-owner walkthrough pending
+**Status:** Accepted; implementation, automated/native evidence, and
+product-owner walkthrough complete
 
 **Plan:**
 [S15 Content-Rich District Expansion](../design/s15-content-rich-district-expansion.md)
@@ -17,7 +18,7 @@
 | S15-C — logical world/support | Accepted | Four transactional district slots and bootstrap records; one composition support plus eight district obstacle bodies; no floor duplicate or perimeter |
 | S15-D — navigation/activity | Accepted | 32-node/64-edge graph, four-seam circuit, live north-row detour, 24 destinations/activity slots, 32 spawn slots, and three ordinary members initially in each district |
 | S15-E — presentation/diagnostics | Accepted | Four simultaneous Metal scenes at 10,112 resident GPU bytes, four exact diagnostic slots, complete baseline publication, cross-row stable population identity, and full-world NPC projection |
-| S15-F — acceptance/cleanup | Automated accepted; human pending | `verify-s15` 191/191 steps and 428/428 tests; editor-on/off repository aggregates pass 1,004/1,004 tests; two-rate Metal; performance baseline; source/doc/dead-assumption audit |
+| S15-F — acceptance/cleanup | Accepted | `verify-s15` 191/191 steps and 428/428 tests; editor-on/off repository aggregates pass 1,004/1,004 tests; two-rate Metal; performance baseline; source/doc/dead-assumption audit; product-owner walkthrough accepted 2026-08-18 |
 
 ## Required Commands
 
@@ -72,6 +73,8 @@ zig build test -Deditor=false --summary all
 
 ## Product-Owner Walkthrough
 
-The final walkthrough is defined in the parent plan. Product-owner approval
-will close S15 and promote G1 unless a measured navigation, streaming, support,
-or crowd pressure point justifies a narrower corrective decision first.
+The product owner reported the four-district product verified on 2026-08-18
+and supplied no corrective finding. This closes S15. The accepted follow-up is
+the [Engine Authoring Foundation](../design/engine-authoring-foundation.md),
+which begins the ownership work originally assigned broadly to G1 through
+concrete material, vehicle, lighting, and map-authoring consumers.

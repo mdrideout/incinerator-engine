@@ -11,9 +11,10 @@ that track indefinitely. No learned model is installed or selected as game
 content, and no later neural phase is authorized. Deterministic rendering is
 the active product direction. ED1 structured developer workspace is complete.
 DR1 implementation, automated/native validation, agent-native inspection, and
-the product-owner visual walkthrough are complete. S14 ranged combat is
-accepted. S15 content-rich four-district implementation and automated
-acceptance are complete under ADR-028; its human walkthrough remains.
+the product-owner visual walkthrough are complete. S14 ranged combat and S15
+content-rich four-district expansion are accepted. ADR-029 and the Engine
+Authoring Foundation plan establish EA0-EA5 as the active sequence before a
+scripting decision, later gameplay pressure, and network productization.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
@@ -42,7 +43,8 @@ acceptance are complete under ADR-028; its human walkthrough remains.
 → [`deterministic-rendering resumption audit complete`](docs/validation/deterministic-rendering-resumption.md)
 → [`DR1 accepted`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
 → [`S14 accepted`](docs/validation/s14-ranged-combat.md)
-→ [`S15 automated acceptance complete; human checkpoint pending`](docs/validation/s15-content-rich-district-expansion.md)
+→ [`S15 accepted`](docs/validation/s15-content-rich-district-expansion.md)
+→ [`EA0-EA5 Engine Authoring Foundation active`](docs/design/engine-authoring-foundation.md)
 
 **Active rendering direction:**
 [`DR1 playable deterministic visual fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
@@ -356,7 +358,7 @@ logical authority and operational lifecycle:
   persistence records, lifecycle, systems, or presentation extraction. The
   population planner, durable NPC replacement policy, and normal-product
   encounter lifecycle owner retain narrower composition-owned responsibilities.
-- A private snapshot module owns `SnapshotV11` values, canonical encoding, cold
+- A private snapshot module owns the current schema-15 snapshot values, canonical encoding, cold
   preflight, cross-feature identity/relationship validation, and exact world
   fingerprints. The live authority owns transactional capture/restore and one
   shared physics step; all feature records restore together without private
@@ -459,7 +461,7 @@ logical authority and operational lifecycle:
 | D-005 | Main thread owns ECS mutation/GPU submission; callbacks publish bounded data | Accepted in ADR-008 | Async assets/contact events |
 | D-006 | Allocator and memory-budget strategy | Implemented through M3: bounded logical/content workers and visual ownership, fixed feature/router queues, tracked allocator peaks/final-live bytes, absolute process RSS, snapshot/envelope ceilings, and per-slice measured budgets; future slices must add their own cohorts | Future slices |
 | D-007 | Physics owns dynamic-body simulation transforms; presentation reads interpolated snapshots | Implemented for S0 in amended ADR-005 | Slice 0 scheduling/interpolation |
-| D-008 | Stable entity ID and serialization model | Implemented through composition-owned `SnapshotV11`, canonical crate/character/vehicle/district/interaction/NPC/encounter/replacement state, authoritative tuning, explicit persisted-route modes, validated relationships, and two-district logical reconstruction; live multi-world atomic replacement is outside the accepted one-world-per-process M3 model | Save/restore |
+| D-008 | Stable entity ID and serialization model | Implemented through the composition-owned schema-15 snapshot, canonical crate/character/vehicle/district/interaction/NPC/encounter/population/replacement state, authoritative tuning, explicit persisted-route modes, validated relationships, and four-district logical reconstruction; live multi-world atomic replacement is outside the accepted one-world-per-process M3 model | Save/restore |
 | D-009 | Apple Silicon macOS/Metal is the only current platform; Linux/SteamOS and Windows are future/deferred with no current gates | Implemented in amended ADR-007; active secondary-platform paths are removed and create no abstraction requirement | Explicit secondary-platform product decision |
 | D-010 | Measured entity, body, controller, contact-evidence, draw, queue, memory, streaming, persistence, and fixed-tick budgets | Implemented through M3 with S8 representative population scale plus routine/long one-world authority soaks and automatic ceilings | Future slices extend their own measured budgets |
 | D-011 | Thin-kernel + feature-module architecture | Accepted by this plan | Slice 0 |
@@ -479,7 +481,8 @@ logical authority and operational lifecycle:
 | D-025 | Game-specific neural rendering is a presentation capability with a versioned buffer ABI, explicit fallback, external experiment lifecycle, and human-promoted immutable model bundles | Accepted in [ADR-025](docs/adr/025-game-specific-neural-rendering-boundary.md); completed through the retained external RF10 trial; no model promoted | Paused indefinitely; explicit product-owner restart required |
 | D-026 | Promotion-eligible neural-renderer weights and learned dependencies are title-specific, trained from random initialization on title-owned exact pairs, and reproduced through the engine framework; pretrained models remain comparisons only | Accepted in [ADR-026](docs/adr/026-from-scratch-title-neural-renderer.md), the [north star](docs/design/title-neural-renderer-north-star.md), and its [phase-gated implementation plan](docs/design/title-neural-renderer-implementation-plan.md) | Retained policy if the paused track is explicitly restarted |
 | D-027 | One finite-ammunition handgun is authoritative across solo/listen/dedicated placement; clients submit intent, authority derives current-state semantic/Jolt hits, and vitals owns damage/death | Accepted and implemented in [ADR-027](docs/adr/027-authoritative-ranged-combat.md) and the [S14 validation ledger](docs/validation/s14-ranged-combat.md) | Future weapon slices and measured lag-compensation decision |
-| D-028 | The current sandbox is one exact four-district 2×2 cohort; the composition owns continuous flat support, districts own obstacles/decoration/navigation, and the admitted 32-node graph remains sufficient until measured content proves a navmesh or crowd need | Accepted and implemented in [ADR-028](docs/adr/028-content-rich-four-district-cohort.md), the [phase plan](docs/design/s15-content-rich-district-expansion.md), [evaluation world](docs/design/s15-four-district-evaluation-world.md), [validation ledger](docs/validation/s15-content-rich-district-expansion.md), and [performance baseline](docs/performance/s15-baseline.md) | S15 human walkthrough, then G1 |
+| D-028 | The current sandbox is one exact four-district 2×2 cohort; the composition owns continuous flat support, districts own obstacles/decoration/navigation, and the admitted 32-node graph remains sufficient until measured content proves a navmesh or crowd need | Accepted and implemented in [ADR-028](docs/adr/028-content-rich-four-district-cohort.md), the [phase plan](docs/design/s15-content-rich-district-expansion.md), [evaluation world](docs/design/s15-four-district-evaluation-world.md), [accepted validation](docs/validation/s15-content-rich-district-expansion.md), and [performance baseline](docs/performance/s15-baseline.md) | Complete; establishes EA0-EA5 baseline |
+| D-029 | Reusable runtime capabilities, reusable engine tooling, game runtime/content, and game tooling are separate owners; typed UI and local AI clients share owner-defined authoring transactions; scripting remains evidence-gated | Accepted in [ADR-029](docs/adr/029-engine-game-authoring-boundary.md); implementation planned in [EA0-EA5](docs/design/engine-authoring-foundation.md) | EA0-EA5 and final G1 proof |
 
 ### Decision notes
 
@@ -565,7 +568,13 @@ before dependency resolution.
 | ED1 | One structured, metadata-addressable developer workspace replaces scattered overlay tools | Complete and accepted; docked layouts, startup control, incident-aligned time, editor-on/off builds, and product-owner evidence pass |
 | DR1 | The ordinary deterministic product has one readable lit material path, coherent evaluation world, Render Lab, and semantic render evidence | Complete and accepted; native Metal journey, incident evidence, editor-on/off aggregates, and product-owner visual walkthrough pass |
 | S14 | One authoritative finite-ammunition handgun works across solo, listen, and dedicated placements | Complete and accepted; automated/native, ordinary-product, and continuous mouse-look follow-up pass |
-| S15 | One content-rich four-district cohort supports cross-axis traversal, authored activity, deterministic content admission, and measured four-scene residency | Implementation and automated acceptance complete; human walkthrough pending |
+| S15 | One content-rich four-district cohort supports cross-axis traversal, authored activity, deterministic content admission, and measured four-scene residency | Complete and accepted; automated/native and product-owner evidence pass |
+| EA0 | Engine/game/tooling ownership, asset identity, and typed authoring transaction boundary are executable | Approved; implementation not started |
+| EA1 | Practical texture/material import, assignment, authoring, and evidence | Approved; implementation not started |
+| EA2 | Vehicle archetypes, live revisioned tuning, and local AI/developer control | Approved; implementation not started |
+| EA3 | Authored directional sun and point-light capabilities | Approved; implementation not started |
+| EA4 | Game-owned map assets and construction workflow | Approved; implementation not started |
+| EA5 / G1 | A separately built game consumes explicit engine/runtime and engine-tooling boundaries | Approved; implementation not started |
 | NR0 | A paired deterministic scene produces an evaluated title model, explicit promotion, installed macOS inference, truthful fallback, diagnostics, and measured evidence | NR0-A through NR0-D accepted; NR-0001/2 unpromoted, NR-0003 comparison-only; no model selected. ADR-026 requires the next candidate lineage to start from random initialization. |
 
 M0–M2 are foundational cross-cutting gates. S0–S8 are end-to-end vertical
@@ -1858,8 +1867,9 @@ Record evidence rather than relying only on target numbers:
 
 ### Current next product sequence
 
-DR1 and S14 are accepted. S15 implementation and automated acceptance are
-complete; its product-owner walkthrough is the active checkpoint.
+DR1, S14, and S15 are accepted. EA0 ownership/identity/transaction work is the
+active phase in the approved
+[Engine Authoring Foundation](docs/design/engine-authoring-foundation.md).
 
 47. [x] **S12 — Destination-driven navigation and recovery implementation.**
     Implemented under
@@ -1940,8 +1950,9 @@ older historical “next phase” language.
     [ADR-027](docs/adr/027-authoritative-ranged-combat.md), the
     [phase plan](docs/design/s14-ranged-combat.md), and the
     [validation ledger](docs/validation/s14-ranged-combat.md).
-52. [ ] **S15 — Content-rich district expansion.** Implementation and
-    automated acceptance complete; product-owner walkthrough pending. Built under
+52. [x] **S15 — Content-rich district expansion.** Implementation,
+    automated/native acceptance, and the product-owner walkthrough are
+    complete. Built under
     [ADR-028](docs/adr/028-content-rich-four-district-cohort.md), the
     [implementation plan](docs/design/s15-content-rich-district-expansion.md),
     [four-district evaluation world](docs/design/s15-four-district-evaluation-world.md),
@@ -1954,11 +1965,39 @@ older historical “next phase” language.
     The [performance baseline](docs/performance/s15-baseline.md) records four
     simultaneous Metal scenes, 32-node route pressure, 24 physical activity
     placements, and two-rate product evidence.
-53. [ ] **G1 — Open-engine/separate-game boundary.** Before production game
-    content or distribution, prove a separately built game composition,
-    content package, configuration boundary, third-party notices, and licensing
-    decision without stabilizing a speculative public runtime ABI.
-54. [ ] **MP7+ — Network productization when the gameplay loop warrants it.**
+53. [ ] **EA0 — Ownership, identity, and transaction boundary.** Implement
+    [ADR-029](docs/adr/029-engine-game-authoring-boundary.md): make the
+    engine-runtime, engine-tooling, game-runtime/content, and game-tooling
+    dependencies executable; add stable authoring target/asset identity and a
+    typed revisioned change envelope without a generic CVar/property system.
+54. [ ] **EA1 — Practical textures and materials.** Extend the existing offline
+    glTF/cooked/GPU proof into real project-owned texture import, material
+    assignment, Material Lab authoring, deterministic dependency identity, and
+    native/incident acceptance.
+55. [ ] **EA2 — Vehicle archetypes and live developer control.** Add admitted
+    archetype identity, per-archetype tuning/presentation, Vehicle Lab, safe
+    authority-tick reconfiguration, and one process-local CLI/LLM adapter over
+    the same typed transactions and vehicle-dynamics measurements.
+56. [ ] **EA3 — Authored lighting.** Make the game-owned sun preset editable,
+    add stable point lights, Lighting Lab/gizmos, UI/agent transactions,
+    persistence, and complete render/incident evidence without adding a render
+    graph or speculative shadow framework.
+57. [ ] **EA4 — Game-owned map authoring.** Replace hard-coded layout editing
+    with a versioned placed-asset map, reusable engine selection/transform/
+    collision/navigation/streaming tools, a game-owned urban construction kit,
+    deterministic cooking, and a map-authoring skill.
+58. [ ] **EA5 / G1 — Open-engine/separate-game proof.** Build the game as a
+    separate composition and content package; separate engine/game identities,
+    configuration, tools, third-party notices, and the retained no-license-
+    grant disposition without stabilizing a speculative public runtime ABI.
+59. [ ] **Scripting decision gate.** Add no VM by default. Review concrete
+    mission/trigger/dialogue or rapid-iteration pressure after EA5 and write a
+    separate ADR/vertical slice only if data plus Zig composition is
+    insufficient.
+60. [ ] **S16 — Traffic and ambient vehicle activity (proposed).** Use the new
+    vehicle archetypes and map/road data as a small authored gameplay pressure
+    slice before adding a generic traffic or crowd framework.
+61. [ ] **MP7+ — Network productization when the gameplay loop warrants it.**
     Add private Internet/Steam-compatible routing, then dedicated deployment,
     operational security, and public services as separate programs. Do not
     combine NAT/relay, hosting, accounts, matchmaking, anti-cheat, or MMO
@@ -2053,3 +2092,5 @@ older historical “next phase” language.
 | 2026-08-18 | Completed and accepted DR1 deterministic visual fidelity | Added one normal-bearing lit product path, explicit renderer-neutral scene light/material contracts, coherent evaluation-world markings and multipart silhouettes, Render Lab, and schema-5 render-state evidence; deleted superseded flat product factories. Native validation exposed and repaired SDL 3.4.14 Metal's inverted fence query plus incorrect later-submission fence ownership, then corrected the long journey's blind-spot combat approach and coasting vehicle script. The repaired 2,256-tick Metal journey enters/re-enters the vehicle, traverses both districts, proves death/respawn and hostile replacement, persists four complete anomalies and replay, and has zero screenshot misses/fence failures. Editor-on/off aggregates pass 995/995 tests. The full S13 closure then caught and repaired stale raw-color use in the graphical network client plus the semantic visibility pass's obsolete position/color requirement; its five Metal incident profiles and real-GNS listen/dedicated encounter processes pass. The product owner accepted the visual walkthrough on 2026-08-18. |
 | 2026-08-18 | Completed and accepted S14 ranged combat | Added a feature-owned finite-ammunition handgun contract, protocol 16/replay 17 cohort break, current-state authority hitscan with semantic player/NPC volumes and Jolt obstruction, vitals-owned firearm damage/death, exact shot correlation, reconnect and accepted-ingress replay, tick-ordered client weapon projection, solo/listen/dedicated manual controls, handgun/tracer/HUD presentation, Gameplay Inspector and schema-5 firearm evidence, and updated incident-diagnostics skill. Acceptance found and repaired stale reload projection, an incomplete MP4 replay mapping, and missing listen-host weapon/shot consumption. Focused 167-test session/room evidence, two-client real-GNS listen/dedicated journeys, two-rate installed Metal depletion/reload/kill/replacement smoke, the 283/283-step `verify-s14` gate with 354/354 tests, and current editor-on/off repository aggregates with 1,003/1,003 tests pass. A native SDL follow-up also proves click-to-capture continuous look, captured gameplay clicks, Escape release, and free-Escape quit. The product owner promoted S15 on 2026-08-18. |
 | 2026-08-18 | Completed S15 implementation and automated acceptance | Accepted ADR-028 and replaced the current two-district cohort with four deterministic cooked bundles and one canonical dependency-diamond catalog; advanced recipe 8, population catalog 2, snapshot 15, replay 18, and protocol 17 without compatibility readers; installed a 32-node/64-edge four-seam circuit, 24 destinations/activity slots, 32 spawn slots, and three ordinary starting members per district; made the composition ground the sole flat support body; published four logical/visual/diagnostic slots; and added offline root translation plus exact headless/relocation admission. The installed Metal product holds four scenes at 10,112 GPU bytes and its 240/40 Hz journeys retain all twelve members, all four districts, and cross-row identity. `verify-s15` passes 191/191 steps with 428/428 tests; the editor-enabled aggregate passes 300/300 with 1,004/1,004 tests. The measured planner p99 is 1.522 ms and 24 real-Jolt activity placements admit with zero rejection/separation violation. Product-owner walkthrough remains. |
+| 2026-08-18 | Accepted the S15 product-owner checkpoint | The product owner reported the four-district product verified and supplied no corrective finding. S15 is complete; its automated/native evidence and human checkpoint are reconciled in the validation ledger. |
+| 2026-08-18 | Accepted the Engine Authoring Foundation roadmap | ADR-029 defines separate engine-runtime, engine-tooling, game-runtime/content, and game-tooling owners. EA0-EA5 now sequence typed authoring identity, practical textures/materials, vehicle archetypes plus local AI control, authored sun/point lights, game-owned map construction, and the final separately built game proof. Scripting remains an evidence-gated post-EA5 decision; S16 traffic is proposed afterward and MP7+ remains deferred. |

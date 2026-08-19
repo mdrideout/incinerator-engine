@@ -1,6 +1,6 @@
 # ADR-028: Content-Rich Four-District Sandbox Cohort
 
-**Status:** Accepted and implemented; automated acceptance complete
+**Status:** Accepted and implemented; automated/native and human acceptance complete
 
 **Date:** 2026-08-18
 
