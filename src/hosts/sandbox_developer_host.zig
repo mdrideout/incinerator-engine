@@ -210,6 +210,7 @@ pub const StreamingDiagnosticsPort = struct {
 
 pub const FrameInput = struct {
     camera: *const camera.Camera,
+    viewport: editor_contract.ViewportInput,
     frame_timer: *const timing.FrameTimer,
     include_district_streams: bool,
     authoring: editor_contract.AuthoringInput,
@@ -517,6 +518,11 @@ fn inputCapture(context: *anyopaque) input.Capture {
     };
 }
 
+fn inputSceneRect(context: *anyopaque) ?editor_contract.viewport.SceneRect {
+    const self: *const Owner = @ptrCast(@alignCast(context));
+    return ownerStateConst(self).editor.viewportSceneRect();
+}
+
 fn openRunFolder(path: []const u8) void {
     const url = std.fmt.allocPrintSentinel(
         std.heap.page_allocator,
@@ -636,6 +642,7 @@ pub const Owner = opaque {
             .context = self,
             .process_event = routeInputEvent,
             .capture = inputCapture,
+            .scene_rect = inputSceneRect,
         };
     }
 
@@ -651,6 +658,13 @@ pub const Owner = opaque {
         const state = ownerState(self);
         state.gameplay_mouse_captured = captured;
         state.editor.setGameplayMouseCaptured(captured);
+    }
+
+    pub fn setViewportMode(
+        self: *Owner,
+        mode: editor_contract.viewport.Mode,
+    ) void {
+        ownerState(self).editor.setViewportMode(mode);
     }
 
     pub fn configureEditor(
@@ -1392,6 +1406,7 @@ pub const Owner = opaque {
         state.editor.draw(gpu_renderer, .{
             .wall_unix_ms = wallNowMs(state.io),
             .camera = &camera_view,
+            .viewport = frame.viewport,
             .frame_timing = &frame_timing_view,
             .developer = .{
                 .snapshot = &diagnostics_snapshot,

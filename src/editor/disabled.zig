@@ -7,6 +7,7 @@ const renderer_module = @import("../renderer.zig");
 const input = @import("../input.zig");
 const sdl = @import("../sdl.zig");
 const tool = @import("tool.zig");
+const viewport = tool.viewport;
 const workspace = @import("editor_workspace");
 
 pub const AuthoringCrateView = tool.AuthoringCrateView;
@@ -38,6 +39,7 @@ pub const Editor = struct {
             .context = self,
             .process_event = routeInputEvent,
             .capture = inputCapture,
+            .scene_rect = inputSceneRect,
         };
     }
 
@@ -61,6 +63,12 @@ pub const Editor = struct {
 
     pub fn setGameplayMouseCaptured(_: *Editor, _: bool) void {}
 
+    pub fn setViewportMode(_: *Editor, _: viewport.Mode) void {}
+
+    pub fn viewportSceneRect(_: *const Editor) ?viewport.SceneRect {
+        return null;
+    }
+
     fn routeInputEvent(
         context: *anyopaque,
         event: *const sdl.c.SDL_Event,
@@ -71,6 +79,10 @@ pub const Editor = struct {
 
     fn inputCapture(_: *anyopaque) input.Capture {
         return .{};
+    }
+
+    fn inputSceneRect(_: *anyopaque) ?viewport.SceneRect {
+        return null;
     }
 };
 

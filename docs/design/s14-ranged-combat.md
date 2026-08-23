@@ -14,7 +14,8 @@ population, ED1 developer workspace, and DR1 deterministic visual fidelity
 
 Deliver one playable authoritative hitscan handgun through solo, listen, and
 dedicated placements. A player can equip or holster it, fire, exhaust a
-magazine, reload from finite reserve ammunition, damage and kill NPCs/players,
+magazine, automatically enter the ordinary timed reload while reserve remains,
+manually tactical-reload from a partial magazine, damage and kill NPCs/players,
 observe clear feedback, reconnect without weapon-state ambiguity, and retain
 enough incident/replay evidence to explain every shot.
 
@@ -26,8 +27,14 @@ Default controls:
 
 - `1`: equip or holster the handgun;
 - left mouse: fire one semi-automatic shot;
-- `R` while alive: reload; `R` while dead retains its existing respawn meaning;
+- `R` while alive: manually reload a partial magazine; `R` while dead retains
+  its existing respawn meaning;
 - `Q`: existing melee, unchanged.
+
+The final admitted shot atomically consumes its round and enters `reloading`
+when reserve ammunition remains. It preserves the fired hit/miss result and
+uses the same authoritative reload deadline as `R`; it does not create another
+client action. With zero reserve, the weapon remains genuinely empty.
 
 The first tuning contract is deliberately small and visible in the feature
 configuration: 12-round magazine, 36-round reserve, 25 damage, 60-metre range,
@@ -50,8 +57,9 @@ not engine limits.
 ### S14-A — Contract and cohort
 
 - Add the backend-neutral handgun state/rule contract with exhaustive unit
-  tests for equip, holster, cadence, empty magazine, reload, cancellation,
-  death reset, and invalid context.
+  tests for equip, holster, cadence, final-shot automatic reload, genuine
+  reserve-zero empty state, tactical reload, cancellation, death reset, and
+  invalid context.
 - Add protocol actions, results, shot events, and replicated character weapon
   state; advance the protocol cohort without a fallback decoder.
 - Add weapon ingress to replay identity and transport policy.
@@ -102,8 +110,8 @@ why it hit/missed/rejected, what damage applied, and what was drawn.
 - Solo, listen, and dedicated semantic acceptance.
 - Deterministic impairment, reconnect, replay, death/respawn, NPC replacement,
   and relevant scale coverage.
-- Installed Metal journey: equip, hit, miss, empty, reload, kill, replacement,
-  death/respawn, incident flag, and replay verification.
+- Installed Metal journey: equip, hit, miss, automatic reload, kill,
+  replacement, death/respawn, incident flag, and replay verification.
 - Run editor-enabled and editor-disabled aggregate gates; delete transitional
   code and reconcile documents.
 

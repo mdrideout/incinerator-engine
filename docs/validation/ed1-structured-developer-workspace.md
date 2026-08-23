@@ -21,6 +21,11 @@ the passthrough dock node. The left, right, and bottom regions organize twelve
 statically registered panels; the paused neural panel remains registered for
 retained evidence but is excluded from every deterministic preset.
 
+A 2026-08-22 post-acceptance usability correction retained the same ownership
+model while adding a thirteenth bottom-region `event_log` panel. It also moved
+the formerly floating product/incident readouts into one reserved responsive
+top strip and restored the stable native window title.
+
 The same executable registry now supplies stable panel IDs, categories,
 default regions, purpose, read boundary, request boundary, examples, and audit
 fields to panel dispatch, startup parsing, the Panels menu, the Workspace
@@ -56,9 +61,11 @@ content cohorts did not change.
 
 ## Registry and startup contract
 
-The renderer-neutral `src/editor/workspace.zig` owns twelve `ToolId` values,
-seven task presets, exact panel masks, focus validation, and incident-compatible
-UTC formatting. Unknown layouts/panels, duplicate options/panels, empty panel
+At ED1 acceptance the renderer-neutral `src/editor/workspace.zig` owned twelve
+`ToolId` values. The later `event_log` split brings the current registry to
+thirteen while preserving the same seven task presets, exact panel masks,
+focus validation, and incident-compatible UTC formatting. Unknown
+layouts/panels, duplicate options/panels, empty panel
 sets, and focus on a closed panel fail explicitly. Product and validation mode
 parsers recognize editor options but delegate their meaning to this separate
 owner, so developer presentation cannot select a product mode.
@@ -170,7 +177,7 @@ incident evidence vocabulary.
 | Presets, exact panels, focus, and parser failures | Passed | None required |
 | Docked composition and central scene passthrough | Metal capture reviewed | Optional preference pass |
 | UTC/wall/tick/frame screenshot identity | Metal capture and index correlated | Optional legibility preference |
-| F1/F2/F3 and ImGui capture routing | Existing event/capture regressions passed | Physical-key confirmation optional |
+| F1/F2 and ImGui capture routing | Existing event/capture regressions passed | Physical-key confirmation optional |
 | Resize and renderer lifecycle | Installed incident journey passed | None required |
 | Editor-disabled/headless isolation | Passed | None required |
 | Panel drag, resize, and saved human arrangement | ImGui-owned behavior retained | Product owner may tune locally |
@@ -180,6 +187,11 @@ an unresolved ownership or correctness gate. Any unreadable panel width,
 undesired preset composition, or shortcut issue should be flagged through the
 existing incident workflow and can be adjusted without reopening ED1's
 architecture.
+
+Phase 3 of the later Editor Interaction and Agent Control program supersedes
+ED1's former `F3` input-passthrough shortcut with explicit Character/Free
+Camera viewport modes. ED1's accepted docking and compile-time editor boundary
+remain unchanged.
 
 ## Deferred by design
 

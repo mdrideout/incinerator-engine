@@ -155,14 +155,16 @@ Default regions are conventions, not new subsystem boundaries:
 - **left:** gameplay, navigation, and population inspection;
 - **right:** camera, rendering, physics visualization, interaction, and
   authoring detail;
-- **bottom:** statistics, diagnostics, and incident capture;
+- **bottom:** statistics, diagnostics, collapsed event histories, and incident
+  capture;
 - **guide:** panel metadata and launch examples; and
 - **paused:** neural-rendering UI remains retained but closed and is not
   included in deterministic presets while the product track is paused.
 
-The product HUD and short incident-capture status remain intentionally visible
-product feedback. They are not general editor windows and are not converted
-into authority or a second workspace.
+Product HUD and incident-capture status share one reserved responsive ImGui
+strip at the top of the workspace (or one box while F1 hides the workspace).
+They remain presentation-only product feedback, not authority or a second
+workspace.
 
 ## Dependency cohort
 

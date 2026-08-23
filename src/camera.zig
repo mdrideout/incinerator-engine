@@ -117,18 +117,78 @@ pub const Camera = struct {
     /// dx = horizontal mouse movement (pixels)
     /// dy = vertical mouse movement (pixels)
     pub fn rotate(self: *Camera, dx: f32, dy: f32) void {
-        self.yaw += dx * self.look_sensitivity;
-        self.pitch -= dy * self.look_sensitivity; // Inverted: moving mouse up looks up
+        if (!std.math.isFinite(dx) or !std.math.isFinite(dy) or
+            !std.math.isFinite(self.yaw) or !std.math.isFinite(self.pitch) or
+            !std.math.isFinite(self.look_sensitivity)) return;
+        var yaw = self.yaw + dx * self.look_sensitivity;
+        var pitch = self.pitch - dy * self.look_sensitivity;
+        if (!std.math.isFinite(yaw) or !std.math.isFinite(pitch)) return;
 
         // Clamp pitch to prevent flipping (just under 90 degrees)
         const max_pitch = std.math.pi / 2.0 - 0.01;
-        self.pitch = std.math.clamp(self.pitch, -max_pitch, max_pitch);
+        pitch = std.math.clamp(pitch, -max_pitch, max_pitch);
 
         // Keep yaw in reasonable range to avoid floating point issues
-        if (self.yaw > std.math.pi) {
-            self.yaw -= std.math.pi * 2.0;
-        } else if (self.yaw < -std.math.pi) {
-            self.yaw += std.math.pi * 2.0;
+        if (yaw > std.math.pi) {
+            yaw -= std.math.pi * 2.0;
+        } else if (yaw < -std.math.pi) {
+            yaw += std.math.pi * 2.0;
+        }
+        if (!std.math.isFinite(yaw)) return;
+        self.yaw = yaw;
+        self.pitch = pitch;
+    }
+
+    /// Move an editor camera in local right/up/forward space. This mutates
+    /// presentation only; the caller decides whether gameplay receives input.
+    pub fn moveFree(
+        self: *Camera,
+        local_move: [3]f32,
+        delta_seconds: f32,
+        fast: bool,
+    ) void {
+        if (!std.math.isFinite(delta_seconds) or delta_seconds <= 0 or
+            !std.math.isFinite(self.move_speed) or self.move_speed <= 0) return;
+        for (local_move) |value| {
+            if (!std.math.isFinite(value)) return;
+        }
+
+        const forward = self.getForward();
+        const right = self.getRight();
+        var direction = [3]f32{
+            right[0] * local_move[0] + forward[0] * local_move[2],
+            local_move[1] + forward[1] * local_move[2],
+            right[2] * local_move[0] + forward[2] * local_move[2],
+        };
+        const magnitude_squared = direction[0] * direction[0] +
+            direction[1] * direction[1] + direction[2] * direction[2];
+        if (!std.math.isFinite(magnitude_squared) or magnitude_squared <= 0) return;
+        if (magnitude_squared > 1) {
+            const inverse_magnitude = 1 / @sqrt(magnitude_squared);
+            for (&direction) |*value| value.* *= inverse_magnitude;
+        }
+
+        const fast_multiplier: f32 = if (fast) 4 else 1;
+        const distance = self.move_speed * fast_multiplier * delta_seconds;
+        const candidate = [3]f32{
+            self.position[0] + direction[0] * distance,
+            self.position[1] + direction[1] * distance,
+            self.position[2] + direction[2] * distance,
+        };
+        for (candidate) |value| {
+            if (!std.math.isFinite(value)) return;
+        }
+        self.position = zm.f32x4(candidate[0], candidate[1], candidate[2], 1);
+    }
+
+    /// Scale editor navigation speed smoothly from wheel steps. Invalid or
+    /// unrepresentable results leave the last valid authored speed unchanged.
+    pub fn adjustMoveSpeed(self: *Camera, wheel_steps: f32) void {
+        if (!std.math.isFinite(wheel_steps) or wheel_steps == 0 or
+            !std.math.isFinite(self.move_speed) or self.move_speed <= 0) return;
+        const candidate = self.move_speed * std.math.exp2(wheel_steps * 0.25);
+        if (std.math.isFinite(candidate) and candidate > 0) {
+            self.move_speed = candidate;
         }
     }
 
@@ -210,6 +270,19 @@ test "pitch clamp" {
     cam.rotate(0.0, 10000.0); // Try to look way down
     try std.testing.expect(cam.pitch > -std.math.pi / 2.0);
     try std.testing.expect(cam.pitch < std.math.pi / 2.0);
+}
+
+test "free movement validates state and wheel adjusts speed" {
+    var cam = Camera{ .yaw = 0, .pitch = 0, .move_speed = 5 };
+    cam.moveFree(.{ 0, 0, 1 }, 1, false);
+    try std.testing.expectApproxEqAbs(@as(f32, -2), cam.position[2], 0.0001);
+    cam.moveFree(.{ 0, 1, 0 }, 0.5, true);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), cam.position[1], 0.0001);
+
+    cam.adjustMoveSpeed(4);
+    try std.testing.expectApproxEqAbs(@as(f32, 10), cam.move_speed, 0.0001);
+    cam.adjustMoveSpeed(-4);
+    try std.testing.expectApproxEqAbs(@as(f32, 5), cam.move_speed, 0.0001);
 }
 
 test "drag look rotates only while active and cancels cleanly" {

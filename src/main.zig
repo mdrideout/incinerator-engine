@@ -69,6 +69,8 @@ const sandbox_authoring = @import("sandbox_authoring");
 const sandbox_interaction = @import("sandbox_interaction");
 const sandbox_persistence = @import("sandbox_persistence");
 const camera = @import("camera.zig");
+const viewport = @import("editor/viewport.zig");
+const viewport_controller = @import("viewport_controller.zig");
 const sdl = @import("sdl.zig");
 const shader_assets = @import("shader_assets");
 const editor_contract = @import("editor/tool.zig");
@@ -1401,8 +1403,7 @@ const S14RangedCombatSmokeProgress = struct {
     equipped: bool = false,
     committed_drain_shots: u8 = 0,
     cadence_rejected: bool = false,
-    empty_rejected: bool = false,
-    reload_started: bool = false,
+    automatic_reload_started: bool = false,
     reload_completed: bool = false,
     hit_count: u8 = 0,
     target_killed: bool = false,
@@ -1414,7 +1415,19 @@ const S14RangedCombatSmokeProgress = struct {
     tracer_drawn: bool = false,
     ammo_hud_observed: bool = false,
     last_fire_request_tick: u64 = 0,
-    last_empty_request_tick: u64 = 0,
+
+    fn observeDrainShot(
+        self: *S14RangedCombatSmokeProgress,
+        result: sandbox_host.WeaponActionResult,
+    ) void {
+        self.committed_drain_shots +|= 1;
+        if (result.mode == .reloading and result.magazine_ammo == 0 and
+            result.reserve_ammo > 0 and
+            result.reload_complete_tick > result.authority_tick)
+        {
+            self.automatic_reload_started = true;
+        }
+    }
 
     fn observeWeaponResult(
         self: *S14RangedCombatSmokeProgress,
@@ -1424,7 +1437,7 @@ const S14RangedCombatSmokeProgress = struct {
         switch (result.disposition) {
             .equipped => self.equipped = true,
             .fired_miss => if (!self.reload_completed) {
-                self.committed_drain_shots +|= 1;
+                self.observeDrainShot(result);
             },
             .fired_hit => if (self.reload_completed) {
                 const target = self.target_entity orelse return;
@@ -1438,11 +1451,9 @@ const S14RangedCombatSmokeProgress = struct {
                 // The drain phase proves committed ammo consumption. A moving
                 // population member can cross the ray before the physical
                 // blocker, so both committed outcomes advance the phase.
-                self.committed_drain_shots +|= 1;
+                self.observeDrainShot(result);
             },
             .cooldown => self.cadence_rejected = true,
-            .empty => self.empty_rejected = true,
-            .reload_started => self.reload_started = true,
             else => {},
         }
     }
@@ -1471,7 +1482,7 @@ const S14RangedCombatSmokeProgress = struct {
         self.ammo_hud_observed = self.ammo_hud_observed or
             hud.weapon_mode != .holstered or hud.magazine_ammo != 0 or
             hud.reserve_ammo != 0;
-        if (self.reload_started and hud.weapon_mode == .equipped and
+        if (self.automatic_reload_started and hud.weapon_mode == .equipped and
             hud.magazine_ammo > 0 and hud.reload_remaining_ticks == 0)
         {
             self.reload_completed = true;
@@ -1481,7 +1492,7 @@ const S14RangedCombatSmokeProgress = struct {
     fn requireComplete(self: S14RangedCombatSmokeProgress) !void {
         if (!self.target_selected or !self.equipped or
             self.committed_drain_shots != 12 or !self.cadence_rejected or
-            !self.empty_rejected or !self.reload_started or
+            !self.automatic_reload_started or
             !self.reload_completed or self.hit_count < 4 or
             !self.target_killed or !self.target_death_drawn or
             !self.target_replaced or !self.weapon_drawn or !self.tracer_drawn or
@@ -1489,7 +1500,7 @@ const S14RangedCombatSmokeProgress = struct {
         {
             std.debug.print(
                 "S14_RANGED_SMOKE_MISSING target={} equipped={} drain={d} " ++
-                    "cadence={} empty={} reload={}/{} hits={d} killed={} " ++
+                    "cadence={} auto_reload={}/{} hits={d} killed={} " ++
                     "draw={}:{d} death_draw={} replacement={} " ++
                     "weapon_draw={} tracer_draw={} hud={}\n",
                 .{
@@ -1497,8 +1508,7 @@ const S14RangedCombatSmokeProgress = struct {
                     self.equipped,
                     self.committed_drain_shots,
                     self.cadence_rejected,
-                    self.empty_rejected,
-                    self.reload_started,
+                    self.automatic_reload_started,
                     self.reload_completed,
                     self.hit_count,
                     self.target_killed,
@@ -2120,6 +2130,8 @@ const App = struct {
     validation: ValidationAppState,
     validation_tick_origin: u64 = 0,
     game_camera: camera.Camera,
+    viewport_controller: viewport_controller.Controller,
+    viewport_requests: viewport.Requests,
     // Presentation resources remain owned by the visual host.
     ground_mesh: mesh.Mesh,
     block_mesh: mesh.Mesh,
@@ -2440,7 +2452,7 @@ const App = struct {
         std.debug.print(" Tick rate: {d} Hz ({d:.3} ms)\n", .{ timing.TICK_RATE, timing.TICK_DURATION * 1000.0 });
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Controls:\n", .{});
-        std.debug.print("   Click playable area - Capture mouse for continuous look\n", .{});
+        std.debug.print("   Click scene (Character) - Capture mouse for continuous look\n", .{});
         std.debug.print("   ESC - Release captured mouse / quit while mouse is free\n", .{});
         std.debug.print("   WASD - Move character / drive vehicle\n", .{});
         std.debug.print("   E - Enter / exit vehicle\n", .{});
@@ -2448,13 +2460,14 @@ const App = struct {
         std.debug.print("   Q - Authoritative melee\n", .{});
         std.debug.print("   1 - Equip / holster handgun\n", .{});
         std.debug.print("   Left-click - Fire equipped handgun\n", .{});
-        std.debug.print("   R - Reload / respawn after death\n", .{});
+        std.debug.print("   R - Tactical reload / respawn after death\n", .{});
         std.debug.print("   SPACE - Jump / vehicle brake\n", .{});
         std.debug.print("   LEFT SHIFT - Vehicle hand brake\n", .{});
-        std.debug.print("   Right-click + drag - Turn/look without capture\n", .{});
+        std.debug.print("   Right-click + drag (Character) - Turn/look without capture\n", .{});
+        std.debug.print("   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed\n", .{});
         std.debug.print("   F1 - Toggle editor UI\n", .{});
         std.debug.print("   F2 - Toggle ImGui demo\n", .{});
-        std.debug.print("   F3 - Toggle editor input passthrough\n", .{});
+        std.debug.print("   F3 - Toggle Character / Free Camera viewport mode\n", .{});
         if (developer.incidentRunPath() != null) {
             std.debug.print("   Cmd+Option+I - Flag human-test anomaly\n", .{});
             std.debug.print("   F9 / Fn+F9 - Optional anomaly shortcut\n", .{});
@@ -2512,6 +2525,8 @@ const App = struct {
                 .yaw = 0,
                 .pitch = -0.25,
             },
+            .viewport_controller = .{},
+            .viewport_requests = .{},
         };
     }
 
@@ -4200,14 +4215,56 @@ const App = struct {
     /// Apply the canonical main-window suspension policy. Both the normal loop
     /// and the native lifecycle smoke use this path.
     fn pumpInputEvents(self: *App) bool {
+        self.developer.setViewportMode(self.viewport_controller.mode);
         self.developer.setGameplayMouseCaptured(
             self.input_buffer.gameplayMouseLocked(),
         );
         const running = self.input_buffer.pumpEvents(self.developer.eventSink());
+        if (self.input_buffer.takeViewportModeRequest()) |mode| {
+            self.applyViewportRequest(.{ .set_mode = mode });
+        }
+        self.applyViewportRequests(self.input_buffer.takeFreeCameraRequests(
+            @floatCast(self.frame_timer.getDeltaTime()),
+        ));
         self.developer.setGameplayMouseCaptured(
             self.input_buffer.gameplayMouseLocked(),
         );
         return running;
+    }
+
+    fn applyViewportRequest(self: *App, request: viewport.Request) void {
+        const previous_mode = self.viewport_controller.mode;
+        self.viewport_controller.apply(request, &self.game_camera);
+        if (self.viewport_controller.mode != previous_mode) {
+            self.input_buffer.setViewportMode(self.viewport_controller.mode);
+            self.developer.setViewportMode(self.viewport_controller.mode);
+            self.developer.setGameplayMouseCaptured(
+                self.input_buffer.gameplayMouseLocked(),
+            );
+            self.action_latch.clear();
+        }
+    }
+
+    fn applyViewportRequests(self: *App, pending: viewport.Requests) void {
+        if (pending.mode) |mode| {
+            self.applyViewportRequest(.{ .set_mode = mode });
+        }
+        if (pending.start_from_product_view) {
+            self.applyViewportRequest(.start_from_product_view);
+        }
+        if (pending.speed_steps != 0) {
+            self.applyViewportRequest(.{ .adjust_speed = pending.speed_steps });
+        }
+        if (pending.navigation) |navigation| {
+            self.applyViewportRequest(.{ .navigate = navigation });
+        }
+        if (pending.frame_target) |target| {
+            self.applyViewportRequest(.{ .frame_selection = target });
+        }
+    }
+
+    fn activeCamera(self: *const App) *const camera.Camera {
+        return self.viewport_controller.activeCamera(&self.game_camera);
     }
 
     fn waitForWindowSuspension(self: *App) bool {
@@ -7023,7 +7080,8 @@ const App = struct {
         }
         if (self.neural_target_frames) |*target_frames| {
             if (target_frames.wantsFrame(self.frame_timer.total_frames)) {
-                const forward = self.game_camera.getForward();
+                const scene_camera = self.activeCamera();
+                const forward = scene_camera.getForward();
                 const up = camera.Camera.getUp();
                 const target_state = neural_target_fixture.sequenceStateFor(
                     self.neural_target_fixture_variant,
@@ -7031,13 +7089,13 @@ const App = struct {
                 );
                 try target_frames.record(&self.neural_inputs.?, .{
                     .position = .{
-                        self.game_camera.position[0],
-                        self.game_camera.position[1],
-                        self.game_camera.position[2],
+                        scene_camera.position[0],
+                        scene_camera.position[1],
+                        scene_camera.position[2],
                     },
                     .forward = .{ forward[0], forward[1], forward[2] },
                     .up = .{ up[0], up[1], up[2] },
-                    .vertical_fov_radians = self.game_camera.fov,
+                    .vertical_fov_radians = scene_camera.fov,
                 }, target_state.scene, target_state.event);
             }
         }
@@ -7685,6 +7743,7 @@ const App = struct {
             actions.weapon_toggle_pressed = true;
             return actions;
         }
+        if (hud.weapon_mode == .reloading) return actions;
 
         if (progress.committed_drain_shots < 12) {
             const source = self.simulation.player().focusPosition() orelse return actions;
@@ -7700,17 +7759,7 @@ const App = struct {
             return actions;
         }
 
-        if (!progress.empty_rejected) {
-            if (tick > progress.last_empty_request_tick) {
-                actions.fire_pressed = true;
-                progress.last_empty_request_tick = tick;
-            }
-            return actions;
-        }
-        if (!progress.reload_started) {
-            actions.reload_pressed = true;
-            return actions;
-        }
+        if (!progress.automatic_reload_started) return actions;
         if (!progress.reload_completed) return actions;
 
         if (!progress.target_selected) {
@@ -7775,7 +7824,7 @@ const App = struct {
     }
 
     fn s14ClearRayYaw(self: *App, source: [3]f32) !f32 {
-        // The empty/reload acceptance phase must not provoke the population.
+        // The depletion/automatic-reload acceptance phase must not provoke the population.
         // Find a deterministic horizontal ray whose full handgun range clears
         // every live authored NPC instead of relying on a particular fixture
         // object to happen to occlude them.
@@ -8098,8 +8147,9 @@ const App = struct {
         const depth: f32 = 0.05;
         const geometry = combat_presentation.healthBarGeometry(plan, width);
         const y = position[1] + y_offset;
-        const rotation = zm.rotationY(-self.game_camera.yaw);
-        const right = self.game_camera.getRight();
+        const scene_camera = self.activeCamera();
+        const rotation = zm.rotationY(-scene_camera.yaw);
+        const right = scene_camera.getRight();
         self.gpu_renderer.drawMeshWithMaterial(
             &self.block_mesh,
             null,
@@ -8664,74 +8714,77 @@ const App = struct {
         }
         var follow_target: ?[3]f32 = null;
         var follow_distance: f32 = 0;
-        if (self.controlled_vehicle_id) |controlled_id| {
-            for (vehicle_draws) |draw| {
-                if (std.meta.eql(draw.entity, controlled_id)) {
-                    const target = [3]f32{
-                        draw.chassis_pose.position[0],
-                        draw.chassis_pose.position[1] + 1,
-                        draw.chassis_pose.position[2],
-                    };
-                    follow_target = target;
-                    follow_distance = 12.0;
-                    self.game_camera.followTarget(target, follow_distance);
-                    break;
+        if (self.viewport_controller.mode == .character) {
+            if (self.controlled_vehicle_id) |controlled_id| {
+                for (vehicle_draws) |draw| {
+                    if (std.meta.eql(draw.entity, controlled_id)) {
+                        const target = [3]f32{
+                            draw.chassis_pose.position[0],
+                            draw.chassis_pose.position[1] + 1,
+                            draw.chassis_pose.position[2],
+                        };
+                        follow_target = target;
+                        follow_distance = 12.0;
+                        self.game_camera.followTarget(target, follow_distance);
+                        break;
+                    }
                 }
-            }
-            // A reliable action result can precede the corresponding
-            // replication lane on a reordered transport. Keep the previous
-            // camera target until the controlled vehicle becomes visible.
-        } else {
-            for (character_draws) |draw| {
-                if (draw.local_player) {
-                    follow_target = draw.camera_target;
-                    follow_distance = 9.0;
-                    self.game_camera.followTarget(draw.camera_target, follow_distance);
-                    break;
+                // A reliable action result can precede the corresponding
+                // replication lane on a reordered transport. Keep the previous
+                // camera target until the controlled vehicle becomes visible.
+            } else {
+                for (character_draws) |draw| {
+                    if (draw.local_player) {
+                        follow_target = draw.camera_target;
+                        follow_distance = 9.0;
+                        self.game_camera.followTarget(draw.camera_target, follow_distance);
+                        break;
+                    }
                 }
+                // Initial admission/admin outcomes may precede the first client
+                // projection. Keep the previous target until presentation catches
+                // up; validation scenarios require eventual evidence separately.
             }
-            // Initial admission/admin outcomes may precede the first client
-            // projection. Keep the previous target until presentation catches
-            // up; validation scenarios require eventual evidence separately.
-        }
-        if (follow_target) |target| {
-            const desired_position = [3]f32{
-                self.game_camera.position[0],
-                self.game_camera.position[1],
-                self.game_camera.position[2],
-            };
-            if (try self.simulation.presentation().lineHitFraction(
-                target,
-                desired_position,
-            )) |hit_fraction| {
-                self.game_camera.clampFollowObstruction(
+            if (follow_target) |target| {
+                const desired_position = [3]f32{
+                    self.game_camera.position[0],
+                    self.game_camera.position[1],
+                    self.game_camera.position[2],
+                };
+                if (try self.simulation.presentation().lineHitFraction(
                     target,
-                    follow_distance,
-                    hit_fraction,
-                    0.2,
-                );
+                    desired_position,
+                )) |hit_fraction| {
+                    self.game_camera.clampFollowObstruction(
+                        target,
+                        follow_distance,
+                        hit_fraction,
+                        0.2,
+                    );
+                }
             }
         }
+        const scene_camera = self.viewport_controller.activeCameraMut(&self.game_camera);
         var neural_history_reset: engine.neural_rendering.ResetReason = .none;
         if (self.neural_capture_camera_program) |program| {
             if (self.neural_target_fixture_enabled) {
                 neural_history_reset = neural_capture_camera.apply(
                     program,
-                    &self.game_camera,
+                    scene_camera,
                     neural_target_fixture.center,
                     self.frame_timer.total_frames,
                 );
             } else if (self.neural_evaluation_fixture_enabled) {
                 neural_history_reset = neural_capture_camera.apply(
                     program,
-                    &self.game_camera,
+                    scene_camera,
                     neural_evaluation_fixture.center,
                     self.frame_timer.total_frames,
                 );
             } else if (follow_target) |target| {
                 neural_history_reset = neural_capture_camera.apply(
                     program,
-                    &self.game_camera,
+                    scene_camera,
                     target,
                     self.frame_timer.total_frames,
                 );
@@ -8739,7 +8792,7 @@ const App = struct {
         }
 
         // Get view-projection matrix from camera
-        const view_proj = self.game_camera.getViewProjectionMatrix(aspect_ratio);
+        const view_proj = scene_camera.getViewProjectionMatrix(aspect_ratio);
         if (self.neural_inputs) |*inputs| {
             try inputs.beginFrame(.{
                 .authority_tick = self.simulation.inspection().tickIndex(),
@@ -8758,7 +8811,7 @@ const App = struct {
                     .first_frame
                 else
                     neural_history_reset,
-            }, self.game_camera.getViewMatrix());
+            }, scene_camera.getViewMatrix());
         }
         scene_extraction_profile.finish(.success);
 
@@ -9322,7 +9375,6 @@ const App = struct {
         if (build_options.validation_mode or builtin.is_test) {
             self.validation.s11_combat.observeProductHud(&gameplay_view);
         }
-        self.updateProductTitle(character_draws, npc_draws, combat_hud);
         try self.drawDeveloperOverlay(&gameplay_view);
         try self.prepareIncidentSemanticEvidence(
             character_draws,
@@ -10119,119 +10171,22 @@ const App = struct {
         return @tagName(value);
     }
 
-    fn updateProductTitle(
-        self: *App,
-        character_draws: []const sandbox_host.CharacterDraw,
-        npc_draws: []const sandbox_host.NpcDraw,
-        hud: combat_presentation.LocalHud,
-    ) void {
-        var local_hurt = false;
-        for (character_draws) |draw| {
-            if (draw.local_player and draw.combat.hit_flash) local_hurt = true;
-        }
-        var npc_state: []const u8 = "none";
-        var npc_health: u16 = 0;
-        var npc_maximum_health: u16 = 0;
-        var attack_remaining: u64 = 0;
-        for (npc_draws) |draw| {
-            if (draw.life_state == .dead) {
-                npc_state = "DEAD - REPLACEMENT PENDING";
-                npc_health = draw.health;
-                npc_maximum_health = draw.maximum_health;
-                break;
-            }
-            if (draw.encounter_state == .patrolling and draw.life_state == .alive) continue;
-            npc_state = @tagName(draw.encounter_state);
-            npc_health = draw.health;
-            npc_maximum_health = draw.maximum_health;
-            attack_remaining = draw.attack_impact_tick -| hud.authority_tick;
-            break;
-        }
-        if (std.mem.eql(u8, npc_state, "none")) {
-            if (self.simulation.developer().diagnostics().population) |population_diagnostics| {
-                if (population_diagnostics.replacement_pending != 0 or
-                    population_diagnostics.awaiting_spawn != 0)
-                {
-                    npc_state = "REPLACEMENT PENDING";
-                }
-            }
-        }
-        const feedback = self.product_feedback.current(hud.authority_tick);
-        const action = if (feedback) |value| @tagName(value.kind) else "none";
-        const disposition = if (feedback) |value|
-            @tagName(value.disposition)
-        else
-            "none";
-        const reason = if (feedback) |value|
-            actionFeedbackReason(value.kind, value.reason_domain, value.reason)
-        else
-            "none";
-        const respawn = if (hud.life_state == .dead)
-            if (hud.respawn_remaining_ticks == 0) "PRESS R TO RESPAWN" else "respawn cooling down"
-        else
-            "alive";
-        const damage = if (hud.life_state == .dead)
-            "DEAD"
-        else if (local_hurt)
-            "DAMAGE RECEIVED"
-        else
-            "healthy";
-        const melee_result = if (hud.latest_melee_disposition) |value|
-            @tagName(value)
-        else
-            "none";
-        const respawn_result = if (hud.latest_respawn_disposition) |value|
-            @tagName(value)
-        else
-            "none";
-        const weapon_result = if (hud.latest_weapon_disposition) |value|
-            @tagName(value)
-        else
-            "none";
-        var storage: [512]u8 = undefined;
-        const title = std.fmt.bufPrintZ(
-            &storage,
-            "Incinerator | HP {d}/{d} {s} | handgun {s} {d}/{d} fire {d}t reload {d}t/{s} | {s} {d}t | melee {d}t/{s} | NPC {s} HP {d}/{d} attack {d}t | action {s}/{s}/{s} | respawn-result {s}",
-            .{
-                hud.health,
-                hud.maximum_health,
-                damage,
-                @tagName(hud.weapon_mode),
-                hud.magazine_ammo,
-                hud.reserve_ammo,
-                hud.weapon_remaining_ticks,
-                hud.reload_remaining_ticks,
-                weapon_result,
-                respawn,
-                hud.respawn_remaining_ticks,
-                hud.melee_remaining_ticks,
-                melee_result,
-                npc_state,
-                npc_health,
-                npc_maximum_health,
-                attack_remaining,
-                action,
-                disposition,
-                reason,
-                respawn_result,
-            },
-        ) catch return;
-        _ = c.SDL_SetWindowTitle(self.window, title.ptr);
-    }
-
     fn drawDeveloperOverlay(
         self: *App,
         gameplay_view: *const editor_contract.GameplayView,
     ) !void {
+        self.viewport_requests.clear();
         self.authoring_requests.clear();
         self.interaction_requests.clear();
         self.navigation_requests.clear();
         defer {
+            self.viewport_requests.clear();
             self.authoring_requests.clear();
             self.interaction_requests.clear();
             self.navigation_requests.clear();
         }
         const authoring_view = try self.crateAuthoringView();
+        const viewport_view = self.viewport_controller.view();
         const interaction_view = try self.interactionEditorView();
         const gates = self.simulation.developer().navigationGateState();
         const navigation_view = editor_contract.NavigationLabView{
@@ -10337,7 +10292,11 @@ const App = struct {
             self.developerAuthorityPort(),
             self.developerStreamingPort(),
             .{
-                .camera = &self.game_camera,
+                .camera = self.activeCamera(),
+                .viewport = .{
+                    .view = &viewport_view,
+                    .requests = &self.viewport_requests,
+                },
                 .frame_timer = &self.frame_timer,
                 .include_district_streams = self.includeDeveloperDistrictStreams(),
                 .authoring = .{
@@ -10388,6 +10347,7 @@ const App = struct {
                 },
             },
         ));
+        self.applyViewportRequests(self.viewport_requests.take());
         try self.applyAuthoringRequests(self.authoring_requests.slice());
         try self.applyInteractionRequests(self.interaction_requests.slice());
         try self.applyNavigationRequests(self.navigation_requests.slice());
@@ -11291,8 +11251,8 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
             const evidence = app.validation.s14_ranged_combat;
             std.debug.print(
                 "S14_RANGED_COMBAT_SMOKE_RESULT frames={d} ticks={d} " ++
-                    "target={} equipped={} drain={d} cadence={} empty={} " ++
-                    "reload={}/{} hits={d} killed={} death_draw={} " ++
+                    "target={} equipped={} drain={d} cadence={} " ++
+                    "auto_reload={}/{} hits={d} killed={} death_draw={} " ++
                     "replacement={} weapon_draw={} tracer_draw={} hud={} " ++
                     "virtual_render_hz={d} gpu_driver={s}\n",
                 .{
@@ -11302,8 +11262,7 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
                     evidence.equipped,
                     evidence.committed_drain_shots,
                     evidence.cadence_rejected,
-                    evidence.empty_rejected,
-                    evidence.reload_started,
+                    evidence.automatic_reload_started,
                     evidence.reload_completed,
                     evidence.hit_count,
                     evidence.target_killed,

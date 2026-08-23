@@ -111,7 +111,8 @@ evidence, and a repaired full native gameplay/incident journey. See the
 [DR1 validation record](docs/validation/dr1-playable-deterministic-visual-fidelity.md).
 The product-owner DR1 visual walkthrough is accepted. DR1 is complete. S14
 implements one authoritative hitscan handgun across solo, private-listen, and
-dedicated placements with finite ammunition/reload, current-state semantic
+dedicated placements with finite ammunition, final-shot automatic reload,
+manual tactical reload, current-state semantic
 targeting plus Jolt obstruction, vitals-owned damage/death, reconnect/replay,
 client-owned HUD/weapon/tracer presentation, and schema-5 firearm evidence.
 Its focused, two-client real-GNS, two-rate installed Metal, ordinary-product,
@@ -545,21 +546,23 @@ distances are 9 m and 12 m respectively.
 
 | Key | Action |
 |---|---|
-| Click playable area | Capture the mouse for continuous turn/look; the first click only captures and does not fire |
-| ESC | Release captured mouse; quit when the mouse is already free |
-| W / A / S / D | Move the character, or throttle/reverse and steer while driving |
-| E | Enter or exit the sandbox vehicle |
-| F | Collect the nearby carryable, or drop it beside the character at any valid world position |
-| Q | Request authoritative melee against the nearest valid target |
-| 1 | Equip or holster the authoritative handgun |
-| Left mouse | Fire one handgun shot while equipped |
-| R | Reload while alive; request authoritative respawn after death and cooldown |
-| Space | Jump on foot; service brake while driving |
-| Left Shift | Handbrake while driving |
-| Right mouse + drag | Turn/look without capturing the mouse |
+| Click scene in Character mode | Capture the mouse for continuous turn/look; the first click only captures and does not fire |
+| ESC | Release captured mouse in Character mode; quit when the mouse is already free |
+| W / A / S / D | Move the character or drive in Character mode; fly while holding right mouse in Free Camera |
+| E | Enter or exit the sandbox vehicle in Character mode |
+| F | Collect/drop in Character mode; frame the Gameplay Inspector selection in Free Camera |
+| Q | Request authoritative melee in Character mode |
+| 1 | Equip or holster the authoritative handgun in Character mode |
+| Left mouse | Fire while captured in Character mode; never fires in Free Camera |
+| R | In Character mode, manually tactical-reload while alive or request respawn after death/cooldown |
+| Space | Jump on foot or service-brake while driving in Character mode |
+| Left Shift | Handbrake while driving; accelerate Free Camera flight |
+| Right mouse + drag | Turn/look without capture in Character mode; own Free Camera fly/look input |
+| Q / E while right-dragging | Move Free Camera down/up |
+| Mouse wheel over scene | Adjust Free Camera flight speed |
 | F1 | Toggle editor UI |
 | F2 | Toggle ImGui demo |
-| F3 | Toggle editor input passthrough |
+| F3 | Toggle Character / Free Camera viewport mode |
 | Command+Option+I | Recommended macOS shortcut to flag a human-test anomaly |
 | F9 / Fn+F9 | Optional shortcut when macOS delivers the function key to SDL |
 | Command+Shift+9 | Optional alternate anomaly shortcut |
@@ -575,9 +578,20 @@ zig build run -- --editor-layout=navigation --editor-focus=navigation_lab --edit
 zig build run -- --editor-panels=gameplay_inspector,diagnostics,incident_capture --editor-focus=incident_capture
 ```
 
-The persistent bottom bar shows UTC, `wall_unix_ms`, authority tick,
-presentation frame, and active layout so screenshots align with incident
-evidence. Open the editor with F1, then use
+The scene toolbar makes `Character` versus `Free Camera` explicit. Free Camera
+is editor-local presentation state: it releases SDL relative mouse mode,
+suppresses local gameplay actions, and does not pause the simulation or enter
+authority snapshots, replication, replay, or world saves. Viewport object
+picking and the shared World Outliner selection arrive in the next sequential
+editor phase; until then, left clicks in Free Camera are deliberately safe but
+do not select, while `F` can frame the current Gameplay Inspector selection.
+
+The reserved top status strip presents player health, handgun state and firing
+controls, threat/action feedback, incident status, and mouse-capture state in
+responsive ImGui columns. The macOS window title remains the stable product
+name instead of duplicating live status. The persistent bottom bar shows UTC,
+`wall_unix_ms`, authority tick, presentation frame, and active layout so
+screenshots align with incident evidence. Open the editor with F1, then use
 **Panels → Physics Debug & Profiler**. Its
 master switch and category checkboxes control bounded shapes, bounds, contacts,
 centers of mass, and velocity evidence. The same panel shows persistent Metal
@@ -592,14 +606,23 @@ no-progress; it is diagnostic telemetry and does not alter authority.
 
 **Panels → Gameplay Inspector** explains the selected local player or NPC across
 its durable/replicated identity, authority and presentation pose, health/life,
-encounter deadline, separation, last action disposition, and filtered causal
-trace. Trace freeze, resume, and clear are bounded developer requests; durable
-incident streams replace the removed giant terminal JSON export. The tool
-cannot mutate gameplay authority. The small gameplay panel
-at the upper-left remains visible when F1 hides developer windows and gives
-plain-language health, damage, attack, cooldown, death, respawn, and rejected
-action feedback. A dead player remains visible in red until respawn, rather
-than disappearing as an implicit representation of authority teardown.
+encounter deadline, separation, and last action disposition. It cannot mutate
+gameplay authority. **Panels → Event Log** is a separate bottom-wide tab for
+the bounded runtime journal and selected-entity gameplay event history. Both
+histories are collapsed by default and scroll inside the wide panel when
+opened. Gameplay events record requests, authority admission, outcomes,
+replication, and presentation; their pause/resume buttons control recording
+only, not gameplay. **Panels → Diagnostics** is reserved for runtime health,
+an explicitly labelled gameplay pause checkbox, single-tick control, and
+collapsed queue, authority-cycle, world-streaming, and residency details.
+Durable incident streams replace the removed giant terminal JSON export.
+
+The top status strip remains visible as one responsive ImGui box when F1 hides
+the docked developer workspace. It gives plain-language health, damage,
+handgun controls (`1` equip/holster, left mouse fire, `R` tactical reload), attack,
+cooldown, death, respawn, rejected-action, incident, and mouse-capture feedback.
+A dead player remains visible in red until respawn, rather than disappearing as
+an implicit representation of authority teardown.
 
 Every Debug product run records a bounded schema-5 diagnostic bundle under
 `~/Library/Logs/Incinerator/runs`. Press Command+Option+I near an anomaly (or
@@ -662,21 +685,32 @@ See [ADR-021](docs/adr/021-local-human-test-incident-bundles.md), the
 [incident design](docs/design/human-test-incident-capture.md), and the
 [validation record](docs/validation/human-test-incident-capture.md).
 
-To author and persist the sandbox crate, supply an existing absolute save root
-and enable the editor explicitly:
+The sandbox contains one persistent runtime physics test crate. It is not an
+imported asset or a reusable content definition. The current ImGui proof
+authors only its XYZ position; size, collider shape, material, duplication, and
+general object placement are not part of this tool.
+
+To author and persist that crate, supply an existing absolute save root and
+enable the editor explicitly:
 
 ```bash
 mkdir -p /tmp/incinerator-saves
 zig build run -Deditor=true -- --save-root=/tmp/incinerator-saves
 ```
 
-Open **Panels → Crate Authoring**, select the available crate, edit its draft
-position, and use **Apply position**, **Undo**, **Redo**, and **Save**. The tool
-only sees immutable records and emits typed requests that the host applies
-after UI drawing. The committed slot is
+`--save-root` is startup configuration for the process-owned filesystem
+destination; it is not a command-line authoring workflow. All crate editing is
+done in **Panels → Crate Authoring**: select the available crate, edit its draft
+position, and use **Apply position**, **Undo**, **Redo**, and **Save world
+snapshot**. The tool only sees immutable records and emits typed requests that
+the host applies after UI drawing.
+
+A save is a restorable snapshot of authoritative sandbox world state, not a
+source asset or a content commit. The save directory is the folder passed to
+`--save-root`; the fixed logical slot in the example is
 `/tmp/incinerator-saves/sandbox.isav`. S5 intentionally exposes one relocation
-producer and one fixed slot; CLI/automation routing, autosave, migration, and
-multiple writers are future work.
+producer and one fixed slot; autosave, migration, and multiple writers are
+future work.
 
 Open **Panels → Interaction** to inspect the immutable carryable/holder state
 and emit the same typed collect/drop requests used by F. A carryable is either

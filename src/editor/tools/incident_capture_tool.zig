@@ -26,27 +26,20 @@ pub const State = struct {
     anomaly_note: [incident.max_note_bytes:0]u8 = @splat(0),
 };
 
-/// Always-visible confirmation for shortcut flags. This is status only; all
-/// controls remain in the dedicated Incident Capture tool window.
+/// Compact status cell shared by the visible workspace header and the
+/// editor-hidden product overlay. All controls remain in Incident Capture.
 pub fn drawProductStatus(ctx: *const tool_module.IncidentInput) void {
     const view = ctx.view;
     const anomalies = view.anomalySlice();
-    if (!view.health.enabled or anomalies.len == 0) return;
-    const latest = anomalies[anomalies.len - 1];
-
-    zgui.setNextWindowPos(.{ .x = 300, .y = 10, .cond = .always });
-    zgui.setNextWindowBgAlpha(.{ .alpha = 0.78 });
-    if (zgui.begin("##incident_product_status", .{
-        .flags = .{
-            .no_title_bar = true,
-            .no_resize = true,
-            .no_move = true,
-            .no_collapse = true,
-            .always_auto_resize = true,
-            .no_saved_settings = true,
-            .no_focus_on_appearing = true,
-        },
-    })) {
+    zgui.textDisabled("INCIDENT CAPTURE", .{});
+    if (!view.health.enabled) {
+        zgui.textDisabled("Disabled for this build/run", .{});
+        zgui.textDisabled("No capture shortcut active", .{});
+    } else if (anomalies.len == 0) {
+        zgui.text("Ready", .{});
+        zgui.textDisabled("Cmd+Option+I flags an anomaly", .{});
+    } else {
+        const latest = anomalies[anomalies.len - 1];
         zgui.textColored(
             if (latest.status == .capturing)
                 .{ 1, 0.75, 0.15, 1 }
@@ -54,12 +47,11 @@ pub fn drawProductStatus(ctx: *const tool_module.IncidentInput) void {
                 .{ 1, 0.3, 0.2, 1 }
             else
                 .{ 0.25, 0.95, 0.35, 1 },
-            "INCIDENT #{d} {s}",
+            "Incident #{d}: {s}",
             .{ latest.id, @tagName(latest.status) },
         );
-        if (view.status_len != 0) zgui.text("{s}", .{view.statusText()});
+        if (view.status_len != 0) zgui.textWrapped("{s}", .{view.statusText()});
     }
-    zgui.end();
 }
 
 fn request(ctx: *const tool_module.IncidentInput, value: incident.Request) void {

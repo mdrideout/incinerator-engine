@@ -18,6 +18,7 @@
 
 const std = @import("std");
 const workspace = @import("editor_workspace");
+pub const viewport = @import("viewport.zig");
 
 const engine = @import("incinerator_engine");
 const sandbox_host = @import("sandbox_host_contracts");
@@ -502,11 +503,17 @@ pub const RenderInput = struct {
     view: *const RenderView,
 };
 
+pub const ViewportInput = struct {
+    view: *const viewport.View,
+    requests: *viewport.Requests,
+};
+
 /// One-frame observations and fixed request sinks, grouped by concern. This is
 /// the composition/editor boundary; tools never receive App or Simulation.
 pub const FrameInput = struct {
     wall_unix_ms: i64,
     camera: *const CameraView,
+    viewport: ViewportInput,
     frame_timing: *const FrameTimingView,
     developer: DeveloperInput,
     visualization: VisualizationInput,

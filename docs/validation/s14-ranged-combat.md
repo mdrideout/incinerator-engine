@@ -35,10 +35,13 @@ zig build test-session-contracts test-m6-transaction test-mp6-hosts \
 ```
 
 The authority proof covers equip, hit, rejected cadence without ammo loss,
+final-shot automatic reload, no synthetic reload ingress, manual tactical
 reload, reconnect during reload, completion, miss, four firearm hits, player
-death cleanup, and exact accepted-ingress counts. Protocol tests round-trip and
-reject malformed weapon messages. Client/presentation regressions prove an old
-reliable action result cannot mask a newer reload-completion snapshot.
+death cleanup, and exact accepted-ingress counts. The local-solo proof drains
+the full magazine through the public player role and observes the same result
+and forced completion snapshot. Protocol tests round-trip and reject malformed
+weapon messages. Client/presentation regressions prove an old reliable action
+result cannot mask a newer reload-completion snapshot.
 
 ### Graphical network placements
 
@@ -64,10 +67,23 @@ Both independent presentation schedules passed:
 - 3,840 frames / 960 validation ticks at virtual 240 Hz;
 - 1,280 frames / 960 validation ticks at virtual 80 Hz.
 
-Each proves equip, twelve committed shots, cooldown and empty rejection,
-reload start/completion, four NPC hits and death, visible death presentation,
-safe population replacement, handgun draw, tracer draw, ammo HUD, and clean
-shutdown on Metal.
+Each proves equip, twelve committed shots, cooldown rejection, final-shot
+automatic reload start/completion, four NPC hits and death, visible death
+presentation, safe population replacement, handgun draw, tracer draw, ammo
+HUD, and clean shutdown on Metal. The driver submits no extra empty shot or
+reload action during the depletion transition.
+
+### 2026-08-22 automatic-reload follow-up
+
+Editor Interaction Phase 2 moved empty-magazine convenience into the existing
+authoritative ranged-combat rule. The final shot now retains its hit/miss
+result while projecting `reloading`, zero magazine rounds, finite reserve, and
+the normal deadline. The focused solo/listen/dedicated gate passed `107/107`
+steps and `174/174` tests; the two-rate installed Metal journey passed `84/84`
+steps with `auto_reload=true/true`; and repository aggregates passed
+`305/305` editor-enabled and `302/302` editor-disabled steps with `1026/1026`
+tests in each configuration. Full evidence and the pending human walkthrough
+are in the [Phase 2 validation record](editor-interaction-phase-2-authoritative-automatic-reload.md).
 
 ### Complete aggregate
 
@@ -140,14 +156,17 @@ Then verify:
    holding a button, then left-click an NPC four times with the cadence. Confirm
    the captured-state hint says `ESC releases`; tracer, hit feedback, health
    loss, red death presentation, and replacement should remain readable.
-3. Fire away from actors, confirm misses still consume ammunition, exhaust the
-   magazine, observe `empty`, press `R`, and confirm the reload countdown ends
-   at `12/24`.
-4. Enter a vehicle or collect the carryable and confirm the handgun holsters;
+3. Fire away from actors, confirm misses still consume ammunition, and exhaust
+   the magazine. Confirm the final shot is visible, the HUD immediately enters
+   the timed reload without pressing `R`, and the countdown ends at `12/24`.
+   Fire once during the reload and confirm it is rejected as `reloading`.
+4. Fire one or more rounds, press `R`, and confirm manual tactical reload still
+   fills the partial magazine from finite reserve.
+5. Enter a vehicle or collect the carryable and confirm the handgun holsters;
    exit/drop, re-equip, and fire again.
-5. Allow player death and press `R` after the respawn countdown; the new avatar
+6. Allow player death and press `R` after the respawn countdown; the new avatar
    starts holstered with the authored loadout.
-6. Open Gameplay Inspector and Incident Capture, flag any anomaly, and confirm
+7. Open Gameplay Inspector and Incident Capture, flag any anomaly, and confirm
    the bundle contains `kind=firearm` records plus weapon/ray/draw evidence.
 
 The product owner promoted the roadmap to S15 on 2026-08-18 after the

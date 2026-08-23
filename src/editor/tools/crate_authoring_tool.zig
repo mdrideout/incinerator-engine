@@ -17,7 +17,7 @@ pub const descriptor = tool_module.Descriptor{
     .name = "Crate Authoring",
     .category = .authoring,
     .default_region = .right,
-    .purpose = "Relocate the selected persistent crate and commit the authoritative sandbox save slot.",
+    .purpose = "Relocate the persistent runtime physics test crate and write a restorable sandbox world snapshot.",
     .reads = "Immutable crate authoring session, selection, feedback, and save projection.",
     .requests = "Emits typed begin/apply/cancel/undo/redo/save requests through the authoring boundary.",
     .examples = &.{ "crate=1:4 revision=7", "save=committed slot=sandbox" },
@@ -193,6 +193,10 @@ fn drawChangeEvidence(evidence: ?sandbox_authoring.ChangeEvidence) void {
 
 fn drawSaveFeedback(feedback: tool_module.SaveFeedback) void {
     zgui.separatorText("Durable save");
+    zgui.textWrapped(
+        "A save is a restorable snapshot of the sandbox world. It is not a source asset or a content commit.",
+        .{},
+    );
     const color: [4]f32 = switch (feedback.status) {
         .committed => .{ 0.25, 0.9, 0.35, 1 },
         .committed_sync_warning => .{ 1, 0.75, 0.2, 1 },
@@ -217,6 +221,16 @@ pub fn draw(state: *State, ctx: *const AuthoringInput) void {
     if (zgui.begin("Crate Authoring", .{})) {
         const session = view.session;
         var request_emitted = false;
+
+        zgui.textWrapped(
+            "This crate is one runtime physics test object, not an imported asset. This narrow authoring proof supports XYZ position only. Size, collider shape, material, duplication, and general object placement are not editable here.",
+            .{},
+        );
+        zgui.textDisabled(
+            "Workflow: select crate -> edit position -> apply -> undo/redo -> save world snapshot",
+            .{},
+        );
+        zgui.separator();
 
         if (session.pending) |pending| {
             zgui.textColored(.{ 1, 0.75, 0.2, 1 }, "Authority operation pending", .{});
@@ -263,6 +277,7 @@ pub fn draw(state: *State, ctx: *const AuthoringInput) void {
 
             const pending = session.pending != null;
             zgui.beginDisabled(.{ .disabled = pending });
+            zgui.textDisabled("Position in world meters (X, Y, Z); crate size is fixed.", .{});
             if (zgui.inputFloat3("Draft position", .{
                 .v = &state.position,
                 .cfmt = "%.3f",
@@ -282,7 +297,7 @@ pub fn draw(state: *State, ctx: *const AuthoringInput) void {
             if (state.dirty) {
                 zgui.textColored(
                     .{ 1, 0.75, 0.2, 1 },
-                    "Draft modified; natural physics refresh is paused",
+                    "Draft is held for editing; gameplay and crate physics are still running",
                     .{},
                 );
             } else {
@@ -361,7 +376,7 @@ pub fn draw(state: *State, ctx: *const AuthoringInput) void {
                 save_busy or
                 view.save.status == .unavailable,
         });
-        if (zgui.button("Save authoritative world", .{})) {
+        if (zgui.button("Save world snapshot", .{})) {
             _ = push(ctx, .save);
         }
         zgui.endDisabled();

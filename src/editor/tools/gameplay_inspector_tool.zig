@@ -1,8 +1,9 @@
-//! Read-only selected-entity gameplay inspector and causal trace viewer.
+//! Read-only selected-entity gameplay inspector and product status views.
 //!
-//! The tool consumes one immutable frame projection and a type-erased trace
-//! borrow. Its only write surface is the fixed trace-control mailbox owned by
-//! the developer host.
+//! The inspector consumes one immutable frame projection. The bounded gameplay
+//! event history is rendered in the bottom Diagnostics tool, while its only
+//! write surface remains the fixed trace-control mailbox owned by the
+//! developer host.
 
 const std = @import("std");
 const zgui = @import("zgui");
@@ -19,9 +20,9 @@ pub const descriptor = tool_module.Descriptor{
     .name = "Gameplay Inspector",
     .category = .gameplay,
     .default_region = .left,
-    .purpose = "Trace an entity across authority, replication, presentation, relevance, vitals, and navigation.",
-    .reads = "Immutable GameplayView and bounded semantic gameplay trace.",
-    .requests = "Emits bounded trace freeze, resume, clear, and selection requests only.",
+    .purpose = "Inspect an entity across authority, replication, presentation, relevance, vitals, and navigation.",
+    .reads = "Immutable GameplayView projected by the sandbox composition.",
+    .requests = "Selection is editor-local; the inspector emits no gameplay mutation requests.",
     .examples = &.{ "npc 1:12:3 authority=present draw=present", "health=75/100 relevance=full_world" },
     .audit_fields = &.{ "wall_unix_ms", "authority_tick", "presentation_frame", "persistent_id", "replicated_entity" },
 };
@@ -98,92 +99,107 @@ fn request(ctx: *const GameplayInput, value: engine.gameplay_trace.Request) void
     _ = ctx.requests.push(value);
 }
 
-/// Always-on, presentation-only product feedback. It deliberately remains
-/// visible when the developer windows are hidden with F1.
-pub fn drawProductHud(ctx: *const GameplayInput) void {
+pub fn drawPlayerStatus(ctx: *const GameplayInput) void {
     const view = ctx.view;
-    zgui.setNextWindowPos(.{ .x = 10, .y = 38, .cond = .always });
-    zgui.setNextWindowBgAlpha(.{ .alpha = 0.72 });
-    if (zgui.begin("##gameplay_product_hud", .{
-        .flags = .{
-            .no_title_bar = true,
-            .no_resize = true,
-            .no_move = true,
-            .no_collapse = true,
-            .always_auto_resize = true,
-            .no_saved_settings = true,
-            .no_focus_on_appearing = true,
+    zgui.textDisabled("PLAYER", .{});
+    const health_color: [4]f32 = if (view.local_life_state == .dead)
+        .{ 1, 0.2, 0.15, 1 }
+    else if (view.local_damage_feedback)
+        .{ 1, 0.55, 0.1, 1 }
+    else
+        .{ 0.25, 0.95, 0.35, 1 };
+    zgui.textColored(
+        health_color,
+        "HP {d}/{d}  {s}",
+        .{
+            view.local_health,
+            view.local_maximum_health,
+            if (view.local_life_state == .dead)
+                "DEAD"
+            else if (view.local_damage_feedback)
+                "DAMAGE RECEIVED"
+            else
+                "ALIVE",
         },
-    })) {
-        const health_color: [4]f32 = if (view.local_life_state == .dead)
-            .{ 1, 0.2, 0.15, 1 }
-        else if (view.local_damage_feedback)
-            .{ 1, 0.55, 0.1, 1 }
-        else
-            .{ 0.25, 0.95, 0.35, 1 };
-        zgui.textColored(
-            health_color,
-            "HP {d}/{d}  {s}",
-            .{
-                view.local_health,
-                view.local_maximum_health,
-                if (view.local_life_state == .dead)
-                    "DEAD"
-                else if (view.local_damage_feedback)
-                    "DAMAGE RECEIVED"
-                else
-                    "ALIVE",
-            },
-        );
-        if (view.local_life_state == .dead) {
-            if (view.respawn_instruction_visible) {
-                zgui.textColored(.{ 0.2, 0.9, 1, 1 }, "Press R to respawn", .{});
-            } else {
-                zgui.text(
-                    "Respawn available in {d} ticks",
-                    .{view.respawn_remaining_ticks},
-                );
-            }
-        } else if (view.melee_remaining_ticks != 0) {
-            zgui.text("Melee cooldown: {d} ticks", .{view.melee_remaining_ticks});
+    );
+    if (view.local_life_state == .dead) {
+        if (view.respawn_instruction_visible) {
+            zgui.textColored(.{ 0.2, 0.9, 1, 1 }, "R: respawn", .{});
+        } else {
+            zgui.text("Respawn in {d} ticks", .{view.respawn_remaining_ticks});
         }
-        zgui.text(
-            "Handgun: {s}  ammo {d}/{d}",
-            .{ @tagName(view.weapon_mode), view.magazine_ammo, view.reserve_ammo },
+    } else if (view.melee_remaining_ticks != 0) {
+        zgui.text("Melee cooldown: {d} ticks", .{view.melee_remaining_ticks});
+    } else {
+        zgui.textDisabled(
+            "tick {d}  frame {d}",
+            .{ view.authority_tick, view.presentation_frame },
         );
-        if (view.reload_remaining_ticks != 0) {
-            zgui.textColored(
-                .{ 1, 0.8, 0.15, 1 },
-                "Reloading: {d} ticks",
-                .{view.reload_remaining_ticks},
-            );
-        } else if (view.weapon_remaining_ticks != 0) {
-            zgui.text("Fire cadence: {d} ticks", .{view.weapon_remaining_ticks});
-        }
+    }
+}
 
-        for (view.entitySlice()) |entity| {
-            if (entity.kind != .npc or !entity.attack_windup) continue;
+pub fn drawWeaponStatus(ctx: *const GameplayInput) void {
+    const view = ctx.view;
+    zgui.textDisabled("HANDGUN", .{});
+    zgui.text(
+        "{s}  ammo {d}/{d}",
+        .{ @tagName(view.weapon_mode), view.magazine_ammo, view.reserve_ammo },
+    );
+    if (view.reload_remaining_ticks != 0) {
+        zgui.textColored(
+            .{ 1, 0.8, 0.15, 1 },
+            "Reloading: {d} ticks",
+            .{view.reload_remaining_ticks},
+        );
+    } else if (view.weapon_remaining_ticks != 0) {
+        zgui.text("Fire cadence: {d} ticks", .{view.weapon_remaining_ticks});
+    } else {
+        zgui.textColored(
+            .{ 0.2, 0.85, 1, 1 },
+            "1 equip/holster | LMB fire | R tactical reload",
+            .{},
+        );
+    }
+}
+
+pub fn drawThreatStatus(ctx: *const GameplayInput) void {
+    const view = ctx.view;
+    zgui.textDisabled("THREAT / LAST ACTION", .{});
+    var hostile_visible = false;
+    for (view.entitySlice()) |entity| {
+        if (entity.kind != .npc) continue;
+        hostile_visible = true;
+        if (entity.attack_windup) {
             zgui.textColored(
                 .{ 1, 0.45, 0.08, 1 },
                 "HOSTILE ATTACK in {d} ticks",
                 .{entity.deadline_tick -| view.authority_tick},
             );
-            break;
-        }
-        if (view.last_action.sequence != 0 and
-            view.last_action.disposition == .rejected)
-        {
-            zgui.textColored(
-                .{ 1, 0.3, 0.2, 1 },
-                "{s} rejected: {s}",
-                .{
-                    @tagName(view.last_action.action),
-                    view.last_action.reasonText(),
-                },
+        } else {
+            zgui.text(
+                "NPC {s}  HP {d}/{d}",
+                .{ @tagName(entity.life_state), entity.health, entity.maximum_health },
             );
         }
+        break;
     }
-    zgui.end();
+    if (!hostile_visible) zgui.textDisabled("No NPC projected", .{});
+    if (view.last_action.sequence == 0) {
+        zgui.textDisabled("No action result yet", .{});
+    } else {
+        zgui.textColored(
+            if (view.last_action.disposition == .rejected)
+                .{ 1, 0.3, 0.2, 1 }
+            else
+                .{ 0.25, 0.9, 0.35, 1 },
+            "{s}: {s} ({s})",
+            .{
+                @tagName(view.last_action.action),
+                @tagName(view.last_action.disposition),
+                view.last_action.reasonText(),
+            },
+        );
+    }
 }
 
 pub fn draw(
@@ -435,32 +451,49 @@ pub fn draw(
         } else {
             zgui.text("No gameplay entities projected", .{});
         }
+    }
+    zgui.end();
+}
 
-        zgui.separatorText("Causal gameplay trace");
-        const stats = ctx.trace.summary;
-        zgui.text(
-            "{d}/{d}, peak {d}, overwritten {d}, frozen {}, rejected {d}",
-            .{
-                stats.occupancy,
-                stats.capacity,
-                stats.high_water,
-                stats.overwritten,
-                stats.frozen,
-                stats.rejected_while_frozen,
-            },
-        );
-        zgui.text("UI request rejections {d}", .{ctx.requests.rejected});
-        if (zgui.button("Freeze", .{})) request(ctx, .freeze);
-        zgui.sameLine(.{});
-        if (zgui.button("Resume", .{})) request(ctx, .resume_capture);
-        zgui.sameLine(.{});
-        if (zgui.button("Clear", .{})) request(ctx, .clear);
+/// Bottom-wide diagnostic history for the entity selected in Gameplay
+/// Inspector. Recording controls affect only this bounded history; they never
+/// pause or resume gameplay.
+pub fn drawEventHistory(ctx: *const GameplayInput, selected: ?EntityRef) void {
+    if (!zgui.collapsingHeader("Gameplay event history", .{})) return;
+    zgui.textWrapped(
+        "Recent authority events for the selected entity: requests, admission, outcomes, replication, and presentation. This is diagnostic history, not a gameplay mode or a replay.",
+        .{},
+    );
+    const stats = ctx.trace.summary;
+    zgui.text(
+        "Recorded {d}/{d} | peak {d} | overwritten {d} | recording {s} | rejected while paused {d}",
+        .{
+            stats.occupancy,
+            stats.capacity,
+            stats.high_water,
+            stats.overwritten,
+            if (stats.frozen) "PAUSED" else "ACTIVE",
+            stats.rejected_while_frozen,
+        },
+    );
+    zgui.text("UI request rejections {d}", .{ctx.requests.rejected});
+    if (zgui.button("Pause event recording", .{})) request(ctx, .freeze);
+    zgui.sameLine(.{});
+    if (zgui.button("Resume event recording", .{})) request(ctx, .resume_capture);
+    zgui.sameLine(.{});
+    if (zgui.button("Clear event history", .{})) request(ctx, .clear);
 
-        if (state.selected) |selected| {
+    if (selected) |entity| {
+        if (zgui.beginChild("##gameplay_event_entries", .{
+            .h = 180,
+            .child_flags = .{ .frame_style = true },
+        })) {
             const first = ctx.trace.len() -| 128;
+            var matches: usize = 0;
             for (first..ctx.trace.len()) |trace_index| {
                 const record = ctx.trace.at(trace_index).?;
-                if (!recordMatches(record, selected)) continue;
+                if (!recordMatches(record, entity)) continue;
+                matches += 1;
                 zgui.text(
                     "#{d} tick={d} {s}/{s}/{s} {s} reason={s}:{d} correlation={d}",
                     .{
@@ -476,9 +509,18 @@ pub fn draw(
                     },
                 );
             }
+            if (matches == 0) zgui.textDisabled(
+                "No recent events match the selected entity.",
+                .{},
+            );
         }
+        zgui.endChild();
+    } else {
+        zgui.textDisabled(
+            "Select an entity in Gameplay Inspector to filter the history.",
+            .{},
+        );
     }
-    zgui.end();
 }
 
 test "selection follows stable identity and defaults to local player" {

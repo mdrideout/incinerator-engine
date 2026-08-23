@@ -60,6 +60,10 @@ pub fn apply(
             else blk: {
                 state.magazine -= 1;
                 state.next_fire_tick = authority_tick +| config.fire_interval_ticks;
+                if (state.magazine == 0 and state.reserve != 0) {
+                    state.mode = .reloading;
+                    state.reload_complete_tick = authority_tick +| config.reload_ticks;
+                }
                 break :blk .shot_admitted;
             },
         },
@@ -92,7 +96,7 @@ pub fn reset(state: *contract.State, config: contract.Config) !void {
     state.* = try initialState(config);
 }
 
-test "handgun equips fires respects cadence empties and reloads" {
+test "final admitted shot starts and completes the ordinary timed reload" {
     const config = contract.Config{
         .magazine_capacity = 2,
         .starting_reserve = 3,
@@ -119,19 +123,66 @@ test "handgun equips fires respects cadence empties and reloads" {
         contract.Disposition.shot_admitted,
         (try apply(&state, config, .fire, context, 5)).disposition,
     );
+    try std.testing.expectEqual(contract.Mode.reloading, state.mode);
+    try std.testing.expectEqual(@as(u16, 0), state.magazine);
+    try std.testing.expectEqual(@as(u16, 3), state.reserve);
+    try std.testing.expectEqual(@as(u64, 10), state.reload_complete_tick);
     try std.testing.expectEqual(
-        contract.Disposition.empty,
+        contract.Disposition.reloading,
         (try apply(&state, config, .fire, context, 8)).disposition,
     );
-    try std.testing.expectEqual(
-        contract.Disposition.reload_started,
-        (try apply(&state, config, .reload, context, 8)).disposition,
-    );
-    try std.testing.expectEqual(contract.Mode.reloading, state.mode);
-    try std.testing.expect(!(try advance(&state, config, 12)).completed_reload);
-    try std.testing.expect((try advance(&state, config, 13)).completed_reload);
+    try std.testing.expect(!(try advance(&state, config, 9)).completed_reload);
+    try std.testing.expect((try advance(&state, config, 10)).completed_reload);
     try std.testing.expectEqual(@as(u16, 2), state.magazine);
     try std.testing.expectEqual(@as(u16, 1), state.reserve);
+}
+
+test "final admitted shot without reserve remains genuinely empty" {
+    const config = contract.Config{
+        .magazine_capacity = 1,
+        .starting_reserve = 0,
+        .fire_interval_ticks = 3,
+    };
+    var state = try initialState(config);
+    const context = contract.Context{ .alive = true, .on_foot = true, .hands_free = true };
+    _ = try apply(&state, config, .equip_toggle, context, 1);
+    try std.testing.expectEqual(
+        contract.Disposition.shot_admitted,
+        (try apply(&state, config, .fire, context, 2)).disposition,
+    );
+    try std.testing.expectEqual(contract.Mode.equipped, state.mode);
+    try std.testing.expectEqual(@as(u16, 0), state.magazine);
+    try std.testing.expectEqual(@as(u64, 0), state.reload_complete_tick);
+    try std.testing.expectEqual(
+        contract.Disposition.empty,
+        (try apply(&state, config, .fire, context, 5)).disposition,
+    );
+    try std.testing.expectEqual(
+        contract.Disposition.no_reserve,
+        (try apply(&state, config, .reload, context, 5)).disposition,
+    );
+}
+
+test "manual tactical reload remains available for a partial magazine" {
+    const config = contract.Config{
+        .magazine_capacity = 4,
+        .starting_reserve = 3,
+        .reload_ticks = 5,
+    };
+    var state = try initialState(config);
+    const context = contract.Context{ .alive = true, .on_foot = true, .hands_free = true };
+    _ = try apply(&state, config, .equip_toggle, context, 1);
+    _ = try apply(&state, config, .fire, context, 2);
+    try std.testing.expectEqual(
+        contract.Disposition.reload_started,
+        (try apply(&state, config, .reload, context, 3)).disposition,
+    );
+    try std.testing.expectEqual(contract.Mode.reloading, state.mode);
+    try std.testing.expectEqual(@as(u64, 8), state.reload_complete_tick);
+    try std.testing.expect(!(try advance(&state, config, 7)).completed_reload);
+    try std.testing.expect((try advance(&state, config, 8)).completed_reload);
+    try std.testing.expectEqual(@as(u16, 4), state.magazine);
+    try std.testing.expectEqual(@as(u16, 2), state.reserve);
 }
 
 test "holster cancels reload and death reset restores authored loadout" {

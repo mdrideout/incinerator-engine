@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const sdl = @import("sdl.zig");
+pub const viewport = @import("editor/viewport.zig");
 
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
@@ -18,6 +19,7 @@ pub const sdl_c = c;
 pub const EventRoute = struct {
     keyboard_reserved: bool = false,
     mouse_reserved: bool = false,
+    viewport_mode_request: ?viewport.Mode = null,
 };
 
 pub const Capture = struct {
@@ -31,6 +33,7 @@ pub const EventSink = struct {
     context: *anyopaque,
     process_event: *const fn (*anyopaque, *const c.SDL_Event) EventRoute,
     capture: *const fn (*anyopaque) Capture,
+    scene_rect: *const fn (*anyopaque) ?viewport.SceneRect,
 
     fn processEvent(self: EventSink, event: *const c.SDL_Event) EventRoute {
         return self.process_event(self.context, event);
@@ -38,6 +41,10 @@ pub const EventSink = struct {
 
     fn currentCapture(self: EventSink) Capture {
         return self.capture(self.context);
+    }
+
+    fn currentSceneRect(self: EventSink) ?viewport.SceneRect {
+        return self.scene_rect(self.context);
     }
 };
 
@@ -96,6 +103,15 @@ pub const InputBuffer = struct {
     gameplay_mouse_ignore_motion: bool,
     gameplay_mouse_lock_failures: u64,
 
+    /// Editor viewport routing is presentation-only. Physical key state is
+    /// retained for Free Camera navigation while gameplay-visible state stays
+    /// suppressed.
+    viewport_mode: viewport.Mode,
+    viewport_mode_request: ?viewport.Mode,
+    free_camera_look_active: bool,
+    free_camera_look_delta: [2]f32,
+    free_camera_speed_steps: f32,
+
     /// Entering editor capture or losing focus invalidates any actions already
     /// latched by the sandbox host during earlier render frames.
     gameplay_reset_requested: bool,
@@ -137,6 +153,11 @@ pub const InputBuffer = struct {
             .gameplay_mouse_locked = false,
             .gameplay_mouse_ignore_motion = false,
             .gameplay_mouse_lock_failures = 0,
+            .viewport_mode = .character,
+            .viewport_mode_request = null,
+            .free_camera_look_active = false,
+            .free_camera_look_delta = .{ 0, 0 },
+            .free_camera_speed_steps = 0,
             .gameplay_reset_requested = false,
             .quit_requested = false,
             .main_window_id = main_window_id,
@@ -164,6 +185,64 @@ pub const InputBuffer = struct {
 
     pub fn gameplayMouseLockFailures(self: *const InputBuffer) u64 {
         return self.gameplay_mouse_lock_failures;
+    }
+
+    pub fn viewportMode(self: *const InputBuffer) viewport.Mode {
+        return self.viewport_mode;
+    }
+
+    /// Synchronize the platform adapter with the visual-host viewport owner.
+    /// Entering Free Camera releases SDL relative mode immediately and both
+    /// directions suppress held physical input until its real release.
+    pub fn setViewportMode(self: *InputBuffer, mode: viewport.Mode) void {
+        if (self.viewport_mode == mode) return;
+        if (mode == .free_camera) self.releaseGameplayMouse();
+        self.viewport_mode = mode;
+        self.free_camera_look_active = false;
+        self.free_camera_look_delta = .{ 0, 0 };
+        self.free_camera_speed_steps = 0;
+        self.clearGameplayForRoutingTransition();
+    }
+
+    pub fn takeViewportModeRequest(self: *InputBuffer) ?viewport.Mode {
+        defer self.viewport_mode_request = null;
+        return self.viewport_mode_request;
+    }
+
+    /// Convert retained physical state into the same typed requests used by
+    /// the editor toolbar. Movement is active only during a scene-owned RMB
+    /// drag; merely typing while an ImGui panel is focused cannot fly.
+    pub fn takeFreeCameraRequests(
+        self: *InputBuffer,
+        delta_seconds: f32,
+    ) viewport.Requests {
+        var requests = viewport.Requests{};
+        defer {
+            self.free_camera_look_delta = .{ 0, 0 };
+            self.free_camera_speed_steps = 0;
+        }
+        if (self.viewport_mode != .free_camera) return requests;
+
+        if (self.free_camera_speed_steps != 0) {
+            requests.submit(.{ .adjust_speed = self.free_camera_speed_steps });
+        }
+        if (!self.free_camera_look_active) return requests;
+
+        var move = [3]f32{ 0, 0, 0 };
+        if (self.isPhysicalKeyDown(Key.A)) move[0] -= 1;
+        if (self.isPhysicalKeyDown(Key.D)) move[0] += 1;
+        if (self.isPhysicalKeyDown(Key.Q)) move[1] -= 1;
+        if (self.isPhysicalKeyDown(Key.E)) move[1] += 1;
+        if (self.isPhysicalKeyDown(Key.S)) move[2] -= 1;
+        if (self.isPhysicalKeyDown(Key.W)) move[2] += 1;
+        const navigation = viewport.Navigation{
+            .move = move,
+            .look_delta = self.free_camera_look_delta,
+            .delta_seconds = delta_seconds,
+            .fast = self.isPhysicalKeyDown(Key.LSHIFT),
+        };
+        if (navigation.hasInput()) requests.submit(.{ .navigate = navigation });
+        return requests;
     }
 
     /// Release before destroying the SDL window. This is also used for focus
@@ -204,6 +283,8 @@ pub const InputBuffer = struct {
         self.window_restored_this_frame = false;
         self.gameplay_reset_requested = false;
         self.gameplay_mouse_ignore_motion = false;
+        self.free_camera_look_delta = .{ 0, 0 };
+        self.free_camera_speed_steps = 0;
     }
 
     /// Process all pending SDL events. Call once per frame.
@@ -224,14 +305,21 @@ pub const InputBuffer = struct {
             // ImGui always observes the event. The returned route represents
             // only explicit editor shortcuts, never backend recognition.
             const route = editor_sink.processEvent(&event);
+            if (route.viewport_mode_request) |mode| {
+                self.setViewportMode(mode);
+                self.viewport_mode_request = mode;
+            }
             const current_capture = editor_sink.currentCapture();
             self.applyCapture(
                 current_capture.keyboard,
                 current_capture.mouse and !self.gameplay_mouse_locked,
             );
 
-            const keyboard_blocked = self.keyboard_captured or route.keyboard_reserved;
-            const mouse_blocked = self.mouse_captured or route.mouse_reserved;
+            const keyboard_blocked = self.viewport_mode == .free_camera or
+                self.keyboard_captured or route.keyboard_reserved;
+            const mouse_blocked = self.viewport_mode == .free_camera or
+                self.mouse_captured or route.mouse_reserved;
+            const editor_mouse_blocked = self.mouse_captured or route.mouse_reserved;
 
             switch (event.type) {
                 // Process lifecycle/window events regardless of editor routing.
@@ -273,6 +361,13 @@ pub const InputBuffer = struct {
 
                 c.SDL_EVENT_MOUSE_MOTION => {
                     if (!self.isMainWindow(event.motion.windowID)) continue;
+                    if (self.viewport_mode == .free_camera) {
+                        if (self.free_camera_look_active) {
+                            self.free_camera_look_delta[0] += event.motion.xrel;
+                            self.free_camera_look_delta[1] += event.motion.yrel;
+                        }
+                        continue;
+                    }
                     self.handleMouseMotion(
                         event.motion.xrel,
                         event.motion.yrel,
@@ -285,6 +380,23 @@ pub const InputBuffer = struct {
                     const raw_button: usize = @intCast(event.button.button);
                     if (raw_button >= 1 and raw_button <= self.mouse_buttons.len) {
                         const button = raw_button - 1;
+                        const inside_scene = pointInsideScene(
+                            editor_sink.currentSceneRect(),
+                            .{ event.button.x, event.button.y },
+                        );
+                        if (self.viewport_mode == .free_camera) {
+                            self.handleMouseButtonDown(button, true);
+                            if (button == MouseButton.RIGHT and
+                                !editor_mouse_blocked and inside_scene)
+                            {
+                                self.free_camera_look_active = true;
+                            }
+                            continue;
+                        }
+                        if (!self.gameplay_mouse_locked and !inside_scene) {
+                            self.handleMouseButtonDown(button, true);
+                            continue;
+                        }
                         if (button == MouseButton.LEFT and
                             !self.gameplay_mouse_locked and !mouse_blocked and
                             self.captureGameplayMouse())
@@ -300,8 +412,27 @@ pub const InputBuffer = struct {
                 c.SDL_EVENT_MOUSE_BUTTON_UP => {
                     const raw_button: usize = @intCast(event.button.button);
                     if (raw_button >= 1 and raw_button <= self.mouse_buttons.len) {
-                        self.handleMouseButtonUp(event.button.windowID, raw_button - 1);
+                        const button = raw_button - 1;
+                        self.handleMouseButtonUp(event.button.windowID, button);
+                        if (self.isMainWindow(event.button.windowID) and
+                            button == MouseButton.RIGHT)
+                        {
+                            self.free_camera_look_active = false;
+                        }
                     }
+                },
+
+                c.SDL_EVENT_MOUSE_WHEEL => {
+                    if (!self.isMainWindow(event.wheel.windowID) or
+                        self.viewport_mode != .free_camera or
+                        editor_mouse_blocked or
+                        !pointInsideScene(
+                            editor_sink.currentSceneRect(),
+                            .{ event.wheel.mouse_x, event.wheel.mouse_y },
+                        )) continue;
+                    const direction: f32 = if (event.wheel.direction ==
+                        c.SDL_MOUSEWHEEL_FLIPPED) -1 else 1;
+                    self.free_camera_speed_steps += event.wheel.y * direction;
                 },
 
                 c.SDL_EVENT_WINDOW_MINIMIZED => {
@@ -347,6 +478,24 @@ pub const InputBuffer = struct {
         self.gameplay_mouse_locked = locked;
         self.gameplay_mouse_ignore_motion = locked;
         self.gameplay_reset_requested = true;
+        for (0..self.mouse_buttons.len) |button| {
+            if (self.physical_mouse_buttons[button]) {
+                self.mouse_buttons_suppressed[button] = true;
+            }
+            self.mouse_buttons[button] = false;
+            self.mouse_buttons_pressed[button] = false;
+        }
+        self.mouse_delta_x = 0;
+        self.mouse_delta_y = 0;
+    }
+
+    fn clearGameplayForRoutingTransition(self: *InputBuffer) void {
+        self.gameplay_reset_requested = true;
+        for (0..MAX_KEYS) |index| {
+            if (self.physical_keys_down[index]) self.keys_suppressed[index] = true;
+            self.keys_down[index] = false;
+            self.keys_pressed[index] = false;
+        }
         for (0..self.mouse_buttons.len) |button| {
             if (self.physical_mouse_buttons[button]) {
                 self.mouse_buttons_suppressed[button] = true;
@@ -488,6 +637,9 @@ pub const InputBuffer = struct {
 
         self.mouse_delta_x = 0;
         self.mouse_delta_y = 0;
+        self.free_camera_look_active = false;
+        self.free_camera_look_delta = .{ 0, 0 };
+        self.free_camera_speed_steps = 0;
     }
 
     fn handleWindowCloseRequested(self: *InputBuffer, window_id: c.SDL_WindowID) void {
@@ -547,7 +699,18 @@ pub const InputBuffer = struct {
     pub fn gameplayActionsMustReset(self: *const InputBuffer) bool {
         return self.gameplay_reset_requested;
     }
+
+    fn isPhysicalKeyDown(self: *const InputBuffer, scancode: c.SDL_Scancode) bool {
+        const index: usize = @intCast(scancode);
+        return index < MAX_KEYS and self.physical_keys_down[index];
+    }
 };
+
+fn pointInsideScene(rect: ?viewport.SceneRect, point: [2]f32) bool {
+    // Editor-disabled and pre-first-frame products retain the canonical whole
+    // window behavior; ImGui capture still blocks actual panels and overlays.
+    return if (rect) |scene| scene.contains(point) else true;
+}
 
 // ============================================================================
 // Common Scancode Constants (for convenience)
@@ -584,6 +747,7 @@ test "InputBuffer initialization" {
     try std.testing.expect(!input.mouse_captured);
     try std.testing.expect(!input.gameplayMouseLocked());
     try std.testing.expectEqual(@as(u64, 0), input.gameplayMouseLockFailures());
+    try std.testing.expectEqual(viewport.Mode.character, input.viewportMode());
     try std.testing.expect(!input.window_minimized);
     try std.testing.expect(!input.window_minimized_this_frame);
     try std.testing.expect(!input.window_restored_this_frame);
@@ -606,6 +770,52 @@ test "gameplay mouse mode transition consumes held input and releases cleanly" {
     // the same state transition used after a successful platform unlock.
     input.releaseGameplayMouse();
     try std.testing.expect(!input.gameplayMouseLocked());
+}
+
+test "entering Free Camera releases gameplay lock and clears held actions" {
+    var input = InputBuffer.init(1);
+    input.handleKeyDown(@intCast(Key.W), false);
+    input.handleMouseButtonDown(MouseButton.LEFT, false);
+    input.setGameplayMouseLocked(true);
+    input.setViewportMode(.free_camera);
+
+    try std.testing.expectEqual(viewport.Mode.free_camera, input.viewportMode());
+    try std.testing.expect(!input.gameplayMouseLocked());
+    try std.testing.expect(!input.isKeyDown(Key.W));
+    try std.testing.expect(!input.isMouseButtonDown(MouseButton.LEFT));
+    try std.testing.expect(!input.isMouseButtonPressed(MouseButton.LEFT));
+    try std.testing.expect(input.gameplayActionsMustReset());
+}
+
+test "Free Camera navigation reads physical holds without exposing gameplay" {
+    var input = InputBuffer.init(1);
+    input.setViewportMode(.free_camera);
+    input.beginFrame();
+    input.handleKeyDown(@intCast(Key.W), true);
+    input.handleKeyDown(@intCast(Key.D), true);
+    input.handleKeyDown(@intCast(Key.LSHIFT), true);
+    input.handleMouseButtonDown(MouseButton.RIGHT, true);
+    input.free_camera_look_active = true;
+    input.free_camera_look_delta = .{ 8, -3 };
+
+    const requests = input.takeFreeCameraRequests(0.5);
+    const navigation = requests.navigation.?;
+    try std.testing.expectEqual([3]f32{ 1, 0, 1 }, navigation.move);
+    try std.testing.expectEqual([2]f32{ 8, -3 }, navigation.look_delta);
+    try std.testing.expect(navigation.fast);
+    try std.testing.expect(!input.isKeyDown(Key.W));
+    try std.testing.expect(!input.isKeyDown(Key.D));
+    try std.testing.expect(!input.isMouseButtonDown(MouseButton.RIGHT));
+}
+
+test "Free Camera selection click cannot become a firearm edge" {
+    var input = InputBuffer.init(1);
+    input.setViewportMode(.free_camera);
+    input.beginFrame();
+    input.handleMouseButtonDown(MouseButton.LEFT, true);
+    try std.testing.expect(input.physical_mouse_buttons[MouseButton.LEFT]);
+    try std.testing.expect(!input.isMouseButtonDown(MouseButton.LEFT));
+    try std.testing.expect(!input.isMouseButtonPressed(MouseButton.LEFT));
 }
 
 test "physical key release is observed during keyboard capture" {
@@ -721,6 +931,10 @@ test "event sink is a borrowed callback surface without retained ownership" {
             const self: *const @This() = @ptrCast(@alignCast(context));
             return self.current_capture;
         }
+
+        fn sceneRect(_: *anyopaque) ?viewport.SceneRect {
+            return null;
+        }
     };
 
     var fake = FakeEditor{};
@@ -728,6 +942,7 @@ test "event sink is a borrowed callback surface without retained ownership" {
         .context = &fake,
         .process_event = FakeEditor.process,
         .capture = FakeEditor.readCapture,
+        .scene_rect = FakeEditor.sceneRect,
     };
     const event = std.mem.zeroes(c.SDL_Event);
     try std.testing.expect(sink.processEvent(&event).keyboard_reserved);

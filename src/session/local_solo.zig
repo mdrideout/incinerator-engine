@@ -1928,6 +1928,58 @@ test "solo placement joins shared authority and applies replicated movement" {
     );
 }
 
+test "solo final shot projects automatic reload and completion" {
+    const placement = try initOwned(std.testing.allocator, testConfig(0x4c4f_4310), false, null);
+    defer placement.deinit();
+    try placement.characters().submit(.{ .spawn = .{
+        .request_id = 1,
+        .position = .{ 0, 0, 0 },
+    } });
+    try placement.lifecycle().tick();
+    _ = placement.characters().pollOutcome() orelse return error.MissingCharacterOutcome;
+    // Character spawn publishes before the vitals transaction that makes the
+    // new avatar eligible for weapon admission completes on the next cycle.
+    try placement.lifecycle().tick();
+
+    try placement.player().requestWeapon(.equip_toggle);
+    try placement.lifecycle().tick();
+    const equipped = placement.player().pollWeaponActionResult() orelse
+        return error.MissingWeaponEquipResult;
+    try std.testing.expectEqual(WeaponActionDisposition.equipped, equipped.disposition);
+
+    var final_shot: ?WeaponActionResult = null;
+    for (0..equipped.magazine_ammo) |shot_index| {
+        try placement.player().requestWeapon(.fire);
+        try placement.lifecycle().tick();
+        const fired = placement.player().pollWeaponActionResult() orelse
+            return error.MissingWeaponFireResult;
+        try std.testing.expectEqual(WeaponActionDisposition.fired_miss, fired.disposition);
+        _ = placement.player().pollShotEvent() orelse return error.MissingWeaponShotEvent;
+        if (shot_index + 1 == equipped.magazine_ammo) {
+            final_shot = fired;
+            break;
+        }
+        try std.testing.expectEqual(WeaponMode.equipped, fired.mode);
+        while (placement.inspection().tickIndex() < fired.weapon_ready_tick) {
+            try placement.lifecycle().tick();
+        }
+    }
+
+    const depleted = final_shot orelse return error.MissingFinalWeaponShot;
+    try std.testing.expectEqual(WeaponMode.reloading, depleted.mode);
+    try std.testing.expectEqual(@as(u16, 0), depleted.magazine_ammo);
+    try std.testing.expectEqual(@as(u16, 36), depleted.reserve_ammo);
+    try std.testing.expect(depleted.reload_complete_tick > depleted.authority_tick);
+    while (placement.inspection().tickIndex() <= depleted.reload_complete_tick) {
+        try placement.lifecycle().tick();
+    }
+    const reloaded = placement.presentation().combatHud();
+    try std.testing.expectEqual(WeaponMode.equipped, reloaded.weapon_mode);
+    try std.testing.expectEqual(@as(u16, 12), reloaded.magazine_ammo);
+    try std.testing.expectEqual(@as(u16, 24), reloaded.reserve_ammo);
+    try std.testing.expectEqual(@as(u64, 0), reloaded.reload_remaining_ticks);
+}
+
 test "solo vehicle actions and control use shared authority admission" {
     const config = testConfig(0x4c4f_4302);
     try std.testing.expectEqualDeep(

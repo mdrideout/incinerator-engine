@@ -9659,6 +9659,71 @@ test "authority drops stale input without terminating an unreliable stream" {
     try std.testing.expectEqual(@as(u32, 1), ingress[0].sequence.value);
 }
 
+test "authoritative final shot projects automatic reload without synthetic ingress" {
+    var fixture = try initRangedCombatFixture(0x454d_4422);
+    defer fixture.deinit();
+    const session = fixture.authority.session();
+    const core = embeddedAuthorityCore(fixture.authority);
+    const attacker_index = @as(usize, fixture.attacker.participant.index) - 1;
+
+    const equipped = try submitWeaponActionForTest(&fixture, 1, .equip_toggle);
+    try std.testing.expectEqual(protocol.WeaponActionDisposition.equipped, equipped.result.disposition);
+    core.participants[attacker_index].weapon.magazine = 1;
+    core.participants[attacker_index].weapon.next_fire_tick = 0;
+
+    const final_shot = try submitWeaponActionForTest(&fixture, 2, .fire);
+    try std.testing.expectEqual(protocol.WeaponActionDisposition.fired_hit, final_shot.result.disposition);
+    try std.testing.expect(final_shot.shot != null);
+    try std.testing.expectEqual(protocol.WeaponMode.reloading, final_shot.result.mode);
+    try std.testing.expectEqual(@as(u16, 0), final_shot.result.magazine_ammo);
+    try std.testing.expectEqual(@as(u16, 36), final_shot.result.reserve_ammo);
+    try std.testing.expect(final_shot.result.reload_complete_tick > final_shot.result.authority_tick);
+    try std.testing.expectEqual(
+        ranged_combat_contract.Mode.reloading,
+        core.participants[attacker_index].weapon.mode,
+    );
+
+    const blocked_fire = try submitWeaponActionForTest(&fixture, 3, .fire);
+    try std.testing.expectEqual(protocol.WeaponActionDisposition.reloading, blocked_fire.result.disposition);
+    try std.testing.expect(blocked_fire.shot == null);
+    try std.testing.expectEqual(
+        final_shot.result.reload_complete_tick,
+        blocked_fire.result.reload_complete_tick,
+    );
+
+    for (0..handgun_config.reload_ticks + 2) |_| {
+        if (core.participants[attacker_index].weapon.mode == .equipped) break;
+        try session.tick();
+        while (takeOutboundForTest(session) != null) {}
+    }
+    try std.testing.expectEqual(
+        ranged_combat_contract.Mode.equipped,
+        core.participants[attacker_index].weapon.mode,
+    );
+    try std.testing.expectEqual(@as(u16, 12), core.participants[attacker_index].weapon.magazine);
+    try std.testing.expectEqual(@as(u16, 24), core.participants[attacker_index].weapon.reserve);
+
+    try std.testing.expectEqual(
+        @as(u16, 3),
+        session.diagnostics().ingress_entries,
+    );
+    var ingress_records: [3]AcceptedIngress = undefined;
+    const ingress_count = session.copyAcceptedIngress(&ingress_records);
+    try std.testing.expectEqual(@as(usize, ingress_records.len), ingress_count);
+    var equip_records: u8 = 0;
+    var fire_records: u8 = 0;
+    var reload_records: u8 = 0;
+    for (ingress_records[0..ingress_count]) |record| switch (record.kind) {
+        .weapon_equip_toggle => equip_records += 1,
+        .weapon_fire => fire_records += 1,
+        .weapon_reload => reload_records += 1,
+        else => {},
+    };
+    try std.testing.expectEqual(@as(u8, 1), equip_records);
+    try std.testing.expectEqual(@as(u8, 1), fire_records);
+    try std.testing.expectEqual(@as(u8, 0), reload_records);
+}
+
 test "authoritative handgun owns hit cadence reload reconnect miss and death" {
     var fixture = try initRangedCombatFixture(0x454d_4421);
     defer fixture.deinit();

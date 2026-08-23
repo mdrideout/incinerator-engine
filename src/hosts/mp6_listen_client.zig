@@ -575,7 +575,7 @@ pub fn main(init: std.process.Init) !void {
     var app = try App.init(init, invocation);
     defer app.deinit();
     std.debug.print(
-        "MP6_LISTEN_READY endpoint={s}:{d} host={d} guest={d} ticket={s} controls=WASD/SPACE/LSHIFT/right-drag look/E enter-exit/F collect-drop/Q melee/1 handgun/left-click fire/R reload-respawn/P prediction/C-L-ESC close\n",
+        "MP6_LISTEN_READY endpoint={s}:{d} host={d} guest={d} ticket={s} controls=WASD/SPACE/LSHIFT/right-drag look/E enter-exit/F collect-drop/Q melee/1 handgun/left-click fire/R tactical-reload-respawn/P prediction/C-L-ESC close\n",
         .{
             invocation.config.advertise_host,
             invocation.config.port,

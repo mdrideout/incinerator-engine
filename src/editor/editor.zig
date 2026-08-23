@@ -14,10 +14,12 @@ const renderer_module = @import("../renderer.zig");
 
 const imgui_backend = @import("imgui_backend.zig");
 const tool = @import("tool.zig");
+const viewport = tool.viewport;
 const stats_tool = @import("tools/stats_tool.zig");
 const camera_tool = @import("tools/camera_tool.zig");
 const render_tool = @import("tools/render_tool.zig");
 const diagnostics_tool = @import("tools/diagnostics_tool.zig");
+const event_log_tool = @import("tools/event_log_tool.zig");
 const gameplay_inspector_tool = @import("tools/gameplay_inspector_tool.zig");
 const navigation_lab_tool = @import("tools/navigation_lab_tool.zig");
 const population_lab_tool = @import("tools/population_lab_tool.zig");
@@ -49,6 +51,7 @@ const default_tools = [_]Tool{
     Tool.init(camera_tool.descriptor),
     Tool.init(render_tool.descriptor),
     Tool.init(diagnostics_tool.descriptor),
+    Tool.init(event_log_tool.descriptor),
     Tool.init(gameplay_inspector_tool.descriptor),
     Tool.init(navigation_lab_tool.descriptor),
     Tool.init(population_lab_tool.descriptor),
@@ -59,11 +62,29 @@ const default_tools = [_]Tool{
     Tool.init(neural_rendering_lab_tool.descriptor),
 };
 
+/// Human-facing Panels menu order. Keep this independent from `default_tools`:
+/// registry order also determines default dock/tab construction, while this
+/// list exists only to make panel discovery alphabetical.
+const panel_menu_order = [_]tool.ToolId{
+    .camera,
+    .crate_authoring,
+    .diagnostics,
+    .event_log,
+    .gameplay_inspector,
+    .incident_capture,
+    .interaction,
+    .navigation_lab,
+    .neural_rendering_lab,
+    .physics_debug,
+    .population_lab,
+    .render,
+    .stats,
+};
+
 pub const Editor = struct {
     backend: imgui_backend.Backend = .{},
     visible: bool = true,
     show_demo_window: bool = false,
-    input_passthrough: bool = false,
     tools: [default_tools.len]Tool = default_tools,
     stats: stats_tool.State = .{},
     crate_authoring: crate_authoring_tool.State = .{},
@@ -76,6 +97,9 @@ pub const Editor = struct {
     pending_focus: ?workspace.ToolId = workspace.defaultFocus(.gameplay),
     show_workspace_guide: bool = false,
     gameplay_mouse_captured: bool = false,
+    viewport_mode: viewport.Mode = .character,
+    scene_rect: ?viewport.SceneRect = null,
+    pending_viewport_mode: ?viewport.Mode = null,
 
     /// Initialize the owned editor after the renderer has claimed its window.
     pub fn init(
@@ -128,7 +152,10 @@ pub const Editor = struct {
                 return route;
             }
             if (event.key.scancode == c.SDL_SCANCODE_F3) {
-                if (!event.key.repeat) self.input_passthrough = !self.input_passthrough;
+                if (!event.key.repeat) {
+                    self.viewport_mode = self.viewport_mode.toggled();
+                    route.viewport_mode_request = self.viewport_mode;
+                }
                 route.keyboard_reserved = true;
                 return route;
             }
@@ -151,6 +178,7 @@ pub const Editor = struct {
             .context = self,
             .process_event = routeInputEvent,
             .capture = inputCapture,
+            .scene_rect = inputSceneRect,
         };
     }
 
@@ -175,13 +203,11 @@ pub const Editor = struct {
             @intCast(window_size.height),
             framebuffer_scale,
         );
-
-        gameplay_inspector_tool.drawProductHud(&frame.gameplay);
-        incident_capture_tool.drawProductStatus(&frame.incident);
-        if (self.gameplay_mouse_captured) drawGameplayMouseCaptureHint();
+        self.viewport_mode = frame.viewport.view.mode;
 
         if (!self.visible) {
-            drawHiddenHint();
+            self.scene_rect = null;
+            drawProductStatusOverlay(self, &frame);
             self.backend.render(cmd, swapchain_texture);
             return;
         }
@@ -190,7 +216,8 @@ pub const Editor = struct {
         // their tabs appear. Preserve the requested panel through the layout
         // frame and focus it on the following stable frame.
         const layout_was_pending = self.layout_pending;
-        self.drawWorkspace(&frame);
+        const viewport_content = self.drawWorkspace(&frame);
+        self.drawSceneViewport(&frame, viewport_content);
         for (&self.tools) |*registered_tool| {
             if (registered_tool.enabled) {
                 if (!layout_was_pending and
@@ -213,12 +240,12 @@ pub const Editor = struct {
 
     pub fn wantsMouse(self: *const Editor) bool {
         if (self.gameplay_mouse_captured) return false;
-        if (!self.visible or self.input_passthrough) return false;
+        if (!self.visible) return false;
         return self.backend.wantsMouse();
     }
 
     pub fn wantsKeyboard(self: *const Editor) bool {
-        if (!self.visible or self.input_passthrough) return false;
+        if (!self.visible) return false;
         return self.backend.wantsKeyboard();
     }
 
@@ -239,6 +266,14 @@ pub const Editor = struct {
         self.gameplay_mouse_captured = captured;
     }
 
+    pub fn setViewportMode(self: *Editor, mode: viewport.Mode) void {
+        self.viewport_mode = mode;
+    }
+
+    pub fn viewportSceneRect(self: *const Editor) ?viewport.SceneRect {
+        return self.scene_rect;
+    }
+
     fn drawTool(
         self: *Editor,
         id: tool.ToolId,
@@ -250,6 +285,11 @@ pub const Editor = struct {
             .camera => camera_tool.draw(frame.camera),
             .render => render_tool.draw(render_settings, &frame.render),
             .diagnostics => diagnostics_tool.draw(&frame.developer),
+            .event_log => event_log_tool.draw(
+                &frame.developer,
+                &frame.gameplay,
+                self.gameplay_inspector.selected,
+            ),
             .gameplay_inspector => gameplay_inspector_tool.draw(
                 &self.gameplay_inspector,
                 &frame.gameplay,
@@ -276,15 +316,19 @@ pub const Editor = struct {
         }
     }
 
-    fn drawWorkspace(self: *Editor, frame: *const FrameInput) void {
+    fn drawWorkspace(
+        self: *Editor,
+        frame: *const FrameInput,
+    ) ?viewport.SceneRect {
         self.drawMainMenuBar();
+        var central_rect: ?viewport.SceneRect = null;
 
-        const viewport = zgui.getMainViewport();
-        const work_pos = viewport.getWorkPos();
-        const work_size = viewport.getWorkSize();
+        const main_viewport = zgui.getMainViewport();
+        const work_pos = main_viewport.getWorkPos();
+        const work_size = main_viewport.getWorkSize();
         zgui.setNextWindowPos(.{ .x = work_pos[0], .y = work_pos[1], .cond = .always });
         zgui.setNextWindowSize(.{ .w = work_size[0], .h = work_size[1], .cond = .always });
-        zgui.setNextWindowViewport(viewport.getId());
+        zgui.setNextWindowViewport(main_viewport.getId());
         zgui.pushStyleVar1f(.{ .idx = .window_rounding, .v = 0 });
         zgui.pushStyleVar1f(.{ .idx = .window_border_size, .v = 0 });
         zgui.pushStyleVar2f(.{ .idx = .window_padding, .v = .{ 0, 0 } });
@@ -301,9 +345,20 @@ pub const Editor = struct {
             .no_nav_focus = true,
             .no_docking = true,
         } })) {
-            const status_height: f32 = 26;
+            const available_width = zgui.getContentRegionAvail()[0];
+            const product_status_height = productStatusHeight(available_width);
+            if (zgui.beginChild("##product_status", .{
+                .h = product_status_height,
+                .child_flags = .{ .frame_style = true },
+                .window_flags = .{ .no_scrollbar = true },
+            })) {
+                drawProductStatusTable(self, frame, available_width);
+            }
+            zgui.endChild();
+
+            const footer_height: f32 = 26;
             const available = zgui.getContentRegionAvail();
-            const dock_size = .{ available[0], @max(@as(f32, 0), available[1] - status_height) };
+            const dock_size = .{ available[0], @max(@as(f32, 0), available[1] - footer_height) };
             const dock_pos = zgui.getCursorScreenPos();
             const dockspace_id = zgui.dockSpace(
                 "IncineratorWorkspaceDockspace",
@@ -317,9 +372,17 @@ pub const Editor = struct {
                 self.buildDockLayout(dockspace_id, dock_pos, dock_size);
                 self.layout_pending = false;
             }
+            if (zgui.dockBuilderGetCentralNode(dockspace_id)) |central_node| {
+                var rect: [4]f32 = undefined;
+                zgui.dockNodeRect(central_node, &rect);
+                central_rect = viewport.SceneRect.init(
+                    .{ rect[0], rect[1] },
+                    .{ rect[2], rect[3] },
+                );
+            }
 
             if (zgui.beginChild("##workspace_status", .{
-                .h = status_height,
+                .h = footer_height,
                 .child_flags = .{ .frame_style = true },
                 .window_flags = .{ .no_scrollbar = true },
             })) {
@@ -332,14 +395,133 @@ pub const Editor = struct {
                         frame.gameplay.view.authority_tick,
                         frame.gameplay.view.presentation_frame,
                         @tagName(self.layout),
-                        if (self.gameplay_mouse_captured)
-                            "CAPTURED (Esc releases)"
-                        else
-                            "free (click scene to capture)",
+                        viewportMouseStatus(
+                            self.viewport_mode,
+                            self.gameplay_mouse_captured,
+                        ),
                     },
                 );
             }
             zgui.endChild();
+        }
+        zgui.end();
+        return central_rect;
+    }
+
+    fn drawSceneViewport(
+        self: *Editor,
+        frame: *const FrameInput,
+        viewport_content: ?viewport.SceneRect,
+    ) void {
+        if (self.pending_viewport_mode) |mode| {
+            frame.viewport.requests.submit(.{ .set_mode = mode });
+            self.pending_viewport_mode = null;
+        }
+        self.scene_rect = null;
+        const content = viewport_content orelse return;
+        const toolbar_height: f32 = 58;
+        const toolbar_maximum_y = @min(
+            content.maximum[1],
+            content.minimum[1] + toolbar_height,
+        );
+        const toolbar = viewport.SceneRect.init(content.minimum, .{
+            content.maximum[0],
+            toolbar_maximum_y,
+        }) orelse return;
+        self.scene_rect = viewport.SceneRect.init(.{
+            content.minimum[0],
+            toolbar.maximum[1],
+        }, content.maximum);
+        self.drawViewportToolbar(frame, toolbar);
+    }
+
+    fn drawViewportToolbar(
+        self: *Editor,
+        frame: *const FrameInput,
+        toolbar: viewport.SceneRect,
+    ) void {
+        zgui.setNextWindowPos(.{
+            .x = toolbar.minimum[0],
+            .y = toolbar.minimum[1],
+            .cond = .always,
+        });
+        zgui.setNextWindowSize(.{
+            .w = toolbar.maximum[0] - toolbar.minimum[0],
+            .h = toolbar.maximum[1] - toolbar.minimum[1],
+            .cond = .always,
+        });
+        zgui.setNextWindowBgAlpha(.{ .alpha = 0.92 });
+        if (zgui.begin("##viewport_toolbar", .{ .flags = .{
+            .no_title_bar = true,
+            .no_resize = true,
+            .no_move = true,
+            .no_collapse = true,
+            .no_saved_settings = true,
+            .no_focus_on_appearing = true,
+            .no_nav_focus = true,
+            .no_docking = true,
+        } })) {
+            if (zgui.button(if (self.viewport_mode == .character)
+                "Character [active]"
+            else
+                "Character", .{}))
+            {
+                frame.viewport.requests.submit(.{ .set_mode = .character });
+            }
+            zgui.sameLine(.{});
+            if (zgui.button(if (self.viewport_mode == .free_camera)
+                "Free Camera [active]"
+            else
+                "Free Camera", .{}))
+            {
+                frame.viewport.requests.submit(.{ .set_mode = .free_camera });
+            }
+
+            const free_mode = self.viewport_mode == .free_camera;
+            zgui.sameLine(.{});
+            zgui.beginDisabled(.{ .disabled = !free_mode });
+            if (zgui.button("Start From Product View", .{})) {
+                frame.viewport.requests.submit(.start_from_product_view);
+            }
+            zgui.sameLine(.{});
+            const target = viewportFocusTarget(self, frame);
+            zgui.beginDisabled(.{ .disabled = target == null });
+            if (zgui.button("Frame Inspector Selection", .{})) {
+                frame.viewport.requests.submit(.{ .frame_selection = target.? });
+            }
+            zgui.endDisabled();
+            zgui.endDisabled();
+
+            if (free_mode) {
+                zgui.sameLine(.{});
+                zgui.textDisabled(
+                    "speed {d:.2} m/s",
+                    .{frame.viewport.view.free_camera.move_speed},
+                );
+            }
+
+            if (free_mode) {
+                zgui.textDisabled(
+                    "RMB+WASD fly | Q/E up/down | Shift fast | wheel speed | F frame Inspector selection | F3 Character",
+                    .{},
+                );
+                if (self.scene_rect) |scene| {
+                    if (scene.contains(zgui.getMousePos()) and
+                        !zgui.isAnyItemActive() and
+                        !zgui.isPopupOpen("", .any_popup) and
+                        zgui.isKeyPressed(.f, false))
+                    {
+                        if (target) |focus| {
+                            frame.viewport.requests.submit(.{ .frame_selection = focus });
+                        }
+                    }
+                }
+            } else {
+                zgui.textDisabled(
+                    "Click viewport: capture | Esc: release | 1: handgun | LMB: fire | R: tactical reload | F3: Free Camera",
+                    .{},
+                );
+            }
         }
         zgui.end();
     }
@@ -440,7 +622,8 @@ pub const Editor = struct {
         }
 
         if (zgui.beginMenu("Panels", true)) {
-            for (&self.tools) |*registered_tool| {
+            for (panel_menu_order) |id| {
+                const registered_tool = self.toolById(id);
                 if (zgui.menuItem(registered_tool.descriptor.name, .{
                     .selected = registered_tool.enabled,
                 })) {
@@ -459,11 +642,17 @@ pub const Editor = struct {
         }
 
         if (zgui.beginMenu("View", true)) {
-            if (zgui.menuItem("Input Passthrough", .{
+            if (zgui.menuItem("Character", .{
                 .shortcut = "F3",
-                .selected = self.input_passthrough,
+                .selected = self.viewport_mode == .character,
             })) {
-                self.input_passthrough = !self.input_passthrough;
+                self.pending_viewport_mode = .character;
+            }
+            if (zgui.menuItem("Free Camera", .{
+                .shortcut = "F3",
+                .selected = self.viewport_mode == .free_camera,
+            })) {
+                self.pending_viewport_mode = .free_camera;
             }
             zgui.separator();
             if (zgui.menuItem("Hide Editor", .{ .shortcut = "F1" })) {
@@ -484,6 +673,13 @@ pub const Editor = struct {
         }
     }
 
+    fn toolById(self: *Editor, id: tool.ToolId) *Tool {
+        for (&self.tools) |*registered_tool| {
+            if (registered_tool.descriptor.id == id) return registered_tool;
+        }
+        unreachable;
+    }
+
     fn routeInputEvent(
         context: *anyopaque,
         event: *const c.SDL_Event,
@@ -499,6 +695,11 @@ pub const Editor = struct {
             .mouse = self.wantsMouse(),
         };
     }
+
+    fn inputSceneRect(context: *anyopaque) ?viewport.SceneRect {
+        const self: *const Editor = @ptrCast(@alignCast(context));
+        return self.viewportSceneRect();
+    }
 };
 
 fn isMouseEvent(event_type: u32) bool {
@@ -512,56 +713,130 @@ fn isMouseEvent(event_type: u32) bool {
     };
 }
 
-fn drawGameplayMouseCaptureHint() void {
-    const viewport = zgui.getMainViewport();
-    const work_pos = viewport.getWorkPos();
-    const work_size = viewport.getWorkSize();
+fn panelNameLessThanIgnoreCase(lhs: []const u8, rhs: []const u8) bool {
+    const shared_len = @min(lhs.len, rhs.len);
+    for (lhs[0..shared_len], rhs[0..shared_len]) |lhs_byte, rhs_byte| {
+        const lhs_lower = std.ascii.toLower(lhs_byte);
+        const rhs_lower = std.ascii.toLower(rhs_byte);
+        if (lhs_lower != rhs_lower) return lhs_lower < rhs_lower;
+    }
+    return lhs.len < rhs.len;
+}
+
+fn viewportMouseStatus(mode: viewport.Mode, captured: bool) []const u8 {
+    return switch (mode) {
+        .character => if (captured)
+            "Character CAPTURED (Esc releases)"
+        else
+            "Character cursor free (click viewport to capture)",
+        .free_camera => "Free Camera cursor released",
+    };
+}
+
+fn viewportFocusTarget(
+    editor: *const Editor,
+    frame: *const FrameInput,
+) ?viewport.FocusTarget {
+    const selected = editor.gameplay_inspector.selected orelse return null;
+    for (frame.gameplay.view.entitySlice()) |entity| {
+        if (!std.meta.eql(selected, entity.entity)) continue;
+        const radius = @max(entity.radius, entity.half_height);
+        const target = viewport.FocusTarget{
+            .center = entity.presentation_position,
+            .radius = radius,
+        };
+        return if (target.isValid()) target else null;
+    }
+    return null;
+}
+
+fn productStatusColumnCount(width: f32) i32 {
+    if (width >= 1_000) return 4;
+    if (width >= 600) return 2;
+    return 1;
+}
+
+fn productStatusHeight(width: f32) f32 {
+    return switch (productStatusColumnCount(width)) {
+        4 => 76,
+        2 => 132,
+        else => 204,
+    };
+}
+
+fn drawProductStatusTable(
+    editor: *const Editor,
+    frame: *const FrameInput,
+    available_width: f32,
+) void {
+    const columns = productStatusColumnCount(available_width);
+    if (!zgui.beginTable("##product_status_columns", .{
+        .column = columns,
+        .flags = .{
+            .borders = .inner,
+            .sizing = .stretch_same,
+            .no_saved_settings = true,
+        },
+    })) return;
+    defer zgui.endTable();
+
+    inline for (0..4) |index| {
+        if (index % @as(usize, @intCast(columns)) == 0) {
+            zgui.tableNextRow(.{});
+        }
+        _ = zgui.tableNextColumn();
+        switch (index) {
+            0 => gameplay_inspector_tool.drawPlayerStatus(&frame.gameplay),
+            1 => gameplay_inspector_tool.drawWeaponStatus(&frame.gameplay),
+            2 => gameplay_inspector_tool.drawThreatStatus(&frame.gameplay),
+            3 => {
+                incident_capture_tool.drawProductStatus(&frame.incident);
+                zgui.textColored(
+                    if (editor.viewport_mode == .free_camera)
+                        .{ 0.85, 0.65, 1, 1 }
+                    else if (editor.gameplay_mouse_captured)
+                        .{ 0.25, 0.95, 1, 1 }
+                    else
+                        .{ 0.7, 0.7, 0.7, 1 },
+                    "{s}",
+                    .{viewportMouseStatus(
+                        editor.viewport_mode,
+                        editor.gameplay_mouse_captured,
+                    )},
+                );
+            },
+            else => unreachable,
+        }
+    }
+}
+
+fn drawProductStatusOverlay(editor: *const Editor, frame: *const FrameInput) void {
+    const main_viewport = zgui.getMainViewport();
+    const work_pos = main_viewport.getWorkPos();
+    const work_size = main_viewport.getWorkSize();
     zgui.setNextWindowPos(.{
-        .x = work_pos[0] + work_size[0] * 0.5,
+        .x = work_pos[0] + 10,
         .y = work_pos[1] + 10,
         .cond = .always,
-        .pivot_x = 0.5,
-        .pivot_y = 0,
+    });
+    const overlay_width = @max(@as(f32, 280), work_size[0] - 20);
+    zgui.setNextWindowSize(.{
+        .w = overlay_width,
+        .h = productStatusHeight(overlay_width) + 30,
+        .cond = .always,
     });
     zgui.setNextWindowBgAlpha(.{ .alpha = 0.82 });
-    if (zgui.begin("##gameplay_mouse_capture_hint", .{ .flags = .{
+    if (zgui.begin("##product_status_overlay", .{ .flags = .{
         .no_title_bar = true,
         .no_resize = true,
         .no_move = true,
         .no_collapse = true,
-        .always_auto_resize = true,
         .no_saved_settings = true,
         .no_focus_on_appearing = true,
         .no_nav_focus = true,
     } })) {
-        zgui.textColored(
-            .{ 0.25, 0.95, 1.0, 1.0 },
-            "MOUSE CAPTURED  |  Move to look  |  ESC releases",
-            .{},
-        );
-    }
-    zgui.end();
-}
-
-fn drawHiddenHint() void {
-    zgui.setNextWindowPos(.{ .x = 10, .y = 10, .cond = .always });
-    zgui.setNextWindowBgAlpha(.{ .alpha = 0.5 });
-    if (zgui.begin("##hidden_hint", .{
-        .flags = .{
-            .no_title_bar = true,
-            .no_resize = true,
-            .no_move = true,
-            .no_collapse = true,
-            .always_auto_resize = true,
-            .no_saved_settings = true,
-            .no_focus_on_appearing = true,
-        },
-    })) {
-        zgui.textColored(
-            .{ 0.7, 0.7, 0.7, 1.0 },
-            "Press F1 to show editor",
-            .{},
-        );
+        drawProductStatusTable(editor, frame, overlay_width);
+        zgui.textDisabled("Editor hidden | F1 shows the workspace", .{});
     }
     zgui.end();
 }
@@ -575,6 +850,44 @@ test "tool registry contains every tool identity exactly once" {
         seen[index] = true;
     }
     for (seen) |present| try std.testing.expect(present);
+}
+
+test "Panels menu contains every registered tool once in alphabetical order" {
+    try std.testing.expectEqual(default_tools.len, panel_menu_order.len);
+
+    var seen = [_]bool{false} ** std.meta.tags(tool.ToolId).len;
+    var previous_name: ?[]const u8 = null;
+    for (panel_menu_order) |id| {
+        const index = @intFromEnum(id);
+        try std.testing.expect(!seen[index]);
+        seen[index] = true;
+
+        var descriptor: ?workspace.Descriptor = null;
+        for (default_tools) |registered_tool| {
+            if (registered_tool.descriptor.id == id) {
+                descriptor = registered_tool.descriptor;
+                break;
+            }
+        }
+        const current_name = descriptor orelse return error.UnregisteredPanelMenuTool;
+        if (previous_name) |previous| {
+            try std.testing.expect(panelNameLessThanIgnoreCase(
+                previous,
+                current_name.name,
+            ));
+        }
+        previous_name = current_name.name;
+    }
+
+    for (seen) |present| try std.testing.expect(present);
+    try std.testing.expect(panelNameLessThanIgnoreCase("camera", "Crate Authoring"));
+}
+
+test "product status strip uses responsive columns without overlapping docks" {
+    try std.testing.expectEqual(@as(i32, 4), productStatusColumnCount(1_600));
+    try std.testing.expectEqual(@as(i32, 2), productStatusColumnCount(800));
+    try std.testing.expectEqual(@as(i32, 1), productStatusColumnCount(420));
+    try std.testing.expect(productStatusHeight(420) > productStatusHeight(1_600));
 }
 
 test "editor runtime and tool state belong to each value" {
@@ -643,4 +956,20 @@ test "owned editor event routing mutates only its receiver" {
     try std.testing.expect(route.keyboard_reserved);
     try std.testing.expect(!first.isVisible());
     try std.testing.expect(second.isVisible());
+}
+
+test "F3 requests the opposite explicit viewport mode" {
+    var editor = Editor{};
+    var event = std.mem.zeroes(c.SDL_Event);
+    event.type = c.SDL_EVENT_KEY_DOWN;
+    event.key.scancode = c.SDL_SCANCODE_F3;
+
+    var route = editor.processEvent(&event);
+    try std.testing.expect(route.keyboard_reserved);
+    try std.testing.expectEqual(viewport.Mode.free_camera, route.viewport_mode_request.?);
+    try std.testing.expectEqual(viewport.Mode.free_camera, editor.viewport_mode);
+
+    route = editor.processEvent(&event);
+    try std.testing.expectEqual(viewport.Mode.character, route.viewport_mode_request.?);
+    try std.testing.expectEqual(viewport.Mode.character, editor.viewport_mode);
 }

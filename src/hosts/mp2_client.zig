@@ -836,9 +836,9 @@ const App = struct {
                 .holstered => self.weapon_action_requested = .equip_toggle,
                 .reloading => return,
                 .equipped => {
-                    if (self.client.magazine_ammo == 0) {
-                        self.weapon_action_requested = .reload;
-                    } else if (tick >= self.client.weapon_ready_tick) {
+                    if (self.client.magazine_ammo != 0 and
+                        tick >= self.client.weapon_ready_tick)
+                    {
                         const distance = nearestLivingNpcDistanceSquared(&self.client) orelse
                             return;
                         if (distance <= 18.0 * 18.0) {
@@ -1213,7 +1213,7 @@ pub fn main(init: std.process.Init) !void {
     var app = try App.init(init, invocation);
     defer app.deinit();
     std.debug.print(
-        "MP6_CLIENT_CONNECT endpoint={s} account={d} ticketed={} controls=WASD/SPACE/LSHIFT/right-drag look/E enter-exit/F collect-drop/Q melee/1 handgun/left-click fire/R reload-respawn/P prediction/F8 reconnect/C cancel/L leave/ESC\n",
+        "MP6_CLIENT_CONNECT endpoint={s} account={d} ticketed={} controls=WASD/SPACE/LSHIFT/right-drag look/E enter-exit/F collect-drop/Q melee/1 handgun/left-click fire/R tactical-reload-respawn/P prediction/F8 reconnect/C cancel/L leave/ESC\n",
         .{
             app.endpoint[0..app.endpoint_len],
             app.client.account.value,
