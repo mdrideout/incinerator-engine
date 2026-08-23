@@ -1,8 +1,7 @@
 # Editor Interaction Phase 3: Explicit Character and Free Camera Modes
 
-**Status:** Implementation, automated validation, native SDL/Metal validation,
-and architecture/dead-code/documentation review complete; product-owner
-interaction review pending
+**Status:** Accepted by product owner on 2026-08-22 after corrective rendering
+repair and interaction retest
 
 **Date:** 2026-08-22
 
@@ -56,17 +55,19 @@ The old `Input Passthrough` menu and shortcut semantics were removed. There is
 now one control for viewport input ownership rather than two overlapping
 policies.
 
-## Deliberate Phase 4 boundary
+## Deliberate Phase 4 boundary at Phase 3 acceptance
 
-Free Camera left clicks are already removed from firearm and all other gameplay
-input, including clicks outside the scene or through ImGui. They do not yet
-pick world objects. Shared viewport picking, explicit cross-tool selection,
-highlighting, and the World Outliner remain Phase 4 as planned.
+At Phase 3 acceptance, Free Camera left clicks were already removed from
+firearm and all other gameplay input, including clicks outside the scene or
+through ImGui, but did not yet pick world objects. Shared viewport picking,
+explicit cross-tool selection, highlighting, and the World Outliner remained
+the Phase 4 boundary. Phase 4 has since implemented that boundary; see the
+[Phase 4 validation ledger](editor-interaction-phase-4-selection-world-outliner.md).
 
-`Frame Inspector Selection` and the Free Camera-only `F` shortcut are live in
-this phase for the existing Gameplay Inspector selection. This provides a real
-typed frame-selection consumer without pre-implementing Phase 4's selection
-union or CPU picking path.
+`Frame Inspector Selection` and the Free Camera-only `F` shortcut were live in
+this phase for the then-existing Gameplay Inspector selection. This provided a
+real typed frame-selection consumer without pre-implementing Phase 4's
+selection union or CPU picking path.
 
 ## Corrective human-review repair
 
@@ -158,7 +159,7 @@ Results:
 - README controls and the root phase ledger describe the new modes, no-pause
   behavior, and Phase 4 selection boundary.
 
-## Required product-owner interaction review
+## Accepted product-owner interaction review
 
 Run:
 
@@ -194,5 +195,6 @@ Then test:
 9. Minimize/restore or change focus during both captured Character play and a
    Free Camera right drag. Confirm held movement/look does not remain latched.
 
-Phase 4 must not begin until this product-owner review is accepted and this
-record and the root plan are updated.
+The product owner confirmed the corrected rendering, explicit mode toggles,
+capture/release behavior, and Free Camera navigation all worked, then
+authorized Phase 4. This closes the Phase 3 stop review.

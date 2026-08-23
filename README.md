@@ -550,10 +550,10 @@ distances are 9 m and 12 m respectively.
 | ESC | Release captured mouse in Character mode; quit when the mouse is already free |
 | W / A / S / D | Move the character or drive in Character mode; fly while holding right mouse in Free Camera |
 | E | Enter or exit the sandbox vehicle in Character mode |
-| F | Collect/drop in Character mode; frame the Gameplay Inspector selection in Free Camera |
+| F | Collect/drop in Character mode; frame the shared World Outliner/viewport selection in Free Camera |
 | Q | Request authoritative melee in Character mode |
 | 1 | Equip or holster the authoritative handgun in Character mode |
-| Left mouse | Fire while captured in Character mode; never fires in Free Camera |
+| Left mouse | Fire while captured in Character mode; select the nearest world object in Free Camera |
 | R | In Character mode, manually tactical-reload while alive or request respawn after death/cooldown |
 | Space | Jump on foot or service-brake while driving in Character mode |
 | Left Shift | Handbrake while driving; accelerate Free Camera flight |
@@ -581,10 +581,13 @@ zig build run -- --editor-panels=gameplay_inspector,diagnostics,incident_capture
 The scene toolbar makes `Character` versus `Free Camera` explicit. Free Camera
 is editor-local presentation state: it releases SDL relative mouse mode,
 suppresses local gameplay actions, and does not pause the simulation or enter
-authority snapshots, replication, replay, or world saves. Viewport object
-picking and the shared World Outliner selection arrive in the next sequential
-editor phase; until then, left clicks in Free Camera are deliberately safe but
-do not select, while `F` can frame the current Gameplay Inspector selection.
+authority snapshots, replication, replay, or world saves. The **World
+Outliner** lists current crate and gameplay instances by stable semantic
+identity. Search or filter the list, click a row, or left-click the rendered
+object in Free Camera; all editor panels share that one selection. A yellow
+bounding box and XYZ marker show the selected object, `F`/`Frame Selection`
+frames it, and `Clear Selection` or an empty scene click clears it. Panel,
+toolbar, menu, bottom-bar, and status-bar clicks never pick through the UI.
 
 The reserved top status strip presents player health, handgun state and firing
 controls, threat/action feedback, incident status, and mouse-capture state in

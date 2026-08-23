@@ -27,37 +27,22 @@ pub const descriptor = tool_module.Descriptor{
     .audit_fields = &.{ "wall_unix_ms", "authority_tick", "presentation_frame", "persistent_id", "replicated_entity" },
 };
 
-pub const State = struct {
-    selected: ?EntityRef = null,
-};
-
 fn sameEntity(first: EntityRef, second: EntityRef) bool {
     return first.namespace == second.namespace and first.local == second.local and
         first.incarnation == second.incarnation;
 }
 
 fn selectedIndex(
-    state: *State,
     view: *const tool_module.GameplayView,
+    selection_view: tool_module.selection.View,
 ) ?usize {
     const entities = view.entitySlice();
-    if (entities.len == 0) {
-        state.selected = null;
-        return null;
-    }
-    if (state.selected) |selected| {
+    if (selection_view.activeGameplay()) |selected| {
         for (entities, 0..) |entity, index| {
             if (sameEntity(selected, entity.entity)) return index;
         }
     }
-    for (entities, 0..) |entity, index| {
-        if (entity.kind == .local_player) {
-            state.selected = entity.entity;
-            return index;
-        }
-    }
-    state.selected = entities[0].entity;
-    return 0;
+    return null;
 }
 
 fn recordMatches(record: engine.gameplay_trace.Record, selected: EntityRef) bool {
@@ -203,13 +188,13 @@ pub fn drawThreatStatus(ctx: *const GameplayInput) void {
 }
 
 pub fn draw(
-    state: *State,
     ctx: *const GameplayInput,
+    selection_input: *const tool_module.SelectionInput,
 ) void {
     if (zgui.begin("Gameplay Inspector", .{})) {
         const view = ctx.view;
         const entities = view.entitySlice();
-        const selected_index = selectedIndex(state, view);
+        const selected_index = selectedIndex(view, selection_input.view);
 
         zgui.text(
             "Authority tick {d} | presentation frame {d} | entities {d}",
@@ -246,18 +231,24 @@ pub fn draw(
         zgui.separatorText("Selected entity");
         if (selected_index) |index| {
             if (zgui.button("Previous", .{})) {
-                state.selected = entities[(index + entities.len - 1) % entities.len].entity;
+                selection_input.requests.submit(.{ .select = .{
+                    .gameplay_entity = entities[(index + entities.len - 1) % entities.len].entity,
+                } });
             }
             zgui.sameLine(.{});
             if (zgui.button("Local player", .{})) {
                 for (entities) |entity| if (entity.kind == .local_player) {
-                    state.selected = entity.entity;
+                    selection_input.requests.submit(.{ .select = .{
+                        .gameplay_entity = entity.entity,
+                    } });
                     break;
                 };
             }
             zgui.sameLine(.{});
             if (zgui.button("Next", .{})) {
-                state.selected = entities[(index + 1) % entities.len].entity;
+                selection_input.requests.submit(.{ .select = .{
+                    .gameplay_entity = entities[(index + 1) % entities.len].entity,
+                } });
             }
 
             const entity = entities[index];
@@ -449,7 +440,22 @@ pub fn draw(
                 zgui.text("target none", .{});
             }
         } else {
-            zgui.text("No gameplay entities projected", .{});
+            if (entities.len == 0) {
+                zgui.text("No gameplay entities projected", .{});
+            } else {
+                if (zgui.button("Select local player", .{})) {
+                    for (entities) |entity| if (entity.kind == .local_player) {
+                        selection_input.requests.submit(.{ .select = .{
+                            .gameplay_entity = entity.entity,
+                        } });
+                        break;
+                    };
+                }
+                zgui.textDisabled(
+                    "Select a gameplay entity in World Outliner or the Free Camera viewport.",
+                    .{},
+                );
+            }
         }
     }
     zgui.end();
@@ -517,14 +523,13 @@ pub fn drawEventHistory(ctx: *const GameplayInput, selected: ?EntityRef) void {
         zgui.endChild();
     } else {
         zgui.textDisabled(
-            "Select an entity in Gameplay Inspector to filter the history.",
+            "Select a gameplay entity in World Outliner, Gameplay Inspector, or the Free Camera viewport to filter the history.",
             .{},
         );
     }
 }
 
-test "selection follows stable identity and defaults to local player" {
-    var state = State{};
+test "gameplay inspector resolves only the shared stable selection" {
     var view = tool_module.GameplayView{
         .authority_tick = 1,
         .presentation_frame = 2,
@@ -548,6 +553,13 @@ test "selection follows stable identity and defaults to local player" {
     view.entities[1].entity.local = 1;
     view.entities[1].kind = .local_player;
     view.entity_count = 2;
-    try std.testing.expectEqual(@as(?usize, 1), selectedIndex(&state, &view));
-    try std.testing.expectEqual(@as(u64, 1), state.selected.?.local);
+    const selected = tool_module.selection.View{
+        .entries = &.{},
+        .active = .{ .gameplay_entity = view.entities[1].entity },
+    };
+    try std.testing.expectEqual(@as(?usize, 1), selectedIndex(&view, selected));
+    try std.testing.expectEqual(
+        @as(?usize, null),
+        selectedIndex(&view, .{ .entries = &.{}, .active = null }),
+    );
 }

@@ -21,6 +21,7 @@ const render_tool = @import("tools/render_tool.zig");
 const diagnostics_tool = @import("tools/diagnostics_tool.zig");
 const event_log_tool = @import("tools/event_log_tool.zig");
 const gameplay_inspector_tool = @import("tools/gameplay_inspector_tool.zig");
+const world_outliner_tool = @import("tools/world_outliner_tool.zig");
 const navigation_lab_tool = @import("tools/navigation_lab_tool.zig");
 const population_lab_tool = @import("tools/population_lab_tool.zig");
 const incident_capture_tool = @import("tools/incident_capture_tool.zig");
@@ -60,6 +61,7 @@ const default_tools = [_]Tool{
     Tool.init(crate_authoring_tool.descriptor),
     Tool.init(interaction_tool.descriptor),
     Tool.init(neural_rendering_lab_tool.descriptor),
+    Tool.init(world_outliner_tool.descriptor),
 };
 
 /// Human-facing Panels menu order. Keep this independent from `default_tools`:
@@ -79,6 +81,7 @@ const panel_menu_order = [_]tool.ToolId{
     .population_lab,
     .render,
     .stats,
+    .world_outliner,
 };
 
 pub const Editor = struct {
@@ -88,7 +91,7 @@ pub const Editor = struct {
     tools: [default_tools.len]Tool = default_tools,
     stats: stats_tool.State = .{},
     crate_authoring: crate_authoring_tool.State = .{},
-    gameplay_inspector: gameplay_inspector_tool.State = .{},
+    world_outliner: world_outliner_tool.State = .{},
     navigation_lab: navigation_lab_tool.State = .{},
     population_lab: population_lab_tool.State = .{},
     incident_capture: incident_capture_tool.State = .{},
@@ -115,6 +118,7 @@ pub const Editor = struct {
 
     /// Release ImGui while the renderer device and window are still alive.
     pub fn deinit(self: *Editor) void {
+        self.world_outliner.deinit();
         self.backend.deinit();
         self.* = .{};
     }
@@ -288,11 +292,11 @@ pub const Editor = struct {
             .event_log => event_log_tool.draw(
                 &frame.developer,
                 &frame.gameplay,
-                self.gameplay_inspector.selected,
+                frame.selection.view.activeGameplay(),
             ),
             .gameplay_inspector => gameplay_inspector_tool.draw(
-                &self.gameplay_inspector,
                 &frame.gameplay,
+                &frame.selection,
             ),
             .navigation_lab => navigation_lab_tool.draw(
                 &self.navigation_lab,
@@ -313,6 +317,10 @@ pub const Editor = struct {
             ),
             .interaction => interaction_tool.draw(&frame.interaction),
             .neural_rendering_lab => neural_rendering_lab_tool.draw(&frame.neural),
+            .world_outliner => world_outliner_tool.draw(
+                &self.world_outliner,
+                &frame.selection,
+            ),
         }
     }
 
@@ -486,7 +494,7 @@ pub const Editor = struct {
             zgui.sameLine(.{});
             const target = viewportFocusTarget(self, frame);
             zgui.beginDisabled(.{ .disabled = target == null });
-            if (zgui.button("Frame Inspector Selection", .{})) {
+            if (zgui.button("Frame Selection", .{})) {
                 frame.viewport.requests.submit(.{ .frame_selection = target.? });
             }
             zgui.endDisabled();
@@ -502,7 +510,7 @@ pub const Editor = struct {
 
             if (free_mode) {
                 zgui.textDisabled(
-                    "RMB+WASD fly | Q/E up/down | Shift fast | wheel speed | F frame Inspector selection | F3 Character",
+                    "LMB select | RMB+WASD fly | Q/E up/down | Shift fast | wheel speed | F frame selection | F3 Character",
                     .{},
                 );
                 if (self.scene_rect) |scene| {
@@ -734,20 +742,17 @@ fn viewportMouseStatus(mode: viewport.Mode, captured: bool) []const u8 {
 }
 
 fn viewportFocusTarget(
-    editor: *const Editor,
+    _: *const Editor,
     frame: *const FrameInput,
 ) ?viewport.FocusTarget {
-    const selected = editor.gameplay_inspector.selected orelse return null;
-    for (frame.gameplay.view.entitySlice()) |entity| {
-        if (!std.meta.eql(selected, entity.entity)) continue;
-        const radius = @max(entity.radius, entity.half_height);
-        const target = viewport.FocusTarget{
-            .center = entity.presentation_position,
-            .radius = radius,
-        };
-        return if (target.isValid()) target else null;
-    }
-    return null;
+    const bounds = (frame.selection.view.activeEntry() orelse return null)
+        .world_bounds orelse return null;
+    const half_extents = bounds.halfExtents();
+    const target = viewport.FocusTarget{
+        .center = bounds.center(),
+        .radius = @max(half_extents[0], @max(half_extents[1], half_extents[2])),
+    };
+    return if (target.isValid()) target else null;
 }
 
 fn productStatusColumnCount(width: f32) i32 {
@@ -898,13 +903,13 @@ test "editor runtime and tool state belong to each value" {
     first.tools[0].toggle();
     first.stats.history_index = 7;
     first.crate_authoring.dirty = true;
-    first.gameplay_inspector.selected = .{ .namespace = 1, .local = 2 };
+    first.world_outliner.kind_filter = .crate;
 
     try std.testing.expect(second.visible);
     try std.testing.expect(second.tools[0].enabled);
     try std.testing.expectEqual(@as(usize, 0), second.stats.history_index);
     try std.testing.expect(!second.crate_authoring.dirty);
-    try std.testing.expect(second.gameplay_inspector.selected == null);
+    try std.testing.expect(second.world_outliner.kind_filter == null);
 }
 
 test "startup configuration owns exact panel visibility and focus" {

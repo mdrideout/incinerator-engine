@@ -1,10 +1,8 @@
 # Editor Interaction and Agent Control Plan
 
-**Status:** Phases 1-2 accepted; Phase 3 implementation and automated/native
-validation complete with product-owner interaction review pending; Phases 4-8
-not started
+**Status:** Phases 1-4 accepted; Phases 5-8 not started
 
-**Date:** 2026-08-22
+**Date:** 2026-08-23
 
 **Platform:** Apple Silicon macOS only
 
@@ -444,8 +442,7 @@ when reserve ammunition is available.
 
 ### Phase 3 — Explicit Character and Free Camera modes
 
-**Status:** Implementation and automated/native validation complete on
-2026-08-22; product-owner interaction review pending
+**Status:** Accepted by product owner on 2026-08-22
 
 **Validation:**
 [Phase 3 explicit Character and Free Camera modes](docs/validation/editor-interaction-phase-3-viewport-modes.md)
@@ -523,6 +520,11 @@ ownership visible and deterministic.
 ---
 
 ### Phase 4 — Selection foundation and World Outliner
+
+**Status:** Accepted by product owner on 2026-08-23
+
+**Validation:**
+[Phase 4 selection foundation and World Outliner](docs/validation/editor-interaction-phase-4-selection-world-outliner.md)
 
 **Purpose:** Make world-object discovery and selection coherent before adding
 more authoring labs.

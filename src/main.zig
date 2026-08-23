@@ -74,6 +74,7 @@ const viewport_controller = @import("viewport_controller.zig");
 const sdl = @import("sdl.zig");
 const shader_assets = @import("shader_assets");
 const editor_contract = @import("editor/tool.zig");
+const editor_selection = editor_contract.selection;
 const sandbox_host = @import("local_solo_session");
 const combat_presentation = @import("combat_presentation");
 const product_feedback = @import("sandbox/product_feedback.zig");
@@ -2132,6 +2133,10 @@ const App = struct {
     game_camera: camera.Camera,
     viewport_controller: viewport_controller.Controller,
     viewport_requests: viewport.Requests,
+    selection_controller: editor_selection.Controller,
+    selection_requests: editor_selection.Requests,
+    selection_entries: std.ArrayListUnmanaged(editor_selection.Entry),
+    pending_selection_click: ?[2]f32,
     // Presentation resources remain owned by the visual host.
     ground_mesh: mesh.Mesh,
     block_mesh: mesh.Mesh,
@@ -2456,10 +2461,10 @@ const App = struct {
         std.debug.print("   ESC - Release captured mouse / quit while mouse is free\n", .{});
         std.debug.print("   WASD - Move character / drive vehicle\n", .{});
         std.debug.print("   E - Enter / exit vehicle\n", .{});
-        std.debug.print("   F - Collect / drop carryable\n", .{});
+        std.debug.print("   F - Collect/drop carryable (Character) / frame selection (Free Camera)\n", .{});
         std.debug.print("   Q - Authoritative melee\n", .{});
         std.debug.print("   1 - Equip / holster handgun\n", .{});
-        std.debug.print("   Left-click - Fire equipped handgun\n", .{});
+        std.debug.print("   Left-click - Fire equipped handgun (Character) / select object (Free Camera)\n", .{});
         std.debug.print("   R - Tactical reload / respawn after death\n", .{});
         std.debug.print("   SPACE - Jump / vehicle brake\n", .{});
         std.debug.print("   LEFT SHIFT - Vehicle hand brake\n", .{});
@@ -2527,6 +2532,10 @@ const App = struct {
             },
             .viewport_controller = .{},
             .viewport_requests = .{},
+            .selection_controller = .{},
+            .selection_requests = .{},
+            .selection_entries = .empty,
+            .pending_selection_click = null,
         };
     }
 
@@ -2534,6 +2543,7 @@ const App = struct {
         const completed_ticks = self.simulation.inspection().tickIndex();
 
         self.input_buffer.detachGameplayMouseWindow();
+        self.selection_entries.deinit(std.heap.page_allocator);
 
         // Errors may unwind after external buffers were encoded into a frame
         // but before normal submission. Retire and drain that work before any
@@ -4226,6 +4236,9 @@ const App = struct {
         self.applyViewportRequests(self.input_buffer.takeFreeCameraRequests(
             @floatCast(self.frame_timer.getDeltaTime()),
         ));
+        if (self.input_buffer.takeFreeCameraSelectionClick()) |point| {
+            self.pending_selection_click = point;
+        }
         self.developer.setGameplayMouseCaptured(
             self.input_buffer.gameplayMouseLocked(),
         );
@@ -4236,6 +4249,7 @@ const App = struct {
         const previous_mode = self.viewport_controller.mode;
         self.viewport_controller.apply(request, &self.game_camera);
         if (self.viewport_controller.mode != previous_mode) {
+            self.pending_selection_click = null;
             self.input_buffer.setViewportMode(self.viewport_controller.mode);
             self.developer.setViewportMode(self.viewport_controller.mode);
             self.developer.setGameplayMouseCaptured(
@@ -6932,11 +6946,20 @@ const App = struct {
         requests: []const sandbox_authoring.Request,
     ) !void {
         for (requests) |request| switch (request) {
-            .select => |id| self.authoring_controller.select(id) catch |err| {
-                self.recordAuthoringRequestRejection(null, id, err);
-                continue;
+            .select => |id| {
+                self.authoring_controller.select(id) catch |err| {
+                    self.recordAuthoringRequestRejection(null, id, err);
+                    continue;
+                };
+                self.selection_controller.apply(
+                    .{ .select = .{ .persistent_entity = id } },
+                    self.selection_entries.items,
+                );
             },
-            .clear_selection => self.authoring_controller.clearSelection(),
+            .clear_selection => {
+                self.authoring_controller.clearSelection();
+                self.selection_controller.apply(.clear, self.selection_entries.items);
+            },
             .relocate => |relocation| {
                 const view = self.simulation.crates().view(relocation.id) catch |err| switch (err) {
                     error.CrateNotFound, error.NotACrate => {
@@ -7059,6 +7082,265 @@ const App = struct {
             view_projection,
             self.frame_timer.total_frames,
         );
+    }
+
+    fn appendSelectionEntry(
+        self: *App,
+        entry: editor_selection.Entry,
+    ) !void {
+        try entry.validate();
+        for (self.selection_entries.items) |existing| {
+            if (existing.id.eql(entry.id)) return error.DuplicateEditorSelectionIdentity;
+        }
+        try self.selection_entries.append(std.heap.page_allocator, entry);
+    }
+
+    fn applySelectionRequest(self: *App, request: editor_selection.Request) void {
+        self.selection_controller.apply(request, self.selection_entries.items);
+        const active = self.selection_controller.view(
+            self.selection_entries.items,
+        ).activeEntry();
+        if (active) |entry| {
+            if (entry.kind == .crate) {
+                const id = switch (entry.id) {
+                    .persistent_entity => |id| id,
+                    else => {
+                        self.selection_controller.apply(.clear, self.selection_entries.items);
+                        self.authoring_controller.clearSelection();
+                        return;
+                    },
+                };
+                self.authoring_controller.select(id) catch {
+                    self.selection_controller.apply(.clear, self.selection_entries.items);
+                    self.authoring_controller.clearSelection();
+                };
+                return;
+            }
+        }
+        self.authoring_controller.clearSelection();
+    }
+
+    fn orientedSelectionBounds(
+        pose: engine.physics.Pose,
+        half_extents: [3]f32,
+    ) !editor_selection.Bounds {
+        const x = rotateVectorByQuaternion(pose.rotation, .{ half_extents[0], 0, 0 });
+        const y = rotateVectorByQuaternion(pose.rotation, .{ 0, half_extents[1], 0 });
+        const z = rotateVectorByQuaternion(pose.rotation, .{ 0, 0, half_extents[2] });
+        return editor_selection.Bounds.init(pose.position, .{
+            @abs(x[0]) + @abs(y[0]) + @abs(z[0]),
+            @abs(x[1]) + @abs(y[1]) + @abs(z[1]),
+            @abs(x[2]) + @abs(y[2]) + @abs(z[2]),
+        });
+    }
+
+    fn rebuildSelectionEntries(
+        self: *App,
+        crate_draws: anytype,
+        character_draws: []const sandbox_host.CharacterDraw,
+        vehicle_draws: []const sandbox_host.VehicleDraw,
+        carryable_draws: []const sandbox_host.CarryableDraw,
+        npc_draws: []const sandbox_host.NpcDraw,
+    ) !void {
+        self.selection_entries.clearRetainingCapacity();
+        for (crate_draws) |draw| try self.appendSelectionEntry(.{
+            .id = .{ .persistent_entity = draw.persistent_id },
+            .label = "Crate",
+            .kind = .crate,
+            .owner = .game_runtime,
+            .inspectable = true,
+            .authorable = true,
+            .world_bounds = try orientedSelectionBounds(draw.pose, draw.half_extents),
+        });
+        for (character_draws) |draw| try self.appendSelectionEntry(.{
+            .id = .{ .gameplay_entity = gameplayEntityRef(draw.entity, draw.incarnation) },
+            .label = if (draw.local_player) "Local Player" else "Remote Player",
+            .kind = if (draw.local_player) .local_player else .remote_player,
+            .owner = .game_runtime,
+            .inspectable = true,
+            .authorable = false,
+            .world_bounds = try editor_selection.Bounds.init(
+                .{
+                    draw.pose.position[0],
+                    draw.pose.position[1] + draw.half_height + draw.radius,
+                    draw.pose.position[2],
+                },
+                .{ draw.radius, draw.half_height + draw.radius, draw.radius },
+            ),
+        });
+        for (vehicle_draws) |draw| try self.appendSelectionEntry(.{
+            .id = .{ .gameplay_entity = gameplayEntityRef(
+                draw.entity,
+                draw.entity.generation,
+            ) },
+            .label = "Vehicle",
+            .kind = .vehicle,
+            .owner = .game_runtime,
+            .inspectable = true,
+            .authorable = false,
+            .world_bounds = try orientedSelectionBounds(
+                draw.chassis_pose,
+                draw.chassis_half_extents,
+            ),
+        });
+        for (carryable_draws) |draw| try self.appendSelectionEntry(.{
+            .id = .{ .gameplay_entity = gameplayEntityRef(
+                draw.entity,
+                draw.entity.generation,
+            ) },
+            .label = "Carryable",
+            .kind = .carryable,
+            .owner = .game_runtime,
+            .inspectable = true,
+            .authorable = false,
+            .world_bounds = try orientedSelectionBounds(draw.pose, draw.half_extents),
+        });
+        for (npc_draws) |draw| try self.appendSelectionEntry(.{
+            .id = .{ .gameplay_entity = gameplayEntityRef(draw.entity, draw.incarnation) },
+            .label = "NPC",
+            .kind = .npc,
+            .owner = .game_runtime,
+            .inspectable = true,
+            .authorable = false,
+            .world_bounds = try editor_selection.Bounds.init(
+                .{
+                    draw.pose.position[0],
+                    draw.pose.position[1] + draw.half_height + draw.radius,
+                    draw.pose.position[2],
+                },
+                .{ draw.radius, draw.half_height + draw.radius, draw.radius },
+            ),
+        });
+        editor_selection.sortEntries(self.selection_entries.items);
+        const had_selection = self.selection_controller.active != null;
+        self.selection_controller.reconcile(self.selection_entries.items);
+        if (had_selection and self.selection_controller.active == null) {
+            self.authoring_controller.clearSelection();
+        }
+    }
+
+    fn applyPendingViewportSelection(
+        self: *App,
+        scene_camera: *const camera.Camera,
+        scene_aspect: f32,
+    ) void {
+        const point = self.pending_selection_click orelse return;
+        self.pending_selection_click = null;
+        if (self.viewport_controller.mode != .free_camera) return;
+        const window_extent = self.gpu_renderer.getWindowSize();
+        const forward = scene_camera.getForward();
+        const right = scene_camera.getRight();
+        const ray = (editor_selection.Projection{
+            .position = .{
+                scene_camera.position[0],
+                scene_camera.position[1],
+                scene_camera.position[2],
+            },
+            .forward = .{ forward[0], forward[1], forward[2] },
+            .right = .{ right[0], right[1], right[2] },
+            .fov_radians = scene_camera.fov,
+            .screen_extent = .{
+                @floatFromInt(window_extent.width),
+                @floatFromInt(window_extent.height),
+            },
+            .scene_aspect = scene_aspect,
+        }).ray(point) catch {
+            self.applySelectionRequest(.clear);
+            return;
+        };
+        if (editor_selection.pickNearest(ray, self.selection_entries.items)) |id| {
+            self.applySelectionRequest(.{ .select = id });
+        } else {
+            self.applySelectionRequest(.clear);
+        }
+    }
+
+    fn drawSelectionBar(
+        self: *App,
+        center: [3]f32,
+        size: [3]f32,
+        color: [4]f32,
+        view_projection: zm.Mat,
+    ) void {
+        self.gpu_renderer.drawMeshWithMaterial(
+            &self.block_mesh,
+            null,
+            sandbox_visual_catalog.materialTinted(.health_marker, color),
+            zm.mul(
+                zm.scaling(size[0], size[1], size[2]),
+                zm.translation(center[0], center[1], center[2]),
+            ),
+            view_projection,
+        );
+    }
+
+    fn drawSelectionHighlight(self: *App, view_projection: zm.Mat) u64 {
+        const entry = self.selection_controller.view(
+            self.selection_entries.items,
+        ).activeEntry() orelse return 0;
+        const bounds = entry.world_bounds orelse return 0;
+        const center = bounds.center();
+        const half = bounds.halfExtents();
+        const thickness: f32 = 0.045;
+        const yellow = [4]f32{ 1, 0.83, 0.08, 1 };
+        const x_centers = [_][3]f32{
+            .{ center[0], center[1] - half[1], center[2] - half[2] },
+            .{ center[0], center[1] - half[1], center[2] + half[2] },
+            .{ center[0], center[1] + half[1], center[2] - half[2] },
+            .{ center[0], center[1] + half[1], center[2] + half[2] },
+        };
+        for (x_centers) |edge| self.drawSelectionBar(
+            edge,
+            .{ half[0] * 2 + thickness, thickness, thickness },
+            yellow,
+            view_projection,
+        );
+        const y_centers = [_][3]f32{
+            .{ center[0] - half[0], center[1], center[2] - half[2] },
+            .{ center[0] - half[0], center[1], center[2] + half[2] },
+            .{ center[0] + half[0], center[1], center[2] - half[2] },
+            .{ center[0] + half[0], center[1], center[2] + half[2] },
+        };
+        for (y_centers) |edge| self.drawSelectionBar(
+            edge,
+            .{ thickness, half[1] * 2 + thickness, thickness },
+            yellow,
+            view_projection,
+        );
+        const z_centers = [_][3]f32{
+            .{ center[0] - half[0], center[1] - half[1], center[2] },
+            .{ center[0] - half[0], center[1] + half[1], center[2] },
+            .{ center[0] + half[0], center[1] - half[1], center[2] },
+            .{ center[0] + half[0], center[1] + half[1], center[2] },
+        };
+        for (z_centers) |edge| self.drawSelectionBar(
+            edge,
+            .{ thickness, thickness, half[2] * 2 + thickness },
+            yellow,
+            view_projection,
+        );
+
+        const axis_origin = [3]f32{ center[0], bounds.maximum[1] + 0.12, center[2] };
+        const axis_length: f32 = 0.7;
+        self.drawSelectionBar(
+            .{ axis_origin[0] + axis_length * 0.5, axis_origin[1], axis_origin[2] },
+            .{ axis_length, thickness * 1.5, thickness * 1.5 },
+            .{ 1, 0.12, 0.08, 1 },
+            view_projection,
+        );
+        self.drawSelectionBar(
+            .{ axis_origin[0], axis_origin[1] + axis_length * 0.5, axis_origin[2] },
+            .{ thickness * 1.5, axis_length, thickness * 1.5 },
+            .{ 0.15, 1, 0.2, 1 },
+            view_projection,
+        );
+        self.drawSelectionBar(
+            .{ axis_origin[0], axis_origin[1], axis_origin[2] + axis_length * 0.5 },
+            .{ thickness * 1.5, thickness * 1.5, axis_length },
+            .{ 0.12, 0.35, 1, 1 },
+            view_projection,
+        );
+        return 15;
     }
 
     /// Submit one renderer frame, then let the developer owner acquire the
@@ -8793,6 +9075,14 @@ const App = struct {
 
         // Get view-projection matrix from camera
         const view_proj = scene_camera.getViewProjectionMatrix(aspect_ratio);
+        try self.rebuildSelectionEntries(
+            crate_draws,
+            character_draws,
+            vehicle_draws,
+            carryable_draws,
+            npc_draws,
+        );
+        self.applyPendingViewportSelection(scene_camera, aspect_ratio);
         if (self.neural_inputs) |*inputs| {
             try inputs.beginFrame(.{
                 .authority_tick = self.simulation.inspection().tickIndex(),
@@ -9337,6 +9627,7 @@ const App = struct {
             );
             self.validation.s14_ranged_combat.observeHud(combat_hud);
         }
+        scene_draw_calls +|= self.drawSelectionHighlight(view_proj);
         self.mergeProfileCounts(.{ .draw_calls = scene_draw_calls });
         scene_draw_profile.finish(.success);
         self.drawPhysicsDebug(view_proj);
@@ -10176,17 +10467,22 @@ const App = struct {
         gameplay_view: *const editor_contract.GameplayView,
     ) !void {
         self.viewport_requests.clear();
+        self.selection_requests.clear();
         self.authoring_requests.clear();
         self.interaction_requests.clear();
         self.navigation_requests.clear();
         defer {
             self.viewport_requests.clear();
+            self.selection_requests.clear();
             self.authoring_requests.clear();
             self.interaction_requests.clear();
             self.navigation_requests.clear();
         }
         const authoring_view = try self.crateAuthoringView();
         const viewport_view = self.viewport_controller.view();
+        const selection_view = self.selection_controller.view(
+            self.selection_entries.items,
+        );
         const interaction_view = try self.interactionEditorView();
         const gates = self.simulation.developer().navigationGateState();
         const navigation_view = editor_contract.NavigationLabView{
@@ -10202,6 +10498,35 @@ const App = struct {
             .diagnostics = inspection.populationDiagnostics(),
         };
         const render_stats = self.gpu_renderer.frameStats();
+        const active_selection = self.selection_controller.view(
+            self.selection_entries.items,
+        ).activeEntry();
+        var selected_object_kind: []const u8 = "none";
+        var selected_identity_kind: []const u8 = "none";
+        var selected_namespace: u64 = 0;
+        var selected_local: u64 = 0;
+        var selected_incarnation: u32 = 0;
+        if (active_selection) |entry| {
+            selected_object_kind = @tagName(entry.kind);
+            switch (entry.id) {
+                .persistent_entity => |id| {
+                    selected_identity_kind = "persistent_entity";
+                    selected_namespace = id.namespace;
+                    selected_local = id.local;
+                },
+                .gameplay_entity => |id| {
+                    selected_identity_kind = "gameplay_entity";
+                    selected_namespace = id.namespace;
+                    selected_local = id.local;
+                    selected_incarnation = id.incarnation;
+                },
+                .content_asset => |id| {
+                    selected_identity_kind = "content_asset";
+                    selected_namespace = id.namespace;
+                    selected_local = id.local;
+                },
+            }
+        }
         const render_view = editor_contract.RenderView{
             .scene_light = self.gpu_renderer.sceneLight(),
             .frame_stats = render_stats,
@@ -10218,6 +10543,11 @@ const App = struct {
                 @tagName(self.render_frame_audit.surface)
             else
                 "none",
+            .selected_object_kind = selected_object_kind,
+            .selected_identity_kind = selected_identity_kind,
+            .selected_namespace = selected_namespace,
+            .selected_local = selected_local,
+            .selected_incarnation = selected_incarnation,
         };
         var neural_view = editor_contract.NeuralView{};
         if (self.neural_inputs) |*inputs| {
@@ -10297,6 +10627,10 @@ const App = struct {
                     .view = &viewport_view,
                     .requests = &self.viewport_requests,
                 },
+                .selection = .{
+                    .view = selection_view,
+                    .requests = &self.selection_requests,
+                },
                 .frame_timer = &self.frame_timer,
                 .include_district_streams = self.includeDeveloperDistrictStreams(),
                 .authoring = .{
@@ -10347,6 +10681,9 @@ const App = struct {
                 },
             },
         ));
+        if (self.selection_requests.take()) |request| {
+            self.applySelectionRequest(request);
+        }
         self.applyViewportRequests(self.viewport_requests.take());
         try self.applyAuthoringRequests(self.authoring_requests.slice());
         try self.applyInteractionRequests(self.interaction_requests.slice());

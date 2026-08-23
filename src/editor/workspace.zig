@@ -20,6 +20,7 @@ pub const ToolId = enum {
     crate_authoring,
     interaction,
     neural_rendering_lab,
+    world_outliner,
 
     pub fn parse(text: []const u8) !ToolId {
         inline for (std.meta.tags(ToolId)) |candidate| {
@@ -227,6 +228,7 @@ fn presetContains(preset: LayoutPreset, id: ToolId) bool {
     if (id == .neural_rendering_lab) return false;
     return switch (preset) {
         .gameplay => switch (id) {
+            .world_outliner,
             .gameplay_inspector,
             .interaction,
             .stats,
@@ -237,6 +239,7 @@ fn presetContains(preset: LayoutPreset, id: ToolId) bool {
             else => false,
         },
         .navigation => switch (id) {
+            .world_outliner,
             .gameplay_inspector,
             .navigation_lab,
             .population_lab,
@@ -248,6 +251,7 @@ fn presetContains(preset: LayoutPreset, id: ToolId) bool {
             else => false,
         },
         .population => switch (id) {
+            .world_outliner,
             .gameplay_inspector,
             .navigation_lab,
             .population_lab,
@@ -258,6 +262,7 @@ fn presetContains(preset: LayoutPreset, id: ToolId) bool {
             else => false,
         },
         .rendering => switch (id) {
+            .world_outliner,
             .camera,
             .render,
             .physics_debug,
@@ -269,6 +274,7 @@ fn presetContains(preset: LayoutPreset, id: ToolId) bool {
             else => false,
         },
         .incident => switch (id) {
+            .world_outliner,
             .gameplay_inspector,
             .diagnostics,
             .event_log,
@@ -278,7 +284,7 @@ fn presetContains(preset: LayoutPreset, id: ToolId) bool {
             else => false,
         },
         .minimal => switch (id) {
-            .gameplay_inspector, .incident_capture => true,
+            .world_outliner, .gameplay_inspector, .incident_capture => true,
             else => false,
         },
         .all => true,

@@ -82,6 +82,16 @@ fn drawContract(view: *const tool_module.RenderView) void {
         view.last_ordinal,
     });
     zgui.text("last surface: {s}", .{view.last_surface});
+    zgui.text(
+        "selection: {s} {s} {d}:{d}:{d}",
+        .{
+            view.selected_object_kind,
+            view.selected_identity_kind,
+            view.selected_namespace,
+            view.selected_local,
+            view.selected_incarnation,
+        },
+    );
 }
 
 fn drawSettingsUI(settings: *RenderSettings) void {

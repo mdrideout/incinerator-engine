@@ -1783,7 +1783,7 @@ pub const Capture = struct {
     ) void {
         self.recordFormatted(
             .state,
-            "{{\"schema\":{d},\"kind\":\"render_state\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"render_mode\":\"{s}\",\"visual_schema\":{d},\"scene_light\":{{\"sun_direction\":[{d},{d},{d}],\"sun_color\":[{d},{d},{d}],\"sun_intensity\":{d},\"ambient_color\":[{d},{d},{d}]}},\"draw_paths\":{{\"lit_product\":{d},\"unlit_product\":{d},\"debug\":{d},\"normal_geometry\":{d},\"color_geometry\":{d}}},\"last_visual\":{{\"semantic\":\"{s}\",\"part\":\"{s}\",\"ordinal\":{d},\"surface\":\"{s}\"}}}}",
+            "{{\"schema\":{d},\"kind\":\"render_state\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"render_mode\":\"{s}\",\"visual_schema\":{d},\"scene_light\":{{\"sun_direction\":[{d},{d},{d}],\"sun_color\":[{d},{d},{d}],\"sun_intensity\":{d},\"ambient_color\":[{d},{d},{d}]}},\"draw_paths\":{{\"lit_product\":{d},\"unlit_product\":{d},\"debug\":{d},\"normal_geometry\":{d},\"color_geometry\":{d}}},\"last_visual\":{{\"semantic\":\"{s}\",\"part\":\"{s}\",\"ordinal\":{d},\"surface\":\"{s}\"}},\"selection\":{{\"object_kind\":\"{s}\",\"identity_kind\":\"{s}\",\"namespace\":{d},\"local\":{d},\"incarnation\":{d}}}}}",
             .{
                 incident.schema_version,
                 self.takeSequence(),
@@ -1811,6 +1811,11 @@ pub const Capture = struct {
                 view.last_part,
                 view.last_ordinal,
                 view.last_surface,
+                view.selected_object_kind,
+                view.selected_identity_kind,
+                view.selected_namespace,
+                view.selected_local,
+                view.selected_incarnation,
             },
         );
     }

@@ -211,6 +211,7 @@ pub const StreamingDiagnosticsPort = struct {
 pub const FrameInput = struct {
     camera: *const camera.Camera,
     viewport: editor_contract.ViewportInput,
+    selection: editor_contract.SelectionInput,
     frame_timer: *const timing.FrameTimer,
     include_district_streams: bool,
     authoring: editor_contract.AuthoringInput,
@@ -415,6 +416,14 @@ fn defaultIncidentEntity(
         return entity.entity;
     };
     return if (view.entitySlice().len == 0) null else view.entitySlice()[0].entity;
+}
+
+fn incidentEntity(
+    selection_view: editor_contract.selection.View,
+    gameplay_view: *const editor_contract.GameplayView,
+) ?engine.gameplay_trace.EntityRef {
+    if (selection_view.active) |active| return active.gameplay();
+    return defaultIncidentEntity(gameplay_view);
 }
 
 fn requestedVisualizationEnable(
@@ -1407,6 +1416,7 @@ pub const Owner = opaque {
             .wall_unix_ms = wallNowMs(state.io),
             .camera = &camera_view,
             .viewport = frame.viewport,
+            .selection = frame.selection,
             .frame_timing = &frame_timing_view,
             .developer = .{
                 .snapshot = &diagnostics_snapshot,
@@ -1471,7 +1481,7 @@ pub const Owner = opaque {
                 if (capture.flag(
                     frame.gameplay_view.authority_tick,
                     frame.gameplay_view.presentation_frame,
-                    defaultIncidentEntity(frame.gameplay_view),
+                    incidentEntity(frame.selection.view, frame.gameplay_view),
                 )) |id| {
                     capture.recordShortcut(.applied, candidate, id);
                     const flagged_ns = capture.anomalyFlagNs(id).?;
@@ -1487,7 +1497,7 @@ pub const Owner = opaque {
                 .flag => if (capture.flag(
                     frame.gameplay_view.authority_tick,
                     frame.gameplay_view.presentation_frame,
-                    defaultIncidentEntity(frame.gameplay_view),
+                    incidentEntity(frame.selection.view, frame.gameplay_view),
                 )) |id| {
                     const flagged_ns = capture.anomalyFlagNs(id).?;
                     if (state.incident_screenshots) |*screenshots| {

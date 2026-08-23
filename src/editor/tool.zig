@@ -19,6 +19,7 @@
 const std = @import("std");
 const workspace = @import("editor_workspace");
 pub const viewport = @import("viewport.zig");
+pub const selection = @import("selection.zig");
 
 const engine = @import("incinerator_engine");
 const sandbox_host = @import("sandbox_host_contracts");
@@ -497,6 +498,11 @@ pub const RenderView = struct {
     last_part: []const u8 = "none",
     last_ordinal: u16 = 0,
     last_surface: []const u8 = "none",
+    selected_object_kind: []const u8 = "none",
+    selected_identity_kind: []const u8 = "none",
+    selected_namespace: u64 = 0,
+    selected_local: u64 = 0,
+    selected_incarnation: u32 = 0,
 };
 
 pub const RenderInput = struct {
@@ -508,12 +514,18 @@ pub const ViewportInput = struct {
     requests: *viewport.Requests,
 };
 
+pub const SelectionInput = struct {
+    view: selection.View,
+    requests: *selection.Requests,
+};
+
 /// One-frame observations and fixed request sinks, grouped by concern. This is
 /// the composition/editor boundary; tools never receive App or Simulation.
 pub const FrameInput = struct {
     wall_unix_ms: i64,
     camera: *const CameraView,
     viewport: ViewportInput,
+    selection: SelectionInput,
     frame_timing: *const FrameTimingView,
     developer: DeveloperInput,
     visualization: VisualizationInput,

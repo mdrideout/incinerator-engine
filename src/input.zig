@@ -111,6 +111,7 @@ pub const InputBuffer = struct {
     free_camera_look_active: bool,
     free_camera_look_delta: [2]f32,
     free_camera_speed_steps: f32,
+    free_camera_selection_click: ?[2]f32,
 
     /// Entering editor capture or losing focus invalidates any actions already
     /// latched by the sandbox host during earlier render frames.
@@ -158,6 +159,7 @@ pub const InputBuffer = struct {
             .free_camera_look_active = false,
             .free_camera_look_delta = .{ 0, 0 },
             .free_camera_speed_steps = 0,
+            .free_camera_selection_click = null,
             .gameplay_reset_requested = false,
             .quit_requested = false,
             .main_window_id = main_window_id,
@@ -201,12 +203,19 @@ pub const InputBuffer = struct {
         self.free_camera_look_active = false;
         self.free_camera_look_delta = .{ 0, 0 };
         self.free_camera_speed_steps = 0;
+        self.free_camera_selection_click = null;
         self.clearGameplayForRoutingTransition();
     }
 
     pub fn takeViewportModeRequest(self: *InputBuffer) ?viewport.Mode {
         defer self.viewport_mode_request = null;
         return self.viewport_mode_request;
+    }
+
+    pub fn takeFreeCameraSelectionClick(self: *InputBuffer) ?[2]f32 {
+        defer self.free_camera_selection_click = null;
+        if (self.viewport_mode != .free_camera) return null;
+        return self.free_camera_selection_click;
     }
 
     /// Convert retained physical state into the same typed requests used by
@@ -285,6 +294,7 @@ pub const InputBuffer = struct {
         self.gameplay_mouse_ignore_motion = false;
         self.free_camera_look_delta = .{ 0, 0 };
         self.free_camera_speed_steps = 0;
+        self.free_camera_selection_click = null;
     }
 
     /// Process all pending SDL events. Call once per frame.
@@ -386,6 +396,14 @@ pub const InputBuffer = struct {
                         );
                         if (self.viewport_mode == .free_camera) {
                             self.handleMouseButtonDown(button, true);
+                            if (button == MouseButton.LEFT and
+                                !editor_mouse_blocked and inside_scene)
+                            {
+                                self.free_camera_selection_click = .{
+                                    event.button.x,
+                                    event.button.y,
+                                };
+                            }
                             if (button == MouseButton.RIGHT and
                                 !editor_mouse_blocked and inside_scene)
                             {
@@ -816,6 +834,23 @@ test "Free Camera selection click cannot become a firearm edge" {
     try std.testing.expect(input.physical_mouse_buttons[MouseButton.LEFT]);
     try std.testing.expect(!input.isMouseButtonDown(MouseButton.LEFT));
     try std.testing.expect(!input.isMouseButtonPressed(MouseButton.LEFT));
+}
+
+test "Free Camera selection is one-shot and exact scene bounds exclude panels" {
+    var value = InputBuffer.init(1);
+    value.setViewportMode(.free_camera);
+    const scene = viewport.SceneRect.init(.{ 200, 100 }, .{ 800, 600 }).?;
+    try std.testing.expect(pointInsideScene(scene, .{ 200, 100 }));
+    try std.testing.expect(pointInsideScene(scene, .{ 799.9, 599.9 }));
+    try std.testing.expect(!pointInsideScene(scene, .{ 199.9, 300 }));
+    try std.testing.expect(!pointInsideScene(scene, .{ 400, 600 }));
+
+    value.free_camera_selection_click = .{ 450, 300 };
+    try std.testing.expectEqual([2]f32{ 450, 300 }, value.takeFreeCameraSelectionClick().?);
+    try std.testing.expect(value.takeFreeCameraSelectionClick() == null);
+    value.free_camera_selection_click = .{ 450, 300 };
+    value.setViewportMode(.character);
+    try std.testing.expect(value.takeFreeCameraSelectionClick() == null);
 }
 
 test "physical key release is observed during keyboard capture" {
