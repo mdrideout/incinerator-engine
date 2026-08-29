@@ -20,6 +20,9 @@ pub const EventRoute = struct {
     keyboard_reserved: bool = false,
     mouse_reserved: bool = false,
     viewport_mode_request: ?viewport.Mode = null,
+    /// The owned graphical editor can provide the final Escape fallback after
+    /// higher-priority interaction and pointer captures have declined it.
+    system_menu_available: bool = false,
 };
 
 pub const Capture = struct {
@@ -34,6 +37,7 @@ pub const EventSink = struct {
     process_event: *const fn (*anyopaque, *const c.SDL_Event) EventRoute,
     capture: *const fn (*anyopaque) Capture,
     scene_rect: *const fn (*anyopaque) ?viewport.SceneRect,
+    toggle_system_menu: *const fn (*anyopaque) void,
 
     fn processEvent(self: EventSink, event: *const c.SDL_Event) EventRoute {
         return self.process_event(self.context, event);
@@ -45,6 +49,10 @@ pub const EventSink = struct {
 
     fn currentSceneRect(self: EventSink) ?viewport.SceneRect {
         return self.scene_rect(self.context);
+    }
+
+    fn toggleSystemMenu(self: EventSink) void {
+        self.toggle_system_menu(self.context);
     }
 };
 
@@ -189,6 +197,16 @@ pub const InputBuffer = struct {
         return self.gameplay_mouse_lock_failures;
     }
 
+    pub fn freeCameraLookActive(self: *const InputBuffer) bool {
+        return self.free_camera_look_active;
+    }
+
+    /// Explicit application lifecycle requests use this path. Escape routing
+    /// does not set the flag while an editor system menu is available.
+    pub fn requestQuit(self: *InputBuffer) void {
+        self.quit_requested = true;
+    }
+
     pub fn viewportMode(self: *const InputBuffer) viewport.Mode {
         return self.viewport_mode;
     }
@@ -313,7 +331,8 @@ pub const InputBuffer = struct {
 
         while (c.SDL_PollEvent(&event)) {
             // ImGui always observes the event. The returned route represents
-            // only explicit editor shortcuts, never backend recognition.
+            // explicit editor-owned shortcuts and viewport controls, never
+            // delayed backend capture recognition.
             const route = editor_sink.processEvent(&event);
             if (route.viewport_mode_request) |mode| {
                 self.setViewportMode(mode);
@@ -348,10 +367,27 @@ pub const InputBuffer = struct {
                     if (!self.isMainWindow(event.key.windowID)) continue;
                     if (event.key.scancode == c.SDL_SCANCODE_ESCAPE) {
                         if (!event.key.repeat) {
-                            if (self.gameplay_mouse_locked) {
+                            if (route.keyboard_reserved or self.keyboard_captured) {
+                                // The concrete editor interaction or ImGui
+                                // control that received this event owns it.
+                            } else if (self.gameplay_mouse_locked) {
                                 self.releaseGameplayMouse();
+                            } else if (self.free_camera_look_active) {
+                                self.free_camera_look_active = false;
+                                self.free_camera_look_delta = .{ 0, 0 };
+                                self.gameplay_reset_requested = true;
+                            } else if (route.system_menu_available) {
+                                self.clearGameplayForRoutingTransition();
+                                editor_sink.toggleSystemMenu();
+                                const menu_capture = editor_sink.currentCapture();
+                                self.applyCapture(
+                                    menu_capture.keyboard,
+                                    menu_capture.mouse,
+                                );
                             } else {
-                                self.quit_requested = true;
+                                // A composition without a system-menu surface
+                                // still consumes Escape as cancel/back. Process
+                                // exit remains an explicit lifecycle request.
                             }
                         }
                         continue;
@@ -970,6 +1006,8 @@ test "event sink is a borrowed callback surface without retained ownership" {
         fn sceneRect(_: *anyopaque) ?viewport.SceneRect {
             return null;
         }
+
+        fn toggleSystemMenu(_: *anyopaque) void {}
     };
 
     var fake = FakeEditor{};
@@ -978,6 +1016,7 @@ test "event sink is a borrowed callback surface without retained ownership" {
         .process_event = FakeEditor.process,
         .capture = FakeEditor.readCapture,
         .scene_rect = FakeEditor.sceneRect,
+        .toggle_system_menu = FakeEditor.toggleSystemMenu,
     };
     const event = std.mem.zeroes(c.SDL_Event);
     try std.testing.expect(sink.processEvent(&event).keyboard_reserved);

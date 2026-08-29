@@ -14,6 +14,7 @@ const renderer_module = @import("../renderer.zig");
 
 const imgui_backend = @import("imgui_backend.zig");
 const tool = @import("tool.zig");
+const selection = tool.selection;
 const viewport = tool.viewport;
 const stats_tool = @import("tools/stats_tool.zig");
 const camera_tool = @import("tools/camera_tool.zig");
@@ -43,8 +44,9 @@ pub const CrateAuthoringView = tool.CrateAuthoringView;
 pub const InteractionView = tool.InteractionView;
 pub const StartupConfig = workspace.StartupConfig;
 
-/// Semantic editor routing for an SDL event. This reports only shortcuts that
-/// the editor reserves; ImGui capture is queried independently.
+/// Semantic editor routing for an SDL event. This reports explicit shortcuts
+/// and viewport controls that the editor owns; ImGui capture is queried
+/// independently.
 pub const EventRoute = input.EventRoute;
 
 const default_tools = [_]Tool{
@@ -69,11 +71,11 @@ const default_tools = [_]Tool{
 /// list exists only to make panel discovery alphabetical.
 const panel_menu_order = [_]tool.ToolId{
     .camera,
-    .crate_authoring,
     .diagnostics,
     .event_log,
     .gameplay_inspector,
     .incident_capture,
+    .crate_authoring,
     .interaction,
     .navigation_lab,
     .neural_rendering_lab,
@@ -98,11 +100,15 @@ pub const Editor = struct {
     layout: workspace.LayoutPreset = .gameplay,
     layout_pending: bool = true,
     pending_focus: ?workspace.ToolId = workspace.defaultFocus(.gameplay),
+    last_observed_selection: ?selection.Id = null,
     show_workspace_guide: bool = false,
     gameplay_mouse_captured: bool = false,
     viewport_mode: viewport.Mode = .character,
     scene_rect: ?viewport.SceneRect = null,
     pending_viewport_mode: ?viewport.Mode = null,
+    system_menu_open: bool = false,
+    system_menu_popup_pending: bool = false,
+    quit_requested: bool = false,
 
     /// Initialize the owned editor after the renderer has claimed its window.
     pub fn init(
@@ -148,15 +154,44 @@ pub const Editor = struct {
         }
         _ = self.backend.processEvent(event);
 
+        if (event.type == c.SDL_EVENT_WINDOW_FOCUS_LOST or
+            event.type == c.SDL_EVENT_WINDOW_MINIMIZED)
+        {
+            _ = self.crate_authoring.cancelGizmoDrag();
+        }
+
         var route = EventRoute{};
         if (event.type == c.SDL_EVENT_KEY_DOWN) {
+            if (event.key.scancode == c.SDL_SCANCODE_ESCAPE) {
+                route.system_menu_available = true;
+                if (!event.key.repeat and self.crate_authoring.cancelGizmoDrag()) {
+                    route.keyboard_reserved = true;
+                    return route;
+                }
+                if (!event.key.repeat and self.system_menu_open) {
+                    self.system_menu_open = false;
+                    self.system_menu_popup_pending = false;
+                    route.keyboard_reserved = true;
+                    return route;
+                }
+                if (self.system_menu_open) route.keyboard_reserved = true;
+                return route;
+            }
+            if (self.system_menu_open) {
+                route.keyboard_reserved = true;
+                return route;
+            }
             if (event.key.scancode == c.SDL_SCANCODE_F1) {
-                if (!event.key.repeat) self.visible = !self.visible;
+                if (!event.key.repeat) {
+                    self.visible = !self.visible;
+                    if (!self.visible) _ = self.crate_authoring.cancelGizmoDrag();
+                }
                 route.keyboard_reserved = true;
                 return route;
             }
             if (event.key.scancode == c.SDL_SCANCODE_F3) {
                 if (!event.key.repeat) {
+                    _ = self.crate_authoring.cancelGizmoDrag();
                     self.viewport_mode = self.viewport_mode.toggled();
                     route.viewport_mode_request = self.viewport_mode;
                 }
@@ -165,7 +200,24 @@ pub const Editor = struct {
             }
         }
 
+        if (self.system_menu_open and isMouseEvent(event.type)) {
+            route.mouse_reserved = true;
+            return route;
+        }
+
         if (!self.visible) return route;
+        if (self.viewport_mode == .free_camera and
+            event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN and
+            event.button.button == c.SDL_BUTTON_LEFT and
+            self.toolById(.crate_authoring).enabled and
+            self.crate_authoring.claimsGizmoPointer(.{ event.button.x, event.button.y }))
+        {
+            // Backend capture reflects the previous completed ImGui frame and
+            // can lag a cursor move plus click delivered in one event pump.
+            // Claim the concrete handle hit synchronously so the same press
+            // cannot also become a Free Camera world-selection miss.
+            route.mouse_reserved = true;
+        }
         if (event.type == c.SDL_EVENT_KEY_DOWN and
             event.key.scancode == c.SDL_SCANCODE_F2)
         {
@@ -183,6 +235,7 @@ pub const Editor = struct {
             .process_event = routeInputEvent,
             .capture = inputCapture,
             .scene_rect = inputSceneRect,
+            .toggle_system_menu = inputToggleSystemMenu,
         };
     }
 
@@ -208,10 +261,17 @@ pub const Editor = struct {
             framebuffer_scale,
         );
         self.viewport_mode = frame.viewport.view.mode;
+        self.observeSelection(frame.selection.view);
+        if (!self.visible or self.viewport_mode != .free_camera or
+            !self.toolById(.crate_authoring).enabled)
+        {
+            _ = self.crate_authoring.cancelGizmoDrag();
+        }
 
         if (!self.visible) {
             self.scene_rect = null;
             drawProductStatusOverlay(self, &frame);
+            self.drawSystemMenu();
             self.backend.render(cmd, swapchain_texture);
             return;
         }
@@ -237,18 +297,35 @@ pub const Editor = struct {
                 );
             }
         }
+        if (self.viewport_mode == .free_camera and
+            self.toolById(.crate_authoring).enabled)
+        {
+            if (self.scene_rect) |scene| crate_authoring_tool.drawGizmo(
+                &self.crate_authoring,
+                frame.authoring.view,
+                frame.camera.*,
+                scene,
+                .{
+                    @floatFromInt(window_size.width),
+                    @floatFromInt(window_size.height),
+                },
+            );
+        }
         if (self.show_workspace_guide) self.drawWorkspaceGuide();
         if (self.show_demo_window) zgui.showDemoWindow(&self.show_demo_window);
+        self.drawSystemMenu();
         self.backend.render(cmd, swapchain_texture);
     }
 
     pub fn wantsMouse(self: *const Editor) bool {
+        if (self.system_menu_open) return true;
         if (self.gameplay_mouse_captured) return false;
         if (!self.visible) return false;
         return self.backend.wantsMouse();
     }
 
     pub fn wantsKeyboard(self: *const Editor) bool {
+        if (self.system_menu_open) return true;
         if (!self.visible) return false;
         return self.backend.wantsKeyboard();
     }
@@ -271,7 +348,22 @@ pub const Editor = struct {
     }
 
     pub fn setViewportMode(self: *Editor, mode: viewport.Mode) void {
+        if (self.viewport_mode != mode) _ = self.crate_authoring.cancelGizmoDrag();
         self.viewport_mode = mode;
+    }
+
+    pub fn toggleSystemMenu(self: *Editor) void {
+        self.system_menu_open = !self.system_menu_open;
+        self.system_menu_popup_pending = self.system_menu_open;
+    }
+
+    pub fn systemMenuOpen(self: *const Editor) bool {
+        return self.system_menu_open;
+    }
+
+    pub fn takeQuitRequested(self: *Editor) bool {
+        defer self.quit_requested = false;
+        return self.quit_requested;
     }
 
     pub fn viewportSceneRect(self: *const Editor) ?viewport.SceneRect {
@@ -314,6 +406,7 @@ pub const Editor = struct {
             .crate_authoring => crate_authoring_tool.draw(
                 &self.crate_authoring,
                 &frame.authoring,
+                &frame.selection,
             ),
             .interaction => interaction_tool.draw(&frame.interaction),
             .neural_rendering_lab => neural_rendering_lab_tool.draw(&frame.neural),
@@ -611,6 +704,58 @@ pub const Editor = struct {
         zgui.end();
     }
 
+    fn drawSystemMenu(self: *Editor) void {
+        const popup_name = "System Menu##incinerator_system_menu";
+        if (self.system_menu_popup_pending) {
+            zgui.openPopup(popup_name, .{});
+            self.system_menu_popup_pending = false;
+        }
+
+        const main_viewport = zgui.getMainViewport();
+        const work_pos = main_viewport.getWorkPos();
+        const work_size = main_viewport.getWorkSize();
+        zgui.setNextWindowPos(.{
+            .x = work_pos[0] + work_size[0] * 0.5,
+            .y = work_pos[1] + work_size[1] * 0.5,
+            .cond = .always,
+            .pivot_x = 0.5,
+            .pivot_y = 0.5,
+        });
+        zgui.setNextWindowSize(.{ .w = 360, .h = 150, .cond = .always });
+        if (zgui.beginPopupModal(popup_name, .{
+            .popen = &self.system_menu_open,
+            .flags = .{
+                .no_resize = true,
+                .no_move = true,
+                .no_collapse = true,
+                .no_saved_settings = true,
+            },
+        })) {
+            zgui.textWrapped(
+                "Gameplay continues while this developer menu is open.",
+                .{},
+            );
+            zgui.separator();
+            if (zgui.button("Resume", .{ .w = 160 })) {
+                self.system_menu_open = false;
+                zgui.closeCurrentPopup();
+            }
+            zgui.sameLine(.{});
+            if (zgui.button("Quit", .{ .w = 160 })) {
+                self.requestSystemMenuQuit();
+                zgui.closeCurrentPopup();
+            }
+            zgui.textDisabled("Esc resumes | Quit exits the application", .{});
+            zgui.endPopup();
+        }
+    }
+
+    pub fn requestSystemMenuQuit(self: *Editor) void {
+        self.quit_requested = true;
+        self.system_menu_open = false;
+        self.system_menu_popup_pending = false;
+    }
+
     fn drawMainMenuBar(self: *Editor) void {
         if (!zgui.beginMainMenuBar()) return;
         defer zgui.endMainMenuBar();
@@ -688,6 +833,29 @@ pub const Editor = struct {
         unreachable;
     }
 
+    /// Reveal the concrete authoring Inspector once when a new inspectable
+    /// crate becomes the shared selection. Remembering the observed identity
+    /// lets a developer close the panel without it reopening every frame; a
+    /// later clear or different selection makes reselecting the crate reveal
+    /// it again.
+    fn observeSelection(self: *Editor, view: selection.View) void {
+        const active = view.activeEntry();
+        const current = if (active) |entry| entry.id else null;
+        if (optionalSelectionEql(self.last_observed_selection, current)) return;
+        self.last_observed_selection = current;
+
+        const entry = active orelse return;
+        if (entry.kind != .crate or
+            entry.availability != .available or
+            !entry.inspectable)
+        {
+            return;
+        }
+
+        self.toolById(.crate_authoring).enabled = true;
+        self.pending_focus = .crate_authoring;
+    }
+
     fn routeInputEvent(
         context: *anyopaque,
         event: *const c.SDL_Event,
@@ -707,6 +875,11 @@ pub const Editor = struct {
     fn inputSceneRect(context: *anyopaque) ?viewport.SceneRect {
         const self: *const Editor = @ptrCast(@alignCast(context));
         return self.viewportSceneRect();
+    }
+
+    fn inputToggleSystemMenu(context: *anyopaque) void {
+        const self: *Editor = @ptrCast(@alignCast(context));
+        self.toggleSystemMenu();
     }
 };
 
@@ -729,6 +902,11 @@ fn panelNameLessThanIgnoreCase(lhs: []const u8, rhs: []const u8) bool {
         if (lhs_lower != rhs_lower) return lhs_lower < rhs_lower;
     }
     return lhs.len < rhs.len;
+}
+
+fn optionalSelectionEql(first: ?selection.Id, second: ?selection.Id) bool {
+    if (first == null or second == null) return first == null and second == null;
+    return first.?.eql(second.?);
 }
 
 fn viewportMouseStatus(mode: viewport.Mode, captured: bool) []const u8 {
@@ -885,7 +1063,7 @@ test "Panels menu contains every registered tool once in alphabetical order" {
     }
 
     for (seen) |present| try std.testing.expect(present);
-    try std.testing.expect(panelNameLessThanIgnoreCase("camera", "Crate Authoring"));
+    try std.testing.expect(panelNameLessThanIgnoreCase("Incident Capture", "Inspector"));
 }
 
 test "product status strip uses responsive columns without overlapping docks" {
@@ -910,6 +1088,48 @@ test "editor runtime and tool state belong to each value" {
     try std.testing.expectEqual(@as(usize, 0), second.stats.history_index);
     try std.testing.expect(!second.crate_authoring.dirty);
     try std.testing.expect(second.world_outliner.kind_filter == null);
+}
+
+test "new crate selection reveals Inspector once and respects manual close" {
+    var editor = Editor{};
+    editor.toolById(.crate_authoring).enabled = false;
+    editor.pending_focus = null;
+
+    const crate_id: selection.Id = .{
+        .persistent_entity = .{ .namespace = 1, .local = 1 },
+    };
+    const entries = [_]selection.Entry{.{
+        .id = crate_id,
+        .label = "Crate",
+        .kind = .crate,
+        .owner = .game_runtime,
+        .inspectable = true,
+        .authorable = true,
+        .world_bounds = try selection.Bounds.init(.{ 0, 0, 0 }, .{ 1, 1, 1 }),
+    }};
+    const selected = selection.View{ .entries = &entries, .active = crate_id };
+
+    editor.observeSelection(selected);
+    try std.testing.expect(editor.toolById(.crate_authoring).enabled);
+    try std.testing.expectEqual(
+        workspace.ToolId.crate_authoring,
+        editor.pending_focus.?,
+    );
+
+    // A manual close remains respected while the same selection stays active.
+    editor.toolById(.crate_authoring).enabled = false;
+    editor.pending_focus = null;
+    editor.observeSelection(selected);
+    try std.testing.expect(!editor.toolById(.crate_authoring).enabled);
+    try std.testing.expect(editor.pending_focus == null);
+
+    editor.observeSelection(.{ .entries = &entries, .active = null });
+    editor.observeSelection(selected);
+    try std.testing.expect(editor.toolById(.crate_authoring).enabled);
+    try std.testing.expectEqual(
+        workspace.ToolId.crate_authoring,
+        editor.pending_focus.?,
+    );
 }
 
 test "startup configuration owns exact panel visibility and focus" {
@@ -977,4 +1197,79 @@ test "F3 requests the opposite explicit viewport mode" {
     route = editor.processEvent(&event);
     try std.testing.expectEqual(viewport.Mode.character, route.viewport_mode_request.?);
     try std.testing.expectEqual(viewport.Mode.character, editor.viewport_mode);
+}
+
+test "editor Escape acceptance cancels an active gizmo before the system menu fallback" {
+    var editor = Editor{};
+    editor.crate_authoring = .{
+        .id = .{ .namespace = 1, .local = 4 },
+        .position = .{ 3, 4, 5 },
+        .dirty = true,
+    };
+    editor.crate_authoring.beginGizmoDrag(.x);
+    try std.testing.expect(editor.crate_authoring.applyGizmoDisplacement(.x, 7));
+
+    var event = std.mem.zeroes(c.SDL_Event);
+    event.type = c.SDL_EVENT_KEY_DOWN;
+    event.key.scancode = c.SDL_SCANCODE_ESCAPE;
+    const route = editor.processEvent(&event);
+
+    try std.testing.expect(route.keyboard_reserved);
+    try std.testing.expect(route.system_menu_available);
+    try std.testing.expect(!editor.crate_authoring.gizmoDragActive());
+    try std.testing.expectEqual([3]f32{ 3, 4, 5 }, editor.crate_authoring.position);
+    try std.testing.expect(editor.crate_authoring.dirty);
+    try std.testing.expect(!editor.systemMenuOpen());
+}
+
+test "editor Escape acceptance opens and then closes the owned system menu" {
+    var editor = Editor{};
+    var event = std.mem.zeroes(c.SDL_Event);
+    event.type = c.SDL_EVENT_KEY_DOWN;
+    event.key.scancode = c.SDL_SCANCODE_ESCAPE;
+
+    const fallback = editor.processEvent(&event);
+    try std.testing.expect(!fallback.keyboard_reserved);
+    try std.testing.expect(fallback.system_menu_available);
+    editor.toggleSystemMenu();
+    try std.testing.expect(editor.systemMenuOpen());
+    try std.testing.expect(editor.wantsKeyboard());
+    try std.testing.expect(editor.wantsMouse());
+
+    const close = editor.processEvent(&event);
+    try std.testing.expect(close.keyboard_reserved);
+    try std.testing.expect(!editor.systemMenuOpen());
+    try std.testing.expect(!editor.takeQuitRequested());
+}
+
+test "viewport mode change forcibly cancels an active gizmo" {
+    var editor = Editor{};
+    editor.viewport_mode = .free_camera;
+    editor.crate_authoring = .{
+        .id = .{ .namespace = 1, .local = 4 },
+        .position = .{ 3, 4, 5 },
+    };
+    editor.crate_authoring.beginGizmoDrag(.z);
+    try std.testing.expect(editor.crate_authoring.applyGizmoDisplacement(.z, 7));
+
+    var event = std.mem.zeroes(c.SDL_Event);
+    event.type = c.SDL_EVENT_KEY_DOWN;
+    event.key.scancode = c.SDL_SCANCODE_F3;
+    const route = editor.processEvent(&event);
+
+    try std.testing.expect(route.keyboard_reserved);
+    try std.testing.expectEqual(viewport.Mode.character, editor.viewport_mode);
+    try std.testing.expect(!editor.crate_authoring.gizmoDragActive());
+    try std.testing.expectEqual([3]f32{ 3, 4, 5 }, editor.crate_authoring.position);
+    try std.testing.expect(!editor.crate_authoring.dirty);
+}
+
+test "editor Escape acceptance system menu Quit emits one explicit lifecycle request" {
+    var editor = Editor{};
+    editor.toggleSystemMenu();
+    editor.requestSystemMenuQuit();
+
+    try std.testing.expect(!editor.systemMenuOpen());
+    try std.testing.expect(editor.takeQuitRequested());
+    try std.testing.expect(!editor.takeQuitRequested());
 }

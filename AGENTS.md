@@ -21,6 +21,22 @@
 - Race conditions and footguns must be grounded in likely real-world exceptions, NOT unlikely theoretical scenarios in a vacuum.
 - Do not get caught in self-invalidation loops. This can look like failing overly-pedantic tests, over-engineering a solution to pass the test, and then failing those tests. I end up deleting a lot of these scenarios to save you and allow forward progress.
 
+## Editor Interaction
+
+- Before changing SDL input routing, ImGui capture, viewport modes, selection,
+  gizmos, shortcuts, system menus, or renderer overlays, read
+  `skills/incinerator-editor-interaction/SKILL.md` and
+  `docs/adr/030-editor-input-routing-and-interaction-capture.md` completely.
+- Model the full press/drag/release/cancel journey and its winning owner before
+  implementation. Keep viewport mode, pointer lock, interaction capture,
+  simulation pause, diagnostics, selection, and authoring state independent.
+- Do not rely on previous-frame ImGui capture for a new event, place a
+  full-scene ImGui window over the renderer, or let raw Escape bypass an active
+  interaction and application-menu routing.
+- Every interaction change requires deterministic routing coverage and the
+  applicable native SDL/Metal acceptance; human review is reserved for
+  usability and visual feel.
+
 ## Neural Rendering
 
 - Neural rendering is paused indefinitely by product-owner decision. Read `docs/design/neural-rendering-pause.md` first. Do not initiate, extend, retrain, optimize, promote, or begin another neural-rendering phase unless the user explicitly requests that the track resume. Deterministic rendering is the active product focus; preserve the retained neural work without expanding it.

@@ -7,6 +7,8 @@ const c = input.sdl_c;
 
 const EmptySink = struct {
     mode: input.viewport.Mode = .character,
+    system_menu_open: bool = false,
+    system_menu_available: bool = true,
 
     fn process(context: *anyopaque, event: *const c.SDL_Event) input.EventRoute {
         const self: *@This() = @ptrCast(@alignCast(context));
@@ -19,15 +21,45 @@ const EmptySink = struct {
                 .viewport_mode_request = self.mode,
             };
         }
+        if (event.type == c.SDL_EVENT_KEY_DOWN and
+            event.key.scancode == c.SDL_SCANCODE_ESCAPE)
+        {
+            if (!self.system_menu_available) return .{};
+            if (!event.key.repeat and self.system_menu_open) {
+                self.system_menu_open = false;
+                return .{
+                    .keyboard_reserved = true,
+                    .system_menu_available = true,
+                };
+            }
+            return .{ .system_menu_available = true };
+        }
+        if (self.system_menu_open) return .{
+            .keyboard_reserved = event.type == c.SDL_EVENT_KEY_DOWN or
+                event.type == c.SDL_EVENT_KEY_UP,
+            .mouse_reserved = event.type == c.SDL_EVENT_MOUSE_MOTION or
+                event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN or
+                event.type == c.SDL_EVENT_MOUSE_BUTTON_UP or
+                event.type == c.SDL_EVENT_MOUSE_WHEEL,
+        };
         return .{};
     }
 
-    fn capture(_: *anyopaque) input.Capture {
-        return .{};
+    fn capture(context: *anyopaque) input.Capture {
+        const self: *const @This() = @ptrCast(@alignCast(context));
+        return .{
+            .keyboard = self.system_menu_open,
+            .mouse = self.system_menu_open,
+        };
     }
 
     fn sceneRect(_: *anyopaque) ?input.viewport.SceneRect {
         return input.viewport.SceneRect.init(.{ 0, 0 }, .{ 640, 360 });
+    }
+
+    fn toggleSystemMenu(context: *anyopaque) void {
+        const self: *@This() = @ptrCast(@alignCast(context));
+        self.system_menu_open = !self.system_menu_open;
     }
 
     fn sink(self: *EmptySink) input.EventSink {
@@ -36,6 +68,7 @@ const EmptySink = struct {
             .process_event = process,
             .capture = capture,
             .scene_rect = sceneRect,
+            .toggle_system_menu = toggleSystemMenu,
         };
     }
 };
@@ -220,6 +253,20 @@ pub fn main() !void {
         return error.FreeCameraNavigationMismatch;
     }
 
+    // Escape during an active Free Camera look cancels only that interaction.
+    // It neither opens the system menu nor exits the product.
+    try pushEscape(window_id);
+    owner.beginFrame();
+    if (!owner.pumpEvents(empty.sink()) or owner.freeCameraLookActive() or
+        empty.system_menu_open)
+    {
+        return error.FreeCameraLookEscapeCancelFailed;
+    }
+    const cancelled_requests = owner.takeFreeCameraRequests(0.5);
+    if (cancelled_requests.navigation != null) {
+        return error.FreeCameraLookEscapeNavigationLeaked;
+    }
+
     try pushMouseButtonAt(window_id, c.SDL_BUTTON_LEFT, false, 320, 180);
     try pushMouseButtonAt(window_id, c.SDL_BUTTON_RIGHT, false, 320, 180);
     try pushKey(window_id, c.SDL_SCANCODE_W, false);
@@ -236,16 +283,39 @@ pub fn main() !void {
     _ = owner.takeViewportModeRequest() orelse
         return error.CharacterModeRequestMissing;
 
-    // The existing quit contract remains available once the pointer is free.
+    // With no interaction or pointer capture active, Escape opens the owned
+    // system menu. A second Escape closes it; neither press exits.
     try pushEscape(window_id);
     owner.beginFrame();
-    if (owner.pumpEvents(empty.sink())) return error.FreeEscapeDidNotQuit;
+    if (!owner.pumpEvents(empty.sink()) or !empty.system_menu_open) {
+        return error.FreeEscapeDidNotOpenMenu;
+    }
+    try pushEscape(window_id);
+    owner.beginFrame();
+    if (!owner.pumpEvents(empty.sink()) or empty.system_menu_open) {
+        return error.MenuEscapeDidNotResume;
+    }
+
+    // Compile-time editor-disabled products have no ImGui menu. An otherwise
+    // unowned Escape remains cancel/back and cannot become process exit.
+    empty.system_menu_available = false;
+    try pushEscape(window_id);
+    owner.beginFrame();
+    if (!owner.pumpEvents(empty.sink()) or empty.system_menu_open) {
+        return error.MenuAbsentEscapeRequestedQuit;
+    }
+
+    // Quitting is an explicit lifecycle action, not an Escape side effect.
+    owner.requestQuit();
+    owner.beginFrame();
+    if (owner.pumpEvents(empty.sink())) return error.ExplicitQuitMissing;
 
     std.debug.print(
         "MOUSE_CAPTURE_ACCEPTANCE_PASS first_click_consumed=true relative=true " ++
             "outside_scene_suppressed=true captured_click=true escape_release=true free_camera=true " ++
-            "free_navigation=true selection_suppressed=true character_restore=true " ++
-            "free_escape_quit=true failures={d}\n",
+            "free_navigation=true free_look_escape=true selection_suppressed=true character_restore=true " ++
+            "free_escape_menu=true menu_escape_resume=true menu_absent_escape_safe=true " ++
+            "explicit_quit=true failures={d}\n",
         .{owner.gameplayMouseLockFailures()},
     );
 }

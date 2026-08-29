@@ -40,6 +40,7 @@ pub const Editor = struct {
             .process_event = routeInputEvent,
             .capture = inputCapture,
             .scene_rect = inputSceneRect,
+            .toggle_system_menu = inputToggleSystemMenu,
         };
     }
 
@@ -65,6 +66,16 @@ pub const Editor = struct {
 
     pub fn setViewportMode(_: *Editor, _: viewport.Mode) void {}
 
+    pub fn toggleSystemMenu(_: *Editor) void {}
+
+    pub fn systemMenuOpen(_: *const Editor) bool {
+        return false;
+    }
+
+    pub fn takeQuitRequested(_: *Editor) bool {
+        return false;
+    }
+
     pub fn viewportSceneRect(_: *const Editor) ?viewport.SceneRect {
         return null;
     }
@@ -84,6 +95,8 @@ pub const Editor = struct {
     fn inputSceneRect(_: *anyopaque) ?viewport.SceneRect {
         return null;
     }
+
+    fn inputToggleSystemMenu(_: *anyopaque) void {}
 };
 
 test "disabled editor reserves and captures no input" {

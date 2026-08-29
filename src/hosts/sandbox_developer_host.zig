@@ -229,12 +229,14 @@ pub const FrameInput = struct {
 pub const Effects = struct {
     reset_gameplay_actions: bool = false,
     toggle_neural_presentation: bool = false,
+    request_quit: bool = false,
 
     pub fn merge(self: *Effects, other: Effects) void {
         self.reset_gameplay_actions = self.reset_gameplay_actions or
             other.reset_gameplay_actions;
         self.toggle_neural_presentation = self.toggle_neural_presentation !=
             other.toggle_neural_presentation;
+        self.request_quit = self.request_quit or other.request_quit;
     }
 };
 
@@ -532,6 +534,11 @@ fn inputSceneRect(context: *anyopaque) ?editor_contract.viewport.SceneRect {
     return ownerStateConst(self).editor.viewportSceneRect();
 }
 
+fn inputToggleSystemMenu(context: *anyopaque) void {
+    const self: *Owner = @ptrCast(@alignCast(context));
+    ownerState(self).editor.toggleSystemMenu();
+}
+
 fn openRunFolder(path: []const u8) void {
     const url = std.fmt.allocPrintSentinel(
         std.heap.page_allocator,
@@ -652,6 +659,7 @@ pub const Owner = opaque {
             .process_event = routeInputEvent,
             .capture = inputCapture,
             .scene_rect = inputSceneRect,
+            .toggle_system_menu = inputToggleSystemMenu,
         };
     }
 
@@ -661,6 +669,10 @@ pub const Owner = opaque {
 
     pub fn editorVisible(self: *const Owner) bool {
         return ownerStateConst(self).editor.isVisible();
+    }
+
+    pub fn systemMenuOpen(self: *const Owner) bool {
+        return ownerStateConst(self).editor.systemMenuOpen();
     }
 
     pub fn setGameplayMouseCaptured(self: *Owner, captured: bool) void {
@@ -1476,6 +1488,7 @@ pub const Owner = opaque {
         );
         self.applyVisualizationRequests(state.visualization_requests.slice());
         effects.toggle_neural_presentation = state.neural_requests.toggle_model;
+        effects.request_quit = state.editor.takeQuitRequested();
         if (state.incident) |capture| {
             while (state.pending_shortcuts.pop()) |candidate| {
                 if (capture.flag(

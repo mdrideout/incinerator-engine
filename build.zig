@@ -592,6 +592,7 @@ pub fn build(b: *std.Build) void {
     // zgui wraps Dear ImGui for immediate-mode debug UI.
     // We use the SDL3 GPU backend to integrate with our existing renderer.
     var editor_gui_module: ?*std.Build.Module = null;
+    var editor_gui_library: ?*std.Build.Step.Compile = null;
     if (editor_enabled) {
         const zgui = b.lazyDependency("zgui", .{
             .target = target,
@@ -613,6 +614,7 @@ pub fn build(b: *std.Build) void {
         }) orelse return;
         const editor_gui = zgui_sdl3_gpu.build(b, zgui, sdl_dep, target, optimize);
         editor_gui_module = editor_gui.module;
+        editor_gui_library = editor_gui.library;
         addClientImport(exe, validation_exe, "zgui", editor_gui.module);
         linkClientLibrary(exe, validation_exe, editor_gui.library);
     }
@@ -1281,10 +1283,16 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
             .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
+            .{ .name = "sandbox_interaction", .module = sandbox_interaction_module },
+            .{ .name = "population_contract", .module = population_contract_module },
+            .{ .name = "editor_workspace", .module = editor_workspace_module },
         },
     });
     if (editor_gui_module) |module| {
         sandbox_developer_host_test_module.addImport("zgui", module);
+    }
+    if (editor_gui_library) |library| {
+        sandbox_developer_host_test_module.linkLibrary(library);
     }
     sandbox_developer_host_test_module.linkLibrary(sdl_lib);
 
@@ -3981,6 +3989,30 @@ pub fn build(b: *std.Build) void {
     sandbox_developer_host_test_step.dependOn(
         &run_sandbox_developer_host_tests.step,
     );
+
+    const editor_gizmo_tests = b.addTest(.{
+        .name = "editor-gizmo-tests",
+        .root_module = sandbox_developer_host_test_module,
+        .filters = &.{"gizmo"},
+    });
+    const run_editor_gizmo_tests = b.addRunArtifact(editor_gizmo_tests);
+    const editor_gizmo_test_step = b.step(
+        "test-editor-gizmo",
+        "Run focused crate gizmo routing, draft, drop, Apply, and cancel tests",
+    );
+    editor_gizmo_test_step.dependOn(&run_editor_gizmo_tests.step);
+
+    const editor_escape_tests = b.addTest(.{
+        .name = "editor-escape-tests",
+        .root_module = sandbox_developer_host_test_module,
+        .filters = &.{"editor Escape acceptance"},
+    });
+    const run_editor_escape_tests = b.addRunArtifact(editor_escape_tests);
+    const editor_escape_test_step = b.step(
+        "test-editor-escape",
+        "Run focused editor Escape ownership, restoration, menu, and quit-request tests",
+    );
+    editor_escape_test_step.dependOn(&run_editor_escape_tests.step);
 
     const sandbox_authoring_tests = b.addTest(.{ .root_module = sandbox_authoring_module });
     const run_sandbox_authoring_tests = b.addRunArtifact(sandbox_authoring_tests);

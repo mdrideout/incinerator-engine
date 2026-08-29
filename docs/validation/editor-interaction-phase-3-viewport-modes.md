@@ -113,6 +113,11 @@ The native SDL acceptance reports:
 MOUSE_CAPTURE_ACCEPTANCE_PASS first_click_consumed=true relative=true outside_scene_suppressed=true captured_click=true escape_release=true free_camera=true free_navigation=true selection_suppressed=true character_restore=true free_escape_quit=true failures=0
 ```
 
+That line is the historical Phase 3 result. ADR-030 intentionally superseded
+its final `free_escape_quit` behavior and label on 2026-08-29; current acceptance
+is recorded in
+[Editor Input Routing and Escape](editor-interaction-routing-and-escape.md).
+
 Result: `52/52` focused steps and `64/64` graphical developer-host tests pass.
 The suite includes the viewport contract, camera-controller, editor routing,
 and existing owner tests. The native SDL process exits cleanly with zero mouse

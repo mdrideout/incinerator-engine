@@ -160,6 +160,22 @@ const district_east_coord = sandbox_contracts.navigation_east_coord;
 const district_west_slot_index = district_streaming_host.west_slot_index;
 const district_east_slot_index = district_streaming_host.east_slot_index;
 
+/// The Inspector's scrub range follows the installed four-district footprint.
+/// Districts do not bound Y, so one district span is the explicit exploratory
+/// vertical range. Exact Inspector inputs remain unbounded owner requests.
+const crate_authoring_position_hint = editor_contract.CratePositionHint{
+    .minimum = .{
+        -district_contract.chunk_half_span,
+        0,
+        -district_contract.chunk_half_span,
+    },
+    .maximum = .{
+        district_contract.chunk_span + district_contract.chunk_half_span,
+        district_contract.chunk_span,
+        district_contract.chunk_span + district_contract.chunk_half_span,
+    },
+};
+
 const sandbox_block = sandbox_contracts.StaticBox{
     .position = .{ 0, 1, -5 },
     .half_extents = .{ 2, 1, 0.5 },
@@ -2458,7 +2474,7 @@ const App = struct {
         std.debug.print("===========================================\n", .{});
         std.debug.print(" Controls:\n", .{});
         std.debug.print("   Click scene (Character) - Capture mouse for continuous look\n", .{});
-        std.debug.print("   ESC - Release captured mouse / quit while mouse is free\n", .{});
+        std.debug.print("   ESC - Cancel active interaction / release capture / system menu\n", .{});
         std.debug.print("   WASD - Move character / drive vehicle\n", .{});
         std.debug.print("   E - Enter / exit vehicle\n", .{});
         std.debug.print("   F - Collect/drop carryable (Character) / frame selection (Free Camera)\n", .{});
@@ -6218,6 +6234,7 @@ const App = struct {
         effects: sandbox_developer_host.Effects,
     ) void {
         if (effects.reset_gameplay_actions) self.action_latch.clear();
+        if (effects.request_quit) self.input_buffer.requestQuit();
         if (effects.toggle_neural_presentation) {
             if (self.neural_rendering) |*neural| _ = neural.toggle();
         }
@@ -6709,12 +6726,14 @@ const App = struct {
         };
         return .{
             .id = view.id,
+            .half_extents = view.half_extents,
             .state = view.state,
             .authoring_revision = view.authoring_revision,
         };
     }
 
     fn crateAuthoringView(self: *App) !editor_contract.CrateAuthoringView {
+        try crate_authoring_position_hint.validate();
         var session = self.authoring_controller.snapshot();
         var selected: ?editor_contract.AuthoringCrateView = null;
         if (session.selected) |id| {
@@ -6730,6 +6749,7 @@ const App = struct {
             null;
         return .{
             .session = session,
+            .position_hint = crate_authoring_position_hint,
             .available_crate = available,
             .selected_crate = selected,
             .feedback = self.authoring_feedback,
@@ -7101,7 +7121,9 @@ const App = struct {
             self.selection_entries.items,
         ).activeEntry();
         if (active) |entry| {
-            if (entry.kind == .crate) {
+            if (entry.kind == .crate and entry.authorable and
+                entry.availability == .available)
+            {
                 const id = switch (entry.id) {
                     .persistent_entity => |id| id,
                     else => {
@@ -7319,28 +7341,7 @@ const App = struct {
             yellow,
             view_projection,
         );
-
-        const axis_origin = [3]f32{ center[0], bounds.maximum[1] + 0.12, center[2] };
-        const axis_length: f32 = 0.7;
-        self.drawSelectionBar(
-            .{ axis_origin[0] + axis_length * 0.5, axis_origin[1], axis_origin[2] },
-            .{ axis_length, thickness * 1.5, thickness * 1.5 },
-            .{ 1, 0.12, 0.08, 1 },
-            view_projection,
-        );
-        self.drawSelectionBar(
-            .{ axis_origin[0], axis_origin[1] + axis_length * 0.5, axis_origin[2] },
-            .{ thickness * 1.5, axis_length, thickness * 1.5 },
-            .{ 0.15, 1, 0.2, 1 },
-            view_projection,
-        );
-        self.drawSelectionBar(
-            .{ axis_origin[0], axis_origin[1], axis_origin[2] + axis_length * 0.5 },
-            .{ thickness * 1.5, thickness * 1.5, axis_length },
-            .{ 0.12, 0.35, 1, 1 },
-            view_projection,
-        );
-        return 15;
+        return 12;
     }
 
     /// Submit one renderer frame, then let the developer owner acquire the

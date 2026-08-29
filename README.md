@@ -291,7 +291,8 @@ zig build measure-s11 -Deditor=false -Doptimize=ReleaseFast
 zig build verify-source-package -Deditor=false --summary all
 
 # Native SDL proof that the first scene click captures without firing, a
-# captured click reaches gameplay, Escape releases, and free Escape quits.
+# captured click reaches gameplay, Escape follows interaction/capture/menu
+# priority, and only an explicit lifecycle request quits.
 zig build test-mouse-capture-macos --summary all
 
 # Manual three-terminal multiplayer test. Build/install once, then launch one authority
@@ -303,8 +304,8 @@ zig build install-mp2
 
 # Client controls: WASD move, Space jump, E enter/exit, F collect/drop,
 # Q melee, R request respawn after death, click the playable area to capture
-# continuous mouse-look, and Escape to release it (or quit while free). Right
-# mouse + drag remains available without capture. While
+# continuous mouse-look, and Escape to release it. Close the window to quit an
+# editor-disabled client. Right mouse + drag remains available without capture. While
 # driving, W/S are throttle/reverse, A/D steer, Space brakes, and Left Shift is
 # the hand brake. P toggles vehicle prediction for live A/B comparison. F8
 # manufactures a transport loss and reconnect while playing. Recoverable
@@ -547,7 +548,7 @@ distances are 9 m and 12 m respectively.
 | Key | Action |
 |---|---|
 | Click scene in Character mode | Capture the mouse for continuous turn/look; the first click only captures and does not fire |
-| ESC | Release captured mouse in Character mode; quit when the mouse is already free |
+| ESC | Cancel an active gizmo drag, cancel Free Camera look, release Character mouse capture, close an open system menu, or open the system menu—in that order |
 | W / A / S / D | Move the character or drive in Character mode; fly while holding right mouse in Free Camera |
 | E | Enter or exit the sandbox vehicle in Character mode |
 | F | Collect/drop in Character mode; frame the shared World Outliner/viewport selection in Free Camera |
@@ -588,6 +589,11 @@ object in Free Camera; all editor panels share that one selection. A yellow
 bounding box and XYZ marker show the selected object, `F`/`Frame Selection`
 frames it, and `Clear Selection` or an empty scene click clears it. Panel,
 toolbar, menu, bottom-bar, and status-bar clicks never pick through the UI.
+During an active gizmo drag, Escape restores the complete position draft and
+dirty state retained at mouse-down. Outside an active interaction or pointer
+capture, Escape opens the system menu; Escape/Resume closes it, and only its
+explicit Quit action exits. Opening this local menu clears held gameplay input
+but does not pause simulation or multiplayer authority.
 
 The reserved top status strip presents player health, handgun state and firing
 controls, threat/action feedback, incident status, and mouse-capture state in
@@ -702,18 +708,22 @@ zig build run -Deditor=true -- --save-root=/tmp/incinerator-saves
 ```
 
 `--save-root` is startup configuration for the process-owned filesystem
-destination; it is not a command-line authoring workflow. All crate editing is
-done in **Panels → Crate Authoring**: select the available crate, edit its draft
-position, and use **Apply position**, **Undo**, **Redo**, and **Save world
-snapshot**. The tool only sees immutable records and emits typed requests that
-the host applies after UI drawing.
+destination; it is not a command-line authoring workflow. Switch to **Free
+Camera**, then select **Crate** through the **World Outliner** or viewport. The
+**Inspector** automatically opens and focuses for the new selection. Its
+axis-colored sliders and adjacent exact meter inputs share one local position
+draft with the only red/green/blue axis display: the interactive translate
+gizmo. **Revert Draft** discards that draft; **Apply Position** emits one typed
+revisioned relocation; **Undo** and **Redo** use the same owner history. Gizmo
+release never applies or saves by itself. Escape during a drag restores the
+pre-drag draft, including whether earlier unapplied edits already made it dirty.
 
-A save is a restorable snapshot of authoritative sandbox world state, not a
-source asset or a content commit. The save directory is the folder passed to
-`--save-root`; the fixed logical slot in the example is
-`/tmp/incinerator-saves/sandbox.isav`. S5 intentionally exposes one relocation
-producer and one fixed slot; autosave, migration, and multiple writers are
-future work.
+A **Save World Snapshot** is a restorable snapshot of authoritative sandbox
+world state, not a source asset or a content commit. The save directory is the
+folder passed to `--save-root`; the fixed logical slot in the example is
+`/tmp/incinerator-saves/sandbox.isav`. A dirty draft must first be applied or
+reverted. S5 intentionally exposes one relocation producer and one fixed slot;
+autosave, migration, and multiple writers are future work.
 
 Open **Panels → Interaction** to inspect the immutable carryable/holder state
 and emit the same typed collect/drop requests used by F. A carryable is either

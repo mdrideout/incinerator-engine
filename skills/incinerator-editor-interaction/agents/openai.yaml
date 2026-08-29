@@ -1,0 +1,3 @@
+interface:
+  display_name: "Incinerator Editor Interaction"
+  short_description: "Route and validate Incinerator editor input"

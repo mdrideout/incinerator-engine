@@ -27,8 +27,10 @@ a CPU camera ray using the rendered camera FOV/aspect and current logical window
 coordinates. The nearest intersected immutable world AABB wins. A miss clears
 selection. Character mode and all ImGui-owned coordinates remain excluded.
 
-The selected object receives an unlit yellow AABB with red/green/blue axis
-markers in ordinary deterministic output. This visualization is submitted
+The selected object receives an unlit yellow AABB in ordinary deterministic
+output. The originally accepted passive red/green/blue axis marker was removed
+when Phase 5 introduced the interactive crate translate gizmo, avoiding two
+different axis displays on one selection. The yellow visualization is submitted
 directly through the renderer debug path and is not recorded as gameplay,
 authority, physics, save/replay, replication, or neural-renderer input.
 
@@ -87,6 +89,11 @@ The native input acceptance remained green:
 MOUSE_CAPTURE_ACCEPTANCE_PASS first_click_consumed=true relative=true outside_scene_suppressed=true captured_click=true escape_release=true free_camera=true free_navigation=true selection_suppressed=true character_restore=true free_escape_quit=true failures=0
 ```
 
+That line is retained as historical Phase 4 evidence. ADR-030 intentionally
+replaced the final free-Escape behavior and acceptance label on 2026-08-29; see
+[Editor Input Routing and Escape](editor-interaction-routing-and-escape.md) for
+the current contract and output.
+
 ## Native Metal validation
 
 `zig build smoke-installed-s1-macos -Deditor=true` completed on Apple Silicon
@@ -134,7 +141,8 @@ Then test:
    Confirm entries show semantic type, stable identity, owner, and either
    `AUTHORABLE` or `READ-ONLY`.
 2. Select the crate row. Confirm the row is selected and the rendered crate has
-   a bright yellow bounding box plus red/green/blue axis marker.
+   a bright yellow bounding box. In the Phase 5 editor, the only colored axes
+   are the interactive translate gizmo.
 3. Press **Clear Selection**. Confirm both row selection and highlight clear.
 4. Enter **Free Camera**. Left-click the crate in the scene. Confirm the same
    highlight appears and the Outliner reveals/selects the crate row. Press `F`

@@ -73,8 +73,33 @@ pub const ProfileFrameView = developer_profile.FrameRing(
 /// body handle.
 pub const AuthoringCrateView = struct {
     id: engine.PersistentId,
+    half_extents: [3]f32,
     state: engine.physics.BodyState,
     authoring_revision: u64,
+    collider: CrateColliderStatus = .active_dynamic_box,
+};
+
+pub const CrateColliderStatus = enum {
+    active_dynamic_box,
+};
+
+/// Game-composition-owned exploration range for the crate position controls.
+/// Exact numeric edits deliberately remain unbounded; the crate owner is the
+/// final validator for every submitted pose.
+pub const CratePositionHint = struct {
+    minimum: [3]f32,
+    maximum: [3]f32,
+
+    pub fn validate(self: CratePositionHint) !void {
+        for (0..3) |axis| {
+            if (!std.math.isFinite(self.minimum[axis]) or
+                !std.math.isFinite(self.maximum[axis]) or
+                self.minimum[axis] >= self.maximum[axis])
+            {
+                return error.InvalidCratePositionHint;
+            }
+        }
+    }
 };
 
 pub const AuthoringFeedbackStatus = enum {
@@ -121,6 +146,7 @@ pub const SaveFeedback = struct {
 /// change the request or authority boundary.
 pub const CrateAuthoringView = struct {
     session: sandbox_authoring.Snapshot,
+    position_hint: CratePositionHint,
     available_crate: ?AuthoringCrateView = null,
     selected_crate: ?AuthoringCrateView = null,
     feedback: AuthoringFeedback = .{},

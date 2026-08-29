@@ -1,6 +1,7 @@
 # Editor Interaction and Agent Control Plan
 
-**Status:** Phases 1-4 accepted; Phases 5-8 not started
+**Status:** Phases 1-4 accepted; Phase 5 implemented and awaiting product-owner
+interaction review; Phases 6-8 not started
 
 **Date:** 2026-08-23
 
@@ -573,7 +574,9 @@ more authoring labs.
 #### Selection visualization
 
 - Render an unmistakable selection highlight in ordinary deterministic output.
-- Prefer a simple bounding box and axis marker for the first slice.
+- Use a simple yellow bounding box for the shared selection. Reserve colored
+  axes for an actual interactive transform gizmo instead of displaying a
+  second passive axis marker.
 - Ensure the highlight is visible against the current crate and environment
   colors.
 - Keep selection visualization presentation-only and excluded from gameplay,
@@ -612,6 +615,13 @@ more authoring labs.
 
 ### Phase 5 — Selection-driven crate Inspector and transform controls
 
+**Status:** Implemented; automated/native acceptance complete and product-owner
+interaction review pending
+
+**Validation:**
+[Phase 5 selection-driven crate Inspector](docs/validation/editor-interaction-phase-5-crate-inspector.md),
+[editor routing and Escape addendum](docs/validation/editor-interaction-routing-and-escape.md)
+
 **Purpose:** Turn the crate proof into a comprehensible typed editing workflow
 without generalizing it into a universal object editor.
 
@@ -619,6 +629,8 @@ without generalizing it into a universal object editor.
 
 - Keep or rename the current crate panel according to the accepted workspace
   terminology, but make it selection-driven.
+- Reveal and focus the Inspector when an inspectable crate becomes the shared
+  selection. Respect a manual close until the selection changes.
 - Show sections for:
   - identity and object kind;
   - availability and authorability;
@@ -675,7 +687,13 @@ without generalizing it into a universal object editor.
   refresh, rejection preservation, selection change, and selection loss.
 - Control tests cover scrub input, exact input, non-finite rejection, and
   presentation-range overflow.
-- Gizmo tests prove it updates the draft and cannot directly mutate authority.
+- Gizmo tests independently prove begin/update/drop, Escape restore, preservation
+  of a pre-existing dirty draft, and the absence of any authority request before
+  explicit Apply.
+- Routing tests prove the active gizmo consumes Escape before the system menu,
+  and the system menu consumes its closing Escape before application lifecycle.
+- The native SDL gate proves Escape priority across Character capture, Free
+  Camera RMB look, system-menu open/close, and explicit quit.
 - Transaction tests cover apply, stale revision, owner busy, undo, redo, and
   save deferral while a transaction or dirty draft exists.
 - Save/replay and incident evidence remain exact.
@@ -687,6 +705,10 @@ without generalizing it into a universal object editor.
 - Verify highlight, stable identity, revision, position, and fixed dimensions.
 - Scrub each axis and type exact positive, negative, and fractional values.
 - Move the translate gizmo and verify numeric fields follow.
+- During one drag, press Escape and verify the exact pre-drag draft and dirty
+  state return without moving authority or opening the system menu.
+- With no active drag/look/capture, press Escape to open the system menu; press
+  Escape again to resume, then reopen it and use Quit explicitly.
 - Revert without applying and verify authority never moves.
 - Apply a draft and verify the crate moves, the result is correlated, and the
   revision advances.
