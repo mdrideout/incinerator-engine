@@ -33,6 +33,11 @@ incapable of moving authority or saving. Only **Apply Position** emits the
 existing revisioned relocate request with the crate's current rotation and
 zero-velocity policy.
 
+Character mode retains the semantic crate selection and inactive draft for the
+Outliner and Inspector, but hides the yellow bounds, gizmo, and exact retained
+handle regions as one editor-world-affordance projection. Returning to a
+visible Free Camera reprojects them from current state.
+
 Selection, draft state, transaction state, the last correlated result, and
 world-snapshot state remain at the top level. Transaction/history internals and
 authored-change evidence are collapsed by default. Persistence uses the exact
@@ -215,9 +220,11 @@ proves a completed drag rejects further pointer updates.
 - README terminology, the alphabetical Panels menu, root phase ledger, and this
   validation record now agree on **Inspector**, **Apply Position**, and **Save
   World Snapshot**.
-- Phase 5 itself added no endpoint, CLI, or MCP path. After this phase was
-  accepted, the product owner separately authorized EA0.5 endpoint/CLI work;
-  Phase 7 MCP work has not started.
+- Phase 5 itself added no endpoint or CLI path. After this phase was accepted,
+  the product owner separately authorized and accepted EA0.5 endpoint/CLI work.
+  On 2026-08-30 the product owner eliminated MCP and authorized Phase 7 to make
+  the CLI agent contract and repository skill first-class. Its implementation,
+  automated, native, and clean-context agent candidate now passes.
 
 ## Product-owner interaction acceptance
 
@@ -281,13 +288,17 @@ Then verify:
     the discarded draft.
 13. Toggle Character/Free Camera and exercise normal character capture, look,
     movement, firing, menus, panels, World Outliner selection, and free-camera
-   RMB+WASD. Confirm the transparent gizmo neither captures unrelated scene
-   input nor regresses the product rendering area.
+    RMB+WASD. Confirm Character mode hides both yellow bounds and gizmo without
+    clearing the shared selection or inactive draft. Return to Free Camera and
+    confirm both reappear, with no stale handle claim, selection request, or
+    authoring transaction. Confirm the transparent gizmo neither captures
+    unrelated scene input nor regresses the product rendering area.
 14. While holding RMB in Free Camera, press Escape and confirm only fly/look
     ends. With no active interaction, press Escape and confirm the system menu
     opens without pausing gameplay. Press Escape to Resume, reopen the menu,
     and confirm only the explicit **Quit** button exits.
 
 Phase 5 is closed. Its stop review satisfied the precondition for the
-separately authorized EA0.5 schedule amendment; Phase 7 remains blocked until
-EA0.5 itself is accepted.
+separately authorized EA0.5 schedule amendment. EA0.5 was accepted on
+2026-08-30. Phase 7's CLI agent-contract replacement was then separately
+authorized; its candidate is complete with product-owner stop review pending.

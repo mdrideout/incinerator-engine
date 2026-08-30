@@ -17,6 +17,13 @@ pub const Mode = enum {
     }
 };
 
+/// One composition rule controls renderer decorations, ImGui manipulators,
+/// and their synchronous input claims. Semantic selection and authoring drafts
+/// remain independent and may persist while these affordances are hidden.
+pub fn editorWorldAffordancesVisible(editor_visible: bool, mode: Mode) bool {
+    return editor_visible and mode == .free_camera;
+}
+
 /// Window-space scene region from the most recently composed editor frame.
 /// The platform input adapter uses it only for routing pointer input.
 pub const SceneRect = struct {
@@ -140,6 +147,13 @@ test "scene rectangle uses half-open window-space bounds" {
     try std.testing.expect(!rect.contains(.{ 110, 40 }));
     try std.testing.expect(!rect.contains(.{ 40, 220 }));
     try std.testing.expect(SceneRect.init(.{ 4, 4 }, .{ 4, 9 }) == null);
+}
+
+test "editor world affordances require a visible Free Camera composition" {
+    try std.testing.expect(editorWorldAffordancesVisible(true, .free_camera));
+    try std.testing.expect(!editorWorldAffordancesVisible(true, .character));
+    try std.testing.expect(!editorWorldAffordancesVisible(false, .free_camera));
+    try std.testing.expect(!editorWorldAffordancesVisible(false, .character));
 }
 
 test "viewport request slots remain typed and coalesce per operation" {

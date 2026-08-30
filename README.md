@@ -126,10 +126,14 @@ product-owner four-district walkthrough pass. S15 is accepted. The active
 sequences practical materials/textures, vehicle archetypes and local AI tuning,
 authored lighting, game-owned map construction, and the separately built game
 proof under [ADR-029](docs/adr/029-engine-game-authoring-boundary.md).
-EA0 is accepted. EA0.5's local typed endpoint and canonical CLI now have
-complete focused/aggregate, installed Metal, LLM-agent, and architecture
-closeout; only the human usability and product-owner checkpoint remains before
-EA1 starts.
+EA0 and EA0.5 are accepted. The local typed endpoint and canonical CLI passed
+focused/aggregate, installed Metal, LLM-agent, architecture, human usability,
+and product-owner review. Phase 7 now makes that CLI a first-class agent
+contract with a machine-readable catalog, guided results, and repository-owned
+skill; the planned MCP adapter was eliminated because local coding agents have
+shell access. Its implementation/automated/native/clean-context/comprehensive-
+manual-agent candidate passes; product-owner stop review remains and EA1 has
+not started.
 The combined-tree
 [deterministic-rendering resumption audit](docs/validation/deterministic-rendering-resumption.md)
 passes and records the correction that restored the ordinary product from an
@@ -716,6 +720,8 @@ run ID reported by discovery and confirm every later response belongs to it:
 
 ```bash
 ./zig-out/bin/incinerator-dev help
+./zig-out/bin/incinerator-dev agent bootstrap
+./zig-out/bin/incinerator-dev agent catalog
 ./zig-out/bin/incinerator-dev discovery
 ./zig-out/bin/incinerator-dev describe
 ./zig-out/bin/incinerator-dev schema list
@@ -723,13 +729,33 @@ run ID reported by discovery and confirm every later response belongs to it:
 ./zig-out/bin/incinerator-dev content list
 ```
 
+Coding agents must begin with `agent bootstrap`, record its run identity and
+catalog digest, then read `agent catalog` rather than relying on remembered
+commands. The repository workflow is defined by
+[`skills/incinerator-developer-cli/SKILL.md`](skills/incinerator-developer-cli/SKILL.md).
+Each endpoint command returns a CLI envelope containing
+`agent_contract_revision`, stable `operation`, explicit `terminal`, structured
+`next` operations, and the complete typed endpoint `response`. Structured next
+operations identify polling and reinspection requirements; they are guidance,
+not authorization for broader work. Successful and pending operations exit
+zero. Typed endpoint failures, rejected terminal transactions, failed results,
+and missing correlated results are still printed as JSON but exit nonzero, so
+shell automation cannot silently continue through a rejected operation. Every
+non-help operation emits JSON; help remains human-readable text and `--json` is
+an optional explicit flag.
+Phase 7 implementation and acceptance evidence is recorded in the
+[CLI agent-contract validation ledger](docs/validation/editor-interaction-phase-7-cli-agent-contract.md).
+
 Copy a real target such as `persistent-entity:N:L` from `world list`; do not
 guess or hard-code a run's identity. Inspect it to record the initial revision,
 then use that exact revision in a distinctive relocation. Authoring, save, and
 capture requests report admission separately from terminal completion: poll
 their returned IDs to terminal results and re-inspect the target after an
 authoring transaction. Selection and camera responses are synchronous. The
-concrete workflow is:
+transaction's `committed_position` is the exact pose applied at its authority
+tick. Crate inspection reports the dynamic body's current simulated position,
+which can change afterward under gravity and collision even though the
+committed revision remains authoritative. The concrete workflow is:
 
 ```text
 ./zig-out/bin/incinerator-dev inspect --target persistent-entity:N:L
@@ -769,7 +795,9 @@ Authoring, save, and capture admission responses do not necessarily report
 terminal completion. Poll until each transaction/capture/save reports a
 terminal disposition; a `failed` save stops the acceptance sequence and its
 typed detail must be recorded. A committed save proves that the ordinary
-graphical product wrote the fixed durable slot. Under the accepted S5
+graphical product wrote the fixed durable slot. The save result reports
+canonical snapshot `payload_bytes`; `generation` is null because the fixed
+sandbox slot does not expose storage generations. Under the accepted S5
 architecture, cold restore is performed by a separate fresh
 SDL/editor/GPU-free verifier whose expected world/content cohort matches the
 slot; the EA0.5 ordinary-product slot has not yet been claimed as cold-verified.
@@ -782,9 +810,9 @@ existing incident screenshot path and requires incident capture to be enabled.
 Use `--discovery /absolute/path/to/discovery.json` to override discovery.
 
 This is a local developer-only Unix socket, not a remote service. It is absent
-from editor-disabled and ordinary headless compositions. Phase 7's thin MCP
-adapter has not started; the CLI remains the canonical automation and
-diagnostic client. See the
+from editor-disabled and ordinary headless compositions. The CLI is the sole
+agent-control, automation, and diagnostic client; no MCP adapter is planned.
+See the
 [EA0.5 validation ledger](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md).
 
 The sandbox contains one persistent runtime physics test crate. It is not an

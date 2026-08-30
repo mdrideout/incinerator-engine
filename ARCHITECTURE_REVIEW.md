@@ -15,9 +15,14 @@ executable. EA0.5 now implements the developer-only local socket, five concrete
 sandbox schemas, canonical CLI, graphical-owner dispatch, persistence, and
 correlated frame evidence. Its focused/aggregate automation, installed native
 Metal journey, LLM-agent workflow, and architecture/security/dead-code/doc
-review are complete; human usability and product-owner acceptance remain.
-EA1-EA5 retain the practical asset, vehicle-archetype, lighting, map, and
-engine/game separation pressure. No open P0 blocks the EA0.5 checkpoint.
+review are complete. Human usability and product-owner acceptance closed on
+2026-08-30. The product owner eliminated the planned MCP adapter and authorized
+Phase 7 to make the canonical CLI and repository-owned agent skill first-class.
+Its implementation, automated, installed Metal, clean-context agent, and
+comprehensive manual agent-review candidate pass; product-owner stop review
+remains. EA1-EA5 retain the practical asset, vehicle-archetype,
+lighting, map, and engine/game separation pressure. No open P0 blocks the next
+phase decision.
 The neural-rendering proof
 is retained through RF10 as external technical evidence, but no learned model
 is promoted, installed, or selected. The product owner paused that track
@@ -26,12 +31,11 @@ the shared RF0-RF5 sandbox visual catalog is useful conventional-renderer input,
 not an authorization to continue neural work. ADR-025 and ADR-026 remain
 preserved boundary policy for an explicit future restart.
 
-**Last reviewed:** 2026-08-29
+**Last reviewed:** 2026-08-30
 
-**Scope:** Accepted EA0 and current EA0.5 architecture, their demonstrated
-strengths, remaining structural pressure before another product or service
-slice, the active deterministic-rendering direction, and the retained paused
-neural proof
+**Scope:** Accepted EA0 and EA0.5 architecture, their demonstrated strengths,
+remaining structural pressure before another product or service slice, the
+active deterministic-rendering direction, and the retained paused neural proof
 
 **Related roadmap:** [`OVERHAUL_PLAN.md`](OVERHAUL_PLAN.md)
 
@@ -58,7 +62,8 @@ neural proof
 → [`S14 accepted`](docs/validation/s14-ranged-combat.md)
 → [`S15 accepted`](docs/validation/s15-content-rich-district-expansion.md)
 → [`EA0 accepted`](docs/validation/ea0-ownership-identity-transaction-boundary.md)
-→ [`EA0.5 machine closeout complete; human/product-owner review pending`](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md)
+→ [`EA0.5 accepted`](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md)
+→ `Phase 7 CLI agent-contract candidate; product-owner review pending`
 → [`EA1-EA5 pending`](docs/design/engine-authoring-foundation.md)
 
 **Active rendering direction:**

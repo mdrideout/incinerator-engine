@@ -26,6 +26,11 @@ Write the concrete sequence from physical input through completion. Identify:
 Keep viewport mode, gameplay mouse lock, active interaction capture,
 simulation pause, diagnostic recording, selection, and authoring transaction
 state independent. Do not add another boolean that implicitly combines them.
+When a named composition hides an interaction surface, preserve any state that
+is meant to persist but remove every projected half together: renderer
+decoration, ImGui affordance, and retained hit region. A later mode transition
+must reproject from current semantic state rather than revive last-frame input
+geometry.
 
 ## Route by current ownership
 
@@ -61,6 +66,9 @@ Use conventional editor semantics before exposing backend terminology:
 - Content Browser selects reusable assets.
 - Inspector follows the applicable selection and respects manual closure.
 - Selection highlight, manipulators, and diagnostics have distinct visuals.
+- Semantic selection may persist outside an editable viewport mode, but
+  selection bounds and manipulators appear only when the shared editor-world
+  affordance policy permits both.
 - A live manipulation may preview continuously while still producing one
   bounded typed transaction and one undo record.
 

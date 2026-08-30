@@ -157,7 +157,7 @@ pub const Editor = struct {
         if (event.type == c.SDL_EVENT_WINDOW_FOCUS_LOST or
             event.type == c.SDL_EVENT_WINDOW_MINIMIZED)
         {
-            _ = self.crate_authoring.cancelGizmoDrag();
+            self.crate_authoring.deactivateGizmo();
         }
 
         var route = EventRoute{};
@@ -184,15 +184,14 @@ pub const Editor = struct {
             if (event.key.scancode == c.SDL_SCANCODE_F1) {
                 if (!event.key.repeat) {
                     self.visible = !self.visible;
-                    if (!self.visible) _ = self.crate_authoring.cancelGizmoDrag();
+                    if (!self.visible) self.crate_authoring.deactivateGizmo();
                 }
                 route.keyboard_reserved = true;
                 return route;
             }
             if (event.key.scancode == c.SDL_SCANCODE_F3) {
                 if (!event.key.repeat) {
-                    _ = self.crate_authoring.cancelGizmoDrag();
-                    self.viewport_mode = self.viewport_mode.toggled();
+                    self.setViewportMode(self.viewport_mode.toggled());
                     route.viewport_mode_request = self.viewport_mode;
                 }
                 route.keyboard_reserved = true;
@@ -206,7 +205,10 @@ pub const Editor = struct {
         }
 
         if (!self.visible) return route;
-        if (self.viewport_mode == .free_camera and
+        if (viewport.editorWorldAffordancesVisible(
+            self.visible,
+            self.viewport_mode,
+        ) and
             event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN and
             event.button.button == c.SDL_BUTTON_LEFT and
             self.toolById(.crate_authoring).enabled and
@@ -260,12 +262,16 @@ pub const Editor = struct {
             @intCast(window_size.height),
             framebuffer_scale,
         );
-        self.viewport_mode = frame.viewport.view.mode;
+        self.setViewportMode(frame.viewport.view.mode);
         self.observeSelection(frame.selection.view);
-        if (!self.visible or self.viewport_mode != .free_camera or
+        const world_affordances_visible = viewport.editorWorldAffordancesVisible(
+            self.visible,
+            self.viewport_mode,
+        );
+        if (!world_affordances_visible or
             !self.toolById(.crate_authoring).enabled)
         {
-            _ = self.crate_authoring.cancelGizmoDrag();
+            self.crate_authoring.deactivateGizmo();
         }
 
         if (!self.visible) {
@@ -297,7 +303,7 @@ pub const Editor = struct {
                 );
             }
         }
-        if (self.viewport_mode == .free_camera and
+        if (world_affordances_visible and
             self.toolById(.crate_authoring).enabled)
         {
             if (self.scene_rect) |scene| crate_authoring_tool.drawGizmo(
@@ -348,7 +354,7 @@ pub const Editor = struct {
     }
 
     pub fn setViewportMode(self: *Editor, mode: viewport.Mode) void {
-        if (self.viewport_mode != mode) _ = self.crate_authoring.cancelGizmoDrag();
+        if (self.viewport_mode != mode) self.crate_authoring.deactivateGizmo();
         self.viewport_mode = mode;
     }
 
@@ -1257,6 +1263,10 @@ test "viewport mode change forcibly cancels an active gizmo" {
         .id = .{ .namespace = 1, .local = 4 },
         .position = .{ 3, 4, 5 },
     };
+    editor.crate_authoring.gizmo_handle_regions[0] = .{
+        .minimum = .{ 90, 90 },
+        .maximum = .{ 110, 110 },
+    };
     editor.crate_authoring.beginGizmoDrag(.z);
     try std.testing.expect(editor.crate_authoring.applyGizmoDisplacement(.z, 7));
 
@@ -1270,6 +1280,66 @@ test "viewport mode change forcibly cancels an active gizmo" {
     try std.testing.expect(!editor.crate_authoring.gizmoDragActive());
     try std.testing.expectEqual([3]f32{ 3, 4, 5 }, editor.crate_authoring.position);
     try std.testing.expect(!editor.crate_authoring.dirty);
+    try std.testing.expect(!editor.crate_authoring.claimsGizmoPointer(.{ 100, 100 }));
+}
+
+test "viewport mode round trip hides gizmo projection but preserves its inactive authoring draft" {
+    var editor = Editor{};
+    editor.viewport_mode = .free_camera;
+    editor.crate_authoring = .{
+        .id = .{ .namespace = 1, .local = 4 },
+        .position = .{ 6, 7, 8 },
+        .draft_base_revision = 12,
+        .dirty = true,
+    };
+
+    editor.setViewportMode(.character);
+    try std.testing.expectEqual([3]f32{ 6, 7, 8 }, editor.crate_authoring.position);
+    try std.testing.expectEqual(@as(u64, 12), editor.crate_authoring.draft_base_revision);
+    try std.testing.expect(editor.crate_authoring.dirty);
+    try std.testing.expect(!viewport.editorWorldAffordancesVisible(
+        editor.visible,
+        editor.viewport_mode,
+    ));
+
+    editor.setViewportMode(.free_camera);
+    try std.testing.expectEqual([3]f32{ 6, 7, 8 }, editor.crate_authoring.position);
+    try std.testing.expectEqual(@as(u64, 12), editor.crate_authoring.draft_base_revision);
+    try std.testing.expect(editor.crate_authoring.dirty);
+    try std.testing.expect(viewport.editorWorldAffordancesVisible(
+        editor.visible,
+        editor.viewport_mode,
+    ));
+}
+
+test "focus loss and minimization deactivate the complete gizmo projection" {
+    for ([_]u32{
+        c.SDL_EVENT_WINDOW_FOCUS_LOST,
+        c.SDL_EVENT_WINDOW_MINIMIZED,
+    }) |event_type| {
+        var editor = Editor{};
+        editor.viewport_mode = .free_camera;
+        editor.crate_authoring = .{
+            .id = .{ .namespace = 1, .local = 4 },
+            .position = .{ 3, 4, 5 },
+            .dirty = true,
+        };
+        editor.crate_authoring.gizmo_handle_regions[0] = .{
+            .minimum = .{ 90, 90 },
+            .maximum = .{ 110, 110 },
+        };
+        editor.crate_authoring.beginGizmoDrag(.x);
+        try std.testing.expect(editor.crate_authoring.applyGizmoDisplacement(.x, 7));
+
+        var event = std.mem.zeroes(c.SDL_Event);
+        event.type = event_type;
+        _ = editor.processEvent(&event);
+
+        try std.testing.expect(!editor.crate_authoring.gizmoDragActive());
+        try std.testing.expectEqual([3]f32{ 3, 4, 5 }, editor.crate_authoring.position);
+        try std.testing.expect(editor.crate_authoring.dirty);
+        try std.testing.expect(!editor.crate_authoring.claimsGizmoPointer(.{ 100, 100 }));
+    }
 }
 
 test "editor Escape acceptance system menu Quit emits one explicit lifecycle request" {

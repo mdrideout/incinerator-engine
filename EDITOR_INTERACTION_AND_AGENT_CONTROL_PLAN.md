@@ -1,8 +1,8 @@
 # Editor Interaction and Agent Control Plan
 
-**Status:** Phases 1-5 accepted; Phase 6 / EA0.5 implementation plus focused,
-aggregate, installed native Metal, and LLM-agent closeout complete, with human
-usability and product-owner review pending; Phases 7-8 not started
+**Status:** Phases 1-6 accepted; Phase 7 implementation, automated, installed
+Metal, clean-context agent, and comprehensive manual agent-review candidate
+complete with product-owner stop review pending; Phase 8 / EA1 has not started
 
 **Date:** 2026-08-23
 
@@ -20,6 +20,7 @@ usability and product-owner review pending; Phases 7-8 not started
 
 - [EA0 validation ledger](docs/validation/ea0-ownership-identity-transaction-boundary.md)
 - [EA0.5 validation ledger](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md)
+- [Phase 7 CLI agent-contract validation](docs/validation/editor-interaction-phase-7-cli-agent-contract.md)
 - [ED1 validation ledger](docs/validation/ed1-structured-developer-workspace.md)
 - [S14 validation ledger](docs/validation/s14-ranged-combat.md)
 
@@ -147,7 +148,7 @@ free-camera transform workflow needed to provide that structure.
 
 EA0 defines and validates the lifecycle/discovery contract for a future local
 developer endpoint. It deliberately did not create a socket, transport, CLI,
-MCP server, shell evaluator, or remote service. At this plan's creation, the
+agent skill, shell evaluator, or remote service. At this plan's creation, the
 accepted roadmap deferred endpoint transport and the canonical
 `incinerator-dev` client until EA2.
 
@@ -172,7 +173,7 @@ interaction foundation was accepted.
 | Crate relocation | Game/runtime authoring owner | Validate and apply typed revisioned transaction | Direct pose/body mutation from ImGui |
 | Asset browsing | Engine tooling plus game content descriptions | Query stable content identities | Treat runtime entities or source paths as assets |
 | Developer endpoint | Engine-runtime lifecycle contract plus game-tooling adapter | Local typed sandbox schema transport | Remote control or second state owner |
-| CLI/MCP | Developer-only game-tooling client products | Submit the same registered owner requests | Shell execution, raw memory, generic command strings |
+| CLI agent contract | Developer-only game-tooling client plus repository-owned skill | Describe and submit the same registered owner requests through the typed client | MCP, shell evaluation, raw memory, generic command strings, duplicated command manuals |
 
 The following ADR-029 constraints remain mandatory throughout every phase:
 
@@ -182,7 +183,7 @@ The following ADR-029 constraints remain mandatory throughout every phase:
 - no universal command bus;
 - no service locator;
 - no arbitrary code console;
-- no direct ImGui, CLI, or MCP access to Flecs, Jolt, SDL, renderer resources,
+- no direct ImGui or CLI access to Flecs, Jolt, SDL, renderer resources,
   storage internals, or the filesystem; and
 - no silent promotion from preview to session authority or durable content.
 
@@ -238,6 +239,12 @@ saves, or replay. Switching back to Character resumes normal character/vehicle
 follow. Returning to Free Camera restores the previous free-camera pose unless
 the user explicitly requests `Frame Selected` or `Start From Product View`.
 
+Semantic selection and an inactive Inspector draft persist across that mode
+change. Character mode hides all editor-world decorations and manipulators;
+returning to a visible Free Camera reprojects the yellow selection bounds and
+applicable gizmo from the retained state without creating a selection or
+authority transaction.
+
 ### 4.3 World selection and crate editing
 
 1. Switch to Free Camera.
@@ -255,32 +262,24 @@ the user explicitly requests `Frame Selected` or `Start From Product View`.
 
 ## 5. Target Agent Workflow
 
-The human ImGui workflow remains primary for people. The CLI is the canonical
-local automation client and uses machine-readable output. MCP is a thin schema
-adapter added only after the CLI path is accepted.
+The human ImGui workflow remains primary for people. The CLI is the sole local
+agent-control product and uses machine-readable output. Local coding agents are
+expected to have shell access, so this program adds no MCP adapter or second
+client protocol.
 
-An intended agent session is:
+An agent begins every session from the installed client itself:
 
 ```text
-incinerator-dev describe --json
-incinerator-dev world list --json
-incinerator-dev content list --json
-incinerator-dev inspect --target persistent-entity:1:4 --json
-incinerator-dev select --target persistent-entity:1:4 --json
-incinerator-dev camera mode free-camera --json
-incinerator-dev crate set-position \
-  --target persistent-entity:1:4 \
-  --expected-revision 7 \
-  --x 3.0 --y 1.0 --z -5.0 --json
-incinerator-dev transaction inspect --id 42 --json
-incinerator-dev capture-frame --json
-incinerator-dev undo --target persistent-entity:1:4 --expected-revision 8 --json
-incinerator-dev save-world --json
+incinerator-dev agent bootstrap
+incinerator-dev agent catalog
 ```
 
-Names are illustrative until the CLI schema phase accepts exact syntax. The
-semantic operations are required; the spelling is not yet a compatibility
-contract.
+The bootstrap records endpoint lifecycle, current run identity, protocol and
+agent-contract revisions, catalog digest, and safe next operation IDs. The
+catalog is the authoritative installed description of commands, parameters,
+units, effects, prerequisites, typed rejections, and completion models. The
+repository-owned CLI skill teaches workflow judgment without copying that
+catalog.
 
 Every mutating result must report:
 
@@ -733,10 +732,7 @@ without generalizing it into a universal object editor.
 
 ### Phase 6 — EA0.5 local endpoint and canonical CLI
 
-**Status:** Authorized by the product owner on 2026-08-29; implementation,
-focused and aggregate automated acceptance, installed native Metal, LLM-agent
-workflow, and architecture/security/dead-code/documentation review complete;
-human usability and product-owner stop review pending
+**Status:** Complete and accepted by the product owner on 2026-08-30
 
 **Purpose:** Give developers and LLM agents a live, typed, local control path
 through the same ownership boundaries as ImGui.
@@ -858,57 +854,98 @@ of EA2 and the roadmap amendment is accepted.
 
 ---
 
-### Phase 7 — Thin MCP adapter
+### Phase 7 — First-class CLI agent contract and skill
 
-**Status:** Not started; blocked on EA0.5 acceptance.
+**Status:** Implementation, automated, installed Metal, clean-context agent,
+and comprehensive manual agent-review candidate complete; product-owner stop
+review pending.
 
-**Purpose:** Make the accepted local developer schemas directly discoverable to
-MCP-capable LLM agents without introducing another mutation path.
+**Purpose:** Make the accepted `incinerator-dev` client self-describing and hard
+for shell-capable coding agents to misuse, without introducing another protocol
+or mutation path.
 
 #### Implementation
 
-- Build the MCP server on the accepted typed client library from Phase 6.
-- Map MCP tools one-to-one to registered developer schemas.
-- Generate tool descriptions and JSON schemas from the same manually registered
-  schema descriptions consumed by the CLI; do not infer a generic property
-  system.
-- Expose resources or tools for frame captures and structured inspection without
-  embedding arbitrary local filesystem access.
-- Keep the CLI as the canonical diagnostic and acceptance client.
-- Do not let MCP bypass expected revisions, transaction IDs, source identity,
-  typed validation, outcome polling, or edit-scope rules.
-- Do not expose shell, unrestricted files, remote transport, raw engine objects,
-  or multiplayer administration.
+- Add a separate, read-only, manually registered CLI operation catalog beside
+  the fixed sandbox protocol. It describes operation IDs, command tokens,
+  parameter types/units/sources, effect class, availability, completion model,
+  polling path, terminal follow-up, typed rejection reasons, and valid examples.
+- Keep the operation catalog descriptive only. Typed protocol commands and the
+  reusable client remain the executable source of truth; do not infer a generic
+  property system or command dispatcher.
+- Add `agent bootstrap` for current discovery lifecycle, run identity, protocol
+  cohort, schema identity, agent-contract revision/catalog digest, and safe next
+  operation IDs.
+- Add `agent catalog` as an offline-capable machine-readable description of the
+  installed CLI.
+- Wrap endpoint results with the stable operation ID, explicit `terminal`
+  state, structured next operations, and the complete typed response. Admission
+  remains visibly distinct from terminal completion.
+- Preserve the typed JSON body for every result while returning a nonzero shell
+  status for endpoint failures, rejected terminal transactions, failed results,
+  and missing correlated results. Successful admissions and pending polls exit
+  zero.
+- Describe transaction `committed_position` as the pose applied at the
+  authority tick and crate inspection as the dynamic body's current simulated
+  pose; physics evolution after commit is not a transaction mismatch.
+- Report canonical snapshot payload bytes for committed saves. The fixed
+  sandbox slot truthfully reports no storage generation.
+- Keep the agent catalog digest independent of the endpoint wire-schema digest;
+  documentation metadata changes do not manufacture protocol incompatibility.
+- Add the repository-owned `incinerator-developer-cli` skill. The skill owns
+  workflow judgment and reads the installed catalog instead of duplicating it.
+- Record the CLI skill trigger in `AGENTS.md` so project coding agents load it
+  before inspection, authoring, persistence, or evidence workflows.
+- Add no MCP dependency, shell evaluator, unrestricted file access, remote
+  transport, raw engine object access, or multiplayer administration.
 
-#### Required MCP capabilities
+#### Required agent-contract coverage
 
-- describe endpoint and schemas;
-- list world instances;
-- list real content assets;
-- inspect stable target;
-- select/clear selection;
-- inspect/set viewport mode and free-camera view;
-- apply crate position transaction;
-- inspect transaction outcome;
-- undo/redo;
-- save world snapshot; and
-- capture/read a correlated frame artifact.
+- Every public CLI operation has one stable descriptor and valid example.
+- Every endpoint command maps exhaustively to exactly one matching schema and
+  agent operation.
+- Every mutating operation declares presentation, session-authority, durable,
+  or evidence effect.
+- Every admitted operation declares its polling operation and emits the
+  correlation ID needed to use it.
+- Revisioned operations identify the inspection source for the expected
+  revision and require terminal reinspection.
+- The base skill covers discovery, current-run identity, world/content
+  distinction, effect classification, typed failure, and handoff evidence.
+- Conditional skill references cover authoring transactions and
+  persistence/capture without loading those details for read-only queries.
 
 #### Automated acceptance
 
-- MCP and CLI operations serialize to the same typed client requests.
-- Contract tests compare UI, CLI, and MCP mutation outcomes.
-- Stale, invalid, unavailable, and busy rejections remain identical.
-- MCP disconnect cannot cancel, duplicate, or orphan an admitted transaction.
-- Editor-disabled products remain independent of MCP dependencies.
+- Catalog completeness and uniqueness are checked structurally, not by brittle
+  prose snapshots.
+- The command-union-to-descriptor switch is exhaustive and each descriptor's
+  endpoint schema matches the typed command schema.
+- Every catalog example parses through the canonical CLI grammar.
+- Guidance tests distinguish synchronous, admitted, pending, accepted,
+  rejected, committed, captured, and failed results.
+- CLI status tests distinguish successful/pending operations from typed
+  terminal failure without suppressing the JSON response.
+- The installed `agent catalog` output parses as complete JSON without a live
+  editor; `agent bootstrap` validates the current discovery document.
+- The focused endpoint/client/CLI group, editor-enabled/disabled aggregates,
+  installed-product, and native Metal gates pass.
+- Editor-disabled and ordinary headless products acquire no CLI catalog, skill,
+  endpoint, or mutable-authoring runtime dependency.
 
 #### Human/agent acceptance
 
-- Connect an MCP-capable local agent to a running editor.
-- Have the agent discover capabilities without private repository knowledge.
-- Have it find the crate, select it, choose a useful camera view, apply a move,
-  inspect the result, capture evidence, revert, and verify restoration.
-- Repeat the same workflow with the CLI and compare outcomes.
+- From a clean agent context, load the repository skill, run bootstrap/catalog,
+  and discover the live product without private repository knowledge.
+- Find and inspect the crate; select it and establish a useful Free Camera view.
+- Move it with the observed revision, follow structured next operations to a
+  terminal result, and re-inspect the committed value/revision.
+- Capture and inspect correlated visual evidence, undo the edit, and verify
+  restoration.
+- Request a durable save only when separately authorized and report exactly
+  what the committed result proves.
+- Confirm an unavailable/stale run stops the workflow rather than provoking
+  guessed identities, flags, or retries.
 
 #### Stop review
 
@@ -958,7 +995,7 @@ sequence.
 
 #### Automated acceptance
 
-- Catalog UI and CLI/MCP projections agree on stable identity and digest.
+- Catalog UI and CLI projections agree on stable identity and digest.
 - Search/filter tests cover type, owner, name, and invalid content.
 - Runtime entities never appear as assets.
 - Source paths never become runtime identity.
@@ -1067,7 +1104,7 @@ This program does not add:
 - production authentication/matchmaking/services;
 - source-asset loading by the runtime renderer;
 - thumbnails/previews invented before a real EA1 content consumer needs them;
-- a second mutation authority in UI, CLI, or MCP; or
+- a second mutation authority or MCP adapter; or
 - automatic gameplay pause when entering Free Camera.
 
 Neural rendering remains paused and is not touched by this program.
@@ -1107,7 +1144,7 @@ and validate solo, listen, dedicated, protocol, and presentation projections.
 Mitigation: derive it from observed world bounds as a presentation hint and
 allow exact entry outside the range for owner validation.
 
-### CLI or MCP becomes a privileged bypass
+### CLI becomes a privileged bypass
 
 Mitigation: reuse the same typed owner request path, source/revision/transaction
 metadata, and result correlation. Keep transport local and developer-only.
@@ -1141,12 +1178,13 @@ This plan is complete only when:
    revisioned apply, rejection, undo/redo, and saved-world restoration.
 8. The local CLI can discover, inspect, change, observe, capture, revert, and
    save through typed schemas with no private code knowledge.
-9. The MCP adapter, if authorized, proves it is a thin client over the same
-   schemas and not a second authority.
+9. The CLI publishes a first-class agent bootstrap/catalog, guided result
+   model, and repository-owned skill without duplicating or bypassing owners.
 10. EA1 Content Browser integration lists and inspects real project-owned assets
     without mixing them with live instances or runtime source paths.
 11. Editor-disabled and shipping/runtime compositions do not acquire editor,
-    endpoint, CLI-server, MCP, importer, or mutable-authoring dependencies.
+    endpoint, CLI-server, agent-contract, importer, or mutable-authoring
+    dependencies.
 12. Every phase has its own accepted architecture, dead-code,
     documentation-drift, automated, native Metal, human, and applicable agent
     evidence before the program advances.

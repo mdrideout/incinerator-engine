@@ -101,6 +101,7 @@ const DeveloperSaveRequest = struct {
 
 const DeveloperSaveTerminal = struct {
     disposition: developer_protocol.SaveDisposition,
+    payload_bytes: ?u64,
     detail: []const u8,
 };
 
@@ -153,6 +154,47 @@ fn developerEditorControlCaptureDetail(
     }
     return null;
 }
+
+/// Project persistent semantic selection into the renderer only when the
+/// current editor/viewport composition exposes world-editing affordances.
+/// Hiding the decoration never mutates selection or an authoring draft.
+fn selectionDecorationBounds(
+    editor_visible: bool,
+    viewport_mode: viewport.Mode,
+    selection_view: editor_selection.View,
+) ?editor_selection.Bounds {
+    if (!viewport.editorWorldAffordancesVisible(editor_visible, viewport_mode)) {
+        return null;
+    }
+    const entry = selection_view.activeEntry() orelse return null;
+    return entry.world_bounds;
+}
+
+test "selection decoration projection follows editor viewport composition without clearing selection" {
+    const id = editor_selection.Id{
+        .persistent_entity = .{ .namespace = 1, .local = 7 },
+    };
+    const bounds = try editor_selection.Bounds.init(.{ 1, 2, 3 }, .{ 1, 1, 1 });
+    const entries = [_]editor_selection.Entry{.{
+        .id = id,
+        .label = "Crate",
+        .kind = .crate,
+        .owner = .game_runtime,
+        .inspectable = true,
+        .authorable = true,
+        .world_bounds = bounds,
+    }};
+    const view = editor_selection.View{ .entries = &entries, .active = id };
+
+    try std.testing.expect(selectionDecorationBounds(true, .character, view) == null);
+    try std.testing.expect(selectionDecorationBounds(false, .free_camera, view) == null);
+    try std.testing.expectEqualDeep(
+        bounds,
+        selectionDecorationBounds(true, .free_camera, view).?,
+    );
+    try std.testing.expect(editor_selection.Id.eql(id, view.active.?));
+}
+
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
 
@@ -7266,7 +7308,7 @@ const App = struct {
             .disposition = terminal.disposition,
             .slot = sandbox_persistence.slot_label,
             .generation = null,
-            .payload_bytes = null,
+            .payload_bytes = terminal.payload_bytes,
             .detail = terminal.detail,
         };
         const feedback = self.persistence.feedback();
@@ -8291,6 +8333,7 @@ const App = struct {
     fn finalizeDeveloperSaveRequest(
         self: *App,
         disposition: developer_protocol.SaveDisposition,
+        payload_bytes: ?u64,
         detail: []const u8,
     ) void {
         var index = self.developer_endpoint_state.save_requests.items.len;
@@ -8300,6 +8343,7 @@ const App = struct {
             if (retained.terminal != null) continue;
             retained.terminal = .{
                 .disposition = disposition,
+                .payload_bytes = payload_bytes,
                 .detail = detail,
             };
             return;
@@ -8347,6 +8391,7 @@ const App = struct {
                         .committed, .committed_sync_warning => .committed,
                         else => .failed,
                     },
+                    feedback.payload_bytes,
                     feedback.detail,
                 );
             }
@@ -8565,10 +8610,11 @@ const App = struct {
     }
 
     fn drawSelectionHighlight(self: *App, view_projection: zm.Mat) u64 {
-        const entry = self.selection_controller.view(
-            self.selection_entries.items,
-        ).activeEntry() orelse return 0;
-        const bounds = entry.world_bounds orelse return 0;
+        const bounds = selectionDecorationBounds(
+            self.developer.editorVisible(),
+            self.viewport_controller.mode,
+            self.selection_controller.view(self.selection_entries.items),
+        ) orelse return 0;
         const center = bounds.center();
         const half = bounds.halfExtents();
         const thickness: f32 = 0.045;

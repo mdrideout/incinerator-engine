@@ -49,6 +49,9 @@ pub const Feedback = struct {
     sequence: u64 = 0,
     status: FeedbackStatus,
     slot: []const u8 = slot_label,
+    /// Canonical snapshot payload committed inside the durable envelope.
+    /// Absent for idle, deferred, unavailable, and failed attempts.
+    payload_bytes: ?u64 = null,
     detail: []const u8,
 };
 
@@ -328,12 +331,17 @@ pub const Owner = opaque {
         );
         return switch (result) {
             .committed => result: {
-                self.setFeedback(.committed, "atomic replace and sync complete");
+                self.setCommittedFeedback(
+                    .committed,
+                    @intCast(snapshot.bytes.len),
+                    "atomic replace and sync complete",
+                );
                 break :result .committed;
             },
             .committed_sync_warning => result: {
-                self.setFeedback(
+                self.setCommittedFeedback(
                     .committed_sync_warning,
+                    @intCast(snapshot.bytes.len),
                     "atomic replace committed; directory sync uncertain",
                 );
                 break :result .committed_sync_warning;
@@ -354,6 +362,22 @@ pub const Owner = opaque {
         data.retained_feedback = .{
             .sequence = data.retained_feedback.sequence +| 1,
             .status = status,
+            .detail = detail,
+        };
+    }
+
+    fn setCommittedFeedback(
+        self: *Owner,
+        status: FeedbackStatus,
+        payload_bytes: u64,
+        detail: []const u8,
+    ) void {
+        std.debug.assert(status == .committed or status == .committed_sync_warning);
+        const data = self.ownerData();
+        data.retained_feedback = .{
+            .sequence = data.retained_feedback.sequence +| 1,
+            .status = status,
+            .payload_bytes = payload_bytes,
             .detail = detail,
         };
     }
@@ -540,6 +564,10 @@ test "commit writes the canonical envelope admitted by the owner cohort" {
     );
     try std.testing.expectEqual(@as(usize, 1), calls);
     try std.testing.expectEqual(@as(u64, 1), owner.feedback().sequence);
+    try std.testing.expectEqual(
+        @as(?u64, source.payload.len),
+        owner.feedback().payload_bytes,
+    );
 
     const bytes = try temporary.dir.readFileAlloc(
         std.testing.io,

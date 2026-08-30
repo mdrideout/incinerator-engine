@@ -271,6 +271,14 @@ pub const State = struct {
         self.gizmo_handle_regions = .{ null, null, null };
     }
 
+    /// Remove both halves of the projected gizmo affordance. Mode, panel, or
+    /// editor visibility transitions call this even when no drag is active so
+    /// a later transition cannot revive stale last-frame handle regions.
+    pub fn deactivateGizmo(self: *State) void {
+        _ = self.cancelGizmoDrag();
+        self.clearGizmoPointerClaims();
+    }
+
     pub fn claimsGizmoPointer(self: *const State, point: [2]f32) bool {
         for (self.gizmo_handle_regions) |region| {
             if (region) |active| {

@@ -52,6 +52,7 @@ const classified_sources = [_]ClassifiedSource{
 
     .{ .path = "src/hosts/sandbox_authoring.zig", .owner = .game_tooling },
     .{ .path = "src/hosts/sandbox_developer_protocol.zig", .owner = .game_tooling },
+    .{ .path = "src/hosts/sandbox_developer_cli_contract.zig", .owner = .game_tooling },
     .{
         .path = "src/adapters/transport/macos_developer_endpoint.zig",
         .owner = .game_tooling,
@@ -97,6 +98,7 @@ const named_owners = [_]NamedOwner{
     .{ .name = "sandbox_diagnostics_contract", .owner = .game_runtime_content },
     .{ .name = "sandbox_authoring", .owner = .game_tooling },
     .{ .name = "sandbox_developer_protocol", .owner = .game_tooling },
+    .{ .name = "sandbox_developer_cli_contract", .owner = .game_tooling },
     .{ .name = "developer_endpoint_client", .owner = .game_tooling },
 };
 

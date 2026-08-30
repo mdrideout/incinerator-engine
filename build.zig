@@ -463,6 +463,16 @@ pub fn build(b: *std.Build) void {
     else
         disabled_developer_endpoint_module;
 
+    const sandbox_developer_cli_contract_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/sandbox_developer_cli_contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{
+            .name = "sandbox_developer_protocol",
+            .module = sandbox_developer_protocol_module,
+        }},
+    });
+
     const incinerator_dev_module = b.createModule(.{
         .root_source_file = b.path("tools/incinerator_dev.zig"),
         .target = target,
@@ -475,6 +485,10 @@ pub fn build(b: *std.Build) void {
             .{
                 .name = "sandbox_developer_protocol",
                 .module = sandbox_developer_protocol_module,
+            },
+            .{
+                .name = "sandbox_developer_cli_contract",
+                .module = sandbox_developer_cli_contract_module,
             },
         },
     });
@@ -507,6 +521,20 @@ pub fn build(b: *std.Build) void {
         "Run reusable local developer client tests",
     );
     developer_client_test_step.dependOn(&run_developer_client_tests.step);
+
+    const developer_cli_contract_tests = b.addTest(.{
+        .root_module = sandbox_developer_cli_contract_module,
+    });
+    const run_developer_cli_contract_tests = b.addRunArtifact(
+        developer_cli_contract_tests,
+    );
+    const developer_cli_contract_test_step = b.step(
+        "test-developer-cli-contract",
+        "Run first-class CLI agent-contract tests",
+    );
+    developer_cli_contract_test_step.dependOn(
+        &run_developer_cli_contract_tests.step,
+    );
 
     const incinerator_dev_tests = b.addTest(.{ .root_module = incinerator_dev_module });
     const run_incinerator_dev_tests = b.addRunArtifact(incinerator_dev_tests);
@@ -569,6 +597,7 @@ pub fn build(b: *std.Build) void {
     );
     developer_endpoint_test_step.dependOn(&run_developer_protocol_tests.step);
     developer_endpoint_test_step.dependOn(&run_developer_client_tests.step);
+    developer_endpoint_test_step.dependOn(&run_developer_cli_contract_tests.step);
     developer_endpoint_test_step.dependOn(&run_incinerator_dev_tests.step);
     developer_endpoint_test_step.dependOn(&run_developer_endpoint_transport_tests.step);
     developer_endpoint_test_step.dependOn(&run_developer_endpoint_integration_tests.step);

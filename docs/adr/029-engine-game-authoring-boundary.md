@@ -1,8 +1,8 @@
 # ADR-029: Engine, Game, and Authoring Ownership Boundary
 
-**Status:** Accepted; EA0 accepted; EA0.5 local developer control authorized
-ahead of EA1 with machine-verifiable closeout complete and human/product-owner
-acceptance pending; EA1-EA5 pending
+**Status:** Accepted; EA0 and EA0.5 accepted; Phase 7 first-class CLI agent
+contract implementation/automated/native/agent candidate complete with
+product-owner stop review pending; EA1-EA5 pending
 
 **Date:** 2026-08-18
 
@@ -158,7 +158,13 @@ untrusted-mod or sandboxing need.
   CLI as a named EA0.5 schedule amendment before EA1. EA0 remains the completed
   contract/ownership phase; EA0.5 supplies transport and a client without
   changing the four-owner decision or moving vehicle-specific schemas out of
-  EA2.
+  EA2. The product owner accepted EA0.5 on 2026-08-30 after its human usability
+  and final editor-affordance correction checkpoint.
+- On 2026-08-30 the product owner eliminated the planned MCP adapter. Local
+  coding agents are guaranteed shell access, so the accepted typed client and
+  canonical JSON CLI remain the sole agent-control product. Phase 7 adds a
+  self-describing operation catalog, guided result model, and repository-owned
+  skill without changing the endpoint protocol or feature-owner authority.
 
 ## References
 

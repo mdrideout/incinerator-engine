@@ -1,11 +1,8 @@
 # EA0.5 Local Developer Endpoint and Canonical CLI Validation
 
-**Status:** Implementation, focused and aggregate automated acceptance,
-installed native Metal acceptance, LLM-agent workflow, and architecture,
-security, dead-code, and documentation review complete; human usability and
-product-owner checkpoints pending
+**Status:** Complete and accepted by the product owner on 2026-08-30
 
-**Date:** 2026-08-29
+**Date:** 2026-08-30
 
 **Program:**
 [Editor Interaction and Agent Control Plan](../../EDITOR_INTERACTION_AND_AGENT_CONTROL_PLAN.md)
@@ -27,10 +24,11 @@ defined and validated endpoint lifecycle, discovery, run identity, protocol
 cohort, and schema identity values, but it created no socket or CLI. This phase
 does not rewrite that historical boundary.
 
-The implementation and machine-verifiable closeout are complete. EA0.5 is not
-accepted until the human usability walkthrough and product-owner stop review
-are complete. EA1 remains blocked on that checkpoint. Phase 7's MCP adapter
-has not started.
+The implementation, machine-verifiable closeout, human usability walkthrough,
+and product-owner stop review are complete. EA0.5 is accepted. On 2026-08-30
+the product owner eliminated the planned MCP adapter and authorized Phase 7 to
+make the canonical CLI and repository-owned agent skill first-class. EA1 has
+not started.
 
 ## Acceptance Ledger
 
@@ -50,10 +48,10 @@ has not started.
 | Full aggregate/save/replay/incident gates | Complete for EA0.5 | Editor-on/off aggregates, installed native S5 authoring/save cold-verifier smokes, current-run incident inspection, and the aggregate replay/incident regressions pass |
 | Installed native Metal endpoint journey | Complete | Final run `2026-08-30T03-35-14.391Z_solo_e03eb8dd` exercised discovery/query, selection, camera, authoring, stale edit/history rejection, undo/redo, complete frame capture, committed save, and clean endpoint retirement |
 | LLM-agent workflow | Complete | The canonical installed CLI alone discovered the run, found a real target, inspected, selected, changed camera and crate state, observed terminal results, reverted/reapplied, captured evidence, saved, and verified shutdown without private process state |
-| Human usability workflow | Pending | Confirm that CLI-driven selection/camera/authoring are legible in ImGui and the rendered viewport and that normal Character, Free Camera, gizmo, Escape, capture, and save interactions still feel correct |
+| Human usability workflow | Complete | The product owner confirmed the CLI/editor workflow and the corrected Character/Free Camera, selection, gizmo, Escape, capture, and rendering behavior. The final finding—yellow selection bounds surviving a Free Camera→Character transition—was repaired by one shared editor-world-affordance projection that hides bounds, gizmo, and hit regions together while retaining semantic selection and inactive draft state |
 | Architecture/security/dead-code/doc review | Complete | No material EA0.5 ownership, security, dead-code, or documentation blocker remains; transport lifecycle races and unbounded allocations found during review were repaired and regression-covered |
 | Repository-wide macOS readiness | Inherited failure, outside EA0.5 | `test-macos-readiness` reaches S3 then fails `S3StreamingSmokeEvidenceMissing` because the historical S3 smoke still expects one resident scene/2,528 bytes while the accepted S15 product admits four scenes/10,112 bytes; focused and aggregate EA0.5 gates remain green |
-| Product-owner checkpoint | Pending | EA0.5 has been authorized but not accepted |
+| Product-owner checkpoint | Complete | The product owner accepted EA0.5 on 2026-08-30 after the final editor-affordance correction and validation |
 
 ## Implemented Surface
 
@@ -134,13 +132,15 @@ These commands pass on the final implementation:
 |---|---|
 | `zig build -Deditor=true -Dincident-capture=true -j1` | Pass; 79/79 steps; graphical product and installed CLI compile |
 | `zig build test-developer-endpoint -Deditor=true -j1` | Pass; 65/65 steps and 35/35 tests across protocol, reusable client, CLI grammar, macOS transport lifecycle, real local-socket integration, and graphical-App dispatch |
-| `zig build test-sandbox-developer-host` | Pass; graphical developer-owner diagnostics, incident evidence, and correlated-frame seam coverage |
-| `zig build test -Deditor=true -j1` | Pass; 318/318 steps and 1,238/1,238 tests |
-| `zig build test -Deditor=false -j1` | Pass; 313/313 steps and 1,102/1,104 tests, with the two endpoint-dependent cases skipped as designed |
+| `zig build test-sandbox-developer-host test-editor-gizmo -Deditor=true` | Pass; 46/46 shared steps and 147/147 focused tests covering routing, draft/drop/cancel, mode/visibility cleanup, and stale hit-region removal |
+| `zig build test -Deditor=true -j1` | Pass; 318/318 steps and 1,245/1,245 tests |
+| `zig build test -Deditor=false -j1` | Pass; 313/313 steps and 1,105/1,107 tests, with the two endpoint-dependent cases skipped as designed |
 | `zig build verify-ea0-ownership test-ea0-ownership -Deditor=true -j1` | Pass; 6/6 steps and 5/5 tests; EA0 four-owner dependency boundary and explicit adapter classification remain executable |
 | `zig build smoke-installed-s5-authoring-macos -Deditor=true -j1` | Pass; 90/90 steps; native Metal edit/undo/redo revisions 1/2/3, committed save, and canonical editor-free cold restore |
 | `zig build smoke-installed-s5-save-macos -Deditor=true -j1` | Pass; 85/85 steps; canonical active, waiting, and content-unloaded restart cases |
 | `zig build inspect-incident -- <final-run>` | Pass; complete anomaly, 112 artifacts, zero artifact failures |
+| `zig build test-mouse-capture-macos -Deditor=true` | Pass; native SDL Character/Free Camera, Escape, menu, selection-suppression, and explicit-quit routing |
+| `zig build smoke-installed-s1-macos -Deditor=true` | Pass; 86/86 steps, 160/160 ready Metal frames, and clean ImGui/renderer teardown after the final interaction correction |
 
 The ordinary graphical product treats `--save-root` as a write destination and
 starts a fresh world on relaunch; graphical auto-restore is not part of EA0.5.
@@ -224,11 +224,34 @@ From a second terminal:
     `--discovery` path.
 11. Confirm normal Character play, Free Camera navigation, gizmo capture,
     Escape routing, rendering, incident capture, and save behavior remain
-    unchanged throughout the workflow.
+    unchanged throughout the workflow. A CLI or UI mode change to Character
+    must retain semantic selection/Inspector state while hiding the yellow
+    bounds, gizmo, and hit claims; returning to Free Camera must reproject them
+    without a new transaction.
+
+## Product-Owner Acceptance
+
+The product owner completed the human checkpoint and accepted EA0.5 on
+2026-08-30. Human review found one final composition error: after selecting the
+crate in Free Camera and switching to Character, the renderer retained the
+yellow selection bounds after the ImGui gizmo disappeared. The repair did not
+clear semantic selection or the Inspector draft. Instead, one explicit
+editor-visible/Free-Camera policy now controls renderer bounds, ImGui handles,
+and synchronous handle claims together. Mode change, editor hiding, focus
+loss, and minimization also end active capture and discard stale projected hit
+regions. Returning to Free Camera reprojects current state without allocating
+a selection or authoring transaction.
+
+The final corrected tree passed the focused, editor-enabled, editor-disabled,
+validation, native SDL, and installed Metal gates recorded above. The inherited
+pre-S15 `test-macos-readiness` expectation remains outside EA0.5 and does not
+change this acceptance.
 
 ## Phase 7 Boundary
 
-Phase 7 has not started. No MCP server, MCP dependency, or second mutation path
-is part of this implementation. The eventual adapter must map one-to-one onto this
-accepted typed client and keep `incinerator-dev` as the canonical diagnostic and
-acceptance client.
+EA0.5 acceptance removed Phase 7's prerequisite blocker. The product owner then
+made a separate 2026-08-30 decision: local coding agents always have shell
+access, so MCP adds no required capability and is eliminated. Phase 7 extends
+the accepted `incinerator-dev` product with a machine-readable operation
+catalog, explicit terminal/next guidance, and a repository-owned skill. It adds
+no endpoint command, second protocol, or second mutation authority.

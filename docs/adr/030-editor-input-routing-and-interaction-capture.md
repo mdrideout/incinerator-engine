@@ -52,6 +52,14 @@ rule says so. Free Camera does not imply pause or authoring authority. Opening
 the system menu clears local held actions but does not claim multiplayer or
 authority pause semantics.
 
+The named editor-world-affordance composition requires both a visible editor
+and Free Camera mode. Semantic selection, Inspector/Outliner correlation, and
+an inactive authoring draft may persist through Character mode, but renderer
+selection bounds, ImGui manipulators, and their synchronous hit regions must
+all disappear together. Returning to a visible Free Camera reprojects those
+affordances from the retained state; it does not create a new selection or
+transaction.
+
 ### Event routing
 
 SDL remains the physical input owner. Every event is first forwarded to the
@@ -127,6 +135,9 @@ The deterministic renderer owns the central scene. The passthrough central dock
 node stays empty. ImGui may draw bounded toolbars, gizmos, menus, and status
 surfaces whose input rectangles match their visible affordances; it may not
 install a transparent full-scene window or dock host over the product view.
+Renderer-owned selection decoration and ImGui-owned handles use the same
+editor-world-affordance composition rule so a mode or visibility transition
+cannot leave a half-visible or stale interactive projection.
 
 ### Automated acceptance
 

@@ -2,10 +2,18 @@
 
 const std = @import("std");
 const client_module = @import("developer_endpoint_client");
+const agent_contract = @import("sandbox_developer_cli_contract");
 const protocol = @import("sandbox_developer_protocol");
+
+const ExitDisposition = enum {
+    success,
+    operation_failed,
+};
 
 const Invocation = union(enum) {
     help,
+    agent_bootstrap,
+    agent_catalog,
     discovery,
     request: protocol.Command,
 };
@@ -21,7 +29,7 @@ const GlobalArguments = struct {
 };
 
 pub fn main(init: std.process.Init) !void {
-    run(init) catch |err| {
+    const disposition = run(init) catch |err| {
         writeJson(init.io, .{
             .client_error = .{
                 .code = @errorName(err),
@@ -29,9 +37,10 @@ pub fn main(init: std.process.Init) !void {
         }) catch {};
         std.process.exit(1);
     };
+    if (disposition == .operation_failed) std.process.exit(1);
 }
 
-fn run(init: std.process.Init) !void {
+fn run(init: std.process.Init) !ExitDisposition {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     var globals = try parseGlobalArguments(init.gpa, args);
     defer globals.deinit(init.gpa);
@@ -41,7 +50,52 @@ fn run(init: std.process.Init) !void {
         globals.command.items,
     );
     switch (invocation) {
-        .help => return writeUsage(init.io),
+        .help => {
+            try writeUsage(init.io);
+            return .success;
+        },
+        .agent_catalog => {
+            try writeJson(init.io, agent_contract.catalog());
+            return .success;
+        },
+        .agent_bootstrap => {
+            const discovery_path = try resolveDiscoveryPath(
+                init.gpa,
+                init.environ_map,
+                globals.discovery_path,
+            );
+            defer init.gpa.free(discovery_path);
+            var discovery = try client_module.loadDiscovery(
+                init.gpa,
+                init.io,
+                discovery_path,
+            );
+            defer discovery.deinit();
+            const available_next = [_]agent_contract.SuggestedOperation{
+                .{ .operation = "agent.catalog" },
+                .{ .operation = "endpoint.describe" },
+                .{ .operation = "world.list" },
+                .{ .operation = "content.list" },
+            };
+            const inactive_next = [_]agent_contract.SuggestedOperation{
+                .{ .operation = "agent.catalog" },
+                .{ .operation = "endpoint.discovery" },
+            };
+            const next: []const agent_contract.SuggestedOperation = if (discovery.value.lifecycle == .available) &available_next else &inactive_next;
+            try writeJson(init.io, .{
+                .agent_contract_revision = agent_contract.agent_contract_revision,
+                .catalog_digest = agent_contract.catalogDigest(),
+                .local_only = true,
+                .discovery_path = discovery_path,
+                .lifecycle = discovery.value.lifecycle,
+                .run_id = discovery.value.run_id,
+                .protocol_cohort = discovery.value.protocol_cohort,
+                .schema_digest = discovery.value.schema_digest,
+                .schema_ids = discovery.value.schema_ids,
+                .next = next,
+            });
+            return .success;
+        },
         .discovery => {
             const discovery_path = try resolveDiscoveryPath(
                 init.gpa,
@@ -55,7 +109,8 @@ fn run(init: std.process.Init) !void {
                 discovery_path,
             );
             defer discovery.deinit();
-            return writeJson(init.io, discovery.value);
+            try writeJson(init.io, discovery.value);
+            return .success;
         },
         .request => |command| {
             const discovery_path = try resolveDiscoveryPath(
@@ -68,9 +123,53 @@ fn run(init: std.process.Init) !void {
             defer client.deinit();
             var response = try client.callCommand(nextRequestId(init.io), command);
             defer response.deinit();
-            return writeJson(init.io, response.value);
+            var next_buffer: [2]agent_contract.SuggestedOperation = undefined;
+            const guidance = agent_contract.responseGuidance(response.value, &next_buffer);
+            const descriptor = agent_contract.descriptorForCommand(command);
+            const disposition = outcomeDisposition(response.value.outcome);
+            try writeJson(init.io, .{
+                .agent_contract_revision = agent_contract.agent_contract_revision,
+                .operation = descriptor.id,
+                .terminal = guidance.terminal,
+                .next = guidance.next,
+                .response = response.value,
+            });
+            return disposition;
         },
     }
+}
+
+fn outcomeDisposition(outcome: protocol.ResponseOutcome) ExitDisposition {
+    return switch (outcome) {
+        .failure => .operation_failed,
+        .success => |payload| switch (payload) {
+            .authoring_admission => |value| if (value.admitted)
+                .success
+            else
+                .operation_failed,
+            .transaction => |value| if (value.disposition == .rejected)
+                .operation_failed
+            else
+                .success,
+            .save_admission => |value| if (value.admitted)
+                .success
+            else
+                .operation_failed,
+            .save_result => |value| switch (value.disposition) {
+                .pending, .committed => .success,
+                .failed, .not_found => .operation_failed,
+            },
+            .frame_admission => |value| if (value.admitted)
+                .success
+            else
+                .operation_failed,
+            .frame_result => |value| switch (value.disposition) {
+                .pending, .captured => .success,
+                .failed, .not_found => .operation_failed,
+            },
+            else => .success,
+        },
+    };
 }
 
 fn resolveDiscoveryPath(
@@ -188,6 +287,18 @@ fn parseInvocation(
     }
     if (tokens.len == 1 and std.mem.eql(u8, tokens[0], "discovery")) {
         return .discovery;
+    }
+    if (tokens.len == 2 and
+        std.mem.eql(u8, tokens[0], "agent") and
+        std.mem.eql(u8, tokens[1], "bootstrap"))
+    {
+        return .agent_bootstrap;
+    }
+    if (tokens.len == 2 and
+        std.mem.eql(u8, tokens[0], "agent") and
+        std.mem.eql(u8, tokens[1], "catalog"))
+    {
+        return .agent_catalog;
     }
 
     var parser = try CommandParser.init(allocator, tokens);
@@ -343,7 +454,10 @@ fn writeUsage(io: std.Io) !void {
     var buffer: [4096]u8 = undefined;
     var writer = std.Io.File.stdout().writer(io, &buffer);
     try writer.interface.writeAll(
-        \\incinerator-dev [--discovery /absolute/discovery.json] <command> --json
+        \\incinerator-dev [--discovery /absolute/discovery.json] [--json] <command>
+        \\  All non-help output is JSON; --json is optional.
+        \\  agent bootstrap
+        \\  agent catalog
         \\  discovery
         \\  describe
         \\  schema list
@@ -397,6 +511,20 @@ test "CLI parses every concrete operation family" {
     }
 }
 
+test "every catalog example parses through the canonical CLI grammar" {
+    for (agent_contract.operationCatalog()) |operation| {
+        const invocation = try parseInvocation(std.testing.allocator, operation.example_argv);
+        if (operation.endpoint_schema) |schema| {
+            try std.testing.expect(invocation == .request);
+            try std.testing.expectEqual(schema, invocation.request.schemaId());
+            try std.testing.expectEqualStrings(
+                operation.id,
+                agent_contract.descriptorForCommand(invocation.request).id,
+            );
+        }
+    }
+}
+
 test "target grammar keeps world and content identities nominally distinct" {
     const entity = try parseTarget("persistent-entity:1:4");
     try std.testing.expect(entity == .persistent_entity);
@@ -420,6 +548,101 @@ test "CLI rejects unknown and duplicate options" {
             "inspect",  "--target",              "persistent-entity:1:4",
             "--target", "persistent-entity:1:5",
         }),
+    );
+}
+
+test "CLI exit status distinguishes progress from typed operation failure" {
+    const target = protocol.Target{
+        .persistent_entity = .{ .namespace = 1, .local = 1 },
+    };
+    try std.testing.expectEqual(
+        ExitDisposition.operation_failed,
+        outcomeDisposition(.{ .failure = .{
+            .code = .owner_unavailable,
+            .detail = "owner unavailable",
+        } }),
+    );
+    try std.testing.expectEqual(
+        ExitDisposition.success,
+        outcomeDisposition(.{ .success = .{ .authoring_admission = .{
+            .admitted = true,
+            .target = target,
+            .transaction_id = 1,
+            .expected_revision = 0,
+        } } }),
+    );
+    try std.testing.expectEqual(
+        ExitDisposition.operation_failed,
+        outcomeDisposition(.{ .success = .{ .authoring_admission = .{
+            .admitted = false,
+            .target = target,
+            .transaction_id = null,
+            .expected_revision = 0,
+        } } }),
+    );
+    try std.testing.expectEqual(
+        ExitDisposition.operation_failed,
+        outcomeDisposition(.{ .success = .{ .transaction = .{
+            .transaction_id = 1,
+            .source = .local_developer_client,
+            .target = target,
+            .scope = .session,
+            .disposition = .rejected,
+            .expected_revision = 0,
+            .committed_revision = null,
+            .before_position = null,
+            .requested_position = .{ 1, 2, 3 },
+            .committed_position = null,
+            .rejection = null,
+            .authority_tick = 1,
+            .presentation_frame = 2,
+        } } }),
+    );
+    try std.testing.expectEqual(
+        ExitDisposition.success,
+        outcomeDisposition(.{ .success = .{ .save_result = .{
+            .save_request_id = 1,
+            .disposition = .committed,
+            .slot = "sandbox",
+            .generation = null,
+            .payload_bytes = 42,
+            .detail = null,
+        } } }),
+    );
+    try std.testing.expectEqual(
+        ExitDisposition.operation_failed,
+        outcomeDisposition(.{ .success = .{ .save_result = .{
+            .save_request_id = 2,
+            .disposition = .not_found,
+            .slot = "sandbox",
+            .generation = null,
+            .payload_bytes = null,
+            .detail = "not retained",
+        } } }),
+    );
+    try std.testing.expectEqual(
+        ExitDisposition.success,
+        outcomeDisposition(.{ .success = .{ .frame_result = .{
+            .capture_id = 1,
+            .disposition = .pending,
+            .artifact_path = null,
+            .authority_tick = null,
+            .presentation_frame = null,
+            .wall_unix_ms = null,
+            .detail = null,
+        } } }),
+    );
+    try std.testing.expectEqual(
+        ExitDisposition.operation_failed,
+        outcomeDisposition(.{ .success = .{ .frame_result = .{
+            .capture_id = 2,
+            .disposition = .failed,
+            .artifact_path = null,
+            .authority_tick = null,
+            .presentation_frame = null,
+            .wall_unix_ms = null,
+            .detail = "capture failed",
+        } } }),
     );
 }
 

@@ -1,8 +1,9 @@
 # Engine Authoring Foundation
 
-**Status:** Approved roadmap; EA0 accepted; EA0.5 implementation plus focused,
-aggregate, installed native Metal, and LLM-agent closeout complete, with human
-usability and product-owner review pending; EA1-EA5 not started
+**Status:** Approved roadmap; EA0 and EA0.5 accepted; Phase 7 first-class CLI
+agent-contract implementation/automated/native/clean-context/comprehensive-
+manual-agent candidate complete with product-owner stop review pending; EA1-EA5
+not started
 
 **Date:** 2026-08-18
 
@@ -95,12 +96,15 @@ introduced.
 ### EA0.5 — Local developer endpoint and canonical CLI
 
 Schedule amendment status: explicitly authorized by the product owner on
-2026-08-29, ahead of EA1. EA0.5 implements the transport and canonical client
-that EA0 deliberately only described. Its implementation, focused and
-aggregate automated gates, installed native Metal journey, LLM-agent workflow,
-and architecture/security/dead-code/documentation review are complete; human
-usability and product-owner acceptance remain pending. It does not
-retroactively enlarge EA0.
+2026-08-29, ahead of EA1, and accepted on 2026-08-30. EA0.5 implements the
+transport and canonical client that EA0 deliberately only described. Its
+implementation, focused and aggregate automated gates, installed native Metal
+journey, LLM-agent workflow, human usability checkpoint, and
+architecture/security/dead-code/documentation review are complete. It does not
+retroactively enlarge EA0. On 2026-08-30 the product owner eliminated the
+planned MCP adapter because local coding agents always have shell access and
+authorized Phase 7 to make the CLI catalog, result guidance, and repository
+skill first-class instead.
 
 - Expose a developer-only process-local macOS Unix socket with explicit
   lifecycle, run identity, protocol cohort, registered schema identities, and

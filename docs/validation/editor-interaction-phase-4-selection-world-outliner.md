@@ -28,11 +28,15 @@ coordinates. The nearest intersected immutable world AABB wins. A miss clears
 selection. Character mode and all ImGui-owned coordinates remain excluded.
 
 The selected object receives an unlit yellow AABB in ordinary deterministic
-output. The originally accepted passive red/green/blue axis marker was removed
-when Phase 5 introduced the interactive crate translate gizmo, avoiding two
-different axis displays on one selection. The yellow visualization is submitted
-directly through the renderer debug path and is not recorded as gameplay,
-authority, physics, save/replay, replication, or neural-renderer input.
+output while the visible editor is in Free Camera. Semantic selection remains
+active for Outliner/Inspector continuity in Character mode, but the renderer
+decoration disappears with the ImGui manipulator and hit regions. Returning to
+Free Camera reprojects both from retained selection. The originally accepted
+passive red/green/blue axis marker was removed when Phase 5 introduced the
+interactive crate translate gizmo, avoiding two different axis displays on one
+selection. The yellow visualization is submitted directly through the renderer
+debug path and is not recorded as gameplay, authority, physics, save/replay,
+replication, or neural-renderer input.
 
 ## Ownership and contracts
 
@@ -156,7 +160,10 @@ Then test:
 8. Click the top toolbar, menus, left/right panels, bottom diagnostics tabs,
    status bar, and footer. Confirm selection never changes through UI.
 9. Switch to Character mode and click/fire normally. Confirm Character clicks
-   do not select and Free Camera selection clicks never fire the handgun.
+   do not select, the yellow editor-world bounds are hidden without clearing
+   the Outliner/Inspector selection, and Free Camera selection clicks never
+   fire the handgun. Return to Free Camera and confirm the retained selection
+   bounds reappear.
 10. Despawn or stream away a selected supported gameplay object if convenient.
     Confirm the highlight and selection clear safely on the next projection.
 

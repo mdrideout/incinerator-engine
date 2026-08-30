@@ -37,6 +37,21 @@
   applicable native SDL/Metal acceptance; human review is reserved for
   usability and visual feel.
 
+## Developer CLI
+
+- Before using or changing `incinerator-dev`, its typed schemas, agent-facing
+  descriptions, or an automated authoring workflow, read
+  `skills/incinerator-developer-cli/SKILL.md` completely.
+- Local coding agents are expected to have shell access. `incinerator-dev` is
+  the sole agent-control product; do not add MCP, a shell evaluator, a generic
+  command/property bus, or another mutation authority.
+- Begin from `incinerator-dev agent bootstrap`, then read
+  `incinerator-dev agent catalog`. Discover targets and revisions from the
+  current run, follow admitted work to a terminal result, and re-inspect state.
+- Keep the executable catalog authoritative for current operations. Skills
+  own workflow judgment and must not duplicate a command catalog that can
+  drift.
+
 ## Neural Rendering
 
 - Neural rendering is paused indefinitely by product-owner decision. Read `docs/design/neural-rendering-pause.md` first. Do not initiate, extend, retrain, optimize, promote, or begin another neural-rendering phase unless the user explicitly requests that the track resume. Deterministic rendering is the active product focus; preserve the retained neural work without expanding it.
