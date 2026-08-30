@@ -15,12 +15,15 @@ the product-owner visual walkthrough are complete. S14 ranged combat and S15
 content-rich four-district expansion are accepted. ADR-029 and the Engine
 Authoring Foundation plan establish EA0-EA5 as the active sequence before a
 scripting decision, later gameplay pressure, and network productization. EA0
-implementation and automated/native acceptance are complete; its product-owner
-checkpoint is pending and EA1 has not started.
+is accepted. The product owner authorized the EA0.5 local endpoint and canonical
+CLI schedule amendment ahead of EA1 on 2026-08-29. Its implementation, focused
+and aggregate automation, installed native Metal evidence, LLM-agent workflow,
+and architecture/security/dead-code/documentation closeout are complete; human
+usability and product-owner acceptance remain pending. EA1 has not started.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-08-19
+**Last reviewed:** 2026-08-29
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -46,7 +49,8 @@ checkpoint is pending and EA1 has not started.
 → [`DR1 accepted`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
 → [`S14 accepted`](docs/validation/s14-ranged-combat.md)
 → [`S15 accepted`](docs/validation/s15-content-rich-district-expansion.md)
-→ [`EA0 candidate complete; product-owner review pending`](docs/validation/ea0-ownership-identity-transaction-boundary.md)
+→ [`EA0 accepted`](docs/validation/ea0-ownership-identity-transaction-boundary.md)
+→ [`EA0.5 machine closeout complete; human/product-owner acceptance pending`](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md)
 → [`EA1-EA5 pending`](docs/design/engine-authoring-foundation.md)
 
 **Active rendering direction:**
@@ -485,7 +489,7 @@ logical authority and operational lifecycle:
 | D-026 | Promotion-eligible neural-renderer weights and learned dependencies are title-specific, trained from random initialization on title-owned exact pairs, and reproduced through the engine framework; pretrained models remain comparisons only | Accepted in [ADR-026](docs/adr/026-from-scratch-title-neural-renderer.md), the [north star](docs/design/title-neural-renderer-north-star.md), and its [phase-gated implementation plan](docs/design/title-neural-renderer-implementation-plan.md) | Retained policy if the paused track is explicitly restarted |
 | D-027 | One finite-ammunition handgun is authoritative across solo/listen/dedicated placement; clients submit intent, authority derives current-state semantic/Jolt hits, and vitals owns damage/death | Accepted and implemented in [ADR-027](docs/adr/027-authoritative-ranged-combat.md) and the [S14 validation ledger](docs/validation/s14-ranged-combat.md) | Future weapon slices and measured lag-compensation decision |
 | D-028 | The current sandbox is one exact four-district 2×2 cohort; the composition owns continuous flat support, districts own obstacles/decoration/navigation, and the admitted 32-node graph remains sufficient until measured content proves a navmesh or crowd need | Accepted and implemented in [ADR-028](docs/adr/028-content-rich-four-district-cohort.md), the [phase plan](docs/design/s15-content-rich-district-expansion.md), [evaluation world](docs/design/s15-four-district-evaluation-world.md), [accepted validation](docs/validation/s15-content-rich-district-expansion.md), and [performance baseline](docs/performance/s15-baseline.md) | Complete; establishes EA0-EA5 baseline |
-| D-029 | Reusable runtime capabilities, reusable engine tooling, game runtime/content, and game tooling are separate owners; typed UI and local AI clients share owner-defined authoring transactions; scripting remains evidence-gated | Accepted in [ADR-029](docs/adr/029-engine-game-authoring-boundary.md); EA0 implementation candidate and evidence are complete under the [EA0 validation ledger](docs/validation/ea0-ownership-identity-transaction-boundary.md); EA1-EA5 remain planned in the [foundation roadmap](docs/design/engine-authoring-foundation.md) | EA0 product-owner checkpoint, then EA1-EA5 and final G1 proof |
+| D-029 | Reusable runtime capabilities, reusable engine tooling, game runtime/content, and game tooling are separate owners; typed UI and local AI clients share owner-defined authoring transactions; scripting remains evidence-gated | Accepted in [ADR-029](docs/adr/029-engine-game-authoring-boundary.md); EA0 and its evidence are accepted under the [EA0 validation ledger](docs/validation/ea0-ownership-identity-transaction-boundary.md); the product owner authorized EA0.5 ahead of EA1 and its completed machine closeout is recorded in the [EA0.5 ledger](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md); EA1-EA5 remain planned in the [foundation roadmap](docs/design/engine-authoring-foundation.md) | Complete EA0.5 human/product-owner acceptance, then EA1-EA5 and final G1 proof |
 
 ### Decision notes
 
@@ -572,7 +576,8 @@ before dependency resolution.
 | DR1 | The ordinary deterministic product has one readable lit material path, coherent evaluation world, Render Lab, and semantic render evidence | Complete and accepted; native Metal journey, incident evidence, editor-on/off aggregates, and product-owner visual walkthrough pass |
 | S14 | One authoritative finite-ammunition handgun works across solo, listen, and dedicated placements | Complete and accepted; automated/native, ordinary-product, and continuous mouse-look follow-up pass |
 | S15 | One content-rich four-district cohort supports cross-axis traversal, authored activity, deterministic content admission, and measured four-scene residency | Complete and accepted; automated/native and product-owner evidence pass |
-| EA0 | Engine/game/tooling ownership, asset identity, and typed authoring transaction boundary are executable | Implementation and automated/native acceptance complete; product-owner checkpoint pending |
+| EA0 | Engine/game/tooling ownership, asset identity, and typed authoring transaction boundary are executable | Complete and accepted |
+| EA0.5 | Developer-only local typed endpoint and canonical CLI use the same selection, viewport, authoring, persistence, and capture owners as ImGui | Implementation, focused/aggregate automation, native Metal, LLM-agent workflow, and architecture/security/dead-code/documentation closeout complete; human usability and product-owner checkpoints pending |
 | EA1 | Practical texture/material import, assignment, authoring, and evidence | Approved; implementation not started |
 | EA2 | Vehicle archetypes, live revisioned tuning, and local AI/developer control | Approved; implementation not started |
 | EA3 | Authored directional sun and point-light capabilities | Approved; implementation not started |
@@ -1870,11 +1875,13 @@ Record evidence rather than relying only on target numbers:
 
 ### Current next product sequence
 
-DR1, S14, and S15 are accepted. EA0 ownership/identity/transaction
-implementation and automated/native acceptance are complete; its product-owner
-checkpoint is the active phase in the approved
-[Engine Authoring Foundation](docs/design/engine-authoring-foundation.md). EA1
-has not started.
+DR1, S14, S15, and EA0 are accepted. EA0.5 local developer control is the
+active phase in the approved
+[Engine Authoring Foundation](docs/design/engine-authoring-foundation.md). Its
+implementation, focused/aggregate automated acceptance, installed native Metal,
+LLM-agent workflow, and architecture/security/dead-code/documentation review
+are complete; human usability and product-owner review remain. EA1 has not
+started.
 
 47. [x] **S12 — Destination-driven navigation and recovery implementation.**
     Implemented under
@@ -1970,43 +1977,51 @@ older historical “next phase” language.
     The [performance baseline](docs/performance/s15-baseline.md) records four
     simultaneous Metal scenes, 32-node route pressure, 24 physical activity
     placements, and two-rate product evidence.
-53. [ ] **EA0 — Ownership, identity, and transaction boundary.** Implementation
-    and automated/native acceptance are complete; product-owner review remains
-    before this item is accepted. Under
+53. [x] **EA0 — Ownership, identity, and transaction boundary.** Implementation,
+    automated/native acceptance, and product-owner review are complete. Under
     [ADR-029](docs/adr/029-engine-game-authoring-boundary.md), the four-owner
     dependency manifest is executable, stable authoring target/asset identity
     and the typed revisioned change envelope are public contracts, and crate
     authoring proves the shared authority path without a generic CVar/property
     system. See the [implementation plan](docs/design/ea0-ownership-identity-transaction-boundary.md)
     and [validation ledger](docs/validation/ea0-ownership-identity-transaction-boundary.md).
-54. [ ] **EA1 — Practical textures and materials.** Extend the existing offline
+54. [ ] **EA0.5 — Local developer endpoint and canonical CLI.** Complete the
+    remaining human usability and product-owner stop review for the implemented
+    local typed socket, reusable client, and `incinerator-dev` product. Focused
+    and aggregate automation, installed native Metal, LLM-agent operation,
+    architecture, security, dead-code, and documentation review are complete.
+    Preserve EA0's historical contracts-only/no-transport scope and keep Phase
+    7 MCP work unstarted. See the
+    [implementation plan](EDITOR_INTERACTION_AND_AGENT_CONTROL_PLAN.md) and
+    [validation ledger](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md).
+55. [ ] **EA1 — Practical textures and materials.** Extend the existing offline
     glTF/cooked/GPU proof into real project-owned texture import, material
     assignment, Material Lab authoring, deterministic dependency identity, and
     native/incident acceptance.
-55. [ ] **EA2 — Vehicle archetypes and live developer control.** Add admitted
+56. [ ] **EA2 — Vehicle archetypes and live developer control.** Add admitted
     archetype identity, per-archetype tuning/presentation, Vehicle Lab, safe
     authority-tick reconfiguration, and one process-local CLI/LLM adapter over
     the same typed transactions and vehicle-dynamics measurements.
-56. [ ] **EA3 — Authored lighting.** Make the game-owned sun preset editable,
+57. [ ] **EA3 — Authored lighting.** Make the game-owned sun preset editable,
     add stable point lights, Lighting Lab/gizmos, UI/agent transactions,
     persistence, and complete render/incident evidence without adding a render
     graph or speculative shadow framework.
-57. [ ] **EA4 — Game-owned map authoring.** Replace hard-coded layout editing
+58. [ ] **EA4 — Game-owned map authoring.** Replace hard-coded layout editing
     with a versioned placed-asset map, reusable engine selection/transform/
     collision/navigation/streaming tools, a game-owned urban construction kit,
     deterministic cooking, and a map-authoring skill.
-58. [ ] **EA5 / G1 — Open-engine/separate-game proof.** Build the game as a
+59. [ ] **EA5 / G1 — Open-engine/separate-game proof.** Build the game as a
     separate composition and content package; separate engine/game identities,
     configuration, tools, third-party notices, and the retained no-license-
     grant disposition without stabilizing a speculative public runtime ABI.
-59. [ ] **Scripting decision gate.** Add no VM by default. Review concrete
+60. [ ] **Scripting decision gate.** Add no VM by default. Review concrete
     mission/trigger/dialogue or rapid-iteration pressure after EA5 and write a
     separate ADR/vertical slice only if data plus Zig composition is
     insufficient.
-60. [ ] **S16 — Traffic and ambient vehicle activity (proposed).** Use the new
+61. [ ] **S16 — Traffic and ambient vehicle activity (proposed).** Use the new
     vehicle archetypes and map/road data as a small authored gameplay pressure
     slice before adding a generic traffic or crowd framework.
-61. [ ] **MP7+ — Network productization when the gameplay loop warrants it.**
+62. [ ] **MP7+ — Network productization when the gameplay loop warrants it.**
     Add private Internet/Steam-compatible routing, then dedicated deployment,
     operational security, and public services as separate programs. Do not
     combine NAT/relay, hosting, accounts, matchmaking, anti-cheat, or MMO
@@ -2104,3 +2119,6 @@ older historical “next phase” language.
 | 2026-08-18 | Accepted the S15 product-owner checkpoint | The product owner reported the four-district product verified and supplied no corrective finding. S15 is complete; its automated/native evidence and human checkpoint are reconciled in the validation ledger. |
 | 2026-08-18 | Accepted the Engine Authoring Foundation roadmap | ADR-029 defines separate engine-runtime, engine-tooling, game-runtime/content, and game-tooling owners. EA0-EA5 now sequence typed authoring identity, practical textures/materials, vehicle archetypes plus local AI control, authored sun/point lights, game-owned map construction, and the final separately built game proof. Scripting remains an evidence-gated post-EA5 decision; S16 traffic is proposed afterward and MP7+ remains deferred. |
 | 2026-08-19 | Completed the EA0 implementation and automated/native acceptance candidate | Added validated stable asset/run/authoring identities, revisioned typed transaction metadata, strict authored-change evidence, endpoint lifecycle/discovery values without transport, and one explicit executable four-owner manifest. Migrated crate edit/undo/redo and replay cohort 19 through the shared authority contract, exported exact typed values/digests to diagnostics and schema-5 incidents, and replaced Camera/Stats backend borrowing with immutable host projections. Closeout repaired stale S15 validation assumptions in standalone save/replay, incident combat replacement, S14 target correlation, MP2 relevance, S11 dedicated pursuit/lifetime, and cold asynchronous fixture settling. EA0 ownership checks pass 6/6 with 4/4 negative tests; editor-on/off aggregates pass 305/305 and 302/302 with 1,022/1,022 tests; the complete S15 automated/native gate passes 305/305 with 395/395 tests. Product-owner crate/editor checkpoint remains; EA1 has not started. |
+| 2026-08-29 | Accepted EA0 and authorized the EA0.5 schedule amendment | The product owner accepted the corrected selection-driven crate Inspector, gizmo, Free Camera, mouse-capture, and Escape-routing workflow. EA0 is closed with its original lifecycle/discovery-contract-only boundary intact. EA0.5 moves the local developer endpoint and canonical CLI ahead of EA1 as a separate phase. |
+| 2026-08-29 | Completed the EA0.5 implementation and focused automated candidate | Added the developer-only macOS Unix-domain socket, atomic discovery, protocol cohort and manually registered typed schemas, reusable client, installed `incinerator-dev` JSON CLI, graphical-main-thread owner dispatch, producer-correlated transaction/save/capture results, and incident-manifest/frame evidence. `zig build`, `test-developer-endpoint`, `test-sandbox-developer-host`, and `verify-ea0-ownership` pass. Final aggregate, installed native Metal, human/LLM-agent, architecture/security, dead-code/documentation, and product-owner stop review remain; Phase 7 MCP and EA1 have not started. |
+| 2026-08-29 | Completed the EA0.5 machine-verifiable closeout | Hardened discovery ownership across concurrent/crashed runs, bounded requests/responses/discovery at measured limits, protected external undo/redo lineage, and classified the sandbox-aware transport truthfully as game tooling. Editor-on passes 318/318 steps and 1,238/1,238 tests; editor-off passes 313/313 and 1,102/1,104 with two designed skips; installed native S5 authoring/save cold verifiers pass 90/90 and 85/85; and the final native Metal CLI run proves all schemas, selection/camera, edit/stale/undo/redo, complete 112-artifact capture, committed save, and clean socket retirement. The inherited repository-wide S3 readiness smoke still expects the pre-S15 one-scene residency and fails after the accepted four-scene cohort; this is recorded without expanding EA0.5. Human usability and product-owner acceptance remain; Phase 7 MCP and EA1 have not started. |

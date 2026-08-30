@@ -162,4 +162,6 @@ Then test:
 
 The product owner confirmed the World Outliner, shared selection, viewport
 picking, selection highlight, framing, and UI click exclusion worked, then
-authorized this Phase 4 record to close. Phase 5 remains not started.
+authorized this Phase 4 record to close. Phase 5 had not started at that
+checkpoint; it is now accepted under the
+[Phase 5 validation record](editor-interaction-phase-5-crate-inspector.md).

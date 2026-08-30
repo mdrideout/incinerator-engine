@@ -1,7 +1,6 @@
 # Editor Input Routing and Escape Validation
 
-**Status:** Implementation and automated/native Metal validation complete;
-product-owner interaction review pending
+**Status:** Complete and accepted by the product owner on 2026-08-29
 
 **Date:** 2026-08-29
 
@@ -116,10 +115,10 @@ S5_AUTHORING_SMOKE_SHUTDOWN status=clean
 S5_AUTHORING_SAVE_VERIFIED id=1:1 tick=11 payload=3467 envelope=3659 canonical=true editor_free=true
 ```
 
-## Human checks that remain
+## Human checks accepted
 
-Automation can prove ownership and state effects, but the product owner should
-still confirm:
+Automation proves ownership and state effects. The product owner also confirmed
+the following interaction and visual-feel checks on 2026-08-29:
 
 1. Gizmo motion feels continuous and numeric fields track it promptly.
 2. Escape during a clean drag restores the live start pose with no menu flash.

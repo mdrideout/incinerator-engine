@@ -66,6 +66,8 @@ const neural_input_host = @import("hosts/neural_input_host.zig");
 const neural_rendering_host = @import("hosts/neural_rendering_host.zig");
 const sandbox_invocation = @import("sandbox_invocation");
 const sandbox_authoring = @import("sandbox_authoring");
+const developer_protocol = @import("sandbox_developer_protocol");
+const developer_endpoint_host = @import("developer_endpoint_host");
 const sandbox_interaction = @import("sandbox_interaction");
 const sandbox_persistence = @import("sandbox_persistence");
 const camera = @import("camera.zig");
@@ -90,6 +92,67 @@ const CharacterControllerDiagnostics = @FieldType(
     sandbox_contracts.Diagnostics,
     "character_controllers",
 );
+
+const DeveloperSaveRequest = struct {
+    id: u64,
+    feedback_sequence_at_admission: u64,
+    terminal: ?DeveloperSaveTerminal = null,
+};
+
+const DeveloperSaveTerminal = struct {
+    disposition: developer_protocol.SaveDisposition,
+    detail: []const u8,
+};
+
+/// The live socket, producer-local authoring session, and result ledgers exist
+/// only in the explicit editor/developer composition. The disabled graphical
+/// and validation products retain the pre-existing discovery projection, but
+/// carry no endpoint producer state through their runtime loop.
+const DeveloperEndpointState = if (build_options.developer_endpoint_enabled) struct {
+    server: ?*developer_endpoint_host.Server = null,
+    authoring_controller: sandbox_authoring.DefaultController,
+    authoring_change_history: std.ArrayListUnmanaged(sandbox_authoring.ChangeEvidence) = .empty,
+    next_save_request_id: u64 = 1,
+    save_requests: std.ArrayListUnmanaged(DeveloperSaveRequest) = .empty,
+
+    fn init(
+        transactions: *sandbox_authoring.TransactionSequencer,
+    ) @This() {
+        return .{
+            .authoring_controller = sandbox_authoring.DefaultController.init(
+                transactions,
+            ),
+        };
+    }
+
+    fn deinit(self: *@This()) void {
+        self.authoring_change_history.deinit(std.heap.page_allocator);
+        self.save_requests.deinit(std.heap.page_allocator);
+    }
+} else struct {
+    fn init(_: *sandbox_authoring.TransactionSequencer) @This() {
+        return .{};
+    }
+
+    fn deinit(_: *@This()) void {}
+};
+
+fn developerEditorControlCaptureDetail(
+    gizmo_drag_active: bool,
+    free_camera_look_active: bool,
+    system_menu_open: bool,
+) ?[]const u8 {
+    if (gizmo_drag_active) {
+        return "crate translate gizmo owns the current pointer interaction";
+    }
+    if (free_camera_look_active) {
+        return "Free Camera look owns the current pointer interaction";
+    }
+    if (system_menu_open) {
+        return "system menu owns editor interaction";
+    }
+    return null;
+}
 // Use shared SDL bindings to avoid opaque type conflicts
 const c = sdl.c;
 
@@ -2095,6 +2158,78 @@ fn makeAuthoringRunId(io: std.Io) engine.authoring.RunId {
     };
 }
 
+const developer_endpoint_capabilities = [_][]const u8{
+    "world-query",
+    "content-query",
+    "editor-selection",
+    "viewport-camera",
+    "crate-authoring",
+    "world-save",
+    "correlated-frame-capture",
+};
+
+fn developerTargetFromSelection(id: editor_selection.Id) developer_protocol.Target {
+    return switch (id) {
+        .persistent_entity => |value| .{ .persistent_entity = value },
+        .gameplay_entity => |value| .{ .gameplay_entity = .{
+            .namespace = value.namespace,
+            .local = value.local,
+            .incarnation = value.incarnation,
+        } },
+        .content_asset => |value| .{ .content_asset = value },
+    };
+}
+
+fn selectionFromDeveloperTarget(target: developer_protocol.Target) editor_selection.Id {
+    return switch (target) {
+        .persistent_entity => |value| .{ .persistent_entity = value },
+        .gameplay_entity => |value| .{ .gameplay_entity = .{
+            .namespace = value.namespace,
+            .local = value.local,
+            .incarnation = value.incarnation,
+        } },
+        .content_asset => |value| .{ .content_asset = value },
+    };
+}
+
+fn developerWorldType(kind: editor_selection.ObjectKind) ?developer_protocol.WorldSemanticType {
+    return switch (kind) {
+        .crate => .crate,
+        .local_player => .local_player,
+        .remote_player => .remote_player,
+        .npc => .npc,
+        .vehicle => .vehicle,
+        .carryable => .carryable,
+        .content_asset => null,
+    };
+}
+
+fn developerAuthoringRejection(
+    rejection: engine.authoring.Rejection,
+) developer_protocol.AuthoringRejection {
+    return switch (rejection) {
+        .common => |common| .{
+            .kind = switch (common) {
+                .invalid_request => .invalid_request,
+                .stale_revision => .stale_revision,
+                .scope_not_supported => .scope_not_supported,
+                .target_not_found => .target_not_found,
+                .target_kind_not_supported => .target_kind_not_supported,
+                .owner_busy => .owner_busy,
+                .owner_unavailable => .owner_unavailable,
+                .durable_commit_failed => .durable_commit_failed,
+            },
+            .detail = @tagName(common),
+        },
+        .owner => |owner| .{
+            .kind = .owner_specific,
+            .owner_domain = owner.domain,
+            .owner_code = owner.code,
+            .detail = "owner-specific rejection",
+        },
+    };
+}
+
 const App = struct {
     io: std.Io,
     window: *c.SDL_Window,
@@ -2130,6 +2265,10 @@ const App = struct {
     authoring_feedback: editor_contract.AuthoringFeedback,
     authoring_run_id: engine.authoring.RunId,
     latest_authoring_change: ?sandbox_authoring.ChangeEvidence,
+    // The enabled state is the endpoint's independent producer session and
+    // outcome lane. It shares only the composition's monotonic transaction
+    // sequencer and the concrete crate owner with ImGui.
+    developer_endpoint_state: DeveloperEndpointState,
     interaction_spawn_enabled: bool,
     interaction_spawn_submitted: bool,
     interaction_transactions: sandbox_interaction.TransactionSequencer,
@@ -2516,6 +2655,9 @@ const App = struct {
             .authoring_controller = sandbox_authoring.DefaultController.init(
                 authoring_transactions,
             ),
+            .developer_endpoint_state = DeveloperEndpointState.init(
+                authoring_transactions,
+            ),
             .authoring_requests = .{},
             .authoring_feedback = .{},
             .authoring_run_id = authoring_run_id,
@@ -2558,8 +2700,17 @@ const App = struct {
     pub fn deinit(self: *App) void {
         const completed_ticks = self.simulation.inspection().tickIndex();
 
+        if (comptime build_options.developer_endpoint_enabled) {
+            if (self.developer_endpoint_state.server) |endpoint| {
+                endpoint.stop();
+                self.developer.recordDeveloperEndpoint(endpoint.discovery());
+                endpoint.destroy();
+            }
+            self.developer_endpoint_state.server = null;
+        }
         self.input_buffer.detachGameplayMouseWindow();
         self.selection_entries.deinit(std.heap.page_allocator);
+        self.developer_endpoint_state.deinit();
 
         // Errors may unwind after external buffers were encoded into a frame
         // but before normal submission. Retire and drain that work before any
@@ -2756,6 +2907,37 @@ const App = struct {
         }
     }
 
+    fn startDeveloperEndpoint(self: *App, home_directory: []const u8) !void {
+        if (comptime !build_options.developer_endpoint_enabled) {
+            return error.DeveloperEndpointDisabled;
+        }
+        if (self.developer_endpoint_state.server != null) {
+            return error.DeveloperEndpointAlreadyStarted;
+        }
+        if (!std.fs.path.isAbsolute(home_directory)) return error.HomeDirectoryNotAbsolute;
+        const directory = try std.fs.path.join(
+            std.heap.page_allocator,
+            &.{ home_directory, "Library/Logs/Incinerator/developer" },
+        );
+        defer std.heap.page_allocator.free(directory);
+        self.developer_endpoint_state.server = try developer_endpoint_host.Server.create(
+            std.heap.page_allocator,
+            self.io,
+            .{
+                .developer_directory = directory,
+                .run_id = self.authoring_run_id,
+            },
+        );
+        const discovery = self.developer_endpoint_state.server.?.discovery();
+        std.debug.print(
+            "DEVELOPER_ENDPOINT lifecycle={s} discovery={s}\n",
+            .{
+                @tagName(discovery.lifecycle),
+                self.developer_endpoint_state.server.?.discoveryPath(),
+            },
+        );
+    }
+
     fn beginHostProfile(
         self: *App,
         phase: developer_profile.Phase,
@@ -2851,6 +3033,10 @@ const App = struct {
             defer input_profile.finish(.failure);
             self.input_buffer.beginFrame();
             running = self.pumpInputEvents();
+            if (comptime build_options.developer_endpoint_enabled) {
+                self.pumpDeveloperEndpoint();
+            }
+            try self.pumpPersistenceCommit();
             if (self.input_buffer.isKeyPressed(input.Key.N)) {
                 if (self.neural_rendering) |*neural| {
                     const enabled = neural.toggle();
@@ -4281,6 +4467,9 @@ const App = struct {
         }
         if (pending.start_from_product_view) {
             self.applyViewportRequest(.start_from_product_view);
+        }
+        if (pending.free_camera_pose) |pose| {
+            self.applyViewportRequest(.{ .set_free_camera_pose = pose });
         }
         if (pending.speed_steps != 0) {
             self.applyViewportRequest(.{ .adjust_speed = pending.speed_steps });
@@ -5773,6 +5962,7 @@ const App = struct {
             .{ .select = id },
             .{ .relocate = .{
                 .id = id,
+                .expected_revision = initial.authoring_revision,
                 .target_pose = target_pose,
                 .velocity = .zero,
             } },
@@ -6212,14 +6402,980 @@ const App = struct {
     fn developerEndpointDiscovery(
         self: *const App,
     ) engine.developer_endpoint.Discovery {
+        if (comptime build_options.developer_endpoint_enabled) {
+            if (self.developer_endpoint_state.server) |endpoint| {
+                return endpoint.discovery();
+            }
+        }
         return .{
-            .lifecycle = if (build_options.editor_enabled)
+            .lifecycle = if (build_options.developer_endpoint_enabled)
                 .declared
             else
                 .disabled,
             .run_id = self.authoring_run_id,
             .protocol_cohort = 1,
         };
+    }
+
+    fn developerResponse(
+        self: *const App,
+        request: developer_protocol.Request,
+        outcome: developer_protocol.ResponseOutcome,
+    ) developer_protocol.Response {
+        return .{
+            .request_id = request.request_id,
+            .schema_id = request.schema_id,
+            .run_id = self.authoring_run_id,
+            .outcome = outcome,
+        };
+    }
+
+    fn respondDeveloperSuccess(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        payload: developer_protocol.Payload,
+    ) !void {
+        try endpoint.respond(self.developerResponse(
+            request,
+            .{ .success = payload },
+        ));
+    }
+
+    fn respondDeveloperFailure(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        code: developer_protocol.FailureCode,
+        detail: []const u8,
+    ) !void {
+        try endpoint.respond(self.developerResponse(request, .{ .failure = .{
+            .code = code,
+            .detail = detail,
+        } }));
+    }
+
+    fn developerEditorControlCaptured(self: *const App) ?[]const u8 {
+        return developerEditorControlCaptureDetail(
+            self.developer.gizmoDragActive(),
+            self.input_buffer.freeCameraLookActive(),
+            self.developer.systemMenuOpen(),
+        );
+    }
+
+    /// Poll one typed endpoint request on the graphical main thread. The
+    /// transport worker never receives App, SDL, simulation, editor, storage,
+    /// renderer, or incident-owner access.
+    fn pumpDeveloperEndpoint(self: *App) void {
+        const endpoint = self.developer_endpoint_state.server orelse return;
+        const request = endpoint.takeRequest() orelse return;
+        self.handleDeveloperEndpointRequest(endpoint, request) catch |err| {
+            self.respondDeveloperFailure(
+                endpoint,
+                request,
+                .internal_error,
+                @errorName(err),
+            ) catch |response_err| {
+                std.log.err(
+                    "developer endpoint response failed: {s} (handling {s})",
+                    .{ @errorName(response_err), @errorName(err) },
+                );
+            };
+        };
+    }
+
+    fn handleDeveloperEndpointRequest(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+    ) !void {
+        switch (request.command) {
+            .describe => try self.respondDeveloperSuccess(endpoint, request, .{
+                .endpoint_description = .{
+                    .product = "incinerator-editor",
+                    .local_only = true,
+                    .transport = "macos-unix-domain-socket",
+                    .protocol_cohort = developer_protocol.protocol_cohort,
+                    .framing_version = developer_protocol.framing_version,
+                    .run_id = self.authoring_run_id,
+                    .schema_digest = developer_protocol.schemaDigest(),
+                    .capabilities = developer_endpoint_capabilities[0..if (self.developer.correlatedFrameCaptureAvailable()) developer_endpoint_capabilities.len else developer_endpoint_capabilities.len - 1],
+                },
+            }),
+            .schema_list => try self.respondDeveloperSuccess(endpoint, request, .{
+                .schema_list = developer_protocol.schemaCatalog(),
+            }),
+            .world_list => try self.respondDeveloperWorldList(endpoint, request),
+            .content_list => try self.respondDeveloperSuccess(endpoint, request, .{
+                // EA0.5 does not invent AssetIds for runtime instances. EA1 is
+                // the first program that will populate this durable catalog.
+                .content_list = &[_]developer_protocol.ContentEntry{},
+            }),
+            .inspect => |command| try self.respondDeveloperInspection(
+                endpoint,
+                request,
+                command.target,
+            ),
+            .selection_set => |command| try self.respondDeveloperSelection(
+                endpoint,
+                request,
+                command.target,
+            ),
+            .selection_clear => {
+                if (self.developerEditorControlCaptured()) |detail| {
+                    try self.respondDeveloperFailure(
+                        endpoint,
+                        request,
+                        .owner_busy,
+                        detail,
+                    );
+                } else {
+                    self.applySelectionRequest(.clear);
+                    self.developer_endpoint_state.authoring_controller.clearSelection();
+                    try self.respondDeveloperSuccess(endpoint, request, .{
+                        .selection = .{ .selected = null },
+                    });
+                }
+            },
+            .camera_inspect => try self.respondDeveloperSuccess(endpoint, request, .{
+                .camera = self.developerCameraState(),
+            }),
+            .camera_set_mode => |command| try self.respondDeveloperCameraMode(
+                endpoint,
+                request,
+                command.mode,
+            ),
+            .camera_set_pose => |command| try self.respondDeveloperCameraPose(
+                endpoint,
+                request,
+                command,
+            ),
+            .camera_focus => |command| try self.respondDeveloperCameraFocus(
+                endpoint,
+                request,
+                command.target,
+            ),
+            .crate_set_position => |command| try self.respondDeveloperCrateEdit(
+                endpoint,
+                request,
+                command,
+            ),
+            .transaction_inspect => |command| try self.respondDeveloperTransaction(
+                endpoint,
+                request,
+                command.transaction_id,
+            ),
+            .undo => |command| try self.respondDeveloperHistory(
+                endpoint,
+                request,
+                .undo,
+                command.target,
+                command.expected_revision,
+            ),
+            .redo => |command| try self.respondDeveloperHistory(
+                endpoint,
+                request,
+                .redo,
+                command.target,
+                command.expected_revision,
+            ),
+            .save_world => try self.respondDeveloperSave(endpoint, request),
+            .save_result => |command| try self.respondDeveloperSaveResult(
+                endpoint,
+                request,
+                command.save_request_id,
+            ),
+            .capture_frame => try self.respondDeveloperFrameCapture(endpoint, request),
+            .frame_result => |command| try self.respondDeveloperFrameResult(
+                endpoint,
+                request,
+                command.capture_id,
+            ),
+        }
+    }
+
+    fn developerSelectionEntry(
+        self: *const App,
+        target: developer_protocol.Target,
+    ) ?*const editor_selection.Entry {
+        const id = selectionFromDeveloperTarget(target);
+        for (self.selection_entries.items) |*entry| {
+            if (entry.id.eql(id)) return entry;
+        }
+        return null;
+    }
+
+    fn developerWorldEntry(
+        self: *App,
+        entry: editor_selection.Entry,
+    ) !?developer_protocol.WorldEntry {
+        const semantic_type = developerWorldType(entry.kind) orelse return null;
+        const bounds = entry.world_bounds orelse return error.WorldSelectionBoundsMissing;
+        const active = self.selection_controller.active;
+        var revision: ?u64 = null;
+        if (entry.kind == .crate and entry.authorable) switch (entry.id) {
+            .persistent_entity => |id| if (try self.authoringCrateView(id)) |crate| {
+                revision = crate.authoring_revision;
+            },
+            else => return error.AuthorableCrateIdentityInvalid,
+        };
+        return .{
+            .target = developerTargetFromSelection(entry.id),
+            .semantic_type = semantic_type,
+            .label = entry.label,
+            .selected = if (active) |selected| selected.eql(entry.id) else false,
+            .position = bounds.center(),
+            .bounds = .{
+                .minimum = bounds.minimum,
+                .maximum = bounds.maximum,
+            },
+            .availability = switch (entry.availability) {
+                .available => .available,
+                .unavailable => .unavailable,
+            },
+            .current_revision = revision,
+            .inspectable = entry.inspectable,
+            .authorable = entry.authorable,
+        };
+    }
+
+    fn respondDeveloperWorldList(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+    ) !void {
+        var entries = std.ArrayListUnmanaged(developer_protocol.WorldEntry).empty;
+        defer entries.deinit(std.heap.page_allocator);
+        for (self.selection_entries.items) |entry| {
+            if (try self.developerWorldEntry(entry)) |world| {
+                try entries.append(std.heap.page_allocator, world);
+            }
+        }
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .world_list = entries.items,
+        });
+    }
+
+    fn respondDeveloperInspection(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        target: developer_protocol.Target,
+    ) !void {
+        const entry = self.developerSelectionEntry(target) orelse
+            return self.respondDeveloperFailure(
+                endpoint,
+                request,
+                .target_not_found,
+                "stable target is not present in the live world or content catalog",
+            );
+        if (!entry.inspectable) return self.respondDeveloperFailure(
+            endpoint,
+            request,
+            .target_kind_not_supported,
+            "target is not inspectable",
+        );
+        if (entry.kind == .crate) {
+            const id = switch (entry.id) {
+                .persistent_entity => |id| id,
+                else => return error.AuthorableCrateIdentityInvalid,
+            };
+            const crate = try self.authoringCrateView(id) orelse
+                return self.respondDeveloperFailure(
+                    endpoint,
+                    request,
+                    .target_not_found,
+                    "crate is no longer available from its runtime owner",
+                );
+            const active = self.selection_controller.active;
+            return self.respondDeveloperSuccess(endpoint, request, .{
+                .inspection = .{ .crate = .{
+                    .target = target,
+                    .selected = if (active) |selected| selected.eql(entry.id) else false,
+                    .availability = .available,
+                    .authoring_revision = crate.authoring_revision,
+                    .position = crate.state.pose.position,
+                    .half_extents = crate.half_extents,
+                    .linear_velocity = crate.state.velocity.linear,
+                    .angular_velocity = crate.state.velocity.angular,
+                } },
+            });
+        }
+        const world = try self.developerWorldEntry(entry.*) orelse
+            return error.ContentEntryReachedWorldInspection;
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .inspection = .{ .world = .{ .entry = world } },
+        });
+    }
+
+    fn respondDeveloperSelection(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        target: developer_protocol.Target,
+    ) !void {
+        if (self.developerEditorControlCaptured()) |detail| {
+            return self.respondDeveloperFailure(
+                endpoint,
+                request,
+                .owner_busy,
+                detail,
+            );
+        }
+        const entry = self.developerSelectionEntry(target) orelse
+            return self.respondDeveloperFailure(
+                endpoint,
+                request,
+                .target_not_found,
+                "stable target is not selectable in the current world",
+            );
+        if (entry.availability != .available) return self.respondDeveloperFailure(
+            endpoint,
+            request,
+            .owner_unavailable,
+            "target is currently unavailable",
+        );
+        self.applySelectionRequest(.{ .select = entry.id });
+        if (entry.kind == .crate) switch (entry.id) {
+            .persistent_entity => |id| try self.developer_endpoint_state.authoring_controller.select(id),
+            else => return error.AuthorableCrateIdentityInvalid,
+        } else self.developer_endpoint_state.authoring_controller.clearSelection();
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .selection = .{ .selected = target },
+        });
+    }
+
+    fn developerCameraState(self: *const App) developer_protocol.CameraState {
+        const view = self.viewport_controller.view();
+        return .{
+            .mode = switch (view.mode) {
+                .character => .character,
+                .free_camera => .free_camera,
+            },
+            .free_camera_initialized = view.free_camera.initialized,
+            .position = view.free_camera.position,
+            .yaw_radians = view.free_camera.yaw,
+            .pitch_radians = view.free_camera.pitch,
+            .move_speed_meters_per_second = view.free_camera.move_speed,
+            .last_focus = if (view.free_camera.last_focus) |focus| .{
+                .center = focus.center,
+                .radius = focus.radius,
+            } else null,
+        };
+    }
+
+    fn respondDeveloperCameraMode(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        mode: developer_protocol.CameraMode,
+    ) !void {
+        if (self.developerEditorControlCaptured()) |detail| {
+            return self.respondDeveloperFailure(
+                endpoint,
+                request,
+                .owner_busy,
+                detail,
+            );
+        }
+        self.applyViewportRequest(.{ .set_mode = switch (mode) {
+            .character => .character,
+            .free_camera => .free_camera,
+        } });
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .camera_mutation = self.developerCameraState(),
+        });
+    }
+
+    fn respondDeveloperCameraPose(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        command: @FieldType(developer_protocol.Command, "camera_set_pose"),
+    ) !void {
+        if (self.developerEditorControlCaptured()) |detail| {
+            return self.respondDeveloperFailure(
+                endpoint,
+                request,
+                .owner_busy,
+                detail,
+            );
+        }
+        if (self.viewport_controller.mode != .free_camera or
+            !self.viewport_controller.free_camera_initialized)
+        {
+            return self.respondDeveloperFailure(
+                endpoint,
+                request,
+                .owner_unavailable,
+                "exact pose requires initialized Free Camera mode",
+            );
+        }
+        self.applyViewportRequest(.{ .set_free_camera_pose = .{
+            .position = command.position,
+            .yaw = command.yaw_radians,
+            .pitch = command.pitch_radians,
+        } });
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .camera_mutation = self.developerCameraState(),
+        });
+    }
+
+    fn respondDeveloperCameraFocus(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        target: developer_protocol.Target,
+    ) !void {
+        if (self.developerEditorControlCaptured()) |detail| {
+            return self.respondDeveloperFailure(
+                endpoint,
+                request,
+                .owner_busy,
+                detail,
+            );
+        }
+        if (self.viewport_controller.mode != .free_camera or
+            !self.viewport_controller.free_camera_initialized)
+        {
+            return self.respondDeveloperFailure(
+                endpoint,
+                request,
+                .owner_unavailable,
+                "focus requires initialized Free Camera mode",
+            );
+        }
+        const entry = self.developerSelectionEntry(target) orelse
+            return self.respondDeveloperFailure(
+                endpoint,
+                request,
+                .target_not_found,
+                "focus target is not present in the live world",
+            );
+        const bounds = entry.world_bounds orelse return self.respondDeveloperFailure(
+            endpoint,
+            request,
+            .target_kind_not_supported,
+            "focus target has no world bounds",
+        );
+        const half_extents = bounds.halfExtents();
+        const radius = @max(half_extents[0], @max(half_extents[1], half_extents[2]));
+        self.applyViewportRequest(.{ .frame_selection = .{
+            .center = bounds.center(),
+            .radius = radius,
+        } });
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .camera_mutation = self.developerCameraState(),
+        });
+    }
+
+    fn developerAdmissionRejection(err: anyerror) developer_protocol.AuthoringRejection {
+        return .{
+            .kind = switch (err) {
+                error.AuthoringOperationPending => .owner_busy,
+                error.AuthoringHistoryRevisionMismatch => .stale_revision,
+                error.UndoHistoryEmpty, error.RedoHistoryEmpty => .invalid_request,
+                error.UndoTargetMismatch,
+                error.RedoTargetMismatch,
+                error.SelectionMismatch,
+                error.NoAuthoringSelection,
+                => .invalid_request,
+                else => .owner_unavailable,
+            },
+            .detail = @errorName(err),
+        };
+    }
+
+    fn respondDeveloperAuthoringRejected(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        target: developer_protocol.Target,
+        expected_revision: u64,
+        transaction_id: ?u64,
+        rejection: developer_protocol.AuthoringRejection,
+    ) !void {
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .authoring_admission = .{
+                .admitted = false,
+                .target = target,
+                .transaction_id = transaction_id,
+                .expected_revision = expected_revision,
+                .rejection = rejection,
+            },
+        });
+    }
+
+    fn respondDeveloperCrateEdit(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        command: @FieldType(developer_protocol.Command, "crate_set_position"),
+    ) !void {
+        if (self.developerEditorControlCaptured()) |detail| {
+            return self.respondDeveloperAuthoringRejected(
+                endpoint,
+                request,
+                command.target,
+                command.expected_revision,
+                null,
+                .{ .kind = .owner_busy, .detail = detail },
+            );
+        }
+        const entry = self.developerSelectionEntry(command.target) orelse
+            return self.respondDeveloperAuthoringRejected(
+                endpoint,
+                request,
+                command.target,
+                command.expected_revision,
+                null,
+                .{ .kind = .target_not_found, .detail = "crate target is not present" },
+            );
+        if (entry.kind != .crate or !entry.authorable) {
+            return self.respondDeveloperAuthoringRejected(
+                endpoint,
+                request,
+                command.target,
+                command.expected_revision,
+                null,
+                .{
+                    .kind = .target_kind_not_supported,
+                    .detail = "target is not an authorable crate",
+                },
+            );
+        }
+        const id = switch (command.target) {
+            .persistent_entity => |id| id,
+            else => unreachable,
+        };
+        const crate = try self.authoringCrateView(id) orelse
+            return self.respondDeveloperAuthoringRejected(
+                endpoint,
+                request,
+                command.target,
+                command.expected_revision,
+                null,
+                .{ .kind = .target_not_found, .detail = "crate owner no longer has target" },
+            );
+        try self.developer_endpoint_state.authoring_controller.select(id);
+        var target_pose = crate.state.pose;
+        target_pose.position = command.position;
+        const owner_command = self.developer_endpoint_state.authoring_controller.beginEditFrom(.{
+            .id = id,
+            .expected_revision = command.expected_revision,
+            .target_pose = target_pose,
+        }, .local_developer_client) catch |err| {
+            return self.respondDeveloperAuthoringRejected(
+                endpoint,
+                request,
+                command.target,
+                command.expected_revision,
+                null,
+                developerAdmissionRejection(err),
+            );
+        };
+        try self.respondDeveloperAuthoringCommand(
+            endpoint,
+            request,
+            command.target,
+            command.expected_revision,
+            owner_command,
+        );
+    }
+
+    fn respondDeveloperHistory(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        operation: sandbox_authoring.OperationKind,
+        target: developer_protocol.Target,
+        expected_revision: u64,
+    ) !void {
+        if (self.developerEditorControlCaptured()) |detail| {
+            return self.respondDeveloperAuthoringRejected(
+                endpoint,
+                request,
+                target,
+                expected_revision,
+                null,
+                .{ .kind = .owner_busy, .detail = detail },
+            );
+        }
+        const id = switch (target) {
+            .persistent_entity => |id| id,
+            else => return self.respondDeveloperAuthoringRejected(
+                endpoint,
+                request,
+                target,
+                expected_revision,
+                null,
+                .{
+                    .kind = .target_kind_not_supported,
+                    .detail = "crate history requires a persistent target",
+                },
+            ),
+        };
+        const owner_command = switch (operation) {
+            .undo => self.developer_endpoint_state.authoring_controller.beginUndoAtRevisionFrom(
+                id,
+                expected_revision,
+                .local_developer_client,
+            ),
+            .redo => self.developer_endpoint_state.authoring_controller.beginRedoAtRevisionFrom(
+                id,
+                expected_revision,
+                .local_developer_client,
+            ),
+            .edit => unreachable,
+        } catch |err| return self.respondDeveloperAuthoringRejected(
+            endpoint,
+            request,
+            target,
+            expected_revision,
+            null,
+            developerAdmissionRejection(err),
+        );
+        try self.respondDeveloperAuthoringCommand(
+            endpoint,
+            request,
+            target,
+            expected_revision,
+            owner_command,
+        );
+    }
+
+    fn respondDeveloperAuthoringCommand(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        target: developer_protocol.Target,
+        expected_revision: u64,
+        owner_command: sandbox_contracts.Command,
+    ) !void {
+        const transaction_id = owner_command.relocate.transaction_id;
+        self.simulation.crates().submit(owner_command) catch |err| {
+            const pending = self.developer_endpoint_state.authoring_controller.snapshot().pending orelse
+                return error.EndpointAuthoringPendingEvidenceMissing;
+            _ = self.developer_endpoint_state.authoring_controller.submissionFailed(
+                transaction_id,
+            );
+            const evidence = try sandbox_authoring.ChangeEvidence.rejectedBeforeOwnerOutcome(
+                pending,
+                .owner_unavailable,
+                self.authoringObservationContext(),
+            );
+            try self.retainAuthoringEvidence(evidence);
+            _ = self.advanceAuthoringFeedback();
+            self.authoring_feedback = .{
+                .sequence = self.authoring_feedback.sequence,
+                .status = .submission_failed,
+                .operation = pending.kind,
+                .transaction_id = transaction_id,
+                .id = pending.id,
+                .detail = @errorName(err),
+            };
+            return self.respondDeveloperAuthoringRejected(
+                endpoint,
+                request,
+                target,
+                expected_revision,
+                transaction_id,
+                .{ .kind = .owner_unavailable, .detail = @errorName(err) },
+            );
+        };
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .authoring_admission = .{
+                .admitted = true,
+                .target = target,
+                .transaction_id = transaction_id,
+                .expected_revision = expected_revision,
+            },
+        });
+    }
+
+    fn developerTransactionFromPending(
+        pending: sandbox_authoring.PendingSummary,
+    ) developer_protocol.TransactionInspection {
+        return .{
+            .transaction_id = pending.transaction_id,
+            .source = switch (pending.request.source) {
+                .ui => .ui,
+                .local_developer_client => .local_developer_client,
+                .scripted_validation => .scripted_validation,
+            },
+            .target = .{ .persistent_entity = pending.id },
+            .scope = switch (pending.request.scope) {
+                .preview => .preview,
+                .session => .session,
+                .asset_commit => .asset_commit,
+            },
+            .disposition = .pending,
+            .expected_revision = pending.request.expected_revision,
+            .committed_revision = null,
+            .before_position = null,
+            .requested_position = pending.requested.target_pose.position,
+            .committed_position = null,
+            .rejection = null,
+            .authority_tick = null,
+            .presentation_frame = null,
+        };
+    }
+
+    fn developerTransactionFromEvidence(
+        evidence: sandbox_authoring.ChangeEvidence,
+    ) developer_protocol.TransactionInspection {
+        return .{
+            .transaction_id = evidence.record.request.transaction_id,
+            .source = switch (evidence.record.request.source) {
+                .ui => .ui,
+                .local_developer_client => .local_developer_client,
+                .scripted_validation => .scripted_validation,
+            },
+            .target = .{ .persistent_entity = evidence.id },
+            .scope = switch (evidence.record.request.scope) {
+                .preview => .preview,
+                .session => .session,
+                .asset_commit => .asset_commit,
+            },
+            .disposition = switch (evidence.record.disposition) {
+                .accepted => .accepted,
+                .rejected => .rejected,
+            },
+            .expected_revision = evidence.record.request.expected_revision,
+            .committed_revision = evidence.record.committed_revision,
+            .before_position = if (evidence.before) |state| state.pose.position else null,
+            .requested_position = evidence.requested.target_pose.position,
+            .committed_position = if (evidence.committed) |state| state.pose.position else null,
+            .rejection = if (evidence.record.rejection) |rejection|
+                developerAuthoringRejection(rejection)
+            else
+                null,
+            .authority_tick = evidence.record.authority_tick,
+            .presentation_frame = evidence.record.presentation_frame,
+        };
+    }
+
+    fn respondDeveloperTransaction(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        transaction_id: u64,
+    ) !void {
+        if (self.developer_endpoint_state.authoring_controller.snapshot().pending) |pending| {
+            if (pending.transaction_id == transaction_id) return self.respondDeveloperSuccess(
+                endpoint,
+                request,
+                .{ .transaction = developerTransactionFromPending(pending) },
+            );
+        }
+        if (self.authoring_controller.snapshot().pending) |pending| {
+            if (pending.transaction_id == transaction_id) return self.respondDeveloperSuccess(
+                endpoint,
+                request,
+                .{ .transaction = developerTransactionFromPending(pending) },
+            );
+        }
+        var index = self.developer_endpoint_state.authoring_change_history.items.len;
+        while (index != 0) {
+            index -= 1;
+            const evidence = self.developer_endpoint_state.authoring_change_history.items[index];
+            if (evidence.record.request.transaction_id == transaction_id) {
+                return self.respondDeveloperSuccess(endpoint, request, .{
+                    .transaction = developerTransactionFromEvidence(evidence),
+                });
+            }
+        }
+        try self.respondDeveloperFailure(
+            endpoint,
+            request,
+            .target_not_found,
+            "authoring transaction is not retained by this run",
+        );
+    }
+
+    fn respondDeveloperSave(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+    ) !void {
+        if (self.developerEditorControlCaptured()) |detail| {
+            return self.respondDeveloperFailure(
+                endpoint,
+                request,
+                .owner_busy,
+                detail,
+            );
+        }
+        if (self.persistence_commit_pending or
+            self.authoring_controller.snapshot().pending != null or
+            self.developer_endpoint_state.authoring_controller.snapshot().pending != null)
+        {
+            return self.respondDeveloperSuccess(
+                endpoint,
+                request,
+                .{ .save_admission = .{
+                    .admitted = false,
+                    .save_request_id = null,
+                    .rejection = "world save waits for the current authoring/save operation",
+                } },
+            );
+        }
+        const id = self.developer_endpoint_state.next_save_request_id;
+        if (id == 0) return error.DeveloperSaveRequestIdExhausted;
+        self.developer_endpoint_state.next_save_request_id +%= 1;
+        const baseline = self.persistence.feedback().sequence;
+        try self.developer_endpoint_state.save_requests.append(std.heap.page_allocator, .{
+            .id = id,
+            .feedback_sequence_at_admission = baseline,
+        });
+        errdefer _ = self.developer_endpoint_state.save_requests.pop();
+        try self.requestPersistenceCommit();
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .save_admission = .{
+                .admitted = true,
+                .save_request_id = id,
+                .rejection = null,
+            },
+        });
+    }
+
+    fn developerSaveResult(
+        self: *const App,
+        save_request_id: u64,
+    ) developer_protocol.SaveResult {
+        var retained: ?DeveloperSaveRequest = null;
+        var index = self.developer_endpoint_state.save_requests.items.len;
+        while (index != 0) {
+            index -= 1;
+            const candidate = self.developer_endpoint_state.save_requests.items[index];
+            if (candidate.id == save_request_id) {
+                retained = candidate;
+                break;
+            }
+        }
+        const found = retained orelse return .{
+            .save_request_id = save_request_id,
+            .disposition = .not_found,
+            .slot = sandbox_persistence.slot_label,
+            .generation = null,
+            .payload_bytes = null,
+            .detail = "save request is not retained by this run",
+        };
+        if (found.terminal) |terminal| return .{
+            .save_request_id = save_request_id,
+            .disposition = terminal.disposition,
+            .slot = sandbox_persistence.slot_label,
+            .generation = null,
+            .payload_bytes = null,
+            .detail = terminal.detail,
+        };
+        const feedback = self.persistence.feedback();
+        return .{
+            .save_request_id = save_request_id,
+            .disposition = .pending,
+            .slot = feedback.slot,
+            .generation = null,
+            .payload_bytes = null,
+            .detail = if (feedback.sequence == found.feedback_sequence_at_admission)
+                "save request admitted; authority capture has not completed"
+            else
+                feedback.detail,
+        };
+    }
+
+    fn respondDeveloperSaveResult(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        save_request_id: u64,
+    ) !void {
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .save_result = self.developerSaveResult(save_request_id),
+        });
+    }
+
+    fn respondDeveloperFrameCapture(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+    ) !void {
+        const selected = self.selection_controller.view(
+            self.selection_entries.items,
+        ).activeGameplay();
+        const admitted = self.developer.admitCorrelatedFrameCapture(
+            self.simulation.inspection().tickIndex(),
+            self.frame_timer.total_frames,
+            selected,
+        ) orelse return self.respondDeveloperSuccess(endpoint, request, .{
+            .frame_admission = .{
+                .admitted = false,
+                .capture_id = null,
+                .rejection = "incident-backed rendered capture is unavailable",
+            },
+        });
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .frame_admission = .{
+                .admitted = true,
+                .capture_id = admitted.capture_id,
+                .rejection = null,
+            },
+        });
+    }
+
+    fn developerFrameResult(
+        capture: *const sandbox_developer_host.CorrelatedFrameCapture,
+    ) developer_protocol.FrameResult {
+        return .{
+            .capture_id = capture.capture_id,
+            .disposition = switch (capture.lifecycle_status) {
+                .capturing => .pending,
+                .complete => .captured,
+                .partial => .failed,
+            },
+            .artifact_path = capture.evidenceDirectory(),
+            .authority_tick = capture.authority_tick,
+            .presentation_frame = capture.presentation_frame,
+            .wall_unix_ms = capture.wall_unix_ms,
+            .detail = if (capture.lifecycle_status == .partial)
+                "capture completed with missing artifacts"
+            else
+                null,
+        };
+    }
+
+    fn respondDeveloperFrameResult(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+        capture_id: u64,
+    ) !void {
+        const narrowed = std.math.cast(u32, capture_id) orelse
+            return self.respondDeveloperSuccess(endpoint, request, .{
+                .frame_result = .{
+                    .capture_id = capture_id,
+                    .disposition = .not_found,
+                    .artifact_path = null,
+                    .authority_tick = null,
+                    .presentation_frame = null,
+                    .wall_unix_ms = null,
+                    .detail = "capture ID is outside the incident identity domain",
+                },
+            });
+        const result = self.developer.correlatedFrameCaptureResult(narrowed) orelse
+            return self.respondDeveloperSuccess(endpoint, request, .{
+                .frame_result = .{
+                    .capture_id = capture_id,
+                    .disposition = .not_found,
+                    .artifact_path = null,
+                    .authority_tick = null,
+                    .presentation_frame = null,
+                    .wall_unix_ms = null,
+                    .detail = "capture is not retained by this run",
+                },
+            });
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .frame_result = developerFrameResult(&result),
+        });
     }
 
     fn includeDeveloperDistrictStreams(self: *const App) bool {
@@ -6551,7 +7707,14 @@ const App = struct {
         comptime validation_composition: bool,
         scenario: ScriptedScenario,
     ) !void {
-        const actions: sandbox_controls.TickSample = if (validation_composition)
+        // A durable capture owns the local composition boundary until its
+        // stage-seven result is terminal. Do not consume the action latch or
+        // submit a fresh idle movement sample while authority work drains;
+        // one-shot input remains latched for the first post-capture tick.
+        const persistence_capture_barrier = self.persistence_commit_pending;
+        const actions: sandbox_controls.TickSample = if (persistence_capture_barrier)
+            sandbox_controls.idleTickSample()
+        else if (validation_composition)
             switch (scenario) {
                 .none => self.action_latch.takeTick(),
                 .s1_character => sandbox_controls.characterScenarioTick(
@@ -6570,9 +7733,14 @@ const App = struct {
             }
         else
             self.action_latch.takeTick();
-        self.game_camera.rotate(actions.look_delta[0], actions.look_delta[1]);
+        if (!persistence_capture_barrier) {
+            self.game_camera.rotate(actions.look_delta[0], actions.look_delta[1]);
+        }
 
-        if (validation_composition) {
+        if (persistence_capture_barrier) {
+            // The authority lifecycle still advances below so already-admitted
+            // input, acknowledgements, outputs, and population work can drain.
+        } else if (validation_composition) {
             switch (scenario) {
                 .none => try self.submitInteractiveActions(actions),
                 .s1_character => if (self.initial_character_id != null) {
@@ -6605,31 +7773,68 @@ const App = struct {
                     self.initial_crate_id = spawned.id;
                 },
                 .relocated => {
-                    const pending = self.authoring_controller.snapshot().pending;
-                    const observed = try self.authoring_controller.observe(outcome);
-                    if (observed == .unrelated or pending == null) {
-                        return error.UnexpectedAuthoringOutcome;
+                    const endpoint_pending: ?sandbox_authoring.PendingSummary = if (comptime build_options.developer_endpoint_enabled)
+                        self.developer_endpoint_state.authoring_controller.snapshot().pending
+                    else
+                        null;
+                    const endpoint_observed: sandbox_authoring.ObserveResult = if (comptime build_options.developer_endpoint_enabled)
+                        try self.developer_endpoint_state.authoring_controller.observe(outcome)
+                    else
+                        .unrelated;
+                    if (endpoint_observed != .unrelated) {
+                        try self.recordAuthoringOutcome(
+                            endpoint_pending orelse return error.EndpointAuthoringPendingEvidenceMissing,
+                            outcome,
+                            endpoint_observed,
+                            null,
+                        );
+                    } else {
+                        const pending = self.authoring_controller.snapshot().pending;
+                        const observed = try self.authoring_controller.observe(outcome);
+                        if (observed == .unrelated or pending == null) {
+                            return error.UnexpectedAuthoringOutcome;
+                        }
+                        try self.recordAuthoringOutcome(pending.?, outcome, observed, null);
                     }
-                    try self.recordAuthoringOutcome(pending.?, outcome, observed, null);
                 },
                 .rejected => |rejected| {
                     if (rejected.command != .relocate) {
                         return error.UnexpectedBootstrapOutcome;
                     }
-                    const pending = self.authoring_controller.snapshot().pending;
-                    const observed = try self.authoring_controller.observe(outcome);
-                    if (observed == .unrelated or pending == null) {
-                        return error.UnexpectedAuthoringOutcome;
+                    const endpoint_pending: ?sandbox_authoring.PendingSummary = if (comptime build_options.developer_endpoint_enabled)
+                        self.developer_endpoint_state.authoring_controller.snapshot().pending
+                    else
+                        null;
+                    const endpoint_observed: sandbox_authoring.ObserveResult = if (comptime build_options.developer_endpoint_enabled)
+                        try self.developer_endpoint_state.authoring_controller.observe(outcome)
+                    else
+                        .unrelated;
+                    if (endpoint_observed != .unrelated) {
+                        try self.recordAuthoringOutcome(
+                            endpoint_pending orelse return error.EndpointAuthoringPendingEvidenceMissing,
+                            outcome,
+                            endpoint_observed,
+                            rejected.reason,
+                        );
+                    } else {
+                        const pending = self.authoring_controller.snapshot().pending;
+                        const observed = try self.authoring_controller.observe(outcome);
+                        if (observed == .unrelated or pending == null) {
+                            return error.UnexpectedAuthoringOutcome;
+                        }
+                        try self.recordAuthoringOutcome(
+                            pending.?,
+                            outcome,
+                            observed,
+                            rejected.reason,
+                        );
                     }
-                    try self.recordAuthoringOutcome(
-                        pending.?,
-                        outcome,
-                        observed,
-                        rejected.reason,
-                    );
                 },
                 .despawned => |id| {
                     self.authoring_controller.invalidateIdentity(id);
+                    if (comptime build_options.developer_endpoint_enabled) {
+                        self.developer_endpoint_state.authoring_controller.invalidateIdentity(id);
+                    }
                     if (self.initial_crate_id != null and
                         std.meta.eql(self.initial_crate_id.?, id))
                     {
@@ -6869,6 +8074,20 @@ const App = struct {
         return self.authoring_feedback.sequence;
     }
 
+    fn retainAuthoringEvidence(
+        self: *App,
+        evidence: sandbox_authoring.ChangeEvidence,
+    ) !void {
+        self.latest_authoring_change = evidence;
+        if (comptime build_options.developer_endpoint_enabled) {
+            try self.developer_endpoint_state.authoring_change_history.append(
+                std.heap.page_allocator,
+                evidence,
+            );
+        }
+        self.developer.recordAuthoredChange(evidence);
+    }
+
     fn recordAuthoringOutcome(
         self: *App,
         pending: sandbox_authoring.PendingSummary,
@@ -6876,11 +8095,12 @@ const App = struct {
         observed: sandbox_authoring.ObserveResult,
         rejection_reason: ?sandbox_contracts.RejectionReason,
     ) !void {
-        self.latest_authoring_change = try sandbox_authoring.ChangeEvidence.init(
+        const evidence = try sandbox_authoring.ChangeEvidence.init(
             pending,
             outcome,
             self.authoringObservationContext(),
         );
+        try self.retainAuthoringEvidence(evidence);
         _ = self.advanceAuthoringFeedback();
         self.authoring_feedback = .{
             .sequence = self.authoring_feedback.sequence,
@@ -6931,12 +8151,12 @@ const App = struct {
             const pending = self.authoring_controller.snapshot().pending orelse
                 return error.AuthoringPendingEvidenceMissing;
             _ = self.authoring_controller.submissionFailed(relocation.transaction_id);
-            self.latest_authoring_change =
-                try sandbox_authoring.ChangeEvidence.rejectedBeforeOwnerOutcome(
-                    pending,
-                    .owner_unavailable,
-                    self.authoringObservationContext(),
-                );
+            const evidence = try sandbox_authoring.ChangeEvidence.rejectedBeforeOwnerOutcome(
+                pending,
+                .owner_unavailable,
+                self.authoringObservationContext(),
+            );
+            try self.retainAuthoringEvidence(evidence);
             _ = self.advanceAuthoringFeedback();
             self.authoring_feedback = .{
                 .sequence = self.authoring_feedback.sequence,
@@ -6981,7 +8201,7 @@ const App = struct {
                 self.selection_controller.apply(.clear, self.selection_entries.items);
             },
             .relocate => |relocation| {
-                const view = self.simulation.crates().view(relocation.id) catch |err| switch (err) {
+                _ = self.simulation.crates().view(relocation.id) catch |err| switch (err) {
                     error.CrateNotFound, error.NotACrate => {
                         self.authoring_controller.invalidateIdentity(relocation.id);
                         self.recordAuthoringRequestRejection(.edit, relocation.id, err);
@@ -6989,10 +8209,7 @@ const App = struct {
                     },
                     else => return err,
                 };
-                const command = self.authoring_controller.beginEdit(
-                    relocation,
-                    view.authoring_revision,
-                ) catch |err| {
+                const command = self.authoring_controller.beginEdit(relocation) catch |err| {
                     self.recordAuthoringRequestRejection(.edit, relocation.id, err);
                     continue;
                 };
@@ -7071,18 +8288,69 @@ const App = struct {
         try self.pumpPersistenceCommit();
     }
 
+    fn finalizeDeveloperSaveRequest(
+        self: *App,
+        disposition: developer_protocol.SaveDisposition,
+        detail: []const u8,
+    ) void {
+        var index = self.developer_endpoint_state.save_requests.items.len;
+        while (index != 0) {
+            index -= 1;
+            const retained = &self.developer_endpoint_state.save_requests.items[index];
+            if (retained.terminal != null) continue;
+            retained.terminal = .{
+                .disposition = disposition,
+                .detail = detail,
+            };
+            return;
+        }
+    }
+
     fn pumpPersistenceCommit(self: *App) !void {
         if (!self.persistence_commit_pending) return;
+        const endpoint_authoring_pending = if (comptime build_options.developer_endpoint_enabled)
+            self.developer_endpoint_state.authoring_controller.snapshot().pending != null
+        else
+            false;
         const result = switch (try self.persistence.apply(
             self.io,
             .{ .commit = .{
-                .authoring_transaction_pending = self.authoring_controller.snapshot().pending != null,
+                .authoring_transaction_pending = self.authoring_controller.snapshot().pending != null or
+                    endpoint_authoring_pending,
             } },
         )) {
             .commit => |result| result,
             .observed => unreachable,
         };
-        self.persistence_commit_pending = result == .deferred_capture_pending;
+        self.persistence_commit_pending = switch (result) {
+            .deferred_authoring_transaction,
+            .deferred_capture_pending,
+            .deferred_simulation_commands,
+            .deferred_district_transition,
+            .deferred_session_work,
+            .deferred_authority_outputs,
+            => true,
+            .storage_unavailable,
+            .deferred_authority_fault,
+            .capture_failed,
+            .encode_failed,
+            .committed,
+            .committed_sync_warning,
+            .not_committed,
+            => false,
+        };
+        if (!self.persistence_commit_pending) {
+            if (comptime build_options.developer_endpoint_enabled) {
+                const feedback = self.persistence.feedback();
+                self.finalizeDeveloperSaveRequest(
+                    switch (result) {
+                        .committed, .committed_sync_warning => .committed,
+                        else => .failed,
+                    },
+                    feedback.detail,
+                );
+            }
+        }
     }
 
     fn extractPhysicsDebug(self: *App) void {
@@ -10910,6 +12178,11 @@ fn productMain(init: std.process.Init, args: anytype) !void {
     app.developer.configureEditor(editor_startup);
     var app_deinitialized = false;
     defer if (!app_deinitialized) app.deinit();
+    if (comptime build_options.developer_endpoint_enabled) {
+        const home = init.environ_map.get("HOME") orelse
+            return error.HomeDirectoryUnavailable;
+        try app.startDeveloperEndpoint(home);
+    }
     try app.configureNeuralRendering(init.environ_map);
     switch (mode) {
         .incident_smoke => {
@@ -11837,6 +13110,420 @@ fn validationMain(init: std.process.Init, args: anytype) !void {
 test "app structure exists" {
     // Basic compile-time check that App struct is valid
     _ = App;
+}
+
+test "developer endpoint app boundary and interaction capture priority" {
+    if (comptime build_options.developer_endpoint_enabled) {
+        try std.testing.expect(@sizeOf(DeveloperEndpointState) != 0);
+    } else {
+        try std.testing.expectEqual(@as(usize, 0), @sizeOf(DeveloperEndpointState));
+    }
+    try std.testing.expectEqualStrings(
+        "crate translate gizmo owns the current pointer interaction",
+        developerEditorControlCaptureDetail(true, true, true).?,
+    );
+    try std.testing.expectEqualStrings(
+        "Free Camera look owns the current pointer interaction",
+        developerEditorControlCaptureDetail(false, true, true).?,
+    );
+    try std.testing.expectEqualStrings(
+        "system menu owns editor interaction",
+        developerEditorControlCaptureDetail(false, false, true).?,
+    );
+    try std.testing.expectEqual(
+        null,
+        developerEditorControlCaptureDetail(false, false, false),
+    );
+}
+
+const DeveloperEndpointTestSink = struct {
+    allocator: std.mem.Allocator,
+    response_json: ?[]u8 = null,
+
+    fn deinit(self: *@This()) void {
+        if (self.response_json) |bytes| self.allocator.free(bytes);
+        self.* = undefined;
+    }
+
+    fn respond(
+        self: *@This(),
+        response: developer_protocol.Response,
+    ) !void {
+        if (self.response_json != null) return error.TestResponseAlreadyQueued;
+        self.response_json = try developer_protocol.encodeResponseAlloc(
+            self.allocator,
+            response,
+        );
+    }
+
+    fn take(self: *@This()) !std.json.Parsed(developer_protocol.Response) {
+        const bytes = self.response_json orelse return error.TestResponseMissing;
+        self.response_json = null;
+        defer self.allocator.free(bytes);
+        return developer_protocol.parseResponse(self.allocator, bytes);
+    }
+};
+
+fn callDeveloperEndpointForTest(
+    app: *App,
+    sink: *DeveloperEndpointTestSink,
+    request_id: u64,
+    command: developer_protocol.Command,
+) !std.json.Parsed(developer_protocol.Response) {
+    const request = developer_protocol.Request.init(
+        app.authoring_run_id,
+        request_id,
+        command,
+    );
+    try request.validate();
+    try app.handleDeveloperEndpointRequest(sink, request);
+    var response = try sink.take();
+    errdefer response.deinit();
+    try developer_protocol.validateResponseForRequest(request, response.value);
+    return response;
+}
+
+fn developerSuccessForTest(
+    response: developer_protocol.Response,
+) !developer_protocol.Payload {
+    return switch (response.outcome) {
+        .success => |payload| payload,
+        .failure => error.UnexpectedDeveloperEndpointFailure,
+    };
+}
+
+test "developer endpoint app boundary routes a concrete owner journey" {
+    if (comptime !build_options.developer_endpoint_enabled) return;
+
+    var app = try App.init(std.testing.io, .s1_smoke, null);
+    defer app.deinit();
+    var sink = DeveloperEndpointTestSink{ .allocator = std.testing.allocator };
+    defer sink.deinit();
+
+    // Establish the real authority and presentation projections consumed by
+    // both ImGui and the endpoint. The endpoint never fabricates a second
+    // object registry for its tests.
+    try app.simulateTick(true, .none);
+    _ = try app.renderS5SmokeFrame(0.5);
+
+    var world_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        1,
+        .{ .world_list = .{} },
+    );
+    defer world_response.deinit();
+    const world_entries = switch (try developerSuccessForTest(world_response.value)) {
+        .world_list => |entries| entries,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    var crate_target: ?developer_protocol.Target = null;
+    var initial_revision: ?u64 = null;
+    for (world_entries) |entry| {
+        if (entry.semantic_type != .crate) continue;
+        crate_target = entry.target;
+        initial_revision = entry.current_revision;
+        try std.testing.expect(entry.inspectable);
+        try std.testing.expect(entry.authorable);
+        break;
+    }
+    const target = crate_target orelse return error.DeveloperWorldCrateMissing;
+    const revision_zero = initial_revision orelse
+        return error.DeveloperWorldCrateRevisionMissing;
+    try std.testing.expectEqual(@as(u64, 0), revision_zero);
+
+    var content_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        2,
+        .{ .content_list = .{} },
+    );
+    defer content_response.deinit();
+    const content_entries = switch (try developerSuccessForTest(content_response.value)) {
+        .content_list => |entries| entries,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expectEqual(@as(usize, 0), content_entries.len);
+
+    var selection_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        3,
+        .{ .selection_set = .{ .target = target } },
+    );
+    defer selection_response.deinit();
+    const selected = switch (try developerSuccessForTest(selection_response.value)) {
+        .selection => |selection| selection.selected,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expect(std.meta.eql(target, selected.?));
+    try std.testing.expect(app.selection_controller.active.?.eql(
+        selectionFromDeveloperTarget(target),
+    ));
+
+    var camera_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        4,
+        .{ .camera_set_mode = .{ .mode = .free_camera } },
+    );
+    defer camera_response.deinit();
+    const camera_state = switch (try developerSuccessForTest(camera_response.value)) {
+        .camera_mutation => |camera_state| camera_state,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expectEqual(developer_protocol.CameraMode.free_camera, camera_state.mode);
+    try std.testing.expectEqual(viewport.Mode.free_camera, app.viewport_controller.mode);
+
+    const edited_position: [3]f32 = .{ 4, 3, -2 };
+    var edit_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        5,
+        .{ .crate_set_position = .{
+            .target = target,
+            .expected_revision = revision_zero,
+            .position = edited_position,
+        } },
+    );
+    defer edit_response.deinit();
+    const edit_admission = switch (try developerSuccessForTest(edit_response.value)) {
+        .authoring_admission => |admission| admission,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expect(edit_admission.admitted);
+    const edit_transaction = edit_admission.transaction_id orelse
+        return error.DeveloperEditTransactionMissing;
+    try app.simulateTick(true, .none);
+
+    var edit_result_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        6,
+        .{ .transaction_inspect = .{ .transaction_id = edit_transaction } },
+    );
+    defer edit_result_response.deinit();
+    const edit_result = switch (try developerSuccessForTest(edit_result_response.value)) {
+        .transaction => |result| result,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expectEqual(
+        developer_protocol.AuthoringSource.local_developer_client,
+        edit_result.source,
+    );
+    try std.testing.expectEqual(developer_protocol.AuthoringDisposition.accepted, edit_result.disposition);
+    try std.testing.expectEqual(@as(u64, 1), edit_result.committed_revision.?);
+    try std.testing.expectEqual(edited_position, edit_result.committed_position.?);
+
+    // An external producer may only undo the revision represented by its own
+    // retained history. Supplying an older revision is rejected before an
+    // owner command is allocated, and cannot overwrite another commit.
+    var stale_undo_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        60,
+        .{ .undo = .{
+            .target = target,
+            .expected_revision = revision_zero,
+        } },
+    );
+    defer stale_undo_response.deinit();
+    const stale_undo_admission = switch (try developerSuccessForTest(
+        stale_undo_response.value,
+    )) {
+        .authoring_admission => |admission| admission,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expect(!stale_undo_admission.admitted);
+    try std.testing.expectEqual(
+        developer_protocol.RejectionKind.stale_revision,
+        stale_undo_admission.rejection.?.kind,
+    );
+    try std.testing.expect(stale_undo_admission.transaction_id == null);
+
+    var undo_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        7,
+        .{ .undo = .{
+            .target = target,
+            .expected_revision = 1,
+        } },
+    );
+    defer undo_response.deinit();
+    const undo_admission = switch (try developerSuccessForTest(undo_response.value)) {
+        .authoring_admission => |admission| admission,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expect(undo_admission.admitted);
+    const undo_transaction = undo_admission.transaction_id orelse
+        return error.DeveloperUndoTransactionMissing;
+    try app.simulateTick(true, .none);
+
+    var undo_result_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        8,
+        .{ .transaction_inspect = .{ .transaction_id = undo_transaction } },
+    );
+    defer undo_result_response.deinit();
+    const undo_result = switch (try developerSuccessForTest(undo_result_response.value)) {
+        .transaction => |result| result,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expectEqual(developer_protocol.AuthoringDisposition.accepted, undo_result.disposition);
+    try std.testing.expectEqual(@as(u64, 2), undo_result.committed_revision.?);
+
+    var redo_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        9,
+        .{ .redo = .{
+            .target = target,
+            .expected_revision = 2,
+        } },
+    );
+    defer redo_response.deinit();
+    const redo_admission = switch (try developerSuccessForTest(redo_response.value)) {
+        .authoring_admission => |admission| admission,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expect(redo_admission.admitted);
+    const redo_transaction = redo_admission.transaction_id orelse
+        return error.DeveloperRedoTransactionMissing;
+    try app.simulateTick(true, .none);
+
+    var redo_result_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        10,
+        .{ .transaction_inspect = .{ .transaction_id = redo_transaction } },
+    );
+    defer redo_result_response.deinit();
+    const redo_result = switch (try developerSuccessForTest(redo_result_response.value)) {
+        .transaction => |result| result,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expectEqual(developer_protocol.AuthoringDisposition.accepted, redo_result.disposition);
+    try std.testing.expectEqual(@as(u64, 3), redo_result.committed_revision.?);
+    try std.testing.expectEqual(edited_position, redo_result.committed_position.?);
+
+    // A stale optimistic revision reaches the same crate authority and is
+    // retained as a typed terminal outcome rather than being confused with
+    // another producer's transaction.
+    var stale_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        11,
+        .{ .crate_set_position = .{
+            .target = target,
+            .expected_revision = revision_zero,
+            .position = .{ 9, 9, 9 },
+        } },
+    );
+    defer stale_response.deinit();
+    const stale_admission = switch (try developerSuccessForTest(stale_response.value)) {
+        .authoring_admission => |admission| admission,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expect(stale_admission.admitted);
+    const stale_transaction = stale_admission.transaction_id orelse
+        return error.DeveloperStaleTransactionMissing;
+    try app.simulateTick(true, .none);
+
+    var stale_result_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        12,
+        .{ .transaction_inspect = .{ .transaction_id = stale_transaction } },
+    );
+    defer stale_result_response.deinit();
+    const stale_result = switch (try developerSuccessForTest(stale_result_response.value)) {
+        .transaction => |result| result,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expectEqual(developer_protocol.AuthoringDisposition.rejected, stale_result.disposition);
+    try std.testing.expectEqual(developer_protocol.RejectionKind.stale_revision, stale_result.rejection.?.kind);
+
+    var inspect_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        13,
+        .{ .inspect = .{ .target = target } },
+    );
+    defer inspect_response.deinit();
+    const crate = switch (try developerSuccessForTest(inspect_response.value)) {
+        .inspection => |inspection| switch (inspection) {
+            .crate => |crate| crate,
+            else => return error.UnexpectedDeveloperInspection,
+        },
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expectEqual(@as(u64, 3), crate.authoring_revision);
+    try std.testing.expectApproxEqAbs(edited_position[0], crate.position[0], 0.0001);
+    try std.testing.expectApproxEqAbs(edited_position[2], crate.position[2], 0.0001);
+    try std.testing.expect(crate.position[1] < edited_position[1]);
+    try std.testing.expect(crate.position[1] != 9);
+
+    var save_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        14,
+        .{ .save_world = .{} },
+    );
+    defer save_response.deinit();
+    const save_admission = switch (try developerSuccessForTest(save_response.value)) {
+        .save_admission => |admission| admission,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expect(save_admission.admitted);
+    const save_request_id = save_admission.save_request_id orelse
+        return error.DeveloperSaveRequestMissing;
+    try app.action_latch.captureFrame(.{
+        .move = .{ 1, 0 },
+        .look_delta = .{ 3, -2 },
+        .carry_pressed = true,
+    });
+    for (0..session_budgets.ticks_per_snapshot + 2) |_| {
+        if (!app.persistence_commit_pending) break;
+        try app.simulateTick(true, .none);
+    }
+    try std.testing.expect(!app.persistence_commit_pending);
+    const retained_actions = app.action_latch.takeTick();
+    try std.testing.expectEqual([2]f32{ 1, 0 }, retained_actions.move);
+    try std.testing.expectEqual([2]f32{ 3, -2 }, retained_actions.look_delta);
+    try std.testing.expect(retained_actions.carry_pressed);
+
+    var save_result_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        15,
+        .{ .save_result = .{ .save_request_id = save_request_id } },
+    );
+    defer save_result_response.deinit();
+    const save_result = switch (try developerSuccessForTest(save_result_response.value)) {
+        .save_result => |result| result,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    // This focused App harness deliberately has no storage capability. The
+    // request still crosses the real persistence owner and retains its exact
+    // terminal result; installed save/restart acceptance proves the committed
+    // path with an explicit save root and admitted content cohort.
+    try std.testing.expectEqual(developer_protocol.SaveDisposition.failed, save_result.disposition);
+
+    var capture_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        16,
+        .{ .capture_frame = .{} },
+    );
+    defer capture_response.deinit();
+    const capture_admission = switch (try developerSuccessForTest(capture_response.value)) {
+        .frame_admission => |admission| admission,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expect(!capture_admission.admitted);
+    try std.testing.expect(capture_admission.rejection != null);
 }
 
 test "window suspension discards pending and held gameplay actions" {

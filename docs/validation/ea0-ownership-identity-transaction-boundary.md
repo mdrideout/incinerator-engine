@@ -1,7 +1,6 @@
 # EA0 Ownership, Identity, and Transaction Boundary Validation
 
-**Status:** Automated and native acceptance complete; product-owner manual
-checkpoint pending
+**Status:** Complete and accepted by the product owner on 2026-08-29
 
 **Date:** 2026-08-19
 
@@ -16,7 +15,7 @@ checkpoint pending
 | Revisioned authoring transaction contract | Complete | Nonzero transaction/revision, source/scope, stale/invalid/scope rejection, and strict authored-change tests |
 | Crate relocation vertical proof | Complete | Shared request metadata, typed outcome, exact undo/redo, save/restart, replay, and immutable editor-view coverage |
 | Authored-change diagnostic envelope | Complete | Accepted/rejected correlation, typed crate values, compact diagnostics, JSON export, incident serialization, and per-transaction deduplication tests |
-| Developer endpoint lifecycle/discovery contract | Complete | Validated immutable lifecycle/schema/discovery values; editor-enabled discovery is declared and editor-disabled discovery is disabled; no transport exists |
+| Developer endpoint lifecycle/discovery contract | Complete | Validated immutable lifecycle/schema/discovery values; editor-enabled discovery is declared and editor-disabled discovery is disabled; EA0 itself added no transport |
 | Four-owner dependency enforcement | Complete | `EA0_OWNERSHIP_PASS owners=4 manifest=explicit tooling=backend_neutral runtime_content=cooked_only` plus four negative tests |
 | Runtime cooked/source-content separation | Complete | EA0 source verifier, S15 cooking/catalog, installed content, headless manifest, and relocation gates pass |
 | Editor enabled aggregate | Complete | 305/305 steps; 1022/1022 tests |
@@ -25,7 +24,7 @@ checkpoint pending
 | Save, replay, and incident regression | Complete | S4 replay, S5 save, five-profile incident capture/inspect/replay, and replay cohort 19 pass |
 | Native Metal regression | Complete | Installed crate-authoring, save, replay, S14 combat, S11/S13 cadence, and complete S15 Metal journeys pass |
 | Architecture/dead-code/doc-drift audit | Complete | Explicit ownership manifest, backend-neutral views, no unused compatibility path, current cohort/docs, formatting, diff, and local-link audit pass |
-| Product-owner manual checkpoint | Pending | Crate authoring and editor regression walkthrough |
+| Product-owner manual checkpoint | Complete | Accepted on 2026-08-29 after the crate authoring and editor interaction walkthrough plus its routing/gizmo corrections |
 
 ## Implemented Evidence
 
@@ -66,11 +65,13 @@ checkpoint pending
 
 ### Developer endpoint boundary
 
-- Engine contracts define only immutable endpoint lifecycle, schema identity,
+- In EA0, engine contracts define only immutable endpoint lifecycle, schema identity,
   bounded absolute discovery path, protocol cohort, and run identity.
 - Editor-enabled runs declare discoverability; editor-disabled runs report the
   endpoint disabled. EA0 does not create a socket, transport, CLI, shell
   evaluator, remote control path, or multiplayer administration surface.
+- The later EA0.5 schedule amendment is documented separately; its transport
+  and CLI do not change what EA0 implemented or what this ledger accepted.
 
 ## Automated and Native Results
 
@@ -126,12 +127,13 @@ immutable Camera/Stats projection repair. Dead-code review found no compatibilit
 reader or superseded transaction path to retain. Documentation now names replay
 cohort 19 and distinguishes EA0 candidate completion from product-owner
 acceptance. No generic CVar, property bag, service locator, universal command
-bus, scripting runtime, endpoint transport, or EA1 capability was introduced.
+bus, scripting runtime, endpoint transport within EA0, or EA1 capability was
+introduced.
 
-## Human Review Target
+## Human Review Outcome
 
-The manual checkpoint should verify only preserved behavior and the concrete
-crate workflow:
+The product owner accepted the concrete crate/editor workflow on 2026-08-29.
+The review covered the following preserved behavior and bounded authoring path:
 
 1. launch the installed editor-enabled Metal product;
 2. open Crate Authoring;
@@ -144,5 +146,7 @@ crate workflow:
 8. confirm ordinary play, rendering, input capture, and other editor panels
    behave as before.
 
-No material, vehicle, lighting, map, endpoint, or scripting review belongs to
-EA0.
+No material, vehicle, lighting, map, endpoint transport, or scripting review
+was claimed for EA0. Endpoint transport and canonical CLI acceptance belongs to
+the separately authorized
+[EA0.5 validation ledger](ea0-5-local-developer-endpoint-and-canonical-cli.md).

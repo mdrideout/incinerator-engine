@@ -1,7 +1,6 @@
 # Editor Interaction Phase 5: Selection-driven Crate Inspector
 
-**Status:** Implementation and automated/native acceptance complete;
-product-owner interaction review pending
+**Status:** Complete and accepted by the product owner on 2026-08-29
 
 **Date:** 2026-08-23
 
@@ -158,8 +157,8 @@ The original semantic replay continues to report the pre-existing
 That limits whole-cohort replay claims but is outside the anomaly window and is
 unaffected by this editor-only repair.
 
-The visual usability and no-occlusion checks remain in the product-owner gate
-below.
+The visual usability and no-occlusion checks were completed through the
+product-owner gate below.
 
 ## Escape-routing repair
 
@@ -216,9 +215,14 @@ proves a completed drag rejects further pointer updates.
 - README terminology, the alphabetical Panels menu, root phase ledger, and this
   validation record now agree on **Inspector**, **Apply Position**, and **Save
   World Snapshot**.
-- Phase 6 endpoint/CLI/MCP work was not started.
+- Phase 5 itself added no endpoint, CLI, or MCP path. After this phase was
+  accepted, the product owner separately authorized EA0.5 endpoint/CLI work;
+  Phase 7 MCP work has not started.
 
-## Product-owner interaction review
+## Product-owner interaction acceptance
+
+The product owner completed and accepted this workflow on 2026-08-29. The
+checklist is retained as the reproducible human evidence target:
 
 Start with an existing absolute save root:
 
@@ -284,5 +288,6 @@ Then verify:
     opens without pausing gameplay. Press Escape to Resume, reopen the menu,
     and confirm only the explicit **Quit** button exits.
 
-After the product owner accepts this checklist, Phase 5 can close. Phase 6 must
-not begin before that stop review.
+Phase 5 is closed. Its stop review satisfied the precondition for the
+separately authorized EA0.5 schedule amendment; Phase 7 remains blocked until
+EA0.5 itself is accepted.

@@ -1,7 +1,8 @@
 # Engine Authoring Foundation
 
-**Status:** Approved roadmap; EA0 implementation candidate complete and
-awaiting product-owner review; EA1-EA5 not started
+**Status:** Approved roadmap; EA0 accepted; EA0.5 implementation plus focused,
+aggregate, installed native Metal, and LLM-agent closeout complete, with human
+usability and product-owner review pending; EA1-EA5 not started
 
 **Date:** 2026-08-18
 
@@ -30,9 +31,9 @@ those real consumers.
 | Textures/materials | Offline glTF cook, embedded PNG decode, UV0, base-color factor/map, explicit sRGB texture upload, generational scene residency | External/GLB dependency workflow, ordinary image sizes, optional and richer material inputs, stable material assets, assignment and authoring |
 | Vehicles | Typed validated tuning, real-Jolt descriptor, persistence/replay, wheel presentation, objective dynamics report | Archetype identity, per-archetype assets/tuning, selection, live revisioned edit, AI client, safe rebuild semantics |
 | Lighting | Renderer-neutral directional sun plus ambient value, conventional lit shader, Render Lab evidence | Editable world-owned sun, stable point lights, selection/gizmos, persistence and AI control |
-| Authoring | Crate-specific selection, typed relocation, revisions, undo/redo, durable save | Shared target identity and transaction envelope with owner-specific typed editors; no generic property bag |
+| Authoring | EA0 stable target identity and transaction envelope; crate-specific selection, typed relocation, revisions, undo/redo, and durable save | Additional owner-specific typed editors; no generic property bag |
 | Maps | Deterministic four-district cook/catalog, streaming, collision/navigation metadata, visual composition | Game-owned map asset, placed-asset workflow, reusable kit, editor placement, deterministic recook |
-| Diagnostics | Structured workspace, panel metadata, incident timelines/images/replay, semantic draw and gameplay evidence | Authored-change stream, separate engine/game build/content identity, discoverable live-control schemas |
+| Diagnostics | Structured workspace, authored-change evidence, panel metadata, incident timelines/images/replay, semantic draw/gameplay evidence, and an implemented EA0.5 live-control path | Separate engine/game build/content identity and accepted per-feature schemas as later phases add them |
 | Scripting | Zig composition and data contracts | No demonstrated VM requirement; decision deliberately deferred |
 
 ## Ownership Matrix
@@ -71,9 +72,9 @@ object model:
 
 ### EA0 — Ownership, identity, and transaction boundary
 
-Implementation status: candidate complete on 2026-08-19; automated, installed,
-native Metal, architecture, dead-code, and documentation gates pass. The
-product-owner manual checkpoint remains before EA1. See the
+Implementation status: accepted by the product owner on 2026-08-29 after the
+automated, installed, native Metal, architecture, dead-code, documentation, and
+manual editor-interaction gates passed. See the
 [EA0 implementation plan](ea0-ownership-identity-transaction-boundary.md) and
 [validation ledger](../validation/ea0-ownership-identity-transaction-boundary.md).
 
@@ -84,12 +85,54 @@ product-owner manual checkpoint remains before EA1. See the
   outcome, and authored-change diagnostic envelope.
 - Add architecture checks preventing tools from reaching Flecs/Jolt/SDL owners
   and preventing runtime content from reaching source paths.
-- Define the developer endpoint lifecycle and discovery record, but implement
-  transport only with EA2's first authority consumer.
+- Define the developer endpoint lifecycle and discovery record without adding
+  transport to the EA0 scope.
 
 Acceptance: ownership is executable in imports/build targets, the existing
 product remains unchanged, and no generic property/CVar/command framework is
 introduced.
+
+### EA0.5 — Local developer endpoint and canonical CLI
+
+Schedule amendment status: explicitly authorized by the product owner on
+2026-08-29, ahead of EA1. EA0.5 implements the transport and canonical client
+that EA0 deliberately only described. Its implementation, focused and
+aggregate automated gates, installed native Metal journey, LLM-agent workflow,
+and architecture/security/dead-code/documentation review are complete; human
+usability and product-owner acceptance remain pending. It does not
+retroactively enlarge EA0.
+
+- Expose a developer-only process-local macOS Unix socket with explicit
+  lifecycle, run identity, protocol cohort, registered schema identities, and
+  a deterministic schema digest.
+- Add the reusable typed client and installed `incinerator-dev` CLI for world
+  and content discovery, stable-target inspection/selection, Character and
+  Free Camera control, exact camera pose/focus, crate relocation with optimistic
+  revision, transaction inspection, undo/redo, world-snapshot save, and
+  correlated frame evidence.
+- Route selection, camera, authoring, persistence, and capture through their
+  existing owners on the graphical main thread. Engine runtime owns the generic
+  endpoint identity/lifecycle values; the concrete sandbox-aware protocol,
+  Unix-socket transport, client, and CLI are game-tooling adapters. The socket
+  thread owns bytes and request/response handoff only. The graphical
+  composition owns schema projection, owner translation, and producer-local
+  correlation; it is not another mutation authority.
+- Keep world instances distinct from durable `AssetId` content. Until EA1
+  creates real durable asset identities, `content list` is truthfully empty and
+  the runtime crate appears only in `world list`.
+- Compile the server only into explicit editor/developer products. Editor-free,
+  validation, shipping, and headless compositions remain endpoint-free unless
+  a named acceptance product explicitly requests it.
+- Do not expose shell execution, filesystem browsing, arbitrary properties,
+  raw engine objects, remote listening, or multiplayer administration.
+
+Acceptance: UI and CLI enter the same typed owners; revisions, outcomes, and
+diagnostics remain exact and producer-correlated; a second local process can
+discover, inspect, select, observe, relocate, reject stale work, undo/redo,
+save, and capture evidence; editor-disabled/headless binaries retain their
+cold boundaries. See the
+[editor interaction and agent control plan](../../EDITOR_INTERACTION_AND_AGENT_CONTROL_PLAN.md)
+and [EA0.5 validation ledger](../validation/ea0-5-local-developer-endpoint-and-canonical-cli.md).
 
 ### EA1 — Practical texture and material vertical slice
 
@@ -135,12 +178,9 @@ and hot asset streaming remain evidence-gated follow-ups.
 - Classify edits as live-safe or rebuild-required. Apply through the authority
   tick boundary; preserve pose, velocity, and occupancy only when the owner can
   prove the transition safe, otherwise reject with a typed reason.
-- Implement a developer-only process-local macOS endpoint and
-  `incinerator-dev` client for schema discovery, inspect, apply, outcome, revert,
-  commit, and measurement actions.
-- Publish endpoint path/session/cohort into the run manifest. Never expose shell
-  evaluation, raw objects, production remote access, or multiplayer authority
-  administration.
+- Extend the accepted EA0.5 endpoint schemas with vehicle-archetype inspection,
+  live tuning, revert, commit, and measurement actions rather than creating a
+  second transport or client path.
 - Connect committed and candidate tuning to the existing vehicle-dynamics
   report/skill and scripted stopping, turning, slip, slalom, recovery, and
   rollover measurements.

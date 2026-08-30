@@ -120,6 +120,10 @@ const GizmoDragMapping = struct {
 pub const State = struct {
     id: ?engine.PersistentId = null,
     position: [3]f32 = .{ 0, 0, 0 },
+    /// Revision observed when this draft was clean. Once the draft becomes
+    /// dirty it remains fixed so Apply cannot silently rebase across another
+    /// producer's committed change.
+    draft_base_revision: u64 = 0,
     dirty: bool = false,
     observed_feedback_sequence: u64 = 0,
     gizmo_axis: ?Axis = null,
@@ -143,6 +147,7 @@ pub const State = struct {
             self.* = .{
                 .id = selected.id,
                 .position = selected.state.pose.position,
+                .draft_base_revision = selected.authoring_revision,
                 .observed_feedback_sequence = view.feedback.sequence,
             };
             return;
@@ -165,11 +170,19 @@ pub const State = struct {
 
         // A clean draft follows ordinary physics publication every frame. A
         // dirty draft remains stable while the dynamic crate keeps simulating.
-        if (!self.dirty) self.position = selected.state.pose.position;
+        if (!self.dirty) {
+            self.position = selected.state.pose.position;
+            self.draft_base_revision = selected.authoring_revision;
+        }
     }
 
-    fn revert(self: *State, authority_position: [3]f32) void {
+    fn revert(
+        self: *State,
+        authority_position: [3]f32,
+        authority_revision: u64,
+    ) void {
         self.position = authority_position;
+        self.draft_base_revision = authority_revision;
         self.dirty = false;
         self.endGizmoDrag();
     }
@@ -290,6 +303,7 @@ fn relocationRequest(
     }
     return .{ .relocate = .{
         .id = crate.id,
+        .expected_revision = state.draft_base_revision,
         .target_pose = .{
             .position = state.position,
             .rotation = crate.state.pose.rotation,
@@ -506,7 +520,9 @@ pub fn draw(state: *State, ctx: *const AuthoringInput, selection: *const Selecti
             const pending = session.pending != null;
             zgui.beginDisabled(.{ .disabled = pending });
             drawAxisControls(state, view.position_hint);
-            if (zgui.button("Revert Draft", .{})) state.revert(crate.state.pose.position);
+            if (zgui.button("Revert Draft", .{})) {
+                state.revert(crate.state.pose.position, crate.authoring_revision);
+            }
             zgui.sameLine(.{});
             if (zgui.button("Clear Selection", .{})) selection.requests.submit(.clear);
             zgui.endDisabled();
@@ -830,6 +846,34 @@ test "clean Inspector draft follows physics while dirty draft remains stable" {
     try std.testing.expect(state.dirty);
 }
 
+test "Inspector draft retains its optimistic base revision until revert or apply" {
+    const id = engine.PersistentId{ .namespace = 9, .local = 5 };
+    var selected = testCrate(id, .{ 1, 2, 3 });
+    selected.authoring_revision = 4;
+    var view = tool_module.CrateAuthoringView{
+        .session = testSession(id),
+        .position_hint = test_position_hint,
+        .selected_crate = selected,
+    };
+    var state = State{};
+    state.synchronize(&view);
+    try std.testing.expectEqual(@as(u64, 4), state.draft_base_revision);
+
+    state.setAxisDraft(.x, 8);
+    view.selected_crate.?.authoring_revision = 5;
+    view.selected_crate.?.state.pose.position = .{ 6, 2, 3 };
+    state.synchronize(&view);
+    try std.testing.expectEqual(@as(u64, 4), state.draft_base_revision);
+    try std.testing.expectEqual(@as(u64, 4), relocationRequest(&state, view.selected_crate.?).?.relocate.expected_revision);
+
+    state.revert(
+        view.selected_crate.?.state.pose.position,
+        view.selected_crate.?.authoring_revision,
+    );
+    try std.testing.expectEqual(@as(u64, 5), state.draft_base_revision);
+    try std.testing.expect(!state.dirty);
+}
+
 test "selection change replaces draft and selection loss clears it" {
     const first = engine.PersistentId{ .namespace = 9, .local = 3 };
     const second = engine.PersistentId{ .namespace = 9, .local = 4 };
@@ -943,8 +987,13 @@ test "editor Escape acceptance restores the pre-drag gizmo draft and dirty state
 
 test "gizmo drop stays local until Apply emits one exact relocate request" {
     const id = engine.PersistentId{ .namespace = 3, .local = 7 };
-    const crate = testCrate(id, .{ 1, 2, 3 });
-    var state = State{ .id = id, .position = crate.state.pose.position };
+    var crate = testCrate(id, .{ 1, 2, 3 });
+    crate.authoring_revision = 12;
+    var state = State{
+        .id = id,
+        .position = crate.state.pose.position,
+        .draft_base_revision = crate.authoring_revision,
+    };
     var requests = sandbox_authoring.RequestBuffer{};
 
     state.beginGizmoDrag(.z);
@@ -959,10 +1008,12 @@ test "gizmo drop stays local until Apply emits one exact relocate request" {
         else => return error.ExpectedRelocateRequest,
     };
     try std.testing.expectEqual(id, relocate.id);
+    try std.testing.expectEqual(@as(u64, 12), relocate.expected_revision);
     try std.testing.expectEqual([3]f32{ 1, 2, 7.5 }, relocate.target_pose.position);
     try std.testing.expectEqual(crate.state.pose.rotation, relocate.target_pose.rotation);
     try std.testing.expectEqual(sandbox_authoring.RelocateRequest{
         .id = id,
+        .expected_revision = 12,
         .target_pose = relocate.target_pose,
         .velocity = .zero,
     }, relocate);
@@ -1011,7 +1062,11 @@ test "dirty drafts and pending transactions defer undo redo and world snapshot" 
             .target = .{ .persistent_entity = id },
             .expected_revision = 0,
         },
-        .requested = .{ .id = id, .target_pose = .{ .position = .{ 2, 2, 2 } } },
+        .requested = .{
+            .id = id,
+            .expected_revision = 0,
+            .target_pose = .{ .position = .{ 2, 2, 2 } },
+        },
     };
     actions = actionAvailability(&state, &view, false);
     try std.testing.expect(!actions.apply and !actions.undo and !actions.redo and !actions.save);

@@ -16,6 +16,7 @@ const Owner = enum {
 const ClassifiedSource = struct {
     path: []const u8,
     owner: Owner,
+    boundary: enum { owner_module, explicit_adapter } = .owner_module,
 };
 
 /// One executable ownership manifest. New reusable authoring roots must be
@@ -33,6 +34,9 @@ const classified_sources = [_]ClassifiedSource{
     .{ .path = "src/session/authority_diagnostics.zig", .owner = .engine_runtime },
 
     .{ .path = "src/editor/workspace.zig", .owner = .engine_tooling },
+    .{ .path = "src/editor/selection.zig", .owner = .engine_tooling },
+    .{ .path = "src/editor/viewport.zig", .owner = .engine_tooling },
+    .{ .path = "src/viewport_controller.zig", .owner = .engine_tooling },
     .{ .path = "src/hosts/developer_controls.zig", .owner = .engine_tooling },
     .{ .path = "src/hosts/developer_diagnostics.zig", .owner = .engine_tooling },
     .{ .path = "src/hosts/developer_profile.zig", .owner = .engine_tooling },
@@ -47,6 +51,14 @@ const classified_sources = [_]ClassifiedSource{
     .{ .path = "src/sandbox/district_recipe.zig", .owner = .game_runtime_content },
 
     .{ .path = "src/hosts/sandbox_authoring.zig", .owner = .game_tooling },
+    .{ .path = "src/hosts/sandbox_developer_protocol.zig", .owner = .game_tooling },
+    .{
+        .path = "src/adapters/transport/macos_developer_endpoint.zig",
+        .owner = .game_tooling,
+        .boundary = .explicit_adapter,
+    },
+    .{ .path = "src/hosts/developer_endpoint_client.zig", .owner = .game_tooling },
+    .{ .path = "tools/incinerator_dev.zig", .owner = .game_tooling },
     .{ .path = "src/editor/tool.zig", .owner = .game_tooling },
     .{ .path = "src/editor/tools/camera_tool.zig", .owner = .game_tooling },
     .{ .path = "src/editor/tools/stats_tool.zig", .owner = .game_tooling },
@@ -84,6 +96,8 @@ const named_owners = [_]NamedOwner{
     .{ .name = "sandbox_district_recipe", .owner = .game_runtime_content },
     .{ .name = "sandbox_diagnostics_contract", .owner = .game_runtime_content },
     .{ .name = "sandbox_authoring", .owner = .game_tooling },
+    .{ .name = "sandbox_developer_protocol", .owner = .game_tooling },
+    .{ .name = "developer_endpoint_client", .owner = .game_tooling },
 };
 
 const external_modules = [_][]const u8{
@@ -136,7 +150,13 @@ pub fn main(init: std.process.Init) !void {
             .limited(4 * 1024 * 1024),
         );
         defer init.gpa.free(source);
-        try verifySource(source, entry.path, entry.owner, true);
+        try verifyClassifiedSource(
+            source,
+            entry.path,
+            entry.owner,
+            entry.boundary == .explicit_adapter,
+            true,
+        );
     }
     std.debug.print(
         "EA0_OWNERSHIP_PASS owners=4 manifest=explicit tooling=backend_neutral runtime_content=cooked_only\n",
@@ -173,7 +193,29 @@ fn verifySource(
     owner: Owner,
     emit_diagnostics: bool,
 ) !void {
-    if (owner == .engine_tooling or owner == .game_tooling) {
+    return verifyClassifiedSource(
+        source,
+        path,
+        owner,
+        false,
+        emit_diagnostics,
+    );
+}
+
+fn verifyClassifiedSource(
+    source: []const u8,
+    path: []const u8,
+    owner: Owner,
+    explicit_adapter: bool,
+    emit_diagnostics: bool,
+) !void {
+    // Host-neutral tooling cannot mutate storage/backends. A source may bypass
+    // only this token check when the explicit manifest classifies that exact
+    // root as an adapter whose declared job is the I/O boundary. Imports and
+    // owner dependency direction remain enforced below.
+    if (!explicit_adapter and
+        (owner == .engine_tooling or owner == .game_tooling))
+    {
         for (forbidden_tooling_mutation_tokens) |token| {
             if (std.mem.indexOf(u8, source, token) != null) {
                 return reportViolation(
@@ -365,5 +407,25 @@ test "game tooling may compose public engine tooling and game value contracts" {
         "src/editor/tools/example.zig",
         .game_tooling,
         false,
+    );
+}
+
+test "explicit adapter classification permits its I/O boundary but not backend imports" {
+    try verifyClassifiedSource(
+        "try std.Io.Dir.cwd().createFile(io, path, .{});",
+        "src/adapters/transport/example.zig",
+        .game_tooling,
+        true,
+        false,
+    );
+    try std.testing.expectError(
+        error.ForbiddenToolingImport,
+        verifyClassifiedSource(
+            "const renderer = @import(\"../../renderer.zig\");",
+            "src/adapters/transport/example.zig",
+            .game_tooling,
+            true,
+            false,
+        ),
     );
 }

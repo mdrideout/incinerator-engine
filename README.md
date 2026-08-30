@@ -126,6 +126,10 @@ product-owner four-district walkthrough pass. S15 is accepted. The active
 sequences practical materials/textures, vehicle archetypes and local AI tuning,
 authored lighting, game-owned map construction, and the separately built game
 proof under [ADR-029](docs/adr/029-engine-game-authoring-boundary.md).
+EA0 is accepted. EA0.5's local typed endpoint and canonical CLI now have
+complete focused/aggregate, installed Metal, LLM-agent, and architecture
+closeout; only the human usability and product-owner checkpoint remains before
+EA1 starts.
 The combined-tree
 [deterministic-rendering resumption audit](docs/validation/deterministic-rendering-resumption.md)
 passes and records the correction that restored the ordinary product from an
@@ -694,6 +698,95 @@ See [ADR-021](docs/adr/021-local-human-test-incident-bundles.md), the
 [incident design](docs/design/human-test-incident-capture.md), and the
 [validation record](docs/validation/human-test-incident-capture.md).
 
+### Local developer endpoint and CLI
+
+An editor-enabled build installs both the graphical product and the canonical
+typed developer client:
+
+```bash
+zig build -Deditor=true -Dincident-capture=true
+mkdir -p /tmp/incinerator-saves
+./zig-out/bin/incinerator_engine --save-root=/tmp/incinerator-saves
+```
+
+In a second terminal, `incinerator-dev` discovers the current local editor at
+`$HOME/Library/Logs/Incinerator/developer/discovery.json` and writes complete
+JSON responses. Start with the installed binary's own grammar, then record the
+run ID reported by discovery and confirm every later response belongs to it:
+
+```bash
+./zig-out/bin/incinerator-dev help
+./zig-out/bin/incinerator-dev discovery
+./zig-out/bin/incinerator-dev describe
+./zig-out/bin/incinerator-dev schema list
+./zig-out/bin/incinerator-dev world list
+./zig-out/bin/incinerator-dev content list
+```
+
+Copy a real target such as `persistent-entity:N:L` from `world list`; do not
+guess or hard-code a run's identity. Inspect it to record the initial revision,
+then use that exact revision in a distinctive relocation. Authoring, save, and
+capture requests report admission separately from terminal completion: poll
+their returned IDs to terminal results and re-inspect the target after an
+authoring transaction. Selection and camera responses are synchronous. The
+concrete workflow is:
+
+```text
+./zig-out/bin/incinerator-dev inspect --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev select --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev camera inspect
+./zig-out/bin/incinerator-dev camera mode free-camera
+./zig-out/bin/incinerator-dev camera pose \
+  --x N --y N --z N --yaw RADIANS --pitch RADIANS
+./zig-out/bin/incinerator-dev camera focus --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev crate set-position --target persistent-entity:N:L \
+  --expected-revision N --x N --y N --z N
+./zig-out/bin/incinerator-dev transaction inspect --id N
+./zig-out/bin/incinerator-dev inspect --target persistent-entity:N:L
+
+# Repeat set-position with the old revision and verify stale_revision.
+./zig-out/bin/incinerator-dev crate set-position --target persistent-entity:N:L \
+  --expected-revision OLD_N --x N --y N --z N
+./zig-out/bin/incinerator-dev transaction inspect --id N
+
+./zig-out/bin/incinerator-dev undo \
+  --target persistent-entity:N:L --expected-revision N
+./zig-out/bin/incinerator-dev transaction inspect --id N
+./zig-out/bin/incinerator-dev inspect --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev redo \
+  --target persistent-entity:N:L --expected-revision N
+./zig-out/bin/incinerator-dev transaction inspect --id N
+./zig-out/bin/incinerator-dev inspect --target persistent-entity:N:L
+
+./zig-out/bin/incinerator-dev camera focus --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev capture-frame
+./zig-out/bin/incinerator-dev capture inspect --id N
+./zig-out/bin/incinerator-dev save-world
+./zig-out/bin/incinerator-dev save result --id N
+```
+
+Authoring, save, and capture admission responses do not necessarily report
+terminal completion. Poll until each transaction/capture/save reports a
+terminal disposition; a `failed` save stops the acceptance sequence and its
+typed detail must be recorded. A committed save proves that the ordinary
+graphical product wrote the fixed durable slot. Under the accepted S5
+architecture, cold restore is performed by a separate fresh
+SDL/editor/GPU-free verifier whose expected world/content cohort matches the
+slot; the EA0.5 ordinary-product slot has not yet been claimed as cold-verified.
+Stopping and relaunching the ordinary graphical product with the same save root
+starts a fresh world and a new endpoint run; graphical startup does not load the
+committed slot. `world list` contains live instances; `content list`
+contains only durable cooked `AssetId` entries and is truthfully empty until
+EA1 creates them, so the runtime crate is never an asset. Frame capture uses the
+existing incident screenshot path and requires incident capture to be enabled.
+Use `--discovery /absolute/path/to/discovery.json` to override discovery.
+
+This is a local developer-only Unix socket, not a remote service. It is absent
+from editor-disabled and ordinary headless compositions. Phase 7's thin MCP
+adapter has not started; the CLI remains the canonical automation and
+diagnostic client. See the
+[EA0.5 validation ledger](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md).
+
 The sandbox contains one persistent runtime physics test crate. It is not an
 imported asset or a reusable content definition. The current ImGui proof
 authors only its XYZ position; size, collider shape, material, duplication, and
@@ -707,8 +800,9 @@ mkdir -p /tmp/incinerator-saves
 zig build run -Deditor=true -- --save-root=/tmp/incinerator-saves
 ```
 
-`--save-root` is startup configuration for the process-owned filesystem
-destination; it is not a command-line authoring workflow. Switch to **Free
+`--save-root` is startup configuration for the process-owned filesystem write
+destination; it neither loads a committed slot nor enables graphical
+auto-restore, and it is not a command-line authoring workflow. Switch to **Free
 Camera**, then select **Crate** through the **World Outliner** or viewport. The
 **Inspector** automatically opens and focuses for the new selection. Its
 axis-colored sliders and adjacent exact meter inputs share one local position

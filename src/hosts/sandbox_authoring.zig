@@ -55,6 +55,10 @@ pub const Snapshot = struct {
 
 pub const RelocateRequest = struct {
     id: engine.PersistentId,
+    /// Optimistic authoring revision observed when the producer began its
+    /// draft. The composition must not replace this with a newer live value
+    /// when the request is eventually submitted.
+    expected_revision: u64,
     target_pose: engine.physics.Pose,
     velocity: crates.RelocationVelocity = .zero,
 };
@@ -300,63 +304,121 @@ pub fn Controller(comptime history_capacity: usize) type {
             self.pruneIdentity(id);
         }
 
-        pub fn beginEdit(
+        /// UI convenience wrapper. Other admitted producers use
+        /// `beginEditFrom` so provenance survives the shared owner path.
+        pub fn beginEdit(self: *Self, request: RelocateRequest) !crates.Command {
+            return self.beginEditFrom(request, .ui);
+        }
+
+        pub fn beginEditFrom(
             self: *Self,
             request: RelocateRequest,
-            expected_revision: u64,
+            source: engine.authoring.Source,
         ) !crates.Command {
             try self.requireIdle();
             const selected = self.selected orelse return error.NoAuthoringSelection;
             if (!std.meta.eql(selected, request.id)) return error.SelectionMismatch;
             try validateRelocateRequest(request);
-            // A current view from another producer may be newer than this
-            // controller's retained lineage. Never rebase old private history
-            // across that external commit merely because a new edit succeeds.
-            if (!self.historyMatchesRevision(request.id, expected_revision)) {
-                self.pruneIdentity(request.id);
-            }
             return self.begin(.edit, .{
                 .transaction_id = try self.transactions.take(),
-                .source = .ui,
+                .source = source,
                 .scope = .session,
                 .id = request.id,
                 .target_pose = request.target_pose,
                 .velocity = request.velocity,
-                .expected_revision = expected_revision,
+                .expected_revision = request.expected_revision,
             });
         }
 
         pub fn beginUndo(self: *Self) !crates.Command {
+            return self.beginUndoFrom(.ui);
+        }
+
+        pub fn beginUndoFrom(
+            self: *Self,
+            source: engine.authoring.Source,
+        ) !crates.Command {
+            const change = try self.peekUndo();
+            return self.beginUndoAtRevisionFrom(
+                change.id,
+                change.expected_revision,
+                source,
+            );
+        }
+
+        /// External producers must echo the identity and revision they
+        /// inspected. The retained inverse value still comes from this owner.
+        /// A caller cannot substitute a newer revision for this producer's
+        /// retained lineage: that would turn undo into an overwrite of another
+        /// producer's commit rather than an optimistic history operation.
+        pub fn beginUndoAtRevisionFrom(
+            self: *Self,
+            id: engine.PersistentId,
+            expected_revision: u64,
+            source: engine.authoring.Source,
+        ) !crates.Command {
             try self.requireIdle();
-            if (self.undo_len == 0) return error.UndoHistoryEmpty;
-            const change = self.undo[self.undo_len - 1];
+            const change = try self.peekUndo();
+            try id.validate();
+            if (!std.meta.eql(change.id, id)) return error.UndoTargetMismatch;
+            if (change.expected_revision != expected_revision) {
+                return error.AuthoringHistoryRevisionMismatch;
+            }
             const transaction_id = try self.transactions.take();
             self.selected = change.id;
             return self.begin(.undo, .{
                 .transaction_id = transaction_id,
-                .source = .ui,
+                .source = source,
                 .scope = .session,
                 .id = change.id,
                 .target_pose = change.before.pose,
                 .velocity = .{ .exact = change.before.velocity },
-                .expected_revision = change.expected_revision,
+                .expected_revision = expected_revision,
             });
         }
 
         pub fn beginRedo(self: *Self) !crates.Command {
+            return self.beginRedoFrom(.ui);
+        }
+
+        pub fn beginRedoFrom(
+            self: *Self,
+            source: engine.authoring.Source,
+        ) !crates.Command {
+            const change = try self.peekRedo();
+            return self.beginRedoAtRevisionFrom(
+                change.id,
+                change.expected_revision,
+                source,
+            );
+        }
+
+        /// External producers echo the target and optimistic revision while
+        /// this owner supplies the retained forward state. The echoed revision
+        /// must still match this producer's retained history lineage.
+        pub fn beginRedoAtRevisionFrom(
+            self: *Self,
+            id: engine.PersistentId,
+            expected_revision: u64,
+            source: engine.authoring.Source,
+        ) !crates.Command {
             try self.requireIdle();
-            if (self.redo_len == 0) return error.RedoHistoryEmpty;
-            const change = self.redo[self.redo_len - 1];
+            const change = try self.peekRedo();
+            try id.validate();
+            if (!std.meta.eql(change.id, id)) return error.RedoTargetMismatch;
+            if (change.expected_revision != expected_revision) {
+                return error.AuthoringHistoryRevisionMismatch;
+            }
             const transaction_id = try self.transactions.take();
             self.selected = change.id;
             return self.begin(.redo, .{
                 .transaction_id = transaction_id,
-                .source = .ui,
+                .source = source,
                 .scope = .session,
                 .id = change.id,
                 .target_pose = change.after.pose,
                 .velocity = .{ .exact = change.after.velocity },
-                .expected_revision = change.expected_revision,
+                .expected_revision = expected_revision,
             });
         }
 
@@ -384,6 +446,18 @@ pub fn Controller(comptime history_capacity: usize) type {
                         .after = try relocated.after.normalized(),
                         .expected_revision = relocated.committed_revision,
                     };
+                    // An accepted edit based on a revision outside this
+                    // producer's retained lineage proves another producer
+                    // committed first. Prune only after owner evidence, not
+                    // merely because a caller submitted an outdated request.
+                    if (pending.kind == .edit and
+                        !self.historyMatchesRevision(
+                            pending.id,
+                            pending.request.expected_revision,
+                        ))
+                    {
+                        self.pruneIdentity(pending.id);
+                    }
                     switch (pending.kind) {
                         .edit => {
                             self.redo_len = 0;
@@ -432,7 +506,13 @@ pub fn Controller(comptime history_capacity: usize) type {
                     }
                     self.pending = null;
                     self.rejected_operations +|= 1;
-                    if (rejected.reason == .state_conflict) {
+                    if (rejected.reason == .state_conflict and
+                        (rejected.actual_revision == null or
+                            !self.historyMatchesRevision(
+                                pending.id,
+                                rejected.actual_revision.?,
+                            )))
+                    {
                         self.pruneIdentity(pending.id);
                     }
                     if (pending.prune_identity_after_outcome or
@@ -462,6 +542,7 @@ pub fn Controller(comptime history_capacity: usize) type {
             relocation: crates.RelocateCrate,
         ) crates.Command {
             const request = relocation.authoringRequest() catch unreachable;
+            const expected_revision = relocation.expected_revision orelse unreachable;
             self.pending = .{
                 .kind = kind,
                 .transaction_id = relocation.transaction_id,
@@ -469,6 +550,7 @@ pub fn Controller(comptime history_capacity: usize) type {
                 .request = request,
                 .requested = .{
                     .id = relocation.id,
+                    .expected_revision = expected_revision,
                     .target_pose = relocation.target_pose,
                     .velocity = relocation.velocity,
                 },
@@ -478,6 +560,16 @@ pub fn Controller(comptime history_capacity: usize) type {
 
         fn requireIdle(self: *const Self) !void {
             if (self.pending != null) return error.AuthoringOperationPending;
+        }
+
+        fn peekUndo(self: *const Self) !ChangeSet {
+            if (self.undo_len == 0) return error.UndoHistoryEmpty;
+            return self.undo[self.undo_len - 1];
+        }
+
+        fn peekRedo(self: *const Self) !ChangeSet {
+            if (self.redo_len == 0) return error.RedoHistoryEmpty;
+            return self.redo[self.redo_len - 1];
         }
 
         fn pushUndo(self: *Self, change: ChangeSet) void {
@@ -548,9 +640,10 @@ fn validateRelocateRequest(request: RelocateRequest) !void {
 
 fn digestRelocateRequest(request: RelocateRequest) !engine.assets.Digest {
     var writer = engine.contracts.replay.Writer.init();
-    writer.writeBytes("incinerator.crate-relocate-request.v1");
+    writer.writeBytes("incinerator.crate-relocate-request.v2");
     writer.writeU64(request.id.namespace);
     writer.writeU64(request.id.local);
+    writer.writeU64(request.expected_revision);
     try writePoseDigest(&writer, request.target_pose);
     switch (request.velocity) {
         .preserve => writer.writeU8(1),
@@ -633,9 +726,10 @@ test "edit undo redo use one correlated semantic command and revision chain" {
     const after = testState(5, 0);
     const edit = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = 0,
         .target_pose = after.pose,
         .velocity = .zero,
-    }, 0);
+    });
     try std.testing.expect(std.meta.activeTag(edit) == .relocate);
     try std.testing.expectEqual(@as(?u64, 0), edit.relocate.expected_revision);
     try std.testing.expectEqual(ObserveResult.applied, try controller.observe(
@@ -675,9 +769,10 @@ test "crate evidence retains generic audit fields and concrete values" {
     const after = testState(5, 0);
     const command = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = 0,
         .target_pose = after.pose,
         .velocity = .zero,
-    }, 0);
+    });
     const pending = controller.snapshot().pending.?;
     const outcome = relocatedOutcome(command, before, after, 1);
     const evidence = try ChangeEvidence.init(pending, outcome, .{
@@ -698,6 +793,83 @@ test "crate evidence retains generic audit fields and concrete values" {
     try std.testing.expect(evidence.record.values.committed != null);
 }
 
+test "explicit producer source survives the shared edit undo and redo owner path" {
+    const id = engine.PersistentId{ .namespace = 7, .local = 32 };
+    var transactions = TransactionSequencer{};
+    var controller = Controller(2).init(&transactions);
+    try controller.select(id);
+    const before = testState(0, 0);
+    const after = testState(2, 0);
+
+    const edit = try controller.beginEditFrom(.{
+        .id = id,
+        .expected_revision = 7,
+        .target_pose = after.pose,
+    }, .local_developer_client);
+    try std.testing.expectEqual(engine.authoring.Source.local_developer_client, edit.relocate.source);
+    try std.testing.expectEqual(
+        engine.authoring.Source.local_developer_client,
+        controller.snapshot().pending.?.request.source,
+    );
+    try std.testing.expectEqual(
+        @as(u64, 7),
+        controller.snapshot().pending.?.requested.expected_revision,
+    );
+    _ = try controller.observe(relocatedOutcome(edit, before, after, 8));
+
+    const undo = try controller.beginUndoFrom(.local_developer_client);
+    try std.testing.expectEqual(engine.authoring.Source.local_developer_client, undo.relocate.source);
+    _ = try controller.observe(relocatedOutcome(undo, after, before, 9));
+
+    const redo = try controller.beginRedoFrom(.scripted_validation);
+    try std.testing.expectEqual(engine.authoring.Source.scripted_validation, redo.relocate.source);
+}
+
+test "external undo and redo reject revisions outside retained producer lineage" {
+    const id = engine.PersistentId{ .namespace = 7, .local = 33 };
+    var transactions = TransactionSequencer{};
+    var controller = Controller(2).init(&transactions);
+    try controller.select(id);
+    const before = testState(0, 0);
+    const after = testState(2, 0);
+
+    const edit = try controller.beginEdit(.{
+        .id = id,
+        .expected_revision = 4,
+        .target_pose = after.pose,
+    });
+    _ = try controller.observe(relocatedOutcome(edit, before, after, 5));
+
+    try std.testing.expectError(
+        error.AuthoringHistoryRevisionMismatch,
+        controller.beginUndoAtRevisionFrom(id, 4, .local_developer_client),
+    );
+    const undo = try controller.beginUndoAtRevisionFrom(
+        id,
+        5,
+        .local_developer_client,
+    );
+    try std.testing.expectEqual(@as(?u64, 5), undo.relocate.expected_revision);
+    try std.testing.expectEqualDeep(before.pose, undo.relocate.target_pose);
+    try std.testing.expectEqual(
+        engine.authoring.Source.local_developer_client,
+        undo.relocate.source,
+    );
+    _ = try controller.observe(relocatedOutcome(undo, after, before, 6));
+
+    try std.testing.expectError(
+        error.AuthoringHistoryRevisionMismatch,
+        controller.beginRedoAtRevisionFrom(id, 5, .local_developer_client),
+    );
+    const redo = try controller.beginRedoAtRevisionFrom(
+        id,
+        6,
+        .local_developer_client,
+    );
+    try std.testing.expectEqual(@as(?u64, 6), redo.relocate.expected_revision);
+    try std.testing.expectEqualDeep(after.pose, redo.relocate.target_pose);
+}
+
 test "crate evidence maps stale revision to typed rejected record" {
     const id = engine.PersistentId{ .namespace = 7, .local = 31 };
     var transactions = TransactionSequencer{};
@@ -705,8 +877,9 @@ test "crate evidence maps stale revision to typed rejected record" {
     try controller.select(id);
     const command = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = 2,
         .target_pose = testState(5, 0).pose,
-    }, 2);
+    });
     const pending = controller.snapshot().pending.?;
     const evidence = try ChangeEvidence.init(pending, .{ .rejected = .{
         .command = .relocate,
@@ -744,17 +917,19 @@ test "multi-level same-crate undo and redo follow the identity revision" {
     const second_state = testState(2, 2);
     const first_edit = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = 0,
         .target_pose = first_state.pose,
         .velocity = .{ .exact = first_state.velocity },
-    }, 0);
+    });
     try std.testing.expectEqual(ObserveResult.applied, try controller.observe(
         relocatedOutcome(first_edit, initial, first_state, 1),
     ));
     const second_edit = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = 1,
         .target_pose = second_state.pose,
         .velocity = .{ .exact = second_state.velocity },
-    }, 1);
+    });
     try std.testing.expectEqual(ObserveResult.applied, try controller.observe(
         relocatedOutcome(second_edit, first_state, second_state, 2),
     ));
@@ -798,22 +973,25 @@ test "interleaved crate history advances revisions only for the affected identit
     try controller.select(first_id);
     const first_edit = try controller.beginEdit(.{
         .id = first_id,
+        .expected_revision = 0,
         .target_pose = first_once.pose,
-    }, 0);
+    });
     _ = try controller.observe(relocatedOutcome(first_edit, initial, first_once, 1));
 
     try controller.select(second_id);
     const second_edit = try controller.beginEdit(.{
         .id = second_id,
+        .expected_revision = 0,
         .target_pose = second_once.pose,
-    }, 0);
+    });
     _ = try controller.observe(relocatedOutcome(second_edit, initial, second_once, 1));
 
     try controller.select(first_id);
     const first_edit_again = try controller.beginEdit(.{
         .id = first_id,
+        .expected_revision = 1,
         .target_pose = first_twice.pose,
-    }, 1);
+    });
     _ = try controller.observe(relocatedOutcome(first_edit_again, first_once, first_twice, 2));
 
     const undo_first_again = try controller.beginUndo();
@@ -838,15 +1016,17 @@ test "rejection and failed submission preserve history" {
     try controller.select(id);
     const command = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = 0,
         .target_pose = testState(1, 0).pose,
-    }, 0);
+    });
     try std.testing.expect(controller.submissionFailed(command.relocate.transaction_id));
     try std.testing.expectEqual(@as(u16, 0), controller.snapshot().undo_count);
 
     const retry = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = 0,
         .target_pose = testState(1, 0).pose,
-    }, 0);
+    });
     try std.testing.expectEqual(ObserveResult.rejected, try controller.observe(.{
         .rejected = .{
             .command = .relocate,
@@ -876,25 +1056,28 @@ test "new edit prunes stale lineage instead of crossing another producer" {
     const newest_state = testState(3, 0);
     const first_edit = try first.beginEdit(.{
         .id = id,
+        .expected_revision = 0,
         .target_pose = first_state.pose,
-    }, 0);
+    });
     _ = try first.observe(relocatedOutcome(first_edit, initial, first_state, 1));
 
     const external_edit = try second.beginEdit(.{
         .id = id,
+        .expected_revision = 1,
         .target_pose = external_state.pose,
-    }, 1);
+    });
     _ = try second.observe(relocatedOutcome(external_edit, first_state, external_state, 2));
 
-    // The authoritative view supplies revision 2. Starting a new local edit
-    // must discard first's revision-1 lineage before recording revision 3.
+    // The authoritative view supplies revision 2. The owner-confirmed commit,
+    // rather than request construction alone, discards revision-1 lineage.
     const newest_edit = try first.beginEdit(.{
         .id = id,
+        .expected_revision = 2,
         .target_pose = newest_state.pose,
-    }, 2);
-    try std.testing.expectEqual(@as(u16, 0), first.snapshot().undo_count);
-    try std.testing.expectEqual(@as(u64, 1), first.snapshot().invalidated_history);
+    });
+    try std.testing.expectEqual(@as(u16, 1), first.snapshot().undo_count);
     _ = try first.observe(relocatedOutcome(newest_edit, external_state, newest_state, 3));
+    try std.testing.expectEqual(@as(u64, 1), first.snapshot().invalidated_history);
 
     const undo_newest = try first.beginUndo();
     try std.testing.expectEqualDeep(external_state.pose, undo_newest.relocate.target_pose);
@@ -905,6 +1088,41 @@ test "new edit prunes stale lineage instead of crossing another producer" {
         4,
     ));
     try std.testing.expectError(error.UndoHistoryEmpty, first.beginUndo());
+}
+
+test "outdated rejected edit preserves history when owner revision matches lineage" {
+    const id = engine.PersistentId{ .namespace = 8, .local = 4 };
+    var transactions = TransactionSequencer{};
+    var controller = Controller(4).init(&transactions);
+    try controller.select(id);
+    const initial = testState(0, 0);
+    const committed = testState(1, 0);
+    const edit = try controller.beginEdit(.{
+        .id = id,
+        .expected_revision = 0,
+        .target_pose = committed.pose,
+    });
+    _ = try controller.observe(relocatedOutcome(edit, initial, committed, 1));
+
+    const stale = try controller.beginEdit(.{
+        .id = id,
+        .expected_revision = 0,
+        .target_pose = testState(9, 0).pose,
+    });
+    try std.testing.expectEqual(ObserveResult.rejected, try controller.observe(.{
+        .rejected = .{
+            .command = .relocate,
+            .reason = .state_conflict,
+            .transaction_id = stale.relocate.transaction_id,
+            .id = id,
+            .expected_revision = 0,
+            .actual_revision = 1,
+        },
+    }));
+    try std.testing.expectEqual(@as(u16, 1), controller.snapshot().undo_count);
+    try std.testing.expectEqual(@as(u64, 0), controller.snapshot().invalidated_history);
+    const undo = try controller.beginUndo();
+    try std.testing.expectEqualDeep(initial.pose, undo.relocate.target_pose);
 }
 
 test "state conflict prunes stale lineage before a later local edit" {
@@ -919,8 +1137,9 @@ test "state conflict prunes stale lineage before a later local edit" {
     const newest_state = testState(3, 0);
     const first_edit = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = 0,
         .target_pose = local_state.pose,
-    }, 0);
+    });
     _ = try controller.observe(relocatedOutcome(first_edit, initial, local_state, 1));
 
     const stale_undo = try controller.beginUndo();
@@ -940,8 +1159,9 @@ test "state conflict prunes stale lineage before a later local edit" {
 
     const newest_edit = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = 2,
         .target_pose = newest_state.pose,
-    }, 2);
+    });
     _ = try controller.observe(relocatedOutcome(
         newest_edit,
         external_state,
@@ -969,8 +1189,9 @@ test "bounded history evicts oldest and identity invalidation prunes safely" {
         try controller.select(id);
         const command = try controller.beginEdit(.{
             .id = id,
+            .expected_revision = 0,
             .target_pose = testState(@floatFromInt(index + 1), 0).pose,
-        }, 0);
+        });
         try std.testing.expectEqual(ObserveResult.applied, try controller.observe(
             relocatedOutcome(command, testState(0, 0), testState(@floatFromInt(index + 1), 0), 1),
         ));
@@ -990,8 +1211,9 @@ test "identity deletion during pending operation defers history pruning" {
     try controller.select(id);
     const command = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = 0,
         .target_pose = testState(3, 0).pose,
-    }, 0);
+    });
     controller.invalidateIdentity(id);
     try std.testing.expect(controller.snapshot().selected == null);
     try std.testing.expectEqual(ObserveResult.applied, try controller.observe(
@@ -1013,12 +1235,14 @@ test "shared sequencer prevents aliases but outcome delivery remains owner expli
     const second_state = testState(2, 0);
     const first_command = try first.beginEdit(.{
         .id = id,
+        .expected_revision = 0,
         .target_pose = first_state.pose,
-    }, 0);
+    });
     const second_command = try second.beginEdit(.{
         .id = id,
+        .expected_revision = 1,
         .target_pose = second_state.pose,
-    }, 1);
+    });
     try std.testing.expect(first_command.relocate.transaction_id != 0);
     try std.testing.expect(second_command.relocate.transaction_id != 0);
     try std.testing.expect(

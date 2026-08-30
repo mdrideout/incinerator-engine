@@ -1,6 +1,6 @@
 # EA0 Ownership, Identity, and Transaction Boundary
 
-**Status:** Implementation candidate complete; product-owner review pending
+**Status:** Accepted by the product owner on 2026-08-29
 
 **Date:** 2026-08-19
 
@@ -104,7 +104,7 @@ engine/game tooling merely because developer products compose them.
   product, and native Metal regression gates.
 - Audit architecture, dead code, documentation drift, and forbidden generic
   abstractions.
-- Stop for product-owner review before EA1.
+- Stop for product-owner review before any later authoring phase.
 
 ## Contract Rules
 
@@ -138,7 +138,12 @@ endpoint-discovery values are validated, existing gameplay/presentation remain
 unchanged, all declared automated/native gates pass, and the product owner has
 a concise manual crate-authoring/editor regression checklist.
 
-The implementation reached that candidate-complete state on 2026-08-19. The
+The implementation reached candidate-complete state on 2026-08-19. The
 automated, installed-product, native Metal, architecture, dead-code, and
-documentation evidence is recorded in the validation ledger. EA1 remains
-blocked on the product-owner checkpoint.
+documentation evidence is recorded in the validation ledger. The product owner
+accepted the preserved crate/editor workflow on 2026-08-29.
+
+That acceptance preserves EA0's original scope: it validated endpoint
+lifecycle and discovery values but added no socket, transport, or CLI. The
+separately authorized EA0.5 schedule amendment now implements that local
+developer surface ahead of EA1; it does not retroactively enlarge this phase.

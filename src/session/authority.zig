@@ -2020,7 +2020,13 @@ const AuthorityCore = struct {
         try self.processNpcOutcomes();
         try self.processNpcEncounterCues();
         if (self.population_enabled) {
-            try self.simulation.stepPopulation();
+            // A pending durable request establishes a bounded capture barrier:
+            // finish work already admitted by the population owner, but do not
+            // perpetually schedule its next step before stage-seven capture can
+            // observe a quiescent simulation boundary.
+            if (self.durable_requests.pending == null) {
+                try self.simulation.stepPopulation();
+            }
             try self.processPopulationIntents();
             while (self.simulation.pollPopulationTransition()) |transition| {
                 self.retainObservation(
@@ -2230,6 +2236,16 @@ const AuthorityCore = struct {
 
     fn extractReplication(self: *AuthorityCore) !void {
         try self.prepareReliableReplay();
+        // Reliable derivatives represent accepted effects and must drain. Once
+        // they and every other durable prerequisite are quiet, avoid creating
+        // a fresh ordinary state projection solely to make stage seven defer
+        // again. The next normal cycle republishes the captured state.
+        if (self.durable_requests.pending != null and
+            self.prepared_outbox.len == 0 and self.durableDeferral() == null)
+        {
+            self.force_snapshot = true;
+            return;
+        }
         if (self.defer_replication_this_cycle) {
             self.force_snapshot = self.force_snapshot or self.hasPendingBaseline();
             return;
@@ -2257,10 +2273,25 @@ const AuthorityCore = struct {
         else if (self.simulation.save(self.allocator)) |bytes|
             .{ .captured = bytes }
         else |err|
-            .{ .failed = err };
+            durableSaveFailure(err);
         self.prepared_durable_result = .{
             .request_id = request_id,
             .disposition = disposition,
+        };
+    }
+
+    fn durableSaveFailure(err: anyerror) snapshot_source.Disposition {
+        return switch (err) {
+            // Authored population membership and its actor lifecycle are
+            // published by separate simulation systems. A capture can land in
+            // the real, one-cycle boundary where the member is live but its
+            // actor records have not converged yet. That is pending session
+            // work, not a corrupt snapshot or a terminal persistence failure.
+            error.PopulationActorLifecycleIncomplete,
+            error.PopulationOutputsPending,
+            error.PopulationTransactionPending,
+            => .{ .deferred = .session_work },
+            else => .{ .failed = err },
         };
     }
 
@@ -9537,6 +9568,55 @@ test "durable capture is decided at cycle stage seven and released by its owner"
     );
 }
 
+test "durable barrier drains population then resumes population and replication" {
+    var config = testEmbeddedCoreConfig(0x454d_4418, .host_managed);
+    config.simulation.authored_population = true;
+    const authority = try EmbeddedAuthority.init(std.testing.allocator, config);
+    defer authority.deinit();
+    const core = embeddedAuthorityCore(authority);
+    const source = try authority.persistence().issueSource();
+    const transport = TransportConnection{ .value = 1 };
+    _ = try authority.session().openConnection(transport);
+    try authority.session().ingest(transport, .{ .hello = .{
+        .account = .{ .value = 1 },
+    } });
+    var saw_transient_deferral = false;
+
+    while (true) {
+        const request_id = try source.request();
+        try authority.session().tick();
+        const disposition = (try source.take(request_id)) orelse
+            return error.MissingDurableCaptureDisposition;
+        switch (disposition) {
+            .deferred => {
+                saw_transient_deferral = true;
+                if (authority.session().beginOutboundLease()) |lease| {
+                    try authority.session().commitOutboundLease(lease.generation);
+                }
+            },
+            .captured => |bytes| {
+                defer source.release(bytes);
+                try std.testing.expect(bytes.len != 0);
+                break;
+            },
+            .failed => |err| return err,
+        }
+    }
+    try std.testing.expect(saw_transient_deferral);
+    try std.testing.expect(core.simulation.operationalQuiescenceReason() == null);
+    try std.testing.expect(core.force_snapshot);
+    const population_before_resume = core.simulation.populationLogicalDigest().?;
+
+    // Releasing the durable request also releases the one-cycle population
+    // scheduling barrier. Its next accepted step changes the population-owned
+    // logical state, while ordinary replication is again permitted.
+    try authority.session().tick();
+    try std.testing.expect(
+        core.simulation.populationLogicalDigest().? != population_before_resume,
+    );
+    try std.testing.expect(!core.force_snapshot);
+}
+
 test "durable capture returns a typed stage-seven deferral while publication is pending" {
     const authority = try initTestEmbeddedAuthority(
         testEmbeddedCoreConfig(0x454d_4412, .host_managed),
@@ -9560,6 +9640,26 @@ test "durable capture returns a typed stage-seven deferral while publication is 
         disposition.deferred,
     );
     try std.testing.expect(authority.session().beginOutboundLease() != null);
+}
+
+test "transient population snapshot boundaries defer durable capture" {
+    inline for (.{
+        error.PopulationActorLifecycleIncomplete,
+        error.PopulationOutputsPending,
+        error.PopulationTransactionPending,
+    }) |err| {
+        const disposition = AuthorityCore.durableSaveFailure(err);
+        try std.testing.expectEqual(
+            snapshot_source.Deferral.session_work,
+            disposition.deferred,
+        );
+    }
+
+    const disposition = AuthorityCore.durableSaveFailure(error.InvalidSnapshotMagic);
+    try std.testing.expectEqual(
+        error.InvalidSnapshotMagic,
+        disposition.failed,
+    );
 }
 
 fn testTakeAndAcknowledgeBaseline(

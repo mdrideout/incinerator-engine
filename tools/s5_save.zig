@@ -147,9 +147,10 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     const initial = try world.crate(id);
     const edit = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = initial.authoring_revision,
         .target_pose = smoke_target_pose,
         .velocity = .zero,
-    }, initial.authoring_revision);
+    });
     try applyAuthoring(&world, &controller, edit);
     try applyAuthoring(&world, &controller, try controller.beginUndo());
     try applyAuthoring(&world, &controller, try controller.beginRedo());
@@ -236,9 +237,10 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     const pre_held_save = try world.crate(id);
     try applyAuthoring(&world, &controller, try controller.beginEdit(.{
         .id = id,
+        .expected_revision = pre_held_save.authoring_revision,
         .target_pose = smoke_target_pose,
         .velocity = .zero,
-    }, pre_held_save.authoring_revision));
+    }));
 
     const held_payload = try world.save(init.gpa);
     defer init.gpa.free(held_payload);
@@ -286,9 +288,10 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     const pre_boundary_save = try world.crate(id);
     try applyAuthoring(&world, &controller, try controller.beginEdit(.{
         .id = id,
+        .expected_revision = pre_boundary_save.authoring_revision,
         .target_pose = smoke_target_pose,
         .velocity = .zero,
-    }, pre_boundary_save.authoring_revision));
+    }));
 
     const boundary_payload = try world.save(init.gpa);
     defer init.gpa.free(boundary_payload);
@@ -356,9 +359,10 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     const pre_content_unloaded_save = try world.crate(id);
     try applyAuthoring(&world, &controller, try controller.beginEdit(.{
         .id = id,
+        .expected_revision = pre_content_unloaded_save.authoring_revision,
         .target_pose = smoke_target_pose,
         .velocity = .zero,
-    }, pre_content_unloaded_save.authoring_revision));
+    }));
     const content_unloaded_final = try world.crate(id);
 
     const content_unloaded_payload = try world.save(init.gpa);

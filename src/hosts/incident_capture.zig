@@ -225,6 +225,7 @@ const Queue = struct {
     last_written_sequence: u64 = 0,
     handoff_ready: bool = false,
     handoff: Handoff = undefined,
+    developer_endpoint: ?engine.developer_endpoint.Discovery = null,
 
     fn reserveVisual(self: *Queue, amount: u64) bool {
         self.lock();
@@ -790,15 +791,22 @@ const Writer = struct {
         const screenshot_fence_failures = self.queue.screenshot_fence_failures;
         const replay_attached = self.queue.replay_attached;
         const anomaly_count = self.queue.anomaly_count;
+        const developer_endpoint = self.queue.developer_endpoint;
         self.queue.unlock();
         var manifest_writer = std.Io.Writer.fixed(&manifest_buffer);
         try manifest_writer.print(
-            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.14\",\"jolt\":\"5.5.0\",\"protocol\":{d},\"replay\":{d},\"snapshot\":{d}}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true,\"navigation_lineage\":true,\"population_activity\":true,\"deterministic_render_state\":true,\"ranged_combat\":true,\"authored_changes\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
+            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.14\",\"jolt\":\"5.5.0\",\"protocol\":{d},\"replay\":{d},\"snapshot\":{d}}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true,\"navigation_lineage\":true,\"population_activity\":true,\"deterministic_render_state\":true,\"ranged_combat\":true,\"authored_changes\":true,\"developer_endpoint_discovery\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
             .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), manifest_protocol_cohort, sandbox_replay.schema_cohort, manifest_snapshot_cohort, @tagName(self.hardening_profile), self.write_failure_after_bytes, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, configured_visual_budget, self.budget_bytes - configured_visual_budget, visual_reserved, visual_exhausted, visual_rejections },
         );
         try manifest_writer.print(
-            "\"writer_queue_capacity\":{d},\"writer_queue\":{d},\"queue_high_water\":{d},\"dropped_records\":{d},\"writer_failed\":{},\"handoff_persisted\":{},\"last_admitted_sequence\":{d},\"last_durable_sequence\":{d},\"bytes_written\":{d},\"bytes_by_class\":{{\"streams\":{d},\"visual\":{d},\"replay\":{d},\"metadata\":{d}}},\"screenshot_misses\":{d},\"screenshot_fence_failures\":{d},\"anomaly_count\":{d},\"replay_status\":\"{s}\",\"screenshot_format\":\"ppm-p6\",\"privacy\":{{\"local_only\":true,\"captures_text_input\":false,\"captures_credentials\":false,\"captures_reserved_shortcut_candidates\":true}}}}\n",
+            "\"writer_queue_capacity\":{d},\"writer_queue\":{d},\"queue_high_water\":{d},\"dropped_records\":{d},\"writer_failed\":{},\"handoff_persisted\":{},\"last_admitted_sequence\":{d},\"last_durable_sequence\":{d},\"bytes_written\":{d},\"bytes_by_class\":{{\"streams\":{d},\"visual\":{d},\"replay\":{d},\"metadata\":{d}}},\"screenshot_misses\":{d},\"screenshot_fence_failures\":{d},\"anomaly_count\":{d},\"replay_status\":\"{s}\",\"screenshot_format\":\"ppm-p6\",\"developer_endpoint\":",
             .{ writer_queue_capacity, queued, high_water, dropped, writer_failed, handoff_persisted, last_admitted, last_durable, bytes, stream_bytes, visual_bytes, replay_bytes, metadata_bytes, screenshot_misses, screenshot_fence_failures, anomaly_count, if (replay_attached) "attached" else "not_attached" },
+        );
+        try writeDeveloperEndpointJson(&manifest_writer, developer_endpoint);
+        try manifest_writer.writeAll(
+            ",\"privacy\":{\"local_only\":true,\"captures_text_input\":false," ++
+                "\"captures_credentials\":false," ++
+                "\"captures_reserved_shortcut_candidates\":true}}\n",
         );
         const manifest = manifest_buffer[0..manifest_writer.end];
         var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, path, .{
@@ -957,6 +965,19 @@ pub const Capture = struct {
         self.setStatus("Incident recording active (Cmd+Option+I; F9 optional)");
     }
 
+    /// Retain the current value-only endpoint discovery record in the atomic
+    /// incident manifest. The incident recorder is evidence only; clients use
+    /// the endpoint adapter's dedicated discovery record.
+    pub fn observeDeveloperEndpoint(
+        self: *Capture,
+        discovery: ?engine.developer_endpoint.Discovery,
+    ) void {
+        if (discovery) |value| value.validate() catch return;
+        self.queue.lock();
+        self.queue.developer_endpoint = discovery;
+        self.queue.unlock();
+    }
+
     /// Configure one explicit IC5-G profile before the writer starts. This is
     /// a required pre-start operation so ordinary live capture cannot mutate
     /// its evidence contract mid-run.
@@ -1039,6 +1060,18 @@ pub const Capture = struct {
         return (self.findAnomaly(id) orelse return null).monotonic_ns;
     }
 
+    /// Return one immutable anomaly projection for a typed local developer
+    /// client. The recorder remains the sole lifecycle and evidence owner.
+    pub fn anomalyView(
+        self: *const Capture,
+        id: incident.AnomalyId,
+    ) ?incident.AnomalyView {
+        for (self.anomalies[0..self.anomaly_count]) |anomaly| {
+            if (anomaly.view.id == id) return anomaly.view;
+        }
+        return null;
+    }
+
     pub fn observe(
         self: *Capture,
         gameplay: engine.gameplay_trace.BorrowedView,
@@ -1075,6 +1108,17 @@ pub const Capture = struct {
             self.recordMetrics(view, frame_time_ms, now);
         }
         self.finishPostRoll(now);
+    }
+
+    /// Record every correlated authoring outcome at the point the composition
+    /// observes it. The per-frame projection below remains useful for retained
+    /// diagnostics, but cannot be the only ingress because two producers may
+    /// complete during the same authority cycle.
+    pub fn observeAuthoredChange(
+        self: *Capture,
+        evidence: sandbox_authoring.ChangeEvidence,
+    ) void {
+        self.recordAuthoredChange(evidence, monotonicNowNs(self.io));
     }
 
     fn recordAuthoredChange(
@@ -2137,6 +2181,42 @@ fn escapeJson(destination: []u8, source: []const u8) []const u8 {
     return destination[0..count];
 }
 
+fn writeDeveloperEndpointJson(
+    writer: *std.Io.Writer,
+    discovery: ?engine.developer_endpoint.Discovery,
+) !void {
+    const value = discovery orelse return writer.writeAll("null");
+    try writer.print(
+        "{{\"lifecycle\":\"{s}\",\"run_id\":{{\"started_wall_unix_ms\":{d}," ++
+            "\"nonce\":{d}}},\"protocol_cohort\":{d},\"endpoint_path\":",
+        .{
+            @tagName(value.lifecycle),
+            value.run_id.started_wall_unix_ms,
+            value.run_id.nonce,
+            value.protocol_cohort,
+        },
+    );
+    if (value.endpoint_path) |path| {
+        var escaped_buffer: [engine.developer_endpoint.max_endpoint_path_bytes * 2]u8 = undefined;
+        const escaped = escapeJson(&escaped_buffer, path.slice());
+        try writer.print("\"{s}\"", .{escaped});
+    } else try writer.writeAll("null");
+    try writer.writeAll(",\"schema_ids\":[");
+    for (value.schema_ids[0..value.schema_count], 0..) |id, index| {
+        if (index != 0) try writer.writeAll(",");
+        try writer.print(
+            "{{\"namespace\":{d},\"local\":{d}}}",
+            .{ id.namespace, id.local },
+        );
+    }
+    try writer.writeAll("],\"schema_digest\":");
+    if (value.schema_digest) |digest| {
+        const hex = std.fmt.bytesToHex(digest, .lower);
+        try writer.print("\"{s}\"", .{&hex});
+    } else try writer.writeAll("null");
+    try writer.writeAll("}");
+}
+
 fn entityJson(
     destination: []u8,
     entity: ?engine.gameplay_trace.EntityRef,
@@ -2363,6 +2443,85 @@ test "incident manifest cohorts source the live protocol and snapshot owners" {
     try std.testing.expectEqual(@as(u16, 15), manifest_snapshot_cohort);
 }
 
+test "incident manifest serializes validated developer endpoint discovery" {
+    var digest: engine.assets.Digest = @splat(0);
+    digest[0] = 0xab;
+    var discovery = engine.developer_endpoint.Discovery{
+        .lifecycle = .available,
+        .run_id = .{ .started_wall_unix_ms = 17, .nonce = 23 },
+        .protocol_cohort = 1,
+        .endpoint_path = try engine.developer_endpoint.Path.init(
+            "/tmp/incinerator-\"developer.sock",
+        ),
+        .schema_count = 2,
+        .schema_digest = digest,
+    };
+    discovery.schema_ids[0] = .{ .namespace = 7, .local = 1 };
+    discovery.schema_ids[1] = .{ .namespace = 7, .local = 2 };
+    try discovery.validate();
+
+    var buffer: [2048]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try writeDeveloperEndpointJson(&writer, discovery);
+    const json = buffer[0..writer.end];
+    var parsed = try std.json.parseFromSlice(
+        std.json.Value,
+        std.testing.allocator,
+        json,
+        .{},
+    );
+    defer parsed.deinit();
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        json,
+        "\"endpoint_path\":\"/tmp/incinerator-\\\"developer.sock\"",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        json,
+        "\"schema_ids\":[{\"namespace\":7,\"local\":1}",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        json,
+        "\"schema_digest\":\"ab00000000000000000000000000000000000000000000000000000000000000\"",
+    ) != null);
+
+    var null_buffer: [16]u8 = undefined;
+    var null_writer = std.Io.Writer.fixed(&null_buffer);
+    try writeDeveloperEndpointJson(&null_writer, null);
+    try std.testing.expectEqualStrings("null", null_buffer[0..null_writer.end]);
+}
+
+test "incident manifest observation retains only validated discovery values" {
+    var capture = Capture{
+        .allocator = std.testing.allocator,
+        .io = std.testing.io,
+        .writer = undefined,
+    };
+    const declared = engine.developer_endpoint.Discovery{
+        .lifecycle = .declared,
+        .run_id = .{ .started_wall_unix_ms = 17, .nonce = 23 },
+        .protocol_cohort = 1,
+    };
+    capture.observeDeveloperEndpoint(declared);
+    try std.testing.expect(std.meta.eql(
+        declared,
+        capture.queue.developer_endpoint.?,
+    ));
+
+    var invalid = declared;
+    invalid.protocol_cohort = 0;
+    capture.observeDeveloperEndpoint(invalid);
+    try std.testing.expect(std.meta.eql(
+        declared,
+        capture.queue.developer_endpoint.?,
+    ));
+
+    capture.observeDeveloperEndpoint(null);
+    try std.testing.expect(capture.queue.developer_endpoint == null);
+}
+
 test "handoff is available to clipboard before durable writer completion" {
     var queue = Queue{};
     queue.handoff_persisted = true;
@@ -2372,7 +2531,7 @@ test "handoff is available to clipboard before durable writer completion" {
     try std.testing.expectEqualStrings("bounded handoff", queue.handoff.slice());
 }
 
-test "authored changes retain typed values and are recorded once per transaction" {
+test "authored changes retain every same-cycle transaction and deduplicate projection" {
     var capture = Capture{
         .allocator = std.testing.allocator,
         .io = std.testing.io,
@@ -2381,6 +2540,7 @@ test "authored changes retain typed values and are recorded once per transaction
     const id = engine.PersistentId{ .namespace = 9, .local = 3 };
     const request = sandbox_authoring.RelocateRequest{
         .id = id,
+        .expected_revision = 7,
         .target_pose = .{ .position = .{ 4, 5, 6 } },
     };
     const pending = sandbox_authoring.PendingSummary{
@@ -2406,9 +2566,24 @@ test "authored changes retain typed values and are recorded once per transaction
             .presentation_frame = 12,
         },
     );
+    var second_pending = pending;
+    second_pending.transaction_id = 42;
+    second_pending.request.transaction_id = 42;
+    second_pending.request.source = .local_developer_client;
+    const second_evidence = try sandbox_authoring.ChangeEvidence.rejectedBeforeOwnerOutcome(
+        second_pending,
+        .owner_unavailable,
+        .{
+            .run_id = .{ .started_wall_unix_ms = 1, .nonce = 2 },
+            .wall_unix_ms = 3,
+            .authority_tick = 8,
+            .presentation_frame = 12,
+        },
+    );
 
     capture.recordAuthoredChange(evidence, 98);
     capture.recordAuthoredChange(evidence, 99);
+    capture.recordAuthoredChange(second_evidence, 98);
     const job = capture.queue.pop() orelse return error.AuthoredChangeRecordMissing;
     const line = switch (job) {
         .line => |value| value,
@@ -2433,6 +2608,22 @@ test "authored changes retain typed values and are recorded once per transaction
         u8,
         line.slice(),
         "\"rejection\":\"owner_unavailable\"",
+    ) != null);
+    const second_job = capture.queue.pop() orelse
+        return error.SecondAuthoredChangeRecordMissing;
+    const second_line = switch (second_job) {
+        .line => |value| value,
+        else => return error.UnexpectedIncidentJob,
+    };
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        second_line.slice(),
+        "\"transaction_id\":42",
+    ) != null);
+    try std.testing.expect(std.mem.indexOf(
+        u8,
+        second_line.slice(),
+        "\"source\":\"local_developer_client\"",
     ) != null);
     try std.testing.expect(capture.queue.pop() == null);
 }

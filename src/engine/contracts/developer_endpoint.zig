@@ -1,11 +1,15 @@
-//! Contract-only lifecycle and discovery values for the future local
-//! developer-control endpoint. EA0 defines no socket, transport, or client.
+//! Contract-only lifecycle and discovery values for the local developer-control
+//! endpoint. Transport, client, and game-specific schemas live outside the
+//! engine runtime contract graph.
 
 const std = @import("std");
 const authoring = @import("authoring.zig");
 const assets = @import("assets.zig");
 
-pub const max_endpoint_path_bytes: usize = 256;
+/// Darwin's `sockaddr_un.sun_path` has 104 bytes including its terminating NUL.
+/// Keeping this limit in the discovery contract prevents a value from being
+/// advertised that the macOS adapter cannot bind or connect to.
+pub const max_endpoint_path_bytes: usize = 103;
 pub const max_schemas: usize = 16;
 
 pub const Lifecycle = enum(u8) {
@@ -37,6 +41,9 @@ pub const Path = struct {
             return error.InvalidDeveloperEndpointPath;
         }
         if (value[0] != '/') return error.DeveloperEndpointPathNotAbsolute;
+        if (std.mem.indexOfScalar(u8, value, 0) != null) {
+            return error.DeveloperEndpointPathContainsNul;
+        }
         var result = Path{};
         @memcpy(result.bytes[0..value.len], value);
         result.len = @intCast(value.len);
@@ -61,7 +68,14 @@ pub const Discovery = struct {
         try self.run_id.validate();
         if (self.protocol_cohort == 0) return error.InvalidDeveloperProtocolCohort;
         if (self.schema_count > max_schemas) return error.TooManyDeveloperSchemas;
-        for (self.schema_ids[0..self.schema_count]) |id| try id.validate();
+        for (self.schema_ids[0..self.schema_count], 0..) |id, index| {
+            try id.validate();
+            for (self.schema_ids[0..index]) |previous| {
+                if (std.meta.eql(previous, id)) {
+                    return error.DuplicateDeveloperSchemaId;
+                }
+            }
+        }
         if (self.schema_digest) |digest| try assets.validateDigest(digest);
 
         switch (self.lifecycle) {
@@ -110,6 +124,28 @@ test "endpoint path rejects relative discovery" {
     try std.testing.expectError(
         error.DeveloperEndpointPathNotAbsolute,
         Path.init("incinerator-dev.sock"),
+    );
+}
+
+test "endpoint path rejects embedded nul" {
+    try std.testing.expectError(
+        error.DeveloperEndpointPathContainsNul,
+        Path.init("/tmp/incinerator\x00dev.sock"),
+    );
+}
+
+test "discovery rejects duplicate schema identities" {
+    var discovery = Discovery{
+        .lifecycle = .declared,
+        .run_id = .{ .started_wall_unix_ms = 1, .nonce = 2 },
+        .protocol_cohort = 1,
+        .schema_count = 2,
+    };
+    discovery.schema_ids[0] = .{ .namespace = 1, .local = 1 };
+    discovery.schema_ids[1] = .{ .namespace = 1, .local = 1 };
+    try std.testing.expectError(
+        error.DuplicateDeveloperSchemaId,
+        discovery.validate(),
     );
 }
 

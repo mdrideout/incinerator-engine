@@ -58,6 +58,21 @@ pub const FreeCameraView = struct {
     last_focus: ?FocusTarget = null,
 };
 
+/// Exact world-space pose accepted by the Free Camera presentation owner.
+/// Projection and navigation speed remain independent camera settings.
+pub const FreeCameraPose = struct {
+    position: [3]f32,
+    yaw: f32,
+    pitch: f32,
+
+    pub fn isValid(self: FreeCameraPose) bool {
+        for (self.position) |value| {
+            if (!std.math.isFinite(value)) return false;
+        }
+        return std.math.isFinite(self.yaw) and std.math.isFinite(self.pitch);
+    }
+};
+
 pub const View = struct {
     mode: Mode = .character,
     free_camera: FreeCameraView = .{},
@@ -79,6 +94,7 @@ pub const Navigation = struct {
 /// Fixed semantic operations accepted by the visual viewport owner.
 pub const Request = union(enum) {
     set_mode: Mode,
+    set_free_camera_pose: FreeCameraPose,
     navigate: Navigation,
     adjust_speed: f32,
     frame_selection: FocusTarget,
@@ -89,6 +105,7 @@ pub const Request = union(enum) {
 /// generic command bus and does not impose an arbitrary queue capacity.
 pub const Requests = struct {
     mode: ?Mode = null,
+    free_camera_pose: ?FreeCameraPose = null,
     navigation: ?Navigation = null,
     speed_steps: f32 = 0,
     frame_target: ?FocusTarget = null,
@@ -97,6 +114,7 @@ pub const Requests = struct {
     pub fn submit(self: *Requests, request: Request) void {
         switch (request) {
             .set_mode => |mode| self.mode = mode,
+            .set_free_camera_pose => |pose| self.free_camera_pose = pose,
             .navigate => |navigation| self.navigation = navigation,
             .adjust_speed => |steps| self.speed_steps += steps,
             .frame_selection => |target| self.frame_target = target,
@@ -127,14 +145,44 @@ test "scene rectangle uses half-open window-space bounds" {
 test "viewport request slots remain typed and coalesce per operation" {
     var requests = Requests{};
     requests.submit(.{ .set_mode = .free_camera });
+    requests.submit(.{ .set_free_camera_pose = .{
+        .position = .{ 4, 5, 6 },
+        .yaw = 0.75,
+        .pitch = -0.25,
+    } });
     requests.submit(.{ .adjust_speed = 1 });
     requests.submit(.{ .adjust_speed = -0.25 });
     requests.submit(.start_from_product_view);
 
     const batch = requests.take();
     try std.testing.expectEqual(Mode.free_camera, batch.mode.?);
+    try std.testing.expectEqualDeep(FreeCameraPose{
+        .position = .{ 4, 5, 6 },
+        .yaw = 0.75,
+        .pitch = -0.25,
+    }, batch.free_camera_pose.?);
     try std.testing.expectEqual(@as(f32, 0.75), batch.speed_steps);
     try std.testing.expect(batch.start_from_product_view);
     try std.testing.expect(requests.mode == null);
+    try std.testing.expect(requests.free_camera_pose == null);
     try std.testing.expectEqual(@as(f32, 0), requests.speed_steps);
+}
+
+test "free camera pose requires only finite exact values" {
+    const exact = FreeCameraPose{
+        .position = .{ -12.5, 3.25, 90 },
+        .yaw = 8.5,
+        .pitch = -2.25,
+    };
+    try std.testing.expect(exact.isValid());
+
+    var invalid = exact;
+    invalid.position[1] = std.math.nan(f32);
+    try std.testing.expect(!invalid.isValid());
+    invalid = exact;
+    invalid.yaw = std.math.inf(f32);
+    try std.testing.expect(!invalid.isValid());
+    invalid = exact;
+    invalid.pitch = -std.math.inf(f32);
+    try std.testing.expect(!invalid.isValid());
 }

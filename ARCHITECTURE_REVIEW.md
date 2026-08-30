@@ -8,12 +8,16 @@ placements. S15 four-district implementation and its automated/native and
 product-owner acceptance are complete under ADR-028. Protocol 17, snapshot
 15, replay 19,
 incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
-automated Metal/product acceptance are current. EA0 now makes the four ADR-029
-owners, stable identity, revisioned typed transaction envelope, crate vertical,
-authored-change evidence, and future endpoint discovery contract executable.
-Its automated/native candidate is complete and awaits product-owner review;
+automated Metal/product acceptance are current. EA0 is accepted and makes the
+four ADR-029 owners, stable identity, revisioned typed transaction envelope,
+crate vertical, authored-change evidence, and endpoint discovery contract
+executable. EA0.5 now implements the developer-only local socket, five concrete
+sandbox schemas, canonical CLI, graphical-owner dispatch, persistence, and
+correlated frame evidence. Its focused/aggregate automation, installed native
+Metal journey, LLM-agent workflow, and architecture/security/dead-code/doc
+review are complete; human usability and product-owner acceptance remain.
 EA1-EA5 retain the practical asset, vehicle-archetype, lighting, map, and
-engine/game separation pressure. No open P0 blocks the EA0 checkpoint.
+engine/game separation pressure. No open P0 blocks the EA0.5 checkpoint.
 The neural-rendering proof
 is retained through RF10 as external technical evidence, but no learned model
 is promoted, installed, or selected. The product owner paused that track
@@ -22,10 +26,10 @@ the shared RF0-RF5 sandbox visual catalog is useful conventional-renderer input,
 not an authorization to continue neural work. ADR-025 and ADR-026 remain
 preserved boundary policy for an explicit future restart.
 
-**Last reviewed:** 2026-08-19
+**Last reviewed:** 2026-08-29
 
-**Scope:** Current EA0 implementation-candidate architecture, its demonstrated
-strengths, its remaining structural pressure before another product or service
+**Scope:** Accepted EA0 and current EA0.5 architecture, their demonstrated
+strengths, remaining structural pressure before another product or service
 slice, the active deterministic-rendering direction, and the retained paused
 neural proof
 
@@ -34,7 +38,7 @@ neural proof
 **Multiplayer strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
 **Latest automated validation:**
-[`docs/validation/ea0-ownership-identity-transaction-boundary.md`](docs/validation/ea0-ownership-identity-transaction-boundary.md)
+[`docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md`](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md)
 
 **Accepted cohesion contract:**
 [`docs/design/m5-client-authority-cohesion.md`](docs/design/m5-client-authority-cohesion.md)
@@ -53,7 +57,8 @@ neural proof
 → [`DR1 accepted`](docs/validation/dr1-playable-deterministic-visual-fidelity.md)
 → [`S14 accepted`](docs/validation/s14-ranged-combat.md)
 → [`S15 accepted`](docs/validation/s15-content-rich-district-expansion.md)
-→ [`EA0 candidate complete; product-owner review pending`](docs/validation/ea0-ownership-identity-transaction-boundary.md)
+→ [`EA0 accepted`](docs/validation/ea0-ownership-identity-transaction-boundary.md)
+→ [`EA0.5 machine closeout complete; human/product-owner review pending`](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md)
 → [`EA1-EA5 pending`](docs/design/engine-authoring-foundation.md)
 
 **Active rendering direction:**
@@ -320,9 +325,16 @@ claim.
 | A-F063 | The engine had no ranged-combat rule owner, authoritative ray/occlusion boundary, finite-ammunition state, or correlated replay/incident contract; allowing clients to name targets would have broken the shared solo/multiplayer source of truth | P1 | S14 ranged combat | Resolved by ADR-027: one backend-neutral handgun feature owns admission/ammo/deadlines, session authority derives current pose and stable semantic/Jolt hit results, vitals owns damage/death, and clients receive only authoritative results/snapshots/events. Protocol, replay, fault, reconnect, incident, Metal, listen, and dedicated gates cover the boundary without lag-compensation or firearms-framework scope. |
 | A-F064 | Reliable weapon results and unreliable snapshots can cross in transit; the first S14 client projection also treated the latest result as permanent HUD state, masking later reload completion, while the private-listen local adapter did not drain weapon/shot feedback | P1 | S14 graphical acceptance | Resolved: weapon results carry the authority tick, client weapon state advances monotonically across result/snapshot lanes, combat presentation treats results as feedback rather than a second state owner, and private-listen host controls/feedback now match the remote graphical client. Regression tests plus real-GNS listen/dedicated observer journeys prove convergence and publication. |
 | A-F065 | The content path proves deterministic embedded PNG base-color material cooking and GPU residency but requires a texture, UV0, one sampler policy, and fixture-sized district limits; it is not yet a practical project asset workflow | P1 | EA1 materials/textures | Open under ADR-029: extend glTF/GLB dependency cooking, material inputs, stable game-owned identity, assignment, diagnostics, and native acceptance from real project content without runtime source-path loading or silent truncation |
-| A-F066 | Revisioned authoring and undo/redo existed only for crate relocation; Render Lab settings bypass an owner request, and no discoverable typed process-local path lets an LLM inspect/apply/revert validated settings | P1 | EA0 then EA2 | EA0 portion resolved, EA2 portion open: stable run/asset/target/transaction/revision/source/scope contracts, typed crate authority transactions, authored-change evidence, endpoint lifecycle/discovery values, and the executable four-owner manifest are implemented. EA2 must prove the UI and local CLI use the same owner-defined vehicle transaction; EA0 deliberately provides no transport or generic CVar/property/command system. |
+| A-F066 | Revisioned authoring and undo/redo existed only for crate relocation; Render Lab settings bypass an owner request, and no discoverable typed process-local path let an LLM inspect/apply/revert validated settings | P1 | EA0.5 foundation, then EA1-EA3 feature owners | EA0 and EA0.5 foundation resolved: stable run/asset/target/transaction/revision/source/scope contracts, typed crate authority transactions, authored-change evidence, executable four-owner classification, owner-safe local discovery/transport, five concrete schemas, and the canonical CLI are implemented. The sandbox-aware protocol/transport/client are truthfully game tooling, while the socket thread owns no mutable product policy. EA1-EA3 must add their own material, vehicle, and lighting owner transactions through the accepted client rather than a generic CVar/property/command system. |
 | A-F067 | The deterministic renderer owns a valid directional sun/ambient contract, but title values are fixed at startup and no stable authored point-light, selection, persistence, gizmo, or incident correlation exists | P2 | EA3 lighting | Open under ADR-029: make the game-owned sun preset and stable point lights editable through typed presentation owners after EA2 proves the shared authoring/control adapter |
 | A-F068 | The accepted four-district map combines deterministic cooked scenes with hard-coded game-specific recipe/composition/population arrays, so ordinary map construction still requires Zig edits and engine/game ownership is not physically provable | P1 | EA4 then EA5/G1 | Open under ADR-029: introduce a versioned game-owned placed-asset map and construction workflow in EA4, reproduce S15 without changing behavior, then prove the separately built game/content boundary in EA5/G1 |
+
+EA0.5's graphical composition adapter is intentionally substantial because it
+projects live owner state and correlates typed producer results at the one
+composition root. It is not a second authority and is not a current blocker.
+Before EA1/EA2 materially expand endpoint schemas, extract projection and
+correlation by demonstrated feature boundary rather than allowing `main.zig`
+to become the permanent home of every future authoring schema.
 
 No finding authorizes a service locator, universal mutable context, generic
 command bus, reflective ECS replication framework, speculative backend layer,

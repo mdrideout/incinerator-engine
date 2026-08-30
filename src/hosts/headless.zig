@@ -3687,12 +3687,13 @@ test "S5 crate authoring edit undo redo and cold restore are coherent" {
     try controller.select(id);
     const edit = try controller.beginEdit(.{
         .id = id,
+        .expected_revision = before.authoring_revision,
         .target_pose = .{
             .position = .{ 5, 3, -2 },
             .rotation = .{ 0, 0.70710677, 0, 0.70710677 },
         },
         .velocity = .zero,
-    }, before.authoring_revision);
+    });
     try world.submit(edit);
     try world.tick();
     const edit_outcome = world.pollOutcome() orelse return error.MissingRelocationOutcome;

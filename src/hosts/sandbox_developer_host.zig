@@ -61,6 +61,26 @@ pub const incident_hotkey_fallback_keycode = c.SDLK_9;
 pub const incident_hotkey_recommended_keycode = c.SDLK_I;
 pub const IncidentSemanticDraw = incident_semantic.Draw;
 pub const incident_semantic_maximum_draws = incident_semantic.maximum_draws;
+pub const correlated_frame_path_capacity = incident_contract.max_path_bytes + 40;
+
+/// Admission/result evidence for a frame capture requested by a local typed
+/// developer client. The directory is the same incident-owned directory used
+/// by human anomaly capture; this value does not grant filesystem ownership.
+pub const CorrelatedFrameCapture = struct {
+    capture_id: incident_contract.AnomalyId,
+    authority_tick: u64,
+    presentation_frame: u64,
+    wall_unix_ms: i64,
+    lifecycle_status: incident_contract.AnomalyStatus,
+    artifact_count: u16,
+    artifact_failures: u16,
+    evidence_directory: [correlated_frame_path_capacity]u8 = @splat(0),
+    evidence_directory_len: u16 = 0,
+
+    pub fn evidenceDirectory(self: *const CorrelatedFrameCapture) []const u8 {
+        return self.evidence_directory[0..self.evidence_directory_len];
+    }
+};
 
 const PendingShortcutQueue = struct {
     pub const capacity: usize = 16;
@@ -428,6 +448,59 @@ fn incidentEntity(
     return defaultIncidentEntity(gameplay_view);
 }
 
+fn correlatedFrameCapture(
+    capture: *const incident_capture.Capture,
+    view: incident_contract.AnomalyView,
+) CorrelatedFrameCapture {
+    var result = CorrelatedFrameCapture{
+        .capture_id = view.id,
+        .authority_tick = view.authority_tick,
+        .presentation_frame = view.presentation_frame,
+        .wall_unix_ms = view.wall_unix_ms,
+        .lifecycle_status = view.status,
+        .artifact_count = view.artifact_count,
+        .artifact_failures = view.artifact_failures,
+    };
+    const path = writeCorrelatedEvidenceDirectory(
+        &result.evidence_directory,
+        capture.runPath(),
+        view.id,
+    );
+    result.evidence_directory_len = @intCast(path.len);
+    return result;
+}
+
+fn writeCorrelatedEvidenceDirectory(
+    destination: *[correlated_frame_path_capacity]u8,
+    run_path: []const u8,
+    capture_id: incident_contract.AnomalyId,
+) []const u8 {
+    return std.fmt.bufPrint(
+        destination,
+        "{s}/anomalies/anomaly-{d:0>4}",
+        .{ run_path, capture_id },
+    ) catch unreachable;
+}
+
+fn admitIncidentCapture(
+    state: *State,
+    authority_tick: u64,
+    presentation_frame: u64,
+    selected: ?engine.gameplay_trace.EntityRef,
+) ?incident_contract.AnomalyId {
+    const capture = state.incident orelse return null;
+    const id = capture.flag(authority_tick, presentation_frame, selected) orelse
+        return null;
+    const flagged_ns = capture.anomalyFlagNs(id).?;
+    if (state.incident_screenshots) |*screenshots| {
+        screenshots.flag(capture, id, flagged_ns);
+    }
+    if (state.incident_semantic) |*semantic| {
+        semantic.flag(capture, id, flagged_ns);
+    }
+    return id;
+}
+
 fn requestedVisualizationEnable(
     requests: []const developer_visualization.Request,
 ) ?bool {
@@ -675,6 +748,10 @@ pub const Owner = opaque {
         return ownerStateConst(self).editor.systemMenuOpen();
     }
 
+    pub fn gizmoDragActive(self: *const Owner) bool {
+        return ownerStateConst(self).editor.gizmoDragActive();
+    }
+
     pub fn setGameplayMouseCaptured(self: *Owner, captured: bool) void {
         const state = ownerState(self);
         state.gameplay_mouse_captured = captured;
@@ -723,6 +800,63 @@ pub const Owner = opaque {
     pub fn incidentRunPath(self: *const Owner) ?[]const u8 {
         const capture = ownerStateConst(self).incident orelse return null;
         return capture.runPath();
+    }
+
+    /// Admit a typed frame request through the incident recorder and its
+    /// existing asynchronous screenshot schedule. Call on the graphical main
+    /// thread with the same tick/frame projection used for the rendered scene.
+    pub fn admitCorrelatedFrameCapture(
+        self: *Owner,
+        authority_tick: u64,
+        presentation_frame: u64,
+        selected: ?engine.gameplay_trace.EntityRef,
+    ) ?CorrelatedFrameCapture {
+        const state = ownerState(self);
+        // A frame request must have a visual owner. Human anomaly flags remain
+        // available without it and can still produce non-visual evidence.
+        if (state.incident_screenshots == null) return null;
+        const id = admitIncidentCapture(
+            state,
+            authority_tick,
+            presentation_frame,
+            selected,
+        ) orelse return null;
+        const capture = state.incident.?;
+        return correlatedFrameCapture(capture, capture.anomalyView(id).?);
+    }
+
+    pub fn correlatedFrameCaptureAvailable(self: *const Owner) bool {
+        const state = ownerStateConst(self);
+        return state.incident != null and state.incident_screenshots != null;
+    }
+
+    /// Poll a previously admitted frame without bypassing incident lifecycle
+    /// ownership or opening its evidence files.
+    pub fn correlatedFrameCaptureResult(
+        self: *const Owner,
+        capture_id: incident_contract.AnomalyId,
+    ) ?CorrelatedFrameCapture {
+        const capture = ownerStateConst(self).incident orelse return null;
+        const view = capture.anomalyView(capture_id) orelse return null;
+        return correlatedFrameCapture(capture, view);
+    }
+
+    /// Preserve each UI or local-client authoring outcome independently even
+    /// when more than one producer completes before the next rendered frame.
+    pub fn recordAuthoredChange(
+        self: *Owner,
+        evidence: editor_contract.AuthoringChangeEvidence,
+    ) void {
+        const capture = ownerState(self).incident orelse return;
+        capture.observeAuthoredChange(evidence);
+    }
+
+    pub fn recordDeveloperEndpoint(
+        self: *Owner,
+        discovery: engine.developer_endpoint.Discovery,
+    ) void {
+        const capture = ownerState(self).incident orelse return;
+        capture.observeDeveloperEndpoint(discovery);
     }
 
     pub const NeuralRuntimeSnapshot = struct {
@@ -1362,6 +1496,7 @@ pub const Owner = opaque {
         );
         const visualization_snapshot = self.visualizationSnapshot();
         if (state.incident) |capture| {
+            capture.observeDeveloperEndpoint(frame.developer_endpoint);
             capture.observe(
                 authority.gameplayTrace(),
                 authority.journal().borrowedChronological(),
@@ -1491,35 +1626,22 @@ pub const Owner = opaque {
         effects.request_quit = state.editor.takeQuitRequested();
         if (state.incident) |capture| {
             while (state.pending_shortcuts.pop()) |candidate| {
-                if (capture.flag(
+                if (admitIncidentCapture(
+                    state,
                     frame.gameplay_view.authority_tick,
                     frame.gameplay_view.presentation_frame,
                     incidentEntity(frame.selection.view, frame.gameplay_view),
                 )) |id| {
                     capture.recordShortcut(.applied, candidate, id);
-                    const flagged_ns = capture.anomalyFlagNs(id).?;
-                    if (state.incident_screenshots) |*screenshots| {
-                        screenshots.flag(capture, id, flagged_ns);
-                    }
-                    if (state.incident_semantic) |*semantic| {
-                        semantic.flag(capture, id, flagged_ns);
-                    }
                 }
             }
             for (state.incident_requests.slice()) |request| switch (request) {
-                .flag => if (capture.flag(
+                .flag => _ = admitIncidentCapture(
+                    state,
                     frame.gameplay_view.authority_tick,
                     frame.gameplay_view.presentation_frame,
                     incidentEntity(frame.selection.view, frame.gameplay_view),
-                )) |id| {
-                    const flagged_ns = capture.anomalyFlagNs(id).?;
-                    if (state.incident_screenshots) |*screenshots| {
-                        screenshots.flag(capture, id, flagged_ns);
-                    }
-                    if (state.incident_semantic) |*semantic| {
-                        semantic.flag(capture, id, flagged_ns);
-                    }
-                },
+                ),
                 .save_note => |note| _ = capture.saveNote(
                     note.id,
                     note.note[0..@min(@as(usize, note.note_len), note.note.len)],
@@ -1892,6 +2014,19 @@ test "incident shortcut queue saturation is bounded" {
     try std.testing.expect(!queue.push(candidate));
     for (0..PendingShortcutQueue.capacity) |_| try std.testing.expect(queue.pop() != null);
     try std.testing.expect(queue.pop() == null);
+}
+
+test "correlated frame evidence uses the incident anomaly directory" {
+    var buffer: [correlated_frame_path_capacity]u8 = undefined;
+    const path = writeCorrelatedEvidenceDirectory(
+        &buffer,
+        "/tmp/incinerator/runs/run-1",
+        7,
+    );
+    try std.testing.expectEqualStrings(
+        "/tmp/incinerator/runs/run-1/anomalies/anomaly-0007",
+        path,
+    );
 }
 
 test "effects merge gameplay reset monotonically" {

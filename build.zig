@@ -398,6 +398,7 @@ pub fn build(b: *std.Build) void {
     options.addOption(bool, "editor_enabled", editor_enabled);
     options.addOption(bool, "validation_mode", false);
     options.addOption(bool, "incident_capture_enabled", incident_capture_enabled);
+    options.addOption(bool, "developer_endpoint_enabled", editor_enabled);
     options.addOption([]const u8, "source_revision", source_identity.revision);
     options.addOption(bool, "source_dirty", source_identity.dirty);
     options.addOption([]const u8, "source_dirty_fingerprint", source_identity.dirty_fingerprint);
@@ -406,9 +407,172 @@ pub fn build(b: *std.Build) void {
     validation_options.addOption(bool, "editor_enabled", editor_enabled);
     validation_options.addOption(bool, "validation_mode", true);
     validation_options.addOption(bool, "incident_capture_enabled", false);
+    validation_options.addOption(bool, "developer_endpoint_enabled", false);
     validation_options.addOption([]const u8, "source_revision", source_identity.revision);
     validation_options.addOption(bool, "source_dirty", source_identity.dirty);
     validation_options.addOption([]const u8, "source_dirty_fingerprint", source_identity.dirty_fingerprint);
+
+    // EA0.5 keeps its concrete wire schemas and reusable client free of SDL,
+    // ImGui, Metal, and runtime implementation imports. Only the explicit
+    // editor product receives the macOS socket adapter below.
+    const sandbox_developer_protocol_module = b.addModule(
+        "incinerator_developer_protocol",
+        .{
+            .root_source_file = b.path("src/hosts/sandbox_developer_protocol.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
+        },
+    );
+    const developer_endpoint_client_module = b.addModule(
+        "incinerator_developer_client",
+        .{
+            .root_source_file = b.path("src/hosts/developer_endpoint_client.zig"),
+            .target = target,
+            .optimize = optimize,
+            .imports = &.{.{
+                .name = "sandbox_developer_protocol",
+                .module = sandbox_developer_protocol_module,
+            }},
+        },
+    );
+    const macos_developer_endpoint_module = b.createModule(.{
+        .root_source_file = b.path("src/adapters/transport/macos_developer_endpoint.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts_module },
+            .{
+                .name = "sandbox_developer_protocol",
+                .module = sandbox_developer_protocol_module,
+            },
+        },
+    });
+    const disabled_endpoint_source = b.addWriteFiles().add("developer_endpoint_disabled.zig",
+        \\//! Deliberately empty endpoint adapter for non-developer compositions.
+        \\pub const Server = void;
+        \\pub const enabled = false;
+    );
+    const disabled_developer_endpoint_module = b.createModule(.{
+        .root_source_file = disabled_endpoint_source,
+        .target = target,
+        .optimize = optimize,
+    });
+    const product_developer_endpoint_module = if (editor_enabled)
+        macos_developer_endpoint_module
+    else
+        disabled_developer_endpoint_module;
+
+    const incinerator_dev_module = b.createModule(.{
+        .root_source_file = b.path("tools/incinerator_dev.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{
+                .name = "developer_endpoint_client",
+                .module = developer_endpoint_client_module,
+            },
+            .{
+                .name = "sandbox_developer_protocol",
+                .module = sandbox_developer_protocol_module,
+            },
+        },
+    });
+    const incinerator_dev_exe = b.addExecutable(.{
+        .name = "incinerator-dev",
+        .root_module = incinerator_dev_module,
+    });
+    const check_incinerator_dev_step = b.step(
+        "check-incinerator-dev",
+        "Compile the local typed developer CLI",
+    );
+    check_incinerator_dev_step.dependOn(&incinerator_dev_exe.step);
+
+    const developer_protocol_tests = b.addTest(.{
+        .root_module = sandbox_developer_protocol_module,
+    });
+    const run_developer_protocol_tests = b.addRunArtifact(developer_protocol_tests);
+    const developer_protocol_test_step = b.step(
+        "test-developer-protocol",
+        "Run host-neutral developer protocol and framing tests",
+    );
+    developer_protocol_test_step.dependOn(&run_developer_protocol_tests.step);
+
+    const developer_client_tests = b.addTest(.{
+        .root_module = developer_endpoint_client_module,
+    });
+    const run_developer_client_tests = b.addRunArtifact(developer_client_tests);
+    const developer_client_test_step = b.step(
+        "test-developer-client",
+        "Run reusable local developer client tests",
+    );
+    developer_client_test_step.dependOn(&run_developer_client_tests.step);
+
+    const incinerator_dev_tests = b.addTest(.{ .root_module = incinerator_dev_module });
+    const run_incinerator_dev_tests = b.addRunArtifact(incinerator_dev_tests);
+    const incinerator_dev_test_step = b.step(
+        "test-incinerator-dev",
+        "Run typed developer CLI grammar tests",
+    );
+    incinerator_dev_test_step.dependOn(&run_incinerator_dev_tests.step);
+
+    const developer_endpoint_transport_tests = b.addTest(.{
+        .root_module = macos_developer_endpoint_module,
+    });
+    const run_developer_endpoint_transport_tests = b.addRunArtifact(
+        developer_endpoint_transport_tests,
+    );
+    const developer_endpoint_transport_test_step = b.step(
+        "test-developer-endpoint-transport",
+        "Run private macOS developer endpoint lifecycle tests",
+    );
+    developer_endpoint_transport_test_step.dependOn(
+        &run_developer_endpoint_transport_tests.step,
+    );
+
+    const developer_endpoint_integration_module = b.createModule(.{
+        .root_source_file = b.path("src/developer_endpoint_integration_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{
+                .name = "sandbox_developer_protocol",
+                .module = sandbox_developer_protocol_module,
+            },
+            .{
+                .name = "developer_endpoint_transport",
+                .module = macos_developer_endpoint_module,
+            },
+            .{
+                .name = "developer_endpoint_client",
+                .module = developer_endpoint_client_module,
+            },
+        },
+    });
+    const developer_endpoint_integration_tests = b.addTest(.{
+        .root_module = developer_endpoint_integration_module,
+    });
+    const run_developer_endpoint_integration_tests = b.addRunArtifact(
+        developer_endpoint_integration_tests,
+    );
+    const developer_endpoint_integration_test_step = b.step(
+        "test-developer-endpoint-integration",
+        "Run every typed command through a real local socket and reusable client",
+    );
+    developer_endpoint_integration_test_step.dependOn(
+        &run_developer_endpoint_integration_tests.step,
+    );
+
+    const developer_endpoint_test_step = b.step(
+        "test-developer-endpoint",
+        "Run the complete EA0.5 developer endpoint test group",
+    );
+    developer_endpoint_test_step.dependOn(&run_developer_protocol_tests.step);
+    developer_endpoint_test_step.dependOn(&run_developer_client_tests.step);
+    developer_endpoint_test_step.dependOn(&run_incinerator_dev_tests.step);
+    developer_endpoint_test_step.dependOn(&run_developer_endpoint_transport_tests.step);
+    developer_endpoint_test_step.dependOn(&run_developer_endpoint_integration_tests.step);
+    developer_endpoint_test_step.dependOn(&incinerator_dev_exe.step);
 
     const exe = b.addExecutable(.{
         .name = "incinerator_engine",
@@ -434,9 +598,21 @@ pub fn build(b: *std.Build) void {
                 .{ .name = "incinerator_engine", .module = mod },
                 // Build options module - provides compile-time access to build flags
                 .{ .name = "build_options", .module = options.createModule() },
+                .{
+                    .name = "sandbox_developer_protocol",
+                    .module = sandbox_developer_protocol_module,
+                },
+                .{
+                    .name = "developer_endpoint_host",
+                    .module = product_developer_endpoint_module,
+                },
             },
         }),
     });
+    // The focused endpoint gate must compile the real App dispatcher too;
+    // protocol-only tests cannot catch drift between wire failures/payloads
+    // and the graphical composition that routes them.
+    developer_endpoint_test_step.dependOn(&exe.step);
     const validation_exe = b.addExecutable(.{
         .name = "incinerator_validation",
         .root_module = b.createModule(.{
@@ -446,6 +622,14 @@ pub fn build(b: *std.Build) void {
             .imports = &.{
                 .{ .name = "incinerator_engine", .module = mod },
                 .{ .name = "build_options", .module = validation_options.createModule() },
+                .{
+                    .name = "sandbox_developer_protocol",
+                    .module = sandbox_developer_protocol_module,
+                },
+                .{
+                    .name = "developer_endpoint_host",
+                    .module = disabled_developer_endpoint_module,
+                },
             },
         }),
     });
@@ -2620,6 +2804,7 @@ pub fn build(b: *std.Build) void {
     // step). By default the install prefix is `zig-out/` but can be overridden
     // by passing `--prefix` or `-p`.
     b.installArtifact(exe);
+    if (editor_enabled) b.installArtifact(incinerator_dev_exe);
 
     // Native Tier-1 runtime gates execute the installed Mach-O directly from
     // outside the repository. They intentionally reject cross builds so a
@@ -2651,9 +2836,10 @@ pub fn build(b: *std.Build) void {
     const verify_validation_boundary = b.addRunArtifact(validation_boundary_tool);
     verify_validation_boundary.addFileArg(exe.getEmittedBin());
     verify_validation_boundary.addFileArg(validation_exe.getEmittedBin());
+    verify_validation_boundary.addArg(if (editor_enabled) "enabled" else "disabled");
     const verify_validation_boundary_step = b.step(
         "verify-validation-boundary",
-        "Prove validation scenarios are absent from the product binary",
+        "Prove validation scenarios and disabled endpoint code respect binary boundaries",
     );
     verify_validation_boundary_step.dependOn(&verify_validation_boundary.step);
     const validation_boundary_tests = b.addTest(.{
@@ -2662,9 +2848,11 @@ pub fn build(b: *std.Build) void {
     const run_validation_boundary_tests = b.addRunArtifact(validation_boundary_tests);
     const test_validation_boundary_step = b.step(
         "test-validation-boundary",
-        "Run product/validation marker scanner tests",
+        "Run product/validation/endpoint marker scanner tests",
     );
     test_validation_boundary_step.dependOn(&run_validation_boundary_tests.step);
+    developer_endpoint_test_step.dependOn(&verify_validation_boundary.step);
+    developer_endpoint_test_step.dependOn(&run_validation_boundary_tests.step);
     const installed_validation_path = b.getInstallPath(
         .{ .custom = "libexec/incinerator" },
         validation_exe.out_filename,
@@ -4202,6 +4390,16 @@ pub fn build(b: *std.Build) void {
         .root_module = exe.root_module,
     });
 
+    const developer_endpoint_app_tests = b.addTest(.{
+        .name = "developer-endpoint-app-tests",
+        .root_module = exe.root_module,
+        .filters = &.{"developer endpoint app boundary"},
+    });
+    const run_developer_endpoint_app_tests = b.addRunArtifact(
+        developer_endpoint_app_tests,
+    );
+    developer_endpoint_test_step.dependOn(&run_developer_endpoint_app_tests.step);
+
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
 
@@ -4273,6 +4471,11 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&verify_cooked_catalog.step);
     test_step.dependOn(&run_mod_tests.step);
     test_step.dependOn(&run_contracts_tests.step);
+    test_step.dependOn(&run_developer_protocol_tests.step);
+    test_step.dependOn(&run_developer_client_tests.step);
+    test_step.dependOn(&run_incinerator_dev_tests.step);
+    test_step.dependOn(&run_developer_endpoint_transport_tests.step);
+    test_step.dependOn(&run_developer_endpoint_integration_tests.step);
     test_step.dependOn(&run_sandbox_value_contracts_tests.step);
     test_step.dependOn(&run_crate_feature_tests.step);
     test_step.dependOn(&run_character_feature_tests.step);

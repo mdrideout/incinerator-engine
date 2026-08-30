@@ -1,7 +1,8 @@
 # ADR-029: Engine, Game, and Authoring Ownership Boundary
 
-**Status:** Accepted; EA0 implementation candidate complete and awaiting
-product-owner review; EA1-EA5 pending
+**Status:** Accepted; EA0 accepted; EA0.5 local developer control authorized
+ahead of EA1 with machine-verifiable closeout complete and human/product-owner
+acceptance pending; EA1-EA5 pending
 
 **Date:** 2026-08-18
 
@@ -49,16 +50,19 @@ the final open-engine/separate-game extraction.
    transactions, and generic diagnostic envelopes.
 2. **Engine tooling** owns reusable development machinery: the workspace,
    selection transport, inspectors and gizmos, undo/redo infrastructure,
-   cook/validation tools, and a local developer-control adapter. It is not part
-   of the required shipping runtime.
+   cook/validation tools, and protocol-neutral local developer-control
+   capabilities when a concrete second consumer proves them. It is not part of
+   the required shipping runtime.
 3. **Game runtime/composition** owns title policy and data: vehicle archetypes,
    actual tuning values, materials and texture assets, light presets and
    placements, map layouts, roads, buildings, population, and gameplay rules.
 4. **Game tooling** owns title vocabulary and workflows: semantic labels,
    palette contents, map-kit tools, title-specific validation, and custom
-   incident projections. It uses engine tooling contracts without giving ImGui
-   or a developer client direct access to authority, Flecs, Jolt, SDL, or the
-   filesystem.
+   incident projections. Concrete title-aware endpoint schemas, transports,
+   and clients remain here until a protocol-neutral engine-tooling component is
+   demonstrated. Game tooling uses engine tooling contracts without giving
+   ImGui or a developer client direct access to authority, Flecs, Jolt, SDL, or
+   the filesystem.
 
 Tooling being supplied by the engine does not make authored game data engine
 data. Likewise, an engine capability is not required to have a stable public
@@ -102,7 +106,10 @@ test/measurement actions. It does not expose multiplayer administration,
 production remote control, shell execution, or raw memory/object access.
 
 ImGui tools and the CLI submit the same typed owner requests. The endpoint is
-an adapter, not another state owner.
+an adapter, not another state owner. EA0.5's concrete sandbox-aware protocol,
+Unix transport, reusable client, and CLI are game tooling built on generic
+engine endpoint identity/lifecycle contracts; their location under an adapter
+directory does not imply protocol-neutral reuse.
 
 ### Assets and maps
 
@@ -147,6 +154,11 @@ untrusted-mod or sandboxing need.
 - Secondary platforms, production asset collaboration, remote developer
   services, public scripting/plugin APIs, traffic, and multiplayer services
   remain deferred.
+- On 2026-08-29 the product owner authorized the local endpoint and canonical
+  CLI as a named EA0.5 schedule amendment before EA1. EA0 remains the completed
+  contract/ownership phase; EA0.5 supplies transport and a client without
+  changing the four-owner decision or moving vehicle-specific schemas out of
+  EA2.
 
 ## References
 

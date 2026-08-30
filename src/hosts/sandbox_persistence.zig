@@ -225,11 +225,18 @@ pub const Owner = opaque {
         data.pending_capture = null;
         return switch (disposition) {
             .captured => |bytes| .{ .source = data.source, .bytes = bytes },
-            .deferred => |reason| switch (reason) {
-                .session_work => error.SessionWorkPending,
-                .simulation_commands => error.CommandsPending,
-                .district_transition => error.DistrictTransitionPending,
-                .authority_outputs => error.AuthorityOutputsPending,
+            .deferred => |reason| {
+                // Keep the durable barrier continuously armed across transient
+                // retries. Leaving one authority cycle between attempts lets
+                // active population schedule fresh work and can alternate
+                // forever between a deferral and a newly pending capture.
+                data.pending_capture = try data.source.request();
+                return switch (reason) {
+                    .session_work => error.SessionWorkPending,
+                    .simulation_commands => error.CommandsPending,
+                    .district_transition => error.DistrictTransitionPending,
+                    .authority_outputs => error.AuthorityOutputsPending,
+                };
             },
             .failed => |err| err,
         };
@@ -294,6 +301,10 @@ pub const Owner = opaque {
                 return .deferred_authority_fault;
             },
             else => {
+                std.log.warn(
+                    "canonical snapshot capture failed: {s}",
+                    .{@errorName(err)},
+                );
                 self.setFeedback(.not_committed, "canonical snapshot capture failed");
                 return .capture_failed;
             },
@@ -540,6 +551,51 @@ test "commit writes the canonical envelope admitted by the owner cohort" {
     const view = try sandbox_save.parse(bytes);
     try view.validateCompatible(testCohort().metadata());
     try std.testing.expectEqualStrings(source.payload, view.payload);
+}
+
+test "transient capture disposition immediately rearms the durable barrier" {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    var calls: usize = 0;
+    var source = TestSource{
+        .calls = &calls,
+        .failure = .session_work_pending,
+    };
+    const owner = try Owner.initBorrowedForTest(
+        std.testing.allocator,
+        temporary.dir,
+        testCohort(),
+        source.asSource(),
+    );
+    defer owner.deinit(std.testing.io);
+
+    const deferred = switch (try owner.apply(
+        std.testing.io,
+        .{ .commit = .{ .authoring_transaction_pending = false } },
+    )) {
+        .commit => |result| result,
+        .observed => unreachable,
+    };
+    try std.testing.expectEqual(CommitResult.deferred_session_work, deferred);
+    try std.testing.expect(source.pending);
+    try std.testing.expectEqual(@as(usize, 2), calls);
+
+    // The next authority cycle runs with request two already pending. A
+    // successful disposition is consumed directly without an unbarriered
+    // request-admission cycle between attempts.
+    source.failure = .none;
+    const committed = switch (try owner.apply(
+        std.testing.io,
+        .{ .commit = .{ .authoring_transaction_pending = false } },
+    )) {
+        .commit => |result| result,
+        .observed => unreachable,
+    };
+    try std.testing.expect(
+        committed == .committed or committed == .committed_sync_warning,
+    );
+    try std.testing.expect(!source.pending);
+    try std.testing.expectEqual(@as(usize, 2), calls);
 }
 
 test "encode failure is typed and preserves the previous committed slot" {

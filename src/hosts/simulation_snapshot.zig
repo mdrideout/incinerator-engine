@@ -494,35 +494,19 @@ fn validatePopulation(snapshot: SnapshotV14) !void {
                 const encounter_present = for (snapshot.npc_encounters) |record| {
                     if (std.meta.eql(record.npc, target)) break true;
                 } else false;
-                if (!vital_present or !encounter_present) {
-                    return error.PopulationActorLifecycleIncomplete;
-                }
+                try validatePopulationActorLifecycle(
+                    expected_hostile,
+                    vital_present,
+                    encounter_present,
+                );
             },
             .awaiting_spawn, .vacant, .replacement_pending => {
                 if (member.actor != null) return error.PopulationInactiveActorPresent;
             },
         }
 
-        const has_activity_claim =
-            member.activity_state == .traveling or
-            member.activity_state == .dwelling;
-        if (has_activity_claim) {
-            const site_id = member.activity_site orelse
-                return error.PopulationActivitySiteMissing;
-            const slot_id = member.activity_slot orelse
-                return error.PopulationActivitySlotMissing;
-            const slot = population_catalog.activitySlotDefinition(slot_id) orelse
-                return error.InvalidPopulationActivitySlot;
-            const step = program.stepSlice()[member.program_cursor];
-            if (!population.ActivitySiteId.eql(site_id, step.site) or
-                !population.ActivitySiteId.eql(slot.site, site_id) or
-                !slot.activities.accepts(step.kind))
-            {
-                return error.PopulationActivityCatalogMismatch;
-            }
-        } else if (member.activity_site != null or member.activity_slot != null) {
-            return error.UnexpectedPopulationActivityClaim;
-        }
+        const step = program.stepSlice()[member.program_cursor];
+        try validatePopulationMemberActivity(member, step);
         switch (member.lifecycle) {
             .awaiting_spawn => if (member.activity_state != .replacement_pending)
                 return error.InvalidPopulationLifecycleState,
@@ -565,6 +549,56 @@ fn validatePopulation(snapshot: SnapshotV14) !void {
                 }
             },
         }
+    }
+}
+
+fn validatePopulationActorLifecycle(
+    hostile_to_players: bool,
+    vital_present: bool,
+    encounter_present: bool,
+) !void {
+    // Every live authored actor owns vitals. Only hostile actors participate
+    // in the NPC encounter feature; passive authored actors are deliberately
+    // absent from that feature's canonical records.
+    if (!vital_present or encounter_present != hostile_to_players) {
+        return error.PopulationActorLifecycleIncomplete;
+    }
+}
+
+fn validatePopulationMemberActivity(
+    member: population.MemberRecordV1,
+    step: population.ActivityStep,
+) !void {
+    switch (member.activity_state) {
+        .traveling, .dwelling => {
+            const site_id = member.activity_site orelse
+                return error.PopulationActivitySiteMissing;
+            const slot_id = member.activity_slot orelse
+                return error.PopulationActivitySlotMissing;
+            const slot = population_catalog.activitySlotDefinition(slot_id) orelse
+                return error.InvalidPopulationActivitySlot;
+            if (!population.ActivitySiteId.eql(site_id, step.site) or
+                !population.ActivitySiteId.eql(slot.site, site_id) or
+                !slot.activities.accepts(step.kind))
+            {
+                return error.PopulationActivityCatalogMismatch;
+            }
+        },
+        .selecting, .waiting_for_slot => {
+            if (member.activity_slot != null) {
+                return error.UnexpectedPopulationActivityClaim;
+            }
+            if (member.activity_site) |site_id| {
+                if (!population.ActivitySiteId.eql(site_id, step.site)) {
+                    return error.PopulationActivityCatalogMismatch;
+                }
+            }
+        },
+        .completing, .interrupted, .vacant, .replacement_pending => {
+            if (member.activity_site != null or member.activity_slot != null) {
+                return error.UnexpectedPopulationActivityClaim;
+            }
+        },
     }
 }
 
@@ -768,5 +802,66 @@ test "population preflight rejects catalog and claim drift before native authori
     try std.testing.expectError(
         error.PopulationCatalogVersionMismatch,
         validate(snapshot, 1, 1, 1, npcs.max_npcs),
+    );
+}
+
+test "population preflight distinguishes waiting intent from an activity claim" {
+    const definition = population_catalog.members[0];
+    const program = population_catalog.programDefinition(definition.program) orelse
+        return error.MissingPopulationProgram;
+    const step = program.stepSlice()[definition.phase_offset];
+    var member = population.MemberRecordV1{
+        .id = definition.id,
+        .lifecycle = .live,
+        .actor_generation = 1,
+        .spawn_in_flight = false,
+        .program_cursor = definition.phase_offset,
+        .activity_sequence = 1,
+        .activity_state = .waiting_for_slot,
+        .activity_site = step.site,
+        .deadline_tick = 0,
+        .retry_tick = 1,
+        .spawn_retry_reason = .none,
+        .spawn_candidate_cursor = 0,
+        .last_transition_tick = 1,
+        .last_transition_reason = .slot_unavailable,
+    };
+
+    try validatePopulationMemberActivity(member, step);
+    member.activity_state = .selecting;
+    try validatePopulationMemberActivity(member, step);
+
+    member.activity_state = .waiting_for_slot;
+    member.activity_slot = population_catalog.activity_slots[0].id;
+    try std.testing.expectError(
+        error.UnexpectedPopulationActivityClaim,
+        validatePopulationMemberActivity(member, step),
+    );
+
+    member.activity_slot = null;
+    member.activity_site = population_catalog.sites[
+        if (step.site.value == population_catalog.sites[0].id.value) 1 else 0
+    ].id;
+    try std.testing.expectError(
+        error.PopulationActivityCatalogMismatch,
+        validatePopulationMemberActivity(member, step),
+    );
+}
+
+test "population actor lifecycle requires encounters only for hostile actors" {
+    try validatePopulationActorLifecycle(false, true, false);
+    try validatePopulationActorLifecycle(true, true, true);
+
+    try std.testing.expectError(
+        error.PopulationActorLifecycleIncomplete,
+        validatePopulationActorLifecycle(false, false, false),
+    );
+    try std.testing.expectError(
+        error.PopulationActorLifecycleIncomplete,
+        validatePopulationActorLifecycle(false, true, true),
+    );
+    try std.testing.expectError(
+        error.PopulationActorLifecycleIncomplete,
+        validatePopulationActorLifecycle(true, true, false),
     );
 }

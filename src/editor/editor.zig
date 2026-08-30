@@ -361,6 +361,13 @@ pub const Editor = struct {
         return self.system_menu_open;
     }
 
+    /// Active editor interactions retain ownership until release or cancel.
+    /// External editor-control producers query this state instead of mutating
+    /// selection or camera state underneath a live pointer gesture.
+    pub fn gizmoDragActive(self: *const Editor) bool {
+        return self.crate_authoring.gizmoDragActive();
+    }
+
     pub fn takeQuitRequested(self: *Editor) bool {
         defer self.quit_requested = false;
         return self.quit_requested;
@@ -1216,6 +1223,7 @@ test "editor Escape acceptance cancels an active gizmo before the system menu fa
 
     try std.testing.expect(route.keyboard_reserved);
     try std.testing.expect(route.system_menu_available);
+    try std.testing.expect(!editor.gizmoDragActive());
     try std.testing.expect(!editor.crate_authoring.gizmoDragActive());
     try std.testing.expectEqual([3]f32{ 3, 4, 5 }, editor.crate_authoring.position);
     try std.testing.expect(editor.crate_authoring.dirty);

@@ -1,7 +1,8 @@
 # Editor Interaction and Agent Control Plan
 
-**Status:** Phases 1-4 accepted; Phase 5 implemented and awaiting product-owner
-interaction review; Phases 6-8 not started
+**Status:** Phases 1-5 accepted; Phase 6 / EA0.5 implementation plus focused,
+aggregate, installed native Metal, and LLM-agent closeout complete, with human
+usability and product-owner review pending; Phases 7-8 not started
 
 **Date:** 2026-08-23
 
@@ -18,6 +19,7 @@ interaction review; Phases 6-8 not started
 **Related validation:**
 
 - [EA0 validation ledger](docs/validation/ea0-ownership-identity-transaction-boundary.md)
+- [EA0.5 validation ledger](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md)
 - [ED1 validation ledger](docs/validation/ed1-structured-developer-workspace.md)
 - [S14 validation ledger](docs/validation/s14-ranged-combat.md)
 
@@ -144,14 +146,15 @@ free-camera transform workflow needed to provide that structure.
 ### 2.5 Agent control
 
 EA0 defines and validates the lifecycle/discovery contract for a future local
-developer endpoint. It deliberately does not create a socket, transport, CLI,
-MCP server, shell evaluator, or remote service. The accepted roadmap currently
-defers endpoint transport and the canonical `incinerator-dev` client until EA2.
+developer endpoint. It deliberately did not create a socket, transport, CLI,
+MCP server, shell evaluator, or remote service. At this plan's creation, the
+accepted roadmap deferred endpoint transport and the canonical
+`incinerator-dev` client until EA2.
 
-Moving local agent control before EA1 is therefore a schedule change, not an
-unnoticed extension of EA0. This plan proposes an explicit **EA0.5 — Local
-Developer Control** amendment after the human editor interaction foundation is
-accepted.
+Moving local agent control before EA1 was therefore accepted as an explicit
+schedule change, not an unnoticed extension of EA0. On 2026-08-29 the product
+owner authorized **EA0.5 — Local Developer Control** after the human editor
+interaction foundation was accepted.
 
 ---
 
@@ -168,8 +171,8 @@ accepted.
 | Crate inspection | Game tooling | Render crate-specific values and requests | Reflection-driven property panel |
 | Crate relocation | Game/runtime authoring owner | Validate and apply typed revisioned transaction | Direct pose/body mutation from ImGui |
 | Asset browsing | Engine tooling plus game content descriptions | Query stable content identities | Treat runtime entities or source paths as assets |
-| Developer endpoint | Engine tooling adapter | Local typed schema transport | Remote control or second state owner |
-| CLI/MCP | Developer-only client products | Submit the same registered owner requests | Shell execution, raw memory, generic command strings |
+| Developer endpoint | Engine-runtime lifecycle contract plus game-tooling adapter | Local typed sandbox schema transport | Remote control or second state owner |
+| CLI/MCP | Developer-only game-tooling client products | Submit the same registered owner requests | Shell execution, raw memory, generic command strings |
 
 The following ADR-029 constraints remain mandatory throughout every phase:
 
@@ -302,6 +305,9 @@ the authority evidence.
 ## 6. Phase Sequence
 
 ### Phase 0 — Plan, terminology, and roadmap amendment review
+
+**Status:** Accepted. The product owner explicitly authorized EA0.5 before EA1
+on 2026-08-29. This is a schedule amendment; it does not rewrite EA0 history.
 
 **Purpose:** Accept the program boundaries before implementation.
 
@@ -615,8 +621,8 @@ more authoring labs.
 
 ### Phase 5 — Selection-driven crate Inspector and transform controls
 
-**Status:** Implemented; automated/native acceptance complete and product-owner
-interaction review pending
+**Status:** Accepted by the product owner on 2026-08-29 after automated/native
+acceptance and the manual Inspector/gizmo/Escape walkthrough
 
 **Validation:**
 [Phase 5 selection-driven crate Inspector](docs/validation/editor-interaction-phase-5-crate-inspector.md),
@@ -727,11 +733,19 @@ without generalizing it into a universal object editor.
 
 ### Phase 6 — EA0.5 local endpoint and canonical CLI
 
+**Status:** Authorized by the product owner on 2026-08-29; implementation,
+focused and aggregate automated acceptance, installed native Metal, LLM-agent
+workflow, and architecture/security/dead-code/documentation review complete;
+human usability and product-owner stop review pending
+
 **Purpose:** Give developers and LLM agents a live, typed, local control path
 through the same ownership boundaries as ImGui.
 
 **Precondition:** Phase 0 explicitly authorizes moving endpoint transport ahead
 of EA2 and the roadmap amendment is accepted.
+
+**Validation:**
+[EA0.5 local developer endpoint and canonical CLI](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md)
 
 #### Endpoint lifecycle
 
@@ -740,8 +754,9 @@ of EA2 and the roadmap amendment is accepted.
   products.
 - Publish absolute endpoint path, run identity, protocol cohort, available
   schema IDs, and schema digest in the run/incident manifest.
-- Remove the socket on orderly shutdown and report failed/stale discovery
-  explicitly.
+- Remove the socket on orderly shutdown, serialize shared discovery ownership,
+  retire only validated dead canonical sockets, and report failed/stale
+  discovery explicitly.
 - Keep editor-disabled and shipping/headless products endpoint-free unless a
   named validation product explicitly composes it.
 - Admit only same-machine developer clients under the current macOS scope.
@@ -794,7 +809,9 @@ of EA2 and the roadmap amendment is accepted.
 
 #### Seeing results
 
-- A mutation response proves only admission/rejection.
+- Authoring, save, and capture submissions report admission/rejection
+  separately from terminal completion. Selection and camera operations are
+  synchronous.
 - Transaction inspection reports the terminal owner result.
 - A subsequent target inspection reports the resulting state and revision.
 - Frame capture provides human-visible presentation evidence tied to a tick and
@@ -842,6 +859,8 @@ of EA2 and the roadmap amendment is accepted.
 ---
 
 ### Phase 7 — Thin MCP adapter
+
+**Status:** Not started; blocked on EA0.5 acceptance.
 
 **Purpose:** Make the accepted local developer schemas directly discoverable to
 MCP-capable LLM agents without introducing another mutation path.
