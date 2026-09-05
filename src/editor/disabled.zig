@@ -66,6 +66,16 @@ pub const Editor = struct {
 
     pub fn setViewportMode(_: *Editor, _: viewport.Mode) void {}
 
+    pub fn selectContentAsset(_: *Editor, _: anytype, _: anytype) bool {
+        return false;
+    }
+
+    pub fn clearContentSelection(_: *Editor) void {}
+
+    pub fn gizmoDragActive(_: *const Editor) bool {
+        return false;
+    }
+
     pub fn toggleSystemMenu(_: *Editor) void {}
 
     pub fn systemMenuOpen(_: *const Editor) bool {

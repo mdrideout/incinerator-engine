@@ -7,7 +7,7 @@
   "target_arch": "aarch64",
   "target_os": "macos",
   "content": {
-    "cohort_fingerprint": "fcdabbf632de0fd3109a95254f8cb9fcc2749d6481aca18512af0c1a557af503",
+    "cohort_fingerprint": "eb0d4dd0b3f4b7e01d5009e2b888c4f14e61c5cd5197cfdc399a5c3afcae1f6f",
     "catalog_sha256": "078fb96071e65f7040bbaec09c6a45ea32e3567e133b29c5da6d21e6b855434f",
     "catalog_file_bytes": 824,
     "bundle_file_bytes": [4364, 4360, 4364, 4360],

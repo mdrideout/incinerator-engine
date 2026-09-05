@@ -8,7 +8,7 @@
 const std = @import("std");
 const protocol = @import("sandbox_developer_protocol");
 
-pub const agent_contract_revision: u16 = 1;
+pub const agent_contract_revision: u16 = 2;
 
 pub const Effect = enum {
     read_only,
@@ -247,7 +247,7 @@ const operations = [_]OperationDescriptor{
     .{
         .id = "content.list",
         .command = &.{ "content", "list" },
-        .summary = "List durable cooked content assets; runtime entities never appear here.",
+        .summary = "List durable cooked content assets with stable identity, owner, bundle, revision, digest, dependencies, source format, cook status, residency, and typed material/texture metadata; runtime entities never appear here.",
         .endpoint_schema = protocol.query_schema,
         .effect = .read_only,
         .completion = .synchronous,
@@ -259,7 +259,7 @@ const operations = [_]OperationDescriptor{
     .{
         .id = "target.inspect",
         .command = &.{"inspect"},
-        .summary = "Inspect one discovered stable world or content target; crate position is the current simulated body pose.",
+        .summary = "Inspect one discovered stable world or content target; content inspection returns the same typed metadata as content.list and crate position is the current simulated body pose.",
         .endpoint_schema = protocol.query_schema,
         .effect = .read_only,
         .completion = .synchronous,
@@ -271,7 +271,7 @@ const operations = [_]OperationDescriptor{
     .{
         .id = "selection.set",
         .command = &.{"select"},
-        .summary = "Select one discovered stable target in the editor.",
+        .summary = "Select one discovered stable target in the editor; content-asset selection is independent from world-instance selection and opens Inspector.",
         .endpoint_schema = protocol.editor_control_schema,
         .effect = .editor_presentation,
         .completion = .synchronous,

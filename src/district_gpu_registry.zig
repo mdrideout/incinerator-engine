@@ -33,10 +33,16 @@ pub const TextureUpload = struct {
     width: u32,
     height: u32,
     format: TextureFormat = .rgba8_unorm,
+    min_filter: TextureFilter = .linear,
+    mag_filter: TextureFilter = .linear,
+    address_u: TextureAddressMode = .repeat,
+    address_v: TextureAddressMode = .repeat,
     rgba8: []const u8,
 };
 
 pub const TextureFormat = enum { rgba8_unorm, rgba8_srgb };
+pub const TextureFilter = enum { nearest, linear };
+pub const TextureAddressMode = enum { clamp_to_edge, mirrored_repeat, repeat };
 
 pub const MaterialUpload = struct {
     base_color: [4]f32 = .{ 1, 1, 1, 1 },
@@ -141,6 +147,10 @@ const StagedTexture = struct {
     width: u32,
     height: u32,
     format: TextureFormat,
+    min_filter: TextureFilter,
+    mag_filter: TextureFilter,
+    address_u: TextureAddressMode,
+    address_v: TextureAddressMode,
     rgba8: []u8,
 
     fn deinit(self: *StagedTexture, allocator: std.mem.Allocator) void {
@@ -193,6 +203,10 @@ const StagedScene = struct {
                 .width = item.width,
                 .height = item.height,
                 .format = item.format,
+                .min_filter = item.min_filter,
+                .mag_filter = item.mag_filter,
+                .address_u = item.address_u,
+                .address_v = item.address_v,
                 .rgba8 = try allocator.dupe(u8, item.rgba8),
             };
             initialized_textures += 1;
@@ -838,9 +852,14 @@ pub const SdlMeshView = struct {
     material_index: u16,
 };
 
+pub const SdlTextureBinding = struct {
+    texture: texture_module.Texture,
+    sampler: ?*c.SDL_GPUSampler,
+};
+
 pub const SdlSceneView = struct {
     mesh_storage: [max_meshes_per_scene]SdlMeshView = undefined,
-    texture_storage: [max_textures_per_scene]texture_module.Texture = undefined,
+    texture_storage: [max_textures_per_scene]SdlTextureBinding = undefined,
     material_storage: [max_materials_per_scene]ResidentMaterial = undefined,
     instance_storage: [max_instances_per_scene]InstanceUpload = undefined,
     mesh_count: u8 = 0,
@@ -856,7 +875,9 @@ pub const SdlSceneView = struct {
         result.mesh_storage[0] = .{ .mesh = fallback_mesh, .material_index = 0 };
         result.mesh_count = 1;
         if (fallback_texture) |borrowed| {
-            result.texture_storage[0] = borrowed;
+            // Fallback views intentionally rely on the renderer's default
+            // sampler while preserving a complete material/texture binding.
+            result.texture_storage[0] = .{ .texture = borrowed, .sampler = null };
             result.texture_count = 1;
         }
         result.material_storage[0] = .{
@@ -887,7 +908,7 @@ pub const SdlSceneView = struct {
     pub fn materialTexture(
         self: *const SdlSceneView,
         material_index: u16,
-    ) ?texture_module.Texture {
+    ) ?SdlTextureBinding {
         const material = self.material_storage[material_index];
         const texture_index = material.base_color_texture orelse return null;
         return self.texture_storage[texture_index];
@@ -902,6 +923,7 @@ const SdlCandidate = struct {
     meshes: [max_meshes_per_scene]ResidentMesh = undefined,
     mesh_count: u8 = 0,
     textures: [max_textures_per_scene]OwnedTexture = undefined,
+    samplers: [max_textures_per_scene]*c.SDL_GPUSampler = undefined,
     texture_count: u8 = 0,
     materials: [max_materials_per_scene]ResidentMaterial = undefined,
     material_count: u8 = 0,
@@ -1007,6 +1029,32 @@ pub const SdlBackend = struct {
                 candidate.mesh_count += 1;
             }
             for (item.textures, 0..) |source, texture_index| {
+                const gpu_sampler = c.SDL_CreateGPUSampler(self.device, &.{
+                    .min_filter = switch (source.min_filter) {
+                        .nearest => c.SDL_GPU_FILTER_NEAREST,
+                        .linear => c.SDL_GPU_FILTER_LINEAR,
+                    },
+                    .mag_filter = switch (source.mag_filter) {
+                        .nearest => c.SDL_GPU_FILTER_NEAREST,
+                        .linear => c.SDL_GPU_FILTER_LINEAR,
+                    },
+                    .mipmap_mode = c.SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
+                    .address_mode_u = sdlAddressMode(source.address_u),
+                    .address_mode_v = sdlAddressMode(source.address_v),
+                    .address_mode_w = c.SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
+                    .mip_lod_bias = 0,
+                    .max_anisotropy = 1,
+                    .compare_op = c.SDL_GPU_COMPAREOP_INVALID,
+                    .min_lod = 0,
+                    .max_lod = 0,
+                    .enable_anisotropy = false,
+                    .enable_compare = false,
+                    .padding1 = 0,
+                    .padding2 = 0,
+                    .props = 0,
+                }) orelse return error.SamplerCreationFailed;
+                var sampler_owned = true;
+                errdefer if (sampler_owned) c.SDL_ReleaseGPUSampler(self.device, gpu_sampler);
                 const gpu_texture = c.SDL_CreateGPUTexture(self.device, &.{
                     .type = c.SDL_GPU_TEXTURETYPE_2D,
                     .format = switch (source.format) {
@@ -1029,7 +1077,9 @@ pub const SdlBackend = struct {
                         .height = source.height,
                     },
                 };
+                candidate.samplers[texture_index] = gpu_sampler;
                 candidate.texture_count += 1;
+                sampler_owned = false;
             }
             for (item.materials, 0..) |source, material_index| {
                 candidate.materials[material_index] = .{
@@ -1144,6 +1194,7 @@ pub const SdlBackend = struct {
         var texture_index = candidate.texture_count;
         while (texture_index > 0) {
             texture_index -= 1;
+            c.SDL_ReleaseGPUSampler(candidate.textures[texture_index].device, candidate.samplers[texture_index]);
             candidate.textures[texture_index].deinit();
         }
         candidate.* = undefined;
@@ -1163,7 +1214,10 @@ pub const SdlBackend = struct {
         }
         result.mesh_count = candidate.mesh_count;
         for (candidate.textures[0..candidate.texture_count], 0..) |*owned, index| {
-            result.texture_storage[index] = owned.borrow();
+            result.texture_storage[index] = .{
+                .texture = owned.borrow(),
+                .sampler = candidate.samplers[index],
+            };
         }
         result.texture_count = candidate.texture_count;
         @memcpy(
@@ -1179,6 +1233,14 @@ pub const SdlBackend = struct {
         return result;
     }
 };
+
+fn sdlAddressMode(mode: TextureAddressMode) c.SDL_GPUSamplerAddressMode {
+    return switch (mode) {
+        .clamp_to_edge => c.SDL_GPU_SAMPLERADDRESSMODE_CLAMP_TO_EDGE,
+        .mirrored_repeat => c.SDL_GPU_SAMPLERADDRESSMODE_MIRRORED_REPEAT,
+        .repeat => c.SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
+    };
+}
 
 pub const DistrictGpuRegistry = Registry(SdlBackend);
 

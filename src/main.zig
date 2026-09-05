@@ -6455,7 +6455,7 @@ const App = struct {
             else
                 .disabled,
             .run_id = self.authoring_run_id,
-            .protocol_cohort = 1,
+            .protocol_cohort = developer_protocol.protocol_cohort,
         };
     }
 
@@ -6548,11 +6548,7 @@ const App = struct {
                 .schema_list = developer_protocol.schemaCatalog(),
             }),
             .world_list => try self.respondDeveloperWorldList(endpoint, request),
-            .content_list => try self.respondDeveloperSuccess(endpoint, request, .{
-                // EA0.5 does not invent AssetIds for runtime instances. EA1 is
-                // the first program that will populate this durable catalog.
-                .content_list = &[_]developer_protocol.ContentEntry{},
-            }),
+            .content_list => try self.respondDeveloperContentList(endpoint, request),
             .inspect => |command| try self.respondDeveloperInspection(
                 endpoint,
                 request,
@@ -6573,6 +6569,7 @@ const App = struct {
                     );
                 } else {
                     self.applySelectionRequest(.clear);
+                    self.developer.clearContentSelection();
                     self.developer_endpoint_state.authoring_controller.clearSelection();
                     try self.respondDeveloperSuccess(endpoint, request, .{
                         .selection = .{ .selected = null },
@@ -6698,12 +6695,79 @@ const App = struct {
         });
     }
 
+    fn developerContentEntry(asset: engine.assets.Entry) developer_protocol.ContentEntry {
+        return .{
+            .asset_id = asset.id,
+            .semantic_type = switch (asset.kind) {
+                .scene => .scene,
+                .mesh => .mesh,
+                .material => .material,
+                .texture => .texture,
+            },
+            .label = asset.label,
+            .owner = asset.owner,
+            .bundle_key = asset.bundle_key,
+            .revision = asset.revision,
+            .availability = if (asset.cook_status == .valid) .available else .unavailable,
+            .digest = asset.digest,
+            .dependencies = asset.dependencies,
+            .source_format = asset.source_format,
+            .cook_status = asset.cook_status,
+            .residency = asset.residency,
+            .last_use_frame = asset.last_use_frame,
+            .details = asset.details,
+            .inspectable = true,
+            .authorable = false,
+        };
+    }
+
+    fn respondDeveloperContentList(
+        self: *App,
+        endpoint: anytype,
+        request: developer_protocol.Request,
+    ) !void {
+        const assets = try self.district_streaming.contentAssets();
+        var entries = std.ArrayListUnmanaged(developer_protocol.ContentEntry).empty;
+        defer entries.deinit(std.heap.page_allocator);
+        for (assets) |asset| try entries.append(
+            std.heap.page_allocator,
+            developerContentEntry(asset),
+        );
+        try self.respondDeveloperSuccess(endpoint, request, .{
+            .content_list = entries.items,
+        });
+    }
+
+    fn developerContentAsset(
+        self: *App,
+        id: engine.assets.AssetId,
+    ) !?engine.assets.Entry {
+        for (try self.district_streaming.contentAssets()) |asset| {
+            if (std.meta.eql(asset.id, id)) return asset;
+        }
+        return null;
+    }
+
     fn respondDeveloperInspection(
         self: *App,
         endpoint: anytype,
         request: developer_protocol.Request,
         target: developer_protocol.Target,
     ) !void {
+        if (target == .content_asset) {
+            const asset = try self.developerContentAsset(target.content_asset) orelse
+                return self.respondDeveloperFailure(
+                    endpoint,
+                    request,
+                    .target_not_found,
+                    "stable content asset is not present in the admitted catalog",
+                );
+            return self.respondDeveloperSuccess(endpoint, request, .{
+                .inspection = .{ .content = .{
+                    .entry = developerContentEntry(asset),
+                } },
+            });
+        }
         const entry = self.developerSelectionEntry(target) orelse
             return self.respondDeveloperFailure(
                 endpoint,
@@ -6763,6 +6827,20 @@ const App = struct {
                 .owner_busy,
                 detail,
             );
+        }
+        if (target == .content_asset) {
+            const assets = try self.district_streaming.contentAssets();
+            if (!self.developer.selectContentAsset(assets, target.content_asset)) {
+                return self.respondDeveloperFailure(
+                    endpoint,
+                    request,
+                    .target_not_found,
+                    "stable content asset is not selectable in the admitted catalog",
+                );
+            }
+            return self.respondDeveloperSuccess(endpoint, request, .{
+                .selection = .{ .selected = target },
+            });
         }
         const entry = self.developerSelectionEntry(target) orelse
             return self.respondDeveloperFailure(
@@ -9791,13 +9869,37 @@ const App = struct {
         model: zm.Mat,
         view_projection: zm.Mat,
     ) !void {
+        return self.drawPresentationMeshSampled(
+            identity,
+            gpu_mesh,
+            diffuse_texture,
+            null,
+            surface,
+            material,
+            model,
+            view_projection,
+        );
+    }
+
+    fn drawPresentationMeshSampled(
+        self: *App,
+        identity: engine.neural_rendering.DrawIdentity,
+        gpu_mesh: *const mesh.Mesh,
+        diffuse_texture: ?texture.Texture,
+        diffuse_sampler: ?*sdl.c.SDL_GPUSampler,
+        surface: sandbox_visual_catalog.Surface,
+        material: renderer.SurfaceMaterial,
+        model: zm.Mat,
+        view_projection: zm.Mat,
+    ) !void {
         // NR4 is an explicitly isolated validation capture. Its fixture is
         // submitted below with adapter-local target provenance; ordinary
         // sandbox draws must not leak into only one side of the paired frame.
         if (self.neural_target_fixture_enabled) return;
-        self.gpu_renderer.drawMeshWithMaterial(
+        self.gpu_renderer.drawMeshWithMaterialSampler(
             gpu_mesh,
             diffuse_texture,
+            diffuse_sampler,
             material,
             model,
             view_projection,
@@ -10066,16 +10168,22 @@ const App = struct {
     fn drawAuthoredDistrictScene(
         self: *App,
         scene: anytype,
+        coord: district_contract.ChunkCoord,
         identity: engine.neural_rendering.Identity,
         view_projection: zm.Mat,
     ) !u64 {
+        try self.district_streaming.recordContentUse(
+            coord,
+            self.frame_timer.total_frames,
+        );
         var draw_calls: u64 = 0;
         for (scene.instances(), 0..) |instance, instance_index| {
             if (instance.mesh_index >= scene.meshes().len) {
                 return error.DistrictResidentInstanceInvalid;
             }
             const resident_mesh = scene.meshes()[instance.mesh_index];
-            try self.drawPresentationMesh(
+            const sampled = scene.materialTexture(resident_mesh.material_index);
+            try self.drawPresentationMeshSampled(
                 .{
                     .identity = identity,
                     .semantic = .district,
@@ -10083,7 +10191,8 @@ const App = struct {
                         return error.DistrictResidentInstanceOrdinalOverflow,
                 },
                 resident_mesh.mesh,
-                scene.materialTexture(resident_mesh.material_index),
+                if (sampled) |binding| binding.texture else null,
+                if (sampled) |binding| binding.sampler else null,
                 .building_primary,
                 sandbox_visual_catalog.materialTinted(
                     .building_primary,
@@ -10517,6 +10626,7 @@ const App = struct {
                 const slot = try self.district_streaming.slot(slot_index);
                 scene_draw_calls +|= try self.drawAuthoredDistrictScene(
                     scene,
+                    slot.coord,
                     districtSceneNeuralIdentity(slot.coord),
                     view_proj,
                 );
@@ -10536,6 +10646,7 @@ const App = struct {
             if (district_plan.authored_scene_resident) {
                 scene_draw_calls +|= try self.drawAuthoredDistrictScene(
                     scene,
+                    draw.build.coord,
                     districtSceneNeuralIdentity(draw.build.coord),
                     view_proj,
                 );
@@ -10586,6 +10697,9 @@ const App = struct {
 
         // CrateFeature extraction is immutable plain data. The visual host is
         // the only layer that resolves its typed handles to GPU resources.
+        const project_crate_texture = try self.district_streaming.textureByLabel(
+            "CargoCratePanels",
+        );
         for (crate_draws) |draw| {
             const crate_mesh = try self.visuals.resolve(draw.mesh, draw.material);
             const scale = zm.scaling(
@@ -10605,10 +10719,14 @@ const App = struct {
                 draw.pose.position[2],
             );
             const model_matrix = zm.mul(zm.mul(scale, rotation), translation);
-            try self.drawPresentationMesh(
+            try self.drawPresentationMeshSampled(
                 persistentNeuralIdentity(draw.persistent_id, .crate, .whole, 0),
                 crate_mesh,
-                crate_mesh.diffuse_texture,
+                if (project_crate_texture) |binding|
+                    binding.texture
+                else
+                    crate_mesh.diffuse_texture,
+                if (project_crate_texture) |binding| binding.sampler else null,
                 .carryable,
                 sandbox_visual_catalog.material(.carryable),
                 model_matrix,
@@ -11946,6 +12064,7 @@ const App = struct {
                     .view = selection_view,
                     .requests = &self.selection_requests,
                 },
+                .content_assets = try self.district_streaming.contentAssets(),
                 .frame_timer = &self.frame_timer,
                 .include_district_streams = self.includeDeveloperDistrictStreams(),
                 .authoring = .{
@@ -13570,6 +13689,80 @@ test "developer endpoint app boundary routes a concrete owner journey" {
     };
     try std.testing.expect(!capture_admission.admitted);
     try std.testing.expect(capture_admission.rejection != null);
+}
+
+test "developer endpoint app boundary exposes typed admitted assets and independent content selection" {
+    if (comptime !build_options.developer_endpoint_enabled) return;
+
+    var app = try App.init(
+        std.testing.io,
+        .sandbox,
+        try content.ContentRootPath.parse(build_options.installed_content_root),
+    );
+    defer app.deinit();
+    var sink = DeveloperEndpointTestSink{ .allocator = std.testing.allocator };
+    defer sink.deinit();
+
+    var list_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        30,
+        .{ .content_list = .{} },
+    );
+    defer list_response.deinit();
+    const entries = switch (try developerSuccessForTest(list_response.value)) {
+        .content_list => |value| value,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expect(entries.len > 0);
+    var cargo: ?developer_protocol.ContentEntry = null;
+    for (entries) |entry| if (std.mem.eql(u8, entry.label, "CargoCratePanels")) {
+        cargo = entry;
+        break;
+    };
+    const texture_entry = cargo orelse return error.DeveloperCargoTextureMissing;
+    try std.testing.expectEqual(developer_protocol.ContentSemanticType.texture, texture_entry.semantic_type);
+    try std.testing.expectEqual(engine.assets.SourceFormat.gltf, texture_entry.source_format);
+    try std.testing.expectEqual(engine.assets.CookStatus.valid, texture_entry.cook_status);
+    const texture_metadata = switch (texture_entry.details) {
+        .texture => |value| value,
+        else => return error.DeveloperCargoTextureMetadataMissing,
+    };
+    try std.testing.expectEqual(engine.assets.ImageEncoding.jpeg, texture_metadata.encoding);
+    try std.testing.expectEqual(engine.assets.ColorSpace.srgb, texture_metadata.color_space);
+    try std.testing.expectEqual(engine.assets.Filter.nearest, texture_metadata.sampler.min_filter);
+    try std.testing.expectEqual(engine.assets.AddressMode.clamp_to_edge, texture_metadata.sampler.address_u);
+
+    const target = developer_protocol.Target{ .content_asset = texture_entry.asset_id };
+    var inspect_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        31,
+        .{ .inspect = .{ .target = target } },
+    );
+    defer inspect_response.deinit();
+    const inspected = switch (try developerSuccessForTest(inspect_response.value)) {
+        .inspection => |inspection| switch (inspection) {
+            .content => |content_entry| content_entry.entry,
+            else => return error.UnexpectedDeveloperInspection,
+        },
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expectEqual(texture_entry.asset_id, inspected.asset_id);
+
+    var select_response = try callDeveloperEndpointForTest(
+        &app,
+        &sink,
+        32,
+        .{ .selection_set = .{ .target = target } },
+    );
+    defer select_response.deinit();
+    const selected = switch (try developerSuccessForTest(select_response.value)) {
+        .selection => |selection_result| selection_result.selected,
+        else => return error.UnexpectedDeveloperPayload,
+    };
+    try std.testing.expect(std.meta.eql(target, selected.?));
+    try std.testing.expect(app.selection_controller.active == null);
 }
 
 test "window suspension discards pending and held gameplay actions" {

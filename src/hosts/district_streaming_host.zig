@@ -1390,6 +1390,80 @@ pub const Owner = opaque {
         return catalog.contentCohort();
     }
 
+    /// Current immutable content inventory with residency projected from the
+    /// visual host. Asset selection and runtime object selection remain
+    /// separate concerns; this slice never contains entity identities.
+    pub fn contentAssets(self: *Owner) ![]const engine.assets.Entry {
+        const state = ownerState(self);
+        const admitted = if (state.catalog) |*value| value else return &.{};
+        for (admitted.assets.entries) |*asset| {
+            asset.residency = .not_resident;
+            const catalog_entry = catalogEntryForBundle(admitted, asset.bundle_key) orelse continue;
+            const coord = district_contract.ChunkCoord{
+                .x = catalog_entry.coord.x,
+                .z = catalog_entry.coord.z,
+            };
+            const slot_index = state.slotIndexForCoord(coord) orelse continue;
+            const handle = sceneHandle(state.slots[slot_index].state) orelse continue;
+            const residency = state.registry.residency(handle) catch continue;
+            if (residency == .resident) asset.residency = .resident;
+        }
+        return admitted.assetView();
+    }
+
+    /// Resolve a named cooked texture only when its owning scene is resident.
+    /// This gives reusable live objects the same cooked/project asset as
+    /// authored scenery without source-file discovery in the runtime.
+    pub fn textureByLabel(
+        self: *Owner,
+        label: []const u8,
+    ) !?district_gpu_registry.SdlTextureBinding {
+        const state = ownerState(self);
+        const admitted = if (state.catalog) |*value| value else return null;
+        var target: ?*const engine.assets.Entry = null;
+        for (admitted.assets.entries) |*asset| {
+            if (asset.kind != .texture) continue;
+            if (std.mem.eql(u8, asset.label, label)) {
+                target = asset;
+                break;
+            }
+        }
+        const asset = target orelse return null;
+        var texture_ordinal: u16 = 0;
+        for (admitted.assets.entries) |candidate| {
+            if (!std.mem.eql(u8, candidate.bundle_key, asset.bundle_key)) continue;
+            if (candidate.kind != .texture) continue;
+            if (std.meta.eql(candidate.id, asset.id)) break;
+            texture_ordinal += 1;
+        }
+        const catalog_entry = catalogEntryForBundle(admitted, asset.bundle_key) orelse return null;
+        const coord = district_contract.ChunkCoord{
+            .x = catalog_entry.coord.x,
+            .z = catalog_entry.coord.z,
+        };
+        const slot_index = state.slotIndexForCoord(coord) orelse return null;
+        const handle = sceneHandle(state.slots[slot_index].state) orelse return null;
+        if (try state.registry.residency(handle) != .resident) return null;
+        const scene = try state.registry.resolve(handle);
+        if (texture_ordinal >= scene.texture_count) return error.ContentAssetProjectionMismatch;
+        return scene.texture_storage[texture_ordinal];
+    }
+
+    pub fn recordContentUse(
+        self: *Owner,
+        coord: district_contract.ChunkCoord,
+        frame_index: u64,
+    ) !void {
+        const state = ownerState(self);
+        const admitted = if (state.catalog) |*value| value else return;
+        const catalog_entry = admitted.entryForCoordinate(coord) orelse
+            return error.DistrictCoordinateNotInCatalog;
+        for (admitted.assets.entries) |*asset| {
+            if (!std.mem.eql(u8, asset.bundle_key, catalog_entry.bundle_key)) continue;
+            asset.last_use_frame = frame_index;
+        }
+    }
+
     pub fn slot(self: *Owner, slot_index: usize) !SlotView {
         const source = try self.checkedSlotConst(slot_index);
         return slotView(source);
@@ -1562,6 +1636,16 @@ pub const Owner = opaque {
         return &ownerState(self).slots[slot_index];
     }
 };
+
+fn catalogEntryForBundle(
+    admitted: *const district_content_catalog.AdmittedCatalog,
+    bundle_key: []const u8,
+) ?content.catalog.EntryView {
+    for (admitted.view().entries) |entry| {
+        if (std.mem.eql(u8, entry.bundle_key, bundle_key)) return entry;
+    }
+    return null;
+}
 
 fn ownerState(owner: *Owner) *State {
     return @ptrCast(@alignCast(owner));

@@ -3,6 +3,7 @@
 const std = @import("std");
 pub const bundle = @import("district_bundle.zig");
 pub const catalog = @import("catalog.zig");
+pub const asset_catalog = @import("asset_catalog.zig");
 
 pub const max_bundle_key_bytes: usize = 96;
 pub const max_content_root_bytes: usize = 1024;

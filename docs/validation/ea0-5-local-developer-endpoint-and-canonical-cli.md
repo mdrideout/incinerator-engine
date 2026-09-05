@@ -27,8 +27,10 @@ does not rewrite that historical boundary.
 The implementation, machine-verifiable closeout, human usability walkthrough,
 and product-owner stop review are complete. EA0.5 is accepted. On 2026-08-30
 the product owner eliminated the planned MCP adapter and authorized Phase 7 to
-make the canonical CLI and repository-owned agent skill first-class. EA1 has
-not started.
+make the canonical CLI and repository-owned agent skill first-class. At this
+historical checkpoint EA1 had not started; the current EA1-A candidate is
+recorded separately in
+[its validation ledger](ea1-a-practical-textures-and-materials.md).
 
 ## Acceptance Ledger
 

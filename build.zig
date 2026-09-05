@@ -15,6 +15,12 @@ const CookDependency = struct {
     bundle: std.Build.LazyPath,
 };
 
+const CookSource = struct {
+    source: std.Build.LazyPath,
+    provenance: std.Build.LazyPath,
+    dependencies: []const std.Build.LazyPath = &.{},
+};
+
 const SourceIdentity = struct {
     revision: []const u8,
     dirty: bool,
@@ -105,15 +111,43 @@ fn runContentCooker(
     root_translation: [3]f32,
     dependencies: []const CookDependency,
 ) CookedContent {
+    return runContentCookerSource(
+        b,
+        cooker,
+        .{ .source = b.path(source_path), .provenance = b.path(provenance_path) },
+        output_name,
+        bundle_key,
+        coord_x,
+        coord_z,
+        root_translation,
+        dependencies,
+    );
+}
+
+fn runContentCookerSource(
+    b: *std.Build,
+    cooker: *std.Build.Step.Compile,
+    source: CookSource,
+    output_name: []const u8,
+    bundle_key: []const u8,
+    coord_x: i32,
+    coord_z: i32,
+    root_translation: [3]f32,
+    dependencies: []const CookDependency,
+) CookedContent {
     const run = b.addRunArtifact(cooker);
-    run.addFileArg(b.path(source_path));
-    run.addFileArg(b.path(provenance_path));
+    run.addFileArg(source.source);
+    run.addFileArg(source.provenance);
     const output = run.addOutputFileArg(output_name);
     run.addArg(bundle_key);
     run.addArg(b.fmt("{d}", .{coord_x}));
     run.addArg(b.fmt("{d}", .{coord_z}));
     for (root_translation) |component| {
         run.addArg(b.fmt("{d}", .{component}));
+    }
+    for (source.dependencies) |dependency| {
+        run.addArg("--source-dependency");
+        run.addFileArg(dependency);
     }
     for (dependencies) |dependency| {
         run.addArg(dependency.semantic_id);
@@ -346,6 +380,7 @@ pub fn build(b: *std.Build) void {
         .root_source_file = b.path("src/content/root.zig"),
         .target = b.graph.host,
         .optimize = optimize,
+        .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
     });
     const district_contract_host_module = b.createModule(.{
         .root_source_file = b.path("src/features/district_contract.zig"),
@@ -402,6 +437,11 @@ pub fn build(b: *std.Build) void {
     options.addOption([]const u8, "source_revision", source_identity.revision);
     options.addOption(bool, "source_dirty", source_identity.dirty);
     options.addOption([]const u8, "source_dirty_fingerprint", source_identity.dirty_fingerprint);
+    options.addOption(
+        []const u8,
+        "installed_content_root",
+        b.getInstallPath(.prefix, "share/incinerator/content"),
+    );
 
     const validation_options = b.addOptions();
     validation_options.addOption(bool, "editor_enabled", editor_enabled);
@@ -411,6 +451,11 @@ pub fn build(b: *std.Build) void {
     validation_options.addOption([]const u8, "source_revision", source_identity.revision);
     validation_options.addOption(bool, "source_dirty", source_identity.dirty);
     validation_options.addOption([]const u8, "source_dirty_fingerprint", source_identity.dirty_fingerprint);
+    validation_options.addOption(
+        []const u8,
+        "installed_content_root",
+        b.getInstallPath(.prefix, "share/incinerator/content"),
+    );
 
     // EA0.5 keeps its concrete wire schemas and reusable client free of SDL,
     // ImGui, Metal, and runtime implementation imports. Only the explicit
@@ -872,6 +917,19 @@ pub fn build(b: *std.Build) void {
     });
     content_cooker.root_module.linkLibrary(host_zmesh.artifact("zmesh"));
 
+    const gltf_to_glb = b.addExecutable(.{
+        .name = "incinerator_gltf_to_glb",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("tools/gltf_to_glb.zig"),
+            .target = b.graph.host,
+            .optimize = .ReleaseSafe,
+        }),
+    });
+    const pack_urban_building = b.addRunArtifact(gltf_to_glb);
+    pack_urban_building.addFileArg(b.path("game/assets/urban_building/urban_building.gltf"));
+    pack_urban_building.addFileArg(b.path("game/assets/urban_building/facade.png"));
+    const urban_building_glb = pack_urban_building.addOutputFileArg("urban_building.glb");
+
     const cooked_fixture = runContentCooker(
         b,
         content_cooker,
@@ -926,11 +984,13 @@ pub fn build(b: *std.Build) void {
             .bundle = cooked_fixture_repeat.output,
         }},
     );
-    const cooked_s15_southwest = runContentCooker(
+    const cooked_s15_southwest = runContentCookerSource(
         b,
         content_cooker,
-        "fixtures/s12_world_west/district.gltf",
-        "fixtures/s15_world_southwest/PROVENANCE.md",
+        .{
+            .source = urban_building_glb,
+            .provenance = b.path("game/assets/urban_building/PROVENANCE.md"),
+        },
         "s15_world_southwest.icdb",
         "district/s15_world_southwest",
         0,
@@ -938,11 +998,14 @@ pub fn build(b: *std.Build) void {
         .{ 0, 0, 0 },
         &.{},
     );
-    const cooked_s15_southeast = runContentCooker(
+    const cooked_s15_southeast = runContentCookerSource(
         b,
         content_cooker,
-        "fixtures/s12_world_east/district.gltf",
-        "fixtures/s15_world_southeast/PROVENANCE.md",
+        .{
+            .source = b.path("game/assets/cargo_crate/cargo_crate.gltf"),
+            .provenance = b.path("game/assets/cargo_crate/PROVENANCE.md"),
+            .dependencies = &.{b.path("game/assets/cargo_crate/panels.jpg")},
+        },
         "s15_world_southeast.icdb",
         "district/s15_world_southeast",
         1,
@@ -989,11 +1052,13 @@ pub fn build(b: *std.Build) void {
             },
         },
     );
-    const cooked_s15_southwest_repeat = runContentCooker(
+    const cooked_s15_southwest_repeat = runContentCookerSource(
         b,
         content_cooker,
-        "fixtures/s12_world_west/district.gltf",
-        "fixtures/s15_world_southwest/PROVENANCE.md",
+        .{
+            .source = urban_building_glb,
+            .provenance = b.path("game/assets/urban_building/PROVENANCE.md"),
+        },
         "s15_world_southwest_repeat.icdb",
         "district/s15_world_southwest",
         0,
@@ -1001,11 +1066,14 @@ pub fn build(b: *std.Build) void {
         .{ 0, 0, 0 },
         &.{},
     );
-    const cooked_s15_southeast_repeat = runContentCooker(
+    const cooked_s15_southeast_repeat = runContentCookerSource(
         b,
         content_cooker,
-        "fixtures/s12_world_east/district.gltf",
-        "fixtures/s15_world_southeast/PROVENANCE.md",
+        .{
+            .source = b.path("game/assets/cargo_crate/cargo_crate.gltf"),
+            .provenance = b.path("game/assets/cargo_crate/PROVENANCE.md"),
+            .dependencies = &.{b.path("game/assets/cargo_crate/panels.jpg")},
+        },
         "s15_world_southeast_repeat.icdb",
         "district/s15_world_southeast",
         1,
@@ -1111,7 +1179,7 @@ pub fn build(b: *std.Build) void {
         "share/incinerator/content/district/s15_world_southwest.icdb",
     );
     const install_s15_southwest_provenance = b.addInstallFile(
-        b.path("fixtures/s15_world_southwest/PROVENANCE.md"),
+        b.path("game/assets/urban_building/PROVENANCE.md"),
         "share/incinerator/content/district/s15_world_southwest.PROVENANCE.md",
     );
     const install_cooked_s15_southeast = b.addInstallFile(
@@ -1119,7 +1187,7 @@ pub fn build(b: *std.Build) void {
         "share/incinerator/content/district/s15_world_southeast.icdb",
     );
     const install_s15_southeast_provenance = b.addInstallFile(
-        b.path("fixtures/s15_world_southeast/PROVENANCE.md"),
+        b.path("game/assets/cargo_crate/PROVENANCE.md"),
         "share/incinerator/content/district/s15_world_southeast.PROVENANCE.md",
     );
     const install_cooked_s15_northwest = b.addInstallFile(
@@ -1361,6 +1429,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "incinerator_engine", .module = mod },
             .{ .name = "content", .module = content_module },
             .{ .name = "district_contract", .module = district_contract_module },
             .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
@@ -4427,6 +4496,7 @@ pub fn build(b: *std.Build) void {
     const run_developer_endpoint_app_tests = b.addRunArtifact(
         developer_endpoint_app_tests,
     );
+    run_developer_endpoint_app_tests.step.dependOn(b.getInstallStep());
     developer_endpoint_test_step.dependOn(&run_developer_endpoint_app_tests.step);
 
     // A run step that will run the second test executable.

@@ -552,6 +552,7 @@ pub const FrameInput = struct {
     camera: *const CameraView,
     viewport: ViewportInput,
     selection: SelectionInput,
+    content_assets: []const engine.assets.Entry,
     frame_timing: *const FrameTimingView,
     developer: DeveloperInput,
     visualization: VisualizationInput,

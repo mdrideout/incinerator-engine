@@ -1,8 +1,8 @@
 # ADR-029: Engine, Game, and Authoring Ownership Boundary
 
-**Status:** Accepted; EA0 and EA0.5 accepted; Phase 7 first-class CLI agent
-contract implementation/automated/native/agent candidate complete with
-product-owner stop review pending; EA1-EA5 pending
+**Status:** Accepted; EA0, EA0.5, and Phase 7 accepted; EA1-A implementation and
+machine acceptance candidate complete with product-owner review pending; EA1-B
+through EA5 pending
 
 **Date:** 2026-08-18
 
@@ -165,6 +165,12 @@ untrusted-mod or sandboxing need.
   canonical JSON CLI remain the sole agent-control product. Phase 7 adds a
   self-describing operation catalog, guided result model, and repository-owned
   skill without changing the endpoint protocol or feature-owner authority.
+- EA1-A now proves the asset side of this decision: project-owned glTF/GLB and
+  PNG/JPEG sources are cooked offline into stable game-owned scene, mesh,
+  material, and texture identities; the renderer consumes only cooked content;
+  and ImGui plus the CLI inspect the same read-only catalog without conflating
+  an asset with a world instance. EA1-B remains the separate typed material
+  mutation/commit phase.
 
 ## References
 

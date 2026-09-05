@@ -1,4 +1,4 @@
-//! Selection-driven Inspector for the sandbox's authorable crate proof.
+//! Selection-driven Inspector for cooked assets and the authorable crate proof.
 //!
 //! The Inspector owns one local XYZ draft. Numeric controls and the viewport
 //! translate gizmo edit that same draft; only the explicit Apply Position
@@ -19,11 +19,11 @@ pub const descriptor = tool_module.Descriptor{
     .name = "Inspector",
     .category = .authoring,
     .default_region = .right,
-    .purpose = "Inspect the selected runtime crate, edit one position draft, and write a restorable sandbox world snapshot.",
-    .reads = "Shared selection plus immutable crate authoring, transaction, evidence, and save projections.",
+    .purpose = "Inspect a selected cooked asset or inspect/author the selected runtime crate and restorable sandbox snapshot.",
+    .reads = "Separate content/world selection plus immutable asset, crate authoring, transaction, evidence, and save projections.",
     .requests = "Emits typed relocate, undo, redo, and world-snapshot requests through the authoring boundary.",
-    .examples = &.{ "crate=1:4 revision=7", "draft=(2.000, 1.000, 5.000)", "snapshot=committed slot=sandbox" },
-    .audit_fields = &.{ "authority_tick", "persistent_id", "transaction_id", "authoring_revision" },
+    .examples = &.{ "asset=texture:N:L", "crate=1:4 revision=7", "draft=(2.000, 1.000, 5.000)", "snapshot=committed slot=sandbox" },
+    .audit_fields = &.{ "asset_id", "asset_digest", "authority_tick", "persistent_id", "transaction_id", "authoring_revision" },
 };
 
 pub const Axis = enum(u2) { x, y, z };
@@ -489,11 +489,21 @@ fn drawWorldSnapshot(state: *const State, ctx: *const AuthoringInput, request_em
     }
 }
 
-pub fn draw(state: *State, ctx: *const AuthoringInput, selection: *const SelectionInput) void {
+pub fn draw(
+    state: *State,
+    ctx: *const AuthoringInput,
+    selection: *const SelectionInput,
+    content_asset: ?*const engine.assets.Entry,
+) void {
     const view = ctx.view;
     state.synchronize(view);
 
     if (zgui.begin("Inspector", .{})) {
+        if (content_asset) |asset| {
+            drawContentAsset(asset);
+            zgui.end();
+            return;
+        }
         const session = view.session;
         var request_emitted = false;
 
@@ -590,6 +600,46 @@ pub fn draw(state: *State, ctx: *const AuthoringInput, selection: *const Selecti
         if (zgui.collapsingHeader("Authored-change Evidence", .{})) drawChangeEvidence(view.latest_change);
     }
     zgui.end();
+}
+
+fn drawContentAsset(asset: *const engine.assets.Entry) void {
+    zgui.textDisabled("Cooked content asset inspection (read-only in EA1-A)", .{});
+    zgui.separatorText("Identity");
+    zgui.text("{s}", .{asset.label});
+    zgui.text("Asset: {d}:{d}", .{ asset.id.namespace, asset.id.local });
+    zgui.text("Kind: {s} | owner: {s}", .{ @tagName(asset.kind), @tagName(asset.owner) });
+    zgui.text("Bundle: {s}", .{asset.bundle_key});
+    zgui.text("Revision: {d} | source: {s}", .{ asset.revision, @tagName(asset.source_format) });
+    zgui.text("Cook: {s} | residency: {s}", .{ @tagName(asset.cook_status), @tagName(asset.residency) });
+    if (asset.last_use_frame) |frame| zgui.text("Last use frame: {d}", .{frame}) else zgui.textDisabled("Last use frame: not observed", .{});
+    var digest_text: [64]u8 = undefined;
+    _ = std.fmt.bufPrint(&digest_text, "{s}", .{&std.fmt.bytesToHex(asset.digest, .lower)}) catch unreachable;
+    zgui.textWrapped("SHA-256: {s}", .{&digest_text});
+
+    zgui.separatorText("Dependencies");
+    if (asset.dependencies.len == 0) zgui.textDisabled("No direct dependencies", .{});
+    for (asset.dependencies) |dependency| zgui.text("{d}:{d}", .{ dependency.namespace, dependency.local });
+
+    zgui.separatorText("Typed metadata");
+    switch (asset.details) {
+        .scene => zgui.text("Scene asset", .{}),
+        .mesh => zgui.text("Mesh asset", .{}),
+        .material => |material| {
+            zgui.text("Base color: ({d:.3}, {d:.3}, {d:.3}, {d:.3})", .{
+                material.base_color[0], material.base_color[1], material.base_color[2], material.base_color[3],
+            });
+            zgui.text("Texcoord: {d}", .{material.base_color_texcoord});
+            if (material.base_color_texture) |texture_id| {
+                zgui.text("Base-color texture: {d}:{d}", .{ texture_id.namespace, texture_id.local });
+            } else zgui.textDisabled("Base-color texture: none", .{});
+        },
+        .texture => |texture| {
+            zgui.text("Dimensions: {d} x {d}", .{ texture.width, texture.height });
+            zgui.text("Encoding: {s} | color space: {s}", .{ @tagName(texture.encoding), @tagName(texture.color_space) });
+            zgui.text("Filter: min {s}, mag {s}", .{ @tagName(texture.sampler.min_filter), @tagName(texture.sampler.mag_filter) });
+            zgui.text("Address: U {s}, V {s}", .{ @tagName(texture.sampler.address_u), @tagName(texture.sampler.address_v) });
+        },
+    }
 }
 
 const ScreenProjection = struct {

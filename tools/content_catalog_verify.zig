@@ -76,6 +76,7 @@ pub fn main(init: std.process.Init) !void {
         .failed => return error.GeneratedBundleIsInvalid,
     };
     defer northeast.deinit();
+    try verifyEa1ProjectAssets(southwest.view(), southeast.view());
 
     const northeast_index = view.lookupSemanticId("district.northeast") orelse
         return error.MissingNortheastEntry;
@@ -135,6 +136,75 @@ pub fn main(init: std.process.Init) !void {
         args[7],
         args[8],
     );
+}
+
+fn verifyEa1ProjectAssets(
+    urban: content.bundle.BundleView,
+    cargo: content.bundle.BundleView,
+) !void {
+    if (urban.source_format != .glb or cargo.source_format != .gltf) {
+        return error.Ea1SourceContainerCoverageMissing;
+    }
+    if (urban.textures.len != 2 or cargo.textures.len != 2 or
+        urban.materials.len != 4 or cargo.materials.len != 4)
+    {
+        return error.Ea1ProjectAssetShapeDiverged;
+    }
+    const urban_texture = urban.textures[1];
+    const cargo_texture = cargo.textures[1];
+    if (!std.mem.eql(u8, urban.name(urban_texture.name).?, "UrbanBrickFacade") or
+        urban_texture.width != 128 or urban_texture.height != 128 or
+        urban_texture.format != .rgba8_srgb or urban_texture.encoding != .png or
+        urban_texture.sampler.min_filter != .linear or
+        urban_texture.sampler.address_u != .mirrored_repeat)
+    {
+        return error.Ea1UrbanTextureMetadataDiverged;
+    }
+    if (!std.mem.eql(u8, cargo.name(cargo_texture.name).?, "CargoCratePanels") or
+        cargo_texture.width != 128 or cargo_texture.height != 128 or
+        cargo_texture.format != .rgba8_srgb or cargo_texture.encoding != .jpeg or
+        cargo_texture.sampler.min_filter != .nearest or
+        cargo_texture.sampler.address_u != .clamp_to_edge)
+    {
+        return error.Ea1CargoTextureMetadataDiverged;
+    }
+    if (urban.materials[2].base_color_texture != 1 or
+        urban.materials[3].base_color_texture != 1 or
+        cargo.materials[2].base_color_texture != 1 or
+        cargo.materials[3].base_color_texture != 1)
+    {
+        return error.Ea1MaterialTextureRelationshipDiverged;
+    }
+    try verifyVisibleTexturedSurface(urban, 1);
+    try verifyVisibleTexturedSurface(cargo, 1);
+}
+
+fn verifyVisibleTexturedSurface(view: content.bundle.BundleView, texture_index: u32) !void {
+    var textured_primitives: usize = 0;
+    for (view.primitives) |primitive| {
+        const material = view.materials[primitive.material];
+        if (material.base_color_texture != texture_index) continue;
+        textured_primitives += 1;
+        for (material.base_color) |factor| {
+            if (factor != 1) return error.Ea1ProjectTextureIsObscuredByTint;
+        }
+
+        const first: usize = @intCast(primitive.first_vertex);
+        const end = first + @as(usize, @intCast(primitive.vertex_count));
+        const vertices = view.vertices[first..end];
+        var minimum = [2]f32{ std.math.inf(f32), std.math.inf(f32) };
+        var maximum = [2]f32{ -std.math.inf(f32), -std.math.inf(f32) };
+        for (vertices) |vertex| {
+            for (0..2) |axis| {
+                minimum[axis] = @min(minimum[axis], vertex.texcoord[axis]);
+                maximum[axis] = @max(maximum[axis], vertex.texcoord[axis]);
+            }
+        }
+        if (maximum[0] - minimum[0] < 0.5 or maximum[1] - minimum[1] < 0.5) {
+            return error.Ea1ProjectTextureHasDegenerateUvs;
+        }
+    }
+    if (textured_primitives == 0) return error.Ea1ProjectTextureHasNoSurface;
 }
 
 fn verifyHeadlessCohort(

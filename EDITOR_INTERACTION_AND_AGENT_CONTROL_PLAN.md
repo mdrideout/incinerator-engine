@@ -1,8 +1,8 @@
 # Editor Interaction and Agent Control Plan
 
-**Status:** Phases 1-6 accepted; Phase 7 implementation, automated, installed
-Metal, clean-context agent, and comprehensive manual agent-review candidate
-complete with product-owner stop review pending; Phase 8 / EA1 has not started
+**Status:** Phases 1-7 accepted; the Phase 8 / EA1-A read-only Content Browser
+and agent-discovery slice is an implementation/machine acceptance candidate
+with product-owner review pending; EA1-B mutation workflows remain gated
 
 **Date:** 2026-08-23
 
@@ -856,9 +856,9 @@ of EA2 and the roadmap amendment is accepted.
 
 ### Phase 7 — First-class CLI agent contract and skill
 
-**Status:** Implementation, automated, installed Metal, clean-context agent,
-and comprehensive manual agent-review candidate complete; product-owner stop
-review pending.
+**Status:** Accepted by the product owner on 2026-08-30 after implementation,
+automated, installed Metal, clean-context agent, and comprehensive manual
+agent review.
 
 **Purpose:** Make the accepted `incinerator-dev` client self-describing and hard
 for shell-capable coding agents to misuse, without introducing another protocol
@@ -962,6 +962,11 @@ project-owned texture, material, and scene identities.
 This phase is coordinated with EA1-A and EA1-B. It does not pull texture or
 material implementation ahead of the accepted Engine Authoring Foundation
 sequence.
+
+EA1-A candidate status: the read-only catalog, Content Browser, Inspector,
+separate asset selection, residency diagnostics, and CLI inspection are
+implemented and machine-validated. Thumbnails/previews, live material
+assignment/revert, and durable commit remain EA1-B.
 
 #### Content Browser
 

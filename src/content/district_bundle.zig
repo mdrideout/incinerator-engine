@@ -6,15 +6,17 @@
 const std = @import("std");
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'D', 'B', 'N', 'D', 'L' };
-pub const format_version: u16 = 2;
-pub const schema_cohort: u16 = 3;
+pub const format_version: u16 = 3;
+pub const schema_cohort: u16 = 4;
 pub const max_navigation_outgoing_edges: u8 = 3;
 pub const header_size: u32 = 320;
 pub const section_count: usize = 12;
 pub const none_index: u32 = std.math.maxInt(u32);
 
 pub const Limits = struct {
-    max_file_bytes: usize = 64 * 1024,
+    /// EA1-A's measured product cohort contains one 128x128 RGBA base-color
+    /// image plus the retained tiny palette in a district bundle.
+    max_file_bytes: usize = 256 * 1024,
     max_strings_bytes: u32 = 4 * 1024,
     max_nodes: u32 = 8,
     max_meshes: u32 = 2,
@@ -23,7 +25,7 @@ pub const Limits = struct {
     max_textures: u32 = 2,
     max_vertices: u32 = 128,
     max_indices: u32 = 384,
-    max_pixel_bytes: u32 = 4 * 1024,
+    max_pixel_bytes: u32 = 128 * 1024,
     max_static_boxes: u32 = 8,
     max_navigation_nodes: u32 = 8,
     max_navigation_edges: u32 = 16,
@@ -45,7 +47,13 @@ pub const Section = enum(u8) {
 };
 
 const section_strides = [section_count]u32{
-    1, 80, 16, 20, 32, 28, 32, 4, 1, 40, 16, 12,
+    1, 80, 16, 20, 36, 44, 32, 4, 1, 40, 16, 12,
+};
+
+pub const SourceFormat = enum(u8) {
+    gltf = 1,
+    glb = 2,
+    _,
 };
 
 pub const NameRef = struct {
@@ -85,6 +93,7 @@ pub const Material = struct {
     name: NameRef,
     base_color: [4]f32,
     base_color_texture: u32 = none_index,
+    base_color_texcoord: u8 = 0,
     flags: u32 = 0,
 };
 
@@ -94,6 +103,32 @@ pub const TextureFormat = enum(u32) {
     _,
 };
 
+pub const ImageEncoding = enum(u8) {
+    png = 1,
+    jpeg = 2,
+    _,
+};
+
+pub const SamplerFilter = enum(u8) {
+    nearest = 1,
+    linear = 2,
+    _,
+};
+
+pub const SamplerAddressMode = enum(u8) {
+    clamp_to_edge = 1,
+    mirrored_repeat = 2,
+    repeat = 3,
+    _,
+};
+
+pub const Sampler = struct {
+    min_filter: SamplerFilter = .linear,
+    mag_filter: SamplerFilter = .linear,
+    address_u: SamplerAddressMode = .repeat,
+    address_v: SamplerAddressMode = .repeat,
+};
+
 pub const Texture = struct {
     name: NameRef,
     width: u32,
@@ -101,6 +136,8 @@ pub const Texture = struct {
     format: TextureFormat = .rgba8_unorm,
     pixel_offset: u32,
     pixel_size: u32,
+    encoding: ImageEncoding = .png,
+    sampler: Sampler = .{},
 };
 
 pub const VertexPNU = struct {
@@ -137,6 +174,7 @@ pub const NavigationEdge = struct {
 pub const BundleView = struct {
     bundle_name: NameRef,
     source_digest: [32]u8,
+    source_format: SourceFormat = .gltf,
     strings: []const u8,
     nodes: []const Node,
     meshes: []const Mesh,
@@ -202,6 +240,7 @@ pub const OwnedBundle = struct {
     identity: BundleIdentity,
     bundle_name: NameRef,
     source_digest: [32]u8,
+    source_format: SourceFormat,
     strings: []u8,
     nodes: []Node,
     meshes: []Mesh,
@@ -219,6 +258,7 @@ pub const OwnedBundle = struct {
         return .{
             .bundle_name = self.bundle_name,
             .source_digest = self.source_digest,
+            .source_format = self.source_format,
             .strings = self.strings,
             .nodes = self.nodes,
             .meshes = self.meshes,
@@ -375,6 +415,7 @@ pub fn encode(
     putU16(bytes, 106, 0);
     putU32(bytes, 108, bundle.bundle_name.offset);
     putU32(bytes, 112, bundle.bundle_name.len);
+    bytes[116] = @intFromEnum(bundle.source_format);
     for (sections, 0..) |section, index| writeSectionDesc(bytes, index, section);
 
     @memcpy(sectionBytes(bytes, sections[@intFromEnum(Section.strings)]), bundle.strings);
@@ -429,7 +470,8 @@ pub fn decode(
         getU64(bytes, 32) != bytes.len - header_size or
         getU16(bytes, 104) != section_count or
         getU16(bytes, 106) != 0 or
-        !std.mem.allEqual(u8, bytes[116..120], 0) or
+        bytes[116] == 0 or
+        !std.mem.allEqual(u8, bytes[117..120], 0) or
         !std.mem.allEqual(u8, bytes[312..320], 0))
     {
         return .{ .failed = .invalid_header };
@@ -467,6 +509,17 @@ pub fn decode(
         expected_offset = end;
     }
     if (expected_offset != bytes.len) return .{ .failed = .size_mismatch };
+
+    if (!recordTailsAreZero(
+        constSectionBytes(bytes, sections[@intFromEnum(Section.materials)]),
+        section_strides[@intFromEnum(Section.materials)],
+        29,
+    )) return .{ .failed = .{ .invalid_section = .materials } };
+    if (!recordTailsAreZero(
+        constSectionBytes(bytes, sections[@intFromEnum(Section.textures)]),
+        section_strides[@intFromEnum(Section.textures)],
+        33,
+    )) return .{ .failed = .{ .invalid_section = .textures } };
 
     const counts = Counts.fromSections(sections);
     if (counts.capacityFailure(limits)) |failure| {
@@ -529,6 +582,7 @@ pub fn decode(
         },
         .bundle_name = .{ .offset = getU32(bytes, 108), .len = getU32(bytes, 112) },
         .source_digest = source_digest,
+        .source_format = @enumFromInt(bytes[116]),
         .strings = strings,
         .nodes = nodes,
         .meshes = meshes,
@@ -554,6 +608,7 @@ fn validationFailure(bundle: BundleView, limits: Limits) ?ValidationFailure {
     const counts = Counts.fromView(bundle);
     if (counts.capacityFailure(limits)) |failure| return .{ .capacity_exceeded = failure };
     if (std.mem.allEqual(u8, &bundle.source_digest, 0)) return .missing_source_digest;
+    if (bundle.source_format != .gltf and bundle.source_format != .glb) return .invalid_header;
     if (bundle.bundle_name.bytes(bundle.strings) == null) return .invalid_name;
     if (!std.unicode.utf8ValidateSlice(bundle.strings)) return .invalid_name;
     if (bundle.nodes.len == 0 or bundle.meshes.len == 0 or bundle.primitives.len == 0 or
@@ -604,10 +659,20 @@ fn validationFailure(bundle: BundleView, limits: Limits) ?ValidationFailure {
         }
         if (material.base_color_texture != none_index and
             material.base_color_texture >= bundle.textures.len) return .invalid_reference;
+        if (material.base_color_texcoord != 0) return .invalid_material;
     }
     for (bundle.textures) |texture| {
         if (texture.name.bytes(bundle.strings) == null or texture.width == 0 or texture.height == 0 or
-            (texture.format != .rgba8_unorm and texture.format != .rgba8_srgb)) return .invalid_texture;
+            (texture.format != .rgba8_unorm and texture.format != .rgba8_srgb) or
+            (texture.encoding != .png and texture.encoding != .jpeg) or
+            (texture.sampler.min_filter != .nearest and texture.sampler.min_filter != .linear) or
+            (texture.sampler.mag_filter != .nearest and texture.sampler.mag_filter != .linear) or
+            (texture.sampler.address_u != .clamp_to_edge and
+                texture.sampler.address_u != .mirrored_repeat and
+                texture.sampler.address_u != .repeat) or
+            (texture.sampler.address_v != .clamp_to_edge and
+                texture.sampler.address_v != .mirrored_repeat and
+                texture.sampler.address_v != .repeat)) return .invalid_texture;
         const pixels = std.math.mul(u32, texture.width, texture.height) catch return .invalid_texture;
         const expected_size = std.math.mul(u32, pixels, 4) catch return .invalid_texture;
         if (texture.pixel_size != expected_size or
@@ -829,6 +894,19 @@ fn constSectionBytes(bytes: []const u8, section: SectionDesc) []const u8 {
     return bytes[section.offset..][0..section.byte_size];
 }
 
+fn recordTailsAreZero(bytes: []const u8, stride: u32, first_reserved: u32) bool {
+    std.debug.assert(first_reserved <= stride);
+    var offset: usize = 0;
+    while (offset < bytes.len) : (offset += stride) {
+        if (!std.mem.allEqual(
+            u8,
+            bytes[offset + first_reserved .. offset + stride],
+            0,
+        )) return false;
+    }
+    return true;
+}
+
 fn writeSectionDesc(bytes: []u8, index: usize, section: SectionDesc) void {
     const offset = 120 + index * 16;
     putU32(bytes, offset, section.offset);
@@ -903,40 +981,61 @@ fn decodePrimitives(values: []Primitive, bytes: []const u8) void {
 
 fn encodeMaterials(bytes: []u8, values: []const Material) void {
     for (values, 0..) |value, index| {
-        const base = index * 32;
+        const base = index * 36;
         putName(bytes, base, value.name);
         for (value.base_color, 0..) |item, item_index| putF32(bytes, base + 8 + item_index * 4, item);
         putU32(bytes, base + 24, value.base_color_texture);
-        putU32(bytes, base + 28, value.flags);
+        bytes[base + 28] = value.base_color_texcoord;
+        putU32(bytes, base + 32, value.flags);
     }
 }
 
 fn decodeMaterials(values: []Material, bytes: []const u8) void {
     for (values, 0..) |*value, index| {
-        const base = index * 32;
+        const base = index * 36;
         value.name = getName(bytes, base);
         for (&value.base_color, 0..) |*item, item_index| item.* = getF32(bytes, base + 8 + item_index * 4);
         value.base_color_texture = getU32(bytes, base + 24);
-        value.flags = getU32(bytes, base + 28);
+        value.base_color_texcoord = bytes[base + 28];
+        value.flags = getU32(bytes, base + 32);
     }
 }
 
 fn encodeTextures(bytes: []u8, values: []const Texture) void {
     for (values, 0..) |value, index| {
-        const base = index * 28;
+        const base = index * 44;
         putName(bytes, base, value.name);
         putU32(bytes, base + 8, value.width);
         putU32(bytes, base + 12, value.height);
         putU32(bytes, base + 16, @intFromEnum(value.format));
         putU32(bytes, base + 20, value.pixel_offset);
         putU32(bytes, base + 24, value.pixel_size);
+        bytes[base + 28] = @intFromEnum(value.encoding);
+        bytes[base + 29] = @intFromEnum(value.sampler.min_filter);
+        bytes[base + 30] = @intFromEnum(value.sampler.mag_filter);
+        bytes[base + 31] = @intFromEnum(value.sampler.address_u);
+        bytes[base + 32] = @intFromEnum(value.sampler.address_v);
     }
 }
 
 fn decodeTextures(values: []Texture, bytes: []const u8) void {
     for (values, 0..) |*value, index| {
-        const base = index * 28;
-        value.* = .{ .name = getName(bytes, base), .width = getU32(bytes, base + 8), .height = getU32(bytes, base + 12), .format = @enumFromInt(getU32(bytes, base + 16)), .pixel_offset = getU32(bytes, base + 20), .pixel_size = getU32(bytes, base + 24) };
+        const base = index * 44;
+        value.* = .{
+            .name = getName(bytes, base),
+            .width = getU32(bytes, base + 8),
+            .height = getU32(bytes, base + 12),
+            .format = @enumFromInt(getU32(bytes, base + 16)),
+            .pixel_offset = getU32(bytes, base + 20),
+            .pixel_size = getU32(bytes, base + 24),
+            .encoding = @enumFromInt(bytes[base + 28]),
+            .sampler = .{
+                .min_filter = @enumFromInt(bytes[base + 29]),
+                .mag_filter = @enumFromInt(bytes[base + 30]),
+                .address_u = @enumFromInt(bytes[base + 31]),
+                .address_v = @enumFromInt(bytes[base + 32]),
+            },
+        };
     }
 }
 
@@ -1284,7 +1383,7 @@ test "bundle rejects authenticated non-canonical reserved and alignment bytes" {
     const canonical = (try encode(std.testing.allocator, padded_bundle, .{})).bytes;
     defer std.testing.allocator.free(canonical);
 
-    for ([_]usize{ 116, 312 }) |reserved_offset| {
+    for ([_]usize{ 117, 312 }) |reserved_offset| {
         const altered = try std.testing.allocator.dupe(u8, canonical);
         defer std.testing.allocator.free(altered);
         altered[reserved_offset] = 1;
@@ -1294,6 +1393,22 @@ test "bundle rejects authenticated non-canonical reserved and alignment bytes" {
         @memcpy(altered[72..104], &digest);
         const result = try decode(std.testing.allocator, altered, .{});
         try std.testing.expect(result.failed == .invalid_header);
+    }
+
+    for ([_]struct { section: Section, reserved: u32 }{
+        .{ .section = .materials, .reserved = 29 },
+        .{ .section = .textures, .reserved = 33 },
+    }) |record| {
+        const altered_record = try std.testing.allocator.dupe(u8, canonical);
+        defer std.testing.allocator.free(altered_record);
+        const descriptor = readSectionDesc(altered_record, @intFromEnum(record.section));
+        altered_record[descriptor.offset + record.reserved] = 1;
+        @memset(altered_record[72..104], 0);
+        var record_digest: [32]u8 = undefined;
+        calculateIntegrity(altered_record, &record_digest);
+        @memcpy(altered_record[72..104], &record_digest);
+        const record_result = try decode(std.testing.allocator, altered_record, .{});
+        try std.testing.expectEqual(record.section, record_result.failed.invalid_section);
     }
 
     var previous_end: u64 = header_size;

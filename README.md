@@ -132,8 +132,15 @@ and product-owner review. Phase 7 now makes that CLI a first-class agent
 contract with a machine-readable catalog, guided results, and repository-owned
 skill; the planned MCP adapter was eliminated because local coding agents have
 shell access. Its implementation/automated/native/clean-context/comprehensive-
-manual-agent candidate passes; product-owner stop review remains and EA1 has
-not started.
+manual-agent review passes and the product owner accepted Phase 7. EA1-A now
+has a complete machine acceptance candidate: project-owned GLB/glTF with
+embedded/external PNG/JPEG, stable cooked asset identities, correct
+color-space/sampler handling, real textured building and crate content, a
+read-only Content Browser/Inspector, and CLI parity. Product-owner visual and
+usability review remains before EA1-B is authorized.
+See the
+[EA1-A validation ledger](docs/validation/ea1-a-practical-textures-and-materials.md)
+for the exact cooked cohort and manual checklist.
 The combined-tree
 [deterministic-rendering resumption audit](docs/validation/deterministic-rendering-resumption.md)
 passes and records the correction that restored the ordinary product from an
@@ -803,9 +810,11 @@ SDL/editor/GPU-free verifier whose expected world/content cohort matches the
 slot; the EA0.5 ordinary-product slot has not yet been claimed as cold-verified.
 Stopping and relaunching the ordinary graphical product with the same save root
 starts a fresh world and a new endpoint run; graphical startup does not load the
-committed slot. `world list` contains live instances; `content list`
-contains only durable cooked `AssetId` entries and is truthfully empty until
-EA1 creates them, so the runtime crate is never an asset. Frame capture uses the
+committed slot. `world list` contains live instances; `content list` contains
+only durable cooked `AssetId` entries. EA1-A now publishes real game-owned
+scene, mesh, material, and texture entries with dependencies, source container,
+cook state, residency/last-use, and typed material/texture metadata. The
+runtime crate is still a world instance, never an asset. Frame capture uses the
 existing incident screenshot path and requires incident capture to be enabled.
 Use `--discovery /absolute/path/to/discovery.json` to override discovery.
 

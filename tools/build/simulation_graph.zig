@@ -161,6 +161,7 @@ pub fn create(
         .root_source_file = b.path("src/content/root.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{ .name = "engine_contracts", .module = contracts }},
     });
     const headless_manifest_files = b.addWriteFiles();
     _ = headless_manifest_files.addCopyFile(

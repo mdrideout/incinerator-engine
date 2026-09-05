@@ -44,7 +44,7 @@ pub fn main(init: std.process.Init) !void {
 fn verifyIdentity(identity: content.bundle.BundleIdentity) !void {
     if (identity.format_version != content.bundle.format_version or
         identity.schema_cohort != content.bundle.schema_cohort or
-        identity.format_version != 2 or identity.schema_cohort != 3)
+        identity.format_version != 3 or identity.schema_cohort != 4)
     {
         return error.InvalidCookedBundleCohort;
     }

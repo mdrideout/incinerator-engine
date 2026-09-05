@@ -1,0 +1,440 @@
+{
+  "asset": {
+    "version": "2.0",
+    "generator": "Incinerator Engine EA1-A project asset",
+    "copyright": "Copyright 2026 Matt; project-owned asset"
+  },
+  "scene": 0,
+  "scenes": [
+    {
+      "name": "CargoCrateDistrict",
+      "nodes": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        7
+      ]
+    }
+  ],
+  "nodes": [
+    {
+      "name": "EastRoadAndSidewalks",
+      "mesh": 0,
+      "translation": [
+        16,
+        0,
+        0
+      ]
+    },
+    {
+      "name": "CargoCrateLandmark",
+      "mesh": 1,
+      "translation": [
+        18.5,
+        0,
+        6.2
+      ],
+      "scale": [
+        3.2,
+        2.4,
+        1.0
+      ]
+    },
+    {
+      "name": "TransitBody",
+      "mesh": 1,
+      "translation": [
+        19.0,
+        0,
+        -6.1
+      ],
+      "scale": [
+        3.0,
+        1.6,
+        1.0
+      ]
+    },
+    {
+      "name": "AlleyMarker",
+      "mesh": 1,
+      "translation": [
+        14.0,
+        0,
+        0
+      ],
+      "scale": [
+        0.35,
+        2.0,
+        0.35
+      ]
+    },
+    {
+      "name": "MarketBeacon",
+      "mesh": 1,
+      "translation": [
+        20.0,
+        0,
+        5.0
+      ],
+      "scale": [
+        0.18,
+        1.8,
+        0.18
+      ]
+    },
+    {
+      "name": "TransitBeacon",
+      "mesh": 1,
+      "translation": [
+        20.0,
+        0,
+        -4.0
+      ],
+      "scale": [
+        0.18,
+        1.8,
+        0.18
+      ]
+    },
+    {
+      "name": "NorthGatePost",
+      "mesh": 1,
+      "translation": [
+        8.9,
+        0,
+        5.5
+      ],
+      "scale": [
+        0.25,
+        1.8,
+        0.25
+      ]
+    },
+    {
+      "name": "SouthGatePost",
+      "mesh": 1,
+      "translation": [
+        8.9,
+        0,
+        -4.5
+      ],
+      "scale": [
+        0.25,
+        1.8,
+        0.25
+      ]
+    }
+  ],
+  "meshes": [
+    {
+      "name": "DistrictSurface",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 3,
+          "material": 0
+        },
+        {
+          "attributes": {
+            "POSITION": 0,
+            "NORMAL": 1,
+            "TEXCOORD_0": 2
+          },
+          "indices": 4,
+          "material": 1
+        }
+      ]
+    },
+    {
+      "name": "LandmarkBlock",
+      "primitives": [
+        {
+          "attributes": {
+            "POSITION": 5,
+            "NORMAL": 6,
+            "TEXCOORD_0": 7
+          },
+          "indices": 8,
+          "material": 2
+        },
+        {
+          "attributes": {
+            "POSITION": 5,
+            "NORMAL": 6,
+            "TEXCOORD_0": 7
+          },
+          "indices": 9,
+          "material": 3
+        }
+      ]
+    }
+  ],
+  "materials": [
+    {
+      "name": "Asphalt",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.12,
+          0.15,
+          0.18,
+          1
+        ],
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0,
+        "roughnessFactor": 1
+      }
+    },
+    {
+      "name": "Concrete",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          0.55,
+          0.58,
+          0.62,
+          1
+        ],
+        "baseColorTexture": {
+          "index": 0
+        },
+        "metallicFactor": 0,
+        "roughnessFactor": 1
+      }
+    },
+    {
+      "name": "CargoCrateMaterial",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1
+        ],
+        "baseColorTexture": {
+          "index": 1
+        },
+        "metallicFactor": 0,
+        "roughnessFactor": 1
+      }
+    },
+    {
+      "name": "CargoCrateTrim",
+      "pbrMetallicRoughness": {
+        "baseColorFactor": [
+          1.0,
+          1.0,
+          1.0,
+          1
+        ],
+        "baseColorTexture": {
+          "index": 1
+        },
+        "metallicFactor": 0,
+        "roughnessFactor": 1
+      }
+    }
+  ],
+  "textures": [
+    {
+      "name": "S12Palette",
+      "sampler": 0,
+      "source": 0
+    },
+    {
+      "name": "CargoCratePanels",
+      "sampler": 1,
+      "source": 1
+    }
+  ],
+  "samplers": [
+    {
+      "magFilter": 9729,
+      "minFilter": 9729,
+      "wrapS": 10497,
+      "wrapT": 10497
+    },
+    {
+      "magFilter": 9728,
+      "minFilter": 9728,
+      "wrapS": 33071,
+      "wrapT": 33071
+    }
+  ],
+  "images": [
+    {
+      "bufferView": 10,
+      "mimeType": "image/png"
+    },
+    {
+      "name": "CargoCratePanelsSource",
+      "uri": "panels.jpg",
+      "mimeType": "image/jpeg"
+    }
+  ],
+  "buffers": [
+    {
+      "byteLength": 1212,
+      "uri": "data:application/octet-stream;base64,AAAAwQrXozwAAKDAAAAAQQrXozwAAKDAAAAAQQrXozwAAKBAAAAAwQrXozwAAKBAAAAAwY/C9TwAAKBAAAAAQY/C9TwAAKBAAAAAQY/C9TwAAABBAAAAwY/C9TwAAABBAAAAwY/C9TwAAADBAAAAQY/C9TwAAADBAAAAQY/C9TwAAKDAAAAAwY/C9TwAAKDAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AACAPwAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAIA/AACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAgD8AAIA/AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsAAAAAvwAAAAAAAAA/AAAAPwAAAAAAAAA/AAAAPwAAgD8AAAA/AAAAvwAAgD8AAAA/AAAAPwAAAAAAAAC/AAAAvwAAAAAAAAC/AAAAvwAAgD8AAAC/AAAAPwAAgD8AAAC/AAAAvwAAAAAAAAC/AAAAvwAAAAAAAAA/AAAAvwAAgD8AAAA/AAAAvwAAgD8AAAC/AAAAPwAAAAAAAAA/AAAAPwAAAAAAAAC/AAAAPwAAgD8AAAC/AAAAPwAAgD8AAAA/AAAAvwAAgD8AAAA/AAAAPwAAgD8AAAA/AAAAPwAAgD8AAAC/AAAAvwAAgD8AAAC/AAAAvwAAAAAAAAC/AAAAPwAAAAAAAAC/AAAAPwAAAAAAAAA/AAAAvwAAAAAAAAA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AAAAAAAAAAAAAIC/AACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAvwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAgL8AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8AEAARABIAEAASABMAFAAVABYAFAAWABcA"
+    },
+    {
+      "byteLength": 48,
+      "uri": "data:application/octet-stream;base64,AAABAAIAAAACAAMABAAFAAYABAAGAAcACAAJAAoACAAKAAsADAANAA4ADAAOAA8A"
+    },
+    {
+      "byteLength": 75,
+      "uri": "data:application/octet-stream;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAACCAYAAACZgbYnAAAAEklEQVR4nGP476Dwn0Gh4f9/ABbYBP0M1VuFAAAAAElFTkSuQmCC"
+    },
+    {
+      "byteLength": 192,
+      "uri": "data:application/octet-stream;base64,AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAIA/AACAPwAAAAAAAIA/AAAAAAAAAAAAAIA/AAAAAAAAgD8AAIA/AAAAAAAAgD8AAAAAAAAAAAAAgD8AAAAAAACAPwAAgD8AAAAAAACAPwAAAAAAAAAAAACAPwAAAAAAAIA/AACAPwAAAAAAAIA/"
+    }
+  ],
+  "bufferViews": [
+    {
+      "buffer": 0,
+      "byteOffset": 0,
+      "byteLength": 144
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 144,
+      "byteLength": 144
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 288,
+      "byteLength": 96
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 384,
+      "byteLength": 12
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 396,
+      "byteLength": 24
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 420,
+      "byteLength": 288
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 708,
+      "byteLength": 288
+    },
+    {
+      "buffer": 3,
+      "byteOffset": 0,
+      "byteLength": 192
+    },
+    {
+      "buffer": 1,
+      "byteOffset": 0,
+      "byteLength": 48
+    },
+    {
+      "buffer": 0,
+      "byteOffset": 1188,
+      "byteLength": 24
+    },
+    {
+      "buffer": 2,
+      "byteOffset": 0,
+      "byteLength": 75
+    }
+  ],
+  "accessors": [
+    {
+      "bufferView": 0,
+      "componentType": 5126,
+      "count": 12,
+      "type": "VEC3",
+      "min": [
+        -8,
+        0.02,
+        -8
+      ],
+      "max": [
+        8,
+        0.03,
+        8
+      ]
+    },
+    {
+      "bufferView": 1,
+      "componentType": 5126,
+      "count": 12,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 2,
+      "componentType": 5126,
+      "count": 12,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 3,
+      "componentType": 5123,
+      "count": 6,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 4,
+      "componentType": 5123,
+      "count": 12,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 5,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3",
+      "min": [
+        -0.5,
+        0,
+        -0.5
+      ],
+      "max": [
+        0.5,
+        1,
+        0.5
+      ]
+    },
+    {
+      "bufferView": 6,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC3"
+    },
+    {
+      "bufferView": 7,
+      "componentType": 5126,
+      "count": 24,
+      "type": "VEC2"
+    },
+    {
+      "bufferView": 8,
+      "componentType": 5123,
+      "count": 24,
+      "type": "SCALAR"
+    },
+    {
+      "bufferView": 9,
+      "componentType": 5123,
+      "count": 12,
+      "type": "SCALAR"
+    }
+  ]
+}

@@ -7,7 +7,7 @@
     "max_vehicles": 1,
     "max_npcs": 64
   },
-  "expected_content_cohort": "fcdabbf632de0fd3109a95254f8cb9fcc2749d6481aca18512af0c1a557af503",
+  "expected_content_cohort": "eb0d4dd0b3f4b7e01d5009e2b888c4f14e61c5cd5197cfdc399a5c3afcae1f6f",
   "save_root": "/tmp/incinerator-headless-saves",
   "save_slot": "world",
   "start_policy": "fresh_or_restore",

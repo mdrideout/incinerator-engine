@@ -232,6 +232,7 @@ pub const FrameInput = struct {
     camera: *const camera.Camera,
     viewport: editor_contract.ViewportInput,
     selection: editor_contract.SelectionInput,
+    content_assets: []const engine.assets.Entry,
     frame_timer: *const timing.FrameTimer,
     include_district_streams: bool,
     authoring: editor_contract.AuthoringInput,
@@ -750,6 +751,18 @@ pub const Owner = opaque {
 
     pub fn gizmoDragActive(self: *const Owner) bool {
         return ownerStateConst(self).editor.gizmoDragActive();
+    }
+
+    pub fn selectContentAsset(
+        self: *Owner,
+        entries: []const engine.assets.Entry,
+        id: engine.assets.AssetId,
+    ) bool {
+        return ownerState(self).editor.selectContentAsset(entries, id);
+    }
+
+    pub fn clearContentSelection(self: *Owner) void {
+        ownerState(self).editor.clearContentSelection();
     }
 
     pub fn setGameplayMouseCaptured(self: *Owner, captured: bool) void {
@@ -1564,6 +1577,7 @@ pub const Owner = opaque {
             .camera = &camera_view,
             .viewport = frame.viewport,
             .selection = frame.selection,
+            .content_assets = frame.content_assets,
             .frame_timing = &frame_timing_view,
             .developer = .{
                 .snapshot = &diagnostics_snapshot,

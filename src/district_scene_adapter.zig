@@ -175,6 +175,18 @@ pub fn build(source: bundle.BundleView) !UploadPlan {
                 .rgba8_srgb => .rgba8_srgb,
                 else => unreachable,
             },
+            .min_filter = switch (texture.sampler.min_filter) {
+                .nearest => .nearest,
+                .linear => .linear,
+                else => return error.InvalidDistrictSceneSampler,
+            },
+            .mag_filter = switch (texture.sampler.mag_filter) {
+                .nearest => .nearest,
+                .linear => .linear,
+                else => return error.InvalidDistrictSceneSampler,
+            },
+            .address_u = try addressMode(texture.sampler.address_u),
+            .address_v = try addressMode(texture.sampler.address_v),
             .rgba8 = pixels,
         };
     }
@@ -252,6 +264,15 @@ pub fn build(source: bundle.BundleView) !UploadPlan {
     if (instance_count == 0) return error.EmptyDistrictScene;
     result.instance_count = @intCast(instance_count);
     return result;
+}
+
+fn addressMode(value: bundle.SamplerAddressMode) !gpu.TextureAddressMode {
+    return switch (value) {
+        .clamp_to_edge => .clamp_to_edge,
+        .mirrored_repeat => .mirrored_repeat,
+        .repeat => .repeat,
+        else => error.InvalidDistrictSceneSampler,
+    };
 }
 
 fn rangeFromSlice(slice: anytype, first: u32, count: u32) !@TypeOf(slice) {

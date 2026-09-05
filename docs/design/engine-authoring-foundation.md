@@ -1,9 +1,8 @@
 # Engine Authoring Foundation
 
-**Status:** Approved roadmap; EA0 and EA0.5 accepted; Phase 7 first-class CLI
-agent-contract implementation/automated/native/clean-context/comprehensive-
-manual-agent candidate complete with product-owner stop review pending; EA1-EA5
-not started
+**Status:** Approved roadmap; EA0, EA0.5, and Phase 7 accepted; EA1-A
+implementation and machine acceptance candidate complete on 2026-08-30 with
+product-owner review pending; EA1-B through EA5 not started
 
 **Date:** 2026-08-18
 
@@ -142,6 +141,14 @@ and [EA0.5 validation ledger](../validation/ea0-5-local-developer-endpoint-and-c
 
 #### EA1-A — Import and runtime material
 
+Implementation status: candidate complete. The offline importer, project-owned
+PNG/JPEG assets, deterministic GLB/glTF cooks, stable cooked asset catalog,
+runtime sampler/color-space path, Content Browser/Inspector, and CLI parity are
+implemented. Focused tests, editor-on/off aggregates, filtered-source package,
+installed-product, and native Metal gates pass. Product-owner visual/usability
+review remains before EA1-A acceptance or EA1-B authorization. See the
+[EA1-A validation ledger](../validation/ea1-a-practical-textures-and-materials.md).
+
 - Admit `.glb` and safely rooted `.gltf` dependencies.
 - Support external and embedded PNG/JPEG source images.
 - Preserve base-color factors with optional base-color textures.
@@ -166,6 +173,10 @@ and [EA0.5 validation ledger](../validation/ea0-5-local-developer-endpoint-and-c
 Acceptance: a project-owned textured asset imports, cooks reproducibly,
 relocates, renders with the expected material, can be reassigned live and
 persisted, and remains diagnosable without the renderer loading source files.
+
+The import/runtime/diagnostic portion is EA1-A. Live reassignment and durable
+material persistence are EA1-B and are intentionally not claimed by the EA1-A
+candidate.
 
 KTX2/Basis compression, virtual texturing, bindless materials, shader graphs,
 and hot asset streaming remain evidence-gated follow-ups.

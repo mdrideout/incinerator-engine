@@ -8,7 +8,7 @@
 const std = @import("std");
 const engine = @import("engine_contracts");
 
-pub const protocol_cohort: u16 = 1;
+pub const protocol_cohort: u16 = 2;
 pub const framing_version: u16 = 1;
 pub const frame_header_bytes: usize = 32;
 pub const frame_magic = "ICDV".*;
@@ -99,7 +99,7 @@ pub const common_wire_shape_signature_v1 =
     "endpoint_stopping,owner_busy,owner_unavailable,target_not_found," ++
     "target_kind_not_supported,internal_error}";
 
-const query_wire_shape_v1 =
+const query_wire_shape_v2 =
     "commands{describe:{},schema_list:{},world_list:{},content_list:{}," ++
     "inspect:{target:Target}}|payloads{endpoint_description:{product:string," ++
     "local_only:bool,transport:string,protocol_cohort:u16,framing_version:u16," ++
@@ -110,8 +110,11 @@ const query_wire_shape_v1 =
     "label:string,selected:bool,position:?Vec3,bounds:?Bounds," ++
     "availability:Availability,current_revision:?u64,inspectable:bool," ++
     "authorable:bool},content_list:[]ContentEntry{asset_id:AssetId," ++
-    "semantic_type:ContentSemanticType,label:string,availability:Availability," ++
-    "digest:?sha256,inspectable:bool,authorable:bool},inspection:Inspection{" ++
+    "semantic_type:ContentSemanticType,label:string,owner:AssetOwner,bundle_key:string," ++
+    "revision:u64,availability:Availability,digest:sha256,dependencies:[]AssetId," ++
+    "source_format:SourceFormat,cook_status:CookStatus,residency:Residency," ++
+    "last_use_frame:?u64,details:AssetDetails,inspectable:bool,authorable:bool}," ++
+    "inspection:Inspection{" ++
     "crate:{target:Target,selected:bool,availability:Availability," ++
     "authoring_revision:u64,position:Vec3,half_extents:Vec3," ++
     "linear_velocity:Vec3,angular_velocity:Vec3},world:{entry:WorldEntry}," ++
@@ -159,11 +162,11 @@ const measurement_wire_shape_v1 =
 const registered_schemas = [_]SchemaDescriptor{
     .{
         .id = query_schema,
-        .name = "incinerator.sandbox.query.v1",
-        .version = 1,
+        .name = "incinerator.sandbox.query.v2",
+        .version = 2,
         .class = .query,
         .description = "Endpoint, world, content, and stable-target inspection.",
-        .wire_shape_signature = query_wire_shape_v1,
+        .wire_shape_signature = query_wire_shape_v2,
     },
     .{
         .id = editor_control_schema,
@@ -199,14 +202,14 @@ const registered_schemas = [_]SchemaDescriptor{
     },
 };
 
-/// Frozen SHA-256 of the complete cohort-1 canonical wire-shape catalog.
+/// Frozen SHA-256 of the complete cohort-2 canonical wire-shape catalog.
 /// Any intentional wire change must advance the affected schema/cohort and
 /// update this value together with its explicit signature.
-pub const canonical_schema_digest_v1 = engine.assets.Digest{
-    0x10, 0xed, 0x09, 0x50, 0xfd, 0xfb, 0x8e, 0xd3,
-    0xc5, 0xdb, 0x34, 0x63, 0x03, 0x86, 0x7a, 0x8b,
-    0xc9, 0x4e, 0x99, 0x0f, 0xc9, 0x42, 0xb8, 0x24,
-    0xb5, 0xe9, 0x93, 0x84, 0x21, 0xaf, 0x67, 0x98,
+pub const canonical_schema_digest_v2 = engine.assets.Digest{
+    0x62, 0x88, 0xe6, 0x36, 0xd3, 0xaf, 0x35, 0x48,
+    0xfb, 0x3a, 0x0e, 0x53, 0xd4, 0x2a, 0xb0, 0x30,
+    0xc5, 0x9d, 0x82, 0xdc, 0x58, 0x05, 0x77, 0x3d,
+    0xa3, 0x95, 0x0e, 0xfa, 0xea, 0x29, 0x55, 0x76,
 };
 
 pub fn schemaCatalog() []const SchemaDescriptor {
@@ -379,8 +382,17 @@ pub const ContentEntry = struct {
     asset_id: AssetId,
     semantic_type: ContentSemanticType,
     label: []const u8,
+    owner: engine.assets.Owner,
+    bundle_key: []const u8,
+    revision: u64,
     availability: Availability,
-    digest: ?engine.assets.Digest,
+    digest: engine.assets.Digest,
+    dependencies: []const AssetId,
+    source_format: engine.assets.SourceFormat,
+    cook_status: engine.assets.CookStatus,
+    residency: engine.assets.Residency,
+    last_use_frame: ?u64,
+    details: engine.assets.Details,
     inspectable: bool,
     authorable: bool,
 };
@@ -960,7 +972,7 @@ test "manual schema catalog has stable classes and digest" {
     for (seen) |present| try std.testing.expect(present);
     const digest = schemaDigest();
     try engine.assets.validateDigest(digest);
-    try std.testing.expectEqualSlices(u8, &canonical_schema_digest_v1, &digest);
+    try std.testing.expectEqualSlices(u8, &canonical_schema_digest_v2, &digest);
 }
 
 test "discovery lifecycle documents require active paths and available digest" {

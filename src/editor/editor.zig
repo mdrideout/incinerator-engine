@@ -15,6 +15,7 @@ const renderer_module = @import("../renderer.zig");
 const imgui_backend = @import("imgui_backend.zig");
 const tool = @import("tool.zig");
 const selection = tool.selection;
+const content_selection = @import("content_selection.zig");
 const viewport = tool.viewport;
 const stats_tool = @import("tools/stats_tool.zig");
 const camera_tool = @import("tools/camera_tool.zig");
@@ -23,6 +24,7 @@ const diagnostics_tool = @import("tools/diagnostics_tool.zig");
 const event_log_tool = @import("tools/event_log_tool.zig");
 const gameplay_inspector_tool = @import("tools/gameplay_inspector_tool.zig");
 const world_outliner_tool = @import("tools/world_outliner_tool.zig");
+const content_browser_tool = @import("tools/content_browser_tool.zig");
 const navigation_lab_tool = @import("tools/navigation_lab_tool.zig");
 const population_lab_tool = @import("tools/population_lab_tool.zig");
 const incident_capture_tool = @import("tools/incident_capture_tool.zig");
@@ -51,6 +53,7 @@ pub const EventRoute = input.EventRoute;
 
 const default_tools = [_]Tool{
     Tool.init(stats_tool.descriptor),
+    Tool.init(content_browser_tool.descriptor),
     Tool.init(camera_tool.descriptor),
     Tool.init(render_tool.descriptor),
     Tool.init(diagnostics_tool.descriptor),
@@ -71,6 +74,7 @@ const default_tools = [_]Tool{
 /// list exists only to make panel discovery alphabetical.
 const panel_menu_order = [_]tool.ToolId{
     .camera,
+    .content_browser,
     .diagnostics,
     .event_log,
     .gameplay_inspector,
@@ -94,6 +98,10 @@ pub const Editor = struct {
     stats: stats_tool.State = .{},
     crate_authoring: crate_authoring_tool.State = .{},
     world_outliner: world_outliner_tool.State = .{},
+    content_browser: content_browser_tool.State = .{},
+    content_selection_controller: content_selection.Controller = .{},
+    content_selection_requests: content_selection.Requests = .{},
+    inspector_subject: enum { world, content } = .world,
     navigation_lab: navigation_lab_tool.State = .{},
     population_lab: population_lab_tool.State = .{},
     incident_capture: incident_capture_tool.State = .{},
@@ -303,6 +311,18 @@ pub const Editor = struct {
                 );
             }
         }
+        if (self.content_selection_controller.apply(
+            frame.content_assets,
+            &self.content_selection_requests,
+        )) {
+            if (self.content_selection_controller.active != null) {
+                self.inspector_subject = .content;
+                self.toolById(.crate_authoring).enabled = true;
+                self.pending_focus = .crate_authoring;
+            } else if (self.inspector_subject == .content) {
+                self.inspector_subject = .world;
+            }
+        }
         if (world_affordances_visible and
             self.toolById(.crate_authoring).enabled)
         {
@@ -374,6 +394,26 @@ pub const Editor = struct {
         return self.crate_authoring.gizmoDragActive();
     }
 
+    pub fn selectContentAsset(
+        self: *Editor,
+        entries: []const @import("incinerator_engine").assets.Entry,
+        id: @import("incinerator_engine").assets.AssetId,
+    ) bool {
+        for (entries) |entry| if (std.meta.eql(entry.id, id)) {
+            self.content_selection_controller.active = id;
+            self.inspector_subject = .content;
+            self.toolById(.crate_authoring).enabled = true;
+            self.pending_focus = .crate_authoring;
+            return true;
+        };
+        return false;
+    }
+
+    pub fn clearContentSelection(self: *Editor) void {
+        self.content_selection_controller.active = null;
+        if (self.inspector_subject == .content) self.inspector_subject = .world;
+    }
+
     pub fn takeQuitRequested(self: *Editor) bool {
         defer self.quit_requested = false;
         return self.quit_requested;
@@ -391,6 +431,11 @@ pub const Editor = struct {
     ) void {
         switch (id) {
             .stats => stats_tool.draw(&self.stats, frame.frame_timing),
+            .content_browser => content_browser_tool.draw(
+                &self.content_browser,
+                &self.content_selection_controller.view(frame.content_assets),
+                &self.content_selection_requests,
+            ),
             .camera => camera_tool.draw(frame.camera),
             .render => render_tool.draw(render_settings, &frame.render),
             .diagnostics => diagnostics_tool.draw(&frame.developer),
@@ -420,6 +465,10 @@ pub const Editor = struct {
                 &self.crate_authoring,
                 &frame.authoring,
                 &frame.selection,
+                if (self.inspector_subject == .content)
+                    self.content_selection_controller.view(frame.content_assets).activeEntry()
+                else
+                    null,
             ),
             .interaction => interaction_tool.draw(&frame.interaction),
             .neural_rendering_lab => neural_rendering_lab_tool.draw(&frame.neural),
@@ -856,6 +905,7 @@ pub const Editor = struct {
         const current = if (active) |entry| entry.id else null;
         if (optionalSelectionEql(self.last_observed_selection, current)) return;
         self.last_observed_selection = current;
+        if (current != null) self.inspector_subject = .world;
 
         const entry = active orelse return;
         if (entry.kind != .crate or

@@ -845,6 +845,26 @@ pub const Renderer = struct {
         model: zm.Mat,
         view_projection: zm.Mat,
     ) void {
+        self.drawMeshWithMaterialSampler(
+            m,
+            diffuse_texture,
+            null,
+            material,
+            model,
+            view_projection,
+        );
+    }
+
+    /// Draw a mesh with independently resolved material and sampler inputs.
+    pub fn drawMeshWithMaterialSampler(
+        self: *Renderer,
+        m: *const Mesh,
+        diffuse_texture: ?Texture,
+        diffuse_sampler: ?*c.SDL_GPUSampler,
+        material: SurfaceMaterial,
+        model: zm.Mat,
+        view_projection: zm.Mat,
+    ) void {
         const render_pass = self.current_render_pass orelse {
             std.debug.print("drawMesh called outside of an active render pass\n", .{});
             return;
@@ -912,7 +932,7 @@ pub const Renderer = struct {
 
                 const sampler_binding = c.SDL_GPUTextureSamplerBinding{
                     .texture = texture_handle,
-                    .sampler = self.default_sampler,
+                    .sampler = diffuse_sampler orelse self.default_sampler,
                 };
                 c.SDL_BindGPUFragmentSamplers(render_pass, 0, &sampler_binding, 1);
 

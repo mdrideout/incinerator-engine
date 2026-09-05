@@ -1,6 +1,7 @@
 //! Renderer-neutral admission boundary for the canonical district catalog.
 
 const std = @import("std");
+const engine = @import("incinerator_engine");
 const content = @import("content");
 const district_contract = @import("district_contract");
 const sandbox_replay = @import("sandbox_replay");
@@ -38,9 +39,11 @@ pub const AdmissionResult = union(enum) {
 pub const AdmittedCatalog = struct {
     root_path: content.ContentRootPath,
     catalog: content.catalog.OwnedCatalog,
+    assets: content.asset_catalog.OwnedCatalog,
     cohort: sandbox_replay.ContentCohort,
 
     pub fn deinit(self: *AdmittedCatalog) void {
+        self.assets.deinit();
         self.catalog.deinit();
         self.* = undefined;
     }
@@ -51,6 +54,10 @@ pub const AdmittedCatalog = struct {
 
     pub fn identity(self: *const AdmittedCatalog) content.catalog.Identity {
         return self.catalog.identity();
+    }
+
+    pub fn assetView(self: *const AdmittedCatalog) []const engine.assets.Entry {
+        return self.assets.view();
     }
 
     pub fn contentCohort(self: *const AdmittedCatalog) ContentCohort {
@@ -144,6 +151,8 @@ pub fn admit(
     }
     var logical_builds: [sandbox_recipe.installed_coords.len]district_contract.DistrictBuild =
         undefined;
+    var asset_builder = content.asset_catalog.Builder.init(allocator);
+    defer asset_builder.deinit();
     for (catalog_view.entries, 0..) |entry, entry_index| {
         if (entry.recipe_version != sandbox_recipe.current_recipe_version) {
             return .{ .failed = .{ .incompatible_recipe = .{
@@ -196,6 +205,7 @@ pub fn admit(
                         .entry_index = @intCast(entry_index),
                     } } };
                 }
+                try asset_builder.appendBundle(entry.semantic_id, scene);
             },
         }
     }
@@ -212,10 +222,13 @@ pub fn admit(
         identity.source_digest,
         identity.integrity_digest,
     );
+    var assets = try asset_builder.finish();
+    errdefer assets.deinit();
     catalog_owned = false;
     return .{ .admitted = .{
         .root_path = root_path,
         .catalog = catalog,
+        .assets = assets,
         .cohort = cohort,
     } };
 }

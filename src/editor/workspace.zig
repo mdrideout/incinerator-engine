@@ -8,6 +8,7 @@ const std = @import("std");
 
 pub const ToolId = enum {
     stats,
+    content_browser,
     camera,
     render,
     diagnostics,
@@ -228,6 +229,7 @@ fn presetContains(preset: LayoutPreset, id: ToolId) bool {
     if (id == .neural_rendering_lab) return false;
     return switch (preset) {
         .gameplay => switch (id) {
+            .content_browser,
             .world_outliner,
             .gameplay_inspector,
             .interaction,

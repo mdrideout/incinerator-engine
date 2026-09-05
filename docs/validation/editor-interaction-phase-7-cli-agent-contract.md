@@ -1,8 +1,8 @@
 # Editor Interaction Phase 7 — First-Class CLI Agent Contract Validation
 
-**Status:** Implementation, automated, installed Metal, clean-context agent,
-and comprehensive manual agent review candidate complete; product-owner stop
-review pending
+**Status:** Accepted by the product owner on 2026-08-30 after implementation,
+automated, installed Metal, clean-context agent, and comprehensive manual agent
+review
 
 **Date:** 2026-08-30
 
@@ -25,6 +25,10 @@ mutation authority. The endpoint protocol remains cohort 1. The separate agent
 catalog revision describes client usability metadata and does not manufacture
 wire incompatibility.
 
+Historical note: those were the Phase 7 acceptance cohorts. EA1-A subsequently
+advanced the endpoint to protocol cohort 2 and agent-contract revision 2 to
+publish real durable asset metadata.
+
 ## Acceptance Ledger
 
 | Gate | Status | Evidence |
@@ -43,7 +47,7 @@ wire incompatibility.
 | Editor-disabled boundary | Complete | The CLI remains installed only for editor-enabled products; editor-disabled and headless runtime graphs acquire no endpoint, catalog, skill, or mutable-authoring dependency |
 | Automated | Complete | Focused CLI contract/grammar, complete endpoint group, EA0 ownership, editor-on, editor-off, and documentation checks pass as recorded below |
 | Installed Metal and agent journey | Complete | Two live installed editor runs exercised all 22 operations, typed failures, selection and camera projection, revisioned move/stale/undo/redo/restoration, pending and terminal frame evidence, durable save, clean shutdown, and stopped discovery |
-| Product-owner stop review | Pending | Confirm the catalog and guided JSON make the intended agent workflow understandable; no graphical interaction change requires a new usability walkthrough |
+| Product-owner stop review | Complete | Accepted on 2026-08-30; EA1-A was authorized as the next phase |
 
 ## Implemented Contract
 
@@ -224,6 +228,9 @@ Final observed evidence:
 
 ## Product-Owner Checkpoint
 
+The product owner accepted Phase 7 and authorized EA1-A on 2026-08-30. The
+following completed journey remains the acceptance record:
+
 No viewport or gameplay behavior changed. The remaining review is the installed
 agent experience:
 
@@ -243,4 +250,4 @@ agent experience:
 6. Stop the product and rerun bootstrap. Confirm `stopped` exposes no live
    mutation suggestion.
 
-Product-owner confirmation closes Phase 7 and promotes Phase 8 / EA1-A.
+Product-owner confirmation closed Phase 7 and promoted Phase 8 / EA1-A.

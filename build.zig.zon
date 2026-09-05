@@ -84,6 +84,7 @@
         "config",
         "docs",
         "fixtures",
+        "game",
         "shaders",
         "skills",
         "src",

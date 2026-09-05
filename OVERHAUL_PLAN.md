@@ -22,8 +22,9 @@ product-owner review. On 2026-08-30 the product owner eliminated the planned
 MCP adapter because local coding agents always have shell access and authorized
 Phase 7 to make the canonical CLI and repository-owned agent skill first-class.
 Its implementation, automated, installed Metal, clean-context agent, and
-comprehensive manual agent-review candidate pass; product-owner stop review
-remains. EA1 has not started.
+comprehensive manual agent review pass, and the product owner accepted it on
+2026-08-30. EA1-A implementation and machine acceptance are a complete
+candidate; product-owner visual/usability review remains before EA1-B.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
@@ -55,8 +56,9 @@ remains. EA1 has not started.
 → [`S15 accepted`](docs/validation/s15-content-rich-district-expansion.md)
 → [`EA0 accepted`](docs/validation/ea0-ownership-identity-transaction-boundary.md)
 → [`EA0.5 accepted`](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md)
-→ `Phase 7 CLI agent-contract candidate; product-owner review pending`
-→ [`EA1-EA5 pending`](docs/design/engine-authoring-foundation.md)
+→ `Phase 7 CLI agent contract accepted`
+→ [`EA1-A machine candidate; product-owner review pending`](docs/validation/ea1-a-practical-textures-and-materials.md)
+→ `EA1-B-EA5 pending`
 
 **Active rendering direction:**
 [`DR1 playable deterministic visual fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
@@ -494,7 +496,7 @@ logical authority and operational lifecycle:
 | D-026 | Promotion-eligible neural-renderer weights and learned dependencies are title-specific, trained from random initialization on title-owned exact pairs, and reproduced through the engine framework; pretrained models remain comparisons only | Accepted in [ADR-026](docs/adr/026-from-scratch-title-neural-renderer.md), the [north star](docs/design/title-neural-renderer-north-star.md), and its [phase-gated implementation plan](docs/design/title-neural-renderer-implementation-plan.md) | Retained policy if the paused track is explicitly restarted |
 | D-027 | One finite-ammunition handgun is authoritative across solo/listen/dedicated placement; clients submit intent, authority derives current-state semantic/Jolt hits, and vitals owns damage/death | Accepted and implemented in [ADR-027](docs/adr/027-authoritative-ranged-combat.md) and the [S14 validation ledger](docs/validation/s14-ranged-combat.md) | Future weapon slices and measured lag-compensation decision |
 | D-028 | The current sandbox is one exact four-district 2×2 cohort; the composition owns continuous flat support, districts own obstacles/decoration/navigation, and the admitted 32-node graph remains sufficient until measured content proves a navmesh or crowd need | Accepted and implemented in [ADR-028](docs/adr/028-content-rich-four-district-cohort.md), the [phase plan](docs/design/s15-content-rich-district-expansion.md), [evaluation world](docs/design/s15-four-district-evaluation-world.md), [accepted validation](docs/validation/s15-content-rich-district-expansion.md), and [performance baseline](docs/performance/s15-baseline.md) | Complete; establishes EA0-EA5 baseline |
-| D-029 | Reusable runtime capabilities, reusable engine tooling, game runtime/content, and game tooling are separate owners; typed UI and local AI clients share owner-defined authoring transactions; scripting remains evidence-gated | Accepted in [ADR-029](docs/adr/029-engine-game-authoring-boundary.md); EA0 and its evidence are accepted under the [EA0 validation ledger](docs/validation/ea0-ownership-identity-transaction-boundary.md); EA0.5 is accepted under the [EA0.5 ledger](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md); Phase 7 replaces the discarded MCP plan with a first-class CLI agent contract; EA1-EA5 remain planned in the [foundation roadmap](docs/design/engine-authoring-foundation.md) | Complete and accept Phase 7 CLI agent usability; then complete EA1-EA5 and final G1 proof |
+| D-029 | Reusable runtime capabilities, reusable engine tooling, game runtime/content, and game tooling are separate owners; typed UI and local AI clients share owner-defined authoring transactions; scripting remains evidence-gated | Accepted in [ADR-029](docs/adr/029-engine-game-authoring-boundary.md); EA0, EA0.5, and Phase 7 are accepted; EA1-A has a complete machine candidate in its [validation ledger](docs/validation/ea1-a-practical-textures-and-materials.md) | Complete EA1-A product-owner review, then EA1-B-EA5 and final G1 proof |
 
 ### Decision notes
 
@@ -583,8 +585,8 @@ before dependency resolution.
 | S15 | One content-rich four-district cohort supports cross-axis traversal, authored activity, deterministic content admission, and measured four-scene residency | Complete and accepted; automated/native and product-owner evidence pass |
 | EA0 | Engine/game/tooling ownership, asset identity, and typed authoring transaction boundary are executable | Complete and accepted |
 | EA0.5 | Developer-only local typed endpoint and canonical CLI use the same selection, viewport, authoring, persistence, and capture owners as ImGui | Complete and accepted; final human correction unified renderer bounds, ImGui gizmo, and retained hit-region visibility across Character/Free Camera transitions |
-| Editor Phase 7 | Canonical CLI publishes a first-class machine catalog and guided results; a repository-owned skill teaches safe shell-agent workflows without duplicating commands | Implementation/automated/native/clean-context/comprehensive-manual-agent candidate complete; product-owner stop review pending |
-| EA1 | Practical texture/material import, assignment, authoring, and evidence | Approved; implementation not started |
+| Editor Phase 7 | Canonical CLI publishes a first-class machine catalog and guided results; a repository-owned skill teaches safe shell-agent workflows without duplicating commands | Complete and accepted by the product owner on 2026-08-30 |
+| EA1 | Practical texture/material import, assignment, authoring, and evidence | EA1-A import/runtime/inspection machine candidate complete; product-owner review pending. EA1-B not started |
 | EA2 | Vehicle archetypes, live revisioned tuning, and local AI/developer control | Approved; implementation not started |
 | EA3 | Authored directional sun and point-light capabilities | Approved; implementation not started |
 | EA4 | Game-owned map assets and construction workflow | Approved; implementation not started |
@@ -1884,9 +1886,11 @@ Record evidence rather than relying only on target numbers:
 DR1, S14, S15, EA0, and EA0.5 are accepted. The product owner eliminated the
 planned MCP adapter and authorized Phase 7's first-class CLI agent contract in
 the [Editor Interaction and Agent Control Plan](EDITOR_INTERACTION_AND_AGENT_CONTROL_PLAN.md).
-Complete its machine-readable catalog, guided result envelope, repository
-skill, installed workflow, and product-owner stop review before EA1-A. The
-candidate evidence is recorded in the
+Its machine-readable catalog, guided result envelope, repository skill,
+installed workflow, and product-owner stop review are complete. EA1-A is now
+the active product checkpoint. Its candidate evidence is recorded in the
+[EA1-A validation ledger](docs/validation/ea1-a-practical-textures-and-materials.md);
+the historical CLI evidence remains in the
 [Phase 7 validation ledger](docs/validation/editor-interaction-phase-7-cli-agent-contract.md).
 
 47. [x] **S12 — Destination-driven navigation and recovery implementation.**
@@ -1996,21 +2000,21 @@ older historical “next phase” language.
     architecture, security, dead-code, documentation, human usability, and
     product-owner review are complete. EA0's historical
     contracts-only/no-transport scope remains preserved. The discarded MCP
-    plan created no implementation. Phase 7 CLI agent-contract work is
-    separately authorized; its implementation/automated/native/agent candidate
-    is complete with product-owner review pending.
+    plan created no implementation. Phase 7 CLI agent-contract work is accepted.
     See the
     [implementation plan](EDITOR_INTERACTION_AND_AGENT_CONTROL_PLAN.md) and
     [validation ledger](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md).
-55. [ ] **Phase 7 — First-class CLI agent contract and skill.** The
+55. [x] **Phase 7 — First-class CLI agent contract and skill.** The
     implementation, structural coverage, editor-on/off aggregates, installed
-    Metal shell-agent journey, documentation, and Skill validation pass.
-    Product-owner stop review remains before promotion. See the
+    Metal shell-agent journey, documentation, Skill validation, and
+    product-owner stop review pass. See the
     [validation ledger](docs/validation/editor-interaction-phase-7-cli-agent-contract.md).
-56. [ ] **EA1 — Practical textures and materials.** Extend the existing offline
-    glTF/cooked/GPU proof into real project-owned texture import, material
-    assignment, Material Lab authoring, deterministic dependency identity, and
-    native/incident acceptance.
+56. [ ] **EA1 — Practical textures and materials.** EA1-A now extends the
+    offline glTF/cooked/GPU proof into real project-owned GLB/glTF plus PNG/JPEG
+    import, deterministic dependency/asset identity, runtime material sampling,
+    Content Browser/Inspector, CLI parity, and native automation. Product-owner
+    EA1-A review remains. EA1-B material response, assignment, Material Lab,
+    revert, durable commit, and final incident acceptance have not started.
 57. [ ] **EA2 — Vehicle archetypes and live developer control.** Add admitted
     archetype identity, per-archetype tuning/presentation, Vehicle Lab, safe
     authority-tick reconfiguration, and one process-local CLI/LLM adapter over
@@ -2139,3 +2143,6 @@ older historical “next phase” language.
 | 2026-08-30 | Eliminated MCP and authorized Phase 7 first-class CLI agent usability | Local coding agents are guaranteed shell access, so MCP adds integration cost but no required capability. The canonical `incinerator-dev` client remains the sole agent-control product. Phase 7 now owns a machine-readable installed operation catalog, agent bootstrap, explicit terminal/structured-next result guidance, a repository-owned skill with progressive authoring/persistence references, structural drift tests, and clean-context installed workflow evidence. It adds no endpoint operation, generic property/command framework, remote access, or second mutation authority. |
 | 2026-08-30 | Completed the Phase 7 CLI agent-contract implementation and acceptance candidate | Added an offline 22-operation catalog plus live bootstrap; exhaustive typed-command/schema mapping; separate full-metadata catalog digest; synchronous/admitted/poll-until-terminal effects; guided JSON envelopes; project Skill and AGENTS routing; explicit EA0 game-tooling classification; and a new validation ledger. Focused CLI contract/grammar passes 8/8, complete endpoint 39/39, editor-on 318/318 with 1,246/1,246, editor-off 313/313 with 1,106/1,108 and two designed skips, validation 46/46, and the installed Metal shell-agent journey completed move/poll/reinspect/capture/undo/save/stopped-discovery over 5,626 frames. Product-owner stop review remains before EA1. |
 | 2026-08-30 | Completed comprehensive Phase 7 manual agent review and repaired the discovered usability gaps | Exercised all 22 installed operations, all effect classes, live/stopped lifecycle, selection/camera projection, move/stale/undo/redo/restoration, save, capture, missing-result, and typed-failure paths across two native Metal runs. Corrected the skill's dynamic-physics interpretation; made typed endpoint/terminal failures preserve JSON while exiting nonzero; reconciled optional `--json` across help/catalog; and forwarded canonical committed snapshot bytes through the existing persistence owner. The repaired installed run proves exit-1 `owner_unavailable`, `stale_revision`, and missing-result responses; exit-0 admission/pending/success; a 21,059-byte canonical payload in a 21,251-byte envelope; restored crate state; and correlated capture. Focused CLI passes 9/9, complete endpoint 40/40, editor-on passes 318/318 with 1,247/1,247, and editor-off passes 313/313 with 1,107/1,109 and two designed skips. Product-owner stop review remains before EA1. |
+| 2026-08-30 | Accepted Phase 7 and authorized EA1-A | The product owner accepted the first-class CLI agent contract after its complete automated, installed Metal, clean-context, comprehensive manual agent, architecture, security, dead-code, and documentation review. Phase 7 is closed. EA1-A practical import and runtime materials plus the first real Content Browser integration are authorized; EA1-B remains separately gated. |
+| 2026-08-30 | Completed the EA1-A machine acceptance candidate | Added host-only GLB/glTF import with rooted embedded/external PNG/JPEG, optional base-color maps, explicit encoding/color/sampler/UV metadata, dependency-sensitive deterministic cooking, measured bundle limits, and stable game-owned scene/mesh/material/texture identities. Project-owned brick and cargo textures render through renderer-owned SDL GPU texture/sampler residency, including the live crate. Content Browser/Inspector and protocol-cohort-2 CLI expose the same separate durable asset catalog. Focused, filtered-source, editor-on 1,256/1,256, editor-off 1,112/1,114 with two designed skips, installed-product, and native Metal automation pass. Product-owner visual/usability review remains before EA1-B. |
+| 2026-08-30 | Corrected the EA1-A false visual-acceptance claim | Product review found no recognizable brick wall despite green residency/draw counters. Exact CLI camera placement and a correlated product frame exposed collapsed `(0,0)` UVs on every project landmark face plus a destructive material tint. Both project landmark meshes now use per-face `0..1` UVs and neutral base-color factors. Cook verification rejects degenerate textured UV spans and non-neutral project texture factors. A fresh installed Metal capture at the southwest depot visibly confirms brick courses, windows, and lintels; product-owner EA1-A review remains open. |
