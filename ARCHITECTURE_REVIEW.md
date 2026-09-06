@@ -5,7 +5,7 @@ foundation now includes accepted S12 semantic navigation and S13 authored
 population/activity. DR1 deterministic visual fidelity and S14 authoritative
 ranged combat are accepted across solo, private-listen, and dedicated
 placements. S15 four-district implementation and its automated/native and
-product-owner acceptance are complete under ADR-028. Protocol 17, snapshot
+product-owner acceptance are complete under ADR-028. Protocol 18, snapshot
 15, replay 19,
 incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
 automated Metal/product acceptance are current. EA0 is accepted and makes the
@@ -35,7 +35,7 @@ the shared RF0-RF5 sandbox visual catalog is useful conventional-renderer input,
 not an authorization to continue neural work. ADR-025 and ADR-026 remain
 preserved boundary policy for an explicit future restart.
 
-**Last reviewed:** 2026-08-30
+**Last reviewed:** 2026-09-06
 
 **Scope:** Accepted EA0 and EA0.5 architecture, their demonstrated strengths,
 remaining structural pressure before another product or service slice, the
@@ -46,6 +46,8 @@ active deterministic-rendering direction, and the retained paused neural proof
 **Multiplayer strategy:** [`MULTIPLAYER_PLAN.md`](MULTIPLAYER_PLAN.md)
 
 **Latest automated validation:**
+[`E2E review corrections`](docs/validation/e2e-review-corrections.md), plus the
+EA1-A candidate evidence:
 [`docs/validation/ea1-a-practical-textures-and-materials.md`](docs/validation/ea1-a-practical-textures-and-materials.md)
 
 **Accepted cohesion contract:**
@@ -225,7 +227,7 @@ an optional non-vendored Steamworks adapter for Steam networking compatibility.
   explicit lifetimes and do not masquerade as each other.
 - Dynamic physics owns simulation transforms; presentation reads interpolated
   previous/current state.
-- Snapshot V12 is canonical logical state and contains no Flecs IDs, Jolt
+- Snapshot V15 is canonical logical state and contains no Flecs IDs, Jolt
   handles, GPU objects, borrowed pointers, or asynchronous worker ownership.
 - Feature queues and external-producer paths are bounded with typed admission,
   reserved authority outcomes, and visible observational loss.

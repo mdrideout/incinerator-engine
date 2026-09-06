@@ -21,6 +21,7 @@ const Invocation = union(enum) {
 const GlobalArguments = struct {
     command: std.ArrayList([]const u8),
     discovery_path: ?[]const u8,
+    expected_run_id: ?protocol.RunId,
 
     fn deinit(self: *GlobalArguments, allocator: std.mem.Allocator) void {
         self.command.deinit(allocator);
@@ -82,6 +83,7 @@ fn run(init: std.process.Init) !ExitDisposition {
                 .{ .operation = "endpoint.discovery" },
             };
             const next: []const agent_contract.SuggestedOperation = if (discovery.value.lifecycle == .available) &available_next else &inactive_next;
+            var run_token_buffer: [64]u8 = undefined;
             try writeJson(init.io, .{
                 .agent_contract_revision = agent_contract.agent_contract_revision,
                 .catalog_digest = agent_contract.catalogDigest(),
@@ -89,6 +91,10 @@ fn run(init: std.process.Init) !ExitDisposition {
                 .discovery_path = discovery_path,
                 .lifecycle = discovery.value.lifecycle,
                 .run_id = discovery.value.run_id,
+                .expected_run = try std.fmt.bufPrint(&run_token_buffer, "{d}:{d}", .{
+                    discovery.value.run_id.started_wall_unix_ms,
+                    discovery.value.run_id.nonce,
+                }),
                 .protocol_cohort = discovery.value.protocol_cohort,
                 .schema_digest = discovery.value.schema_digest,
                 .schema_ids = discovery.value.schema_ids,
@@ -113,6 +119,7 @@ fn run(init: std.process.Init) !ExitDisposition {
             return .success;
         },
         .request => |command| {
+            try requireExpectedRun(command, globals.expected_run_id);
             const discovery_path = try resolveDiscoveryPath(
                 init.gpa,
                 init.environ_map,
@@ -121,7 +128,11 @@ fn run(init: std.process.Init) !ExitDisposition {
             defer init.gpa.free(discovery_path);
             var client = try client_module.Client.init(init.gpa, init.io, discovery_path);
             defer client.deinit();
-            var response = try client.callCommand(nextRequestId(init.io), command);
+            var response = try client.call(protocol.Request.init(
+                globals.expected_run_id orelse client.runId(),
+                nextRequestId(init.io),
+                command,
+            ));
             defer response.deinit();
             var next_buffer: [2]agent_contract.SuggestedOperation = undefined;
             const guidance = agent_contract.responseGuidance(response.value, &next_buffer);
@@ -192,6 +203,7 @@ fn parseGlobalArguments(
     var result = GlobalArguments{
         .command = try std.ArrayList([]const u8).initCapacity(allocator, args.len),
         .discovery_path = null,
+        .expected_run_id = null,
     };
     errdefer result.deinit(allocator);
 
@@ -199,6 +211,20 @@ fn parseGlobalArguments(
     while (index < args.len) : (index += 1) {
         const argument = args[index];
         if (std.mem.eql(u8, argument, "--json")) continue;
+        if (std.mem.eql(u8, argument, "--expected-run") or
+            std.mem.startsWith(u8, argument, "--expected-run="))
+        {
+            if (result.expected_run_id != null) return error.DuplicateExpectedRun;
+            const token = if (std.mem.startsWith(u8, argument, "--expected-run="))
+                argument["--expected-run=".len..]
+            else token: {
+                index += 1;
+                if (index >= args.len) return error.MissingExpectedRun;
+                break :token args[index];
+            };
+            result.expected_run_id = try parseRunId(token);
+            continue;
+        }
         if (std.mem.eql(u8, argument, "--discovery")) {
             if (result.discovery_path != null) return error.DuplicateDiscoveryPath;
             index += 1;
@@ -216,6 +242,24 @@ fn parseGlobalArguments(
         try result.command.append(allocator, argument);
     }
     return result;
+}
+
+fn parseRunId(token: []const u8) !protocol.RunId {
+    var parts = std.mem.splitScalar(u8, token, ':');
+    const wall = parts.next() orelse return error.InvalidExpectedRun;
+    const nonce = parts.next() orelse return error.InvalidExpectedRun;
+    if (parts.next() != null) return error.InvalidExpectedRun;
+    const run_id = protocol.RunId{
+        .started_wall_unix_ms = std.fmt.parseInt(i64, wall, 10) catch return error.InvalidExpectedRun,
+        .nonce = std.fmt.parseInt(u64, nonce, 10) catch return error.InvalidExpectedRun,
+    };
+    run_id.validate() catch return error.InvalidExpectedRun;
+    return run_id;
+}
+
+fn requireExpectedRun(command: protocol.Command, expected_run: ?protocol.RunId) !void {
+    if (agent_contract.descriptorForCommand(command).effect != .read_only and expected_run == null)
+        return error.ExpectedRunRequired;
 }
 
 const CommandParser = struct {
@@ -454,7 +498,8 @@ fn writeUsage(io: std.Io) !void {
     var buffer: [4096]u8 = undefined;
     var writer = std.Io.File.stdout().writer(io, &buffer);
     try writer.interface.writeAll(
-        \\incinerator-dev [--discovery /absolute/discovery.json] [--json] <command>
+        \\incinerator-dev [--discovery /absolute/discovery.json] [--expected-run wall-ms:nonce] [--json] <command>
+        \\All mutating operations require --expected-run from agent bootstrap. Pin reads and result polls to that run too.
         \\  All non-help output is JSON; --json is optional.
         \\  agent bootstrap
         \\  agent catalog
@@ -648,4 +693,27 @@ test "CLI exit status distinguishes progress from typed operation failure" {
 
 test "CLI entry point compiles" {
     std.testing.refAllDecls(@This());
+}
+
+test "CLI pins every mutating effect and parses the bootstrap run token" {
+    var globals = try parseGlobalArguments(std.testing.allocator, &.{
+        "incinerator-dev", "--expected-run=123:456", "clear-selection",
+    });
+    defer globals.deinit(std.testing.allocator);
+    try std.testing.expectEqual(protocol.RunId{ .started_wall_unix_ms = 123, .nonce = 456 }, globals.expected_run_id.?);
+    for (agent_contract.operationCatalog()) |operation| {
+        const invocation = try parseInvocation(std.testing.allocator, operation.example_argv);
+        if (invocation != .request) continue;
+        if (operation.effect == .read_only) {
+            try requireExpectedRun(invocation.request, null);
+        } else {
+            try std.testing.expectError(error.ExpectedRunRequired, requireExpectedRun(invocation.request, null));
+            try requireExpectedRun(invocation.request, globals.expected_run_id);
+        }
+    }
+    try std.testing.expectError(error.InvalidExpectedRun, parseRunId("123:0"));
+    try std.testing.expectError(error.InvalidExpectedRun, parseRunId("123:456:789"));
+    try std.testing.expectError(error.DuplicateExpectedRun, parseGlobalArguments(std.testing.allocator, &.{
+        "incinerator-dev", "--expected-run", "1:2", "--expected-run=3:4",
+    }));
 }

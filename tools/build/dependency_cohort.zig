@@ -2,6 +2,10 @@
 
 const std = @import("std");
 
+test {
+    _ = @import("network_cohort.zig");
+}
+
 pub fn main(init: std.process.Init) !void {
     var args = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa);
     defer args.deinit();

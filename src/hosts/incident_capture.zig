@@ -2439,7 +2439,7 @@ test "incident manifest cohorts source the live protocol and snapshot owners" {
         sandbox_host_contracts.snapshot_schema,
         manifest_snapshot_cohort,
     );
-    try std.testing.expectEqual(@as(u16, 17), manifest_protocol_cohort);
+    try std.testing.expectEqual(@as(u16, 18), manifest_protocol_cohort);
     try std.testing.expectEqual(@as(u16, 15), manifest_snapshot_cohort);
 }
 

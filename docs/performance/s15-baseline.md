@@ -1,7 +1,7 @@
 # S15 Four-District Baseline
 
-**Status:** Automated characterization accepted; human play acceptance remains
-open
+**Status:** Accepted; automated characterization and product-owner play
+acceptance completed on 2026-08-18
 
 **Recorded:** 2026-08-18
 
@@ -16,6 +16,9 @@ This baseline records the first exact four-district product cohort. It keeps
 content residency, route-search work, authored-population authority, physical
 placement, and presentation cadence as separate claims. The machine-readable
 result is [`s15-baseline.json`](s15-baseline.json).
+These are dated measurements of the original S15 cohort, not fresh measurements
+of later textured-content or implementation changes. The acceptance record is
+[`S15 validation`](../validation/s15-content-rich-district-expansion.md).
 
 ## Reproduction
 

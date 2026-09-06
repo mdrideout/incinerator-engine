@@ -136,7 +136,7 @@ pub const State = struct {
         self.* = .{};
     }
 
-    fn synchronize(self: *State, view: *const tool_module.CrateAuthoringView) void {
+    pub fn synchronize(self: *State, view: *const tool_module.CrateAuthoringView) void {
         const selected = coherentSelection(view) orelse {
             self.reset();
             self.observed_feedback_sequence = view.feedback.sequence;
@@ -957,6 +957,47 @@ test "selection change replaces draft and selection loss clears it" {
     state.synchronize(&view);
     try std.testing.expectEqual(@as(?engine.PersistentId, null), state.id);
     try std.testing.expect(!state.dirty);
+}
+
+test "CLI completion preserves the human draft and cannot overwrite UI completion" {
+    const id = engine.PersistentId{ .namespace = 9, .local = 5 };
+    var view = tool_module.CrateAuthoringView{
+        .session = testSession(id),
+        .position_hint = test_position_hint,
+        .selected_crate = testCrate(id, .{ 1, 2, 3 }),
+    };
+    var state = State{};
+    state.synchronize(&view);
+    state.setAxisDraft(.x, 8);
+    const base = state.draft_base_revision;
+    view.selected_crate.?.authoring_revision = base + 1;
+    view.selected_crate.?.state.pose.position = .{ 6, 2, 3 };
+    const external = tool_module.AuthoringFeedback{
+        .status = .applied,
+        .operation = .edit,
+        .transaction_id = 11,
+        .id = id,
+    };
+    // Use the same producer-aware publication as App.recordAuthoringOutcome.
+    view.feedback.record(.local_developer_client, external);
+    state.synchronize(&view);
+    try std.testing.expect(state.dirty);
+    try std.testing.expectEqual([3]f32{ 8, 2, 3 }, state.position);
+    try std.testing.expectEqual(base, relocationRequest(&state, view.selected_crate.?).?.relocate.expected_revision);
+
+    view.feedback.record(.ui, .{ .status = .rejected, .transaction_id = 12, .id = id });
+    state.synchronize(&view);
+    try std.testing.expect(state.dirty);
+    state.revert(view.selected_crate.?.state.pose.position, base + 1);
+    state.setAxisDraft(.x, 10);
+    view.selected_crate.?.state.pose.position[0] = 10;
+    view.selected_crate.?.authoring_revision = base + 2;
+    view.feedback.record(.ui, .{ .status = .applied, .transaction_id = 13, .id = id });
+    view.feedback.record(.local_developer_client, external);
+    state.synchronize(&view);
+    try std.testing.expect(!state.dirty);
+    try std.testing.expectEqual(@as(u64, 13), view.feedback.transaction_id.?);
+    try std.testing.expectEqual(base + 2, state.draft_base_revision);
 }
 
 test "correlated applied feedback refreshes draft and rejection preserves it" {

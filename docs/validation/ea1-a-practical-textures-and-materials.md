@@ -194,11 +194,12 @@ zig build install -Deditor=true
 
    ```sh
    ./zig-out/bin/incinerator-dev agent bootstrap
-   ./zig-out/bin/incinerator-dev content list
-   ./zig-out/bin/incinerator-dev inspect --target content-asset:N:L
-   ./zig-out/bin/incinerator-dev select --target content-asset:N:L
+   ./zig-out/bin/incinerator-dev --expected-run "$expected_run" content list
+   ./zig-out/bin/incinerator-dev --expected-run "$expected_run" inspect --target content-asset:N:L
+   ./zig-out/bin/incinerator-dev --expected-run "$expected_run" select --target content-asset:N:L
    ```
 
+   Set `expected_run` to the token returned by this bootstrap (agent contract 3).
    Copy `N:L` from `content list`; do not guess it. Confirm the CLI fields agree
    with Inspector and that selecting an asset does not deselect the live crate.
 8. Restart the installed product from outside the repository working directory

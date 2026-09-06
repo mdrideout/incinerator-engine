@@ -96,6 +96,18 @@ authorization tied to the target session/authority, participant or external
 identity, expiration, and nonce/generation. Transport encryption and Steam
 authentication do not independently authorize gameplay membership.
 
+The 2026-09-06 implementation correction advances the network cohort to protocol
+18. The build identity hashes sorted runtime/native source and build inputs,
+including uncommitted edits, then the pinned dependency/rate cohort. It excludes
+Git metadata and absolute checkout paths, so the same source package and
+checkout agree. The content identity hashes the exact compiled
+`config/headless-content.json` admission manifest, including catalog/bundle
+digests and recipe versions; the installed-content gate verifies that manifest
+against the cook. Debug and ReleaseFast from the same inputs remain compatible.
+These are compatibility fingerprints, not credentials or authenticity checks.
+Clients and authorities must be rebuilt together for this intentional
+greenfield break. Wire layout, durable snapshot, and replay schemas are unchanged.
+
 There is no generic RPC system, generic event bus, or reflection-driven
 component replication.
 

@@ -16,6 +16,11 @@ The machine-readable record is
 [`m3-baseline.json`](m3-baseline.json). This is a macOS characterization and
 regression gate for the exact M3 cohort, not a portable throughput promise.
 
+The corrected 2026-09-06 scenario-v4 capacity/lifecycle workload is recorded in
+[`m3-readiness-2026-09-06.json`](m3-readiness-2026-09-06.json), with methodology and
+limits explained in [E2E corrections](../validation/e2e-review-corrections.md).
+The historical scenario-v3 numbers below are unchanged.
+
 ## Method
 
 Each routine trial used a fresh workload process and ran exactly 32,768

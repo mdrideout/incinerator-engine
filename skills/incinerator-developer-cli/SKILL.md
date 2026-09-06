@@ -18,6 +18,10 @@ mutation path.
 2. Record the discovery lifecycle, run identity, protocol cohort, and agent
    catalog digest. Stop if the endpoint is not available; do not attach to an
    old socket or substitute another run.
+   Retain bootstrap's `expected_run` token and supply the catalog's run
+   precondition on every subsequent live request, including result polls.
+   A replaced discovery document requires fresh bootstrap and inspection;
+   never silently substitute its new token into a prepared mutation.
 3. Run `incinerator-dev agent catalog`. Treat its operation IDs, parameters,
    units, effects, completion models, and availability as authoritative.
 4. Use the catalog rather than remembered syntax or copied documentation.

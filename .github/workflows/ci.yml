@@ -146,10 +146,10 @@ jobs:
           -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS"
           --summary all
 
-      - name: Debug build with editor
+      - name: Debug tests and build with editor
         shell: bash
         run: >-
-          zig build
+          zig build test install -Deditor=true
           -Dglslc="$GLSLC" -Dspirv-cross="$SPIRV_CROSS"
           --summary all
 

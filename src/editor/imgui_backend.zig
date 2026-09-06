@@ -24,12 +24,15 @@ const zgui = @import("zgui");
 const sdl = @import("../sdl.zig");
 
 const c = sdl.c;
+extern fn inc_imgui_claims_pointer(x: f32, y: f32) bool;
 
 /// Owned lifecycle guard around zgui's process-wide ImGui context. The backend
 /// does not retain a Renderer pointer; all GPU handles needed after init arrive
 /// as one-frame borrows.
 pub const Backend = struct {
     initialized: bool = false,
+    pointer_buttons: u32 = 0,
+    event_mouse_capture: ?bool = null,
 
     pub fn init(
         self: *Backend,
@@ -88,10 +91,38 @@ pub const Backend = struct {
     /// Call this for every SDL event before your game processes it.
     ///
     /// Returns whether the backend recognized the event. This is not ImGui capture;
-    /// gameplay routing must use `WantCaptureMouse`/`WantCaptureKeyboard` instead.
+    /// Gameplay routing uses synchronous pointer claims and keyboard capture.
     pub fn processEvent(self: *const Backend, event: *const c.SDL_Event) bool {
         if (!self.initialized) return false;
         return zgui.backend.processEvent(@ptrCast(event));
+    }
+
+    pub fn cancelPointer(self: *Backend) void {
+        self.pointer_buttons = 0;
+        self.event_mouse_capture = null;
+    }
+
+    /// Resolve the current SDL position against the presented UI, retaining a
+    /// UI-owned press through motion and release outside the original window.
+    pub fn claimsMouseEvent(self: *Backend, event: *const c.SDL_Event) bool {
+        if (!self.initialized) return false;
+        const position: [2]f32 = switch (event.type) {
+            c.SDL_EVENT_MOUSE_MOTION => .{ event.motion.x, event.motion.y },
+            c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_MOUSE_BUTTON_UP => .{ event.button.x, event.button.y },
+            c.SDL_EVENT_MOUSE_WHEEL => .{ event.wheel.mouse_x, event.wheel.mouse_y },
+            else => return false,
+        };
+        const hit = inc_imgui_claims_pointer(position[0], position[1]);
+        const claimed = self.pointer_buttons != 0 or hit;
+        if ((event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN or event.type == c.SDL_EVENT_MOUSE_BUTTON_UP) and
+            event.button.button > 0 and event.button.button <= @bitSizeOf(u32))
+        {
+            const mask = @as(u32, 1) << @as(u5, @intCast(event.button.button - 1));
+            if (event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN and claimed) self.pointer_buttons |= mask;
+            if (event.type == c.SDL_EVENT_MOUSE_BUTTON_UP) self.pointer_buttons &= ~mask;
+        }
+        self.event_mouse_capture = claimed;
+        return claimed;
     }
 
     /// Begin a new ImGui frame.
@@ -179,7 +210,7 @@ pub const Backend = struct {
     /// likely ignore them.
     pub fn wantsMouse(self: *const Backend) bool {
         if (!self.initialized) return false;
-        return zgui.io.getWantCaptureMouse();
+        return self.event_mouse_capture orelse zgui.io.getWantCaptureMouse();
     }
 
     /// Check if ImGui wants to capture keyboard input.

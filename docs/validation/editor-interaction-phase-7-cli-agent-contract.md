@@ -29,6 +29,15 @@ Historical note: those were the Phase 7 acceptance cohorts. EA1-A subsequently
 advanced the endpoint to protocol cohort 2 and agent-contract revision 2 to
 publish real durable asset metadata.
 
+The 2026-09-06 E2E correction advances the agent contract to revision 3 while
+retaining endpoint protocol 2. Bootstrap now returns `expected_run`; every
+mutating CLI operation requires that run token. Pin inspections and result polls
+to the same token too. A restart or another editor replacing shared discovery
+produces `DeveloperRunMismatch` before connecting, rather than silently adopting
+the newly discovered run. Historical transcripts below predate that CLI
+precondition; use the current executable catalog when reproducing them. See
+[`E2E review corrections`](e2e-review-corrections.md) for current evidence.
+
 ## Acceptance Ledger
 
 | Gate | Status | Evidence |
@@ -237,7 +246,8 @@ agent experience:
 1. Build editor-enabled and run the product with an absolute temporary save
    root.
 2. Run `incinerator-dev agent bootstrap`. Confirm the output makes the current
-   run and safe starting operations obvious.
+   run and safe starting operations obvious. Retain `expected_run` and supply
+   it on all later live requests, including inspections and result polls.
 3. Run `incinerator-dev agent catalog`. Inspect a read-only operation, a camera
    operation, `crate.set-position`, `world.save`, and `frame.capture`. Confirm
    their effects and synchronous/admitted completion differences are clear.

@@ -101,6 +101,7 @@ pub const Server = struct {
             if (!self.input_ingress.available(connection_index)) continue;
             var received_count: usize = 0;
             while (received_count < budgets.inbound_message_capacity) : (received_count += 1) {
+                if (!self.authority.transportIngressAvailable()) break;
                 const received = self.network.receive(
                     connection.*,
                     &self.receive_storage,
@@ -175,6 +176,7 @@ pub const Server = struct {
                 }
             },
             .connected => {
+                if (event.listen_socket.value != self.listen_socket.value) return;
                 if (self.findConnection(event.connection) == null) {
                     const slot = self.freeConnectionSlot() orelse {
                         self.network.close(
@@ -199,8 +201,10 @@ pub const Server = struct {
                 }
             },
             .closed_by_peer, .problem_detected_locally => {
-                _ = try self.authority.transportClosed(.{ .value = event.connection.value });
-                self.removeConnection(event.connection);
+                if (self.findConnection(event.connection) != null) {
+                    _ = try self.authority.transportClosed(.{ .value = event.connection.value });
+                    self.removeConnection(event.connection);
+                }
                 self.network.close(
                     event.connection,
                     event.end_reason,
@@ -242,10 +246,12 @@ pub const Server = struct {
                     .control => .control,
                 },
             ) catch |err| {
-                if (outbound.delivery == .reliable) {
-                    try self.authority.retryOutboundLease(lease.generation);
-                    return err;
-                }
+                if (err != error.GameNetworkingSocketsSendFailed) return err;
+                // A failed peer must not strand the publication head and stop
+                // the room. Unreceipted reliable records remain reconnectable.
+                self.network.close(connection, 4004, "transport send failed", .immediate);
+                self.removeConnection(connection);
+                _ = try self.authority.transportClosed(outbound.connection);
             };
             try self.authority.commitOutboundLease(lease.generation);
             if (outbound.close_after_send) {
@@ -439,6 +445,97 @@ test "MP2 ingress lanes match the accepted protocol classes" {
         .unreliable,
         .input,
     ));
+}
+
+test "real GNS malformed and control bursts preserve the room and another participant" {
+    for ([_]bool{ false, true }, 0..) |control_burst, case_index| {
+        const port: u16 = @intCast(29_731 + case_index);
+        var server = try Server.init(std.testing.allocator, port, false);
+        defer server.deinit();
+        var endpoint_buffer: [64]u8 = undefined;
+        const endpoint = try std.fmt.bufPrintZ(&endpoint_buffer, "127.0.0.1:{d}", .{port});
+        const healthy = try server.network.connect(endpoint);
+        defer server.network.close(healthy, 1000, "test complete", .immediate);
+        const noisy = try server.network.connect(endpoint);
+        defer server.network.close(noisy, 1000, "test complete", .immediate);
+        while (server.authority.diagnostics().active_connections != 2) {
+            try server.pumpNetwork();
+            try server.tick();
+            try std.Io.sleep(std.testing.io, .fromMilliseconds(1), .awake);
+        }
+        try server.network.configureConnected(healthy);
+        try server.network.configureConnected(noisy);
+        var bytes: [budgets.max_wire_message_bytes]u8 = undefined;
+        try server.network.send(healthy, try protocol.encodeClient(.{
+            .hello = .{ .account = .{ .value = 10_101 } },
+        }, &bytes), .reliable, .control);
+        var welcome: ?protocol.Welcome = null;
+        while (welcome == null) {
+            try server.pumpNetwork();
+            try server.tick();
+            while (try server.network.receive(healthy, &bytes)) |received| {
+                const delivered = try protocol.decodeDeliveredServer(received.bytes);
+                if (delivered.message == .welcome) welcome = delivered.message.welcome;
+                if (delivered.message == .relevance_baseline) {
+                    try server.network.send(healthy, try protocol.encodeClient(.{ .baseline_ack = .{
+                        .session = welcome.?.session,
+                        .participant = welcome.?.participant,
+                        .baseline_id = delivered.message.relevance_baseline.baseline_id,
+                    } }, &bytes), .reliable, .control);
+                }
+                try std.testing.expect(delivered.message != .rejected);
+            }
+            try std.Io.sleep(std.testing.io, .fromMilliseconds(1), .awake);
+        }
+        const count = if (control_burst) budgets.inbound_control_capacity + 1 else budgets.inbound_notice_capacity + 1;
+        const payload = if (control_burst) try protocol.encodeClient(.{
+            .hello = .{ .account = .{ .value = 10_102 } },
+        }, &bytes) else &[_]u8{ 0, 1, 2 };
+        for (0..count) |_| try server.network.send(noisy, payload, .reliable, .control);
+
+        // Deliberately hold the authority tick until the actual receive loop
+        // reaches admission pressure. Further pumps must leave bytes queued.
+        while (server.authority.transportIngressAvailable()) {
+            try server.pumpNetwork();
+            try std.Io.sleep(std.testing.io, .fromMilliseconds(1), .awake);
+        }
+        try server.pumpNetwork();
+        try std.testing.expectEqual(@as(u64, 0), server.authority.diagnostics().mailbox_rejected);
+        try server.tick();
+        const resumed_tick = server.authority.diagnostics().tick;
+        var received_snapshot = false;
+        while (!received_snapshot) {
+            try server.pumpNetwork();
+            try server.tick();
+            while (try server.network.receive(healthy, &bytes)) |received| {
+                const delivered = try protocol.decodeDeliveredServer(received.bytes);
+                try std.testing.expect(delivered.message != .rejected and delivered.message != .disconnected);
+                if (delivered.message == .relevance_baseline) {
+                    try server.network.send(healthy, try protocol.encodeClient(.{ .baseline_ack = .{
+                        .session = welcome.?.session,
+                        .participant = welcome.?.participant,
+                        .baseline_id = delivered.message.relevance_baseline.baseline_id,
+                    } }, &bytes), .reliable, .control);
+                }
+                if (delivered.message == .snapshot and delivered.message.snapshot.server_tick > resumed_tick) received_snapshot = true;
+            }
+            try std.Io.sleep(std.testing.io, .fromMilliseconds(1), .awake);
+        }
+        try std.testing.expect(server.authority.diagnostics().tick > resumed_tick);
+        try std.testing.expectEqual(@as(u64, 0), server.authority.diagnostics().mailbox_rejected);
+
+        // Model the OS closing a transport before its callback is pumped.
+        // A reliable publication failure must release the lease so the next
+        // authority tick still runs.
+        for (server.connections) |connection| {
+            if (!connection.isValid()) continue;
+            server.network.close(connection, 1000, "test closed transport", .immediate);
+            try server.authority.rejectOversized(.{ .value = connection.value });
+            break;
+        }
+        try server.tick();
+        try server.tick();
+    }
 }
 
 test "MP2 authority is loopback-only unless remote exposure is explicit" {

@@ -723,22 +723,27 @@ mkdir -p /tmp/incinerator-saves
 In a second terminal, `incinerator-dev` discovers the current local editor at
 `$HOME/Library/Logs/Incinerator/developer/discovery.json` and writes complete
 JSON responses. Start with the installed binary's own grammar, then record the
-run ID reported by discovery and confirm every later response belongs to it:
+run ID reported by bootstrap. Set `expected_run` to its `expected_run` token
+before the live requests below; retain that token throughout the workflow:
 
 ```bash
 ./zig-out/bin/incinerator-dev help
 ./zig-out/bin/incinerator-dev agent bootstrap
 ./zig-out/bin/incinerator-dev agent catalog
 ./zig-out/bin/incinerator-dev discovery
-./zig-out/bin/incinerator-dev describe
-./zig-out/bin/incinerator-dev schema list
-./zig-out/bin/incinerator-dev world list
-./zig-out/bin/incinerator-dev content list
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" describe
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" schema list
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" world list
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" content list
 ```
 
 Coding agents must begin with `agent bootstrap`, record its run identity and
 catalog digest, then read `agent catalog` rather than relying on remembered
-commands. The repository workflow is defined by
+commands. Agent contract 3 requires `--expected-run` for every mutation, including
+selection, camera changes, saves, and captures. Pin reads and result polls too.
+A restart or second editor replacing discovery must produce `DeveloperRunMismatch`;
+bootstrap and inspect again before preparing a new mutation. Missing run tokens
+fail with `ExpectedRunRequired` before discovery or owner access. The repository workflow is defined by
 [`skills/incinerator-developer-cli/SKILL.md`](skills/incinerator-developer-cli/SKILL.md).
 Each endpoint command returns a CLI envelope containing
 `agent_contract_revision`, stable `operation`, explicit `terminal`, structured
@@ -765,37 +770,37 @@ which can change afterward under gravity and collision even though the
 committed revision remains authoritative. The concrete workflow is:
 
 ```text
-./zig-out/bin/incinerator-dev inspect --target persistent-entity:N:L
-./zig-out/bin/incinerator-dev select --target persistent-entity:N:L
-./zig-out/bin/incinerator-dev camera inspect
-./zig-out/bin/incinerator-dev camera mode free-camera
-./zig-out/bin/incinerator-dev camera pose \
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" inspect --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" select --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" camera inspect
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" camera mode free-camera
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" camera pose \
   --x N --y N --z N --yaw RADIANS --pitch RADIANS
-./zig-out/bin/incinerator-dev camera focus --target persistent-entity:N:L
-./zig-out/bin/incinerator-dev crate set-position --target persistent-entity:N:L \
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" camera focus --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" crate set-position --target persistent-entity:N:L \
   --expected-revision N --x N --y N --z N
-./zig-out/bin/incinerator-dev transaction inspect --id N
-./zig-out/bin/incinerator-dev inspect --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" transaction inspect --id N
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" inspect --target persistent-entity:N:L
 
 # Repeat set-position with the old revision and verify stale_revision.
-./zig-out/bin/incinerator-dev crate set-position --target persistent-entity:N:L \
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" crate set-position --target persistent-entity:N:L \
   --expected-revision OLD_N --x N --y N --z N
-./zig-out/bin/incinerator-dev transaction inspect --id N
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" transaction inspect --id N
 
-./zig-out/bin/incinerator-dev undo \
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" undo \
   --target persistent-entity:N:L --expected-revision N
-./zig-out/bin/incinerator-dev transaction inspect --id N
-./zig-out/bin/incinerator-dev inspect --target persistent-entity:N:L
-./zig-out/bin/incinerator-dev redo \
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" transaction inspect --id N
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" inspect --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" redo \
   --target persistent-entity:N:L --expected-revision N
-./zig-out/bin/incinerator-dev transaction inspect --id N
-./zig-out/bin/incinerator-dev inspect --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" transaction inspect --id N
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" inspect --target persistent-entity:N:L
 
-./zig-out/bin/incinerator-dev camera focus --target persistent-entity:N:L
-./zig-out/bin/incinerator-dev capture-frame
-./zig-out/bin/incinerator-dev capture inspect --id N
-./zig-out/bin/incinerator-dev save-world
-./zig-out/bin/incinerator-dev save result --id N
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" camera focus --target persistent-entity:N:L
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" capture-frame
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" capture inspect --id N
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" save-world
+./zig-out/bin/incinerator-dev --expected-run "$expected_run" save result --id N
 ```
 
 Authoring, save, and capture admission responses do not necessarily report

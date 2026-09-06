@@ -1,4 +1,5 @@
 const std = @import("std");
+const network_cohort = @import("network_cohort.zig");
 
 const FlecsDebugMode = enum {
     sanitize,
@@ -240,12 +241,18 @@ pub fn create(
     );
     const simulation_cohort_options = cohort_options.createModule();
     const network_options = b.addOptions();
-    network_options.addOption(u16, "protocol_revision", 17);
-    network_options.addOption(u64, "build_cohort", networkBuildCohort());
+    network_options.addOption(u16, "protocol_revision", 18);
+    network_options.addOption(u64, "build_cohort", networkBuildCohort(b));
+    const manifest_bytes = b.build_root.handle.readFileAlloc(
+        b.graph.io,
+        "config/headless-content.json",
+        b.allocator,
+        .unlimited,
+    ) catch |err| std.debug.panic("network content identity: {s}", .{@errorName(err)});
     network_options.addOption(
         u64,
         "content_cohort",
-        std.hash.Wyhash.hash(0x494e_434e, "s15-four-district-content-v1"),
+        network_cohort.contentFingerprint(manifest_bytes),
     );
     const network_cohort_options = network_options.createModule();
 
@@ -1034,8 +1041,9 @@ pub fn create(
     };
 }
 
-fn networkBuildCohort() u64 {
-    var fingerprint: u64 = 0x4d50_3200_0000_0001;
+fn networkBuildCohort(b: *std.Build) u64 {
+    var fingerprint = network_cohort.sourceFingerprint(b.graph.io, b.allocator, b.build_root.handle) catch |err|
+        std.debug.panic("network source identity: {s}", .{@errorName(err)});
     inline for (.{
         "zig-0.16.0",
         cohort.zflecs_revision,
@@ -1045,7 +1053,7 @@ fn networkBuildCohort() u64 {
         cohort.gns_revision,
         "authority-60hz",
         "snapshot-20hz",
-        "protocol-v16",
+        "protocol-v18",
     }) |part| fingerprint = std.hash.Wyhash.hash(fingerprint, part);
     return fingerprint;
 }

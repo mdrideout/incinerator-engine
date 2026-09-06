@@ -568,3 +568,38 @@ test "stopped discovery and a stale initialized client fail explicitly" {
         ),
     );
 }
+
+test "prepared edit rejects a restarted or second editor before owner admission" {
+    for ([_]bool{ true, false }, 0..) |restart, case_index| {
+        var temporary = std.testing.tmpDir(.{});
+        defer temporary.cleanup();
+        var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
+        const root_len = try temporary.dir.realPath(std.testing.io, &root_buffer);
+        const root = root_buffer[0..root_len];
+        var first = try transport.Server.create(std.testing.allocator, std.testing.io, .{
+            .developer_directory = root,
+            .run_id = .{ .started_wall_unix_ms = 1, .nonce = 0xea05_2001 + case_index * 2 },
+        });
+        defer first.destroy();
+        var inspected = try client_module.Client.init(std.testing.allocator, std.testing.io, first.discoveryPath());
+        defer inspected.deinit();
+        const prepared = protocol.Request.init(inspected.runId(), 1, .{ .crate_set_position = .{
+            .target = target,
+            .expected_revision = 0,
+            .position = .{ 3, 1, 5 },
+        } });
+        if (restart) first.stop();
+        var second = try transport.Server.create(std.testing.allocator, std.testing.io, .{
+            .developer_directory = root,
+            .run_id = .{ .started_wall_unix_ms = 2, .nonce = 0xea05_2002 + case_index * 2 },
+        });
+        defer second.destroy();
+        // Like a new CLI process, load the now-replaced shared discovery.
+        var mutating = try client_module.Client.init(std.testing.allocator, std.testing.io, first.discoveryPath());
+        defer mutating.deinit();
+        try std.testing.expectEqual(second.discovery().run_id, mutating.runId());
+        try std.testing.expectError(error.DeveloperRunMismatch, mutating.call(prepared));
+        try std.testing.expect(second.takeRequest() == null);
+        try std.testing.expect(first.takeRequest() == null);
+    }
+}

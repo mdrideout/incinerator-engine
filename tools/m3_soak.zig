@@ -28,7 +28,7 @@ const producer_count: usize = 2;
 const expected_internal_non_relocation_handbacks: u64 =
     headless_authority.internal_outcome_capacity + 1;
 const config_cohort = "m3-config-v1:namespace=93001,crates=8,characters=1,vehicles=1,npcs=64,ground=true,producers=2,quota=8,ingress=16,transactions=16,results=8";
-const scenario_cohort = "m3-scenario-v3:district-cancel-activate-unload-reload,s2-live-vehicle,s7-collect-drop,s8-64-npcs,two-producer-relocation-saturation,draining-stop,canonical-cold-restore";
+const scenario_cohort = "m3-scenario-v4:district-cancel-activate-unload-reload,s2-live-vehicle,s7-collect-drop,64-separated-npc-controllers-one-patrol,two-producer-relocation-saturation,draining-stop,canonical-cold-restore";
 const content_cohort = "incinerator.m3.logical-content.v1";
 
 const p99_ceiling_ns: u64 = std.time.ns_per_s / 120;
@@ -897,17 +897,42 @@ fn setupIntegratedSlices(
 
     var npc_ids: [sandbox_contracts.npc_capacity]sandbox_contracts.PersistentId = undefined;
     const first_npc_request_id: u64 = 1_000;
+    // M3 measures native controller capacity alongside producer/lifecycle work.
+    // S12/S13 own movement/population characterization. The former fixture
+    // placed all 64 colliding CharacterVirtuals at one point and sent them to
+    // the same terminal, measuring unresolved crowd overlap instead.
+    const columns = [_]f32{ -7, -5.5, -4, -2.5, 2.5, 4, 5.5, 7 };
+    const npc_district = try sandbox_contracts.proceduralDistrictBuild(west);
     for (0..sandbox_contracts.npc_capacity) |index| {
+        const position: [3]f32 = .{ columns[index % columns.len], 0, -7 + 2 * @as(f32, @floatFromInt(index / columns.len)) };
+        var anchor = west_node;
+        var nearest_distance = std.math.inf(f32);
+        for (npc_district.navigationNodes(), 0..) |node, node_index| {
+            const npc_config = worldConfig().npc;
+            const center_height = npc_config.half_height + npc_config.radius;
+            if (try authority.world.presentationLineHitFraction(
+                .{ position[0], position[1] + center_height, position[2] },
+                .{ node.position[0], node.position[1] + center_height, node.position[2] },
+            ) != null) continue;
+            const dx = position[0] - node.position[0];
+            const dz = position[2] - node.position[2];
+            const distance = dx * dx + dz * dz;
+            if (distance < nearest_distance) {
+                nearest_distance = distance;
+                anchor.index = @intCast(node_index);
+            }
+        }
+        if (!std.math.isFinite(nearest_distance)) return error.M3NpcAnchorUnavailable;
         try authority.world.submitNpc(.{ .spawn = .{
             .request_id = first_npc_request_id + index,
-            .position = .{ -5, 0, 5 },
+            .position = position,
             .facing_yaw = 0,
-            .anchor = west_node,
+            .anchor = anchor,
             .hostile_to_players = true,
-            .goal = .{ .patrol_between = .{
-                .first = west_node,
-                .second = east_node,
-            } },
+            .goal = if (index == 0) .{ .patrol_between = .{
+                .first = sandbox_contracts.player_plaza_destination,
+                .second = sandbox_contracts.market_terminal_destination,
+            } } else .hold,
         } });
     }
     try tickWithoutCrateWork(authority);
@@ -916,7 +941,10 @@ fn setupIntegratedSlices(
         const spawned = switch (authority.world.pollNpcOutcome() orelse
             return error.M3NpcSpawnOutcomeMissing) {
             .spawned => |spawned| spawned,
-            else => return error.M3UnexpectedNpcSpawnOutcome,
+            else => |outcome| {
+                std.debug.print("M3 NPC spawn failed: {any}\n", .{outcome});
+                return error.M3UnexpectedNpcSpawnOutcome;
+            },
         };
         if (spawned.request_id < first_npc_request_id or
             spawned.request_id >= first_npc_request_id + sandbox_contracts.npc_capacity or
@@ -1527,14 +1555,14 @@ fn requireIntegratedState(
 ) !void {
     const diagnostics = world.diagnostics();
     if (diagnostics.district.active_count != 2 or
-        diagnostics.district.body_count != 6 or
+        diagnostics.district.body_count != 4 or
         diagnostics.characters.active_count != 1 or
         diagnostics.vehicles.active_count != 1 or
         diagnostics.interaction.active_count != 1 or
         diagnostics.interaction.dynamic_body_count != 1 or
         npcCount(diagnostics) != sandbox_contracts.npc_capacity or
         diagnostics.npc.controller_count != sandbox_contracts.npc_capacity or
-        diagnostics.body_count != 10 or
+        diagnostics.body_count != 8 or
         diagnostics.character_controllers.native_used != sandbox_contracts.npc_capacity + 1 or
         diagnostics.character_controllers.native_capacity != 128 or
         diagnostics.character_controllers.feature_owned != sandbox_contracts.npc_capacity + 1 or
@@ -2108,7 +2136,7 @@ test "M3 cohort identities are fixed and domain separated" {
         config_cohort,
     );
     try std.testing.expectEqualStrings(
-        "m3-scenario-v3:district-cancel-activate-unload-reload,s2-live-vehicle,s7-collect-drop,s8-64-npcs,two-producer-relocation-saturation,draining-stop,canonical-cold-restore",
+        "m3-scenario-v4:district-cancel-activate-unload-reload,s2-live-vehicle,s7-collect-drop,64-separated-npc-controllers-one-patrol,two-producer-relocation-saturation,draining-stop,canonical-cold-restore",
         scenario_cohort,
     );
     const config_digest = cohortDigest(config_cohort);

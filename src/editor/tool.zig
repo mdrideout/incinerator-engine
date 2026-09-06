@@ -109,7 +109,7 @@ pub const AuthoringFeedbackStatus = enum {
     submission_failed,
 };
 
-/// Latest correlated authoring result retained by the composition. `sequence`
+/// Latest UI-owned authoring result retained by the composition. `sequence`
 /// advances for every update so an optional editor can distinguish a new
 /// result from an unchanged snapshot without owning outcome history.
 pub const AuthoringFeedback = struct {
@@ -120,6 +120,15 @@ pub const AuthoringFeedback = struct {
     id: ?engine.PersistentId = null,
     rejection_reason: ?sandbox_host.RejectionReason = null,
     detail: []const u8 = "",
+
+    /// Shared evidence keeps every producer's result. Inspector completion
+    /// must retain its own result even if another producer finishes afterward.
+    pub fn record(self: *AuthoringFeedback, source: engine.authoring.Source, result: AuthoringFeedback) void {
+        if (source != .ui) return;
+        const sequence = self.sequence +| 1;
+        self.* = result;
+        self.sequence = sequence;
+    }
 };
 
 pub const SaveFeedbackStatus = enum {

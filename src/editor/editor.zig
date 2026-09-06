@@ -166,6 +166,7 @@ pub const Editor = struct {
             event.type == c.SDL_EVENT_WINDOW_MINIMIZED)
         {
             self.crate_authoring.deactivateGizmo();
+            self.backend.cancelPointer();
         }
 
         var route = EventRoute{};
@@ -213,6 +214,10 @@ pub const Editor = struct {
         }
 
         if (!self.visible) return route;
+        if (self.backend.claimsMouseEvent(event)) {
+            route.mouse_reserved = true;
+            return route;
+        }
         if (viewport.editorWorldAffordancesVisible(
             self.visible,
             self.viewport_mode,

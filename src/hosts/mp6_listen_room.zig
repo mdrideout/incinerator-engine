@@ -233,8 +233,8 @@ pub const Runtime = struct {
         if (self.closed) return error.ListenRoomClosed;
         self.network.runCallbacks();
         while (self.network.pollEvent()) |event| try self.handleEvent(event);
-        try self.receiveGuestIngress(now_unix_seconds);
         try self.receiveHostIngress(now_unix_seconds);
+        try self.receiveGuestIngress(now_unix_seconds);
         try self.authority.session().tick();
         try self.flushAuthorityOutput();
         try self.receiveHostEgress();
@@ -415,10 +415,17 @@ pub const Runtime = struct {
             if (!self.guest_input_ingress.available(connection_index)) continue;
             var count: usize = 0;
             while (count < budgets.inbound_message_capacity) : (count += 1) {
-                const received = try self.network.receive(
+                if (!self.authority.session().transportIngressAvailable()) break;
+                const received = self.network.receive(
                     connection.transport,
                     &self.receive_storage,
-                ) orelse break;
+                ) catch |err| switch (err) {
+                    error.ReceivedMessageTooLarge => {
+                        try self.authority.session().rejectOversized(.{ .value = connection.transport.value });
+                        break;
+                    },
+                    else => return err,
+                } orelse break;
                 const message = protocol.decodeClient(received.bytes) catch {
                     try self.authority.session().ingestBytes(
                         .{ .value = connection.transport.value },
@@ -501,10 +508,12 @@ pub const Runtime = struct {
                     toGnsDelivery(outbound.delivery),
                     toGnsLane(outbound.lane),
                 ) catch |err| {
-                    if (outbound.delivery == .reliable) {
-                        try self.authority.session().retryOutboundLease(lease.generation);
-                        return err;
+                    if (err != error.GameNetworkingSocketsSendFailed) return err;
+                    if (self.findGuest(connection)) |index| {
+                        try self.terminateGuest(index, 4004, "transport send failed");
                     }
+                    try self.authority.session().commitOutboundLease(lease.generation);
+                    continue;
                 };
                 if (outbound.message == .welcome) {
                     if (self.findGuest(connection)) |index| {
@@ -807,4 +816,40 @@ test "listen room config keeps remote exposure explicit" {
         .allow_remote = true,
         .advertise_host = "192.168.1.25",
     });
+}
+
+test "real GNS guest bursts preserve listen host input and publication" {
+    for ([_]bool{ false, true }, 0..) |control_burst, case_index| {
+        const port: u16 = @intCast(29_741 + case_index);
+        const runtime = try Runtime.create(std.testing.allocator, .{ .port = port }, 1);
+        defer runtime.destroy();
+        var endpoint_buffer: [64]u8 = undefined;
+        const endpoint = try std.fmt.bufPrintZ(&endpoint_buffer, "127.0.0.1:{d}", .{port});
+        const noisy = try runtime.network.connect(endpoint);
+        defer runtime.network.close(noisy, 1000, "test complete", .immediate);
+        while (runtime.authority.session().diagnostics().active_connections != 2) {
+            try runtime.step(1);
+            try std.Io.sleep(std.testing.io, .fromMilliseconds(1), .awake);
+        }
+        try runtime.network.configureConnected(noisy);
+        var bytes: [budgets.max_wire_message_bytes]u8 = undefined;
+        const payload = if (control_burst) try protocol.encodeClient(.{ .hello = .{
+            .account = .{ .value = 2 },
+            .external_identity = runtime.guest_intent.external_identity,
+            .join_authorization = runtime.guest_intent.authorization,
+        } }, &bytes) else &[_]u8{ 0, 1, 2 };
+        const count = if (control_burst) budgets.inbound_control_capacity + 1 else budgets.inbound_notice_capacity + 1;
+        for (0..count) |_| try runtime.network.send(noisy, payload, .reliable, .control);
+        while (runtime.authority.session().transportIngressAvailable()) {
+            try runtime.receiveGuestIngress(1);
+            try std.Io.sleep(std.testing.io, .fromMilliseconds(1), .awake);
+        }
+        const before_tick = runtime.authority.session().diagnostics().tick;
+        try runtime.sendHostInput(.{ 1, 0 }, 0, false);
+        try runtime.step(1);
+        try runtime.step(1);
+        try std.testing.expectEqual(session_client.State.joined, runtime.client.state);
+        try std.testing.expect(runtime.authority.session().diagnostics().tick > before_tick);
+        try std.testing.expectEqual(@as(u64, 0), runtime.authority.session().diagnostics().mailbox_rejected);
+    }
 }

@@ -2,7 +2,7 @@
 
 **Status:** Accepted, implemented, and amended for the ED1 workspace
 **Date:** 2025-12-05
-**Amended:** 2026-08-17
+**Amended:** 2026-09-06
 **Decision Makers:** Matt, Claude
 
 > The tool-oriented editor remains accepted. The 2026 overhaul amendments
@@ -11,7 +11,7 @@
 > value owned by the visual host. The engine compiles the exact-pinned zgui SDL3
 > GPU sources against its selected SDL 3.4.14 headers, passes the actual
 > swapchain format to ImGui, maintains physical input independently, and gates
-> gameplay with ImGui `WantCapture*`. The prototype Scene/Gizmo tools and their
+> gameplay through explicit event ownership and keyboard capture. The prototype Scene/Gizmo tools and their
 > direct world mutation were removed at S0 closure. Authoring returns only
 > through persistent IDs and typed feature commands.
 
@@ -231,6 +231,10 @@ simulation or input authority.
 
 ### Event Processing
 
+ADR-030 supersedes the earlier capture/Escape policy in this ADR. The current
+implementation and acceptance are recorded in
+[`E2E review corrections`](../validation/e2e-review-corrections.md).
+
 Every event is forwarded to ImGui, but backend recognition is not a routing
 decision. The input layer first preserves physical state, including releases
 and focus loss, and separately maintains gameplay-visible state:
@@ -246,7 +250,11 @@ while (c.SDL_PollEvent(&event)) {
 ```
 
 Reserved editor shortcuts are reported explicitly through `EventRoute`.
-Gameplay capture uses `WantCaptureKeyboard` and `WantCaptureMouse`; a held input
+Keyboard capture uses `WantCaptureKeyboard`. Mouse events are resolved against
+the current SDL position and the last presented ImGui window geometry, including
+floating windows, popup dismissal, and the dockspace's passthrough hole. A UI
+press stays owned through drag/release outside its window. Prior-frame
+`WantCaptureMouse` is not sufficient to admit a new scene press. A held input
 that becomes captured stays suppressed until its physical release. Main-window
 focus loss clears held state, while secondary editor-window lifecycle events do
 not masquerade as game-window events.
@@ -255,9 +263,11 @@ The central passthrough scene also supports explicit gameplay mouse capture.
 A primary click not consumed by ImGui enters SDL per-window relative mouse mode,
 consumes that first click, and gives gameplay continuous look motion without a
 held button. While captured, mouse events do not mutate ImGui and the workspace
-shows `ESC releases`; Escape releases capture instead of quitting. Escape quits
-only while the mouse is already free. Focus loss, minimization, close, and host
-teardown release capture. Right-button drag remains the uncaptured fallback.
+shows `ESC releases`; Escape first cancels an active interaction, then releases
+pointer lock, then opens or closes the application menu. Quitting is an explicit
+menu or OS action. Focus loss, minimization, close, and host teardown release
+capture. Free Camera owns its separate right-button look interaction; viewport
+mode and pointer lock remain independent under ADR-030.
 
 ## Rationale
 

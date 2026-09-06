@@ -7185,15 +7185,6 @@ const App = struct {
                 self.authoringObservationContext(),
             );
             try self.retainAuthoringEvidence(evidence);
-            _ = self.advanceAuthoringFeedback();
-            self.authoring_feedback = .{
-                .sequence = self.authoring_feedback.sequence,
-                .status = .submission_failed,
-                .operation = pending.kind,
-                .transaction_id = transaction_id,
-                .id = pending.id,
-                .detail = @errorName(err),
-            };
             return self.respondDeveloperAuthoringRejected(
                 endpoint,
                 request,
@@ -8221,9 +8212,7 @@ const App = struct {
             self.authoringObservationContext(),
         );
         try self.retainAuthoringEvidence(evidence);
-        _ = self.advanceAuthoringFeedback();
-        self.authoring_feedback = .{
-            .sequence = self.authoring_feedback.sequence,
+        self.authoring_feedback.record(pending.request.source, .{
             .status = switch (observed) {
                 .applied => .applied,
                 .rejected => .rejected,
@@ -8242,7 +8231,7 @@ const App = struct {
                 .rejected => authoringRejectionDetail(rejection_reason orelse unreachable),
                 .unrelated => unreachable,
             },
-        };
+        });
     }
 
     fn recordAuthoringRequestRejection(
@@ -13440,6 +13429,14 @@ test "developer endpoint app boundary routes a concrete owner journey" {
     try std.testing.expectEqual(developer_protocol.CameraMode.free_camera, camera_state.mode);
     try std.testing.expectEqual(viewport.Mode.free_camera, app.viewport_controller.mode);
 
+    // Exercise the real Inspector state against this App's immutable view
+    // while the endpoint commits through its separate authoring controller.
+    var human_draft = @import("editor/tools/crate_authoring_tool.zig").State{};
+    var authoring_view = try app.crateAuthoringView();
+    human_draft.synchronize(&authoring_view);
+    human_draft.position[0] = 9;
+    human_draft.dirty = true;
+    const human_position = human_draft.position;
     const edited_position: [3]f32 = .{ 4, 3, -2 };
     var edit_response = try callDeveloperEndpointForTest(
         &app,
@@ -13479,6 +13476,24 @@ test "developer endpoint app boundary routes a concrete owner journey" {
     try std.testing.expectEqual(developer_protocol.AuthoringDisposition.accepted, edit_result.disposition);
     try std.testing.expectEqual(@as(u64, 1), edit_result.committed_revision.?);
     try std.testing.expectEqual(edited_position, edit_result.committed_position.?);
+
+    authoring_view = try app.crateAuthoringView();
+    human_draft.synchronize(&authoring_view);
+    try std.testing.expect(human_draft.dirty);
+    try std.testing.expectEqual(human_position, human_draft.position);
+    try std.testing.expectEqual(revision_zero, human_draft.draft_base_revision);
+    try app.applyAuthoringRequests(&.{.{ .relocate = .{
+        .id = target.persistent_entity,
+        .expected_revision = human_draft.draft_base_revision,
+        .target_pose = .{ .position = human_draft.position },
+    } }});
+    try app.simulateTick(true, .none);
+    authoring_view = try app.crateAuthoringView();
+    human_draft.synchronize(&authoring_view);
+    try std.testing.expectEqual(editor_contract.AuthoringFeedbackStatus.rejected, authoring_view.feedback.status);
+    try std.testing.expect(human_draft.dirty);
+    try std.testing.expectEqual(human_position, human_draft.position);
+    try std.testing.expectEqual(@as(u64, 1), authoring_view.selected_crate.?.authoring_revision);
 
     // An external producer may only undo the revision represented by its own
     // retained history. Supplying an older revision is rejected before an

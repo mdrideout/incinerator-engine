@@ -8,7 +8,7 @@
 const std = @import("std");
 const protocol = @import("sandbox_developer_protocol");
 
-pub const agent_contract_revision: u16 = 2;
+pub const agent_contract_revision: u16 = 3;
 
 pub const Effect = enum {
     read_only,
@@ -150,6 +150,12 @@ const capture_id_parameter = [_]ParameterDescriptor{.{
 
 const global_options = [_]GlobalOptionDescriptor{
     .{
+        .flag = "--expected-run",
+        .value = "wall-ms:nonce",
+        .required = false,
+        .description = "Use expected_run from agent.bootstrap throughout one workflow, including reads and result polls. Required for every operation whose effect is not read_only; a different discovery run rejects before connecting.",
+    },
+    .{
         .flag = "--discovery",
         .value = "/absolute/discovery.json",
         .required = false,
@@ -164,7 +170,7 @@ const global_options = [_]GlobalOptionDescriptor{
 };
 
 const invariants = [_][]const u8{
-    "Record the current run identity and reject responses from another run.",
+    "Pin every workflow request with --expected-run from agent.bootstrap. Mutations without it fail with ExpectedRunRequired; a replaced discovery run fails with DeveloperRunMismatch before connecting. Rediscover and reinspect after a restart.",
     "Discover stable targets from world.list or content.list; never guess identities.",
     "World instances and durable content assets are different identity domains.",
     "Inspect immediately before a revisioned mutation and use that exact revision.",

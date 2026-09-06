@@ -140,7 +140,7 @@ pub fn main(init: std.process.Init) !void {
         .optimize = @tagName(builtin.mode),
         .target_arch = @tagName(builtin.target.cpu.arch),
         .target_os = @tagName(builtin.target.os.tag),
-        .methodology = "8192 fixed owner ticks for separate 12/16 authored cohorts with immediate deterministic host acknowledgements; 2048 measured real-Jolt ticks for 24 uniquely placed activity-slot CharacterVirtual actors after 120 warmup ticks; 4096 bounded 64-command synthetic planning waves; exact protocol-17 full-snapshot wire sizes",
+        .methodology = "8192 fixed owner ticks for separate 12/16 authored cohorts with immediate deterministic host acknowledgements; 2048 measured real-Jolt ticks for 24 uniquely placed activity-slot CharacterVirtual actors after 120 warmup ticks; 4096 bounded 64-command synthetic planning waves; exact current-protocol full-snapshot wire sizes",
         .ordinary = ordinary,
         .physical_owner = physical_owner,
         .physical_jolt = physical_jolt,

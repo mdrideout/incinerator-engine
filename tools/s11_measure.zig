@@ -179,11 +179,11 @@ fn runTrial(init: std.process.Init, scale: bool) !TrialReport {
         .position = .{ @as(f32, @floatFromInt(index % 8)) * 0.1, 0, 0 },
         .facing_yaw = 0,
         .alive = true,
+        .hostile_to_players = true,
     };
 
     var visibility = Visibility{};
     var feature = try Feature.init(&visibility, .{
-        .hostile_npc_limit = contract.max_records,
         .ambient_perception_interval_ticks = 1,
         .engaged_perception_interval_ticks = 1,
         .los_queries_per_tick = 16,

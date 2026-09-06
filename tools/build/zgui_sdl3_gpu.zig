@@ -85,6 +85,7 @@ pub fn build(
         },
         .flags = cflags,
     });
+    native.addCSourceFile(.{ .file = b.path("src/editor/imgui_pointer.cpp"), .flags = cflags });
 
     const library = b.addLibrary(.{
         .name = "incinerator_imgui",

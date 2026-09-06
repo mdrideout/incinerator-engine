@@ -4300,6 +4300,24 @@ pub fn build(b: *std.Build) void {
     );
     editor_escape_test_step.dependOn(&run_editor_escape_tests.step);
 
+    // Keep native SDL/Metal acceptance explicit, like the existing installed
+    // smoke gates. The ordinary editor tests remain usable without a GPU.
+    const editor_pointer_test_step = if (editor_gui_library) |library| step: {
+        const module = b.createModule(.{
+            .root_source_file = b.path("src/editor_pointer_acceptance_test.zig"),
+            .target = target,
+            .optimize = optimize,
+        });
+        for (sandbox_developer_host_test_module.import_table.keys(), sandbox_developer_host_test_module.import_table.values()) |name, imported|
+            module.addImport(name, imported);
+        module.linkLibrary(library);
+        module.linkLibrary(sdl_lib);
+        const run = b.addRunArtifact(b.addTest(.{ .root_module = module }));
+        const acceptance = b.step("test-editor-pointer-macos", "Run real queued SDL floating-panel ownership with Metal presentation");
+        acceptance.dependOn(&run.step);
+        break :step acceptance;
+    } else null;
+
     const sandbox_authoring_tests = b.addTest(.{ .root_module = sandbox_authoring_module });
     const run_sandbox_authoring_tests = b.addRunArtifact(sandbox_authoring_tests);
     const sandbox_authoring_test_step = b.step(
@@ -4913,6 +4931,7 @@ pub fn build(b: *std.Build) void {
         "verify-s15",
         "Run complete four-district content, navigation, population, replay, diagnostics, and Metal acceptance",
     );
+    if (editor_pointer_test_step) |pointer_step| verify_s15_step.dependOn(pointer_step);
     verify_s15_step.dependOn(content_cooker_test_step);
     verify_s15_step.dependOn(content_relocation_step);
     verify_s15_step.dependOn(district_contract_test_step);

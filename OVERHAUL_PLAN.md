@@ -28,7 +28,7 @@ candidate; product-owner visual/usability review remains before EA1-B.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
-**Last reviewed:** 2026-08-30
+**Last reviewed:** 2026-09-06
 
 **Historical roadmap:** [`PLAN_001.md`](PLAN_001.md)
 
@@ -73,6 +73,18 @@ candidate; product-owner visual/usability review remains before EA1-B.
 [historical implementation plan](docs/design/title-neural-renderer-implementation-plan.md))
 
 **Purpose:** Source of truth for turning the current learning prototype into a robust, testable, game-specific engine.
+
+**2026-09-06 review follow-through:** Complete the concrete transport, cohort,
+CLI, Inspector, input-routing, benchmark, and CI corrections recorded in
+[`E2E review corrections`](docs/validation/e2e-review-corrections.md). Then close
+EA1-A's product-owner visual/usability checkpoint before beginning EA1-B.
+The accepted EA0–EA5 sequence and neural pause remain in force.
+
+The player-loop proposal in
+[`Sandbox player loop`](docs/design/sandbox-player-loop.md) gives that sequence
+a concrete ordinary-play acceptance journey. It is a proposed title direction,
+not a claim that an objective/reward system already exists or that a new
+gameplay framework has been accepted.
 
 ---
 

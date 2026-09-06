@@ -141,6 +141,20 @@ const IngressMailbox = struct {
     high_water: u16 = 0,
     rejected: u64 = 0,
 
+    // A transport may close every admitted connection before the next tick.
+    // Keep those lifecycle notices admissible even when network control traffic
+    // fills its share of the existing mailbox. Excess bytes stay in GNS.
+    fn canOpenConnection(self: *const IngressMailbox) bool {
+        return self.control.len < budgets.inbound_control_capacity - budgets.max_participants;
+    }
+
+    fn transportIngressAvailable(self: *const IngressMailbox) bool {
+        return self.canOpenConnection() and
+            self.gameplay.len < budgets.inbound_gameplay_capacity and
+            self.input.len < budgets.inbound_input_capacity and
+            self.notice.len < budgets.inbound_notice_capacity;
+    }
+
     fn push(self: *IngressMailbox, class: IngressClass, payload: IngressPayload) !u64 {
         const ordinal = self.next_ordinal;
         if (ordinal == 0) return error.IngressOrdinalExhausted;
@@ -275,6 +289,45 @@ fn reliableMessageReceipted(message: protocol.ServerMessage) bool {
         => true,
         .snapshot, .relevance_baseline, .rejected, .disconnected => false,
     };
+}
+
+test "transport admission preserves close capacity and resumes after a tick" {
+    var mailbox = IngressMailbox{};
+    for (0..budgets.inbound_control_capacity - budgets.max_participants) |_| {
+        try std.testing.expect(mailbox.transportIngressAvailable());
+        _ = try mailbox.push(.control, .{ .connection_opened = .{ .value = 1 } });
+    }
+    try std.testing.expect(!mailbox.transportIngressAvailable());
+    try std.testing.expect(!mailbox.canOpenConnection());
+    for (0..budgets.max_participants) |_| {
+        _ = try mailbox.push(.control, .{ .connection_closed = .{ .value = 1 } });
+    }
+    var scratch = CycleScratch{};
+    scratch.freeze(&mailbox);
+    try std.testing.expect(mailbox.transportIngressAvailable());
+    for (0..budgets.inbound_notice_capacity) |_| {
+        _ = try mailbox.push(.notice, .{ .malformed = .{ .value = 1 } });
+    }
+    try std.testing.expect(!mailbox.transportIngressAvailable());
+    scratch.freeze(&mailbox);
+    for (0..budgets.inbound_input_capacity) |_| {
+        _ = try mailbox.push(.input, .{ .decoded = .{
+            .transport = .{ .value = 1 },
+            .message = .{ .input = .{
+                .session = .{ .value = 1 },
+                .participant = .{ .index = 1, .generation = 1 },
+                .sequence = .{ .value = 1 },
+                .target_tick = 1,
+                .move = .{ 0, 0 },
+                .facing_yaw = 0,
+                .jump_pressed = false,
+            } },
+            .admission_time_unix_seconds = null,
+        } });
+    }
+    try std.testing.expect(!mailbox.transportIngressAvailable());
+    scratch.freeze(&mailbox);
+    try std.testing.expect(mailbox.transportIngressAvailable());
 }
 
 test "ingress mailbox reserves control capacity and freezes a stable ordered prefix" {
@@ -1359,6 +1412,7 @@ const AuthorityCore = struct {
     ) !u64 {
         try self.ensureOperationalMutation();
         if (transport.value == 0) return error.InvalidTransportConnection;
+        if (!self.mailbox.canOpenConnection()) return error.IngressClassCapacityReached;
         return self.mailbox.push(.control, .{ .connection_opened = transport });
     }
 
@@ -6666,6 +6720,10 @@ pub const DedicatedAuthority = opaque {
         try self.state().ingestBytes(transport, bytes);
     }
 
+    pub fn transportIngressAvailable(self: *const DedicatedAuthority) bool {
+        return self.stateConst().mailbox.transportIngressAvailable();
+    }
+
     pub fn ingest(
         self: *DedicatedAuthority,
         transport: TransportConnection,
@@ -6889,6 +6947,14 @@ pub const EmbeddedSessionRole = struct {
         bytes: []const u8,
     ) !void {
         try authorityCore(self.context).ingestBytes(transport, bytes);
+    }
+
+    pub fn transportIngressAvailable(self: EmbeddedSessionRole) bool {
+        return authorityCore(self.context).mailbox.transportIngressAvailable();
+    }
+
+    pub fn rejectOversized(self: EmbeddedSessionRole, transport: TransportConnection) !void {
+        try authorityCore(self.context).rejectOversized(transport);
     }
 
     pub fn ingestAtUnixTime(
@@ -11607,6 +11673,15 @@ test "terminal admission failures release connections without partial participan
         protocol.RejectionReason.build_mismatch,
         takeOutboundForTest(authority).?.message.rejected.reason,
     );
+    try std.testing.expectEqual(@as(u16, 0), authority.diagnostics().active_connections);
+    try std.testing.expectEqual(@as(u16, 0), authority.diagnostics().active_participants);
+
+    _ = try authority.openConnection(.{ .value = 4 });
+    try authority.ingest(.{ .value = 4 }, .{ .hello = .{
+        .content = protocol.content_cohort ^ 1,
+        .account = .{ .value = 4 },
+    } });
+    try std.testing.expectEqual(protocol.RejectionReason.content_mismatch, takeOutboundForTest(authority).?.message.rejected.reason);
     try std.testing.expectEqual(@as(u16, 0), authority.diagnostics().active_connections);
     try std.testing.expectEqual(@as(u16, 0), authority.diagnostics().active_participants);
 
