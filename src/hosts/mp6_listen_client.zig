@@ -21,6 +21,7 @@ const s11_scenario = gameplay_scenarios.get(
 );
 
 const Invocation = struct {
+    content_root: ?[]const u8 = null,
     config: listen_room.Config = .{},
     ticket_path: []const u8 = default_ticket_path,
     max_frames: ?u64 = null,
@@ -84,7 +85,7 @@ const App = struct {
             c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_HIGH_PIXEL_DENSITY,
         ) orelse return error.SDLWindowFailed;
         errdefer c.SDL_DestroyWindow(window);
-        var scene = try client_scene.Scene.init(window);
+        var scene = try client_scene.Scene.init(process_init.io, process_init.gpa, window, invocation.content_root);
         errdefer scene.deinit();
         return .{
             .io = process_init.io,
@@ -600,7 +601,11 @@ fn parseInvocation(args: []const []const u8) !Invocation {
     var result = Invocation{};
     var index: usize = 1;
     while (index < args.len) : (index += 1) {
-        if (std.mem.eql(u8, args[index], "--port")) {
+        if (std.mem.eql(u8, args[index], "--content-root")) {
+            index += 1;
+            if (index >= args.len) return error.MissingContentRoot;
+            result.content_root = args[index];
+        } else if (std.mem.eql(u8, args[index], "--port")) {
             index += 1;
             if (index >= args.len) return error.MissingPort;
             result.config.port = try std.fmt.parseInt(u16, args[index], 10);

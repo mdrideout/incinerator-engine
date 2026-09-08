@@ -1,0 +1,147 @@
+MP6_DEDICATED_PROCESS_PASS clients=2 ticketed=true real_gns=true graphical=true host_migration=false
+Build Summary: 63/63 steps succeeded; 7/7 tests passed
+verify-mp6-dedicated success
++- run bash success 6s
+|  +- compile exe incinerator_mp6_server Debug native cached 97ms MaxRSS:35M
+|  |  +- run sh (game-networking-sockets) cached
+|  |  +- options cached
+|  |  +- options cached
+|  |  +- options cached
+|  |  +- options cached
+|  |  +- WriteFile joltc.h cached
+|  |  +- compile lib joltc Debug native cached 67ms MaxRSS:34M
+|  |  +- compile lib joltc Debug native (reused)
+|  +- compile exe incinerator_mp2_client Debug native cached 97ms MaxRSS:35M
+|  |  +- shaders cached
+|  |  |  +- WriteFile triangle.vert.metal cached
+|  |  |     +- run spirv-cross (triangle.vert.metal) cached
+|  |  |     |  +- run glslc (triangle.vert.spv) cached
+|  |  |     +- run spirv-cross (triangle.frag.metal) cached
+|  |  |     |  +- run glslc (triangle.frag.spv) cached
+|  |  |     +- run spirv-cross (model.vert.metal) cached
+|  |  |     |  +- run glslc (model.vert.spv) cached
+|  |  |     +- run spirv-cross (model.frag.metal) cached
+|  |  |     |  +- run glslc (model.frag.spv) cached
+|  |  |     +- run spirv-cross (visibility.frag.metal) cached
+|  |  |     |  +- run glslc (visibility.frag.spv) cached
+|  |  |     +- run spirv-cross (neural_primitive.vert.metal) cached
+|  |  |     |  +- run glslc (neural_primitive.vert.spv) cached
+|  |  |     +- run spirv-cross (neural_primitive.frag.metal) cached
+|  |  |     |  +- run glslc (neural_primitive.frag.spv) cached
+|  |  |     +- run spirv-cross (neural_model.vert.metal) cached
+|  |  |     |  +- run glslc (neural_model.vert.spv) cached
+|  |  |     +- run spirv-cross (neural_model.frag.metal) cached
+|  |  |     |  +- run glslc (neural_model.frag.spv) cached
+|  |  |     +- run spirv-cross (triangle.vert.json) cached
+|  |  |     |  +- run glslc (triangle.vert.spv) (reused)
+|  |  |     +- run spirv-cross (triangle.frag.json) cached
+|  |  |     |  +- run glslc (triangle.frag.spv) (reused)
+|  |  |     +- run spirv-cross (model.vert.json) cached
+|  |  |     |  +- run glslc (model.vert.spv) (reused)
+|  |  |     +- run spirv-cross (model.frag.json) cached
+|  |  |     |  +- run glslc (model.frag.spv) (reused)
+|  |  |     +- run spirv-cross (visibility.frag.json) cached
+|  |  |     |  +- run glslc (visibility.frag.spv) (reused)
+|  |  |     +- run spirv-cross (neural_primitive.vert.json) cached
+|  |  |     |  +- run glslc (neural_primitive.vert.spv) (reused)
+|  |  |     +- run spirv-cross (neural_primitive.frag.json) cached
+|  |  |     |  +- run glslc (neural_primitive.frag.spv) (reused)
+|  |  |     +- run spirv-cross (neural_model.vert.json) cached
+|  |  |     |  +- run glslc (neural_model.vert.spv) (reused)
+|  |  |     +- run spirv-cross (neural_model.frag.json) cached
+|  |  |        +- run glslc (neural_model.frag.spv) (reused)
+|  |  +- run sh (game-networking-sockets) (reused)
+|  |  +- WriteFile SDL3 cached
+|  |  |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h cached
+|  |  +- compile lib SDL3 Debug native cached 105ms MaxRSS:36M
+|  |  |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+|  |  |  +- configure cmake header include/build_config/SDL_build_config.h.cmake to SDL_build_config.h cached
+|  |  |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+|  |  +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|  |  +- run sh (game-networking-sockets) (reused)
+|  |  +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+|  |  +- WriteFile SDL3 (+1 more reused dependencies)
+|  |  +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|  |  +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|  |  +- WriteFile SDL3 (+1 more reused dependencies)
+|  |  +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|  |  +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|  |  +- options cached
+|  |  +- options (reused)
+|  |  +- options (reused)
+|  |  +- options (reused)
+|  +- install generated to share/incinerator/content/vehicle/meridian.icdb cached
+|  |  +- run exe incinerator_content_cooker (meridian.icdb) cached
+|  |     +- compile exe incinerator_content_cooker ReleaseSafe native cached 51ms MaxRSS:34M
+|  |        +- WriteFile cached
+|  |        +- compile lib zmesh ReleaseSafe native cached 31ms MaxRSS:33M
+|  |        +- compile lib zmesh ReleaseSafe native (reused)
+|  |        +- WriteFile (reused)
+|  |        +- compile lib zmesh ReleaseSafe native (reused)
+|  |        +- compile lib zmesh ReleaseSafe native (reused)
+|  |        +- options cached
+|  |        +- options cached
+|  +- install generated to share/incinerator/content/vehicle/courier.icdb cached
+|     +- run exe incinerator_content_cooker (courier.icdb) cached
+|        +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
++- test-mp6-hosts success
+   +- run test 2 pass (2 total) 44ms MaxRSS:18M
+   |  +- compile test Debug native cached 98ms MaxRSS:35M
+   |     +- run sh (game-networking-sockets) (reused)
+   |     +- options (reused)
+   |     +- options (reused)
+   |     +- options (reused)
+   |     +- options (reused)
+   |     +- WriteFile joltc.h (reused)
+   |     +- compile lib joltc Debug native (reused)
+   |     +- compile lib joltc Debug native (reused)
+   +- run test 2 pass (2 total) 848ms MaxRSS:80M
+   |  +- compile test Debug native cached 97ms MaxRSS:35M
+   |     +- run sh (game-networking-sockets) (reused)
+   |     +- run sh (game-networking-sockets) (reused)
+   |     +- options (reused)
+   |     +- options (reused)
+   |     +- options (reused)
+   |     +- options (reused)
+   |     +- WriteFile joltc.h (reused)
+   |     +- compile lib joltc Debug native (reused)
+   |     +- compile lib joltc Debug native (reused)
+   +- run test 2 pass (2 total) 45ms MaxRSS:21M
+   |  +- compile test Debug native cached 96ms MaxRSS:35M
+   |     +- WriteFile SDL3 (+1 more reused dependencies)
+   |     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+   |     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+   |     +- run sh (game-networking-sockets) (reused)
+   |     +- WriteFile SDL3 (+1 more reused dependencies)
+   |     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+   |     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+   |     +- WriteFile SDL3 (+1 more reused dependencies)
+   |     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+   |     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+   |     +- options (reused)
+   |     +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+   |     +- options (reused)
+   |     +- options (reused)
+   |     +- options (reused)
+   |     +- options (reused)
+   |     +- WriteFile joltc.h (reused)
+   |     +- compile lib joltc Debug native (reused)
+   |     +- compile lib joltc Debug native (reused)
+   +- run test 1 pass (1 total) 54ms MaxRSS:21M
+      +- compile test Debug native cached 97ms MaxRSS:35M
+         +- WriteFile SDL3 (+1 more reused dependencies)
+         +- compile lib SDL3 Debug native (+3 more reused dependencies)
+         +- compile lib SDL3 Debug native (+3 more reused dependencies)
+         +- run sh (game-networking-sockets) (reused)
+         +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+         +- WriteFile SDL3 (+1 more reused dependencies)
+         +- compile lib SDL3 Debug native (+3 more reused dependencies)
+         +- compile lib SDL3 Debug native (+3 more reused dependencies)
+         +- WriteFile SDL3 (+1 more reused dependencies)
+         +- compile lib SDL3 Debug native (+3 more reused dependencies)
+         +- compile lib SDL3 Debug native (+3 more reused dependencies)
+         +- options (reused)
+         +- options (reused)
+         +- options (reused)
+         +- options (reused)
+

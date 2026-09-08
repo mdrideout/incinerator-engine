@@ -21,7 +21,7 @@ test "sixteen authored activity spawn and replacement poses remain physically ad
     var body_count: usize = 0;
     var bodies: [1 + recipe.installed_coords.len * district.max_static_boxes]physics_adapter.BodyId =
         undefined;
-    bodies[body_count] = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 50, 1, 50 });
+    bodies[body_count] = try physics.createStaticBox(recipe.ground_center, recipe.ground_half_extents);
     body_count += 1;
     for (builds) |build| {
         for (build.boxes()) |box| {

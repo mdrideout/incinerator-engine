@@ -82,6 +82,27 @@ pub const OwnedTexture = struct {
 // Public API
 // ============================================================================
 
+/// Full mip chain for a nonempty two-dimensional texture, including level zero.
+pub fn mipLevelCount(width: u32, height: u32) u32 {
+    std.debug.assert(width > 0 and height > 0);
+    return 32 - @as(u32, @clz(@max(width, height)));
+}
+
+/// RGBA8 texel storage, excluding driver-specific allocation alignment.
+pub fn mipStorageBytes(width: u32, height: u32) !u64 {
+    if (width == 0 or height == 0) return error.InvalidTextureDimensions;
+    var w: u64 = width;
+    var h: u64 = height;
+    var bytes: u64 = 0;
+    while (true) {
+        const level_bytes = std.math.mul(u64, w * h, 4) catch return error.TextureTooLarge;
+        bytes = std.math.add(u64, bytes, level_bytes) catch return error.TextureTooLarge;
+        if (w == 1 and h == 1) return bytes;
+        w = @max(1, w / 2);
+        h = @max(1, h / 2);
+    }
+}
+
 /// Create a GPU texture from RGBA pixel data.
 ///
 /// Parameters:
@@ -114,11 +135,11 @@ pub fn createTexture(
     const gpu_texture = c.SDL_CreateGPUTexture(device, &c.SDL_GPUTextureCreateInfo{
         .type = c.SDL_GPU_TEXTURETYPE_2D,
         .format = c.SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
-        .usage = c.SDL_GPU_TEXTUREUSAGE_SAMPLER,
+        .usage = c.SDL_GPU_TEXTUREUSAGE_SAMPLER | c.SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
         .width = width,
         .height = height,
         .layer_count_or_depth = 1,
-        .num_levels = 1,
+        .num_levels = mipLevelCount(width, height),
         .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
         .props = 0,
     }) orelse {
@@ -192,6 +213,9 @@ pub fn createTexture(
     );
 
     c.SDL_EndGPUCopyPass(copy_pass);
+    if (mipLevelCount(width, height) > 1) {
+        c.SDL_GenerateMipmapsForGPUTexture(copy_cmd, gpu_texture);
+    }
 
     // Submit and wait for upload to complete
     const fence = c.SDL_SubmitGPUCommandBufferAndAcquireFence(copy_cmd) orelse {

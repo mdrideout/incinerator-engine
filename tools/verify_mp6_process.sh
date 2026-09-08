@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-    echo "usage: verify_mp6_process.sh <room-server> <graphical-client>" >&2
+if [[ $# -ne 3 ]]; then
+    echo "usage: verify_mp6_process.sh <room-server> <graphical-client> <content-root>" >&2
     exit 2
 fi
+
+content_root=$3
 
 server=$1
 client=$2
@@ -53,11 +55,11 @@ grep -q '^MP6_SERVER_READY ' "$server_log"
 test -f "$run_dir/tickets/account-1.room"
 test -f "$run_dir/tickets/account-2.room"
 
-"$client" \
+"$client" --content-root "$content_root" \
     --ticket "$run_dir/tickets/account-1.room" \
     --max-frames 900 >"$client_one_log" 2>&1 &
 client_one_pid=$!
-"$client" \
+"$client" --content-root "$content_root" \
     --ticket "$run_dir/tickets/account-2.room" \
     --max-frames 900 >"$client_two_log" 2>&1 &
 client_two_pid=$!
@@ -75,7 +77,7 @@ grep -q '^MP4_BASELINE ' "$client_one_log"
 grep -q "^MP6_CLIENT_CONNECT endpoint=127.0.0.1:$port account=2 ticketed=true" "$client_two_log"
 grep -q '^MP2_CLIENT_JOINED ' "$client_two_log"
 grep -q '^MP4_BASELINE ' "$client_two_log"
-grep -q '^MP6_SERVER_CLOSED .* participants=2 host_migration=false$' "$server_log"
+grep -Eq '^MP6_SERVER_CLOSED .* participants=2 host_migration=false( |$)' "$server_log"
 
 if grep -Eiq 'admission_secret|reconnect_token|join_authorization|error:' \
     "$server_log" "$client_one_log" "$client_two_log"; then

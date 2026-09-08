@@ -233,6 +233,8 @@ pub const FrameInput = struct {
     viewport: editor_contract.ViewportInput,
     selection: editor_contract.SelectionInput,
     content_assets: []const engine.assets.Entry,
+    material: ?@import("material_authoring_contract").Input = null,
+    vehicle: ?@import("vehicle_authoring_contract").Input = null,
     frame_timer: *const timing.FrameTimer,
     include_district_streams: bool,
     authoring: editor_contract.AuthoringInput,
@@ -862,6 +864,21 @@ pub const Owner = opaque {
     ) void {
         const capture = ownerState(self).incident orelse return;
         capture.observeAuthoredChange(evidence);
+    }
+
+    pub fn recordMaterialChange(self: *Owner, evidence: @import("material_authoring_contract").Evidence, tick: u64, frame: u64) void {
+        const capture = ownerState(self).incident orelse return;
+        capture.observeMaterialChange(evidence, tick, frame);
+    }
+
+    pub fn recordVehicleMotion(self: *Owner, frame: @import("vehicle_motion.zig").Frame) void {
+        const capture = ownerState(self).incident orelse return;
+        capture.observeVehicleMotion(frame);
+    }
+
+    pub fn recordVehicleChange(self: *Owner, evidence: @import("vehicle_authoring_contract").Evidence, tick: u64, frame: u64) void {
+        const capture = ownerState(self).incident orelse return;
+        capture.observeVehicleChange(evidence, tick, frame);
     }
 
     pub fn recordDeveloperEndpoint(
@@ -1578,6 +1595,8 @@ pub const Owner = opaque {
             .viewport = frame.viewport,
             .selection = frame.selection,
             .content_assets = frame.content_assets,
+            .material = frame.material,
+            .vehicle = frame.vehicle,
             .frame_timing = &frame_timing_view,
             .developer = .{
                 .snapshot = &diagnostics_snapshot,

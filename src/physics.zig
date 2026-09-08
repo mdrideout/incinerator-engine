@@ -343,6 +343,7 @@ const broad_phase_layers = struct {
 const CharacterRelocationQuery = struct {
     body_interface: *c.JPH_BodyInterface,
     max_penetration_depth: f32,
+    ignored_body: ?c.JPH_BodyID = null,
     blocked: bool = false,
 };
 
@@ -352,7 +353,7 @@ fn collectCharacterRelocationHit(
 ) callconv(.c) f32 {
     const query: *CharacterRelocationQuery = @ptrCast(@alignCast(raw.?));
     const hit = result[0];
-    if (hit.penetrationDepth <= query.max_penetration_depth or
+    if (query.ignored_body == hit.bodyID2 or hit.penetrationDepth <= query.max_penetration_depth or
         c.JPH_BodyInterface_IsSensor(query.body_interface, hit.bodyID2))
     {
         return std.math.floatMax(f32);
@@ -367,7 +368,7 @@ fn collectCharacterPlacementHit(
 ) callconv(.c) void {
     const query: *CharacterRelocationQuery = @ptrCast(@alignCast(raw.?));
     const hit = result[0];
-    if (hit.penetrationDepth <= query.max_penetration_depth or
+    if (query.ignored_body == hit.bodyID2 or hit.penetrationDepth <= query.max_penetration_depth or
         c.JPH_BodyInterface_IsSensor(query.body_interface, hit.bodyID2))
     {
         return;
@@ -1214,6 +1215,8 @@ pub const Physics = struct {
         const wheel_up = toVec3(.{ 0, 1, 0 });
         const vehicle_forward = toVec3(.{ 0, 0, -1 });
         for (normalized.wheel_attachment_positions, 0..) |attachment, index| {
+            const rear = index >= 2;
+            const tires = if (rear) normalized.rear_axle.tire_friction else normalized.tire_friction;
             const settings_wv = c.JPH_WheelSettingsWV_Create() orelse
                 return error.VehicleWheelSettingsCreationFailed;
             const settings: *c.JPH_WheelSettings = @ptrCast(settings_wv);
@@ -1228,17 +1231,17 @@ pub const Physics = struct {
             c.JPH_WheelSettings_SetWheelForward(settings, &vehicle_forward);
             c.JPH_WheelSettings_SetSuspensionMinLength(
                 settings,
-                normalized.suspension_min_length,
+                (if (rear) normalized.rear_axle.suspension_min_length else normalized.suspension_min_length),
             );
             c.JPH_WheelSettings_SetSuspensionMaxLength(
                 settings,
-                normalized.suspension_max_length,
+                (if (rear) normalized.rear_axle.suspension_max_length else normalized.suspension_max_length),
             );
             var spring: c.JPH_SpringSettings = undefined;
             c.JPH_WheelSettings_GetSuspensionSpring(settings, &spring);
             spring.mode = c.JPH_SpringMode_FrequencyAndDamping;
-            spring.frequencyOrStiffness = normalized.suspension_frequency;
-            spring.damping = normalized.suspension_damping;
+            spring.frequencyOrStiffness = (if (rear) normalized.rear_axle.suspension_frequency else normalized.suspension_frequency);
+            spring.damping = (if (rear) normalized.rear_axle.suspension_damping else normalized.suspension_damping);
             c.JPH_WheelSettings_SetSuspensionSpring(settings, &spring);
             c.JPH_WheelSettings_SetRadius(settings, normalized.wheel_radius);
             c.JPH_WheelSettings_SetWidth(settings, normalized.wheel_width);
@@ -1248,7 +1251,7 @@ pub const Physics = struct {
             );
             c.JPH_WheelSettingsWV_SetMaxBrakeTorque(
                 settings_wv,
-                normalized.max_brake_torque,
+                if (rear) normalized.rear_axle.brake_torque_nm else normalized.max_brake_torque,
             );
             c.JPH_WheelSettingsWV_SetMaxHandBrakeTorque(
                 settings_wv,
@@ -1261,13 +1264,13 @@ pub const Physics = struct {
             c.JPH_LinearCurve_AddPoint(longitudinal, 0, 0);
             c.JPH_LinearCurve_AddPoint(
                 longitudinal,
-                normalized.tire_friction.longitudinal_peak_slip,
-                normalized.tire_friction.longitudinal_peak_friction,
+                tires.longitudinal_peak_slip,
+                tires.longitudinal_peak_friction,
             );
             c.JPH_LinearCurve_AddPoint(
                 longitudinal,
-                normalized.tire_friction.longitudinal_slide_slip,
-                normalized.tire_friction.longitudinal_slide_friction,
+                tires.longitudinal_slide_slip,
+                tires.longitudinal_slide_friction,
             );
             c.JPH_LinearCurve_Sort(longitudinal);
             c.JPH_WheelSettingsWV_SetLongitudinalFriction(settings_wv, longitudinal);
@@ -1279,13 +1282,13 @@ pub const Physics = struct {
             c.JPH_LinearCurve_AddPoint(lateral, 0, 0);
             c.JPH_LinearCurve_AddPoint(
                 lateral,
-                normalized.tire_friction.lateral_peak_angle_radians,
-                normalized.tire_friction.lateral_peak_friction,
+                std.math.radiansToDegrees(tires.lateral_peak_angle_radians),
+                tires.lateral_peak_friction,
             );
             c.JPH_LinearCurve_AddPoint(
                 lateral,
-                normalized.tire_friction.lateral_slide_angle_radians,
-                normalized.tire_friction.lateral_slide_friction,
+                std.math.radiansToDegrees(tires.lateral_slide_angle_radians),
+                tires.lateral_slide_friction,
             );
             c.JPH_LinearCurve_Sort(lateral);
             c.JPH_WheelSettingsWV_SetLateralFriction(settings_wv, lateral);
@@ -1296,22 +1299,43 @@ pub const Physics = struct {
             return error.VehicleControllerSettingsCreationFailed;
         defer c.JPH_VehicleControllerSettings_Destroy(@ptrCast(controller_settings));
 
-        // Do not use pinned JoltC's AddDifferential helper: it leaves
-        // leftRightSplit uninitialized. Populate every field from upstream
-        // defaults and install the differential through SetDifferentials.
-        var differential: c.JPH_VehicleDifferentialSettings = undefined;
-        c.JPH_VehicleDifferentialSettings_Init(&differential);
-        differential.leftWheel = @intFromEnum(engine.physics.VehicleWheelIndex.front_left);
-        differential.rightWheel = @intFromEnum(engine.physics.VehicleWheelIndex.front_right);
-        differential.differentialRatio = normalized.front_differential_ratio;
-        differential.leftRightSplit = 0.5;
-        differential.limitedSlipRatio = normalized.front_limited_slip_ratio;
-        differential.engineTorqueRatio = 1.0;
-        c.JPH_WheeledVehicleControllerSettings_SetDifferentials(
-            controller_settings,
-            &differential,
-            1,
-        );
+        const powertrain = normalized.powertrain;
+        const torque_curve = c.JPH_LinearCurve_Create() orelse return error.VehicleTorqueCurveCreationFailed;
+        defer c.JPH_LinearCurve_Destroy(torque_curve);
+        for (powertrain.torque_curve) |point| c.JPH_LinearCurve_AddPoint(torque_curve, point.rpm_fraction, point.torque_fraction);
+        const engine_settings = c.JPH_VehicleEngineSettings{
+            .maxTorque = powertrain.max_torque_nm,
+            .minRPM = powertrain.idle_rpm,
+            .maxRPM = powertrain.max_rpm,
+            .normalizedTorque = torque_curve,
+            .inertia = powertrain.inertia_kg_m2,
+            .angularDamping = powertrain.angular_damping,
+        };
+        c.JPH_WheeledVehicleControllerSettings_SetEngine(controller_settings, &engine_settings);
+        const transmission = c.JPH_VehicleTransmissionSettings_Create() orelse return error.VehicleTransmissionCreationFailed;
+        defer c.JPH_VehicleTransmissionSettings_Destroy(transmission);
+        c.JPH_VehicleTransmissionSettings_SetMode(transmission, c.JPH_TransmissionMode_Auto);
+        c.JPH_VehicleTransmissionSettings_SetGearRatios(transmission, powertrain.forward_gears.ptr, std.math.cast(u32, powertrain.forward_gears.len) orelse return error.VehicleGearCountNotRepresentable);
+        c.JPH_VehicleTransmissionSettings_SetReverseGearRatios(transmission, powertrain.reverse_gears.ptr, std.math.cast(u32, powertrain.reverse_gears.len) orelse return error.VehicleGearCountNotRepresentable);
+        c.JPH_VehicleTransmissionSettings_SetSwitchTime(transmission, powertrain.switch_time_s);
+        c.JPH_VehicleTransmissionSettings_SetClutchReleaseTime(transmission, powertrain.clutch_release_s);
+        c.JPH_VehicleTransmissionSettings_SetSwitchLatency(transmission, powertrain.switch_latency_s);
+        c.JPH_VehicleTransmissionSettings_SetShiftUpRPM(transmission, powertrain.shift_up_rpm);
+        c.JPH_VehicleTransmissionSettings_SetShiftDownRPM(transmission, powertrain.shift_down_rpm);
+        c.JPH_VehicleTransmissionSettings_SetClutchStrength(transmission, powertrain.clutch_strength);
+        c.JPH_WheeledVehicleControllerSettings_SetTransmission(controller_settings, transmission);
+
+        // Populate all fields; the pinned AddDifferential helper leaves its
+        // left/right split uninitialized. The two entries represent axles.
+        const differentials = [2]c.JPH_VehicleDifferentialSettings{
+            .{ .leftWheel = 0, .rightWheel = 1, .differentialRatio = normalized.front_differential_ratio, .leftRightSplit = 0.5, .limitedSlipRatio = normalized.front_limited_slip_ratio, .engineTorqueRatio = powertrain.front_torque_fraction },
+            .{ .leftWheel = 2, .rightWheel = 3, .differentialRatio = powertrain.rear_differential_ratio, .leftRightSplit = 0.5, .limitedSlipRatio = powertrain.rear_limited_slip_ratio, .engineTorqueRatio = 1 - powertrain.front_torque_fraction },
+        };
+        // An axle with zero requested drive must not be connected: Jolt's
+        // center limited-slip transfer can send it torque even at ratio zero.
+        const driven = if (powertrain.front_torque_fraction == 1) differentials[0..1] else if (powertrain.front_torque_fraction == 0) differentials[1..2] else differentials[0..2];
+        c.JPH_WheeledVehicleControllerSettings_SetDifferentials(controller_settings, driven.ptr, @intCast(driven.len));
+        c.JPH_WheeledVehicleControllerSettings_SetDifferentialLimitedSlipRatio(controller_settings, powertrain.center_limited_slip_ratio);
 
         var vehicle_settings: c.JPH_VehicleConstraintSettings = undefined;
         c.JPH_VehicleConstraintSettings_Init(&vehicle_settings);
@@ -1321,6 +1345,12 @@ pub const Physics = struct {
         vehicle_settings.wheelsCount = engine.physics.vehicle_wheel_count;
         vehicle_settings.wheels = @ptrCast(&wheel_settings);
         vehicle_settings.controller = @ptrCast(controller_settings);
+        const anti_roll_bars = [2]c.JPH_VehicleAntiRollBar{
+            .{ .leftWheel = 0, .rightWheel = 1, .stiffness = normalized.front_anti_roll_stiffness },
+            .{ .leftWheel = 2, .rightWheel = 3, .stiffness = normalized.rear_axle.anti_roll_stiffness },
+        };
+        vehicle_settings.antiRollBars = &anti_roll_bars;
+        vehicle_settings.antiRollBarsCount = anti_roll_bars.len;
         if (failure_point != null) {
             try injectVehicleCreateFailure(failure_point, .after_settings);
         }
@@ -1329,6 +1359,16 @@ pub const Physics = struct {
             body,
             &vehicle_settings,
         ) orelse return error.VehicleConstraintCreationFailed;
+        const controller: *c.JPH_WheeledVehicleController = @ptrCast(c.JPH_VehicleConstraint_GetController(constraint) orelse {
+            c.JPH_Constraint_Destroy(@ptrCast(constraint));
+            return error.VehicleControllerInvariantBroken;
+        });
+        const initial_powertrain = powertrainStateToC(normalized.initial_powertrain orelse .{ .engine_rpm = powertrain.idle_rpm });
+        c.IC_Vehicle_SetCombinedTireResponse(controller, &[_]f32{ normalized.tire_friction.longitudinal_slide_slip, normalized.tire_friction.longitudinal_slide_slip, normalized.rear_axle.tire_friction.longitudinal_slide_slip, normalized.rear_axle.tire_friction.longitudinal_slide_slip }, &[_]f32{ normalized.tire_friction.lateral_slide_angle_radians, normalized.tire_friction.lateral_slide_angle_radians, normalized.rear_axle.tire_friction.lateral_slide_angle_radians, normalized.rear_axle.tire_friction.lateral_slide_angle_radians });
+        if (!c.IC_Vehicle_SetPowertrainState(controller, &initial_powertrain)) {
+            c.JPH_Constraint_Destroy(@ptrCast(constraint));
+            return error.IncompatibleVehiclePowertrainState;
+        }
         var constraint_added = false;
         var listener_added = false;
         errdefer {
@@ -1436,6 +1476,49 @@ pub const Physics = struct {
         }
     }
 
+    fn setVehicleLiveSettings(self: *Physics, id: VehicleId, settings: engine.physics.VehicleLiveSettings) !void {
+        try settings.validate();
+        const record = try self.vehicleRecord(id);
+        const controller: *c.JPH_WheeledVehicleController = @ptrCast(c.JPH_VehicleConstraint_GetController(record.constraint).?);
+        if (!c.IC_Vehicle_SetEngineCoefficients(controller, settings.max_torque_nm, settings.idle_rpm, settings.max_rpm, settings.inertia_kg_m2, settings.angular_damping)) return error.IncompatibleVehiclePowertrainState;
+        c.JPH_VehicleConstraint_SetMaxPitchRollAngle(record.constraint, settings.max_pitch_roll_radians);
+    }
+
+    /// Configuration replacement always samples and preserves live motion.
+    /// Construction initial-state fields never provide a relocation capability.
+    fn rebuildFourWheelVehicle(self: *Physics, id: VehicleId, requested: engine.physics.VehicleDesc) !VehicleId {
+        const old = try self.vehicleRecord(id);
+        const state = try self.fourWheelVehicleState(id);
+        if (state.powertrain.switch_time_left_s > 0 or state.powertrain.clutch_release_left_s > 0) return error.VehicleIsShifting;
+        var candidate = requested;
+        candidate.chassis = state.chassis;
+        candidate.initial_powertrain = state.powertrain;
+        for (&candidate.initial_wheel_dynamics, state.wheels) |*motion, wheel| motion.* = .{ .rotation_angle = wheel.rotation_angle, .angular_velocity = wheel.angular_velocity };
+        try candidate.validate();
+        // Test the proposed collision shape before allocating or replacing a
+        // live vehicle. The old chassis is excluded, sensors do not block.
+        const half_extents = toVec3(candidate.chassis_half_extents);
+        const box = c.JPH_BoxShape_Create(&half_extents, c.JPH_DEFAULT_CONVEX_RADIUS) orelse return error.VehicleShapeCreationFailed;
+        defer c.JPH_Shape_Destroy(@ptrCast(box));
+        var transform: c.JPH_RMat4 = undefined;
+        const rotation = toJoltQuat(state.chassis.pose.rotation);
+        const position = toVec3(state.chassis.pose.position);
+        c.JPH_Mat4_RotationTranslation(&transform, &rotation, &position);
+        var settings: c.JPH_CollideShapeSettings = undefined;
+        c.JPH_CollideShapeSettings_Init(&settings);
+        settings.maxSeparationDistance = 0;
+        const scale = toVec3(.{ 1, 1, 1 });
+        var base = toRVec3(.{ 0, 0, 0 });
+        var query = CharacterRelocationQuery{ .body_interface = self.body_interface, .max_penetration_depth = 0.001, .ignored_body = old.body_id };
+        _ = c.JPH_NarrowPhaseQuery_CollideShape2(c.JPH_PhysicsSystem_GetNarrowPhaseQuery(self.system).?, @ptrCast(box), &scale, &transform, &settings, &base, c.JPH_CollisionCollectorType_AllHit, collectCharacterPlacementHit, &query, null, null, null, null);
+        if (query.blocked) return error.VehicleRebuildCollisionBlocked;
+        const replacement = try self.createFourWheelVehicle(candidate, null);
+        errdefer self.destroyFourWheelVehicle(replacement) catch unreachable;
+        _ = try self.fourWheelVehicleState(replacement);
+        try self.destroyFourWheelVehicle(id);
+        return replacement;
+    }
+
     fn fourWheelVehicleState(
         self: *Physics,
         vehicle_id: VehicleId,
@@ -1483,7 +1566,15 @@ pub const Physics = struct {
                 &canonical_wheel_up,
                 &world_transform,
             );
+            var longitudinal_slip: f32 = 0;
+            var lateral_slip: f32 = 0;
+            c.IC_Vehicle_GetWheelSlip(wheel, &longitudinal_slip, &lateral_slip);
             result.* = .{
+                .suspension_impulse_ns = c.JPH_Wheel_GetSuspensionLambda(wheel),
+                .longitudinal_impulse_ns = c.JPH_Wheel_GetLongitudinalLambda(wheel),
+                .lateral_impulse_ns = c.JPH_Wheel_GetLateralLambda(wheel),
+                .longitudinal_slip = longitudinal_slip,
+                .lateral_slip_radians = lateral_slip,
                 .pose = try poseFromJoltMatrix(world_transform),
                 .angular_velocity = wheelAngularVelocityFromJolt(
                     c.JPH_Wheel_GetAngularVelocity(wheel),
@@ -1506,7 +1597,10 @@ pub const Physics = struct {
             return error.VehicleControllerInvariantBroken;
         const transmission = c.JPH_WheeledVehicleController_GetTransmission(controller) orelse
             return error.VehicleControllerInvariantBroken;
+        var drivetrain_state: c.IC_VehiclePowertrainState = undefined;
+        if (!c.IC_Vehicle_GetPowertrainState(controller, &drivetrain_state)) return error.VehiclePowertrainBridgeMismatch;
         const state = engine.physics.VehicleState{
+            .powertrain = powertrainStateFromC(drivetrain_state),
             .chassis = .{
                 .pose = .{
                     .position = fromRVec3(chassis_position),
@@ -2848,6 +2942,13 @@ pub const Vehicles = struct {
         return self.physics.createFourWheelVehicle(desc, null);
     }
 
+    pub fn setVehicleLiveSettings(self: *Vehicles, id: Handle, settings: engine.physics.VehicleLiveSettings) !void {
+        try self.physics.setVehicleLiveSettings(id, settings);
+    }
+    pub fn rebuildVehicle(self: *Vehicles, id: Handle, settings: engine.physics.VehicleDesc) !Handle {
+        return self.physics.rebuildFourWheelVehicle(id, settings);
+    }
+
     pub fn destroyVehicle(self: *Vehicles, vehicle_id: Handle) !void {
         try self.physics.destroyFourWheelVehicle(vehicle_id);
     }
@@ -3240,6 +3341,59 @@ test "Jolt rigid matrix conversion covers identity and 180 degree branches" {
         for (rotation.position, pose.position) |expected, actual| {
             try std.testing.expectApproxEqAbs(expected, actual, 0.0001);
         }
+    }
+}
+
+test "vehicle installs authored lateral tire curves in Jolt degree units" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    var vehicles = physics.vehicles();
+    const desc = engine.physics.VehicleDesc{};
+    const handle = try vehicles.createVehicle(desc);
+    defer vehicles.destroyVehicle(handle) catch unreachable;
+    const record = try physics.vehicleRecord(handle);
+    for (0..engine.physics.vehicle_wheel_count) |index| {
+        const wheel = c.JPH_VehicleConstraint_GetWheel(record.constraint, @intCast(index)).?;
+        const settings = c.JPH_WheelWV_GetSettings(@ptrCast(wheel)).?;
+        const curve = c.JPH_WheelSettingsWV_GetLateralFriction(settings).?;
+        try std.testing.expectEqual(@as(u32, 3), c.JPH_LinearCurve_GetPointCount(curve));
+        var peak: c.JPH_Point = undefined;
+        var slide: c.JPH_Point = undefined;
+        c.JPH_LinearCurve_GetPoint(curve, 1, &peak);
+        c.JPH_LinearCurve_GetPoint(curve, 2, &slide);
+        try std.testing.expectApproxEqAbs(@as(f32, 3), peak.x, 0.00001);
+        try std.testing.expectEqual(desc.tire_friction.lateral_peak_friction, peak.y);
+        try std.testing.expectApproxEqAbs(@as(f32, 20), slide.x, 0.00001);
+        try std.testing.expectEqual(desc.tire_friction.lateral_slide_friction, slide.y);
+    }
+}
+
+test "installed tire response couples sliding axes and handbrake owns only rear wheels" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    var vehicles = physics.vehicles();
+    const desc = engine.physics.VehicleDesc{};
+    const handle = try vehicles.createVehicle(desc);
+    defer vehicles.destroyVehicle(handle) catch unreachable;
+    const record = try physics.vehicleRecord(handle);
+    const controller: *c.JPH_WheeledVehicleController = @ptrCast(c.JPH_VehicleConstraint_GetController(record.constraint).?);
+    for (0..4) |i| {
+        const wheel = c.JPH_VehicleConstraint_GetWheel(record.constraint, @intCast(i)).?;
+        const settings = c.JPH_WheelWV_GetSettings(@ptrCast(wheel)).?;
+        try std.testing.expectEqual(if (i < 2) @as(f32, 0) else desc.max_hand_brake_torque, c.JPH_WheelSettingsWV_GetMaxHandBrakeTorque(settings));
+        var longitudinal: f32 = undefined;
+        var lateral: f32 = undefined;
+        c.IC_Vehicle_GetTireImpulseLimits(controller, @intCast(i), 0, 0, &longitudinal, &lateral);
+        try std.testing.expectEqual(@as(f32, 1), longitudinal);
+        try std.testing.expectEqual(@as(f32, 1), lateral);
+        // A locked wheel retains longitudinal drag but loses cornering capacity.
+        c.IC_Vehicle_GetTireImpulseLimits(controller, @intCast(i), 1, 0, &longitudinal, &lateral);
+        try std.testing.expectEqual(@as(f32, 1), longitudinal);
+        try std.testing.expect(lateral > 0 and lateral < 0.25);
+        // Sideways sliding retains lateral drag; sign and 90-degree contact are finite.
+        c.IC_Vehicle_GetTireImpulseLimits(controller, @intCast(i), 0, @as(f32, std.math.pi) / 2, &longitudinal, &lateral);
+        try std.testing.expectEqual(@as(f32, 1), lateral);
+        try std.testing.expect(std.math.isFinite(longitudinal) and longitudinal >= 0);
     }
 }
 
@@ -4825,4 +4979,68 @@ test "debug shape descriptors follow successful replacement only" {
     );
     const record_after_failure = physics.body_handles.get(body.serial).?;
     try std.testing.expectEqual([3]f32{ 1, 2, 3 }, record_after_failure.shape.box);
+}
+
+fn powertrainStateToC(value: engine.physics.VehiclePowertrainState) c.IC_VehiclePowertrainState {
+    return .{ .engine_rpm = value.engine_rpm, .gear = value.gear, .clutch_friction = value.clutch_friction, .switch_time_left_s = value.switch_time_left_s, .clutch_release_left_s = value.clutch_release_left_s, .switch_latency_left_s = value.switch_latency_left_s };
+}
+fn powertrainStateFromC(value: c.IC_VehiclePowertrainState) engine.physics.VehiclePowertrainState {
+    return .{ .engine_rpm = value.engine_rpm, .gear = value.gear, .clutch_friction = value.clutch_friction, .switch_time_left_s = value.switch_time_left_s, .clutch_release_left_s = value.clutch_release_left_s, .switch_latency_left_s = value.switch_latency_left_s };
+}
+
+test "authored drivetrain selects only powered axles and preserves explicit shift state" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    var vehicles = physics.vehicles();
+    for ([_]f32{ 1, 0, 0.4 }) |front_fraction| {
+        const initial = engine.physics.VehiclePowertrainState{ .engine_rpm = 2750, .gear = 2, .clutch_friction = 0.35, .switch_time_left_s = 0.12, .clutch_release_left_s = 0.17, .switch_latency_left_s = 0.28 };
+        const desc = engine.physics.VehicleDesc{ .initial_powertrain = initial, .powertrain = .{ .front_torque_fraction = front_fraction, .center_limited_slip_ratio = 3, .forward_gears = &.{ 3.8, 2.4, 1.6, 1.1, 0.8, 0.65 } } };
+        const handle = try vehicles.createVehicle(desc);
+        defer vehicles.destroyVehicle(handle) catch unreachable;
+        const record = try physics.vehicleRecord(handle);
+        const controller: *c.JPH_WheeledVehicleController = @ptrCast(c.JPH_VehicleConstraint_GetController(record.constraint).?);
+        try std.testing.expectEqual(desc.powertrain.center_limited_slip_ratio, c.IC_Vehicle_GetCenterLimitedSlipRatio(controller));
+        try std.testing.expectEqual(@as(u32, if (front_fraction == 0.4) 2 else 1), c.IC_Vehicle_GetDifferentialCount(controller));
+        try std.testing.expectEqual(@as(i32, if (front_fraction == 0) 2 else 0), c.IC_Vehicle_GetDifferentialLeftWheel(controller, 0));
+        const actual = try vehicles.vehicleState(handle);
+        try std.testing.expectEqualDeep(initial, actual.powertrain);
+        try std.testing.expectEqual(initial.gear, actual.current_gear);
+        try std.testing.expectEqual(initial.engine_rpm, actual.engine_rpm);
+        // A live coefficient edit must preserve the current RPM and shift.
+        try std.testing.expect(c.IC_Vehicle_SetEngineCoefficients(controller, 320, 850, 6500, 0.6, 0.25));
+        try std.testing.expectEqualDeep(initial, (try vehicles.vehicleState(handle)).powertrain);
+        // Narrowing the usable RPM around a moving engine rejects atomically.
+        try std.testing.expect(!c.IC_Vehicle_SetEngineCoefficients(controller, 320, 850, 2000, 0.6, 0.25));
+        try std.testing.expectEqualDeep(initial, (try vehicles.vehicleState(handle)).powertrain);
+    }
+}
+
+test "vehicle rebuild preserves moving chassis and powertrain and rejects collision before replacement" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    var vehicles = physics.vehicles();
+    var handle = try vehicles.createVehicle(.{ .chassis = .{ .pose = .{ .position = .{ 0, 3, 0 } }, .velocity = .{ .linear = .{ 0, 0, -12 }, .angular = .{ 0, 0.2, 0 } } }, .initial_powertrain = .{ .engine_rpm = 2300, .gear = 2, .switch_latency_left_s = 0.2 } });
+    defer vehicles.destroyVehicle(handle) catch unreachable;
+    const before = try vehicles.vehicleState(handle);
+    handle = try vehicles.rebuildVehicle(handle, .{ .mass = 1800 });
+    const after = try vehicles.vehicleState(handle);
+    try std.testing.expectEqualDeep(before.chassis, after.chassis);
+    try std.testing.expectEqualDeep(before.powertrain, after.powertrain);
+    for (before.wheels, after.wheels) |a, b| {
+        try std.testing.expectEqual(a.angular_velocity, b.angular_velocity);
+        try std.testing.expectEqual(a.rotation_angle, b.rotation_angle);
+    }
+    const blocker = try physics.createStaticBox(.{ 2, 3, 0 }, .{ 0.2, 2, 4 });
+    defer _ = physics.removeBody(blocker);
+    try std.testing.expectError(error.VehicleRebuildCollisionBlocked, vehicles.rebuildVehicle(handle, .{ .chassis_half_extents = .{ 2.5, 0.25, 2 } }));
+    try std.testing.expectEqualDeep(after, try vehicles.vehicleState(handle));
+    try std.testing.expectEqual(@as(usize, 1), physics.vehicle_handles.count());
+}
+
+test "district static-box adapter uses the measured road friction" {
+    var physics = try Physics.init();
+    defer physics.deinit();
+    const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 10, 1, 10 });
+    defer _ = physics.removeBody(ground);
+    try std.testing.expectEqual(@as(f32, 0.2), c.JPH_BodyInterface_GetFriction(physics.body_interface, ground.toJolt()));
 }

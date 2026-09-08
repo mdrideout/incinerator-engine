@@ -295,9 +295,9 @@ test "catalog shape admission compares the complete logical navigation fragment"
     edges[4].cost += 1;
     try std.testing.expect(!sandbox_recipe.logicalShapeMatches(view, &build));
     edges[4].cost -= 1;
-    nodes[0].flags = 0;
+    nodes[0].flags ^= 1;
     try std.testing.expect(!sandbox_recipe.logicalShapeMatches(view, &build));
-    nodes[0].flags = content.bundle.navigation_node_terminal;
+    nodes[0].flags ^= 1;
     view.navigation_edges = edges[0 .. build.navigation_edge_count - 1];
     try std.testing.expect(!sandbox_recipe.logicalShapeMatches(view, &build));
 }

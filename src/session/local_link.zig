@@ -158,6 +158,7 @@ test "local link rejects impossible snapshot and action semantics before enqueue
     invalid_snapshot.sequence.value = 1;
     invalid_snapshot.vehicle_count = 1;
     invalid_snapshot.vehicles[0] = .{
+        .definition = protocol.validationVehicleDefinition(),
         .entity = .{ .index = 17, .generation = 1 },
         .position = .{ 0, 1, 0 },
         .rotation = .{ 0, 0, 0, 0 },

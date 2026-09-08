@@ -167,7 +167,7 @@ test "default discovery path is explicit and absolute" {
 
 test "available discovery must match the registered schema digest" {
     const catalog = protocol.schemaCatalog();
-    var ids: [5]protocol.SchemaId = undefined;
+    var ids: [protocol.schemaCatalog().len]protocol.SchemaId = undefined;
     for (catalog, 0..) |schema, index| ids[index] = schema.id;
     const discovery = protocol.DiscoveryDocument{
         .lifecycle = .available,

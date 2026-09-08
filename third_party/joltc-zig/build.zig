@@ -77,6 +77,8 @@ fn buildLibJoltc(
     }
 
     lib_joltc.installHeader(joltc_dep.path("include/joltc.h"), "joltc.h");
+    lib_joltc.installHeader(b.path("vehicle_bridge.h"), "vehicle_bridge.h");
+    lib_joltc.root_module.addIncludePath(b.path("."));
     lib_joltc.root_module.addIncludePath(joltc_dep.path("include"));
     lib_joltc.root_module.addIncludePath(jolt_dep.path(""));
 
@@ -96,6 +98,9 @@ fn buildLibJoltc(
         .files = &.{ "joltc.cpp", "joltc_assert.cpp" },
         .flags = c_flags,
     });
+
+    // Our bridge deliberately compiles with normal C++ access control.
+    lib_joltc.root_module.addCSourceFile(.{ .file = b.path("vehicle_bridge.cpp"), .flags = &.{ "-std=c++17", "-fno-exceptions" } });
 
     const allocator = b.allocator;
     var cpp_files = try std.ArrayList([]const u8).initCapacity(allocator, 0);

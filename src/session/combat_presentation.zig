@@ -770,6 +770,7 @@ test "local HUD uses vehicle anchor and retains the last position without an ava
     try std.testing.expectEqualDeep([3]f32{ 1, 2, 3 }, on_foot.anchor_position.?);
 
     const vehicle = protocol.VehicleState{
+        .definition = protocol.validationVehicleDefinition(),
         .entity = .{ .index = 20, .generation = 1 },
         .position = .{ 7, 1, -4 },
         .rotation = .{ 0, 0, 0, 1 },

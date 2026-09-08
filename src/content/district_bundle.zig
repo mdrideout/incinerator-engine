@@ -6,29 +6,29 @@
 const std = @import("std");
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'D', 'B', 'N', 'D', 'L' };
-pub const format_version: u16 = 3;
-pub const schema_cohort: u16 = 4;
+pub const format_version: u16 = 4;
+pub const schema_cohort: u16 = 6;
 pub const max_navigation_outgoing_edges: u8 = 3;
 pub const header_size: u32 = 320;
 pub const section_count: usize = 12;
 pub const none_index: u32 = std.math.maxInt(u32);
 
+/// Callers may supply measured admission limits. Defaults impose only the
+/// representable bounds of this wire format, never a particular demo scene.
 pub const Limits = struct {
-    /// EA1-A's measured product cohort contains one 128x128 RGBA base-color
-    /// image plus the retained tiny palette in a district bundle.
-    max_file_bytes: usize = 256 * 1024,
-    max_strings_bytes: u32 = 4 * 1024,
-    max_nodes: u32 = 8,
-    max_meshes: u32 = 2,
-    max_primitives: u32 = 4,
-    max_materials: u32 = 4,
-    max_textures: u32 = 2,
-    max_vertices: u32 = 128,
-    max_indices: u32 = 384,
-    max_pixel_bytes: u32 = 128 * 1024,
-    max_static_boxes: u32 = 8,
-    max_navigation_nodes: u32 = 8,
-    max_navigation_edges: u32 = 16,
+    max_file_bytes: usize = std.math.maxInt(u32),
+    max_strings_bytes: u32 = std.math.maxInt(u32),
+    max_nodes: u32 = std.math.maxInt(u32),
+    max_meshes: u32 = std.math.maxInt(u32),
+    max_primitives: u32 = std.math.maxInt(u32),
+    max_materials: u32 = std.math.maxInt(u32),
+    max_textures: u32 = std.math.maxInt(u32),
+    max_vertices: u32 = std.math.maxInt(u32),
+    max_indices: u32 = std.math.maxInt(u32),
+    max_pixel_bytes: u32 = std.math.maxInt(u32),
+    max_static_boxes: u32 = std.math.maxInt(u32),
+    max_navigation_nodes: u32 = std.math.maxInt(u8),
+    max_navigation_edges: u32 = std.math.maxInt(u8),
 };
 
 pub const Section = enum(u8) {
@@ -47,7 +47,7 @@ pub const Section = enum(u8) {
 };
 
 const section_strides = [section_count]u32{
-    1, 80, 16, 20, 36, 44, 32, 4, 1, 40, 16, 12,
+    1, 80, 16, 20, 80, 44, 32, 4, 1, 40, 16, 12,
 };
 
 pub const SourceFormat = enum(u8) {
@@ -95,6 +95,15 @@ pub const Material = struct {
     base_color_texture: u32 = none_index,
     base_color_texcoord: u8 = 0,
     flags: u32 = 0,
+    metallic: f32 = 0,
+    roughness: f32 = 1,
+    normal_scale: f32 = 1,
+    occlusion_strength: f32 = 1,
+    emissive: [3]f32 = .{ 0, 0, 0 },
+    metallic_roughness_texture: u32 = none_index,
+    normal_texture: u32 = none_index,
+    occlusion_texture: u32 = none_index,
+    emissive_texture: u32 = none_index,
 };
 
 pub const TextureFormat = enum(u32) {
@@ -510,11 +519,12 @@ pub fn decode(
     }
     if (expected_offset != bytes.len) return .{ .failed = .size_mismatch };
 
-    if (!recordTailsAreZero(
-        constSectionBytes(bytes, sections[@intFromEnum(Section.materials)]),
-        section_strides[@intFromEnum(Section.materials)],
-        29,
-    )) return .{ .failed = .{ .invalid_section = .materials } };
+    const material_bytes = constSectionBytes(bytes, sections[@intFromEnum(Section.materials)]);
+    var material_offset: usize = 0;
+    while (material_offset < material_bytes.len) : (material_offset += section_strides[@intFromEnum(Section.materials)]) {
+        if (!std.mem.allEqual(u8, material_bytes[material_offset + 29 .. material_offset + 32], 0))
+            return .{ .failed = .{ .invalid_section = .materials } };
+    }
     if (!recordTailsAreZero(
         constSectionBytes(bytes, sections[@intFromEnum(Section.textures)]),
         section_strides[@intFromEnum(Section.textures)],
@@ -612,8 +622,7 @@ fn validationFailure(bundle: BundleView, limits: Limits) ?ValidationFailure {
     if (bundle.bundle_name.bytes(bundle.strings) == null) return .invalid_name;
     if (!std.unicode.utf8ValidateSlice(bundle.strings)) return .invalid_name;
     if (bundle.nodes.len == 0 or bundle.meshes.len == 0 or bundle.primitives.len == 0 or
-        bundle.materials.len == 0 or bundle.vertices.len == 0 or bundle.indices.len == 0 or
-        bundle.static_boxes.len == 0)
+        bundle.materials.len == 0 or bundle.vertices.len == 0 or bundle.indices.len == 0)
     {
         return .invalid_geometry;
     }
@@ -657,9 +666,22 @@ fn validationFailure(bundle: BundleView, limits: Limits) ?ValidationFailure {
         for (material.base_color) |value| {
             if (!std.math.isFinite(value) or value < 0 or value > 1) return .invalid_material;
         }
-        if (material.base_color_texture != none_index and
-            material.base_color_texture >= bundle.textures.len) return .invalid_reference;
+        for ([_]u32{ material.base_color_texture, material.metallic_roughness_texture, material.normal_texture, material.occlusion_texture, material.emissive_texture }) |index| {
+            if (index != none_index and index >= bundle.textures.len) return .invalid_reference;
+        }
+        for ([_]f32{ material.metallic, material.roughness, material.occlusion_strength }) |value| {
+            if (!std.math.isFinite(value) or value < 0 or value > 1) return .invalid_material;
+        }
+        for (material.emissive ++ .{material.normal_scale}) |value| {
+            if (!std.math.isFinite(value) or value < 0) return .invalid_material;
+        }
         if (material.base_color_texcoord != 0) return .invalid_material;
+        for ([_]u32{ material.base_color_texture, material.emissive_texture }) |index| {
+            if (index != none_index and bundle.textures[index].format == .rgba8_unorm) return .invalid_material;
+        }
+        for ([_]u32{ material.metallic_roughness_texture, material.normal_texture, material.occlusion_texture }) |index| {
+            if (index != none_index and bundle.textures[index].format == .rgba8_srgb) return .invalid_material;
+        }
     }
     for (bundle.textures) |texture| {
         if (texture.name.bytes(bundle.strings) == null or texture.width == 0 or texture.height == 0 or
@@ -981,23 +1003,41 @@ fn decodePrimitives(values: []Primitive, bytes: []const u8) void {
 
 fn encodeMaterials(bytes: []u8, values: []const Material) void {
     for (values, 0..) |value, index| {
-        const base = index * 36;
+        const base = index * 80;
         putName(bytes, base, value.name);
         for (value.base_color, 0..) |item, item_index| putF32(bytes, base + 8 + item_index * 4, item);
         putU32(bytes, base + 24, value.base_color_texture);
         bytes[base + 28] = value.base_color_texcoord;
         putU32(bytes, base + 32, value.flags);
+        putF32(bytes, base + 36, value.metallic);
+        putF32(bytes, base + 40, value.roughness);
+        putF32(bytes, base + 44, value.normal_scale);
+        putF32(bytes, base + 48, value.occlusion_strength);
+        for (value.emissive, 0..) |item, item_index| putF32(bytes, base + 52 + item_index * 4, item);
+        putU32(bytes, base + 64, value.metallic_roughness_texture);
+        putU32(bytes, base + 68, value.normal_texture);
+        putU32(bytes, base + 72, value.occlusion_texture);
+        putU32(bytes, base + 76, value.emissive_texture);
     }
 }
 
 fn decodeMaterials(values: []Material, bytes: []const u8) void {
     for (values, 0..) |*value, index| {
-        const base = index * 36;
+        const base = index * 80;
         value.name = getName(bytes, base);
         for (&value.base_color, 0..) |*item, item_index| item.* = getF32(bytes, base + 8 + item_index * 4);
         value.base_color_texture = getU32(bytes, base + 24);
         value.base_color_texcoord = bytes[base + 28];
         value.flags = getU32(bytes, base + 32);
+        value.metallic = getF32(bytes, base + 36);
+        value.roughness = getF32(bytes, base + 40);
+        value.normal_scale = getF32(bytes, base + 44);
+        value.occlusion_strength = getF32(bytes, base + 48);
+        for (&value.emissive, 0..) |*item, item_index| item.* = getF32(bytes, base + 52 + item_index * 4);
+        value.metallic_roughness_texture = getU32(bytes, base + 64);
+        value.normal_texture = getU32(bytes, base + 68);
+        value.occlusion_texture = getU32(bytes, base + 72);
+        value.emissive_texture = getU32(bytes, base + 76);
     }
 }
 
@@ -1198,7 +1238,7 @@ const test_nodes = [_]Node{
 const test_meshes = [_]Mesh{.{ .name = refAt("FixtureTriangle"), .first_primitive = 0, .primitive_count = 1 }};
 const test_primitives = [_]Primitive{.{ .first_vertex = 0, .vertex_count = 3, .first_index = 0, .index_count = 3, .material = 0 }};
 const test_materials = [_]Material{.{ .name = refAt("FixtureMaterial"), .base_color = .{ 1, 0.5, 0.25, 1 }, .base_color_texture = 0 }};
-const test_textures = [_]Texture{.{ .name = refAt("FixtureTexture"), .width = 1, .height = 1, .pixel_offset = 0, .pixel_size = 4 }};
+const test_textures = [_]Texture{.{ .format = .rgba8_srgb, .name = refAt("FixtureTexture"), .width = 1, .height = 1, .pixel_offset = 0, .pixel_size = 4 }};
 const test_vertices = [_]VertexPNU{
     .{ .position = .{ -1, 0, 0 }, .normal = .{ 0, 0, 1 }, .texcoord = .{ 0, 0 } },
     .{ .position = .{ 1, 0, 0 }, .normal = .{ 0, 0, 1 }, .texcoord = .{ 1, 0 } },
@@ -1498,7 +1538,7 @@ test "navigation sections use exact little-endian strides and reject hostile fra
 
     invalid = testBundle();
     var edges = test_navigation_edges;
-    edges[0].target_node = 8;
+    edges[0].target_node = 255;
     invalid.navigation_edges = &edges;
     try std.testing.expect((try encode(std.testing.allocator, invalid, .{})).failed ==
         .invalid_navigation_edge);

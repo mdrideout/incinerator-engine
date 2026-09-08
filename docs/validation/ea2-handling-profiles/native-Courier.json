@@ -1,0 +1,16 @@
+{
+  "evidence_available": true,
+  "frames": 1375,
+  "camera_modes": {
+    "character": 789,
+    "free_camera": 586
+  },
+  "minimum_forward_mps": -7.320087909698486,
+  "maximum_forward_mps": 6.291140556335449,
+  "moving_subtick_frames": 316,
+  "frozen_presented_subtick_frames": 0,
+  "frozen_shadow_predictor_subtick_frames": 0,
+  "maximum_draw_step_m": 0.363408588647003,
+  "maximum_authority_to_draw_distance_m": 0.3555336128044011,
+  "interpretation": "Authority-to-draw distance includes intentional snapshot interpolation delay. Shadow prediction is observed but does not drive solo rendering. Native elapsed time is an injected cadence, not a performance benchmark."
+}

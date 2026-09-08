@@ -17,7 +17,7 @@ pub const descriptor = tool_module.Descriptor{
     .purpose = "Inspect semantic NPC destinations, route lineage, recovery state, and authored gates.",
     .reads = "NavigationLabView plus NPC navigation fields from GameplayView.",
     .requests = "Emits typed destination and evaluation-gate requests through a fixed buffer.",
-    .examples = &.{ "destination=transit_yard status=moving", "route_revision=4 topology_revision=2" },
+    .examples = &.{ "destination=freight_yard status=moving", "route_revision=4 topology_revision=2" },
     .audit_fields = &.{ "authority_tick", "persistent_id", "route_digest", "topology_revision" },
 };
 
@@ -26,12 +26,12 @@ pub const State = struct {
 };
 
 const destinations = [_]sandbox_host.DestinationId{
-    sandbox_host.player_plaza_destination,
-    sandbox_host.depot_forecourt_destination,
-    sandbox_host.south_gate_approach_destination,
-    sandbox_host.market_terminal_destination,
-    sandbox_host.alley_junction_destination,
-    sandbox_host.transit_yard_destination,
+    sandbox_host.garage_forecourt_destination,
+    sandbox_host.foundry_office_destination,
+    sandbox_host.foundry_south_walk_destination,
+    sandbox_host.freight_dispatch_destination,
+    sandbox_host.freight_alley_destination,
+    sandbox_host.freight_yard_destination,
 };
 
 fn selectedNpc(

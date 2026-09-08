@@ -44,7 +44,7 @@ pub fn main(init: std.process.Init) !void {
 fn verifyIdentity(identity: content.bundle.BundleIdentity) !void {
     if (identity.format_version != content.bundle.format_version or
         identity.schema_cohort != content.bundle.schema_cohort or
-        identity.format_version != 3 or identity.schema_cohort != 4)
+        identity.format_version != 4 or identity.schema_cohort != 6)
     {
         return error.InvalidCookedBundleCohort;
     }
@@ -64,7 +64,7 @@ fn verifyCommon(scene: content.bundle.BundleView) !void {
     if (scene.nodes.len != 2 or scene.meshes.len != 1 or scene.primitives.len != 1 or
         scene.materials.len != 1 or scene.textures.len != 1 or scene.vertices.len != 3 or
         scene.indices.len != 3 or scene.static_boxes.len != sandbox_recipe.static_box_count or
-        scene.navigation_nodes.len != 8 or scene.navigation_edges.len != 16)
+        scene.navigation_nodes.len != 12 or scene.navigation_edges.len != 26)
     {
         return error.InvalidFixtureCounts;
     }

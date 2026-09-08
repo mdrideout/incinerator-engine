@@ -5,4 +5,5 @@
 
 pub const c = @cImport({
     @cInclude("joltc.h");
+    @cInclude("vehicle_bridge.h");
 });

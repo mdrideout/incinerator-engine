@@ -7,6 +7,27 @@
 const std = @import("std");
 const gameplay_scenarios = @import("sandbox_gameplay_scenarios");
 
+pub const input_mapping_version: u32 = 2;
+pub const Pedals = struct { jump_pressed: bool, brake: bool, hand_brake: bool };
+
+/// Receives gameplay-owned buttons after editor/viewport capture filtering.
+pub fn mapPedals(forward: bool, backward: bool, space: bool, space_pressed: bool, driving: bool) Pedals {
+    return .{
+        .jump_pressed = space_pressed and !driving,
+        .brake = driving and forward and backward,
+        .hand_brake = driving and space,
+    };
+}
+
+test "Space belongs to jump on foot and held handbrake in a vehicle" {
+    try std.testing.expectEqualDeep(Pedals{ .jump_pressed = true, .brake = false, .hand_brake = false }, mapPedals(false, false, true, true, false));
+    try std.testing.expectEqualDeep(Pedals{ .jump_pressed = false, .brake = false, .hand_brake = true }, mapPedals(true, false, true, true, true));
+    try std.testing.expectEqualDeep(Pedals{ .jump_pressed = false, .brake = true, .hand_brake = false }, mapPedals(true, true, false, false, true));
+    try std.testing.expectEqualDeep(Pedals{ .jump_pressed = false, .brake = false, .hand_brake = false }, mapPedals(false, false, false, false, true));
+    // A held Space has no new jump edge after leaving a vehicle.
+    try std.testing.expect(!mapPedals(false, false, true, false, false).jump_pressed);
+}
+
 pub const FrameSample = struct {
     move: [2]f32 = .{ 0, 0 },
     look_delta: [2]f32 = .{ 0, 0 },

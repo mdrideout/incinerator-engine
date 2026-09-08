@@ -57,6 +57,9 @@ pub const Graph = struct {
     character_contract: *std.Build.Module,
     character: *std.Build.Module,
     vehicle_contract: *std.Build.Module,
+    game_vehicles: *std.Build.Module,
+    vehicle_authoring_contract: *std.Build.Module,
+    vehicle_authoring: *std.Build.Module,
     vehicle: *std.Build.Module,
     district_worker_contract: *std.Build.Module,
     district_worker: *std.Build.Module,
@@ -81,6 +84,8 @@ pub const Graph = struct {
     developer_controls: *std.Build.Module,
     developer_diagnostics: *std.Build.Module,
     sandbox_authoring: *std.Build.Module,
+    material_authoring: *std.Build.Module,
+    material_authoring_contract: *std.Build.Module,
     sandbox_save: *std.Build.Module,
     save_slots: *std.Build.Module,
     sandbox_replay: *std.Build.Module,
@@ -241,7 +246,7 @@ pub fn create(
     );
     const simulation_cohort_options = cohort_options.createModule();
     const network_options = b.addOptions();
-    network_options.addOption(u16, "protocol_revision", 18);
+    network_options.addOption(u16, "protocol_revision", 21);
     network_options.addOption(u64, "build_cohort", networkBuildCohort(b));
     const manifest_bytes = b.build_root.handle.readFileAlloc(
         b.graph.io,
@@ -348,12 +353,19 @@ pub fn create(
         .optimize = optimize,
         .imports = &.{.{ .name = "incinerator_engine", .module = engine }},
     });
+    const spatial_options = b.addOptions();
+    spatial_options.addOption(f32, "chunk_span", @import("../../game/industrial/scene.zig").chunk_span);
+    spatial_options.addOption(usize, "max_static_boxes", @import("../../game/industrial/scene.zig").boxes[0].len);
+    spatial_options.addOption(usize, "max_navigation_nodes", @import("../../game/industrial/scene.zig").navigation_positions.len);
+    spatial_options.addOption(usize, "max_navigation_edges", @import("../../game/industrial/scene.zig").navigation_edge_capacity);
+    spatial_options.addOption(usize, "max_navigation_outgoing_edges", @import("../../game/industrial/scene.zig").navigation_degree);
     const district_contract = b.createModule(.{
         .root_source_file = b.path("src/features/district_contract.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "engine_contracts", .module = contracts }},
     });
+    district_contract.addOptions("spatial_options", spatial_options);
     const navigation_contract = b.createModule(.{
         .root_source_file = b.path("src/features/navigation_contract.zig"),
         .target = target,
@@ -361,7 +373,7 @@ pub fn create(
         .imports = &.{.{ .name = "district_contract", .module = district_contract }},
     });
     const sandbox_district_recipe = b.createModule(.{
-        .root_source_file = b.path("src/sandbox/district_recipe.zig"),
+        .root_source_file = b.path("game/industrial/district_recipe.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -423,6 +435,10 @@ pub fn create(
         .optimize = optimize,
         .imports = &.{.{ .name = "engine_contracts", .module = contracts }},
     });
+    const vehicle_authoring_contract = b.createModule(.{ .root_source_file = b.path("src/hosts/vehicle_authoring_contract.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "engine_contracts", .module = contracts }, .{ .name = "vehicle_contract", .module = vehicle_contract } } });
+    const handling_profiles = b.createModule(.{ .root_source_file = b.path("game/vehicles/handling_profiles.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "vehicle_contract", .module = vehicle_contract }} });
+    const vehicle_authoring = b.createModule(.{ .root_source_file = b.path("src/hosts/vehicle_authoring.zig"), .target = target, .optimize = optimize, .imports = &.{ .{ .name = "handling_profiles", .module = handling_profiles }, .{ .name = "engine_contracts", .module = contracts }, .{ .name = "vehicle_authoring_contract", .module = vehicle_authoring_contract } } });
+    const game_vehicles = b.createModule(.{ .root_source_file = b.path("game/vehicles/catalog.zig"), .target = target, .optimize = optimize, .imports = &.{.{ .name = "vehicle_contract", .module = vehicle_contract }} });
     const vehicle = b.createModule(.{
         .root_source_file = b.path("src/features/vehicle/root.zig"),
         .target = target,
@@ -571,7 +587,7 @@ pub fn create(
         },
     });
     const sandbox_population_catalog = b.createModule(.{
-        .root_source_file = b.path("src/sandbox/population_catalog.zig"),
+        .root_source_file = b.path("game/industrial/population_catalog.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{
@@ -632,6 +648,19 @@ pub fn create(
             .{ .name = "session_authority_diagnostics", .module = session_authority_diagnostics },
         },
     });
+    const material_authoring_contract = b.createModule(.{
+        .root_source_file = b.path("src/hosts/material_authoring_contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "engine_contracts", .module = contracts }},
+    });
+    const material_authoring = b.createModule(.{
+        .root_source_file = b.path("src/hosts/material_authoring.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "incinerator_engine", .module = engine }, .{ .name = "content", .module = content } },
+    });
+    material_authoring.addImport("material_authoring_contract", material_authoring_contract);
     const sandbox_authoring = b.createModule(.{
         .root_source_file = b.path("src/hosts/sandbox_authoring.zig"),
         .target = target,
@@ -795,6 +824,7 @@ pub fn create(
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "vehicle_contract", .module = vehicle_contract },
             .{ .name = "session_budgets", .module = session_budgets },
             .{ .name = "session_identity", .module = session_identity },
             .{ .name = "network_cohort_options", .module = network_cohort_options },
@@ -856,6 +886,7 @@ pub fn create(
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "vehicle_contract", .module = vehicle_contract },
             .{ .name = "session_budgets", .module = session_budgets },
             .{ .name = "session_identity", .module = session_identity },
             .{ .name = "session_protocol", .module = session_protocol },
@@ -937,6 +968,7 @@ pub fn create(
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "game_vehicles", .module = game_vehicles },
             .{ .name = "incinerator_engine", .module = engine },
             .{ .name = "sandbox_simulation", .module = sandbox_simulation },
             .{ .name = "simulation_snapshot", .module = simulation_snapshot },
@@ -989,6 +1021,9 @@ pub fn create(
         .character_contract = character_contract,
         .character = character,
         .vehicle_contract = vehicle_contract,
+        .game_vehicles = game_vehicles,
+        .vehicle_authoring_contract = vehicle_authoring_contract,
+        .vehicle_authoring = vehicle_authoring,
         .vehicle = vehicle,
         .district_worker_contract = district_worker_contract,
         .district_worker = district_worker,
@@ -1013,6 +1048,8 @@ pub fn create(
         .developer_controls = developer_controls,
         .developer_diagnostics = developer_diagnostics,
         .sandbox_authoring = sandbox_authoring,
+        .material_authoring = material_authoring,
+        .material_authoring_contract = material_authoring_contract,
         .sandbox_save = sandbox_save,
         .save_slots = save_slots,
         .sandbox_replay = sandbox_replay,

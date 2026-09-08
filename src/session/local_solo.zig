@@ -100,6 +100,7 @@ pub const CharacterAdminOutcome = union(enum) {
 };
 
 pub const VehicleAdminCommand = union(enum) {
+    reconfigure: vehicle_contract.ReconfigureVehicle,
     spawn: vehicle_contract.SpawnVehicle,
     despawn: vehicle_contract.DespawnVehicle,
 };
@@ -112,6 +113,8 @@ pub const VehicleAdminRejected = struct {
     vehicle_id: ?engine.PersistentId = null,
 };
 pub const VehicleAdminOutcome = union(enum) {
+    reconfigured: vehicle_contract.Reconfigured,
+    reconfiguration_rejected: vehicle_contract.CommandRejected,
     spawned: vehicle_contract.Spawned,
     despawned: engine.PersistentId,
     rejected: VehicleAdminRejected,
@@ -157,6 +160,8 @@ pub const CharacterDraw = struct {
 };
 
 pub const VehicleDraw = struct {
+    definition: protocol.VehicleDefinition,
+    definition_revision: u64,
     entity: ReplicatedEntityId,
     driver: ?ParticipantId,
     chassis_pose: engine.physics.Pose,
@@ -658,10 +663,7 @@ const State = struct {
 
     fn focusPosition(self: *const State) ?[3]f32 {
         if (self.client.ownedVehicle()) |vehicle| {
-            return if (self.client.localVehiclePresentation()) |predicted|
-                predicted.position
-            else
-                vehicle.position;
+            return vehicle.position;
         }
         if (self.client.localPresentation()) |predicted| return predicted.position;
         for (self.client.world.slice()) |entry| {
@@ -744,26 +746,18 @@ const State = struct {
         self: *State,
         frame_alpha: f32,
     ) []const VehicleDraw {
-        const alpha = self.projectionAlpha(frame_alpha);
         var count: usize = 0;
         for (self.client.world.vehicleSlice()) |entry| {
-            var vehicle = replicated_world.World.interpolateVehicle(entry, alpha);
-            if (vehicle.driver) |driver| if (std.meta.eql(driver, self.client.participant)) {
-                if (self.client.localVehiclePresentation()) |predicted| {
-                    vehicle = replicated_world.applyPredictedChassis(vehicle, predicted);
-                }
-            };
+            // Solo has no transport latency to justify replacing Jolt's lateral
+            // motion with the approximate network predictor. Chassis, wheels,
+            // and chase camera share the same replicated interpolation clock.
+            const window = entry.delayedWindow(self.last_tick.tick, frame_alpha);
+            const vehicle = replicated_world.World.interpolateVehicle(window.entry, window.alpha);
             const chassis_pose = engine.physics.Pose{
                 .position = vehicle.position,
                 .rotation = vehicle.rotation,
             };
-            const layout = replicated_world.VehicleWheelLayout{
-                .attachment_positions = self.config.vehicle.tuning.wheel_attachment_positions,
-                .radius = self.config.vehicle.tuning.wheel_radius,
-                .width = self.config.vehicle.tuning.wheel_width,
-                .suspension_max_length = self.config.vehicle.tuning.suspension_max_length,
-                .max_steer_radians = self.config.vehicle.tuning.max_steer_radians,
-            };
+            const layout = replicated_world.vehicleWheelLayout(vehicle.definition);
             // The client world and placement config validate these values before
             // presentation; a failure here is an internal ownership invariant.
             const wheel_poses = replicated_world.composeVehicleWheelPoses(
@@ -789,7 +783,9 @@ const State = struct {
                 .entity = vehicle.entity,
                 .driver = vehicle.driver,
                 .chassis_pose = chassis_pose,
-                .chassis_half_extents = self.config.vehicle.tuning.chassis_half_extents,
+                .definition = vehicle.definition,
+                .definition_revision = vehicle.definition_revision,
+                .chassis_half_extents = vehicle.definition.chassis_half_extents,
                 .chassis_mesh = self.config.vehicle.assets.chassis_mesh,
                 .chassis_material = self.config.vehicle.assets.chassis_material,
                 .wheels = wheels,
@@ -1350,6 +1346,7 @@ pub const VehicleRole = struct {
     pub fn submit(self: VehicleRole, command: VehicleAdminCommand) !void {
         try stateFrom(self.context).authority.vehicles().submit(switch (command) {
             .spawn => |value| .{ .spawn = value },
+            .reconfigure => |value| .{ .reconfigure = value },
             .despawn => |value| .{ .despawn = value },
         });
     }
@@ -1358,6 +1355,7 @@ pub const VehicleRole = struct {
         while (stateFrom(self.context).authority.vehicles().pollOutcome()) |outcome| {
             switch (outcome) {
                 .spawned => |value| return .{ .spawned = value },
+                .reconfigured => |value| return .{ .reconfigured = value },
                 .despawned => |value| return .{ .despawned = value },
                 .rejected => |rejected| switch (rejected.command) {
                     .spawn => return .{ .rejected = .{
@@ -1372,6 +1370,7 @@ pub const VehicleRole = struct {
                         .request_id = rejected.request_id,
                         .vehicle_id = rejected.vehicle_id,
                     } },
+                    .reconfigure => return .{ .reconfiguration_rejected = rejected },
                     .enter, .drive, .exit, .abandon => continue,
                 },
                 .entered, .drive_applied, .exited, .abandoned => continue,
@@ -1720,6 +1719,25 @@ pub const InspectionRole = struct {
         return state.authority.inspection().carryableInterest(participant, replicated);
     }
 
+    /// Read-only correlation of accepted replication, disposable prediction,
+    /// and the exact interpolation clock used by this solo frame.
+    pub fn vehicleMotionProjection(self: InspectionRole, entity: ReplicatedEntityId, frame_alpha: f32) ?struct {
+        latest_tick: u64,
+        previous_tick: u64,
+        current_tick: u64,
+        alpha: f32,
+        replicated: protocol.VehicleState,
+        predicted: ?protocol.VehicleState,
+    } {
+        const state = stateFromConst(self.context);
+        for (state.client.world.vehicleSlice()) |entry| {
+            if (!std.meta.eql(entry.current.entity, entity)) continue;
+            const window = entry.delayedWindow(state.last_tick.tick, frame_alpha);
+            return .{ .latest_tick = entry.current_tick, .previous_tick = window.entry.previous_tick, .current_tick = window.entry.current_tick, .alpha = window.alpha, .replicated = entry.current, .predicted = if (entry.current.driver != null and std.meta.eql(entry.current.driver.?, state.client.participant)) state.client.localVehiclePresentation() else null };
+        }
+        return null;
+    }
+
     pub fn clientDiagnostics(self: InspectionRole) ClientDiagnostics {
         const state = stateFromConst(self.context);
         return .{
@@ -1983,16 +2001,16 @@ test "solo final shot projects automatic reload and completion" {
 test "solo vehicle actions and control use shared authority admission" {
     const config = testConfig(0x4c4f_4302);
     try std.testing.expectEqualDeep(
-        config.vehicle.tuning.wheel_attachment_positions,
-        replicated_world.default_vehicle_wheel_layout.attachment_positions,
+        vehicle_contract.asset.validationFixture().tuning.wheel_attachment_positions,
+        replicated_world.vehicleWheelLayout(protocol.validationVehicleDefinition()).attachment_positions,
     );
     try std.testing.expectEqual(
-        config.vehicle.tuning.wheel_radius,
-        replicated_world.default_vehicle_wheel_layout.radius,
+        vehicle_contract.asset.validationFixture().tuning.wheel_radius,
+        replicated_world.vehicleWheelLayout(protocol.validationVehicleDefinition()).radius,
     );
     try std.testing.expectEqual(
-        config.vehicle.tuning.wheel_width,
-        replicated_world.default_vehicle_wheel_layout.width,
+        vehicle_contract.asset.validationFixture().tuning.wheel_width,
+        replicated_world.vehicleWheelLayout(protocol.validationVehicleDefinition()).width,
     );
     const placement = try initOwned(std.testing.allocator, config, false, null);
     defer placement.deinit();
@@ -2001,6 +2019,7 @@ test "solo vehicle actions and control use shared authority admission" {
         .position = .{ 0, 0, 0 },
     } });
     try placement.vehicles().submit(.{ .spawn = .{
+        .definition = vehicle_contract.asset.validationFixture(),
         .request_id = 2,
         .chassis = .{ .pose = .{ .position = .{ 0, 1, 0 } } },
     } });
@@ -2029,6 +2048,7 @@ test "solo vehicle actions and control use shared authority admission" {
     const authority_vehicle = try placement.vehicles().view(vehicle_id);
     try std.testing.expect(@abs(authority_vehicle.state.wheels[0].steer_angle) > 0.01);
     var projected = protocol.VehicleState{
+        .definition = protocol.validationVehicleDefinition(),
         .entity = entered.vehicle,
         .position = authority_vehicle.state.chassis.pose.position,
         .rotation = authority_vehicle.state.chassis.pose.rotation,
@@ -2046,11 +2066,11 @@ test "solo vehicle actions and control use shared authority admission" {
         };
     }
     const composed = try replicated_world.composeVehicleWheelPoses(projected, .{
-        .attachment_positions = config.vehicle.tuning.wheel_attachment_positions,
-        .radius = config.vehicle.tuning.wheel_radius,
-        .width = config.vehicle.tuning.wheel_width,
-        .suspension_max_length = config.vehicle.tuning.suspension_max_length,
-        .max_steer_radians = config.vehicle.tuning.max_steer_radians,
+        .attachment_positions = vehicle_contract.asset.validationFixture().tuning.wheel_attachment_positions,
+        .radius = vehicle_contract.asset.validationFixture().tuning.wheel_radius,
+        .width = vehicle_contract.asset.validationFixture().tuning.wheel_width,
+        .suspension_max_length = vehicle_contract.asset.validationFixture().tuning.suspension_max_length,
+        .max_steer_radians = vehicle_contract.asset.validationFixture().tuning.max_steer_radians,
     });
     for (composed, authority_vehicle.state.wheels) |pose, authority_wheel| {
         for (pose.position, authority_wheel.pose.position) |actual, expected| {
@@ -2080,6 +2100,13 @@ test "solo vehicle actions and control use shared authority admission" {
     try std.testing.expect(diagnostics.authority.vehicle_actions_accepted >= 1);
     try std.testing.expect(diagnostics.authority.accepted_messages >= 4);
     try std.testing.expect(diagnostics.client.last_acknowledged_input.value >= input_sequence);
+    for (0..60) |_| {
+        _ = try placement.player().submitVehicleControl(.{ .throttle = 1, .steering = 0.25, .brake = 0, .hand_brake = 0 });
+        try placement.lifecycle().tick();
+    }
+    const early_pose = placement.presentation().vehicles(0.1)[0].chassis_pose;
+    const late_pose = placement.presentation().vehicles(0.9)[0].chassis_pose;
+    try std.testing.expect(!std.meta.eql(early_pose.position, late_pose.position));
     const draws = placement.presentation().vehicles(0.5);
     try std.testing.expectEqual(@as(usize, 1), draws.len);
     try std.testing.expectEqual(entered.vehicle, draws[0].entity);
@@ -2424,6 +2451,7 @@ fn repeatedVehicle(
     position: [3]f32,
 ) replicated_world.VehicleEntry {
     const value = protocol.VehicleState{
+        .definition = protocol.validationVehicleDefinition(),
         .entity = entity,
         .position = position,
         .rotation = .{ 0, 0, 0, 1 },

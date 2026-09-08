@@ -79,34 +79,31 @@ pub const Builder = struct {
 
         for (view.materials) |material| {
             const label = view.name(material.name) orelse return error.InvalidAssetName;
-            var material_dependencies: [1]assets.AssetId = undefined;
-            const dependency_count: usize = if (material.base_color_texture == bundle.none_index)
-                0
-            else blk: {
-                const texture = view.textures[material.base_color_texture];
-                material_dependencies[0] = try assets.deriveGameAssetId(
-                    .texture,
-                    bundle_key,
-                    view.name(texture.name) orelse return error.InvalidAssetName,
-                );
-                break :blk 1;
+            var material_dependencies: [5]assets.AssetId = undefined;
+            var dependency_count: usize = 0;
+            var details = assets.MaterialMetadata{
+                .base_color = material.base_color,
+                .base_color_texture = null,
+                .base_color_texcoord = material.base_color_texcoord,
+                .metallic = material.metallic,
+                .roughness = material.roughness,
+                .normal_scale = material.normal_scale,
+                .occlusion_strength = material.occlusion_strength,
+                .emissive = material.emissive,
             };
-            try self.append(
-                .material,
-                label,
-                bundle_key,
-                identity.integrity_digest,
-                material_dependencies[0..dependency_count],
-                source,
-                .{ .material = .{
-                    .base_color = material.base_color,
-                    .base_color_texture = if (dependency_count == 0)
-                        null
-                    else
-                        material_dependencies[0],
-                    .base_color_texcoord = material.base_color_texcoord,
-                } },
-            );
+            inline for (.{ "base_color_texture", "metallic_roughness_texture", "normal_texture", "occlusion_texture", "emissive_texture" }) |field| {
+                const index = @field(material, field);
+                if (index != bundle.none_index) {
+                    const texture = view.textures[index];
+                    const id = try assets.deriveGameAssetId(.texture, bundle_key, view.name(texture.name) orelse return error.InvalidAssetName);
+                    @field(details, field) = id;
+                    if (!contains(material_dependencies[0..dependency_count], id)) {
+                        material_dependencies[dependency_count] = id;
+                        dependency_count += 1;
+                    }
+                }
+            }
+            try self.append(.material, label, bundle_key, identity.integrity_digest, material_dependencies[0..dependency_count], source, .{ .material = details });
         }
 
         for (view.textures) |texture| {

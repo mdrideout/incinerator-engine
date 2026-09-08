@@ -70,6 +70,7 @@ pub const Uniforms = extern struct {
 pub const ModelUniforms = extern struct {
     mvp: [16]f32,
     normal_matrix: [16]f32,
+    model: [16]f32,
 };
 
 /// Fragment shader settings (for texture toggle, etc.)
@@ -77,12 +78,15 @@ pub const ModelUniforms = extern struct {
 pub const FragmentSettings = extern struct {
     use_texture: f32, // 1.0 = use texture, 0.0 = use white
     lit: f32, // 1.0 = scene light, 0.0 = exact unlit material
-    _padding: [2]f32 = .{ 0, 0 }, // Pad to 16 bytes for GPU alignment
+    texture_mask: u32 = 0,
+    _padding: f32 = 0,
     base_color: [4]f32 = .{ 1, 1, 1, 1 },
     emissive: [4]f32 = .{ 0, 0, 0, 0 },
     sun_direction: [4]f32,
     sun_color_intensity: [4]f32,
     ambient_color: [4]f32,
+    response: [4]f32,
+    camera_position: [4]f32,
 };
 
 /// Material tint for authored vertex-color primitives. White preserves the
@@ -93,9 +97,22 @@ pub const PrimitiveFragmentSettings = extern struct {
 };
 
 comptime {
-    std.debug.assert(@sizeOf(FragmentSettings) == 96);
+    std.debug.assert(@sizeOf(FragmentSettings) == 128);
     std.debug.assert(@sizeOf(PrimitiveFragmentSettings) == 16);
 }
+
+pub const TextureBinding = struct {
+    texture: Texture,
+    sampler: ?*c.SDL_GPUSampler = null,
+};
+
+pub const MaterialTextures = struct {
+    base_color: ?TextureBinding = null,
+    metallic_roughness: ?TextureBinding = null,
+    normal: ?TextureBinding = null,
+    occlusion: ?TextureBinding = null,
+    emissive: ?TextureBinding = null,
+};
 
 pub const SceneLight = render_contract.SceneLight;
 pub const SurfaceMaterial = render_contract.SurfaceMaterial;
@@ -338,6 +355,7 @@ fn getModelShaderCode() ShaderCode {
 pub const Renderer = struct {
     device: *c.SDL_GPUDevice,
     window: *c.SDL_Window,
+    offscreen_extent: ?SceneExtent = null,
     swapchain_format: c.SDL_GPUTextureFormat,
     depth_format: c.SDL_GPUTextureFormat,
 
@@ -358,6 +376,7 @@ pub const Renderer = struct {
 
     // Texture sampling resources
     default_sampler: *c.SDL_GPUSampler,
+    camera_position: [3]f32 = .{ 0, 0, 0 },
     placeholder_texture: OwnedTexture, // 1x1 white texture for untextured meshes
 
     // Frame state (valid between beginFrame and submitFrame)
@@ -374,7 +393,7 @@ pub const Renderer = struct {
     /// Initialize the GPU renderer for a window.
     /// This creates the GPU device and graphics pipeline.
     pub fn init(window: *c.SDL_Window) !Renderer {
-        return initWithOptions(window, null, false);
+        return initWithOptions(window, null, false, null);
     }
 
     /// Initialize with a deliberate failure at a real ownership boundary.
@@ -383,7 +402,7 @@ pub const Renderer = struct {
         window: *c.SDL_Window,
         comptime failure_point: InitFailurePoint,
     ) !Renderer {
-        return initWithOptions(window, failure_point, false);
+        return initWithOptions(window, failure_point, false, null);
     }
 
     /// Native failure-isolation seam: construct a healthy renderer while the
@@ -391,13 +410,20 @@ pub const Renderer = struct {
     pub fn initWithoutPhysicsDebugPipelinesForTest(
         window: *c.SDL_Window,
     ) !Renderer {
-        return initWithOptions(window, null, true);
+        return initWithOptions(window, null, true, null);
+    }
+
+    /// Exercise product GPU pipelines without acquiring or presenting a drawable.
+    pub fn initOffscreen(window: *c.SDL_Window, width: u32, height: u32) !Renderer {
+        if (width == 0 or height == 0) return error.InvalidOffscreenExtent;
+        return initWithOptions(window, null, false, .{ .width = width, .height = height });
     }
 
     fn initWithOptions(
         window: *c.SDL_Window,
         comptime failure_point: ?InitFailurePoint,
         comptime omit_physics_debug_pipelines: bool,
+        offscreen_extent: ?SceneExtent,
     ) !Renderer {
         // Advertise only the format embedded in this target binary. SDL uses
         // that contract to select a compatible backend; claiming a format for
@@ -431,16 +457,16 @@ pub const Renderer = struct {
         }
 
         // Claim the window for GPU rendering (creates the swapchain)
-        if (!c.SDL_ClaimWindowForGPUDevice(device, window)) {
+        if (offscreen_extent == null and !c.SDL_ClaimWindowForGPUDevice(device, window)) {
             std.debug.print("SDL_ClaimWindowForGPUDevice failed: {s}\n", .{c.SDL_GetError()});
             return error.GPUWindowClaimFailed;
         }
-        errdefer c.SDL_ReleaseWindowFromGPUDevice(device, window);
+        errdefer if (offscreen_extent == null) c.SDL_ReleaseWindowFromGPUDevice(device, window);
         if (failure_point != null) {
             try injectInitFailure(failure_point, .after_window_claim);
         }
 
-        const swapchain_format = c.SDL_GetGPUSwapchainTextureFormat(device, window);
+        const swapchain_format: c.SDL_GPUTextureFormat = if (offscreen_extent != null) c.SDL_GPU_TEXTUREFORMAT_B8G8R8A8_UNORM else c.SDL_GetGPUSwapchainTextureFormat(device, window);
         if (swapchain_format == c.SDL_GPU_TEXTUREFORMAT_INVALID) {
             std.debug.print("SDL_GetGPUSwapchainTextureFormat failed: {s}\n", .{c.SDL_GetError()});
             return error.SwapchainFormatUnavailable;
@@ -551,6 +577,7 @@ pub const Renderer = struct {
         return Renderer{
             .device = device,
             .window = window,
+            .offscreen_extent = offscreen_extent,
             .swapchain_format = swapchain_format,
             .depth_format = depth_format,
             .pipeline_pos_color = pipeline_pos_color,
@@ -584,7 +611,7 @@ pub const Renderer = struct {
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv_wireframe);
         if (self.physics_debug_pipelines) |pipelines| pipelines.deinit(self.device);
-        c.SDL_ReleaseWindowFromGPUDevice(self.device, self.window);
+        if (self.offscreen_extent == null) c.SDL_ReleaseWindowFromGPUDevice(self.device, self.window);
         c.SDL_DestroyGPUDevice(self.device);
     }
 
@@ -724,9 +751,9 @@ pub const Renderer = struct {
         // texture. A null texture after a successful call is benign (usually a
         // minimized window) and leaves the command buffer safe to cancel.
         var swapchain_texture: ?*c.SDL_GPUTexture = null;
-        var swapchain_width: u32 = 0;
-        var swapchain_height: u32 = 0;
-        if (!c.SDL_WaitAndAcquireGPUSwapchainTexture(cmd, self.window, &swapchain_texture, &swapchain_width, &swapchain_height)) {
+        var swapchain_width: u32 = if (self.offscreen_extent) |extent| extent.width else 0;
+        var swapchain_height: u32 = if (self.offscreen_extent) |extent| extent.height else 0;
+        if (self.offscreen_extent == null and !c.SDL_WaitAndAcquireGPUSwapchainTexture(cmd, self.window, &swapchain_texture, &swapchain_width, &swapchain_height)) {
             std.debug.print("SDL_WaitAndAcquireGPUSwapchainTexture failed: {s}\n", .{c.SDL_GetError()});
             switch (acquireFailureCleanup(swapchain_texture)) {
                 .cancel => try cancelCommandBuffer(cmd),
@@ -735,11 +762,11 @@ pub const Renderer = struct {
             return error.SwapchainAcquisitionFailed;
         }
 
-        if (swapchain_texture == null) {
+        if (self.offscreen_extent == null and swapchain_texture == null) {
             try cancelCommandBuffer(cmd);
             return .unavailable;
         }
-        const acquired_swapchain = swapchain_texture.?;
+        const acquired_swapchain = swapchain_texture;
         self.frame_stats = .{};
 
         if (swapchain_width == 0 or swapchain_height == 0) {
@@ -865,6 +892,20 @@ pub const Renderer = struct {
         model: zm.Mat,
         view_projection: zm.Mat,
     ) void {
+        self.drawMeshWithTextures(m, .{ .base_color = if (diffuse_texture) |value|
+            .{ .texture = value, .sampler = diffuse_sampler }
+        else
+            null }, material, model, view_projection);
+    }
+
+    pub fn drawMeshWithTextures(
+        self: *Renderer,
+        m: *const Mesh,
+        textures: MaterialTextures,
+        material: SurfaceMaterial,
+        model: zm.Mat,
+        view_projection: zm.Mat,
+    ) void {
         const render_pass = self.current_render_pass orelse {
             std.debug.print("drawMesh called outside of an active render pass\n", .{});
             return;
@@ -903,6 +944,7 @@ pub const Renderer = struct {
                 const uniforms = ModelUniforms{
                     .mvp = zm.matToArr(mvp),
                     .normal_matrix = zm.matToArr(normalMatrix(model)),
+                    .model = zm.matToArr(model),
                 };
                 c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(ModelUniforms));
             },
@@ -924,22 +966,25 @@ pub const Renderer = struct {
                 );
             },
             .pos_normal_uv => {
-                // Use mesh's texture if available, otherwise use placeholder (white)
-                const texture_handle = if (diffuse_texture) |tex|
-                    tex.getHandle()
-                else
-                    self.placeholder_texture.borrow().getHandle();
-
-                const sampler_binding = c.SDL_GPUTextureSamplerBinding{
-                    .texture = texture_handle,
-                    .sampler = diffuse_sampler orelse self.default_sampler,
-                };
-                c.SDL_BindGPUFragmentSamplers(render_pass, 0, &sampler_binding, 1);
+                const slots = [_]?TextureBinding{ textures.base_color, textures.metallic_roughness, textures.normal, textures.occlusion, textures.emissive };
+                var bindings: [5]c.SDL_GPUTextureSamplerBinding = undefined;
+                var texture_mask: u32 = 0;
+                for (slots, 0..) |slot, index| {
+                    bindings[index] = .{
+                        .texture = if (slot) |binding| binding.texture.getHandle() else self.placeholder_texture.borrow().getHandle(),
+                        .sampler = if (slot) |binding| binding.sampler orelse self.default_sampler else self.default_sampler,
+                    };
+                    if (slot != null) texture_mask |= @as(u32, 1) << @intCast(index);
+                }
+                c.SDL_BindGPUFragmentSamplers(render_pass, 0, &bindings, bindings.len);
 
                 // Push fragment settings (texture toggle)
                 const frag_settings = FragmentSettings{
                     .use_texture = if (self.render_settings.show_textures) 1.0 else 0.0,
                     .lit = if (material.lit) 1.0 else 0.0,
+                    .texture_mask = texture_mask,
+                    .response = .{ material.metallic, material.roughness, material.normal_scale, material.occlusion_strength },
+                    .camera_position = .{ self.camera_position[0], self.camera_position[1], self.camera_position[2], 1 },
                     .base_color = material.base_color,
                     .emissive = .{
                         material.emissive[0],
@@ -1249,6 +1294,7 @@ pub const Renderer = struct {
 
     /// Get the window dimensions
     pub fn getWindowSize(self: *const Renderer) struct { width: i32, height: i32 } {
+        if (self.offscreen_extent) |extent| return .{ .width = @intCast(extent.width), .height = @intCast(extent.height) };
         var w: c_int = 0;
         var h: c_int = 0;
         _ = c.SDL_GetWindowSize(self.window, &w, &h);
@@ -1513,7 +1559,7 @@ fn createPipelinePosNormalUv(
         .entrypoint = shaders.entrypoint,
         .format = shaders.format,
         .stage = c.SDL_GPU_SHADERSTAGE_FRAGMENT,
-        .num_samplers = 1, // Diffuse texture sampler
+        .num_samplers = 5, // Typed conventional material texture slots
         .num_storage_textures = 0,
         .num_storage_buffers = 0,
         .num_uniform_buffers = 1, // FragmentSettings uniform buffer
@@ -1869,7 +1915,7 @@ test "failed swapchain acquisition cleanup never cancels an acquired texture" {
 }
 
 test "model normal matrix preserves perpendicularity under non-uniform scale" {
-    try std.testing.expectEqual(@as(usize, 128), @sizeOf(ModelUniforms));
+    try std.testing.expectEqual(@as(usize, 192), @sizeOf(ModelUniforms));
 
     const model = zm.mul(
         zm.scaling(2.0, 0.5, 3.0),

@@ -17,6 +17,29 @@ pub const VehicleEntry = struct {
     current: protocol.VehicleState,
     previous_tick: u64 = 0,
     current_tick: u64 = 0,
+    // A forced snapshot can arrive on every authority tick. A three-tick
+    // presentation delay therefore needs four samples, including both ends.
+    // Retain the two samples preceding previous/current, newest first.
+    older: [budgets.ticks_per_snapshot - 1]?struct { state: protocol.VehicleState, tick: u64 } = @splat(null),
+
+    pub fn delayedWindow(self: VehicleEntry, authority_tick: u64, frame_alpha: f32) struct { entry: VehicleEntry, alpha: f32 } {
+        const target = @as(f64, @floatFromInt(authority_tick)) - budgets.ticks_per_snapshot + std.math.clamp(frame_alpha, 0, 1);
+        var newer = self.current;
+        var newer_tick = self.current_tick;
+        var older = self.previous;
+        var older_tick = self.previous_tick;
+        var index: usize = 0;
+        while (target < @as(f64, @floatFromInt(older_tick)) and index < self.older.len) : (index += 1) {
+            const sample = self.older[index] orelse break;
+            newer = older;
+            newer_tick = older_tick;
+            older = sample.state;
+            older_tick = sample.tick;
+        }
+        const interval = newer_tick -| older_tick;
+        const alpha: f32 = if (interval == 0) 1 else @floatCast(std.math.clamp((target - @as(f64, @floatFromInt(older_tick))) / @as(f64, @floatFromInt(interval)), 0, 1));
+        return .{ .entry = .{ .previous = older, .current = newer, .previous_tick = older_tick, .current_tick = newer_tick }, .alpha = alpha };
+    }
 };
 
 pub const CarryableEntry = struct {
@@ -223,6 +246,14 @@ pub const World = struct {
                     .previous_tick = previous.current_tick,
                     .current_tick = snapshot.server_tick,
                 };
+                for (&next_vehicles[index].older, 0..) |*sample, older_index| {
+                    sample.* = if (older_index == 0) .{ .state = previous.previous, .tick = previous.previous_tick } else previous.older[older_index - 1];
+                }
+                if (previous.current.definition_revision != vehicle.definition_revision or !std.meta.eql(previous.current.definition, vehicle.definition)) {
+                    next_vehicles[index].previous = vehicle;
+                    next_vehicles[index].previous_tick = snapshot.server_tick;
+                    next_vehicles[index].older = @splat(null);
+                }
             } else {
                 next_vehicles[index] = .{
                     .previous = vehicle,
@@ -337,6 +368,7 @@ pub const World = struct {
     }
 
     pub fn interpolateVehicle(entry: VehicleEntry, alpha: f32) protocol.VehicleState {
+        if (entry.previous.definition_revision != entry.current.definition_revision or !std.meta.eql(entry.previous.definition, entry.current.definition)) return entry.current;
         const t = std.math.clamp(alpha, 0, 1);
         var result = entry.current;
         for (&result.position, entry.previous.position, entry.current.position) |
@@ -560,20 +592,10 @@ pub const VehicleWheelLayout = struct {
     }
 };
 
-/// Current single-archetype client layout. The content cohort keeps this in
-/// lockstep with VehicleTuning until vehicle archetype identity is projected.
-pub const default_vehicle_wheel_layout = VehicleWheelLayout{
-    .attachment_positions = .{
-        .{ -0.8, -0.18, -1.4 },
-        .{ 0.8, -0.18, -1.4 },
-        .{ -0.8, -0.18, 1.4 },
-        .{ 0.8, -0.18, 1.4 },
-    },
-    .radius = 0.3,
-    .width = 0.2,
-    .suspension_max_length = 0.5,
-    .max_steer_radians = std.math.degreesToRadians(30),
-};
+/// Layout derives exclusively from the admitted definition.
+pub fn vehicleWheelLayout(definition: protocol.VehicleDefinition) VehicleWheelLayout {
+    return .{ .attachment_positions = definition.attachment_positions, .radius = definition.wheel_radius, .width = definition.wheel_width, .suspension_max_length = @reduce(.Max, @as(@Vector(4, f32), definition.suspension_max_lengths)), .max_steer_radians = definition.max_steer_radians };
+}
 
 pub const WheelPose = struct {
     position: [3]f32,
@@ -743,6 +765,7 @@ test "replicated world defensively rejects duplicate projection identities" {
     };
     snapshot.vehicle_count = 1;
     snapshot.vehicles[0] = .{
+        .definition = protocol.validationVehicleDefinition(),
         .entity = duplicate,
         .position = .{ 0, 1, 0 },
         .rotation = .{ 0, 0, 0, 1 },
@@ -779,6 +802,7 @@ test "replicated world rejects invalid projection physics without mutation" {
     invalid.sequence.value = 2;
     invalid.vehicle_count = 1;
     invalid.vehicles[0] = .{
+        .definition = protocol.validationVehicleDefinition(),
         .entity = .{ .index = 17, .generation = 1 },
         .position = .{ 0, 1, 0 },
         .rotation = .{ 0, 0, 0, 0 },
@@ -823,6 +847,7 @@ test "replicated world interpolates vehicle pose and replaces dynamic ownership"
     first.server_tick = 30;
     first.vehicle_count = 1;
     first.vehicles[0] = .{
+        .definition = protocol.validationVehicleDefinition(),
         .entity = .{ .index = 17, .generation = 1 },
         .position = .{ 0, 1, 0 },
         .rotation = .{ 0, 0, 0, 1 },
@@ -903,8 +928,37 @@ test "wheel phase interpolation remains canonical at floating point wrap boundar
     try multi_turn.validate();
 }
 
+test "forced vehicle snapshots preserve constant motion at the three tick render delay" {
+    var world = World{};
+    var snapshot = protocol.Snapshot.empty();
+    snapshot.vehicle_count = 1;
+    snapshot.vehicles[0] = .{ .definition = protocol.validationVehicleDefinition(), .entity = .{ .index = 17, .generation = 1 }, .position = .{ 0, 1, 0 }, .rotation = .{ 0, 0, 0, 1 }, .linear_velocity = .{ 0, 0, -6 }, .angular_velocity = .{ 0, 0, 0 }, .driver = null };
+    for (0..16) |tick| {
+        if (tick % 3 == 0 or tick == 4 or tick == 5 or tick == 8) {
+            snapshot.sequence = snapshot.sequence.next();
+            snapshot.server_tick = tick;
+            snapshot.vehicles[0].position[2] = -@as(f32, @floatFromInt(tick)) / 10;
+            for (&snapshot.vehicles[0].wheels) |*wheel| {
+                wheel.angular_velocity = -100;
+                wheel.spin_phase = canonicalWheelPhase(-100 * @as(f64, @floatFromInt(tick)) / 60);
+            }
+            try world.apply(snapshot);
+        }
+        if (tick < budgets.ticks_per_snapshot) continue;
+        for ([_]f32{ 0, 0.25, 0.5, 0.9 }) |alpha| {
+            const window = world.vehicleSlice()[0].delayedWindow(tick, alpha);
+            const presented = World.interpolateVehicle(window.entry, window.alpha);
+            const target = @as(f32, @floatFromInt(tick - budgets.ticks_per_snapshot)) + alpha;
+            try std.testing.expectApproxEqAbs(-target / 10, presented.position[2], 0.0001);
+            const phase = canonicalWheelPhase(-100 * @as(f64, target) / 60);
+            try std.testing.expectApproxEqAbs(phase, presented.wheels[0].spin_phase, 0.0001);
+        }
+    }
+}
+
 test "predicted chassis does not erase authoritative wheel presentation" {
     var interpolated = protocol.VehicleState{
+        .definition = protocol.validationVehicleDefinition(),
         .entity = .{ .index = 17, .generation = 1 },
         .position = .{ 1, 2, 3 },
         .rotation = .{ 0, 0, 0, 1 },
@@ -938,6 +992,7 @@ test "predicted chassis does not erase authoritative wheel presentation" {
 
 test "vehicle wheel composition applies suspension steering and spin once" {
     var vehicle = protocol.VehicleState{
+        .definition = protocol.validationVehicleDefinition(),
         .entity = .{ .index = 17, .generation = 1 },
         .position = .{ 10, 2, 3 },
         .rotation = .{ 0, 0, 0, 1 },
@@ -953,8 +1008,8 @@ test "vehicle wheel composition applies suspension steering and spin once" {
     vehicle.wheels[2] = .{ .suspension_length = 0.4 };
     vehicle.wheels[3] = .{ .suspension_length = 0.5 };
 
-    const poses = try composeVehicleWheelPoses(vehicle, default_vehicle_wheel_layout);
-    for (poses, default_vehicle_wheel_layout.attachment_positions, vehicle.wheels) |
+    const poses = try composeVehicleWheelPoses(vehicle, vehicleWheelLayout(protocol.validationVehicleDefinition()));
+    for (poses, vehicleWheelLayout(protocol.validationVehicleDefinition()).attachment_positions, vehicle.wheels) |
         pose,
         attachment,
         wheel,
@@ -975,17 +1030,17 @@ test "vehicle wheel composition applies suspension steering and spin once" {
     try std.testing.expectEqualDeep([4]f32{ 0, 0, 0, 1 }, poses[2].rotation);
 
     vehicle.wheels[0].suspension_length =
-        default_vehicle_wheel_layout.suspension_max_length + 0.01;
+        vehicleWheelLayout(protocol.validationVehicleDefinition()).suspension_max_length + 0.01;
     try std.testing.expectError(
         error.VehicleWheelSuspensionExceedsLayout,
-        composeVehicleWheelPoses(vehicle, default_vehicle_wheel_layout),
+        composeVehicleWheelPoses(vehicle, vehicleWheelLayout(protocol.validationVehicleDefinition())),
     );
     vehicle.wheels[0].suspension_length = 0;
     vehicle.wheels[0].steer_angle =
-        default_vehicle_wheel_layout.max_steer_radians + 0.01;
+        vehicleWheelLayout(protocol.validationVehicleDefinition()).max_steer_radians + 0.01;
     try std.testing.expectError(
         error.VehicleWheelSteeringExceedsLayout,
-        composeVehicleWheelPoses(vehicle, default_vehicle_wheel_layout),
+        composeVehicleWheelPoses(vehicle, vehicleWheelLayout(protocol.validationVehicleDefinition())),
     );
 }
 

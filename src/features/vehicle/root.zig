@@ -6,7 +6,7 @@ const contract = @import("vehicle_contract");
 const driver_contract = @import("driver_contract");
 
 const logical_state_domain = "incinerator.vehicle.logical";
-const logical_state_schema: u16 = 2;
+const logical_state_schema: u16 = 3;
 
 const max_pending_commands = contract.max_pending_commands;
 const max_outcomes = contract.max_outcomes;
@@ -55,9 +55,12 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
             wheel_radius: f32,
             wheel_width: f32,
         };
+        const AdmittedDefinition = struct { owned: contract.asset.Owned, digest: engine.assets.Digest, revision: u64 };
         const PhysicsDriven = struct { enabled: bool = true };
         const RuntimeVehicle = struct { handle: Vehicles.Handle };
         const Control = struct {
+            applied_input: engine.physics.VehicleInput = .{},
+            conditioned_steering: f32 = 0,
             input: engine.physics.VehicleInput = .{},
             driver_id: ?engine.PersistentId = null,
         };
@@ -75,6 +78,9 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
         /// or rebuild wheel caches during create; that must not make an
         /// immediate save-after-restore change the declared logical record.
         const RestoredLogicalState = struct {
+            conditioned_steering: f32 = 0,
+            revision: u64 = 0,
+            powertrain: engine.physics.VehiclePowertrainState = .{},
             pending_publication: bool = false,
             chassis: engine.physics.BodyState = .{},
             wheels: [engine.physics.vehicle_wheel_count]VehicleWheelV1 = .{
@@ -87,6 +93,8 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
         const QueuedCommand = struct {
             command: Command,
             eligible_tick: u64,
+            owned_definition: ?contract.asset.Owned = null,
+            definition_digest: ?engine.assets.Digest = null,
         };
         const DriverRollback = struct {
             vehicle_id: engine.PersistentId,
@@ -142,6 +150,7 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
 
         pub fn register(self: *Self, registry: *engine.FeatureRegistry) !void {
             try registry.registerComponent(Vehicle);
+            try registry.registerComponent(AdmittedDefinition);
             try registry.registerComponent(PhysicsDriven);
             try registry.registerComponent(RuntimeVehicle);
             try registry.registerComponent(Control);
@@ -158,9 +167,12 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 if (self.runtime.get(runtime_id, RuntimeVehicle)) |vehicle| {
                     self.destroyVehicleOrPanic(vehicle.handle);
                 }
+                self.releaseDefinition(runtime_id);
                 self.destroyRuntimeOrPanic(runtime_id);
                 _ = self.active.pop();
             }
+            for (self.pending.items) |*queued| if (queued.owned_definition) |*owned| owned.deinit();
+            for (self.applying.items[self.applying_index..]) |*queued| if (queued.owned_definition) |*owned| owned.deinit();
             self.pending.deinit(self.allocator);
             self.applying.deinit(self.allocator);
             self.active.deinit(self.allocator);
@@ -179,8 +191,23 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 self.commands_rejected +|= 1;
                 return error.VehicleCommandQueueFull;
             }
+            var owned: ?contract.asset.Owned = switch (command) {
+                .spawn => |spawn| try spawn.definition.clone(self.allocator),
+                .reconfigure => |edit| try edit.candidate.clone(self.allocator),
+                else => null,
+            };
+            errdefer if (owned) |*definition| definition.deinit();
+            const definition_digest = if (owned) |definition| try definition.value.digest(self.allocator) else null;
+            var retained = command;
+            if (owned) |value| switch (retained) {
+                .spawn => |*spawn| spawn.definition = value.value,
+                .reconfigure => |*edit| edit.candidate = value.value,
+                else => unreachable,
+            };
             self.pending.appendAssumeCapacity(.{
-                .command = command,
+                .owned_definition = owned,
+                .definition_digest = definition_digest,
+                .command = retained,
                 .eligible_tick = eligible_tick,
             });
             self.observeQueueHighWater();
@@ -268,6 +295,9 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                     return error.VehicleRestoreStateInvariantBroken;
                 const state = try canonicalState(try self.vehicleStateFromPort(live.handle));
 
+                const definition = self.runtime.get(runtime_id, AdmittedDefinition) orelse return error.VehicleDefinitionInvariantBroken;
+                writer.writeBytes(&definition.digest);
+                writer.writeU64(definition.revision);
                 writePersistentId(writer, id);
                 try writeVector3(writer, vehicle.chassis_half_extents);
                 try writer.writeF32(vehicle.wheel_radius);
@@ -275,6 +305,7 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 writer.writeBool(authority.enabled);
                 try writeVehicleState(writer, state);
                 try writeVehicleInput(writer, control.input);
+                try writer.writeF32(control.conditioned_steering);
                 writeOptionalPersistentId(writer, control.driver_id);
 
                 // This transition flag and payload can affect an immediate
@@ -282,6 +313,7 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 writer.writeBool(restored.pending_publication);
                 if (restored.pending_publication) {
                     try writeBodyState(writer, restored.chassis);
+                    try writePowertrainState(writer, restored.powertrain);
                     for (restored.wheels) |wheel| {
                         try writer.writeF32(wheel.rotation_angle);
                         try writer.writeF32(wheel.angular_velocity);
@@ -312,6 +344,7 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
         pub fn view(self: *Self, id: engine.PersistentId) !VehicleView {
             const runtime_id = self.runtime.resolve(id) orelse return error.VehicleFeatureNotFound;
             _ = self.runtime.get(runtime_id, Vehicle) orelse return error.VehicleFeatureNotOwned;
+            const definition = self.runtime.get(runtime_id, AdmittedDefinition) orelse return error.VehicleDefinitionInvariantBroken;
             try self.requirePhysicsAuthority(runtime_id);
             const live = self.runtime.get(runtime_id, RuntimeVehicle) orelse
                 return error.VehicleHandleInvariantBroken;
@@ -319,8 +352,13 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 return error.VehicleControlInvariantBroken;
             return .{
                 .id = id,
+                .definition = definition.owned.value,
+                .definition_digest = definition.digest,
+                .revision = definition.revision,
                 .state = try canonicalState(try self.vehicleStateFromPort(live.handle)),
                 .input = control.input,
+                .applied_input = control.applied_input,
+                .conditioned_steering = control.conditioned_steering,
                 .driver_id = control.driver_id,
             };
         }
@@ -368,11 +406,11 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
             return self.presentations.items;
         }
 
-        pub fn snapshotRecords(self: *Self, allocator: std.mem.Allocator) ![]VehicleV1 {
+        pub fn snapshotRecords(self: *Self, allocator: std.mem.Allocator) !std.json.Parsed([]VehicleV1) {
             try self.runtime.ensureSnapshotBoundary();
             if (self.hasPendingCommands()) return error.CommandsPending;
             const records = try allocator.alloc(VehicleV1, self.active.items.len);
-            errdefer allocator.free(records);
+            defer allocator.free(records);
             for (self.active.items, 0..) |runtime_id, index| {
                 try self.requirePhysicsAuthority(runtime_id);
                 const live = self.runtime.get(runtime_id, RuntimeVehicle) orelse
@@ -395,20 +433,27 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                     break :blk state.chassis;
                 };
                 if (restored.pending_publication) wheels = restored.wheels;
+                const definition = self.runtime.get(runtime_id, AdmittedDefinition) orelse return error.VehicleDefinitionInvariantBroken;
                 const record = VehicleV1{
+                    .definition = definition.owned.value,
+                    .revision = definition.revision,
+                    .powertrain = if (restored.pending_publication) restored.powertrain else (try self.vehicleStateFromPort(live.handle)).powertrain,
                     .id = try self.runtime.identity(runtime_id),
                     .chassis_pose = VehiclePoseV1.fromPose(chassis.pose),
                     .linear_velocity = chassis.velocity.linear,
                     .angular_velocity = chassis.velocity.angular,
                     .wheels = wheels,
                     .input = VehicleInputV1.fromInput(control.input),
+                    .conditioned_steering = control.conditioned_steering,
                     .driver_id = control.driver_id,
                 };
                 try validateRecord(record);
                 records[index] = record;
             }
             std.mem.sort(VehicleV1, records, {}, lessThanRecord);
-            return records;
+            const payload = try std.json.Stringify.valueAlloc(allocator, records, .{});
+            defer allocator.free(payload);
+            return std.json.parseFromSlice([]VehicleV1, allocator, payload, .{ .allocate = .alloc_always });
         }
 
         /// Restore vehicles and then establish validated driver links. All
@@ -438,6 +483,7 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 }
                 _ = try self.spawnNow(.{
                     .request_id = 0,
+                    .definition = record.definition,
                     .chassis = .{
                         .pose = record.chassis_pose.toPose(),
                         .velocity = .{
@@ -447,6 +493,9 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                     },
                 }, dynamics, record.input.toInput(), record.id, false, .{
                     .pending_publication = true,
+                    .revision = record.revision,
+                    .powertrain = record.powertrain,
+                    .conditioned_steering = record.conditioned_steering,
                     .chassis = .{
                         .pose = record.chassis_pose.toPose(),
                         .velocity = .{
@@ -498,13 +547,15 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 );
             }
             while (self.applying_index < self.applying.items.len) {
-                const queued = self.applying.items[self.applying_index];
+                var queued = self.applying.items[self.applying_index];
                 self.applying_index += 1;
                 if (queued.eligible_tick > tick.tick_index) {
                     self.pending.appendAssumeCapacity(queued);
                     continue;
                 }
+                defer if (queued.owned_definition) |*owned| owned.deinit();
                 switch (queued.command) {
+                    .reconfigure => |edit| try self.reconfigureNow(edit, tick.tick_index),
                     .spawn => |spawn| {
                         _ = self.spawnNow(
                             spawn,
@@ -580,7 +631,7 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
         fn applyInputSystem(
             raw: *anyopaque,
             _: *engine.Runtime,
-            _: engine.TickContext,
+            tick: engine.TickContext,
         ) !void {
             const self: *Self = @ptrCast(@alignCast(raw));
             for (self.active.items) |runtime_id| {
@@ -589,7 +640,15 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                     return error.VehicleHandleInvariantBroken;
                 const control = self.runtime.getMut(runtime_id, Control) orelse
                     return error.VehicleControlInvariantBroken;
-                try self.setVehicleInputThroughPort(live.handle, control.input);
+                const definition = self.runtime.get(runtime_id, AdmittedDefinition) orelse return error.VehicleDefinitionInvariantBroken;
+                const state = try self.vehicleStateFromPort(live.handle);
+                const v = state.chassis.velocity.linear;
+                const speed = @sqrt(v[0] * v[0] + v[2] * v[2]);
+                control.conditioned_steering = definition.owned.value.tuning.steering.update(control.conditioned_steering, control.input.steering, speed, tick.delta_seconds);
+                var conditioned = contract.control.resolve(control.input, contract.control.forwardSpeed(state.chassis), speed, state.current_gear);
+                conditioned.steering = control.conditioned_steering;
+                try self.setVehicleInputThroughPort(live.handle, conditioned);
+                control.applied_input = conditioned;
                 // Controls are tick-scoped. A missing sample is neutral rather
                 // than a sticky throttle/steering hold.
                 control.input = .{};
@@ -631,16 +690,21 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
             emit_outcome: bool,
             restored_logical: ?RestoredLogicalState,
         ) !engine.PersistentId {
-            const desc = try self.config.tuning.physicsDescriptor(
+            const tuning = try spawn.definition.tuning.toTuning();
+            var desc = try tuning.physicsDescriptor(
                 spawn.chassis,
                 wheel_dynamics,
             ).normalized();
+            if (restored_logical) |logical| desc.initial_powertrain = logical.powertrain;
             try input.validate();
             if (self.active.items.len >= self.config.max_vehicles) {
                 return error.VehicleFeatureCapacityReached;
             }
             if (emit_outcome) std.debug.assert(self.outcomes.len < max_outcomes);
 
+            var owned_definition = try spawn.definition.clone(self.allocator);
+            errdefer owned_definition.deinit();
+            const definition_digest = try owned_definition.value.digest(self.allocator);
             const runtime_id = if (restored_id) |id|
                 try self.runtime.createWithPersistentId(id)
             else
@@ -656,9 +720,10 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 .wheel_radius = desc.wheel_radius,
                 .wheel_width = desc.wheel_width,
             });
+            try self.runtime.set(runtime_id, AdmittedDefinition, .{ .owned = owned_definition, .digest = definition_digest, .revision = if (restored_logical) |logical| logical.revision else 0 });
             try self.runtime.set(runtime_id, PhysicsDriven, .{});
             try self.runtime.set(runtime_id, RuntimeVehicle, .{ .handle = handle });
-            try self.runtime.set(runtime_id, Control, .{ .input = input });
+            try self.runtime.set(runtime_id, Control, .{ .input = input, .conditioned_steering = if (restored_logical) |logical| logical.conditioned_steering else 0 });
             try self.runtime.set(
                 runtime_id,
                 RestoredLogicalState,
@@ -689,6 +754,79 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 } });
             }
             return id;
+        }
+
+        fn rejectEdit(self: *Self, edit: contract.ReconfigureVehicle, reason: RejectionReason, revision: ?u64, backend_error: ?[]const u8) void {
+            self.outcomes.pushAssumeCapacity(.{ .rejected = .{ .command = .reconfigure, .reason = reason, .transaction_id = edit.transaction_id, .source = edit.source, .vehicle_id = edit.id, .actual_revision = revision, .backend_error = backend_error } });
+        }
+
+        fn reconfigureNow(self: *Self, edit: contract.ReconfigureVehicle, tick: u64) !void {
+            const runtime_id = self.runtime.resolve(edit.id) orelse {
+                self.rejectEdit(edit, .vehicle_not_found, null, null);
+                return;
+            };
+            const admitted = self.runtime.getMut(runtime_id, AdmittedDefinition) orelse {
+                self.rejectEdit(edit, .not_owned, null, null);
+                return;
+            };
+            const revision = admitted.revision;
+            if (revision != edit.expected_revision) {
+                self.rejectEdit(edit, .stale_revision, revision, null);
+                return;
+            }
+            if (!std.meta.eql(admitted.owned.value.id, edit.candidate.id)) {
+                self.rejectEdit(edit, .archetype_mismatch, revision, null);
+                return;
+            }
+            if (edit.candidate.revision != edit.expected_asset_revision) {
+                self.rejectEdit(edit, .stale_asset_revision, revision, null);
+                return;
+            }
+            const effect = contract.reconfigurationEffect(admitted.owned.value.tuning, edit.candidate.tuning);
+            if (effect == .rebuild and !edit.rebuild) {
+                self.rejectEdit(edit, .rebuild_required, revision, null);
+                return;
+            }
+            const control = self.runtime.get(runtime_id, Control) orelse return error.VehicleControlInvariantBroken;
+            if (control.driver_id != null and (!std.meta.eql(admitted.owned.value.tuning.chassis_half_extents, edit.candidate.tuning.chassis_half_extents) or
+                !std.meta.eql(admitted.owned.value.tuning.wheel_attachment_positions, edit.candidate.tuning.wheel_attachment_positions)))
+            {
+                self.rejectEdit(edit, .occupied_layout_change, revision, null);
+                return;
+            }
+            if (revision == std.math.maxInt(u64)) return error.AuthoringRevisionExhausted;
+            var owned = edit.candidate.clone(self.allocator) catch |err| {
+                self.rejectEdit(edit, .construction_failed, revision, @errorName(err));
+                return;
+            };
+            var published = false;
+            defer if (!published) owned.deinit();
+            const digest = try owned.value.digest(self.allocator);
+            const live = self.runtime.getMut(runtime_id, RuntimeVehicle) orelse return error.VehicleHandleInvariantBroken;
+            const tuning = try edit.candidate.tuning.toTuning();
+            if (effect == .rebuild or edit.rebuild) {
+                live.handle = self.vehicles.rebuildVehicle(live.handle, tuning.physicsDescriptor(.{}, zeroWheelDynamics())) catch |err| {
+                    self.rejectEdit(edit, switch (@as(anyerror, err)) {
+                        error.VehicleRebuildCollisionBlocked => .collision_blocked,
+                        error.VehicleIsShifting => .shifting,
+                        error.IncompatibleVehiclePowertrainState => .incompatible_powertrain,
+                        else => .construction_failed,
+                    }, revision, @errorName(err));
+                    return;
+                };
+            } else if (effect == .live) {
+                self.vehicles.setVehicleLiveSettings(live.handle, .{ .max_torque_nm = tuning.powertrain.max_torque_nm, .idle_rpm = tuning.powertrain.idle_rpm, .max_rpm = tuning.powertrain.max_rpm, .inertia_kg_m2 = tuning.powertrain.inertia_kg_m2, .angular_damping = tuning.powertrain.angular_damping, .max_pitch_roll_radians = tuning.max_pitch_roll_radians }) catch |err| {
+                    self.rejectEdit(edit, .incompatible_powertrain, revision, @errorName(err));
+                    return;
+                };
+            }
+            const before_digest = admitted.digest;
+            admitted.owned.deinit();
+            admitted.* = .{ .owned = owned, .digest = digest, .revision = revision + 1 };
+            published = true;
+            const dimensions = self.runtime.getMut(runtime_id, Vehicle) orelse return error.VehicleFeatureNotOwned;
+            dimensions.* = .{ .chassis_half_extents = tuning.chassis_half_extents, .wheel_radius = tuning.wheel_radius, .wheel_width = tuning.wheel_width };
+            self.outcomes.pushAssumeCapacity(.{ .reconfigured = .{ .transaction_id = edit.transaction_id, .source = edit.source, .id = edit.id, .authority_tick = tick, .revision = revision + 1, .before_digest = before_digest, .after_digest = digest, .effect = if (edit.rebuild) .rebuild else effect } });
         }
 
         fn enterNow(self: *Self, enter: EnterVehicle) !void {
@@ -829,6 +967,7 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 return error.VehicleActiveIndexInvariantBroken;
             if (emit_outcome) std.debug.assert(self.outcomes.len < max_outcomes);
             try self.destroyVehicleThroughPort(live.handle);
+            self.releaseDefinition(runtime_id);
             self.destroyRuntimeOrPanic(runtime_id);
             _ = self.active.orderedRemove(index);
             if (emit_outcome) self.outcomes.pushAssumeCapacity(.{ .despawned = id });
@@ -943,10 +1082,21 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
         ) !void {
             writer.writeU64(queued.eligible_tick);
             switch (queued.command) {
+                .reconfigure => |edit| {
+                    writer.writeU8(7);
+                    writer.writeU64(edit.transaction_id);
+                    writer.writeU8(@intFromEnum(edit.source));
+                    writePersistentId(writer, edit.id);
+                    writer.writeU64(edit.expected_revision);
+                    writer.writeU64(edit.expected_asset_revision);
+                    writer.writeBool(edit.rebuild);
+                    writer.writeBytes(&queued.definition_digest.?);
+                },
                 .spawn => |spawn| {
                     writer.writeU8(1);
                     writer.writeU64(spawn.request_id);
                     try writeBodyState(writer, spawn.chassis);
+                    writer.writeBytes(&queued.definition_digest.?);
                 },
                 .enter => |enter| {
                     writer.writeU8(2);
@@ -1084,6 +1234,7 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 if (self.runtime.get(runtime_id, RuntimeVehicle)) |vehicle| {
                     self.destroyVehicleOrPanic(vehicle.handle);
                 }
+                self.releaseDefinition(runtime_id);
                 self.destroyRuntimeOrPanic(runtime_id);
                 _ = self.active.pop();
             }
@@ -1094,6 +1245,15 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
                 "vehicle cleanup invariant failed: {s}",
                 .{@errorName(err)},
             );
+        }
+
+        fn releaseDefinition(self: *Self, runtime_id: engine.RuntimeId) void {
+            // Read access remains available during fault cleanup. getMut is
+            // deliberately unavailable once the runtime has faulted.
+            if (self.runtime.get(runtime_id, AdmittedDefinition)) |definition| {
+                var owned = definition.owned;
+                owned.deinit();
+            }
         }
 
         fn destroyRuntimeOrPanic(self: *Self, runtime_id: engine.RuntimeId) void {
@@ -1107,7 +1267,15 @@ pub fn Feature(comptime Vehicles: type, comptime DriverAccess: type) type {
 
 fn validateCommand(command: Command) !void {
     switch (command) {
-        .spawn => |spawn| try spawn.chassis.validate(),
+        .reconfigure => |edit| {
+            if (edit.transaction_id == 0) return error.InvalidAuthoringTransactionId;
+            try edit.id.validate();
+            try edit.candidate.validate();
+        },
+        .spawn => |spawn| {
+            try spawn.chassis.validate();
+            try spawn.definition.validate();
+        },
         .enter => |enter| {
             try enter.vehicle_id.validate();
             try enter.driver_id.validate();
@@ -1239,6 +1407,7 @@ fn writeVehicleState(
     }
     try writer.writeF32(state.engine_rpm);
     writer.writeI32(state.current_gear);
+    try writePowertrainState(writer, state.powertrain);
 }
 
 fn canonicalPose(raw: engine.physics.Pose) !engine.physics.Pose {
@@ -1382,6 +1551,21 @@ const FakeVehicles = struct {
         return handle;
     }
 
+    pub fn setVehicleLiveSettings(self: *FakeVehicles, handle: Handle, _: engine.physics.VehicleLiveSettings) !void {
+        if (self.fail_create_call == self.create_calls + 1) return error.InjectedVehicleCreateFailure;
+        if (!self.live[handle]) return error.InvalidVehicleHandle;
+    }
+    pub fn rebuildVehicle(self: *FakeVehicles, handle: Handle, requested: engine.physics.VehicleDesc) !Handle {
+        var desc = requested;
+        const state = self.states[handle];
+        desc.chassis = state.chassis;
+        desc.initial_powertrain = state.powertrain;
+        for (&desc.initial_wheel_dynamics, state.wheels) |*motion, wheel| motion.* = .{ .rotation_angle = wheel.rotation_angle, .angular_velocity = wheel.angular_velocity };
+        const replacement = try self.createVehicle(desc);
+        try self.destroyVehicle(handle);
+        return replacement;
+    }
+
     pub fn destroyVehicle(self: *FakeVehicles, handle: Handle) !void {
         if (handle >= capacity or !self.live[handle]) return error.InvalidFakeVehicle;
         self.destroy_calls += 1;
@@ -1413,6 +1597,7 @@ const FakeVehicles = struct {
     fn stateFromDesc(desc: engine.physics.VehicleDesc) engine.physics.VehicleState {
         var state = emptyVehicleState();
         state.chassis = desc.chassis;
+        state.powertrain = desc.initial_powertrain orelse .{ .engine_rpm = desc.powertrain.idle_rpm };
         for (&state.wheels, 0..) |*wheel, index| {
             wheel.pose = .{
                 .position = addVector(
@@ -1588,8 +1773,8 @@ test "vehicle diagnostics retain unread output and command high-water marks" {
     try feature.register(&registry);
     runtime.finishRegistration();
 
-    try feature.enqueue(.{ .spawn = .{ .request_id = 1 } });
-    try feature.enqueue(.{ .spawn = .{ .request_id = 2 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 1 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 2 } });
     var snapshot = feature.diagnostics();
     try std.testing.expectEqual(@as(u32, 2), snapshot.commands.occupancy);
     try std.testing.expectEqual(@as(u32, 2), snapshot.commands.high_water);
@@ -1644,7 +1829,7 @@ test "vehicle bounded command reservations drain and recover without allocation"
     }
     try std.testing.expectError(
         error.VehicleCommandQueueFull,
-        feature.enqueue(.{ .spawn = .{ .request_id = 900 } }),
+        feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 900 } }),
     );
     var diagnostics_value = feature.diagnostics();
     try std.testing.expectEqual(@as(u32, max_pending_commands), diagnostics_value.commands.occupancy);
@@ -1661,7 +1846,7 @@ test "vehicle bounded command reservations drain and recover without allocation"
     try std.testing.expectEqual(@as(?u32, max_outcomes), diagnostics_value.outcomes.capacity);
     try std.testing.expectError(
         error.VehicleCommandQueueFull,
-        feature.enqueue(.{ .spawn = .{ .request_id = 901 } }),
+        feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 901 } }),
     );
     try std.testing.expectEqual(@as(u64, 2), feature.diagnostics().commands.rejected);
 
@@ -1679,7 +1864,10 @@ test "vehicle bounded command reservations drain and recover without allocation"
     }
     try std.testing.expect(feature.pollOutcome() == null);
 
-    try feature.enqueue(.{ .spawn = .{ .request_id = 902 } });
+    try std.testing.expectEqual(allocation_count, failing.alloc_index);
+    // A new admitted archetype owns its variable-length content at creation.
+    failing.fail_index = std.math.maxInt(usize);
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 902 } });
     try runtime.tick();
     const spawned = switch (feature.pollOutcome() orelse return error.MissingOutcome) {
         .spawned => |value| value,
@@ -1690,7 +1878,6 @@ test "vehicle bounded command reservations drain and recover without allocation"
     try runtime.tick();
     try std.testing.expectEqual(spawned.id, feature.pollOutcome().?.despawned);
     try std.testing.expectEqual(@as(usize, 0), feature.count());
-    try std.testing.expectEqual(allocation_count, failing.alloc_index);
 }
 
 test "vehicle transition events saturate, drop exactly, and recover after drain" {
@@ -1716,11 +1903,11 @@ test "vehicle transition events saturate, drop exactly, and recover after drain"
     try feature.register(&registry);
     runtime.finishRegistration();
 
-    const allocation_count = failing.alloc_index;
-    failing.fail_index = allocation_count;
-    try feature.enqueue(.{ .spawn = .{ .request_id = 1 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 1 } });
     try runtime.tick();
     const vehicle_id = feature.pollOutcome().?.spawned.id;
+    const allocation_count = failing.alloc_index;
+    failing.fail_index = allocation_count;
 
     for (0..max_events + 1) |index| {
         if (index % 2 == 0) {
@@ -1797,6 +1984,7 @@ test "vehicle logical state hashes the full canonical backend state" {
     runtime.finishRegistration();
 
     try feature.enqueue(.{ .spawn = .{
+        .definition = contract.asset.validationFixture(),
         .request_id = 1,
         .chassis = .{ .pose = .{ .rotation = .{ 0, 0, 0, -1 } } },
     } });
@@ -1830,6 +2018,10 @@ fn testId(namespace: u64, local: u64) engine.PersistentId {
 
 fn testRecord(namespace: u64, local: u64) VehicleV1 {
     return .{
+        .definition = contract.asset.validationFixture(),
+        .revision = 0,
+        .powertrain = .{},
+        .conditioned_steering = 0,
         .id = testId(namespace, local),
         .chassis_pose = .{
             .position = .{ 0, 0, 0 },
@@ -1959,8 +2151,8 @@ test "invalid missing foreign-feature and capacity commands reject explicitly" {
         .vehicle_id = foreign_feature_id,
         .driver_id = driver_id,
     } });
-    try feature.enqueue(.{ .spawn = .{ .request_id = 1 } });
-    try feature.enqueue(.{ .spawn = .{ .request_id = 2 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 1 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 2 } });
     try runtime.tick();
     try expectRejected(&feature, .enter, .vehicle_not_found);
     try expectRejected(&feature, .enter, .not_owned);
@@ -1991,7 +2183,7 @@ test "ordered commands transfer authority and missing drive input neutralizes" {
     try feature.register(&registry);
     runtime.finishRegistration();
 
-    try feature.enqueue(.{ .spawn = .{ .request_id = 9 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 9 } });
     try runtime.tick();
     const vehicle_id = feature.pollOutcome().?.spawned.id;
     try std.testing.expect(vehicles.last_input.isNeutral());
@@ -2053,8 +2245,8 @@ test "enter rejects missing far occupied and already-driving characters" {
     try feature.register(&registry);
     runtime.finishRegistration();
 
-    try feature.enqueue(.{ .spawn = .{ .request_id = 1 } });
-    try feature.enqueue(.{ .spawn = .{ .request_id = 2, .chassis = .{
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 1 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 2, .chassis = .{
         .pose = .{ .position = .{ 10, 0, 0 } },
     } } });
     try runtime.tick();
@@ -2102,11 +2294,11 @@ test "carrying driver is a typed rejection and leaves both relationships healthy
     try feature.register(&registry);
     runtime.finishRegistration();
 
-    try feature.enqueue(.{ .spawn = .{ .request_id = 1 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 1 } });
     try runtime.tick();
     const vehicle_id = feature.pollOutcome().?.spawned.id;
-    const before = try feature.snapshotRecords(std.testing.allocator);
-    defer std.testing.allocator.free(before);
+    var before = try feature.snapshotRecords(std.testing.allocator);
+    defer before.deinit();
 
     try feature.enqueue(.{ .enter = .{
         .vehicle_id = vehicle_id,
@@ -2120,9 +2312,9 @@ test "carrying driver is a typed rejection and leaves both relationships healthy
         (try drivers.driverState(driver_id)).?.carried_item.?,
     );
     try std.testing.expect((try feature.view(vehicle_id)).driver_id == null);
-    const after = try feature.snapshotRecords(std.testing.allocator);
-    defer std.testing.allocator.free(after);
-    try std.testing.expectEqualDeep(before, after);
+    var after = try feature.snapshotRecords(std.testing.allocator);
+    defer after.deinit();
+    try std.testing.expectEqualDeep(before.value, after.value);
 
     // The rejection is non-terminal: resolving the conflicting relationship
     // permits the same command on the next tick.
@@ -2158,7 +2350,7 @@ test "authority blocked exit and occupied despawn preserve the relationship" {
     var registry = runtime.registry();
     try feature.register(&registry);
     runtime.finishRegistration();
-    try feature.enqueue(.{ .spawn = .{ .request_id = 1 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 1 } });
     try runtime.tick();
     const vehicle_id = feature.pollOutcome().?.spawned.id;
     try feature.enqueue(.{ .enter = .{ .vehicle_id = vehicle_id, .driver_id = driver_id } });
@@ -2238,7 +2430,7 @@ test "domain-named driver adapter failure remains terminal and preserves authori
     var registry = runtime.registry();
     try feature.register(&registry);
     runtime.finishRegistration();
-    try feature.enqueue(.{ .spawn = .{ .request_id = 1 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 1 } });
     try runtime.tick();
     const vehicle_id = feature.pollOutcome().?.spawned.id;
 
@@ -2270,7 +2462,7 @@ test "end-driving adapter failure preserves both sides of occupancy" {
     var registry = runtime.registry();
     try feature.register(&registry);
     runtime.finishRegistration();
-    try feature.enqueue(.{ .spawn = .{ .request_id = 1 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 1 } });
     try runtime.tick();
     const vehicle_id = feature.pollOutcome().?.spawned.id;
     try feature.enqueue(.{ .enter = .{ .vehicle_id = vehicle_id, .driver_id = driver_id } });
@@ -2309,7 +2501,7 @@ test "accepted enter uses reserved storage and cannot allocate during commit" {
     var registry = runtime.registry();
     try feature.register(&registry);
     runtime.finishRegistration();
-    try feature.enqueue(.{ .spawn = .{ .request_id = 1 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 1 } });
     try runtime.tick();
     const vehicle_id = feature.pollOutcome().?.spawned.id;
     try feature.enqueue(.{ .enter = .{ .vehicle_id = vehicle_id, .driver_id = driver_id } });
@@ -2344,7 +2536,7 @@ test "domain-named vehicle adapter failure remains terminal and rolls back owner
     var registry = runtime.registry();
     try feature.register(&registry);
     runtime.finishRegistration();
-    try feature.enqueue(.{ .spawn = .{ .request_id = 1 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 1 } });
     try std.testing.expectError(error.VehiclePhysicsPortFailure, runtime.tick());
     try std.testing.expectEqual(@as(usize, 0), feature.count());
     try std.testing.expectEqual(@as(usize, 0), vehicles.live_count);
@@ -2441,7 +2633,7 @@ test "chassis and all wheel presentation samples interpolate immutably" {
     var registry = runtime.registry();
     try feature.register(&registry);
     runtime.finishRegistration();
-    try feature.enqueue(.{ .spawn = .{ .request_id = 1 } });
+    try feature.enqueue(.{ .spawn = .{ .definition = contract.asset.validationFixture(), .request_id = 1 } });
     try runtime.tick();
     _ = feature.pollOutcome();
 
@@ -2497,10 +2689,10 @@ test "occupied logical restore is immediately byte-stable" {
     try feature.restoreRecords((&record)[0..1]);
     runtime.finishRegistration();
 
-    const saved = try feature.snapshotRecords(std.testing.allocator);
-    defer std.testing.allocator.free(saved);
-    try std.testing.expectEqual(@as(usize, 1), saved.len);
-    try std.testing.expect(std.meta.eql(record, saved[0]));
+    var saved = try feature.snapshotRecords(std.testing.allocator);
+    defer saved.deinit();
+    try std.testing.expectEqual(@as(usize, 1), saved.value.len);
+    try std.testing.expectEqualDeep(record, saved.value[0]);
     try std.testing.expectEqual(record.id, (try drivers.driverState(driver_id)).?.mode.driving);
     const draws = try feature.extract(0.25);
     try std.testing.expectEqual(record.chassis_pose.position, draws[0].chassis_pose.position);
@@ -2515,4 +2707,89 @@ test "rotated chassis transforms the local exit offset" {
     try std.testing.expectApproxEqAbs(@as(f32, 10), pose.position[0], 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, 2), pose.position[1], 0.0001);
     try std.testing.expectApproxEqAbs(@as(f32, 2), pose.position[2], 0.0001);
+}
+
+fn writePowertrainState(writer: *engine.contracts.replay.Writer, state: engine.physics.VehiclePowertrainState) !void {
+    try writer.writeF32(state.engine_rpm);
+    writer.writeI32(state.gear);
+    try writer.writeF32(state.clutch_friction);
+    try writer.writeF32(state.switch_time_left_s);
+    try writer.writeF32(state.clutch_release_left_s);
+    try writer.writeF32(state.switch_latency_left_s);
+}
+
+test "admitted definitions are owned per instance and edits publish only through revisioned tick outcomes" {
+    var runtime = try engine.Runtime.init(std.testing.allocator, .{ .namespace = 810, .fixed_delta_seconds = 1.0 / 120.0 });
+    defer runtime.deinit();
+    var vehicles = FakeVehicles{};
+    var drivers = FakeDrivers{};
+    const driver = testId(810, 70);
+    drivers.add(driver, .{});
+    var feature = try Feature(FakeVehicles, FakeDrivers).init(std.testing.allocator, &runtime, &vehicles, &drivers, .{ .max_vehicles = 2 });
+    defer feature.deinit();
+    var registry = runtime.registry();
+    try feature.register(&registry);
+    runtime.finishRegistration();
+    var first = contract.asset.validationFixture();
+    var second = first;
+    second.id.asset.local += 1;
+    second.tuning.mass = 2100;
+    second.tuning.chassis_half_extents = .{ 1, 0.4, 2.3 };
+    try feature.enqueue(.{ .spawn = .{ .request_id = 1, .definition = first } });
+    try feature.enqueue(.{ .spawn = .{ .request_id = 2, .definition = second } });
+    first.tuning.mass = 999; // Caller changes cannot alter an admitted command.
+    try runtime.tick();
+    const first_id = feature.pollOutcome().?.spawned.id;
+    const second_id = feature.pollOutcome().?.spawned.id;
+    try std.testing.expectEqual(@as(f32, 1500), (try feature.view(first_id)).definition.tuning.mass);
+    try std.testing.expectEqual(@as(f32, 2100), (try feature.view(second_id)).definition.tuning.mass);
+    try feature.enqueue(.{ .enter = .{ .vehicle_id = first_id, .driver_id = driver } });
+    try runtime.tick();
+    _ = feature.pollOutcome();
+    var saved_before = try feature.snapshotRecords(std.testing.allocator);
+    defer saved_before.deinit();
+    const handle = runtime.get(runtime.resolve(first_id).?, Feature(FakeVehicles, FakeDrivers).RuntimeVehicle).?.handle;
+    vehicles.states[handle].chassis.velocity.linear = .{ 0, 0, -12 };
+    const before = try feature.view(first_id);
+    var draft = try before.definition.clone(std.testing.allocator);
+    defer draft.deinit();
+    var candidate = draft.value;
+    candidate.tuning.powertrain.max_torque_nm = 320;
+    var edit = contract.ReconfigureVehicle{ .transaction_id = 1, .source = .scripted_validation, .id = first_id, .expected_revision = 0, .expected_asset_revision = candidate.revision, .candidate = candidate, .rebuild = false };
+    try feature.enqueue(.{ .reconfigure = edit });
+    try std.testing.expectEqual(@as(u64, 0), (try feature.view(first_id)).revision);
+    try runtime.tick();
+    const applied = feature.pollOutcome().?.reconfigured;
+    try std.testing.expectEqual(@as(u64, 1), applied.revision);
+    try std.testing.expectEqual(contract.ReconfigurationEffect.live, applied.effect);
+    try std.testing.expectEqual(before.state.chassis.velocity, (try feature.view(first_id)).state.chassis.velocity);
+    try std.testing.expectEqual(driver, (try feature.view(first_id)).driver_id.?);
+    try std.testing.expectEqual(@as(f32, 500), (try feature.view(second_id)).definition.tuning.powertrain.max_torque_nm);
+    try feature.enqueue(.{ .reconfigure = edit });
+    try runtime.tick();
+    try std.testing.expectEqual(RejectionReason.stale_revision, feature.pollOutcome().?.rejected.reason);
+    edit.expected_revision = 1;
+    edit.transaction_id = 2;
+    edit.candidate.tuning.mass = 1800;
+    try feature.enqueue(.{ .reconfigure = edit });
+    try runtime.tick();
+    try std.testing.expectEqual(RejectionReason.rebuild_required, feature.pollOutcome().?.rejected.reason);
+    edit.rebuild = true;
+    vehicles.fail_create_call = vehicles.create_calls + 1;
+    try feature.enqueue(.{ .reconfigure = edit });
+    try runtime.tick();
+    try std.testing.expectEqual(RejectionReason.construction_failed, feature.pollOutcome().?.rejected.reason);
+    try std.testing.expectEqual(@as(u64, 1), (try feature.view(first_id)).revision);
+    try std.testing.expectEqual(@as(f32, 1500), (try feature.view(first_id)).definition.tuning.mass);
+    vehicles.fail_create_call = null;
+    try feature.enqueue(.{ .reconfigure = edit });
+    try runtime.tick();
+    try std.testing.expectEqual(@as(u64, 2), feature.pollOutcome().?.reconfigured.revision);
+    const rebuilt = try feature.view(first_id);
+    try std.testing.expectEqual(before.state.chassis.velocity, rebuilt.state.chassis.velocity);
+    try std.testing.expectEqual(driver, rebuilt.driver_id.?);
+    try std.testing.expectEqual(@as(f32, 1800), rebuilt.definition.tuning.mass);
+    // The saved snapshot owns the old definition after the live owner frees it.
+    try std.testing.expectEqual(@as(f32, 1500), saved_before.value[0].definition.tuning.mass);
+    try std.testing.expectEqual(@as(f32, 500), saved_before.value[0].definition.tuning.powertrain.max_torque_nm);
 }

@@ -1777,7 +1777,7 @@ test "owned simulation teardown accepts live crates pending commands and outcome
 const district_test_assets = district_feature_contract.Assets{
     .scene = .{ .index = 17, .generation = 2 },
 };
-const district_test_coord = district_contract.ChunkCoord{ .x = 0, .z = -4 };
+const district_test_coord = district_contract.ChunkCoord{ .x = 0, .z = 0 };
 
 fn requestDistrict(
     world: *simulation.Simulation,
@@ -2187,6 +2187,7 @@ fn expectNpcStateChanged(
     current: npc_contract.State,
 ) !void {
     const event = world.pollNpcEvent() orelse return error.NpcStateEventMissing;
+    try std.testing.expectEqual(@as(std.meta.Tag(npc_contract.Event), .state_changed), std.meta.activeTag(event));
     switch (event) {
         .state_changed => |value| {
             try std.testing.expectEqual(id, value.id);
@@ -2236,7 +2237,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
     const allocator = std.testing.allocator;
     const west_start = npc_contract.NodeRef{
         .coord = sandbox_contracts.navigation_west_coord,
-        .index = 0,
+        .index = 6,
     };
     var saved: []u8 = undefined;
     var npc_id: engine.PersistentId = undefined;
@@ -2245,7 +2246,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
     {
         var world = try simulation.Simulation.init(allocator, .{
             .namespace = 8_201,
-            .create_ground = false,
+            .create_ground = true,
         });
         defer world.deinit();
 
@@ -2264,19 +2265,19 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         );
         try waitForDistrictActivation(&world, first_east_ticket);
         try std.testing.expectEqual(
-            sandbox_contracts.district_static_box_count * 2,
+            1 + sandbox_contracts.district_static_box_count * 2,
             world.bodyCount(),
         );
 
         try world.submitNpc(.{ .spawn = .{
             .request_id = 10,
-            .position = .{ -5, 0, 5 },
+            .position = .{ -8, 0, 6 },
             .facing_yaw = 0,
             .anchor = west_start,
             .hostile_to_players = true,
             .goal = .{ .patrol_between = .{
-                .first = sandbox_contracts.player_plaza_destination,
-                .second = sandbox_contracts.market_terminal_destination,
+                .first = sandbox_contracts.garage_forecourt_destination,
+                .second = sandbox_contracts.freight_dispatch_destination,
             } },
         } });
         try world.tick();
@@ -2299,7 +2300,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         );
         try std.testing.expect(active_diagnostics.character_controllers.authority_consistent);
         try std.testing.expectEqual(
-            sandbox_contracts.district_static_box_count * 2,
+            1 + sandbox_contracts.district_static_box_count * 2,
             world.bodyCount(),
         );
         try expectNpcOutputEmpty(&world);
@@ -2318,7 +2319,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         try std.testing.expectEqual(sandbox_contracts.navigation_west_coord, waiting.owner);
         try std.testing.expect(waiting.controller_present);
         try std.testing.expectEqual(
-            sandbox_contracts.district_static_box_count,
+            1 + sandbox_contracts.district_static_box_count,
             world.bodyCount(),
         );
         try std.testing.expectEqual(@as(u8, 0), event_sequence);
@@ -2353,7 +2354,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         );
         try std.testing.expectEqual(@as(u32, 1), world.diagnostics().npc.controller_count);
         try std.testing.expectEqual(
-            sandbox_contracts.district_static_box_count,
+            1 + sandbox_contracts.district_static_box_count,
             world.bodyCount(),
         );
         try expectNpcOutputEmpty(&world);
@@ -2389,7 +2390,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         }
         try std.testing.expect(observed_transfer);
         try std.testing.expectEqual(
-            sandbox_contracts.district_static_box_count * 2,
+            1 + sandbox_contracts.district_static_box_count * 2,
             world.bodyCount(),
         );
         try std.testing.expectEqual(@as(u32, 1), world.diagnostics().npc.controller_count);
@@ -2418,7 +2419,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         );
         try std.testing.expect(dormant_diagnostics.character_controllers.authority_consistent);
         try std.testing.expectEqual(
-            sandbox_contracts.district_static_box_count,
+            1 + sandbox_contracts.district_static_box_count,
             world.bodyCount(),
         );
         try std.testing.expectEqual(@as(u8, 3), event_sequence);
@@ -2438,7 +2439,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         try std.testing.expect(resumed.controller_present);
         try std.testing.expectEqual(@as(u32, 1), world.diagnostics().npc.controller_count);
         try std.testing.expectEqual(
-            sandbox_contracts.district_static_box_count * 2,
+            1 + sandbox_contracts.district_static_box_count * 2,
             world.bodyCount(),
         );
         try std.testing.expectEqual(@as(usize, 1), (try world.npcPresentation(0)).len);
@@ -2459,7 +2460,7 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
         try expectNpcGoalReached(
             &world,
             npc_id,
-            sandbox_contracts.market_terminal_destination,
+            sandbox_contracts.freight_dispatch_destination,
         );
         event_sequence += 1;
         saved = try world.save(allocator);
@@ -2467,14 +2468,14 @@ test "S8 headless NPC patrol waits through cancellation crosses suspends and res
     defer allocator.free(saved);
 
     var restored = try simulation.Simulation.fromSnapshot(allocator, saved, .{
-        .create_ground = false,
+        .create_ground = true,
         .district_assets = district_test_assets,
     });
     defer restored.deinit();
     try std.testing.expectEqual(@as(usize, 1), restored.npcCount());
     try std.testing.expectEqual(@as(usize, 3), restored.entityCount());
     try std.testing.expectEqual(
-        sandbox_contracts.district_static_box_count * 2,
+        1 + sandbox_contracts.district_static_box_count * 2,
         restored.bodyCount(),
     );
     const restored_diagnostics = restored.diagnostics();
@@ -2514,7 +2515,7 @@ test "S8 headless rejects hostile NPC restore and controller overflow before aut
             .coord = sandbox_contracts.navigation_west_coord,
             .index = 0,
         } },
-        .position = .{ 9, 0, 3 },
+        .position = .{ district_contract.chunk_span / 2 + 1, 0, 3 },
         .velocity = .{ 0, 0, 0 },
         .facing_yaw = 0,
         .hostile_to_players = true,
@@ -2561,8 +2562,8 @@ test "S8 headless rejects hostile NPC restore and controller overflow before aut
 
 const s7_west = district_contract.ChunkCoord{ .x = 0, .z = 0 };
 const s7_east = district_contract.ChunkCoord{ .x = 1, .z = 0 };
-const s7_west_x: f32 = 6;
-const s7_east_x: f32 = 10;
+const s7_west_x: f32 = district_contract.chunk_span / 2 - 2;
+const s7_east_x: f32 = district_contract.chunk_span / 2 + 2;
 
 fn drainS7Ambient(world: *simulation.Simulation) !void {
     while (world.pollCharacterEvent() != null) {}
@@ -3137,14 +3138,14 @@ test "real district worker cancels activates collides unloads and repeats cleanl
     // The crate settles on the raised district obstacle, not the district floor.
     try world.submit(.{ .spawn = .{
         .request_id = 4,
-        .pose = .{ .position = .{ -5.5, 6, -66 } },
+        .pose = .{ .position = .{ -20, 12, -20 } },
     } });
     try world.tick();
     const crate_id = world.pollOutcome().?.spawned.id;
     for (0..360) |_| try world.tick();
     const supported_y = (try world.crate(crate_id)).state.pose.position[1];
-    try std.testing.expect(supported_y > 2.4);
-    try std.testing.expect(supported_y < 2.7);
+    try std.testing.expect(supported_y > 8.4);
+    try std.testing.expect(supported_y < 8.7);
 
     try unloadDistrict(&world, 5, active_ticket);
     try std.testing.expectEqual(@as(usize, 1), world.entityCount());
@@ -3182,7 +3183,7 @@ test "CharacterVirtual leaves removed district support without stale ground stat
 
     try world.submitCharacter(.{ .spawn = .{
         .request_id = 2,
-        .position = .{ -5.5, 6, -66 },
+        .position = .{ -20, 12, -20 },
     } });
     try world.tick();
     const character_id = world.pollCharacterOutcome().?.spawned.id;
@@ -3190,8 +3191,8 @@ test "CharacterVirtual leaves removed district support without stale ground stat
     for (0..360) |_| try world.tick();
     const supported = try world.character(character_id);
     try std.testing.expectEqual(engine.physics.GroundState.on_ground, supported.ground_state);
-    try std.testing.expect(supported.position[1] > 1.9);
-    try std.testing.expect(supported.position[1] < 2.1);
+    try std.testing.expect(supported.position[1] > 7.9);
+    try std.testing.expect(supported.position[1] < 8.1);
 
     try unloadDistrict(&world, 3, ticket);
     const after_unload = try world.character(character_id);
@@ -3265,6 +3266,10 @@ fn makeS4cScenarioSnapshot(allocator: std.mem.Allocator) ![]u8 {
         .facing_yaw = 0,
     }};
     const vehicle_records = [_]vehicle_contract.VehicleV1{.{
+        .definition = vehicle_contract.asset.validationFixture(),
+        .revision = 0,
+        .powertrain = .{},
+        .conditioned_steering = 0,
         .id = s4c_vehicle_id,
         .chassis_pose = .{
             .position = .{ 0, 2, 0 },
@@ -3276,7 +3281,7 @@ fn makeS4cScenarioSnapshot(allocator: std.mem.Allocator) ![]u8 {
         .input = .{ .throttle = 0, .steering = 0, .brake = 0, .hand_brake = 0 },
         .driver_id = s4c_character_id,
     }};
-    const district_coord = district_contract.ChunkCoord{ .x = 0, .z = -4 };
+    const district_coord = district_contract.ChunkCoord{ .x = 0, .z = 0 };
     const build = try sandbox_contracts.proceduralDistrictBuild(district_coord);
     const district_records = [_]district_feature_contract.DistrictV1{.{
         .id = s4c_district_id,
@@ -3341,7 +3346,7 @@ fn drainS4cLifecycle(
         .rejected => evidence.rejections +|= 1,
         .spawned => evidence.unexpected +|= 1,
         .entered => evidence.unexpected +|= 1,
-        .despawned => evidence.unexpected +|= 1,
+        .despawned, .reconfigured => evidence.unexpected +|= 1,
     };
     while (world.pollDistrictOutcome()) |_| evidence.unexpected +|= 1;
     while (world.pollNpcOutcome()) |outcome| switch (outcome) {
@@ -3449,6 +3454,7 @@ const S4cFinalState = struct {
 };
 
 const S4cCohortEvidence = struct {
+    vehicle_definition: vehicle_contract.asset.Owned,
     save_bytes: []u8,
     digests: [s4c_tick_count]engine.contracts.replay.TickDigests,
     post_instrumentation_digest: engine.contracts.replay.TickDigests,
@@ -3459,6 +3465,7 @@ const S4cCohortEvidence = struct {
 
     fn deinit(self: *@This(), allocator: std.mem.Allocator) void {
         allocator.free(self.save_bytes);
+        self.vehicle_definition.deinit();
         self.* = undefined;
     }
 };
@@ -3568,7 +3575,11 @@ fn runS4cCohort(
     const post_instrumentation_digest = try world.logicalDigests(&digest_scratch);
     const save_bytes = try world.save(allocator);
     errdefer allocator.free(save_bytes);
+    var vehicle_view = try world.vehicle(s4c_vehicle_id);
+    const vehicle_definition = try vehicle_view.definition.clone(allocator);
+    vehicle_view.definition = vehicle_definition.value;
     return .{
+        .vehicle_definition = vehicle_definition,
         .save_bytes = save_bytes,
         .digests = digests,
         .post_instrumentation_digest = post_instrumentation_digest,
@@ -3576,7 +3587,7 @@ fn runS4cCohort(
             .diagnostics = world.diagnostics(),
             .crate = try world.crate(s4c_crate_id),
             .character = try world.character(s4c_character_id),
-            .vehicle = try world.vehicle(s4c_vehicle_id),
+            .vehicle = vehicle_view,
             .district_state = world.districtStateFor(district_test_coord).?,
             .district_ticket = world.activeDistrictTicketFor(district_test_coord),
             .district_count = world.districtCount(),

@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-    echo "usage: verify_s14_dedicated_process.sh <room-server> <graphical-client>" >&2
+if [[ $# -ne 3 ]]; then
+    echo "usage: verify_s14_dedicated_process.sh <room-server> <graphical-client> <content-root>" >&2
     exit 2
 fi
+
+content_root=$3
 
 server=$1
 client=$2
@@ -46,10 +48,10 @@ done
 test -f "$run_dir/tickets/account-1.room"
 test -f "$run_dir/tickets/account-2.room"
 
-"$client" --ticket "$run_dir/tickets/account-1.room" --max-frames 30000 --s14-attacker \
+"$client" --content-root "$content_root" --ticket "$run_dir/tickets/account-1.room" --max-frames 30000 --s14-attacker \
     >"$attacker_log" 2>&1 &
 attacker_pid=$!
-"$client" --ticket "$run_dir/tickets/account-2.room" --max-frames 30000 --s14-observer \
+"$client" --content-root "$content_root" --ticket "$run_dir/tickets/account-2.room" --max-frames 30000 --s14-observer \
     >"$observer_log" 2>&1 &
 observer_pid=$!
 

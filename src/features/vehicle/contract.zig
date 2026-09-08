@@ -1,6 +1,11 @@
 //! Canonical value contract for the vehicle gameplay slice.
 const std = @import("std");
 const engine = @import("engine_contracts");
+pub const asset = @import("asset.zig");
+pub const presentation = @import("presentation.zig");
+pub const control = @import("control.zig");
+pub const steering = @import("steering.zig");
+pub const VehicleArchetypeId = asset.VehicleArchetypeId;
 
 /// Per-world authority budgets. Commands reserve their possible outcome;
 /// occupancy events are observational and use bounded best-effort delivery.
@@ -23,9 +28,10 @@ pub const Assets = struct {
     wheel_material: engine.rendering.MaterialHandle = .invalid,
 };
 
-/// Simulation-relevant tuning shared by every S2 vehicle instance.
+/// Simulation-relevant values admitted separately for each vehicle instance.
 /// Per-instance chassis and wheel dynamics are supplied at spawn/restore.
 pub const VehicleTuning = struct {
+    steering: steering.Settings = .{},
     chassis_half_extents: [3]f32 = .{ 0.9, 0.25, 2.0 },
     center_of_mass_offset: [3]f32 = .{ 0, -0.38, 0 },
     mass: f32 = 1_500,
@@ -44,13 +50,17 @@ pub const VehicleTuning = struct {
     max_steer_radians: f32 = std.math.degreesToRadians(28.0),
     max_brake_torque: f32 = 2_200,
     max_hand_brake_torque: f32 = 4_000,
+    rear_axle: engine.physics.VehicleRearAxle = .{},
+    front_anti_roll_stiffness: f32 = 0,
     tire_friction: engine.physics.VehicleTireFriction = .{},
+    powertrain: engine.physics.VehiclePowertrain = .{},
     front_differential_ratio: f32 = 3.42,
     front_limited_slip_ratio: f32 = 1.4,
     max_pitch_roll_radians: f32 = std.math.degreesToRadians(60.0),
     wheel_collision_max_slope_radians: f32 = std.math.degreesToRadians(60.0),
 
     pub fn validate(self: VehicleTuning) !void {
+        try self.steering.validate();
         try self.physicsDescriptor(.{}, zeroWheelDynamics()).validate();
     }
 
@@ -77,7 +87,10 @@ pub const VehicleTuning = struct {
             .max_steer_radians = self.max_steer_radians,
             .max_brake_torque = self.max_brake_torque,
             .max_hand_brake_torque = self.max_hand_brake_torque,
+            .rear_axle = self.rear_axle,
+            .front_anti_roll_stiffness = self.front_anti_roll_stiffness,
             .tire_friction = self.tire_friction,
+            .powertrain = self.powertrain,
             .front_differential_ratio = self.front_differential_ratio,
             .front_limited_slip_ratio = self.front_limited_slip_ratio,
             .max_pitch_roll_radians = self.max_pitch_roll_radians,
@@ -87,7 +100,6 @@ pub const VehicleTuning = struct {
 };
 
 pub const Config = struct {
-    tuning: VehicleTuning = .{},
     max_entry_distance: f32 = 3.0,
     exit_offset: [3]f32 = .{ 1.5, 0, 0 },
     max_vehicles: usize = 1,
@@ -95,7 +107,6 @@ pub const Config = struct {
 
     pub fn validate(self: Config) !void {
         if (self.max_vehicles == 0) return error.InvalidVehicleLimit;
-        try self.tuning.validate();
         if (!std.math.isFinite(self.max_entry_distance) or self.max_entry_distance < 0) {
             return error.InvalidVehicleEntryDistance;
         }
@@ -106,6 +117,7 @@ pub const Config = struct {
 /// Feature-owned authoritative tuning. Host capacity and presentation handles
 /// are deliberately excluded from persistence.
 pub const VehicleTuningV1 = struct {
+    steering: steering.Settings,
     chassis_half_extents: [3]f32,
     center_of_mass_offset: [3]f32,
     mass: f32,
@@ -119,7 +131,10 @@ pub const VehicleTuningV1 = struct {
     max_steer_radians: f32,
     max_brake_torque: f32,
     max_hand_brake_torque: f32,
+    rear_axle: engine.physics.VehicleRearAxle,
+    front_anti_roll_stiffness: f32,
     tire_friction: engine.physics.VehicleTireFriction,
+    powertrain: engine.physics.VehiclePowertrain,
     front_differential_ratio: f32,
     front_limited_slip_ratio: f32,
     max_pitch_roll_radians: f32,
@@ -127,6 +142,7 @@ pub const VehicleTuningV1 = struct {
 
     pub fn fromTuning(tuning: VehicleTuning) VehicleTuningV1 {
         return .{
+            .steering = tuning.steering,
             .chassis_half_extents = tuning.chassis_half_extents,
             .center_of_mass_offset = tuning.center_of_mass_offset,
             .mass = tuning.mass,
@@ -140,7 +156,10 @@ pub const VehicleTuningV1 = struct {
             .max_steer_radians = tuning.max_steer_radians,
             .max_brake_torque = tuning.max_brake_torque,
             .max_hand_brake_torque = tuning.max_hand_brake_torque,
+            .rear_axle = tuning.rear_axle,
+            .front_anti_roll_stiffness = tuning.front_anti_roll_stiffness,
             .tire_friction = tuning.tire_friction,
+            .powertrain = tuning.powertrain,
             .front_differential_ratio = tuning.front_differential_ratio,
             .front_limited_slip_ratio = tuning.front_limited_slip_ratio,
             .max_pitch_roll_radians = tuning.max_pitch_roll_radians,
@@ -150,6 +169,7 @@ pub const VehicleTuningV1 = struct {
 
     pub fn toTuning(self: VehicleTuningV1) !VehicleTuning {
         const tuning = VehicleTuning{
+            .steering = self.steering,
             .chassis_half_extents = self.chassis_half_extents,
             .center_of_mass_offset = self.center_of_mass_offset,
             .mass = self.mass,
@@ -163,7 +183,10 @@ pub const VehicleTuningV1 = struct {
             .max_steer_radians = self.max_steer_radians,
             .max_brake_torque = self.max_brake_torque,
             .max_hand_brake_torque = self.max_hand_brake_torque,
+            .rear_axle = self.rear_axle,
+            .front_anti_roll_stiffness = self.front_anti_roll_stiffness,
             .tire_friction = self.tire_friction,
+            .powertrain = self.powertrain,
             .front_differential_ratio = self.front_differential_ratio,
             .front_limited_slip_ratio = self.front_limited_slip_ratio,
             .max_pitch_roll_radians = self.max_pitch_roll_radians,
@@ -175,13 +198,11 @@ pub const VehicleTuningV1 = struct {
 };
 
 pub const VehicleConfigV1 = struct {
-    tuning: VehicleTuningV1,
     max_entry_distance: f32,
     exit_offset: [3]f32,
 
     pub fn fromConfig(config: Config) VehicleConfigV1 {
         return .{
-            .tuning = VehicleTuningV1.fromTuning(config.tuning),
             .max_entry_distance = config.max_entry_distance,
             .exit_offset = config.exit_offset,
         };
@@ -193,7 +214,6 @@ pub const VehicleConfigV1 = struct {
         assets: Assets,
     ) !Config {
         const config = Config{
-            .tuning = try self.tuning.toTuning(),
             .max_entry_distance = self.max_entry_distance,
             .exit_offset = self.exit_offset,
             .max_vehicles = max_vehicles,
@@ -210,7 +230,53 @@ pub const VehicleConfigV1 = struct {
 
 pub const SpawnVehicle = struct {
     request_id: u64,
+    definition: asset.Definition,
     chassis: engine.physics.BodyState = .{},
+};
+
+pub const ReconfigurationEffect = enum { presentation, live, rebuild };
+pub const ReconfigureVehicle = struct {
+    transaction_id: u64,
+    source: engine.authoring.Source,
+    id: engine.PersistentId,
+    expected_revision: u64,
+    expected_asset_revision: u64,
+    candidate: asset.Definition,
+    rebuild: bool,
+};
+
+/// Wheel settings and gearbox topology are immutable for authoring purposes.
+/// A cloned curve compares by authored values, not by its allocation address.
+pub fn reconfigurationEffect(before: VehicleTuningV1, after: VehicleTuningV1) ReconfigurationEffect {
+    var comparable = before;
+    comparable.powertrain = after.powertrain;
+    comparable.steering = after.steering;
+    comparable.max_pitch_roll_radians = after.max_pitch_roll_radians;
+    if (!std.meta.eql(comparable, after)) return .rebuild;
+    var engine_before = before.powertrain;
+    const engine_after = after.powertrain;
+    if (!std.mem.eql(f32, engine_before.forward_gears, engine_after.forward_gears) or
+        !std.mem.eql(f32, engine_before.reverse_gears, engine_after.reverse_gears) or
+        engine_before.torque_curve.len != engine_after.torque_curve.len) return .rebuild;
+    for (engine_before.torque_curve, engine_after.torque_curve) |a, b| if (!std.meta.eql(a, b)) return .rebuild;
+    engine_before.forward_gears = engine_after.forward_gears;
+    engine_before.reverse_gears = engine_after.reverse_gears;
+    engine_before.torque_curve = engine_after.torque_curve;
+    const same_engine = std.meta.eql(engine_before, engine_after);
+    inline for (.{ "max_torque_nm", "idle_rpm", "max_rpm", "inertia_kg_m2", "angular_damping" }) |field| @field(engine_before, field) = @field(engine_after, field);
+    if (!std.meta.eql(engine_before, engine_after)) return .rebuild;
+    return if (same_engine and steering.Settings.eql(before.steering, after.steering) and before.max_pitch_roll_radians == after.max_pitch_roll_radians) .presentation else .live;
+}
+
+pub const Reconfigured = struct {
+    transaction_id: u64,
+    source: engine.authoring.Source,
+    id: engine.PersistentId,
+    authority_tick: u64,
+    revision: u64,
+    before_digest: engine.assets.Digest,
+    after_digest: engine.assets.Digest,
+    effect: ReconfigurationEffect,
 };
 
 pub const EnterVehicle = struct {
@@ -240,6 +306,7 @@ pub const AbandonVehicle = struct {
 pub const DespawnVehicle = struct { id: engine.PersistentId };
 
 pub const Command = union(enum) {
+    reconfigure: ReconfigureVehicle,
     spawn: SpawnVehicle,
     enter: EnterVehicle,
     drive: DriveVehicle,
@@ -270,8 +337,17 @@ pub const Exited = struct {
     exit_pose: engine.physics.Pose,
 };
 
-pub const CommandKind = enum { spawn, enter, drive, exit, abandon, despawn };
+pub const CommandKind = enum { spawn, enter, drive, exit, abandon, despawn, reconfigure };
 pub const RejectionReason = enum {
+    stale_revision,
+    stale_asset_revision,
+    archetype_mismatch,
+    rebuild_required,
+    occupied_layout_change,
+    collision_blocked,
+    shifting,
+    incompatible_powertrain,
+    construction_failed,
     capacity_reached,
     vehicle_not_found,
     not_owned,
@@ -286,6 +362,10 @@ pub const RejectionReason = enum {
 };
 
 pub const CommandRejected = struct {
+    transaction_id: ?u64 = null,
+    source: ?engine.authoring.Source = null,
+    actual_revision: ?u64 = null,
+    backend_error: ?[]const u8 = null,
     command: CommandKind,
     reason: RejectionReason,
     request_id: ?u64 = null,
@@ -294,6 +374,7 @@ pub const CommandRejected = struct {
 };
 
 pub const Outcome = union(enum) {
+    reconfigured: Reconfigured,
     spawned: Spawned,
     entered: DriverTransition,
     drive_applied: DriveApplied,
@@ -314,7 +395,14 @@ pub const Event = union(enum) {
 };
 
 pub const VehicleView = struct {
+    /// Last input actually delivered to physics; observational, not save state.
+    applied_input: engine.physics.VehicleInput = .{},
+    conditioned_steering: f32,
+    /// The definition is borrowed until the next authority edit; drafts must clone it.
     id: engine.PersistentId,
+    definition: asset.Definition,
+    definition_digest: engine.assets.Digest,
+    revision: u64,
     state: engine.physics.VehicleState,
     input: engine.physics.VehicleInput,
     driver_id: ?engine.PersistentId,
@@ -394,6 +482,10 @@ pub const VehicleInputV1 = struct {
 /// runtime handles are intentionally absent.
 pub const VehicleV1 = struct {
     id: engine.PersistentId,
+    definition: asset.Definition,
+    revision: u64,
+    powertrain: engine.physics.VehiclePowertrainState,
+    conditioned_steering: f32,
     chassis_pose: VehiclePoseV1,
     linear_velocity: [3]f32,
     angular_velocity: [3]f32,
@@ -419,6 +511,9 @@ pub fn validateRecords(records: []const VehicleV1, max_vehicles: usize) !void {
 
 pub fn validateRecord(record: VehicleV1) !void {
     try record.id.validate();
+    if (!std.math.isFinite(record.conditioned_steering) or @abs(record.conditioned_steering) > 1) return error.InvalidVehicleSteeringState;
+    try record.definition.validate();
+    try record.powertrain.validateFor(record.definition.tuning.powertrain);
     const chassis_pose = record.chassis_pose.toPose();
     try validateCanonicalChassisPose(chassis_pose);
     try (engine.physics.BodyState{
@@ -486,4 +581,8 @@ fn quaternionNeedsNegation(rotation: [4]f32) bool {
 
 test "vehicle contract retains canonical value validation" {
     try (Config{}).validate();
+}
+
+test {
+    _ = asset;
 }

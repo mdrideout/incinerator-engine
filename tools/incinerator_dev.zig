@@ -15,7 +15,10 @@ const Invocation = union(enum) {
     agent_bootstrap,
     agent_catalog,
     discovery,
-    request: protocol.Command,
+    request: struct { command: protocol.Command, candidate: ?std.json.Parsed(protocol.vehicle.Definition) = null },
+    fn deinit(self: Invocation) void {
+        if (self == .request) if (self.request.candidate) |owned| owned.deinit();
+    }
 };
 
 const GlobalArguments = struct {
@@ -50,6 +53,7 @@ fn run(init: std.process.Init) !ExitDisposition {
         init.gpa,
         globals.command.items,
     );
+    defer invocation.deinit();
     switch (invocation) {
         .help => {
             try writeUsage(init.io);
@@ -118,7 +122,8 @@ fn run(init: std.process.Init) !ExitDisposition {
             try writeJson(init.io, discovery.value);
             return .success;
         },
-        .request => |command| {
+        .request => |request| {
+            const command = request.command;
             try requireExpectedRun(command, globals.expected_run_id);
             const discovery_path = try resolveDiscoveryPath(
                 init.gpa,
@@ -154,6 +159,8 @@ fn outcomeDisposition(outcome: protocol.ResponseOutcome) ExitDisposition {
     return switch (outcome) {
         .failure => .operation_failed,
         .success => |payload| switch (payload) {
+            .vehicle_outcome => |value| if (value.disposition == .rejected) .operation_failed else .success,
+            .material_outcome => |value| if (value.rejection == null) .success else .operation_failed,
             .authoring_admission => |value| if (value.admitted)
                 .success
             else
@@ -347,7 +354,52 @@ fn parseInvocation(
 
     var parser = try CommandParser.init(allocator, tokens);
     defer parser.deinit();
+    var candidate_owner: ?std.json.Parsed(protocol.vehicle.Definition) = null;
+    errdefer if (candidate_owner) |owned| owned.deinit();
     const command: protocol.Command = command: {
+        if (parser.prefix(&.{ "vehicle", "assets" })) break :command .{ .vehicle_assets = .{} };
+        if (parser.prefix(&.{ "vehicle", "inspect" })) {
+            const target = try parseTarget(try parser.option("--target"));
+            if (target != .persistent_entity) return error.VehicleInstanceTargetRequired;
+            break :command .{ .vehicle_inspect = .{ .target = target.persistent_entity } };
+        }
+        if (parser.prefix(&.{ "vehicle", "result" })) break :command .{ .vehicle_result = .{ .transaction_id = try parseNonzeroU64(try parser.option("--id")) } };
+        inline for (.{ "apply", "rebuild", "revert", "commit", "measure", "preview", "clear-preview" }) |verb| {
+            if (parser.prefix(&.{ "vehicle", verb })) {
+                const target = try parseTarget(try parser.option("--target"));
+                if (target != .persistent_entity) return error.VehicleInstanceTargetRequired;
+                const revision = try parseU64(try parser.option("--expected-revision"));
+                const asset_revision = try parseNonzeroU64(try parser.option("--expected-asset-revision"));
+                const action: protocol.vehicle.Action = if (comptime std.mem.eql(u8, verb, "apply") or std.mem.eql(u8, verb, "rebuild") or std.mem.eql(u8, verb, "measure") or std.mem.eql(u8, verb, "preview")) action: {
+                    candidate_owner = try std.json.parseFromSlice(protocol.vehicle.Definition, allocator, try parser.option("--value"), .{ .allocate = .alloc_always });
+                    try candidate_owner.?.value.validate();
+                    break :action @unionInit(protocol.vehicle.Action, verb, candidate_owner.?.value);
+                } else @unionInit(protocol.vehicle.Action, if (std.mem.eql(u8, verb, "clear-preview")) "clear_preview" else verb, {});
+                break :command .{ .vehicle_edit = .{ .target = target.persistent_entity, .expected_revision = revision, .expected_asset_revision = asset_revision, .action = action } };
+            }
+        }
+        if (parser.prefix(&.{ "material", "inspect" })) {
+            const target = try parseTarget(try parser.option("--target"));
+            if (target != .content_asset) return error.MaterialAssetTargetRequired;
+            break :command .{ .material_inspect = .{ .target = target.content_asset } };
+        }
+        inline for (.{ "preview", "clear-preview", "apply", "revert", "commit", "assign", "preview-assignment" }) |verb| {
+            if (parser.prefix(&.{ "material", verb })) {
+                const target = try parseTarget(try parser.option("--target"));
+                if (target != .content_asset) return error.MaterialAssetTargetRequired;
+                const revision = try std.fmt.parseInt(u64, try parser.option("--expected-revision"), 10);
+                const action: protocol.material.Action = if (comptime std.mem.eql(u8, verb, "preview") or std.mem.eql(u8, verb, "apply")) action: {
+                    var parsed = try std.json.parseFromSlice(protocol.MaterialValue, allocator, try parser.option("--value"), .{});
+                    defer parsed.deinit();
+                    break :action @unionInit(protocol.material.Action, verb, parsed.value);
+                } else if (comptime std.mem.eql(u8, verb, "assign") or std.mem.eql(u8, verb, "preview-assignment")) action: {
+                    const material_target = try parseTarget(try parser.option("--material"));
+                    if (material_target != .content_asset) return error.MaterialAssetTargetRequired;
+                    break :action @unionInit(protocol.material.Action, if (std.mem.eql(u8, verb, "assign")) "assign" else "preview_assignment", material_target.content_asset);
+                } else @unionInit(protocol.material.Action, if (std.mem.eql(u8, verb, "clear-preview")) "clear_preview" else verb, {});
+                break :command .{ .material_edit = .{ .target = target.content_asset, .expected_revision = revision, .action = action } };
+            }
+        }
         if (parser.prefix(&.{"describe"})) break :command .{ .describe = .{} };
         if (parser.prefix(&.{ "schema", "list" })) break :command .{ .schema_list = .{} };
         if (parser.prefix(&.{ "world", "list" })) break :command .{ .world_list = .{} };
@@ -415,7 +467,7 @@ fn parseInvocation(
         return error.UnknownCommand;
     };
     try parser.finish();
-    return .{ .request = command };
+    return .{ .request = .{ .command = command, .candidate = candidate_owner } };
 }
 
 fn parsePosition(parser: *CommandParser) !protocol.Vec3 {
@@ -552,19 +604,21 @@ test "CLI parses every concrete operation family" {
     };
     for (cases) |case| {
         const invocation = try parseInvocation(allocator, case.args);
-        try std.testing.expectEqual(case.expected, std.meta.activeTag(invocation.request));
+        defer invocation.deinit();
+        try std.testing.expectEqual(case.expected, std.meta.activeTag(invocation.request.command));
     }
 }
 
 test "every catalog example parses through the canonical CLI grammar" {
     for (agent_contract.operationCatalog()) |operation| {
         const invocation = try parseInvocation(std.testing.allocator, operation.example_argv);
+        defer invocation.deinit();
         if (operation.endpoint_schema) |schema| {
             try std.testing.expect(invocation == .request);
-            try std.testing.expectEqual(schema, invocation.request.schemaId());
+            try std.testing.expectEqual(schema, invocation.request.command.schemaId());
             try std.testing.expectEqualStrings(
                 operation.id,
-                agent_contract.descriptorForCommand(invocation.request).id,
+                agent_contract.descriptorForCommand(invocation.request.command).id,
             );
         }
     }
@@ -703,12 +757,13 @@ test "CLI pins every mutating effect and parses the bootstrap run token" {
     try std.testing.expectEqual(protocol.RunId{ .started_wall_unix_ms = 123, .nonce = 456 }, globals.expected_run_id.?);
     for (agent_contract.operationCatalog()) |operation| {
         const invocation = try parseInvocation(std.testing.allocator, operation.example_argv);
+        defer invocation.deinit();
         if (invocation != .request) continue;
         if (operation.effect == .read_only) {
-            try requireExpectedRun(invocation.request, null);
+            try requireExpectedRun(invocation.request.command, null);
         } else {
-            try std.testing.expectError(error.ExpectedRunRequired, requireExpectedRun(invocation.request, null));
-            try requireExpectedRun(invocation.request, globals.expected_run_id);
+            try std.testing.expectError(error.ExpectedRunRequired, requireExpectedRun(invocation.request.command, null));
+            try requireExpectedRun(invocation.request.command, globals.expected_run_id);
         }
     }
     try std.testing.expectError(error.InvalidExpectedRun, parseRunId("123:0"));

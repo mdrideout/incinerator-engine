@@ -9,6 +9,8 @@ const std = @import("std");
 pub const ToolId = enum {
     stats,
     content_browser,
+    material_lab,
+    vehicle_lab,
     camera,
     render,
     diagnostics,

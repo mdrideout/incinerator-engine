@@ -5,6 +5,7 @@
 //! bounded messages plus explicit close policy.
 
 const std = @import("std");
+const game_vehicles = @import("game_vehicles");
 const builtin = @import("builtin");
 const engine = @import("incinerator_engine");
 const sandbox = @import("sandbox_simulation");
@@ -853,6 +854,8 @@ const ObjectInterestState = struct {
 };
 
 const ReplicationState = struct {
+    admitted_vehicle_count: usize = 0,
+    admitted_vehicles: [budgets.max_vehicles]protocol.VehicleState = undefined,
     history: [budgets.snapshot_history_capacity]SnapshotRecord = @splat(.{}),
     history_next: u8 = 0,
     next_sequence: identity.SnapshotSequence = .{ .value = 1 },
@@ -1244,12 +1247,13 @@ const AuthorityCore = struct {
     last_cycle: authority_diagnostics.CycleTrace = .{},
     first_cycle_fault: ?authority_diagnostics.CycleFault = null,
     fn init(
+        authority: *AuthorityCore,
         allocator: std.mem.Allocator,
         core_config: CoreConfig,
         options: Options,
         test_credential_secret: ?[32]u8,
         comptime diagnostic_fault_probe: bool,
-    ) !AuthorityCore {
+    ) !void {
         const authority_fixed_delta_seconds = 1.0 /
             @as(f32, @floatFromInt(budgets.authority_tick_hz));
         if (core_config.simulation.fixed_delta_seconds != authority_fixed_delta_seconds) {
@@ -1284,27 +1288,27 @@ const AuthorityCore = struct {
         const session = try credential_issuer.issueSession();
         const outbox = try allocator.create(Outbox);
         errdefer allocator.destroy(outbox);
-        outbox.* = .{};
+        outbox.clear();
         const prepared_outbox = try allocator.create(Outbox);
         errdefer allocator.destroy(prepared_outbox);
-        prepared_outbox.* = .{};
+        prepared_outbox.clear();
         const participants = try allocator.create([budgets.max_participants]ParticipantSlot);
         errdefer allocator.destroy(participants);
-        participants.* = @splat(.{});
+        for (participants) |*participant| participant.* = .{};
         const prepared_participants = try allocator.create(
             [budgets.max_participants]ParticipantSlot,
         );
         errdefer allocator.destroy(prepared_participants);
-        prepared_participants.* = @splat(.{});
+        for (prepared_participants) |*participant| participant.* = .{};
         const replication = try allocator.create([budgets.max_participants]ReplicationState);
         errdefer allocator.destroy(replication);
-        replication.* = @splat(.{});
+        for (replication) |*state| state.* = .{};
         const prepared_replication = try allocator.create(
             [budgets.max_participants]ReplicationState,
         );
         errdefer allocator.destroy(prepared_replication);
-        prepared_replication.* = @splat(.{});
-        var authority = AuthorityCore{
+        for (prepared_replication) |*state| state.* = .{};
+        authority.* = .{
             .allocator = allocator,
             .simulation = if (diagnostic_fault_probe)
                 try sandbox.Simulation.initWithDiagnosticFaultProbe(
@@ -1348,6 +1352,8 @@ const AuthorityCore = struct {
             try authority.simulation.enablePopulation(.{});
         }
         if (core_config.world_bootstrap == .dedicated_fixture) {
+            var bootstrap_vehicle = try game_vehicles.embeddedSedan(allocator);
+            defer bootstrap_vehicle.deinit();
             authority.vehicles[0] = .{
                 .spawn_pending = true,
                 .generation = 1,
@@ -1359,6 +1365,7 @@ const AuthorityCore = struct {
             try authority.simulation.submitVehicle(.{
                 .spawn = .{
                     .request_id = vehicleSpawnRequestId(0, 1),
+                    .definition = bootstrap_vehicle.value,
                     // Face the fixture down the authored west-to-east route. The
                     // identity rotation drove directly out of the route's south
                     // edge after only four metres.
@@ -1383,7 +1390,6 @@ const AuthorityCore = struct {
                 .assets = .{},
             } });
         }
-        return authority;
     }
 
     fn deinit(self: *AuthorityCore) void {
@@ -4255,6 +4261,7 @@ const AuthorityCore = struct {
                     self.force_snapshot = true;
                 },
                 .drive_applied => {},
+                .reconfigured => self.force_snapshot = true,
                 .exited => |exited| {
                     const participant_index = self.findParticipantByCharacter(
                         exited.driver_id,
@@ -4309,6 +4316,7 @@ const AuthorityCore = struct {
                     self.force_snapshot = true;
                 },
                 .rejected => |rejected| {
+                    if (rejected.command == .reconfigure) continue;
                     const driver = rejected.driver_id orelse {
                         if (self.world_bootstrap == .host_managed) continue;
                         return error.UnexpectedVehicleRejection;
@@ -5155,7 +5163,27 @@ const AuthorityCore = struct {
             if (participant.character != null) {
                 try self.updateParticipantRelevance(participant_index);
             }
-            const full_projection = try self.buildRelevantSnapshot(participant_index);
+            var full_projection = try self.buildRelevantSnapshot(participant_index);
+            const vehicle_admission = &self.replication[participant_index];
+            if (participant.baseline_sent) {
+                for (full_projection.vehicleSlice()) |car| {
+                    var admitted = false;
+                    for (vehicle_admission.admitted_vehicles[0..vehicle_admission.admitted_vehicle_count]) |old| {
+                        if (std.meta.eql(car.entity, old.entity) and std.meta.eql(car.definition, old.definition) and car.definition_revision == old.definition_revision) {
+                            admitted = true;
+                            break;
+                        }
+                    }
+                    if (!admitted) {
+                        participant.baseline_id +%= 1;
+                        if (participant.baseline_id == 0) participant.baseline_id = 1;
+                        participant.baseline_acknowledged = 0;
+                        participant.baseline_sent = false;
+                        full_projection.baseline_id = participant.baseline_id;
+                        break;
+                    }
+                }
+            }
             const relevant_entities: u16 = full_projection.character_count +
                 full_projection.vehicle_count + full_projection.carryable_count +
                 full_projection.npc_count;
@@ -5181,6 +5209,8 @@ const AuthorityCore = struct {
                     .delivery = .reliable,
                     .lane = .control,
                 });
+                vehicle_admission.admitted_vehicle_count = full_projection.vehicle_count;
+                @memcpy(vehicle_admission.admitted_vehicles[0..full_projection.vehicle_count], full_projection.vehicleSlice());
                 participant.baseline_sent = true;
                 const replication = &self.replication[participant_index];
                 replication.baseline_sequence = full_projection.sequence;
@@ -5379,6 +5409,8 @@ const AuthorityCore = struct {
             }
             snapshot.vehicles[snapshot.vehicle_count] = .{
                 .entity = vehicle.replicated,
+                .definition = vehicle_contract.presentation.Definition.fromDefinition(view.definition, view.definition_digest),
+                .definition_revision = view.revision,
                 .position = view.state.chassis.pose.position,
                 .rotation = view.state.chassis.pose.rotation,
                 .linear_velocity = view.state.chassis.velocity.linear,
@@ -6647,7 +6679,7 @@ fn createAuthorityCore(
 ) !*AuthorityCore {
     const core = try allocator.create(AuthorityCore);
     errdefer allocator.destroy(core);
-    core.* = try AuthorityCore.init(
+    try core.init(
         allocator,
         core_config,
         options,
@@ -7712,7 +7744,7 @@ test "bounded object interest records cross-district snapshot causality" {
         19,
         .{ -2, 0, 4 },
         sandbox_district_recipe.navigation_west_coord,
-        .{ 18, 1, 4 },
+        .{ 38, 1, 4 },
         .bounded_world,
     );
     const view = state.view();
@@ -7722,7 +7754,7 @@ test "bounded object interest records cross-district snapshot causality" {
     try std.testing.expectEqual(@as(u32, 7), view.baseline_id);
     try std.testing.expectEqual(@as(u32, 19), view.snapshot_sequence);
     try std.testing.expect(!std.meta.eql(view.observer_district, view.owner_district));
-    try std.testing.expectEqual(@as(f32, 400), view.distance_squared_xz);
+    try std.testing.expectEqual(@as(f32, 1600), view.distance_squared_xz);
 }
 
 fn fingerprintIngress(seed: u64, record: AcceptedIngress) u64 {
@@ -8026,6 +8058,15 @@ fn vehicleRejectionDisposition(
         .too_far => .too_far,
         .exit_blocked => .exit_blocked,
         .seat_occupied, .occupied => .unavailable,
+        .stale_revision,
+        .stale_asset_revision,
+        .archetype_mismatch,
+        .rebuild_required,
+        .occupied_layout_change,
+        .collision_blocked,
+        .shifting,
+        .incompatible_powertrain,
+        .construction_failed,
         .capacity_reached,
         .not_owned,
         .driver_not_found,
@@ -8286,6 +8327,7 @@ fn initCombatVehicleFixture(
         .position = .{ 2, 0, 2 },
     });
     try authority.vehicles().submit(.{ .spawn = .{
+        .definition = vehicle_contract.asset.validationFixture(),
         .request_id = 3,
         .chassis = .{ .pose = .{
             .position = .{ 0, 2, 0 },
@@ -9008,7 +9050,7 @@ test "faulted authority rejects every operational mutation but preserves shutdow
     );
     try std.testing.expectError(
         error.AuthorityFaulted,
-        authority.vehicles().submit(.{ .spawn = .{ .request_id = 3 } }),
+        authority.vehicles().submit(.{ .spawn = .{ .definition = vehicle_contract.asset.validationFixture(), .request_id = 3 } }),
     );
     try std.testing.expectError(
         error.AuthorityFaulted,
@@ -9493,6 +9535,7 @@ test "host-managed vehicle registry accepts spawn and despawn without fixture as
     );
     defer authority.deinit();
     try authority.vehicles().submit(.{ .spawn = .{
+        .definition = vehicle_contract.asset.validationFixture(),
         .request_id = 9,
         .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
     } });
@@ -11756,4 +11799,60 @@ test "duplicate account and connection timeouts are bounded session decisions" {
     }
     try std.testing.expect(observed_timeout);
     try std.testing.expectEqual(@as(u16, 1), authority.diagnostics().reconnecting_participants);
+}
+
+test "EA2 both game archetypes and changed definitions require reliable admission in each placement" {
+    // Identical authoritative core, exercised through each placement role.
+    inline for (.{ false, true }) |dedicated| {
+        const config = testEmbeddedCoreConfig(@as(u64, 0x4541_3200) + @intFromBool(dedicated), .automatic);
+        const core = try createAuthorityCore(std.testing.allocator, config, .{}, @splat(0x62), false);
+        defer destroyAuthorityCore(core);
+        const session = if (dedicated) @as(*DedicatedAuthority, @ptrCast(core)) else @as(*EmbeddedAuthority, @ptrCast(core)).session();
+        var sedan = try game_vehicles.embeddedSedan(std.testing.allocator);
+        defer sedan.deinit();
+        var compact = try vehicle_contract.asset.decode(std.testing.allocator, game_vehicles.courier_bytes);
+        defer compact.deinit();
+        try core.submitHostVehicle(.{ .spawn = .{ .request_id = 1, .definition = sedan.value, .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } } } });
+        try core.submitHostVehicle(.{ .spawn = .{ .request_id = 2, .definition = compact.value, .chassis = .{ .pose = .{ .position = .{ 5, 2, 0 } } } } });
+        const transport = TransportConnection{ .value = 1 };
+        _ = try session.openConnection(transport);
+        try session.ingest(transport, .{ .hello = .{ .account = .{ .value = 1 } } });
+        const welcome = takeOutboundForTest(session).?.message.welcome;
+        try session.tick();
+        var initial: ?protocol.RelevanceBaseline = null;
+        while (takeOutboundForTest(session)) |output| if (output.message == .relevance_baseline) {
+            initial = output.message.relevance_baseline;
+        };
+        const baseline = initial orelse return error.MissingVehicleDefinitionBaseline;
+        try std.testing.expectEqual(@as(u8, 2), baseline.snapshot.vehicle_count);
+        try std.testing.expect(!std.meta.eql(baseline.snapshot.vehicles[0].definition, baseline.snapshot.vehicles[1].definition));
+        try session.ingest(transport, .{ .baseline_ack = .{ .session = welcome.session, .participant = welcome.participant, .baseline_id = baseline.baseline_id } });
+        const target = core.vehicles[0].persistent.?;
+        sedan.value.tuning.powertrain.max_torque_nm += 20;
+        try core.submitHostVehicle(.{ .reconfigure = .{ .transaction_id = 1, .source = .scripted_validation, .id = target, .expected_revision = 0, .expected_asset_revision = sedan.value.revision, .candidate = sedan.value, .rebuild = false } });
+        try session.tick();
+        var changed: ?protocol.RelevanceBaseline = null;
+        while (takeOutboundForTest(session)) |output| switch (output.message) {
+            .relevance_baseline => |value| changed = value,
+            .snapshot => return error.ChangedDefinitionUsedUnreliableAdmission,
+            else => {},
+        };
+        const next = changed orelse return error.MissingReconfiguredDefinitionBaseline;
+        try std.testing.expect(next.baseline_id != baseline.baseline_id);
+        try std.testing.expectEqual(@as(u64, 1), next.snapshot.vehicles[0].definition_revision);
+        try std.testing.expectEqual(@as(u64, 0), next.snapshot.vehicles[1].definition_revision);
+        try std.testing.expectEqualDeep(baseline.snapshot.vehicles[1].definition, next.snapshot.vehicles[1].definition);
+        try std.testing.expect(!std.meta.eql(baseline.snapshot.vehicles[0].definition, next.snapshot.vehicles[0].definition));
+        try session.tick();
+        while (takeOutboundForTest(session)) |output| try std.testing.expect(output.message != .snapshot);
+        try session.ingest(transport, .{ .baseline_ack = .{ .session = welcome.session, .participant = welcome.participant, .baseline_id = next.baseline_id } });
+        core.force_snapshot = true;
+        try session.tick();
+        var published = false;
+        while (takeOutboundForTest(session)) |output| if (output.message == .snapshot) {
+            published = true;
+            try std.testing.expectEqual(@as(u64, 1), output.message.snapshot.vehicles[0].definition_revision);
+        };
+        try std.testing.expect(published);
+    }
 }

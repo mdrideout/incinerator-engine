@@ -9,11 +9,7 @@ const sandbox_recipe = @import("sandbox_district_recipe");
 const bundle = content.bundle;
 const cgltf = zmesh.io.zcgltf;
 
-const max_source_bytes = 512 * 1024;
-const max_image_source_bytes = 4 * 1024 * 1024;
 const max_dependency_id_bytes = 64;
-const max_dependencies = 8;
-const max_source_dependencies = 8;
 const dependency_digest_domain = "incinerator.district.cook.dependencies.v1";
 const root_translation_digest_domain = "incinerator.district.cook.root-translation.v1";
 
@@ -27,19 +23,23 @@ const Invocation = struct {
     provenance_path: []const u8,
     output_path: []const u8,
     key: content.BundleKey,
-    coord: district_contract.ChunkCoord,
+    coord: ?district_contract.ChunkCoord,
     root_translation: [3]f32,
-    dependencies: [max_dependencies]DependencyArgument = undefined,
-    dependency_count: u8 = 0,
-    source_dependencies: [max_source_dependencies][]const u8 = undefined,
-    source_dependency_count: u8 = 0,
+    allocator: std.mem.Allocator,
+    dependencies: std.ArrayList(DependencyArgument) = .empty,
+    source_dependencies: std.ArrayList([]const u8) = .empty,
+
+    fn deinit(self: *Invocation) void {
+        self.dependencies.deinit(self.allocator);
+        self.source_dependencies.deinit(self.allocator);
+    }
 
     fn dependencySlice(self: *const Invocation) []const DependencyArgument {
-        return self.dependencies[0..self.dependency_count];
+        return self.dependencies.items;
     }
 
     fn sourceDependencySlice(self: *const Invocation) []const []const u8 {
-        return self.source_dependencies[0..self.source_dependency_count];
+        return self.source_dependencies.items;
     }
 };
 
@@ -52,13 +52,14 @@ const HashedDependency = struct {
 pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    const invocation = try parseInvocation(args);
+    var invocation = try parseInvocation(allocator, args);
+    defer invocation.deinit();
 
     const source = try std.Io.Dir.cwd().readFileAlloc(
         init.io,
         invocation.input_path,
         allocator,
-        .limited(max_source_bytes),
+        .unlimited,
     );
     defer allocator.free(source);
     const provenance = try std.Io.Dir.cwd().readFileAlloc(
@@ -107,6 +108,7 @@ pub fn main(init: std.process.Init) !void {
         provenance,
         &invocation.key,
         invocation.root_translation,
+        invocation.coord != null,
         invocation.dependencySlice(),
         data,
         &resolver,
@@ -129,7 +131,7 @@ pub fn main(init: std.process.Init) !void {
     try writeAtomic(init.io, invocation.output_path, encoded);
 }
 
-fn parseInvocation(args: anytype) !Invocation {
+fn parseInvocation(allocator: std.mem.Allocator, args: anytype) !Invocation {
     if (args.len < 10) {
         return error.ExpectedInputProvenanceOutputKeyCoordinateTranslationAndDependencies;
     }
@@ -150,6 +152,7 @@ fn parseInvocation(args: anytype) !Invocation {
     }
 
     var result = Invocation{
+        .allocator = allocator,
         .input_path = input_path,
         .provenance_path = provenance_path,
         .output_path = output_path,
@@ -157,24 +160,24 @@ fn parseInvocation(args: anytype) !Invocation {
         .coord = .{ .x = coord_x, .z = coord_z },
         .root_translation = root_translation,
     };
+    errdefer result.deinit();
     var cursor: usize = 10;
+    if (cursor < args.len and std.mem.eql(u8, args[cursor], "--visual-only")) {
+        result.coord = null;
+        cursor += 1;
+    }
     while (cursor < args.len and std.mem.eql(u8, args[cursor], "--source-dependency")) {
         if (cursor + 1 >= args.len) return error.SourceDependencyPathRequired;
-        if (result.source_dependency_count == max_source_dependencies) {
-            return error.TooManySourceDependencies;
-        }
         const path: []const u8 = args[cursor + 1];
         if (path.len == 0) return error.SourceDependencyPathRequired;
         for (result.sourceDependencySlice()) |existing| {
             if (std.mem.eql(u8, existing, path)) return error.DuplicateSourceDependency;
         }
-        result.source_dependencies[result.source_dependency_count] = path;
-        result.source_dependency_count += 1;
+        try result.source_dependencies.append(allocator, path);
         cursor += 2;
     }
     if ((args.len - cursor) % 2 != 0) return error.InvalidCookDependencyArguments;
     const dependency_count = (args.len - cursor) / 2;
-    if (dependency_count > max_dependencies) return error.TooManyCookDependencies;
 
     var previous_id: ?[]const u8 = null;
     for (0..dependency_count) |index| {
@@ -189,13 +192,9 @@ fn parseInvocation(args: anytype) !Invocation {
                 .gt => return error.UnsortedDependencySemanticIds,
             }
         }
-        result.dependencies[index] = .{
-            .semantic_id = semantic_id,
-            .bundle_path = bundle_path,
-        };
+        try result.dependencies.append(allocator, .{ .semantic_id = semantic_id, .bundle_path = bundle_path });
         previous_id = semantic_id;
     }
-    result.dependency_count = @intCast(dependency_count);
     return result;
 }
 
@@ -210,7 +209,9 @@ fn validateDeclaredSourceDependencies(
         &[_]cgltf.Image{}
     else
         (data.images orelse return error.InvalidImageTable)[0..data.images_count];
-    var matched: [max_source_dependencies]bool = @splat(false);
+    const matched = try allocator.alloc(bool, declared.len);
+    defer allocator.free(matched);
+    @memset(matched, false);
     for (images) |image| {
         const uri = if (image.uri) |raw| cString(raw) else continue;
         if (std.mem.startsWith(u8, uri, "data:")) continue;
@@ -228,7 +229,7 @@ fn validateDeclaredSourceDependencies(
             io,
             declared[index],
             allocator,
-            .limited(max_image_source_bytes),
+            .unlimited,
         );
         defer allocator.free(declared_bytes);
         if (!std.mem.eql(u8, rooted_bytes, declared_bytes)) {
@@ -285,6 +286,7 @@ fn sourceDigest(
     provenance: []const u8,
     output_key: *const content.BundleKey,
     root_translation: [3]f32,
+    has_world_recipe: bool,
     dependency_arguments: []const DependencyArgument,
     data: *cgltf.Data,
     resolver: *const SourceResolver,
@@ -295,11 +297,16 @@ fn sourceDigest(
         data,
         resolver,
     );
-    const base = translatedSourceDigest(
-        dependency_source,
-        root_translation,
-    );
-    var dependencies: [max_dependencies]HashedDependency = undefined;
+    const translated = translatedSourceDigest(dependency_source, root_translation);
+    var base = translated;
+    if (!has_world_recipe) {
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        hash.update("incinerator.vehicle.visual-only.v1");
+        hash.update(&translated);
+        hash.final(&base);
+    }
+    const dependencies = try allocator.alloc(HashedDependency, dependency_arguments.len);
+    defer allocator.free(dependencies);
     for (dependency_arguments, 0..) |argument, index| {
         const dependency = try loadDependencyIdentity(io, allocator, argument);
         if (std.mem.eql(u8, dependency.bundle_key.bytes(), output_key.bytes())) {
@@ -410,7 +417,6 @@ const SourceResolver = struct {
         });
         defer file.close(self.io);
         const length = try file.length(self.io);
-        if (length > max_image_source_bytes) return error.ImageSourceTooLarge;
         var read_buffer: [4096]u8 = undefined;
         var reader = file.reader(self.io, &read_buffer);
         return try reader.interface.readAlloc(allocator, @intCast(length));
@@ -502,7 +508,6 @@ fn requireSafeBoundedBuffers(data: *cgltf.Data) !void {
         }
         total_bytes = std.math.add(usize, total_bytes, buffer.size) catch
             return error.SourceCapacityExceeded;
-        if (total_bytes > max_source_bytes) return error.SourceCapacityExceeded;
     }
 }
 
@@ -595,7 +600,7 @@ fn cook(
     data: *cgltf.Data,
     resolver: *const SourceResolver,
     bundle_name: []const u8,
-    coord: district_contract.ChunkCoord,
+    coord: ?district_contract.ChunkCoord,
     root_translation: [3]f32,
     source_digest: [32]u8,
 ) !Cooked {
@@ -651,12 +656,15 @@ fn cook(
     if (data.textures_count != 0) {
         const textures = data.textures orelse return error.InvalidTextureTable;
         for (textures[0..data.textures_count]) |*texture| {
-            try appendTexture(&result, resolver, texture);
+            try appendTexture(&result, resolver, texture, textureColorSpace(data, texture));
         }
     }
 
+    try separateColorAndDataViews(&result);
+
+    const logical_coord = coord orelse return result;
     const logical = switch (sandbox_recipe.build(
-        coord,
+        logical_coord,
         sandbox_recipe.current_recipe_version,
     )) {
         .ready => |build| build,
@@ -836,38 +844,89 @@ fn appendPrimitive(
     });
 }
 
+fn textureIndex(data: *cgltf.Data, view: cgltf.TextureView) !u32 {
+    if (view.has_transform != 0 or (view.texture != null and view.texcoord != 0)) return error.UnsupportedMaterialTexcoord;
+    return if (view.texture) |texture|
+        try pointerIndex(cgltf.Texture, data.textures.?, data.textures_count, texture)
+    else
+        bundle.none_index;
+}
+
+// Reuse one linear view per original texture across every material and data slot.
+fn separateColorAndDataViews(cooked: *Cooked) !void {
+    const views = try cooked.allocator.alloc(u32, cooked.textures.items.len);
+    defer cooked.allocator.free(views);
+    @memset(views, bundle.none_index);
+    for (cooked.materials.items) |*material| {
+        inline for (.{ "metallic_roughness_texture", "normal_texture", "occlusion_texture" }) |field| {
+            const index = @field(material, field);
+            if (index != bundle.none_index and cooked.textures.items[index].format != .rgba8_unorm) {
+                if (views[index] == bundle.none_index) {
+                    var linear = cooked.textures.items[index];
+                    const label = linear.name.bytes(cooked.strings.items) orelse return error.InvalidTextureName;
+                    const name = try std.fmt.allocPrint(cooked.allocator, "{s}.linear", .{label});
+                    defer cooked.allocator.free(name);
+                    linear.name = try cooked.addName(name);
+                    linear.format = .rgba8_unorm;
+                    views[index] = @intCast(cooked.textures.items.len);
+                    try cooked.textures.append(cooked.allocator, linear);
+                }
+                @field(material, field) = views[index];
+            }
+        }
+    }
+}
+
+test "mixed color and data roles share exactly one linear texture view" {
+    var cooked = Cooked.init(std.testing.allocator, @splat(1));
+    defer cooked.deinit();
+    const name = try cooked.addName("Shared");
+    try cooked.textures.append(cooked.allocator, .{ .name = name, .width = 1, .height = 1, .format = .rgba8_srgb, .pixel_offset = 0, .pixel_size = 4 });
+    try cooked.materials.append(cooked.allocator, .{ .name = name, .base_color = .{ 1, 1, 1, 1 }, .base_color_texture = 0, .normal_texture = 0, .occlusion_texture = 0 });
+    try cooked.materials.append(cooked.allocator, .{ .name = name, .base_color = .{ 1, 1, 1, 1 }, .base_color_texture = 0, .metallic_roughness_texture = 0 });
+    try separateColorAndDataViews(&cooked);
+    try std.testing.expectEqual(@as(usize, 2), cooked.textures.items.len);
+    try std.testing.expectEqual(@as(u32, 0), cooked.materials.items[0].base_color_texture);
+    try std.testing.expectEqual(@as(u32, 1), cooked.materials.items[0].normal_texture);
+    try std.testing.expectEqual(@as(u32, 1), cooked.materials.items[0].occlusion_texture);
+    try std.testing.expectEqual(@as(u32, 1), cooked.materials.items[1].metallic_roughness_texture);
+    try std.testing.expectEqual(cooked.textures.items[0].pixel_offset, cooked.textures.items[1].pixel_offset);
+}
+
+fn textureColorSpace(data: *cgltf.Data, texture: *cgltf.Texture) bundle.TextureFormat {
+    for (data.materials.?[0..data.materials_count]) |material| {
+        if (material.pbr_metallic_roughness.base_color_texture.texture == texture or
+            material.emissive_texture.texture == texture) return .rgba8_srgb;
+    }
+    return .rgba8_unorm;
+}
+
 fn appendMaterial(cooked: *Cooked, data: *cgltf.Data, material: *cgltf.Material) !void {
-    if (material.has_pbr_metallic_roughness == 0 or material.extensions_count != 0 or
+    if (material.extensions_count != 0 or
         material.has_pbr_specular_glossiness != 0 or material.has_clearcoat != 0 or
         material.has_transmission != 0 or material.has_volume != 0 or material.has_ior != 0 or
         material.has_specular != 0 or material.has_sheen != 0 or
         material.has_emissive_strength != 0 or material.has_iridescence != 0 or
         material.has_diffuse_transmission != 0 or material.has_anisotropy != 0 or
         material.has_dispersion != 0 or
-        material.alpha_mode != .@"opaque" or material.double_sided != 0 or material.unlit != 0 or
-        material.normal_texture.texture != null or material.occlusion_texture.texture != null or
-        material.emissive_texture.texture != null)
+        material.alpha_mode != .@"opaque" or material.double_sided != 0 or material.unlit != 0)
     {
         return error.UnsupportedMaterialFeature;
     }
     const pbr = material.pbr_metallic_roughness;
-    if (pbr.metallic_roughness_texture.texture != null) {
-        return error.UnsupportedMaterialFeature;
-    }
-    if ((pbr.base_color_texture.texture != null and pbr.base_color_texture.texcoord != 0) or
-        pbr.base_color_texture.has_transform != 0 or
-        pbr.metallic_factor != 0 or pbr.roughness_factor != 1)
-    {
-        return error.UnsupportedMaterialFeature;
-    }
     try cooked.materials.append(cooked.allocator, .{
         .name = try cooked.addName(cString(material.name orelse return error.MaterialNameRequired)),
         .base_color = pbr.base_color_factor,
-        .base_color_texture = if (pbr.base_color_texture.texture) |texture|
-            try pointerIndex(cgltf.Texture, data.textures.?, data.textures_count, texture)
-        else
-            bundle.none_index,
-        .base_color_texcoord = @intCast(pbr.base_color_texture.texcoord),
+        .base_color_texture = try textureIndex(data, pbr.base_color_texture),
+        .metallic = pbr.metallic_factor,
+        .roughness = pbr.roughness_factor,
+        .normal_scale = material.normal_texture.scale,
+        .occlusion_strength = material.occlusion_texture.scale,
+        .emissive = material.emissive_factor,
+        .metallic_roughness_texture = try textureIndex(data, pbr.metallic_roughness_texture),
+        .normal_texture = try textureIndex(data, material.normal_texture),
+        .occlusion_texture = try textureIndex(data, material.occlusion_texture),
+        .emissive_texture = try textureIndex(data, material.emissive_texture),
     });
 }
 
@@ -875,6 +934,7 @@ fn appendTexture(
     cooked: *Cooked,
     resolver: *const SourceResolver,
     texture: *cgltf.Texture,
+    format: bundle.TextureFormat,
 ) !void {
     if (texture.extensions_count != 0 or texture.has_basisu != 0 or texture.has_webp != 0) {
         return error.UnsupportedTextureFeature;
@@ -927,7 +987,7 @@ fn appendTexture(
         .name = try cooked.addName(cString(texture.name orelse return error.TextureNameRequired)),
         .width = decoded.width,
         .height = decoded.height,
-        .format = .rgba8_srgb,
+        .format = format,
         .pixel_offset = pixel_offset,
         .pixel_size = rgba_size,
         .encoding = encoding,
@@ -1040,7 +1100,6 @@ fn decodeDataUri(allocator: std.mem.Allocator, uri: []const u8) ![]u8 {
     const payload = uri[comma + 1 ..];
     const decoded_size = std.base64.standard.Decoder.calcSizeForSlice(payload) catch
         return error.InvalidImageDataUri;
-    if (decoded_size > max_image_source_bytes) return error.ImageSourceTooLarge;
     const decoded = try allocator.alloc(u8, decoded_size);
     errdefer allocator.free(decoded);
     std.base64.standard.Decoder.decode(decoded, payload) catch
@@ -1120,9 +1179,10 @@ test "cooker invocation parses coordinates and strictly sorted dependency pairs"
         "sandbox.west",
         "west.icdb",
     };
-    const invocation = try parseInvocation(args);
-    try std.testing.expectEqual(@as(i32, 1), invocation.coord.x);
-    try std.testing.expectEqual(@as(i32, -2), invocation.coord.z);
+    var invocation = try parseInvocation(std.testing.allocator, args);
+    defer invocation.deinit();
+    try std.testing.expectEqual(@as(i32, 1), invocation.coord.?.x);
+    try std.testing.expectEqual(@as(i32, -2), invocation.coord.?.z);
     try std.testing.expectEqualDeep([3]f32{ 0, 0, 16 }, invocation.root_translation);
     try std.testing.expectEqualStrings("district/s6_east", invocation.key.bytes());
     try std.testing.expectEqual(@as(usize, 2), invocation.dependencySlice().len);
@@ -1147,7 +1207,8 @@ test "cooker invocation parses coordinates and strictly sorted dependency pairs"
         "0",
         "0",
     };
-    const dependency_free = try parseInvocation(no_dependencies);
+    var dependency_free = try parseInvocation(std.testing.allocator, no_dependencies);
+    defer dependency_free.deinit();
     try std.testing.expectEqual(@as(usize, 0), dependency_free.dependencySlice().len);
 }
 
@@ -1168,7 +1229,8 @@ test "cooker invocation records declared rooted image dependencies separately" {
         "district.west",
         "west.icdb",
     };
-    const invocation = try parseInvocation(args);
+    var invocation = try parseInvocation(std.testing.allocator, args);
+    defer invocation.deinit();
     try std.testing.expectEqual(@as(usize, 1), invocation.sourceDependencySlice().len);
     try std.testing.expectEqualStrings(
         "/project/assets/panels.jpg",
@@ -1199,7 +1261,7 @@ test "cooker invocation rejects malformed unsorted duplicate and invalid depende
     };
     try std.testing.expectError(
         error.ExpectedInputProvenanceOutputKeyCoordinateTranslationAndDependencies,
-        parseInvocation(missing_path),
+        parseInvocation(std.testing.allocator, missing_path),
     );
 
     const unsorted = [_][]const u8{
@@ -1220,7 +1282,7 @@ test "cooker invocation rejects malformed unsorted duplicate and invalid depende
     };
     try std.testing.expectError(
         error.UnsortedDependencySemanticIds,
-        parseInvocation(unsorted),
+        parseInvocation(std.testing.allocator, unsorted),
     );
 
     const duplicate = [_][]const u8{
@@ -1241,7 +1303,7 @@ test "cooker invocation rejects malformed unsorted duplicate and invalid depende
     };
     try std.testing.expectError(
         error.DuplicateDependencySemanticId,
-        parseInvocation(duplicate),
+        parseInvocation(std.testing.allocator, duplicate),
     );
 
     const invalid = [_][]const u8{
@@ -1258,7 +1320,7 @@ test "cooker invocation rejects malformed unsorted duplicate and invalid depende
         "Sandbox.West",
         "west.icdb",
     };
-    try std.testing.expectError(error.InvalidDistrictCoordinate, parseInvocation(invalid));
+    try std.testing.expectError(error.InvalidDistrictCoordinate, parseInvocation(std.testing.allocator, invalid));
 
     const invalid_id = [_][]const u8{
         "cooker",
@@ -1274,7 +1336,7 @@ test "cooker invocation rejects malformed unsorted duplicate and invalid depende
         "Sandbox.West",
         "west.icdb",
     };
-    try std.testing.expectError(error.InvalidDependencySemanticId, parseInvocation(invalid_id));
+    try std.testing.expectError(error.InvalidDependencySemanticId, parseInvocation(std.testing.allocator, invalid_id));
 }
 
 test "source digest frames dependency count and identities deterministically" {

@@ -1,5 +1,40 @@
 # Incinerator Engine
 
+The current demo is a fresh, original industrial neighborhood. The previous
+evaluation scene has been replaced. Materials, meshes, textures, collision,
+navigation, and population definitions live under `game/industrial`. Material
+Lab provides neutral/world preview, live mesh assignment, revisioned apply and
+revert, and durable game-asset commits through the same owner as
+`incinerator-dev`. See [EA1-B validation](docs/validation/ea1-b-material-authoring.md).
+
+Run the focused authoring workspace:
+
+```sh
+zig build run -Deditor=true -- --editor-panels=material_lab,content_browser --editor-focus=material_lab
+```
+
+`zig build run` supplies the game material directory. An installed editor uses
+`INCINERATOR_MATERIAL_ROOT=/absolute/path/to/game/industrial` for durable commits.
+
+
+Routine driving tests now run in the background: `zig build vehicle-motion-report -Doptimize=ReleaseSafe` runs the complete headless scenario matrix with compact
+reports. `zig build test-vehicle-offscreen -Deditor=true -Doptimize=ReleaseSafe`
+checks the industrial world and Metal rendering without presenting a window.
+See [background testing commands and evidence](docs/validation/vehicle-background-testing.md).
+
+Vehicle authoring now includes FWD Courier, RWD Meridian and Courier AWD.
+Select a car, open Vehicle Lab, choose a handling preset and **Load Into Draft**;
+measure it before applying or rebuilding. Space holds the rear handbrake.
+S brakes to a stop before reverse; W brakes reverse motion before forward.
+W+S brakes without propulsion. For durable vehicle commits, run:
+
+```sh
+INCINERATOR_VEHICLE_ROOT="$PWD/game/vehicles" zig build run -Deditor=true -- --editor-panels=vehicle_lab,world_outliner --editor-focus=vehicle_lab
+```
+
+See [EA2-H handling and validation](docs/validation/ea2-handling-profiles.md).
+
+
 Incinerator is a game-specific 3D engine with a completed single-player sandbox
 and an accepted Apple Silicon macOS multiplayer foundation. MP0-MP5/M4 prove a
 server-authoritative direct-IP session with characters, vehicles, carry
@@ -132,15 +167,16 @@ and product-owner review. Phase 7 now makes that CLI a first-class agent
 contract with a machine-readable catalog, guided results, and repository-owned
 skill; the planned MCP adapter was eliminated because local coding agents have
 shell access. Its implementation/automated/native/clean-context/comprehensive-
-manual-agent review passes and the product owner accepted Phase 7. EA1-A now
-has a complete machine acceptance candidate: project-owned GLB/glTF with
-embedded/external PNG/JPEG, stable cooked asset identities, correct
-color-space/sampler handling, real textured building and crate content, a
-read-only Content Browser/Inspector, and CLI parity. Product-owner visual and
-usability review remains before EA1-B is authorized.
-See the
-[EA1-A validation ledger](docs/validation/ea1-a-practical-textures-and-materials.md)
-for the exact cooked cohort and manual checklist.
+manual-agent review passes and the product owner accepted Phase 7. EA1 now supplies practical import/runtime materials and the shared Material Lab/CLI
+authoring journey. The product owner authorized the next material phase and a
+fresh scene on 2026-09-06. See the
+[EA1-B validation ledger](docs/validation/ea1-b-material-authoring.md) for the
+current cohort and native authoring evidence. [EA2 vehicle authoring](docs/validation/ea2-vehicle-authoring.md)
+now provides the Meridian sedan and Courier compact, Vehicle Lab/CLI, isolated
+measurements, safe edits/rebuilds and exact commit/restart. Set
+`INCINERATOR_VEHICLE_ROOT="$PWD/game/vehicles"` when launching the editor to
+author the canonical project assets. Lighting, general map authoring and
+separate game packaging follow in EA3–EA5.
 The combined-tree
 [deterministic-rendering resumption audit](docs/validation/deterministic-rendering-resumption.md)
 passes and records the correction that restored the ordinary product from an
@@ -321,8 +357,8 @@ zig build install-mp2
 # Q melee, R request respawn after death, click the playable area to capture
 # continuous mouse-look, and Escape to release it. Close the window to quit an
 # editor-disabled client. Right mouse + drag remains available without capture. While
-# driving, W/S are throttle/reverse, A/D steer, Space brakes, and Left Shift is
-# the hand brake. P toggles vehicle prediction for live A/B comparison. F8
+# driving, W/S brake opposite motion before driving forward/reverse, A/D steer, and
+# Space holds the rear handbrake. W+S service-brakes without propulsion. P toggles vehicle prediction for live A/B comparison. F8
 # manufactures a transport loss and reconnect while playing. Recoverable
 # transport loss uses monotonic capped retry; rejection and authority shutdown
 # terminate cleanly without reconnecting.
@@ -571,8 +607,8 @@ distances are 9 m and 12 m respectively.
 | 1 | Equip or holster the authoritative handgun in Character mode |
 | Left mouse | Fire while captured in Character mode; select the nearest world object in Free Camera |
 | R | In Character mode, manually tactical-reload while alive or request respawn after death/cooldown |
-| Space | Jump on foot or service-brake while driving in Character mode |
-| Left Shift | Handbrake while driving; accelerate Free Camera flight |
+| Space | Jump on foot or hold rear handbrake while driving in Character mode |
+| Left Shift | Accelerate Free Camera flight (no vehicle brake binding) |
 | Right mouse + drag | Turn/look without capture in Character mode; own Free Camera fly/look input |
 | Q / E while right-dragging | Move Free Camera down/up |
 | Mouse wheel over scene | Adjust Free Camera flight speed |
@@ -816,7 +852,9 @@ slot; the EA0.5 ordinary-product slot has not yet been claimed as cold-verified.
 Stopping and relaunching the ordinary graphical product with the same save root
 starts a fresh world and a new endpoint run; graphical startup does not load the
 committed slot. `world list` contains live instances; `content list` contains
-only durable cooked `AssetId` entries. EA1-A now publishes real game-owned
+stable cooked `AssetId` entries. Material and mesh inspection projects the
+current session revision; disposable previews remain explicit in material
+inspection. EA1 publishes game-owned
 scene, mesh, material, and texture entries with dependencies, source container,
 cook state, residency/last-use, and typed material/texture metadata. The
 runtime crate is still a world instance, never an asset. Frame capture uses the

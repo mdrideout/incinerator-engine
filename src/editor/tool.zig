@@ -525,6 +525,8 @@ pub const PopulationInput = struct {
 };
 
 pub const RenderView = struct {
+    material_state_digest: [32]u8 = @splat(0),
+    material_draws: u64 = 0,
     mode: []const u8 = render_contract.mode_name,
     visual_schema: u16 = render_contract.visual_schema_version,
     scene_light: render_contract.SceneLight,
@@ -562,6 +564,8 @@ pub const FrameInput = struct {
     viewport: ViewportInput,
     selection: SelectionInput,
     content_assets: []const engine.assets.Entry,
+    material: ?@import("material_authoring_contract").Input = null,
+    vehicle: ?@import("vehicle_authoring_contract").Input = null,
     frame_timing: *const FrameTimingView,
     developer: DeveloperInput,
     visualization: VisualizationInput,
@@ -586,6 +590,8 @@ pub const ToolId = workspace.ToolId;
 pub const Descriptor = workspace.Descriptor;
 
 /// Runtime visibility state for one statically registered tool.
+const default_gameplay_panels = workspace.PanelMask.fromPreset(.gameplay);
+
 pub const Tool = struct {
     descriptor: Descriptor,
     enabled: bool = true,
@@ -593,7 +599,7 @@ pub const Tool = struct {
     pub fn init(descriptor: Descriptor) Tool {
         return .{
             .descriptor = descriptor,
-            .enabled = workspace.PanelMask.fromPreset(.gameplay).contains(descriptor.id),
+            .enabled = default_gameplay_panels.contains(descriptor.id),
         };
     }
 

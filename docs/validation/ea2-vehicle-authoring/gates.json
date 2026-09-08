@@ -1,0 +1,63 @@
+{
+  "date": "2026-09-07",
+  "platform": "Apple Silicon macOS",
+  "zig": "0.16.0",
+  "checks": [
+    {
+      "command": "zig build -Deditor=true test --summary all",
+      "log": "aggregate-final.log",
+      "sha256": "bcb42d2cac2c022a7c34d685c5fa3f4ec3327fd293a36de705d0815561228fe2",
+      "results": [
+        "EA2_NATIVE_DRIVE_PASS car=Courier world=industrial timestep_hz=60 frames=83 peak_speed_mps=8.154 steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true",
+        "EA2_NATIVE_DRIVE_PASS car=Meridian world=industrial timestep_hz=60 frames=83 peak_speed_mps=9.768 steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true",
+        "Build Summary: 334/334 steps succeeded; 1302/1302 tests passed"
+      ]
+    },
+    {
+      "command": "zig build -Deditor=false test --summary all",
+      "log": "editor-off.log",
+      "sha256": "de1fcf1a18f47d4a7b4c1e7a5cb939f8e5a8a0ac755773d542642793ecbb4af5",
+      "results": [
+        "EA2_NATIVE_DRIVE_PASS car=Courier world=industrial timestep_hz=60 frames=83 peak_speed_mps=8.154 steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true",
+        "EA2_NATIVE_DRIVE_PASS car=Meridian world=industrial timestep_hz=60 frames=83 peak_speed_mps=9.768 steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true",
+        "Build Summary: 329/329 steps succeeded; 1196/1198 tests passed (2 skipped)"
+      ]
+    },
+    {
+      "command": "zig build -Deditor=true test-editor-pointer-macos --summary all",
+      "log": "native-vehicle-final.log",
+      "sha256": "ae368f5345664ad101b61d278e9e66d3c41468c97819cbb0f4e5144b621af045",
+      "results": [
+        "Build Summary: 46/46 steps succeeded; 74/74 tests passed"
+      ]
+    },
+    {
+      "command": "zig build -Deditor=true verify-mp6-listen --summary all",
+      "log": "native-listen-repeat.log",
+      "sha256": "329d9db63f610eb2c77d12a342c34af3a76a5b1d44874b2ec0b314348e4d4871",
+      "results": [
+        "MP6_LISTEN_PROCESS_PASS graphical=2 host_local_link=true guest_real_gns=true walk=true drive=true carry=true reconnect=true host_migration=false",
+        "Build Summary: 63/63 steps succeeded; 7/7 tests passed"
+      ]
+    },
+    {
+      "command": "zig build -Deditor=true verify-mp6-dedicated --summary all",
+      "log": "native-dedicated.log",
+      "sha256": "eeacfc41110dc4164c32a637a992f9415f2170cde3a617311a2d6bc0965c2b37",
+      "results": [
+        "MP6_DEDICATED_PROCESS_PASS clients=2 ticketed=true real_gns=true graphical=true host_migration=false",
+        "Build Summary: 63/63 steps succeeded; 7/7 tests passed"
+      ]
+    },
+    {
+      "command": "bash tools/verify_source_package.sh",
+      "log": "source-package-final.log",
+      "sha256": "36b555d18ba904c0ef793ff49c5f89d269b3fd320d2eae1c4282ecd1531d0ebd",
+      "results": [
+        "Build Summary: 193/193 steps succeeded; 451/451 tests passed",
+        "Build Summary: 33/33 steps succeeded; 56/56 tests passed",
+        "Filtered source package membership, M5/M6/MP6/S11 boundaries, and extracted execution verified."
+      ]
+    }
+  ]
+}

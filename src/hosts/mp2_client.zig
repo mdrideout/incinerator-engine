@@ -28,6 +28,7 @@ const s11_scenario = gameplay_scenarios.get(
 );
 
 const Invocation = struct {
+    content_root: ?[]const u8 = null,
     endpoint: []const u8 = default_endpoint,
     account: u64 = 1,
     endpoint_explicit: bool = false,
@@ -143,7 +144,7 @@ const App = struct {
             c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_HIGH_PIXEL_DENSITY,
         ) orelse return error.SDLWindowFailed;
         errdefer c.SDL_DestroyWindow(window);
-        var scene = try client_scene.Scene.init(window);
+        var scene = try client_scene.Scene.init(process_init.io, process_init.gpa, window, invocation.content_root);
         errdefer scene.deinit();
         var network = try gns.Network.init();
         errdefer network.deinit();
@@ -1328,7 +1329,11 @@ fn parseInvocation(args: []const []const u8) !Invocation {
     var result = Invocation{};
     var index: usize = 1;
     while (index < args.len) : (index += 1) {
-        if (std.mem.eql(u8, args[index], "--connect")) {
+        if (std.mem.eql(u8, args[index], "--content-root")) {
+            index += 1;
+            if (index >= args.len) return error.MissingContentRoot;
+            result.content_root = args[index];
+        } else if (std.mem.eql(u8, args[index], "--connect")) {
             index += 1;
             if (index >= args.len or args[index].len == 0 or args[index].len >= 256) {
                 return error.InvalidEndpoint;

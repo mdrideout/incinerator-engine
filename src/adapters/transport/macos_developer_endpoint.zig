@@ -753,7 +753,7 @@ test "discovery path is private and endpoint lifecycle stops cleanly" {
     });
     defer server.destroy();
     try std.testing.expectEqual(protocol.Lifecycle.available, server.discovery().lifecycle);
-    try std.testing.expectEqual(@as(u8, 5), server.discovery().schema_count);
+    try std.testing.expectEqual(@as(u8, @intCast(protocol.schemaCatalog().len)), server.discovery().schema_count);
     const directory_stat = try std.Io.Dir.cwd().statFile(
         std.testing.io,
         root,

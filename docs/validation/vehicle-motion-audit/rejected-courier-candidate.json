@@ -1,0 +1,3421 @@
+{
+  "schema": 1,
+  "build": {
+    "source_cohort": 668333254755175395,
+    "jolt_revision": "23dadd0e603f1b321142d4c74df07fce85064989",
+    "joltc_revision": "52d8c98df523f449eb3e01b1060a0fde052970d1",
+    "zig_version": "0.16.0",
+    "optimize": "Debug",
+    "architecture": "aarch64"
+  },
+  "definition": {
+    "version": 1,
+    "id": {
+      "asset": {
+        "namespace": 5282233395077009985,
+        "local": 2346745979227719430
+      }
+    },
+    "label": "Courier compact",
+    "revision": 2,
+    "tuning": {
+      "steering": {
+        "rise_per_second": 2.5999999046325684,
+        "return_per_second": 4,
+        "speed_curve": [
+          {
+            "speed_mps": 0,
+            "lock_fraction": 1
+          },
+          {
+            "speed_mps": 8,
+            "lock_fraction": 0.550000011920929
+          },
+          {
+            "speed_mps": 18,
+            "lock_fraction": 0.47999998927116394
+          },
+          {
+            "speed_mps": 30,
+            "lock_fraction": 0.3199999928474426
+          }
+        ]
+      },
+      "chassis_half_extents": [
+        0.8299999833106995,
+        0.6499999761581421,
+        1.9199999570846558
+      ],
+      "center_of_mass_offset": [
+        0,
+        -0.18000000715255737,
+        0
+      ],
+      "mass": 1120,
+      "wheel_attachment_positions": [
+        [
+          -0.7200000286102295,
+          -0.17000000178813934,
+          -1.2400000095367432
+        ],
+        [
+          0.7200000286102295,
+          -0.17000000178813934,
+          -1.2400000095367432
+        ],
+        [
+          -0.7200000286102295,
+          -0.17000000178813934,
+          1.2400000095367432
+        ],
+        [
+          0.7200000286102295,
+          -0.17000000178813934,
+          1.2400000095367432
+        ]
+      ],
+      "wheel_radius": 0.28999999165534973,
+      "wheel_width": 0.1850000023841858,
+      "suspension_min_length": 0.14000000059604645,
+      "suspension_max_length": 0.4399999976158142,
+      "suspension_frequency": 1.350000023841858,
+      "suspension_damping": 0.6200000047683716,
+      "max_steer_radians": 0.5585053563117981,
+      "max_brake_torque": 1700,
+      "max_hand_brake_torque": 4000,
+      "rear_axle": {
+        "suspension_min_length": 0.14000000059604645,
+        "suspension_max_length": 0.4399999976158142,
+        "suspension_frequency": 1.4500000476837158,
+        "suspension_damping": 0.6200000047683716,
+        "brake_torque_nm": 1100,
+        "tire_friction": {
+          "longitudinal_peak_slip": 0.05999999865889549,
+          "longitudinal_peak_friction": 1.399999976158142,
+          "longitudinal_slide_slip": 0.20000000298023224,
+          "longitudinal_slide_friction": 1.149999976158142,
+          "lateral_peak_angle_radians": 0.06981316953897476,
+          "lateral_peak_friction": 1.649999976158142,
+          "lateral_slide_angle_radians": 0.3490658402442932,
+          "lateral_slide_friction": 1.3200000524520874
+        },
+        "anti_roll_stiffness": 300
+      },
+      "front_anti_roll_stiffness": 400,
+      "tire_friction": {
+        "longitudinal_peak_slip": 0.05999999865889549,
+        "longitudinal_peak_friction": 1.399999976158142,
+        "longitudinal_slide_slip": 0.20000000298023224,
+        "longitudinal_slide_friction": 1.149999976158142,
+        "lateral_peak_angle_radians": 0.06981316953897476,
+        "lateral_peak_friction": 1.399999976158142,
+        "lateral_slide_angle_radians": 0.3490658402442932,
+        "lateral_slide_friction": 1.1200000047683716
+      },
+      "powertrain": {
+        "max_torque_nm": 190,
+        "idle_rpm": 800,
+        "max_rpm": 6000,
+        "inertia_kg_m2": 0.3499999940395355,
+        "angular_damping": 0.20000000298023224,
+        "torque_curve": [
+          {
+            "rpm_fraction": 0,
+            "torque_fraction": 0.699999988079071
+          },
+          {
+            "rpm_fraction": 0.3499999940395355,
+            "torque_fraction": 0.9300000071525574
+          },
+          {
+            "rpm_fraction": 0.6499999761581421,
+            "torque_fraction": 1
+          },
+          {
+            "rpm_fraction": 1,
+            "torque_fraction": 0.7200000286102295
+          }
+        ],
+        "forward_gears": [
+          3.200000047683716,
+          2,
+          1.3799999952316284,
+          1,
+          0.7799999713897705
+        ],
+        "reverse_gears": [
+          -2.9000000953674316
+        ],
+        "switch_time_s": 0.5,
+        "clutch_release_s": 0.30000001192092896,
+        "switch_latency_s": 0.5,
+        "shift_up_rpm": 5100,
+        "shift_down_rpm": 1800,
+        "clutch_strength": 10,
+        "front_torque_fraction": 1,
+        "rear_differential_ratio": 3.7300000190734863,
+        "rear_limited_slip_ratio": 1.399999976158142
+      },
+      "front_differential_ratio": 3.4200000762939453,
+      "front_limited_slip_ratio": 1.399999976158142,
+      "max_pitch_roll_radians": 3.1415927410125732,
+      "wheel_collision_max_slope_radians": 1.0471975803375244
+    },
+    "visuals": {
+      "chassis": {
+        "mesh": {
+          "namespace": 5282233395077009985,
+          "local": 9193263696161710883
+        },
+        "material": {
+          "namespace": 5282233395077009985,
+          "local": 2740942240368028446
+        },
+        "local_pose": {
+          "position": [
+            0,
+            -0.18000000715255737,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "wheels": [
+        {
+          "mesh": {
+            "namespace": 5282233395077009985,
+            "local": 11653646415283126671
+          },
+          "material": {
+            "namespace": 5282233395077009985,
+            "local": 9433346811235843760
+          },
+          "local_pose": {
+            "position": [
+              0,
+              0,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "scale": [
+            0.1850000023841858,
+            0.5799999833106995,
+            0.5799999833106995
+          ]
+        },
+        {
+          "mesh": {
+            "namespace": 5282233395077009985,
+            "local": 11653646415283126671
+          },
+          "material": {
+            "namespace": 5282233395077009985,
+            "local": 9433346811235843760
+          },
+          "local_pose": {
+            "position": [
+              0,
+              0,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "scale": [
+            0.1850000023841858,
+            0.5799999833106995,
+            0.5799999833106995
+          ]
+        },
+        {
+          "mesh": {
+            "namespace": 5282233395077009985,
+            "local": 11653646415283126671
+          },
+          "material": {
+            "namespace": 5282233395077009985,
+            "local": 9433346811235843760
+          },
+          "local_pose": {
+            "position": [
+              0,
+              0,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "scale": [
+            0.1850000023841858,
+            0.5799999833106995,
+            0.5799999833106995
+          ]
+        },
+        {
+          "mesh": {
+            "namespace": 5282233395077009985,
+            "local": 11653646415283126671
+          },
+          "material": {
+            "namespace": 5282233395077009985,
+            "local": 9433346811235843760
+          },
+          "local_pose": {
+            "position": [
+              0,
+              0,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "scale": [
+            0.1850000023841858,
+            0.5799999833106995,
+            0.5799999833106995
+          ]
+        }
+      ]
+    }
+  },
+  "definition_digest": [
+    19,
+    122,
+    49,
+    121,
+    57,
+    252,
+    40,
+    0,
+    94,
+    219,
+    208,
+    170,
+    33,
+    0,
+    144,
+    221,
+    6,
+    7,
+    228,
+    99,
+    86,
+    83,
+    175,
+    158,
+    206,
+    180,
+    173,
+    182,
+    205,
+    8,
+    197,
+    39
+  ],
+  "timestep_s": 0.01666666753590107,
+  "results": [
+    {
+      "specification": {
+        "name": "forward_coast_stop",
+        "entry_mps": 0,
+        "segments": [
+          {
+            "ticks": 360,
+            "input": {
+              "throttle": 1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 120,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 0,
+      "final_forward_mps": -1.9551020159269683e-05,
+      "peak_forward_mps": 11.540231704711914,
+      "peak_reverse_mps": 0.04992152005434036,
+      "peak_lateral_mps": 0.005251780152320862,
+      "peak_sideslip_deg": 0.0333552323281765,
+      "wheel_position_error_m": 3.8156285881996155e-06,
+      "wheel_axis_error": 8.344650268554688e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 1.1563286534510553e-05
+    },
+    {
+      "specification": {
+        "name": "reverse_coast_stop",
+        "entry_mps": 0,
+        "segments": [
+          {
+            "ticks": 360,
+            "input": {
+              "throttle": -1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 120,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 0,
+      "final_forward_mps": 3.047150676138699e-05,
+      "peak_forward_mps": 0.05011026933789253,
+      "peak_reverse_mps": 14.077400207519531,
+      "peak_lateral_mps": 0.0027580028399825096,
+      "peak_sideslip_deg": 0.01417605485767126,
+      "wheel_position_error_m": 7.630325853824615e-06,
+      "wheel_axis_error": 5.092622927804769e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -0.011321603320538998
+    },
+    {
+      "specification": {
+        "name": "forward_to_reverse",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": -1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006053924560547,
+      "final_forward_mps": -17.19171905517578,
+      "peak_forward_mps": 8.023524284362793,
+      "peak_reverse_mps": 17.19589614868164,
+      "peak_lateral_mps": 0.005538692232221365,
+      "peak_sideslip_deg": 0.02899971604347229,
+      "wheel_position_error_m": 3.815162926912308e-06,
+      "wheel_axis_error": 7.539457556049456e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -0.02316330559551716
+    },
+    {
+      "specification": {
+        "name": "reverse_to_forward",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": 1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": -8.017355918884277,
+      "final_forward_mps": 13.601593971252441,
+      "peak_forward_mps": 13.601593971252441,
+      "peak_reverse_mps": 8.049039840698242,
+      "peak_lateral_mps": 0.0033773009199649096,
+      "peak_sideslip_deg": 0.024413954466581345,
+      "wheel_position_error_m": 1.909210368467029e-06,
+      "wheel_axis_error": 7.468440799129894e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0.021657364442944527
+    },
+    {
+      "specification": {
+        "name": "forward_to_reverse_steering",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": -1,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006053924560547,
+      "final_forward_mps": -0.8111844062805176,
+      "peak_forward_mps": 8.022981643676758,
+      "peak_reverse_mps": 9.645261764526367,
+      "peak_lateral_mps": 8.3527250289917,
+      "peak_sideslip_deg": 89.68041229248047,
+      "wheel_position_error_m": 2.133313500962686e-06,
+      "wheel_axis_error": 7.492187705793185e-07,
+      "opposing_gear_at_speed_ticks": 15,
+      "initial_turn_yaw_deg": 9.521324157714844
+    },
+    {
+      "specification": {
+        "name": "reverse_to_forward_steering",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": 1,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": -8.017355918884277,
+      "final_forward_mps": 7.268433570861816,
+      "peak_forward_mps": 10.652822494506836,
+      "peak_reverse_mps": 8.045695304870605,
+      "peak_lateral_mps": 6.063985347747803,
+      "peak_sideslip_deg": 39.837921142578125,
+      "wheel_position_error_m": 4.2649612623790745e-06,
+      "wheel_axis_error": 8.344650268554688e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 11.51359748840332
+    },
+    {
+      "specification": {
+        "name": "forward_space_brake",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014694213867188,
+      "final_forward_mps": 0.0009802653221413493,
+      "peak_forward_mps": 16.025531768798828,
+      "peak_reverse_mps": 0.04911419004201889,
+      "peak_lateral_mps": 0.0010482497746124864,
+      "peak_sideslip_deg": 0.007346613798290491,
+      "wheel_position_error_m": 7.629627361893654e-06,
+      "wheel_axis_error": 5.623090828521526e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0.00022542729857377708
+    },
+    {
+      "specification": {
+        "name": "reverse_space_brake",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": -8.017355918884277,
+      "final_forward_mps": 1.78292793862056e-05,
+      "peak_forward_mps": 0.050104960799217224,
+      "peak_reverse_mps": 8.049039840698242,
+      "peak_lateral_mps": 0.0041148969903588295,
+      "peak_sideslip_deg": 0.024413954466581345,
+      "wheel_position_error_m": 1.909210368467029e-06,
+      "wheel_axis_error": 4.851466428590356e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0.021657364442944527
+    },
+    {
+      "specification": {
+        "name": "forward_handbrake_countersteer",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 75,
+            "input": {
+              "throttle": 0,
+              "steering": 0.800000011920929,
+              "brake": 0,
+              "hand_brake": 1
+            }
+          },
+          {
+            "ticks": 60,
+            "input": {
+              "throttle": 0.20000000298023224,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 300,
+            "input": {
+              "throttle": 0.20000000298023224,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014694213867188,
+      "final_forward_mps": 10.797788619995117,
+      "peak_forward_mps": 16.024991989135742,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.5415160655975342,
+      "peak_sideslip_deg": 2.09952449798584,
+      "wheel_position_error_m": 1.52587890625e-05,
+      "wheel_axis_error": 7.376662551905611e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 9.68591594696045
+    },
+    {
+      "specification": {
+        "name": "reverse_handbrake_countersteer",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 75,
+            "input": {
+              "throttle": 0,
+              "steering": 0.800000011920929,
+              "brake": 0,
+              "hand_brake": 1
+            }
+          },
+          {
+            "ticks": 60,
+            "input": {
+              "throttle": -0.20000000298023224,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 300,
+            "input": {
+              "throttle": -0.20000000298023224,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": -8.017355918884277,
+      "final_forward_mps": -3.7249276638031006,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 8.045695304870605,
+      "peak_lateral_mps": 4.009266376495361,
+      "peak_sideslip_deg": 51.73740768432617,
+      "wheel_position_error_m": 2.1324806311895372e-06,
+      "wheel_axis_error": 8.580792041357199e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -17.614299774169922
+    },
+    {
+      "specification": {
+        "name": "forward_left_2",
+        "entry_mps": 2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 2.018237352371216,
+      "final_forward_mps": 6.626652240753174,
+      "peak_forward_mps": 6.626652240753174,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.47338414192199707,
+      "peak_sideslip_deg": 7.39935827255249,
+      "wheel_position_error_m": 1.0679050319595262e-06,
+      "wheel_axis_error": 8.221336997848994e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -6.084365367889404
+    },
+    {
+      "specification": {
+        "name": "forward_right_2",
+        "entry_mps": 2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 2.018237352371216,
+      "final_forward_mps": 6.626712799072266,
+      "peak_forward_mps": 6.626712799072266,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.47339558601379395,
+      "peak_sideslip_deg": 7.398953437805176,
+      "wheel_position_error_m": 1.0679050319595262e-06,
+      "wheel_axis_error": 8.365910275642818e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 6.084123611450195
+    },
+    {
+      "specification": {
+        "name": "forward_left_8",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006053924560547,
+      "final_forward_mps": 10.63100814819336,
+      "peak_forward_mps": 10.63100814819336,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.41443586349487305,
+      "peak_sideslip_deg": 2.3080012798309326,
+      "wheel_position_error_m": 3.84438408218557e-06,
+      "wheel_axis_error": 7.545345397375058e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -10.567785263061523
+    },
+    {
+      "specification": {
+        "name": "forward_right_8",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006053924560547,
+      "final_forward_mps": 10.630797386169434,
+      "peak_forward_mps": 10.630797386169434,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.4151651859283447,
+      "peak_sideslip_deg": 2.3120296001434326,
+      "wheel_position_error_m": 3.9325518628174905e-06,
+      "wheel_axis_error": 7.73139106513554e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 10.567093849182129
+    },
+    {
+      "specification": {
+        "name": "forward_left_16",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014694213867188,
+      "final_forward_mps": 15.802650451660156,
+      "peak_forward_mps": 16.434600830078125,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.286668300628662,
+      "peak_sideslip_deg": 4.508105754852295,
+      "wheel_position_error_m": 1.5258905477821827e-05,
+      "wheel_axis_error": 7.562981636510813e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -9.881515502929688
+    },
+    {
+      "specification": {
+        "name": "forward_right_16",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014694213867188,
+      "final_forward_mps": 15.802314758300781,
+      "peak_forward_mps": 16.434526443481445,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.287827968597412,
+      "peak_sideslip_deg": 4.512237071990967,
+      "wheel_position_error_m": 1.52587890625e-05,
+      "wheel_axis_error": 7.251218221426825e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 9.884230613708496
+    },
+    {
+      "specification": {
+        "name": "forward_left_24",
+        "entry_mps": 24,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 24.003437042236328,
+      "final_forward_mps": 21.269054412841797,
+      "peak_forward_mps": 24.034894943237305,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.523160457611084,
+      "peak_sideslip_deg": 3.7374091148376465,
+      "wheel_position_error_m": 3.0517578125e-05,
+      "wheel_axis_error": 7.845429763619904e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -7.731403827667236
+    },
+    {
+      "specification": {
+        "name": "forward_right_24",
+        "entry_mps": 24,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": 24.003437042236328,
+      "final_forward_mps": 21.268463134765625,
+      "peak_forward_mps": 24.03487777709961,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.528818130493164,
+      "peak_sideslip_deg": 3.751169443130493,
+      "wheel_position_error_m": 1.90827972801344e-06,
+      "wheel_axis_error": 7.232821417346713e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 7.735934734344482
+    },
+    {
+      "specification": {
+        "name": "reverse_left_2",
+        "entry_mps": -2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": -2.0012285709381104,
+      "final_forward_mps": -5.697484493255615,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 5.697484493255615,
+      "peak_lateral_mps": 0.6607370376586914,
+      "peak_sideslip_deg": 8.220545768737793,
+      "wheel_position_error_m": 1.0679050319595262e-06,
+      "wheel_axis_error": 6.336060778266983e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 6.330926418304443
+    },
+    {
+      "specification": {
+        "name": "reverse_right_2",
+        "entry_mps": -2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": -2.0012285709381104,
+      "final_forward_mps": -5.721440315246582,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 5.721440315246582,
+      "peak_lateral_mps": 0.664348840713501,
+      "peak_sideslip_deg": 8.221721649169922,
+      "wheel_position_error_m": 1.0679050319595262e-06,
+      "wheel_axis_error": 5.535535478884412e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -6.3984456062316895
+    },
+    {
+      "specification": {
+        "name": "reverse_left_8",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": -8.017355918884277,
+      "final_forward_mps": -5.2624664306640625,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 9.747529029846191,
+      "peak_lateral_mps": 6.892369747161865,
+      "peak_sideslip_deg": 52.63751983642578,
+      "wheel_position_error_m": 3.932099843950709e-06,
+      "wheel_axis_error": 6.508925594062021e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 12.711230278015137
+    },
+    {
+      "specification": {
+        "name": "reverse_right_8",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": -8.017355918884277,
+      "final_forward_mps": -5.2622857093811035,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 9.74753475189209,
+      "peak_lateral_mps": 6.892393589019775,
+      "peak_sideslip_deg": 52.63856506347656,
+      "wheel_position_error_m": 3.9325518628174905e-06,
+      "wheel_axis_error": 6.590290126951004e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -12.711450576782227
+    },
+    {
+      "specification": {
+        "name": "reverse_left_12",
+        "entry_mps": -12,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": -12.031579971313477,
+      "final_forward_mps": -1.7819805145263672,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 12.63772964477539,
+      "peak_lateral_mps": 9.433765411376953,
+      "peak_sideslip_deg": 78.8413314819336,
+      "wheel_position_error_m": 3.9325518628174905e-06,
+      "wheel_axis_error": 7.300048423530825e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 15.31275463104248
+    },
+    {
+      "specification": {
+        "name": "reverse_right_12",
+        "entry_mps": -12,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 0,
+      "entry_reached": true,
+      "entry_forward_mps": -12.031579971313477,
+      "final_forward_mps": -1.7814619541168213,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 12.637721061706543,
+      "peak_lateral_mps": 9.433755874633789,
+      "peak_sideslip_deg": 78.84427642822266,
+      "wheel_position_error_m": 7.62939453125e-06,
+      "wheel_axis_error": 6.481577088379709e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -15.31355094909668
+    },
+    {
+      "specification": {
+        "name": "forward_coast_stop",
+        "entry_mps": 0,
+        "segments": [
+          {
+            "ticks": 360,
+            "input": {
+              "throttle": 1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 120,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 0,
+      "final_forward_mps": -1.837098170653917e-05,
+      "peak_forward_mps": 11.540163040161133,
+      "peak_reverse_mps": 0.0490340031683445,
+      "peak_lateral_mps": 0.004350349772721529,
+      "peak_sideslip_deg": 0.027486441656947136,
+      "wheel_position_error_m": 7.633351742697414e-06,
+      "wheel_axis_error": 8.55487598983018e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0
+    },
+    {
+      "specification": {
+        "name": "reverse_coast_stop",
+        "entry_mps": 0,
+        "segments": [
+          {
+            "ticks": 360,
+            "input": {
+              "throttle": -1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 120,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 0,
+      "final_forward_mps": 2.9325976356631145e-05,
+      "peak_forward_mps": 0.050584930926561356,
+      "peak_reverse_mps": 14.054401397705078,
+      "peak_lateral_mps": 0.004411051515489817,
+      "peak_sideslip_deg": 0.08129671216011047,
+      "wheel_position_error_m": 7.641026968485676e-06,
+      "wheel_axis_error": 7.396741921184002e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -0.005846641957759857
+    },
+    {
+      "specification": {
+        "name": "forward_to_reverse",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": -1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 8.00606632232666,
+      "final_forward_mps": -17.23741912841797,
+      "peak_forward_mps": 8.023536682128906,
+      "peak_reverse_mps": 17.23741912841797,
+      "peak_lateral_mps": 0.005062065087258816,
+      "peak_sideslip_deg": 0.038346804678440094,
+      "wheel_position_error_m": 3.82214057026431e-06,
+      "wheel_axis_error": 7.077659347487497e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0.15846721827983856
+    },
+    {
+      "specification": {
+        "name": "reverse_to_forward",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": 1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": -8.010978698730469,
+      "final_forward_mps": 13.578681945800781,
+      "peak_forward_mps": 13.578681945800781,
+      "peak_reverse_mps": 8.042683601379395,
+      "peak_lateral_mps": 0.005624535959213972,
+      "peak_sideslip_deg": 0.044470757246017456,
+      "wheel_position_error_m": 1.952450247699744e-06,
+      "wheel_axis_error": 8.450417112726427e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0.00054641516180709
+    },
+    {
+      "specification": {
+        "name": "forward_to_reverse_steering",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": -1,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 8.00606632232666,
+      "final_forward_mps": -0.8343886137008667,
+      "peak_forward_mps": 8.022995948791504,
+      "peak_reverse_mps": 9.645245552062988,
+      "peak_lateral_mps": 8.352601051330566,
+      "peak_sideslip_deg": 89.60550689697266,
+      "wheel_position_error_m": 1.9669532775878906e-06,
+      "wheel_axis_error": 7.306128964046366e-07,
+      "opposing_gear_at_speed_ticks": 16,
+      "initial_turn_yaw_deg": 9.516687393188477
+    },
+    {
+      "specification": {
+        "name": "reverse_to_forward_steering",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": 1,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": -8.010978698730469,
+      "final_forward_mps": 7.362454414367676,
+      "peak_forward_mps": 10.65294361114502,
+      "peak_reverse_mps": 8.039331436157227,
+      "peak_lateral_mps": 6.029282093048096,
+      "peak_sideslip_deg": 39.31482696533203,
+      "wheel_position_error_m": 3.815162926912308e-06,
+      "wheel_axis_error": 7.468440799129894e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 11.497762680053711
+    },
+    {
+      "specification": {
+        "name": "forward_space_brake",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 16.01471710205078,
+      "final_forward_mps": 0.0018653684528544545,
+      "peak_forward_mps": 16.025556564331055,
+      "peak_reverse_mps": 0.049868058413267136,
+      "peak_lateral_mps": 0.0017846169648692012,
+      "peak_sideslip_deg": 0.01119267288595438,
+      "wheel_position_error_m": 7.64828837418463e-06,
+      "wheel_axis_error": 7.754333068987762e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -0.0004986037965863943
+    },
+    {
+      "specification": {
+        "name": "reverse_space_brake",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": -8.010978698730469,
+      "final_forward_mps": 2.9113167329342104e-05,
+      "peak_forward_mps": 0.0506175272166729,
+      "peak_reverse_mps": 8.042683601379395,
+      "peak_lateral_mps": 0.005624535959213972,
+      "peak_sideslip_deg": 0.044470757246017456,
+      "wheel_position_error_m": 1.952450247699744e-06,
+      "wheel_axis_error": 6.670662742180866e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0.00054641516180709
+    },
+    {
+      "specification": {
+        "name": "forward_handbrake_countersteer",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 75,
+            "input": {
+              "throttle": 0,
+              "steering": 0.800000011920929,
+              "brake": 0,
+              "hand_brake": 1
+            }
+          },
+          {
+            "ticks": 60,
+            "input": {
+              "throttle": 0.20000000298023224,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 300,
+            "input": {
+              "throttle": 0.20000000298023224,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 16.01471710205078,
+      "final_forward_mps": 10.797773361206055,
+      "peak_forward_mps": 16.02501678466797,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.5413570404052734,
+      "peak_sideslip_deg": 2.099005937576294,
+      "wheel_position_error_m": 1.528856228105724e-05,
+      "wheel_axis_error": 7.638934675924247e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 9.683664321899414
+    },
+    {
+      "specification": {
+        "name": "reverse_handbrake_countersteer",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 75,
+            "input": {
+              "throttle": 0,
+              "steering": 0.800000011920929,
+              "brake": 0,
+              "hand_brake": 1
+            }
+          },
+          {
+            "ticks": 60,
+            "input": {
+              "throttle": -0.20000000298023224,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 300,
+            "input": {
+              "throttle": -0.20000000298023224,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": -8.010978698730469,
+      "final_forward_mps": -3.6983463764190674,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 8.039336204528809,
+      "peak_lateral_mps": 4.025223255157471,
+      "peak_sideslip_deg": 51.88944625854492,
+      "wheel_position_error_m": 2.133313500962686e-06,
+      "wheel_axis_error": 7.251218221426825e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -17.61421775817871
+    },
+    {
+      "specification": {
+        "name": "forward_left_2",
+        "entry_mps": 2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 2.0182390213012695,
+      "final_forward_mps": 6.626704216003418,
+      "peak_forward_mps": 6.626704216003418,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.4733908176422119,
+      "peak_sideslip_deg": 7.3990559577941895,
+      "wheel_position_error_m": 1.3500156228474225e-06,
+      "wheel_axis_error": 8.429369700024836e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -6.08427095413208
+    },
+    {
+      "specification": {
+        "name": "forward_right_2",
+        "entry_mps": 2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 2.0182390213012695,
+      "final_forward_mps": 6.626700401306152,
+      "peak_forward_mps": 6.626700401306152,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.47338438034057617,
+      "peak_sideslip_deg": 7.399264335632324,
+      "wheel_position_error_m": 1.0679050319595262e-06,
+      "wheel_axis_error": 7.468440799129894e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 6.0841755867004395
+    },
+    {
+      "specification": {
+        "name": "forward_left_8",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 8.00606632232666,
+      "final_forward_mps": 10.631281852722168,
+      "peak_forward_mps": 10.631281852722168,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.41367197036743164,
+      "peak_sideslip_deg": 2.3037760257720947,
+      "wheel_position_error_m": 4.2653778109524865e-06,
+      "wheel_axis_error": 7.378708346550411e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -10.568658828735352
+    },
+    {
+      "specification": {
+        "name": "forward_right_8",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 8.00606632232666,
+      "final_forward_mps": 10.631051063537598,
+      "peak_forward_mps": 10.631051063537598,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.41434240341186523,
+      "peak_sideslip_deg": 2.307488203048706,
+      "wheel_position_error_m": 3.844846105494071e-06,
+      "wheel_axis_error": 6.776343184355937e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 10.566452980041504
+    },
+    {
+      "specification": {
+        "name": "forward_left_16",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 16.01471710205078,
+      "final_forward_mps": 15.802369117736816,
+      "peak_forward_mps": 16.4345645904541,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.2876973152160645,
+      "peak_sideslip_deg": 4.511758327484131,
+      "wheel_position_error_m": 1.5288678696379066e-05,
+      "wheel_axis_error": 8.450417112726427e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -9.883851051330566
+    },
+    {
+      "specification": {
+        "name": "forward_right_16",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 16.01471710205078,
+      "final_forward_mps": 15.802631378173828,
+      "peak_forward_mps": 16.43462562561035,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.286820411682129,
+      "peak_sideslip_deg": 4.508646488189697,
+      "wheel_position_error_m": 1.528856228105724e-05,
+      "wheel_axis_error": 7.468440799129894e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 9.881678581237793
+    },
+    {
+      "specification": {
+        "name": "forward_left_24",
+        "entry_mps": 24,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 24.003498077392578,
+      "final_forward_mps": 21.268611907958984,
+      "peak_forward_mps": 24.03493309020996,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.5280234813690186,
+      "peak_sideslip_deg": 3.7486536502838135,
+      "wheel_position_error_m": 3.052130341529846e-05,
+      "wheel_axis_error": 8.450417112726427e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -7.737033367156982
+    },
+    {
+      "specification": {
+        "name": "forward_right_24",
+        "entry_mps": 24,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": 24.003498077392578,
+      "final_forward_mps": 21.26892852783203,
+      "peak_forward_mps": 24.034934997558594,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.525486707687378,
+      "peak_sideslip_deg": 3.741715669631958,
+      "wheel_position_error_m": 3.051810199394822e-05,
+      "wheel_axis_error": 7.208220154097944e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 7.731897354125977
+    },
+    {
+      "specification": {
+        "name": "reverse_left_2",
+        "entry_mps": -2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": -2.035689115524292,
+      "final_forward_mps": -5.7956953048706055,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 5.7956953048706055,
+      "peak_lateral_mps": 0.671755313873291,
+      "peak_sideslip_deg": 8.21760368347168,
+      "wheel_position_error_m": 1.0202671774095506e-06,
+      "wheel_axis_error": 7.378708346550411e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 6.497101306915283
+    },
+    {
+      "specification": {
+        "name": "reverse_right_2",
+        "entry_mps": -2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": -2.035689115524292,
+      "final_forward_mps": -5.7929840087890625,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 5.7929840087890625,
+      "peak_lateral_mps": 0.6723647117614746,
+      "peak_sideslip_deg": 8.213319778442383,
+      "wheel_position_error_m": 1.3500156228474225e-06,
+      "wheel_axis_error": 7.202056622190867e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -6.493829727172852
+    },
+    {
+      "specification": {
+        "name": "reverse_left_8",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": -8.010978698730469,
+      "final_forward_mps": -5.197155952453613,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 9.750295639038086,
+      "peak_lateral_mps": 6.933282375335693,
+      "peak_sideslip_deg": 53.14494323730469,
+      "wheel_position_error_m": 3.814697265625e-06,
+      "wheel_axis_error": 7.251218221426825e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 12.705333709716797
+    },
+    {
+      "specification": {
+        "name": "reverse_right_8",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": -8.010978698730469,
+      "final_forward_mps": -5.197671413421631,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 9.750347137451172,
+      "peak_lateral_mps": 6.933033466339111,
+      "peak_sideslip_deg": 53.141231536865234,
+      "wheel_position_error_m": 3.932099843950709e-06,
+      "wheel_axis_error": 6.336060778266983e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -12.7062349319458
+    },
+    {
+      "specification": {
+        "name": "reverse_left_12",
+        "entry_mps": -12,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": -12.025822639465332,
+      "final_forward_mps": -1.7124629020690918,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 12.634145736694336,
+      "peak_lateral_mps": 9.441688537597656,
+      "peak_sideslip_deg": 79.25044250488281,
+      "wheel_position_error_m": 3.818885943474015e-06,
+      "wheel_axis_error": 7.27567396552331e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 15.322477340698242
+    },
+    {
+      "specification": {
+        "name": "reverse_right_12",
+        "entry_mps": -12,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 90,
+      "entry_reached": true,
+      "entry_forward_mps": -12.025822639465332,
+      "final_forward_mps": -1.7338614463806152,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 12.634895324707031,
+      "peak_lateral_mps": 9.439226150512695,
+      "peak_sideslip_deg": 79.12446594238281,
+      "wheel_position_error_m": 7.68876816437114e-06,
+      "wheel_axis_error": 6.223353352652339e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -15.316473960876465
+    },
+    {
+      "specification": {
+        "name": "forward_coast_stop",
+        "entry_mps": 0,
+        "segments": [
+          {
+            "ticks": 360,
+            "input": {
+              "throttle": 1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 120,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 0,
+      "final_forward_mps": -1.9401755707804114e-05,
+      "peak_forward_mps": 11.539987564086914,
+      "peak_reverse_mps": 0.04997026547789574,
+      "peak_lateral_mps": 0.0024538577999919653,
+      "peak_sideslip_deg": 0.015699513256549835,
+      "wheel_position_error_m": 7.63777188694803e-06,
+      "wheel_axis_error": 8.534086646250216e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -2.732075699896086e-05
+    },
+    {
+      "specification": {
+        "name": "reverse_coast_stop",
+        "entry_mps": 0,
+        "segments": [
+          {
+            "ticks": 360,
+            "input": {
+              "throttle": -1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 120,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 0,
+      "final_forward_mps": 4.088908826815896e-05,
+      "peak_forward_mps": 0.05014045909047127,
+      "peak_reverse_mps": 14.108442306518555,
+      "peak_lateral_mps": 0.0016021793708205223,
+      "peak_sideslip_deg": 0.0030529778450727463,
+      "wheel_position_error_m": 7.63777188694803e-06,
+      "wheel_axis_error": 7.152557373046875e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 2.732075699896086e-05
+    },
+    {
+      "specification": {
+        "name": "forward_to_reverse",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": -1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006099700927734,
+      "final_forward_mps": -17.203289031982422,
+      "peak_forward_mps": 8.02357006072998,
+      "peak_reverse_mps": 17.203289031982422,
+      "peak_lateral_mps": 0.002292001387104392,
+      "peak_sideslip_deg": 0.018400024622678757,
+      "wheel_position_error_m": 3.826321062661009e-06,
+      "wheel_axis_error": 8.301966545332107e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0.017130114138126373
+    },
+    {
+      "specification": {
+        "name": "reverse_to_forward",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": 1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": -8.034293174743652,
+      "final_forward_mps": 13.60349178314209,
+      "peak_forward_mps": 13.60349178314209,
+      "peak_reverse_mps": 8.065937042236328,
+      "peak_lateral_mps": 0.0011935299262404442,
+      "peak_sideslip_deg": 0.014309680089354515,
+      "wheel_position_error_m": 3.814697265625e-06,
+      "wheel_axis_error": 8.28054169232928e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -0.01267683133482933
+    },
+    {
+      "specification": {
+        "name": "forward_to_reverse_steering",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": -1,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006099700927734,
+      "final_forward_mps": -0.8622852563858032,
+      "peak_forward_mps": 8.023027420043945,
+      "peak_reverse_mps": 9.645252227783203,
+      "peak_lateral_mps": 8.352867126464844,
+      "peak_sideslip_deg": 89.79781341552734,
+      "wheel_position_error_m": 2.1324806311895372e-06,
+      "wheel_axis_error": 7.27567396552331e-07,
+      "opposing_gear_at_speed_ticks": 15,
+      "initial_turn_yaw_deg": 9.531173706054688
+    },
+    {
+      "specification": {
+        "name": "reverse_to_forward_steering",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": 1,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": -8.034293174743652,
+      "final_forward_mps": 7.360336780548096,
+      "peak_forward_mps": 10.652925491333008,
+      "peak_reverse_mps": 8.062603950500488,
+      "peak_lateral_mps": 6.030086994171143,
+      "peak_sideslip_deg": 39.32666015625,
+      "wheel_position_error_m": 2.0370491711219074e-06,
+      "wheel_axis_error": 9.869769428405561e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 11.566816329956055
+    },
+    {
+      "specification": {
+        "name": "forward_space_brake",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014751434326172,
+      "final_forward_mps": 0.002238156972452998,
+      "peak_forward_mps": 16.025590896606445,
+      "peak_reverse_mps": 0.04636513441801071,
+      "peak_lateral_mps": 0.0010800538584589958,
+      "peak_sideslip_deg": 0.0181669220328331,
+      "wheel_position_error_m": 7.635445399500895e-06,
+      "wheel_axis_error": 7.152557373046875e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -8.196227281587198e-05
+    },
+    {
+      "specification": {
+        "name": "reverse_space_brake",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": -8.034293174743652,
+      "final_forward_mps": 2.337935620744247e-05,
+      "peak_forward_mps": 0.050636641681194305,
+      "peak_reverse_mps": 8.065937042236328,
+      "peak_lateral_mps": 0.0011935299262404442,
+      "peak_sideslip_deg": 0.014309680089354515,
+      "wheel_position_error_m": 1.9415017504798016e-06,
+      "wheel_axis_error": 5.960464477539062e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -0.01267683133482933
+    },
+    {
+      "specification": {
+        "name": "forward_handbrake_countersteer",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 75,
+            "input": {
+              "throttle": 0,
+              "steering": 0.800000011920929,
+              "brake": 0,
+              "hand_brake": 1
+            }
+          },
+          {
+            "ticks": 60,
+            "input": {
+              "throttle": 0.20000000298023224,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 300,
+            "input": {
+              "throttle": 0.20000000298023224,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014751434326172,
+      "final_forward_mps": 10.797677993774414,
+      "peak_forward_mps": 16.02505111694336,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.5416457653045654,
+      "peak_sideslip_deg": 2.100022077560425,
+      "wheel_position_error_m": 1.526623782410752e-05,
+      "wheel_axis_error": 8.302300784635008e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 9.68758487701416
+    },
+    {
+      "specification": {
+        "name": "reverse_handbrake_countersteer",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 75,
+            "input": {
+              "throttle": 0,
+              "steering": 0.800000011920929,
+              "brake": 0,
+              "hand_brake": 1
+            }
+          },
+          {
+            "ticks": 60,
+            "input": {
+              "throttle": -0.20000000298023224,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 300,
+            "input": {
+              "throttle": -0.20000000298023224,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": -8.034293174743652,
+      "final_forward_mps": -3.7381789684295654,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 8.062603950500488,
+      "peak_lateral_mps": 3.9943695068359375,
+      "peak_sideslip_deg": 51.3311653137207,
+      "wheel_position_error_m": 1.9983117454103194e-06,
+      "wheel_axis_error": 7.378708346550411e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -17.61804962158203
+    },
+    {
+      "specification": {
+        "name": "forward_left_2",
+        "entry_mps": 2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 2.0182666778564453,
+      "final_forward_mps": 6.626736640930176,
+      "peak_forward_mps": 6.626736640930176,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.4733903408050537,
+      "peak_sideslip_deg": 7.399374485015869,
+      "wheel_position_error_m": 1.3500156228474225e-06,
+      "wheel_axis_error": 6.503806275759416e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -6.084428310394287
+    },
+    {
+      "specification": {
+        "name": "forward_right_2",
+        "entry_mps": 2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 2.0182666778564453,
+      "final_forward_mps": 6.626721382141113,
+      "peak_forward_mps": 6.626721382141113,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.4733893871307373,
+      "peak_sideslip_deg": 7.398926258087158,
+      "wheel_position_error_m": 1.3500156228474225e-06,
+      "wheel_axis_error": 1.0794924492074642e-06,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 6.084196090698242
+    },
+    {
+      "specification": {
+        "name": "forward_left_8",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006099700927734,
+      "final_forward_mps": 10.631843566894531,
+      "peak_forward_mps": 10.631843566894531,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.41196513175964355,
+      "peak_sideslip_deg": 2.2943387031555176,
+      "wheel_position_error_m": 3.9325518628174905e-06,
+      "wheel_axis_error": 8.683682608534582e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -10.56649398803711
+    },
+    {
+      "specification": {
+        "name": "forward_right_8",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006099700927734,
+      "final_forward_mps": 10.633515357971191,
+      "peak_forward_mps": 10.633515357971191,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.4074532985687256,
+      "peak_sideslip_deg": 2.269340991973877,
+      "wheel_position_error_m": 4.2649612623790745e-06,
+      "wheel_axis_error": 7.306128964046366e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 10.563133239746094
+    },
+    {
+      "specification": {
+        "name": "forward_left_16",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014751434326172,
+      "final_forward_mps": 15.802679061889648,
+      "peak_forward_mps": 16.43467140197754,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.2867155075073242,
+      "peak_sideslip_deg": 4.5082526206970215,
+      "wheel_position_error_m": 1.5258905477821827e-05,
+      "wheel_axis_error": 8.344650268554688e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -9.879172325134277
+    },
+    {
+      "specification": {
+        "name": "forward_right_16",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014751434326172,
+      "final_forward_mps": 15.802539825439453,
+      "peak_forward_mps": 16.43460464477539,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.2870492935180664,
+      "peak_sideslip_deg": 4.509474277496338,
+      "wheel_position_error_m": 1.528856228105724e-05,
+      "wheel_axis_error": 8.860867524163041e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 9.886234283447266
+    },
+    {
+      "specification": {
+        "name": "forward_left_24",
+        "entry_mps": 24,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 24.0035343170166,
+      "final_forward_mps": 21.268836975097656,
+      "peak_forward_mps": 24.03495216369629,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.527228593826294,
+      "peak_sideslip_deg": 3.747506618499756,
+      "wheel_position_error_m": 3.051769454032183e-05,
+      "wheel_axis_error": 8.860867524163041e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -7.72771692276001
+    },
+    {
+      "specification": {
+        "name": "forward_right_24",
+        "entry_mps": 24,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": 24.0035343170166,
+      "final_forward_mps": 21.268993377685547,
+      "peak_forward_mps": 24.035017013549805,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.524202585220337,
+      "peak_sideslip_deg": 3.739354372024536,
+      "wheel_position_error_m": 3.0521361622959375e-05,
+      "wheel_axis_error": 7.372687491624674e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 7.740598678588867
+    },
+    {
+      "specification": {
+        "name": "reverse_left_2",
+        "entry_mps": -2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": -2.0207459926605225,
+      "final_forward_mps": -5.634114742279053,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 5.634114742279053,
+      "peak_lateral_mps": 0.6540272235870361,
+      "peak_sideslip_deg": 8.262778282165527,
+      "wheel_position_error_m": 1.3500156228474225e-06,
+      "wheel_axis_error": 5.383012080528715e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 6.3485107421875
+    },
+    {
+      "specification": {
+        "name": "reverse_right_2",
+        "entry_mps": -2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": -2.0207459926605225,
+      "final_forward_mps": -5.637939453125,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 5.637939453125,
+      "peak_lateral_mps": 0.6540207862854004,
+      "peak_sideslip_deg": 8.237162590026855,
+      "wheel_position_error_m": 1.3486991292666062e-06,
+      "wheel_axis_error": 6.107658805376559e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -6.411717414855957
+    },
+    {
+      "specification": {
+        "name": "reverse_left_8",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": -8.034293174743652,
+      "final_forward_mps": -5.299252510070801,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 9.752082824707031,
+      "peak_lateral_mps": 6.868936061859131,
+      "peak_sideslip_deg": 52.35050582885742,
+      "wheel_position_error_m": 3.814697265625e-06,
+      "wheel_axis_error": 7.27567396552331e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 12.727128982543945
+    },
+    {
+      "specification": {
+        "name": "reverse_right_8",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": -8.034293174743652,
+      "final_forward_mps": -5.299042224884033,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 9.752097129821777,
+      "peak_lateral_mps": 6.868945598602295,
+      "peak_sideslip_deg": 52.35163879394531,
+      "wheel_position_error_m": 3.815162926912308e-06,
+      "wheel_axis_error": 7.154109198381775e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -12.727073669433594
+    },
+    {
+      "specification": {
+        "name": "reverse_left_12",
+        "entry_mps": -12,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": -12.013738632202148,
+      "final_forward_mps": -1.8058826923370361,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 12.621503829956055,
+      "peak_lateral_mps": 9.418647766113281,
+      "peak_sideslip_deg": 78.68639373779297,
+      "wheel_position_error_m": 3.932099843950709e-06,
+      "wheel_axis_error": 6.286806524258282e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 15.307014465332031
+    },
+    {
+      "specification": {
+        "name": "reverse_right_12",
+        "entry_mps": -12,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 180,
+      "entry_reached": true,
+      "entry_forward_mps": -12.013738632202148,
+      "final_forward_mps": -1.7825651168823242,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 12.620636940002441,
+      "peak_lateral_mps": 9.420875549316406,
+      "peak_sideslip_deg": 78.82281494140625,
+      "wheel_position_error_m": 3.84438408218557e-06,
+      "wheel_axis_error": 6.085806489863899e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -15.316590309143066
+    },
+    {
+      "specification": {
+        "name": "forward_coast_stop",
+        "entry_mps": 0,
+        "segments": [
+          {
+            "ticks": 360,
+            "input": {
+              "throttle": 1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 120,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 0,
+      "final_forward_mps": -2.183193100790959e-05,
+      "peak_forward_mps": 11.54008960723877,
+      "peak_reverse_mps": 0.049373041838407516,
+      "peak_lateral_mps": 0.002942970721051097,
+      "peak_sideslip_deg": 0.013001621700823307,
+      "wheel_position_error_m": 7.638004717591684e-06,
+      "wheel_axis_error": 8.860867524163041e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 6.830189249740215e-06
+    },
+    {
+      "specification": {
+        "name": "reverse_coast_stop",
+        "entry_mps": 0,
+        "segments": [
+          {
+            "ticks": 360,
+            "input": {
+              "throttle": -1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 120,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 0,
+      "final_forward_mps": 3.547079177224077e-05,
+      "peak_forward_mps": 0.05007995665073395,
+      "peak_reverse_mps": 14.076904296875,
+      "peak_lateral_mps": 0.0014786337269470096,
+      "peak_sideslip_deg": 0.007665625307708979,
+      "wheel_position_error_m": 7.635445399500895e-06,
+      "wheel_axis_error": 7.592284418933559e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -0.0003961509792134166
+    },
+    {
+      "specification": {
+        "name": "forward_to_reverse",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": -1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006083488464355,
+      "final_forward_mps": -17.19032859802246,
+      "peak_forward_mps": 8.023553848266602,
+      "peak_reverse_mps": 17.194347381591797,
+      "peak_lateral_mps": 0.004790092818439007,
+      "peak_sideslip_deg": 0.03672013059258461,
+      "wheel_position_error_m": 3.819351150013972e-06,
+      "wheel_axis_error": 8.678567269271298e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0.16195061802864075
+    },
+    {
+      "specification": {
+        "name": "reverse_to_forward",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": 1,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": -8.016502380371094,
+      "final_forward_mps": 13.597657203674316,
+      "peak_forward_mps": 13.597657203674316,
+      "peak_reverse_mps": 8.048192977905273,
+      "peak_lateral_mps": 0.0020036613568663597,
+      "peak_sideslip_deg": 0.019344858825206757,
+      "wheel_position_error_m": 3.837446911347797e-06,
+      "wheel_axis_error": 8.683682608534582e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0.013086642138659954
+    },
+    {
+      "specification": {
+        "name": "forward_to_reverse_steering",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": -1,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006083488464355,
+      "final_forward_mps": -0.8417131304740906,
+      "peak_forward_mps": 8.023012161254883,
+      "peak_reverse_mps": 9.646713256835938,
+      "peak_lateral_mps": 8.353522300720215,
+      "peak_sideslip_deg": 89.4939193725586,
+      "wheel_position_error_m": 2.133313500962686e-06,
+      "wheel_axis_error": 7.562981636510813e-07,
+      "opposing_gear_at_speed_ticks": 16,
+      "initial_turn_yaw_deg": 9.51093578338623
+    },
+    {
+      "specification": {
+        "name": "reverse_to_forward_steering",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 600,
+            "input": {
+              "throttle": 1,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": -8.016502380371094,
+      "final_forward_mps": 7.265620231628418,
+      "peak_forward_mps": 10.652807235717773,
+      "peak_reverse_mps": 8.04484748840332,
+      "peak_lateral_mps": 6.064994812011719,
+      "peak_sideslip_deg": 39.8535270690918,
+      "wheel_position_error_m": 3.932099843950709e-06,
+      "wheel_axis_error": 9.62942522164667e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 11.506539344787598
+    },
+    {
+      "specification": {
+        "name": "forward_space_brake",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014719009399414,
+      "final_forward_mps": 0.0017493667546659708,
+      "peak_forward_mps": 16.025558471679688,
+      "peak_reverse_mps": 0.04973113536834717,
+      "peak_lateral_mps": 0.0010474077425897121,
+      "peak_sideslip_deg": 0.018113940954208374,
+      "wheel_position_error_m": 7.638004717591684e-06,
+      "wheel_axis_error": 8.085167451099551e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0.00028003775514662266
+    },
+    {
+      "specification": {
+        "name": "reverse_space_brake",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 240,
+            "input": {
+              "throttle": 0,
+              "steering": 0,
+              "brake": 1,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": -8.016502380371094,
+      "final_forward_mps": 2.0218974896124564e-05,
+      "peak_forward_mps": 0.0501086451113224,
+      "peak_reverse_mps": 8.048192977905273,
+      "peak_lateral_mps": 0.004649810492992401,
+      "peak_sideslip_deg": 0.019344858825206757,
+      "wheel_position_error_m": 1.952450247699744e-06,
+      "wheel_axis_error": 6.976544568715326e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 0.013086642138659954
+    },
+    {
+      "specification": {
+        "name": "forward_handbrake_countersteer",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 75,
+            "input": {
+              "throttle": 0,
+              "steering": 0.800000011920929,
+              "brake": 0,
+              "hand_brake": 1
+            }
+          },
+          {
+            "ticks": 60,
+            "input": {
+              "throttle": 0.20000000298023224,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 300,
+            "input": {
+              "throttle": 0.20000000298023224,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014719009399414,
+      "final_forward_mps": 10.79782485961914,
+      "peak_forward_mps": 16.025014877319336,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.5411813259124756,
+      "peak_sideslip_deg": 2.098339319229126,
+      "wheel_position_error_m": 1.5258905477821827e-05,
+      "wheel_axis_error": 9.870824442259618e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 9.68122673034668
+    },
+    {
+      "specification": {
+        "name": "reverse_handbrake_countersteer",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 75,
+            "input": {
+              "throttle": 0,
+              "steering": 0.800000011920929,
+              "brake": 0,
+              "hand_brake": 1
+            }
+          },
+          {
+            "ticks": 60,
+            "input": {
+              "throttle": -0.20000000298023224,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          },
+          {
+            "ticks": 300,
+            "input": {
+              "throttle": -0.20000000298023224,
+              "steering": 0,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": -8.016502380371094,
+      "final_forward_mps": -3.721107006072998,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 8.04484748840332,
+      "peak_lateral_mps": 4.008700370788574,
+      "peak_sideslip_deg": 51.781856536865234,
+      "wheel_position_error_m": 1.9669532775878906e-06,
+      "wheel_axis_error": 8.134450695251871e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -17.61402702331543
+    },
+    {
+      "specification": {
+        "name": "forward_left_2",
+        "entry_mps": 2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 2.0182526111602783,
+      "final_forward_mps": 6.626671314239502,
+      "peak_forward_mps": 6.626671314239502,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.4733872413635254,
+      "peak_sideslip_deg": 7.398955345153809,
+      "wheel_position_error_m": 1.0662403155947686e-06,
+      "wheel_axis_error": 7.586432957396028e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -6.084305286407471
+    },
+    {
+      "specification": {
+        "name": "forward_right_2",
+        "entry_mps": 2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 2.0182526111602783,
+      "final_forward_mps": 6.62671422958374,
+      "peak_forward_mps": 6.62671422958374,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.473391056060791,
+      "peak_sideslip_deg": 7.399154186248779,
+      "wheel_position_error_m": 1.3500156228474225e-06,
+      "wheel_axis_error": 8.55487598983018e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 6.08422327041626
+    },
+    {
+      "specification": {
+        "name": "forward_left_8",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006083488464355,
+      "final_forward_mps": 10.63350772857666,
+      "peak_forward_mps": 10.63350772857666,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.407487154006958,
+      "peak_sideslip_deg": 2.269534111022949,
+      "wheel_position_error_m": 3.932099843950709e-06,
+      "wheel_axis_error": 7.468440799129894e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -10.563735008239746
+    },
+    {
+      "specification": {
+        "name": "forward_right_8",
+        "entry_mps": 8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 8.006083488464355,
+      "final_forward_mps": 10.630997657775879,
+      "peak_forward_mps": 10.630997657775879,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 0.4144632816314697,
+      "peak_sideslip_deg": 2.308152914047241,
+      "wheel_position_error_m": 4.2653778109524865e-06,
+      "wheel_axis_error": 8.751181894695037e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 10.566500663757324
+    },
+    {
+      "specification": {
+        "name": "forward_left_16",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014719009399414,
+      "final_forward_mps": 15.802591323852539,
+      "peak_forward_mps": 16.434541702270508,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.28627347946167,
+      "peak_sideslip_deg": 4.506842613220215,
+      "wheel_position_error_m": 1.52587890625e-05,
+      "wheel_axis_error": 9.611248970031738e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -9.886664390563965
+    },
+    {
+      "specification": {
+        "name": "forward_right_16",
+        "entry_mps": 16,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 16.014719009399414,
+      "final_forward_mps": 15.802586555480957,
+      "peak_forward_mps": 16.434656143188477,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.2870945930480957,
+      "peak_sideslip_deg": 4.509607791900635,
+      "wheel_position_error_m": 1.5258905477821827e-05,
+      "wheel_axis_error": 7.99680208274367e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 9.878721237182617
+    },
+    {
+      "specification": {
+        "name": "forward_left_24",
+        "entry_mps": 24,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 24.003469467163086,
+      "final_forward_mps": 21.268848419189453,
+      "peak_forward_mps": 24.03493309020996,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.5264885425567627,
+      "peak_sideslip_deg": 3.745598077774048,
+      "wheel_position_error_m": 3.0518509447574615e-05,
+      "wheel_axis_error": 7.372687491624674e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -7.739335060119629
+    },
+    {
+      "specification": {
+        "name": "forward_right_24",
+        "entry_mps": 24,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": 0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": 24.003469467163086,
+      "final_forward_mps": 21.269153594970703,
+      "peak_forward_mps": 24.0349063873291,
+      "peak_reverse_mps": 0,
+      "peak_lateral_mps": 1.5227279663085938,
+      "peak_sideslip_deg": 3.7356374263763428,
+      "wheel_position_error_m": 3.052130341529846e-05,
+      "wheel_axis_error": 7.306128964046366e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 7.727798938751221
+    },
+    {
+      "specification": {
+        "name": "reverse_left_2",
+        "entry_mps": -2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": -2.0002431869506836,
+      "final_forward_mps": -5.678225040435791,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 5.678225040435791,
+      "peak_lateral_mps": 0.6578731536865234,
+      "peak_sideslip_deg": 8.221699714660645,
+      "wheel_position_error_m": 1.1920928955078125e-06,
+      "wheel_axis_error": 9.610960205463925e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 6.392906665802002
+    },
+    {
+      "specification": {
+        "name": "reverse_right_2",
+        "entry_mps": -2,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": -2.0002431869506836,
+      "final_forward_mps": -5.683423042297363,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 5.683423042297363,
+      "peak_lateral_mps": 0.6581637859344482,
+      "peak_sideslip_deg": 8.22600269317627,
+      "wheel_position_error_m": 1.0662403155947686e-06,
+      "wheel_axis_error": 6.447228315664688e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -6.362130165100098
+    },
+    {
+      "specification": {
+        "name": "reverse_left_8",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": -8.016502380371094,
+      "final_forward_mps": -5.264487266540527,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 9.747198104858398,
+      "peak_lateral_mps": 6.891279220581055,
+      "peak_sideslip_deg": 52.622535705566406,
+      "wheel_position_error_m": 3.9325518628174905e-06,
+      "wheel_axis_error": 6.419616624953051e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 12.710831642150879
+    },
+    {
+      "specification": {
+        "name": "reverse_right_8",
+        "entry_mps": -8,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": -8.016502380371094,
+      "final_forward_mps": -5.26455545425415,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 9.747191429138184,
+      "peak_lateral_mps": 6.891232013702393,
+      "peak_sideslip_deg": 52.62199020385742,
+      "wheel_position_error_m": 3.932099843950709e-06,
+      "wheel_axis_error": 6.078504952711228e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -12.710770606994629
+    },
+    {
+      "specification": {
+        "name": "reverse_left_12",
+        "entry_mps": -12,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": -0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": -12.030821800231934,
+      "final_forward_mps": -1.7798595428466797,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 12.637123107910156,
+      "peak_lateral_mps": 9.43359661102295,
+      "peak_sideslip_deg": 78.85330963134766,
+      "wheel_position_error_m": 3.932099843950709e-06,
+      "wheel_axis_error": 8.539288387510169e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": 15.3135986328125
+    },
+    {
+      "specification": {
+        "name": "reverse_right_12",
+        "entry_mps": -12,
+        "segments": [
+          {
+            "ticks": 180,
+            "input": {
+              "throttle": -0.4000000059604645,
+              "steering": 0.5,
+              "brake": 0,
+              "hand_brake": 0
+            }
+          }
+        ]
+      },
+      "heading_deg": 270,
+      "entry_reached": true,
+      "entry_forward_mps": -12.030821800231934,
+      "final_forward_mps": -1.7802040576934814,
+      "peak_forward_mps": 0,
+      "peak_reverse_mps": 12.637129783630371,
+      "peak_lateral_mps": 9.43350601196289,
+      "peak_sideslip_deg": 78.8512191772461,
+      "wheel_position_error_m": 3.932099843950709e-06,
+      "wheel_axis_error": 6.529361940010858e-07,
+      "opposing_gear_at_speed_ticks": 0,
+      "initial_turn_yaw_deg": -15.313291549682617
+    }
+  ],
+  "sample_count": 30840,
+  "disposition": "rejected",
+  "reason": "Ordinary forward cornering improved but the unchanged 120 Hz handbrake experiment never reached breakaway; skid_peak=2.298 degrees, recovery unavailable. No candidate was promoted."
+}

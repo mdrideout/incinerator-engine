@@ -29,6 +29,8 @@
 //! └─────────────────────────────────────────────────────────────┘
 
 const std = @import("std");
+const vehicle_contract = @import("vehicle_contract");
+const game_vehicles = @import("game_vehicles");
 const builtin = @import("builtin");
 const build_options = @import("build_options");
 const engine = @import("incinerator_engine");
@@ -47,6 +49,12 @@ const district_feature_contract = @import("district_feature_contract");
 const district_streaming_host = @import("hosts/district_streaming_host.zig");
 const district_content_catalog = @import("district_content_catalog");
 const content = @import("content");
+const material_preview = @import("material_preview.zig");
+const vehicle_developer_host = @import("hosts/vehicle_developer_host.zig");
+const vehicle_authoring_contract = @import("vehicle_authoring_contract");
+const vehicle_visual_resources = @import("vehicle_visual_resources.zig");
+const material_developer_host = @import("hosts/material_developer_host.zig");
+const material_authoring = @import("material_authoring");
 const sandbox_controls = @import("sandbox_controls.zig");
 const sandbox_product_character_lifecycle = @import("sandbox_product_character_lifecycle");
 const developer_controls = @import("developer_controls");
@@ -579,7 +587,7 @@ const s8_west_start = sandbox_contracts.NavigationNodeRef{
     .coord = district_west_coord,
     .index = 2,
 };
-const s8_east_destination = sandbox_contracts.market_terminal_destination;
+const s8_east_destination = sandbox_contracts.freight_dispatch_destination;
 
 comptime {
     if (population.synthetic_command_capacity != sandbox_contracts.npc_capacity) {
@@ -965,7 +973,7 @@ const S8PopulationEvidence = struct {
                 if ((stage != .population_spawned and stage != .destination_waiting) or
                     !sandbox_contracts.DestinationId.eql(
                         reached.destination,
-                        sandbox_contracts.south_gate_approach_destination,
+                        sandbox_contracts.foundry_south_walk_destination,
                     ) or
                     self.first_destination_reached[index])
                 {
@@ -2206,6 +2214,7 @@ const developer_endpoint_capabilities = [_][]const u8{
     "editor-selection",
     "viewport-camera",
     "crate-authoring",
+    "material-authoring",
     "world-save",
     "correlated-frame-capture",
 };
@@ -2290,6 +2299,8 @@ const App = struct {
     neural_target_fixture_variant: neural_target_fixture.Variant = .urban_day,
     neural_evaluation_resize_frame: ?u64 = null,
     render_frame_audit: RenderFrameAudit = .{},
+    material_frame_hash: std.crypto.hash.sha2.Sha256 = .init(.{}),
+    material_frame_draws: u64 = 0,
 
     simulation: *sandbox_host.Placement,
     initial_crate_id: ?sandbox_contracts.PersistentId,
@@ -2306,6 +2317,11 @@ const App = struct {
     authoring_requests: sandbox_authoring.RequestBuffer,
     authoring_feedback: editor_contract.AuthoringFeedback,
     authoring_run_id: engine.authoring.RunId,
+    vehicle_host: ?vehicle_developer_host.Host = null,
+    vehicle_visuals: ?vehicle_visual_resources.Resources = null,
+    material_host: ?material_developer_host.Host = null,
+    material_preview_target: ?material_preview.Preview = null,
+    runtime_materials: ?std.json.Parsed(content.material_library.Library) = null,
     latest_authoring_change: ?sandbox_authoring.ChangeEvidence,
     // The enabled state is the endpoint's independent producer session and
     // outcome lane. It shares only the composition's monotonic transaction
@@ -2354,7 +2370,7 @@ const App = struct {
         comptime profile: BootstrapProfile,
         content_root: ?content.ContentRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, false, false, null, null, .none);
+        return initWithOptions(io, profile, content_root, null, false, false, null, null, .none, null, false);
     }
 
     pub fn initWithSaveRoot(
@@ -2363,7 +2379,7 @@ const App = struct {
         content_root: ?content.ContentRootPath,
         save_root: SaveRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, false, false, save_root, null, .none);
+        return initWithOptions(io, profile, content_root, null, false, false, save_root, null, .none, null, false);
     }
 
     pub fn initProduct(
@@ -2372,6 +2388,7 @@ const App = struct {
         save_root: ?SaveRootPath,
         incident_runs_root: ?[]const u8,
         incident_hardening_profile: incident_capture.HardeningProfile,
+        vehicle_project_root: ?content.ContentRootPath,
     ) !App {
         return initWithOptions(
             io,
@@ -2383,6 +2400,8 @@ const App = struct {
             save_root,
             incident_runs_root,
             incident_hardening_profile,
+            vehicle_project_root,
+            false,
         );
     }
 
@@ -2392,7 +2411,7 @@ const App = struct {
         content_root: ?content.ContentRootPath,
         save_root: ?SaveRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, false, true, save_root, null, .none);
+        return initWithOptions(io, profile, content_root, null, false, true, save_root, null, .none, null, false);
     }
 
     fn initWithFailurePoint(
@@ -2401,7 +2420,7 @@ const App = struct {
         content_root: ?content.ContentRootPath,
         comptime failure_point: AppInitFailurePoint,
     ) !App {
-        return initWithOptions(io, profile, content_root, failure_point, false, false, null, null, .none);
+        return initWithOptions(io, profile, content_root, failure_point, false, false, null, null, .none, null, false);
     }
 
     fn initWithoutPhysicsDebugPipelinesForTest(
@@ -2409,7 +2428,7 @@ const App = struct {
         comptime profile: BootstrapProfile,
         content_root: ?content.ContentRootPath,
     ) !App {
-        return initWithOptions(io, profile, content_root, null, true, false, null, null, .none);
+        return initWithOptions(io, profile, content_root, null, true, false, null, null, .none, null, false);
     }
 
     fn initWithOptions(
@@ -2422,9 +2441,18 @@ const App = struct {
         save_root: ?SaveRootPath,
         incident_runs_root: ?[]const u8,
         incident_hardening_profile: incident_capture.HardeningProfile,
+        vehicle_project_root: ?content.ContentRootPath,
+        comptime offscreen: bool,
     ) !App {
         const authoring_run_id = makeAuthoringRunId(io);
         try authoring_run_id.validate();
+        // Background fixtures never activate Cocoa or show their SDL host window.
+        // Rendering uses an owned texture and does not claim a swapchain.
+        if (offscreen) {
+            if (!c.SDL_SetHint(c.SDL_HINT_MAC_BACKGROUND_APP, "1") or
+                !c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0"))
+                return error.BackgroundVideoHintsRejected;
+        }
         // Initialize SDL3 with video subsystem
         if (!c.SDL_Init(c.SDL_INIT_VIDEO)) {
             std.debug.print("SDL_Init failed: {s}\n", .{c.SDL_GetError()});
@@ -2437,7 +2465,7 @@ const App = struct {
             WINDOW_TITLE,
             INITIAL_WINDOW_WIDTH,
             INITIAL_WINDOW_HEIGHT,
-            c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_HIGH_PIXEL_DENSITY,
+            c.SDL_WINDOW_RESIZABLE | c.SDL_WINDOW_HIGH_PIXEL_DENSITY | (if (offscreen) @as(c.SDL_WindowFlags, c.SDL_WINDOW_HIDDEN) else 0),
         ) orelse {
             std.debug.print("SDL_CreateWindow failed: {s}\n", .{c.SDL_GetError()});
             return error.SDLWindowFailed;
@@ -2451,7 +2479,9 @@ const App = struct {
         }
 
         // Create GPU renderer
-        var gpu_renderer = if (omit_physics_debug_pipelines)
+        var gpu_renderer = if (offscreen)
+            try renderer.Renderer.initOffscreen(window, INITIAL_WINDOW_WIDTH, INITIAL_WINDOW_HEIGHT)
+        else if (omit_physics_debug_pipelines)
             try renderer.Renderer.initWithoutPhysicsDebugPipelinesForTest(window)
         else if (failure_point == null)
             try renderer.Renderer.init(window)
@@ -2504,6 +2534,7 @@ const App = struct {
             try sandbox_contracts.validateDefaultCharacterSpawn(character_config);
         }
         const vehicle_config = sandbox_contracts.VehicleConfig{
+            .max_vehicles = if (profile == .sandbox) game_vehicles.initial_fleet.len else 1,
             .assets = .{
                 .chassis_mesh = sandbox_visual_resources.vehicle_chassis_mesh_handle,
                 .chassis_material = sandbox_visual_resources.vehicle_chassis_material_handle,
@@ -2544,6 +2575,32 @@ const App = struct {
             },
         );
         errdefer district_streaming.abortInit();
+
+        var vehicle_visuals: ?vehicle_visual_resources.Resources = null;
+        if (profile == .sandbox) vehicle_visuals = try vehicle_visual_resources.Resources.init(std.heap.page_allocator, io, gpu_renderer.getDevice(), content_root.?, &game_vehicles.bundle_keys);
+        errdefer if (vehicle_visuals) |*resources| resources.deinit();
+        var vehicle_host: ?vehicle_developer_host.Host = null;
+        if (comptime build_options.editor_enabled) if (profile == .sandbox) {
+            vehicle_host = try vehicle_developer_host.Host.init(std.heap.page_allocator, io, content_root.?, vehicle_project_root, authoring_run_id, vehicle_visuals.?.catalog.view());
+        };
+        errdefer if (vehicle_host) |*host| host.deinit();
+        var runtime_materials: ?std.json.Parsed(content.material_library.Library) = null;
+        errdefer if (runtime_materials) |*library| library.deinit();
+        if (profile == .sandbox) {
+            var directory = try std.Io.Dir.openDirAbsolute(io, (content_root orelse return error.MaterialContentRootRequired).bytes(), .{});
+            defer directory.close(io);
+            runtime_materials = try content.material_library.read(std.heap.page_allocator, io, directory);
+            var stream_owner = district_streaming;
+            try runtime_materials.?.value.validateCatalog(try stream_owner.contentAssets());
+        }
+        var material_host: ?material_developer_host.Host = null;
+        if (comptime build_options.editor_enabled) {
+            if (profile == .sandbox) {
+                var stream_owner = district_streaming;
+                material_host = try material_developer_host.Host.init(io, std.heap.page_allocator, content_root.?, try stream_owner.contentAssets());
+            }
+        }
+        errdefer if (material_host) |*host| host.deinit();
 
         // The visual solo product owns an embedded authority session.
         const simulation_config = sandbox_contracts.Config{
@@ -2638,14 +2695,30 @@ const App = struct {
             } });
         }
         if (profile == .sandbox or profile == .s2_smoke) {
+            var spawn_definition = if (vehicle_host) |*host| try (host.owner.findAsset(game_vehicles.meridian_id) orelse return error.MissingInitialVehicleAsset).value.clone(std.heap.page_allocator) else if (profile == .sandbox) blk: {
+                var directory = try std.Io.Dir.openDirAbsolute(io, content_root.?.bytes(), .{});
+                defer directory.close(io);
+                break :blk try game_vehicles.readSedan(std.heap.page_allocator, io, directory);
+            } else try game_vehicles.embeddedSedan(std.heap.page_allocator);
+            defer spawn_definition.deinit();
             try simulation.vehicles().submit(.{ .spawn = .{
                 .request_id = 1,
+                .definition = spawn_definition.value,
                 .chassis = .{ .pose = .{ .position = switch (profile) {
-                    .sandbox => sandbox_contracts.default_vehicle_spawn_position,
+                    .sandbox => game_vehicles.initial_fleet[0].position,
                     .s2_smoke => .{ 0, 2, 0 },
                     .s0_smoke, .s1_smoke, .s3_smoke => unreachable,
                 } } },
             } });
+            if (profile == .sandbox) {
+                var directory = try std.Io.Dir.openDirAbsolute(io, content_root.?.bytes(), .{});
+                defer directory.close(io);
+                for (game_vehicles.initial_fleet[1..], 2..) |member, request_id| {
+                    var definition = if (vehicle_host) |*host| try (host.owner.findAsset(member.id) orelse return error.MissingInitialVehicleAsset).value.clone(std.heap.page_allocator) else try game_vehicles.read(std.heap.page_allocator, io, directory, member.id);
+                    defer definition.deinit();
+                    try simulation.vehicles().submit(.{ .spawn = .{ .request_id = @intCast(request_id), .definition = definition.value, .chassis = .{ .pose = .{ .position = member.position } } } });
+                }
+            }
         }
 
         std.debug.print("===========================================\n", .{});
@@ -2663,8 +2736,8 @@ const App = struct {
         std.debug.print("   1 - Equip / holster handgun\n", .{});
         std.debug.print("   Left-click - Fire equipped handgun (Character) / select object (Free Camera)\n", .{});
         std.debug.print("   R - Tactical reload / respawn after death\n", .{});
-        std.debug.print("   SPACE - Jump / vehicle brake\n", .{});
-        std.debug.print("   LEFT SHIFT - Vehicle hand brake\n", .{});
+        std.debug.print("   SPACE - Jump / vehicle hand brake\n", .{});
+        std.debug.print("   S - Service brake until stopped, then reverse\n", .{});
         std.debug.print("   Right-click + drag (Character) - Turn/look without capture\n", .{});
         std.debug.print("   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed\n", .{});
         std.debug.print("   F1 - Toggle editor UI\n", .{});
@@ -2722,6 +2795,10 @@ const App = struct {
             .visuals = visuals,
             .visibility_oracle = validation_visibility,
             .district_streaming = district_streaming,
+            .vehicle_host = vehicle_host,
+            .vehicle_visuals = vehicle_visuals,
+            .material_host = material_host,
+            .runtime_materials = runtime_materials,
             .district_focus_override = null,
             .district_prefetch_focus_override = null,
             .persistence = persistence,
@@ -2775,6 +2852,11 @@ const App = struct {
         self.persistence.deinit(self.io);
         self.simulation.deinit();
         std.heap.page_allocator.destroy(self.authoring_transactions);
+        if (self.material_preview_target) |*preview| preview.deinit();
+        if (self.vehicle_host) |*host| host.deinit();
+        if (self.vehicle_visuals) |*resources| resources.deinit();
+        if (self.material_host) |*host| host.deinit();
+        if (self.runtime_materials) |*library| library.deinit();
         self.district_streaming.deinitAfterAuthority();
         self.ground_mesh.deinit();
         self.block_mesh.deinit();
@@ -5213,7 +5295,7 @@ const App = struct {
                         .anchor = s8_west_start,
                         .hostile_to_players = true,
                         .goal = .{ .patrol_between = .{
-                            .first = sandbox_contracts.south_gate_approach_destination,
+                            .first = sandbox_contracts.foundry_south_walk_destination,
                             .second = s8_east_destination,
                         } },
                     });
@@ -6509,6 +6591,25 @@ const App = struct {
     /// transport worker never receives App, SDL, simulation, editor, storage,
     /// renderer, or incident-owner access.
     fn pumpDeveloperEndpoint(self: *App) void {
+        if (self.vehicle_host) |*host| {
+            host.pump();
+            for (host.requests.pending.items) |pending| _ = self.executeVehicleRequest(.ui, pending.value) catch |err| {
+                std.log.err("Vehicle authoring admission failed: {s}", .{@errorName(err)});
+            };
+            host.requests.clear();
+            const evidence_start = host.evidence_written;
+            host.writeEvidence(self.simulation.inspection().tickIndex(), self.frame_timer.total_frames) catch |err| {
+                std.log.err("Vehicle authoring evidence failed: {s}", .{@errorName(err)});
+            };
+            for (host.owner.transactions.items[evidence_start..host.evidence_written]) |tx| self.developer.recordVehicleChange(.{ .run_id = host.run_id, .result = tx.result, .before = tx.before.value, .candidate = if (tx.candidate) |candidate| candidate.value else null }, self.simulation.inspection().tickIndex(), self.frame_timer.total_frames);
+        }
+        defer if (self.material_host) |*host| {
+            for (host.evidence.items) |evidence| self.developer.recordMaterialChange(evidence, self.simulation.inspection().tickIndex(), self.frame_timer.total_frames);
+            host.evidence.clearRetainingCapacity();
+        };
+        if (self.material_host) |*host| host.pump() catch |err| {
+            std.log.err("Material authoring request failed: {s}", .{@errorName(err)});
+        };
         const endpoint = self.developer_endpoint_state.server orelse return;
         const request = endpoint.takeRequest() orelse return;
         self.handleDeveloperEndpointRequest(endpoint, request) catch |err| {
@@ -6526,12 +6627,72 @@ const App = struct {
         };
     }
 
+    fn executeVehicleRequest(self: *App, source: engine.authoring.Source, request: vehicle_authoring_contract.Request) !vehicle_authoring_contract.Result {
+        const host = if (self.vehicle_host) |*value| value else return error.VehicleAuthoringUnavailable;
+        const live = try self.simulation.vehicles().view(request.target);
+        const tx = try host.prepare(source, request, live, self.vehicle_visuals.?.catalog.view());
+        if (tx.command) |command| {
+            self.simulation.vehicles().submit(.{ .reconfigure = command }) catch |err| {
+                host.owner.admissionFailed(tx.result.transaction_id, err);
+            };
+        }
+        return tx.result;
+    }
+    fn selectedVehicleId(self: *App, entry: editor_selection.Entry) ?engine.PersistentId {
+        if (entry.kind != .vehicle) return null;
+        const inspection = self.simulation.inspection();
+        for (0..session_budgets.max_vehicles) |index| {
+            const pair = inspection.vehicleIdentity(index) orelse continue;
+            const selected = editor_selection.Id{ .gameplay_entity = gameplayEntityRef(pair.replicated, pair.replicated.generation) };
+            if (selected.eql(entry.id)) return pair.persistent;
+        }
+        return null;
+    }
+    fn vehicleEditorInput(self: *App, selection: editor_selection.View) !?vehicle_authoring_contract.Input {
+        const host = if (self.vehicle_host) |*value| value else return null;
+        const live = if (selection.activeEntry()) |entry| if (self.selectedVehicleId(entry.*)) |id| try self.simulation.vehicles().view(id) else null else null;
+        return try host.input(live, self.vehicle_visuals.?.catalog.view());
+    }
+
     fn handleDeveloperEndpointRequest(
         self: *App,
         endpoint: anytype,
         request: developer_protocol.Request,
     ) !void {
         switch (request.command) {
+            .vehicle_assets => {
+                const host = if (self.vehicle_host) |*value| value else return self.respondDeveloperFailure(endpoint, request, .owner_unavailable, "Vehicle authoring is unavailable");
+                const summaries = try std.heap.page_allocator.alloc(vehicle_authoring_contract.AssetSummary, host.owner.assets.items.len);
+                defer std.heap.page_allocator.free(summaries);
+                for (host.owner.assets.items, summaries) |asset, *summary| summary.* = .{ .id = asset.value.id, .label = asset.value.label, .revision = asset.value.revision, .digest = try asset.value.digest(std.heap.page_allocator) };
+                try self.respondDeveloperSuccess(endpoint, request, .{ .vehicle_assets = summaries });
+            },
+            .vehicle_inspect => |command| {
+                const host = if (self.vehicle_host) |*value| value else return self.respondDeveloperFailure(endpoint, request, .owner_unavailable, "Vehicle authoring is unavailable");
+                const live = self.simulation.vehicles().view(command.target) catch return self.respondDeveloperFailure(endpoint, request, .target_not_found, "Vehicle instance was not found");
+                try self.respondDeveloperSuccess(endpoint, request, .{ .vehicle_inspection = try host.owner.inspect(live) });
+            },
+            .vehicle_edit => |command| {
+                const result = try self.executeVehicleRequest(.local_developer_client, command);
+                try self.respondDeveloperSuccess(endpoint, request, .{ .vehicle_outcome = result });
+            },
+            .vehicle_result => |command| {
+                const host = if (self.vehicle_host) |*value| value else return self.respondDeveloperFailure(endpoint, request, .owner_unavailable, "Vehicle authoring is unavailable");
+                host.pump();
+                const result = host.owner.result(command.transaction_id, .local_developer_client) orelse return self.respondDeveloperFailure(endpoint, request, .target_not_found, "Vehicle transaction was not admitted by this producer");
+                try self.respondDeveloperSuccess(endpoint, request, .{ .vehicle_outcome = result });
+            },
+            .material_inspect => |command| {
+                const host = if (self.material_host) |*value| value else return self.respondDeveloperFailure(endpoint, request, .owner_unavailable, "Material authoring is unavailable in this composition");
+                const record = host.owner.inspect(command.target) orelse
+                    return self.respondDeveloperFailure(endpoint, request, .target_not_found, "Material asset was not found");
+                try self.respondDeveloperSuccess(endpoint, request, .{ .material_inspection = record });
+            },
+            .material_edit => |command| {
+                const host = if (self.material_host) |*value| value else return self.respondDeveloperFailure(endpoint, request, .owner_unavailable, "Material authoring is unavailable in this composition");
+                const outcome = try host.execute(.local_developer_client, command);
+                try self.respondDeveloperSuccess(endpoint, request, .{ .material_outcome = outcome });
+            },
             .describe => try self.respondDeveloperSuccess(endpoint, request, .{
                 .endpoint_description = .{
                     .product = "incinerator-editor",
@@ -6652,6 +6813,8 @@ const App = struct {
         const bounds = entry.world_bounds orelse return error.WorldSelectionBoundsMissing;
         const active = self.selection_controller.active;
         var revision: ?u64 = null;
+        const vehicle_target = self.selectedVehicleId(entry);
+        if (vehicle_target) |id| revision = (try self.simulation.vehicles().view(id)).revision;
         if (entry.kind == .crate and entry.authorable) switch (entry.id) {
             .persistent_entity => |id| if (try self.authoringCrateView(id)) |crate| {
                 revision = crate.authoring_revision;
@@ -6660,6 +6823,7 @@ const App = struct {
         };
         return .{
             .target = developerTargetFromSelection(entry.id),
+            .authoring_target = if (vehicle_target) |id| .{ .persistent_entity = id } else null,
             .semantic_type = semantic_type,
             .label = entry.label,
             .selected = if (active) |selected| selected.eql(entry.id) else false,
@@ -6717,7 +6881,7 @@ const App = struct {
             .last_use_frame = asset.last_use_frame,
             .details = asset.details,
             .inspectable = true,
-            .authorable = false,
+            .authorable = asset.kind == .material or asset.kind == .mesh,
         };
     }
 
@@ -6726,7 +6890,7 @@ const App = struct {
         endpoint: anytype,
         request: developer_protocol.Request,
     ) !void {
-        const assets = try self.district_streaming.contentAssets();
+        const assets = try self.contentAssets();
         var entries = std.ArrayListUnmanaged(developer_protocol.ContentEntry).empty;
         defer entries.deinit(std.heap.page_allocator);
         for (assets) |asset| try entries.append(
@@ -6742,7 +6906,7 @@ const App = struct {
         self: *App,
         id: engine.assets.AssetId,
     ) !?engine.assets.Entry {
-        for (try self.district_streaming.contentAssets()) |asset| {
+        for (try self.contentAssets()) |asset| {
             if (std.meta.eql(asset.id, id)) return asset;
         }
         return null;
@@ -6829,7 +6993,7 @@ const App = struct {
             );
         }
         if (target == .content_asset) {
-            const assets = try self.district_streaming.contentAssets();
+            const assets = try self.contentAssets();
             if (!self.developer.selectContentAsset(assets, target.content_asset)) {
                 return self.respondDeveloperFailure(
                     endpoint,
@@ -7699,13 +7863,14 @@ const App = struct {
         if (self.input_buffer.isKeyDown(input.Key.W)) move[1] += 1;
         const looking = self.input_buffer.gameplayMouseLocked() or
             self.input_buffer.isMouseButtonDown(input.MouseButton.RIGHT);
+        const pedals = sandbox_controls.mapPedals(self.input_buffer.isKeyDown(input.Key.W), self.input_buffer.isKeyDown(input.Key.S), self.input_buffer.isKeyDown(input.Key.SPACE), self.input_buffer.isKeyPressed(input.Key.SPACE), self.controlled_vehicle_id != null);
         try self.action_latch.captureFrame(.{
             .move = move,
             .look_delta = if (looking)
                 .{ self.input_buffer.mouse_delta_x, self.input_buffer.mouse_delta_y }
             else
                 .{ 0, 0 },
-            .jump_pressed = self.input_buffer.isKeyPressed(input.Key.SPACE),
+            .jump_pressed = pedals.jump_pressed,
             .interact_pressed = self.input_buffer.isKeyPressed(input.Key.E),
             .carry_pressed = self.input_buffer.isKeyPressed(input.Key.F),
             .melee_pressed = self.input_buffer.isKeyPressed(input.Key.Q),
@@ -7713,8 +7878,8 @@ const App = struct {
             .fire_pressed = self.input_buffer.isMouseButtonPressed(input.MouseButton.LEFT),
             .reload_pressed = self.input_buffer.isKeyPressed(input.Key.R),
             .respawn_pressed = self.input_buffer.isKeyPressed(input.Key.R),
-            .brake = self.input_buffer.isKeyDown(input.Key.SPACE),
-            .hand_brake = self.input_buffer.isKeyDown(input.Key.LSHIFT),
+            .brake = pedals.brake,
+            .hand_brake = pedals.hand_brake,
             .reset = self.input_buffer.gameplayActionsMustReset(),
         });
     }
@@ -8579,7 +8744,7 @@ const App = struct {
             .kind = .vehicle,
             .owner = .game_runtime,
             .inspectable = true,
-            .authorable = false,
+            .authorable = self.vehicle_host != null,
             .world_bounds = try orientedSelectionBounds(
                 draw.chassis_pose,
                 draw.chassis_half_extents,
@@ -9527,15 +9692,21 @@ const App = struct {
     ) !void {
         while (self.simulation.vehicles().pollOutcome()) |outcome| {
             switch (outcome) {
+                .reconfigured => |value| if (self.vehicle_host) |*host| host.owner.observe(.{ .reconfigured = value }),
+                .reconfiguration_rejected => |value| if (self.vehicle_host) |*host| host.owner.observe(.{ .rejected = value }),
                 .spawned => |spawned| {
+                    if (self.vehicle_visuals != null and spawned.request_id >= 2 and spawned.request_id <= game_vehicles.initial_fleet.len) continue;
                     if (spawned.request_id != 1 or self.initial_vehicle_id != null) {
                         return error.UnexpectedVehicleBootstrapOutcome;
                     }
                     self.initial_vehicle_id = spawned.id;
                 },
-                .rejected => if (validation_composition) switch (scenario) {
+                .rejected => |rejected| if (validation_composition) switch (scenario) {
                     .none, .s1_character, .s2_vehicle, .s3_streaming, .s8_population, .s4_physics_debug, .s7_interaction, .s11_combat, .s13_population, .s14_ranged_combat => return error.ScriptedVehicleCommandRejected,
-                } else return error.UnexpectedVehicleCommandRejection,
+                } else {
+                    std.log.err("Vehicle {s} rejected: {s} (request {?d})", .{ @tagName(rejected.command), @tagName(rejected.reason), rejected.request_id });
+                    return error.UnexpectedVehicleCommandRejection;
+                },
                 .despawned => return error.UnexpectedVehicleBootstrapOutcome,
             }
         }
@@ -9881,14 +10052,30 @@ const App = struct {
         model: zm.Mat,
         view_projection: zm.Mat,
     ) !void {
+        return self.drawPresentationMaterial(identity, gpu_mesh, .{ .base_color = if (diffuse_texture) |value|
+            .{ .texture = value, .sampler = diffuse_sampler }
+        else
+            null }, surface, material, model, view_projection);
+    }
+
+    fn drawPresentationMaterial(
+        self: *App,
+        identity: engine.neural_rendering.DrawIdentity,
+        gpu_mesh: *const mesh.Mesh,
+        textures: renderer.MaterialTextures,
+        surface: sandbox_visual_catalog.Surface,
+        material: renderer.SurfaceMaterial,
+        model: zm.Mat,
+        view_projection: zm.Mat,
+    ) !void {
+        const diffuse_texture: ?texture.Texture = if (textures.base_color) |binding| binding.texture else null;
         // NR4 is an explicitly isolated validation capture. Its fixture is
         // submitted below with adapter-local target provenance; ordinary
         // sandbox draws must not leak into only one side of the paired frame.
         if (self.neural_target_fixture_enabled) return;
-        self.gpu_renderer.drawMeshWithMaterialSampler(
+        self.gpu_renderer.drawMeshWithTextures(
             gpu_mesh,
-            diffuse_texture,
-            diffuse_sampler,
+            textures,
             material,
             model,
             view_projection,
@@ -10154,6 +10341,52 @@ const App = struct {
         );
     }
 
+    fn materialTextures(self: *App, value: engine.assets.MaterialMetadata) !renderer.MaterialTextures {
+        var result = renderer.MaterialTextures{};
+        inline for (.{ "base_color", "metallic_roughness", "normal", "occlusion", "emissive" }) |slot| {
+            if (@field(value, slot ++ "_texture")) |id| {
+                if (try self.district_streaming.textureByAssetId(id)) |binding| {
+                    @field(result, slot) = .{ .texture = binding.texture, .sampler = binding.sampler };
+                }
+            }
+        }
+        return result;
+    }
+
+    fn contentAssets(self: *App) ![]const engine.assets.Entry {
+        const catalog = try self.district_streaming.contentAssets();
+        return if (self.material_host) |*host| host.contentAssets(catalog) else catalog;
+    }
+
+    fn presentedMaterial(self: *const App, id: engine.assets.AssetId) ?engine.assets.MaterialMetadata {
+        if (self.material_host) |*host| if (host.owner.find(id)) |record| return record.presented();
+        if (self.runtime_materials) |library| if (library.value.find(id)) |record| return record.value;
+        return null;
+    }
+
+    fn renderMaterialPreview(self: *App) !void {
+        if (comptime !build_options.editor_enabled) return;
+        const host = if (self.material_host) |*value| value else return;
+        if (host.preview_mode != .neutral or host.preview_extent == 0) return;
+        const id = host.preview_material orelse return;
+        const value = self.presentedMaterial(id) orelse return;
+        if (self.material_preview_target) |*preview| {
+            if (preview.extent != host.preview_extent) {
+                preview.deinit();
+                self.material_preview_target = null;
+                host.preview_image = null;
+            }
+        }
+        if (self.material_preview_target == null) self.material_preview_target = try material_preview.Preview.init(&self.gpu_renderer, host.preview_extent);
+        const preview = &self.material_preview_target.?;
+        try preview.render(&self.gpu_renderer, &self.block_mesh, try self.materialTextures(value), materialSurface(value));
+        host.preview_image = .{ .binding = &preview.binding, .extent = preview.extent };
+    }
+
+    fn materialSurface(value: engine.assets.MaterialMetadata) renderer.SurfaceMaterial {
+        return .{ .base_color = value.base_color, .metallic = value.metallic, .roughness = value.roughness, .normal_scale = value.normal_scale, .occlusion_strength = value.occlusion_strength, .emissive = value.emissive };
+    }
+
     fn drawAuthoredDistrictScene(
         self: *App,
         scene: anytype,
@@ -10171,8 +10404,33 @@ const App = struct {
                 return error.DistrictResidentInstanceInvalid;
             }
             const resident_mesh = scene.meshes()[instance.mesh_index];
-            const sampled = scene.materialTexture(resident_mesh.material_index);
-            try self.drawPresentationMeshSampled(
+            var textures = scene.materialTextures(resident_mesh.material_index);
+            var surface = scene.materials()[resident_mesh.material_index].surface();
+            var material_id = scene.materials()[resident_mesh.material_index].asset_id;
+            if (resident_mesh.asset_id) |mesh_id| {
+                if (self.material_host) |*host| {
+                    if (host.owner.findBinding(mesh_id)) |binding| material_id = binding.presented();
+                } else if (self.runtime_materials) |library| {
+                    for (library.value.bindings) |binding| if (std.meta.eql(binding.mesh, mesh_id)) {
+                        material_id = binding.material;
+                        break;
+                    };
+                }
+            }
+            if (material_id) |id| if (self.presentedMaterial(id)) |value| {
+                surface = materialSurface(value);
+                textures = try self.materialTextures(value);
+                var identity_bytes: [32]u8 = undefined;
+                const mesh_id = resident_mesh.asset_id orelse return error.MaterialMeshIdentityMissing;
+                std.mem.writeInt(u64, identity_bytes[0..8], mesh_id.namespace, .little);
+                std.mem.writeInt(u64, identity_bytes[8..16], mesh_id.local, .little);
+                std.mem.writeInt(u64, identity_bytes[16..24], id.namespace, .little);
+                std.mem.writeInt(u64, identity_bytes[24..32], id.local, .little);
+                self.material_frame_hash.update(&identity_bytes);
+                self.material_frame_hash.update(&value.digest());
+                self.material_frame_draws += 1;
+            };
+            try self.drawPresentationMaterial(
                 .{
                     .identity = identity,
                     .semantic = .district,
@@ -10180,13 +10438,9 @@ const App = struct {
                         return error.DistrictResidentInstanceOrdinalOverflow,
                 },
                 resident_mesh.mesh,
-                if (sampled) |binding| binding.texture else null,
-                if (sampled) |binding| binding.sampler else null,
+                textures,
                 .building_primary,
-                sandbox_visual_catalog.materialTinted(
-                    .building_primary,
-                    scene.materialBaseColor(resident_mesh.material_index),
-                ),
+                surface,
                 zm.loadMat(instance.transform[0..]),
                 view_projection,
             );
@@ -10332,6 +10586,8 @@ const App = struct {
     /// `alpha` is the interpolation factor (0.0 to 1.0) for smooth visuals.
     fn render(self: *App, alpha: f32) !RenderResult {
         self.render_frame_audit = .{};
+        self.material_frame_hash = .init(.{});
+        self.material_frame_draws = 0;
         if (self.neural_rendering) |*neural| neural.prepareFrame(&self.gpu_renderer);
         // Streamed submissions are independent of the frame command buffer.
         // Poll fences without waiting, then submit at most one bounded batch.
@@ -10488,6 +10744,7 @@ const App = struct {
 
         // Get view-projection matrix from camera
         const view_proj = scene_camera.getViewProjectionMatrix(aspect_ratio);
+        self.gpu_renderer.camera_position = .{ scene_camera.position[0], scene_camera.position[1], scene_camera.position[2] };
         try self.rebuildSelectionEntries(
             crate_draws,
             character_draws,
@@ -10526,29 +10783,31 @@ const App = struct {
         defer scene_draw_profile.finish(.failure);
         var scene_draw_calls: u64 = 0;
 
-        // The ground is a visual-host fixture matching the simulation-owned
-        // static body. Feature-owned entities arrive through extraction below.
-        try self.drawPresentationMesh(
-            fixtureNeuralIdentity(1, .environment, 0),
-            &self.ground_mesh,
-            self.ground_mesh.diffuse_texture,
-            .ground,
-            sandbox_visual_catalog.material(.ground),
-            zm.identity(),
-            view_proj,
-        );
-        scene_draw_calls +|= 1;
-        for (sandbox_visual_composition.environmentPlans()) |part| {
+        if (self.runtime_materials == null) {
+            // The ground is a visual-host fixture matching the simulation-owned
+            // static body. Feature-owned entities arrive through extraction below.
             try self.drawPresentationMesh(
-                fixtureNeuralIdentity(100 + part.ordinal, .environment, part.ordinal),
-                &self.block_mesh,
-                null,
-                part.surface,
-                part.material,
-                part.model,
+                fixtureNeuralIdentity(1, .environment, 0),
+                &self.ground_mesh,
+                self.ground_mesh.diffuse_texture,
+                .ground,
+                sandbox_visual_catalog.material(.ground),
+                zm.identity(),
                 view_proj,
             );
             scene_draw_calls +|= 1;
+            for (sandbox_visual_composition.environmentPlans()) |part| {
+                try self.drawPresentationMesh(
+                    fixtureNeuralIdentity(100 + part.ordinal, .environment, part.ordinal),
+                    &self.block_mesh,
+                    null,
+                    part.surface,
+                    part.material,
+                    part.model,
+                    view_proj,
+                );
+                scene_draw_calls +|= 1;
+            }
         }
         scene_draw_calls +|= try self.drawNeuralEvaluationFixture(view_proj);
         scene_draw_calls +|= try self.drawNeuralTargetFixture(view_proj);
@@ -10579,10 +10838,7 @@ const App = struct {
             scene_draw_calls +|= 1;
         }
         const gate_state = self.simulation.developer().navigationGateState();
-        const gate_positions = [_][3]f32{
-            .{ 8, 1, 12 },
-            .{ 8, 1, 4 },
-        };
+        const gate_positions = @import("sandbox_district_recipe").gate_positions;
         const gate_open = [_]bool{
             gate_state.north_open,
             gate_state.south_open,
@@ -10686,9 +10942,6 @@ const App = struct {
 
         // CrateFeature extraction is immutable plain data. The visual host is
         // the only layer that resolves its typed handles to GPU resources.
-        const project_crate_texture = try self.district_streaming.textureByLabel(
-            "CargoCratePanels",
-        );
         for (crate_draws) |draw| {
             const crate_mesh = try self.visuals.resolve(draw.mesh, draw.material);
             const scale = zm.scaling(
@@ -10711,11 +10964,8 @@ const App = struct {
             try self.drawPresentationMeshSampled(
                 persistentNeuralIdentity(draw.persistent_id, .crate, .whole, 0),
                 crate_mesh,
-                if (project_crate_texture) |binding|
-                    binding.texture
-                else
-                    crate_mesh.diffuse_texture,
-                if (project_crate_texture) |binding| binding.sampler else null,
+                crate_mesh.diffuse_texture,
+                null,
                 .carryable,
                 sandbox_visual_catalog.material(.carryable),
                 model_matrix,
@@ -10755,7 +11005,35 @@ const App = struct {
             scene_draw_calls +|= 1;
         }
 
+        if (self.vehicle_visuals) |*resources| try resources.pump();
         for (vehicle_draws) |draw| {
+            if (self.vehicle_visuals) |*resources| {
+                var bindings = draw.definition.visuals;
+                if (self.vehicle_host) |*host| for (0..session_budgets.max_vehicles) |index| {
+                    const pair = self.simulation.inspection().vehicleIdentity(index) orelse continue;
+                    if (std.meta.eql(pair.replicated, draw.entity)) {
+                        bindings = host.owner.preview(pair.persistent, draw.definition_revision) orelse bindings;
+                        break;
+                    }
+                };
+                if (try resources.resolve(bindings.chassis, draw.chassis_pose)) |part| {
+                    try self.drawPresentationMaterial(replicatedNeuralIdentity(draw.entity, .vehicle, .vehicle_chassis), part.mesh, part.textures, .painted_metal, part.material, part.model, view_proj);
+                    scene_draw_calls +|= 1;
+                }
+                for (draw.wheels, 0..) |wheel, index| {
+                    if (try resources.resolve(bindings.wheels[index], wheel.pose)) |part| {
+                        const semantic: engine.neural_rendering.SemanticPart = switch (index) {
+                            0 => .vehicle_wheel_front_left,
+                            1 => .vehicle_wheel_front_right,
+                            2 => .vehicle_wheel_rear_left,
+                            else => .vehicle_wheel_rear_right,
+                        };
+                        try self.drawPresentationMaterial(replicatedNeuralIdentity(draw.entity, .vehicle, semantic), part.mesh, part.textures, .tire, part.material, part.model, view_proj);
+                        scene_draw_calls +|= 1;
+                    }
+                }
+                continue;
+            }
             _ = try self.visuals.resolve(
                 draw.chassis_mesh,
                 draw.chassis_material,
@@ -11063,6 +11341,7 @@ const App = struct {
         // 2. Let editor do its thing (copy pass + its own render pass)
         // 3. Submit everything together
         self.gpu_renderer.endRenderPass();
+        try self.renderMaterialPreview();
         if (self.neural_inputs) |*inputs| try inputs.render(&self.gpu_renderer);
         self.developer.prepareIncidentProductFrame(
             &self.gpu_renderer,
@@ -11106,6 +11385,50 @@ const App = struct {
         );
         defer submission_profile.finish(.failure);
         try self.submitCurrentFrame();
+        if (self.controlled_vehicle_id) |controlled| for (vehicle_draws) |draw| {
+            if (!std.meta.eql(draw.entity, controlled)) continue;
+            const target = self.simulation.inspection().persistentId(controlled) orelse continue;
+            const view = try self.simulation.vehicles().view(target);
+            const projection = self.simulation.inspection().vehicleMotionProjection(controlled, alpha) orelse continue;
+            const raw = engine.physics.VehicleInput{ .throttle = self.action_latch.held_move[1], .steering = self.action_latch.held_move[0], .brake = if (self.action_latch.held_brake) 1 else 0, .hand_brake = if (self.action_latch.held_hand_brake) 1 else 0 };
+            const forward_speed = vehicle_contract.control.forwardSpeed(view.state.chassis);
+            const q = view.state.chassis.pose.rotation;
+            const right = [3]f32{ 1 - 2 * (q[1] * q[1] + q[2] * q[2]), 2 * (q[0] * q[1] + q[3] * q[2]), 2 * (q[0] * q[2] - q[3] * q[1]) };
+            const v = view.state.chassis.velocity.linear;
+            const prediction = self.simulation.inspection().clientDiagnostics().client.vehicle_prediction;
+            var wheel_poses: [4]engine.physics.Pose = undefined;
+            for (&wheel_poses, draw.wheels) |*out, wheel| out.* = wheel.pose;
+            self.developer.recordVehicleMotion(.{
+                .semantic_entity = gameplayEntityRef(controlled, 1),
+                .authority_tick = self.simulation.inspection().tickIndex(),
+                .presentation_frame = self.frame_timer.total_frames,
+                .frame_time_ms = self.frame_timer.getDeltaTime() * 1000,
+                .fixed_alpha = alpha,
+                .snapshot_alpha = projection.alpha,
+                .previous_snapshot_tick = projection.previous_tick,
+                .snapshot_tick = projection.current_tick,
+                .latest_snapshot_tick = projection.latest_tick,
+                .entity = projection.replicated,
+                .persistent_id = target,
+                .raw_input = raw,
+                .applied_input = view.applied_input,
+                .conditioned_steering = view.conditioned_steering,
+                .authority = view.state,
+                .predicted_pose = if (projection.predicted) |predicted| .{ .position = predicted.position, .rotation = predicted.rotation } else null,
+                .presented_pose = draw.chassis_pose,
+                .presented_wheels = wheel_poses,
+                .camera_position = .{ scene_camera.position[0], scene_camera.position[1], scene_camera.position[2] },
+                .camera_yaw = scene_camera.yaw,
+                .camera_pitch = scene_camera.pitch,
+                .camera_mode = @tagName(self.viewport_controller.mode),
+                .forward_mps = forward_speed,
+                .lateral_mps = v[0] * right[0] + v[1] * right[1] + v[2] * right[2],
+                .prediction_error_m = prediction.current_position_error_m,
+                .prediction_soft_corrections = prediction.soft_corrections,
+                .prediction_hard_corrections = prediction.hard_corrections,
+            });
+        };
+
         if (build_options.validation_mode) {
             try self.captureS11Visibility(character_draws, npc_draws, view_proj);
         }
@@ -11726,8 +12049,7 @@ const App = struct {
             const authority_view = self.simulation.vehicles().view(identity.persistent) catch
                 continue;
             const interest = inspection.vehicleInterest(identity.replicated);
-            const half_extents = (sandbox_contracts.VehicleConfig{})
-                .tuning.chassis_half_extents;
+            const half_extents = authority_view.definition.tuning.chassis_half_extents;
             var projected = editor_contract.GameplayEntityView{
                 .entity = entity,
                 .persistent_id = identity.persistent,
@@ -11949,7 +12271,12 @@ const App = struct {
                 },
             }
         }
+        var material_hash = self.material_frame_hash;
+        var material_digest: [32]u8 = undefined;
+        material_hash.final(&material_digest);
         const render_view = editor_contract.RenderView{
+            .material_state_digest = material_digest,
+            .material_draws = self.material_frame_draws,
             .scene_light = self.gpu_renderer.sceneLight(),
             .frame_stats = render_stats,
             .last_semantic = if (self.render_frame_audit.valid)
@@ -12053,7 +12380,9 @@ const App = struct {
                     .view = selection_view,
                     .requests = &self.selection_requests,
                 },
-                .content_assets = try self.district_streaming.contentAssets(),
+                .content_assets = try self.contentAssets(),
+                .material = if (self.material_host) |*host| host.input() else null,
+                .vehicle = try self.vehicleEditorInput(selection_view),
                 .frame_timer = &self.frame_timer,
                 .include_district_streams = self.includeDeveloperDistrictStreams(),
                 .authoring = .{
@@ -12084,7 +12413,8 @@ const App = struct {
                     .carry = self.input_buffer.isKeyDown(input.Key.F),
                     .attack = self.input_buffer.isKeyDown(input.Key.Q),
                     .respawn = self.input_buffer.isKeyDown(input.Key.R),
-                    .jump_or_brake = self.input_buffer.isKeyDown(input.Key.SPACE),
+                    .space_down = self.input_buffer.isKeyDown(input.Key.SPACE),
+                    .driving = self.controlled_vehicle_id != null,
                     .interact_pressed = self.input_buffer.isKeyPressed(input.Key.E),
                     .carry_pressed = self.input_buffer.isKeyPressed(input.Key.F),
                     .attack_pressed = self.input_buffer.isKeyPressed(input.Key.Q),
@@ -12093,8 +12423,9 @@ const App = struct {
                     .reload_pressed = self.input_buffer.isKeyPressed(input.Key.R) and
                         gameplay_view.local_life_state != .dead,
                     .respawn_pressed = self.input_buffer.isKeyPressed(input.Key.R),
-                    .jump_pressed = self.input_buffer.isKeyPressed(input.Key.SPACE),
-                    .hand_brake = self.input_buffer.isKeyDown(input.Key.LSHIFT),
+                    .jump_pressed = self.controlled_vehicle_id == null and self.input_buffer.isKeyPressed(input.Key.SPACE),
+                    .hand_brake = self.controlled_vehicle_id != null and self.input_buffer.isKeyDown(input.Key.SPACE),
+                    .service_brake = self.controlled_vehicle_id != null and self.input_buffer.isKeyDown(input.Key.W) and self.input_buffer.isKeyDown(input.Key.S),
                     .right_mouse = self.input_buffer.isMouseButtonDown(2),
                     .mouse_delta_x = self.input_buffer.mouse_delta_x,
                     .mouse_delta_y = self.input_buffer.mouse_delta_y,
@@ -12328,10 +12659,20 @@ fn productMain(init: std.process.Init, args: anytype) !void {
         configured_save_root,
         incident_runs_root,
         hardening_profile,
+        if (init.environ_map.get("INCINERATOR_VEHICLE_ROOT")) |root| try content.ContentRootPath.parse(root) else null,
     );
-    app.developer.configureEditor(editor_startup);
     var app_deinitialized = false;
     defer if (!app_deinitialized) app.deinit();
+    if (comptime build_options.editor_enabled) {
+        if (init.environ_map.get("INCINERATOR_MATERIAL_ROOT")) |root| {
+            const path = try content.ContentRootPath.parse(root);
+            var project = try material_developer_host.Host.init(init.io, std.heap.page_allocator, path, try app.district_streaming.contentAssets());
+            project.persistence_available = true;
+            if (app.material_host) |*host| host.deinit();
+            app.material_host = project;
+        }
+    }
+    app.developer.configureEditor(editor_startup);
     if (comptime build_options.developer_endpoint_enabled) {
         const home = init.environ_map.get("HOME") orelse
             return error.HomeDirectoryUnavailable;
@@ -13346,7 +13687,7 @@ fn developerSuccessForTest(
     };
 }
 
-test "developer endpoint app boundary routes a concrete owner journey" {
+pub fn acceptDeveloperOwnerJourney() !void {
     if (comptime !build_options.developer_endpoint_enabled) return;
 
     var app = try App.init(std.testing.io, .s1_smoke, null);
@@ -13706,7 +14047,7 @@ test "developer endpoint app boundary routes a concrete owner journey" {
     try std.testing.expect(capture_admission.rejection != null);
 }
 
-test "developer endpoint app boundary exposes typed admitted assets and independent content selection" {
+pub fn acceptDeveloperAssets() !void {
     if (comptime !build_options.developer_endpoint_enabled) return;
 
     var app = try App.init(
@@ -13730,23 +14071,23 @@ test "developer endpoint app boundary exposes typed admitted assets and independ
         else => return error.UnexpectedDeveloperPayload,
     };
     try std.testing.expect(entries.len > 0);
-    var cargo: ?developer_protocol.ContentEntry = null;
-    for (entries) |entry| if (std.mem.eql(u8, entry.label, "CargoCratePanels")) {
-        cargo = entry;
+    var brick: ?developer_protocol.ContentEntry = null;
+    for (entries) |entry| if (std.mem.eql(u8, entry.label, "Foundry Street / Brick Color")) {
+        brick = entry;
         break;
     };
-    const texture_entry = cargo orelse return error.DeveloperCargoTextureMissing;
+    const texture_entry = brick orelse return error.DeveloperBrickTextureMissing;
     try std.testing.expectEqual(developer_protocol.ContentSemanticType.texture, texture_entry.semantic_type);
-    try std.testing.expectEqual(engine.assets.SourceFormat.gltf, texture_entry.source_format);
+    try std.testing.expectEqual(engine.assets.SourceFormat.glb, texture_entry.source_format);
     try std.testing.expectEqual(engine.assets.CookStatus.valid, texture_entry.cook_status);
     const texture_metadata = switch (texture_entry.details) {
         .texture => |value| value,
-        else => return error.DeveloperCargoTextureMetadataMissing,
+        else => return error.DeveloperBrickTextureMetadataMissing,
     };
-    try std.testing.expectEqual(engine.assets.ImageEncoding.jpeg, texture_metadata.encoding);
+    try std.testing.expectEqual(engine.assets.ImageEncoding.png, texture_metadata.encoding);
     try std.testing.expectEqual(engine.assets.ColorSpace.srgb, texture_metadata.color_space);
-    try std.testing.expectEqual(engine.assets.Filter.nearest, texture_metadata.sampler.min_filter);
-    try std.testing.expectEqual(engine.assets.AddressMode.clamp_to_edge, texture_metadata.sampler.address_u);
+    try std.testing.expectEqual(engine.assets.Filter.linear, texture_metadata.sampler.min_filter);
+    try std.testing.expectEqual(engine.assets.AddressMode.repeat, texture_metadata.sampler.address_u);
 
     const target = developer_protocol.Target{ .content_asset = texture_entry.asset_id };
     var inspect_response = try callDeveloperEndpointForTest(
@@ -13921,7 +14262,7 @@ test "S8 per-identity evidence requires every exact lifecycle slot" {
         const id = s8TestIdentity(index);
         try evidence.observeEvent(.population_spawned, &summary, .{ .goal_reached = .{
             .id = id,
-            .destination = sandbox_contracts.south_gate_approach_destination,
+            .destination = sandbox_contracts.foundry_south_walk_destination,
         } });
         try evidence.observeEvent(.destination_waiting, &summary, .{ .state_changed = .{
             .id = id,
@@ -14025,7 +14366,7 @@ test "S8 per-identity evidence rejects duplicate missing and swapped outputs" {
         error.UnexpectedS8NpcEvent,
         evidence.observeEvent(.crossed_east, &summary, .{ .goal_reached = .{
             .id = first,
-            .destination = sandbox_contracts.market_terminal_destination,
+            .destination = sandbox_contracts.freight_dispatch_destination,
         } }),
     );
 
@@ -14120,6 +14461,33 @@ test "interactive vehicle rejections keep normal play healthy while carrying" {
 }
 
 test "all engine module tests are discovered" {
+    // These pure suites were formerly discovered as a side effect of compiling
+    // window-opening fixture bodies. Keep their coverage explicit after the split.
+    std.testing.refAllDecls(@import("primitives.zig"));
+    std.testing.refAllDecls(@import("physics_debug_gpu.zig"));
+    std.testing.refAllDecls(@import("incident_semantic.zig"));
+    std.testing.refAllDecls(@import("viewport_controller.zig"));
+    std.testing.refAllDecls(@import("district_scene_adapter.zig"));
+    std.testing.refAllDecls(@import("visibility_oracle.zig"));
+    std.testing.refAllDecls(@import("sandbox/product_feedback.zig"));
+    std.testing.refAllDecls(@import("sandbox/product_presentation_trace.zig"));
+    std.testing.refAllDecls(@import("hosts/sandbox_developer_host.zig"));
+    std.testing.refAllDecls(@import("hosts/neural_input_host.zig"));
+    std.testing.refAllDecls(@import("hosts/neural_trial_bundle.zig"));
+    std.testing.refAllDecls(@import("hosts/neural_capture_camera.zig"));
+    std.testing.refAllDecls(@import("hosts/neural_capture_host.zig"));
+    if (build_options.editor_enabled) {
+        std.testing.refAllDecls(@import("editor/editor.zig"));
+        std.testing.refAllDecls(@import("editor/content_selection.zig"));
+        std.testing.refAllDecls(@import("editor/tools/material_lab_tool.zig"));
+        std.testing.refAllDecls(@import("editor/tools/incident_capture_tool.zig"));
+        std.testing.refAllDecls(@import("editor/tools/world_outliner_tool.zig"));
+        std.testing.refAllDecls(@import("editor/tools/population_lab_tool.zig"));
+        std.testing.refAllDecls(@import("editor/tools/content_browser_tool.zig"));
+        std.testing.refAllDecls(@import("editor/tools/crate_authoring_tool.zig"));
+        std.testing.refAllDecls(@import("editor/tools/gameplay_inspector_tool.zig"));
+    }
+
     // Zig 0.16 analyzes declarations lazily. Explicitly reference each module
     // so its test blocks remain part of the engine test contract.
     std.testing.refAllDecls(@import("camera.zig"));
@@ -14135,4 +14503,380 @@ test "all engine module tests are discovered" {
     std.testing.refAllDecls(@import("renderer.zig"));
     std.testing.refAllDecls(@import("texture.zig"));
     std.testing.refAllDecls(@import("timing.zig"));
+}
+
+pub fn acceptVehicleDriving(comptime offscreen: bool) !void {
+    const ScriptedInput = struct {
+        fn queueKey(window: *c.SDL_Window, scancode: c.SDL_Scancode, down: bool) !void {
+            var event = std.mem.zeroes(c.SDL_Event);
+            event.type = if (down) c.SDL_EVENT_KEY_DOWN else c.SDL_EVENT_KEY_UP;
+            event.key.windowID = c.SDL_GetWindowID(window);
+            event.key.scancode = scancode;
+            event.key.down = down;
+            // PeepEvents deliberately bypasses this fixture's physical-event
+            // filter; the queued test event still traverses the real SDL pump.
+            try std.testing.expectEqual(@as(c_int, 1), c.SDL_PeepEvents(&event, 1, c.SDL_ADDEVENT, 0, 0));
+        }
+
+        fn frames(app: *App, count: usize) !void {
+            for (0..count) |_| {
+                try app.frame_timer.beginFrameWithElapsedSeconds(timing.TICK_DURATION);
+                app.input_buffer.beginFrame();
+                try std.testing.expect(app.pumpInputEvents());
+                try app.captureFrameActions();
+                try app.district_streaming.pumpContent(app.districtAuthorityPort(), app.frame_timer.total_frames);
+                while (app.frame_timer.shouldTick()) {
+                    try app.simulateTick(false, .none);
+                    app.frame_timer.recordCompletedTick();
+                }
+                _ = try app.renderS5SmokeFrame(app.frame_timer.alpha());
+            }
+        }
+
+        // This fixture owns the action latch and camera. Keep the real SDL
+        // lifecycle pump, but exclude physical controls before they reach
+        // either ImGui or the viewport. Normal interactive runs do not use this.
+        fn filter(_: ?*anyopaque, event: [*c]c.SDL_Event) callconv(.c) bool {
+            return switch (event.*.type) {
+                c.SDL_EVENT_KEY_DOWN,
+                c.SDL_EVENT_KEY_UP,
+                c.SDL_EVENT_TEXT_INPUT,
+                c.SDL_EVENT_TEXT_EDITING,
+                c.SDL_EVENT_MOUSE_MOTION,
+                c.SDL_EVENT_MOUSE_BUTTON_DOWN,
+                c.SDL_EVENT_MOUSE_BUTTON_UP,
+                c.SDL_EVENT_MOUSE_WHEEL,
+                => false,
+                else => true,
+            };
+        }
+
+        fn interference(window: *c.SDL_Window, down: bool) !void {
+            const window_id = c.SDL_GetWindowID(window);
+            var button = std.mem.zeroes(c.SDL_Event);
+            button.type = if (down) c.SDL_EVENT_MOUSE_BUTTON_DOWN else c.SDL_EVENT_MOUSE_BUTTON_UP;
+            button.button.windowID = window_id;
+            button.button.button = c.SDL_BUTTON_RIGHT;
+            button.button.down = down;
+            button.button.x = 800;
+            button.button.y = 450;
+            try std.testing.expect(!c.SDL_PushEvent(&button));
+            var motion = std.mem.zeroes(c.SDL_Event);
+            motion.type = c.SDL_EVENT_MOUSE_MOTION;
+            motion.motion.windowID = window_id;
+            motion.motion.x = 820;
+            motion.motion.y = 460;
+            motion.motion.xrel = 20;
+            motion.motion.yrel = 10;
+            try std.testing.expect(!c.SDL_PushEvent(&motion));
+            // Movement, mode switch, cancel and editor shortcuts must all stay
+            // outside the scripted journey, including their matching releases.
+            for ([_]c.SDL_Scancode{ c.SDL_SCANCODE_A, c.SDL_SCANCODE_F3, c.SDL_SCANCODE_ESCAPE, c.SDL_SCANCODE_F1 }) |key| {
+                var event = std.mem.zeroes(c.SDL_Event);
+                event.type = if (down) c.SDL_EVENT_KEY_DOWN else c.SDL_EVENT_KEY_UP;
+                event.key.windowID = window_id;
+                event.key.scancode = key;
+                event.key.down = down;
+                try std.testing.expect(!c.SDL_PushEvent(&event));
+            }
+        }
+    };
+    var root_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    var working_dir = try std.Io.Dir.cwd().openDir(std.testing.io, ".", .{});
+    defer working_dir.close(std.testing.io);
+    const root_len = try working_dir.realPath(std.testing.io, &root_buffer);
+    const runs_root = try std.fmt.allocPrint(std.testing.allocator, "{s}/zig-out/vehicle-motion-runs", .{root_buffer[0..root_len]});
+    defer std.testing.allocator.free(runs_root);
+    for ([_]usize{ 1, 0, 2 }) |fleet_index| {
+        const sedan = fleet_index == 0;
+        const car_name: []const u8 = switch (fleet_index) {
+            0 => "Meridian",
+            1 => "Courier",
+            2 => "Courier-AWD",
+            else => unreachable,
+        };
+        var app = try App.initWithOptions(std.testing.io, .sandbox, try content.ContentRootPath.parse(build_options.installed_content_root), null, false, false, null, runs_root, .none, null, offscreen);
+        if (offscreen) try std.testing.expect(c.SDL_GetWindowFlags(app.window) & c.SDL_WINDOW_HIDDEN != 0);
+        defer app.deinit();
+        var previous_filter: c.SDL_EventFilter = null;
+        var previous_filter_context: ?*anyopaque = null;
+        _ = c.SDL_GetEventFilter(&previous_filter, &previous_filter_context);
+        c.SDL_SetEventFilter(ScriptedInput.filter, null);
+        defer c.SDL_SetEventFilter(previous_filter, previous_filter_context);
+        c.SDL_FilterEvents(ScriptedInput.filter, null);
+        std.debug.print("VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true\n", .{});
+        app.game_camera.yaw = 0;
+        // The product spawn is five metres west of the compact. Walk to its door
+        // through the same fixed-tick input latch used by SDL gameplay input.
+        for (0..180) |_| {
+            try app.frame_timer.beginFrameWithElapsedSeconds(timing.TICK_DURATION);
+            try app.district_streaming.pumpContent(app.districtAuthorityPort(), app.frame_timer.total_frames);
+            while (app.frame_timer.shouldTick()) {
+                try app.simulateTick(false, .none);
+                app.frame_timer.recordCompletedTick();
+            }
+            _ = try app.renderS5SmokeFrame(app.frame_timer.alpha());
+        }
+        const world_frame = try app.renderS5SmokeFrame(app.frame_timer.alpha());
+        try std.testing.expect(world_frame.district_count > 0);
+        if (fleet_index == 2) {
+            try app.action_latch.captureFrame(.{ .move = .{ 0, 1 } });
+            for (0..90) |_| try app.simulateTick(false, .none);
+            try app.action_latch.captureFrame(.{ .move = .{ 1, 0 } });
+            for (0..6) |_| try app.simulateTick(false, .none);
+        } else if (sedan) {
+            try app.action_latch.captureFrame(.{ .move = .{ 0, -1 } });
+            for (0..40) |_| try app.simulateTick(false, .none);
+            try app.action_latch.captureFrame(.{ .move = .{ 1, 0 } });
+            for (0..120) |_| try app.simulateTick(false, .none);
+            try app.action_latch.captureFrame(.{ .move = .{ 0, 1 } });
+            for (0..30) |_| try app.simulateTick(false, .none);
+        } else {
+            try app.action_latch.captureFrame(.{ .move = .{ 1, 0 } });
+            for (0..40) |_| try app.simulateTick(false, .none);
+        }
+        try app.action_latch.captureFrame(.{ .interact_pressed = true });
+        try app.simulateTick(false, .none);
+        try app.action_latch.captureFrame(.{});
+        for (0..4) |_| try app.simulateTick(false, .none);
+        const controlled = app.controlled_vehicle_id orelse return error.NativeVehicleEnterFailed;
+        const target = app.simulation.inspection().persistentId(controlled) orelse return error.NativeVehicleIdentityMissing;
+        if (!offscreen and fleet_index == 1) {
+            const editor_visible = app.developer.editorVisible();
+            if (editor_visible) try app.toggleEditorForS5Smoke(false);
+            _ = try app.renderS5SmokeFrame(app.frame_timer.alpha());
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_W, true);
+            try ScriptedInput.frames(&app, 180);
+            try std.testing.expect(vehicle_contract.control.forwardSpeed((try app.simulation.vehicles().view(target)).state.chassis) > 1);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_W, false);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_S, true);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_A, true);
+            try ScriptedInput.frames(&app, 1);
+            var pedals = (try app.simulation.vehicles().view(target)).applied_input;
+            try std.testing.expect(pedals.brake == 1 and pedals.throttle == 0 and pedals.hand_brake == 0);
+            try std.testing.expect(@abs(pedals.steering) > 0);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_A, false);
+            try ScriptedInput.frames(&app, 239);
+            try std.testing.expect(vehicle_contract.control.forwardSpeed((try app.simulation.vehicles().view(target)).state.chassis) < -1);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_S, false);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_W, true);
+            try ScriptedInput.frames(&app, 1);
+            pedals = (try app.simulation.vehicles().view(target)).applied_input;
+            try std.testing.expect(pedals.brake == 1 and pedals.throttle == 0);
+            try ScriptedInput.frames(&app, 239);
+            try std.testing.expect(vehicle_contract.control.forwardSpeed((try app.simulation.vehicles().view(target)).state.chassis) > 1);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_SPACE, true);
+            try ScriptedInput.frames(&app, 30);
+            pedals = (try app.simulation.vehicles().view(target)).applied_input;
+            try std.testing.expect(pedals.hand_brake == 1 and pedals.brake == 0 and pedals.throttle == 1);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_SPACE, false);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_S, true);
+            try ScriptedInput.frames(&app, 180);
+            const stopped = try app.simulation.vehicles().view(target);
+            try std.testing.expect(stopped.applied_input.brake == 1 and stopped.applied_input.hand_brake == 0 and stopped.applied_input.throttle == 0);
+            try std.testing.expect(@abs(vehicle_contract.control.forwardSpeed(stopped.state.chassis)) < 0.1);
+            var lost = std.mem.zeroes(c.SDL_Event);
+            lost.type = c.SDL_EVENT_WINDOW_FOCUS_LOST;
+            lost.window.windowID = c.SDL_GetWindowID(app.window);
+            try std.testing.expect(c.SDL_PushEvent(&lost));
+            try ScriptedInput.frames(&app, 1);
+            try std.testing.expect((try app.simulation.vehicles().view(target)).applied_input.isNeutral());
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_S, false);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_W, false);
+            try ScriptedInput.frames(&app, 1);
+            lost.type = c.SDL_EVENT_WINDOW_FOCUS_GAINED;
+            try std.testing.expect(c.SDL_PushEvent(&lost));
+            try ScriptedInput.frames(&app, 1);
+            // Held Space must not become a fresh on-foot jump across occupancy.
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_SPACE, true);
+            try ScriptedInput.frames(&app, 1);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_E, true);
+            try ScriptedInput.frames(&app, 1);
+            try std.testing.expect(app.controlled_vehicle_id == null);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_E, false);
+            try ScriptedInput.frames(&app, 2);
+            try std.testing.expect((try app.simulation.characters().view(app.initial_character_id.?)).velocity[1] < 0.1);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_E, true);
+            try ScriptedInput.frames(&app, 1);
+            try std.testing.expectEqual(controlled, app.controlled_vehicle_id.?);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_E, false);
+            try ScriptedInput.queueKey(app.window, c.SDL_SCANCODE_SPACE, false);
+            try ScriptedInput.frames(&app, 1);
+            if (editor_visible) try app.toggleEditorForS5Smoke(true);
+            std.debug.print("VEHICLE_PEDALS_SDL_PASS opposite_braking=true reverse=true space_handbrake=true simultaneous_pedals=true release=true focus_loss=true held_space_occupancy=true brake_steering=true\n", .{});
+        }
+        const initial = try app.simulation.vehicles().view(target);
+        try std.testing.expectEqual(game_vehicles.initial_fleet[fleet_index].id, initial.definition.id);
+        const initial_position = initial.state.chassis.pose.position;
+        const initial_digest = initial.definition_digest;
+        var maximum_speed: f32 = 0;
+        var steering_observed = false;
+        var spinning_observed = false;
+        // Exercise the real fixed-step accumulator at low, matched, high, and
+        // irregular render cadences. Only virtual frame elapsed time is injected;
+        // controls, admission, physics, projection, camera, and Metal are product paths.
+        const schedule = [_]struct { ticks: usize, input: sandbox_controls.FrameSample, terminal: enum { moving, stopped, forward, reverse } = .moving }{
+            .{ .ticks = 180, .input = .{ .move = .{ 0, 1 } }, .terminal = .forward },
+            .{ .ticks = 180, .input = .{ .brake = true }, .terminal = .stopped },
+            .{ .ticks = 180, .input = .{ .move = .{ 0, -1 } }, .terminal = .reverse },
+            .{ .ticks = 180, .input = .{ .brake = true }, .terminal = .stopped },
+            .{ .ticks = 120, .input = .{ .move = .{ 0, 1 } }, .terminal = .forward },
+            .{ .ticks = 240, .input = .{ .move = .{ 0, -1 } }, .terminal = .reverse },
+            .{ .ticks = 240, .input = .{ .move = .{ 0, 1 } }, .terminal = .forward },
+            .{ .ticks = 60, .input = .{ .move = .{ 0.3, 0.4 } } },
+            .{ .ticks = 45, .input = .{ .move = .{ -0.3, 0 }, .hand_brake = true } },
+            .{ .ticks = 45, .input = .{ .move = .{ 0.3, 0.2 } } },
+            .{ .ticks = 180, .input = .{ .brake = true }, .terminal = .stopped },
+        };
+        const output_path = try std.fmt.allocPrint(std.testing.allocator, "zig-out/vehicle-motion-{s}-{s}.ndjson", .{ if (offscreen) "offscreen" else "native", car_name });
+        defer std.testing.allocator.free(output_path);
+        var audit_file = try std.Io.Dir.cwd().createFile(std.testing.io, output_path, .{});
+        defer audit_file.close(std.testing.io);
+        var audit_buffer: [4096]u8 = undefined;
+        var audit_writer = audit_file.writer(std.testing.io, &audit_buffer);
+        var rendered_frames: usize = 0;
+        var sub_tick_frames: usize = 0;
+        var catchup_frames: usize = 0;
+        var interpolation_motion_frames: usize = 0;
+        var peak_reverse: f32 = 0;
+        const cadences = [_]f64{ 1.0 / 30.0, 1.0 / 60.0, 1.0 / 144.0, 1.0 / 144.0, 1.0 / 144.0, 1.0 / 20.0 };
+        for (schedule, 0..) |segment, segment_index| {
+            if (!offscreen and segment_index == 7) {
+                const captured = app.developer.admitCorrelatedFrameCapture(app.simulation.inspection().tickIndex(), app.frame_timer.total_frames, null) orelse return error.NativeMotionCaptureUnavailable;
+                std.debug.print("VEHICLE_NATIVE_CAPTURE car={s} path={s}\n", .{ car_name, captured.evidenceDirectory() });
+            }
+            app.applyViewportRequest(.{ .set_mode = if (segment_index % 2 == 0) .character else .free_camera });
+            const start_position = (try app.simulation.vehicles().view(target)).state.chassis.pose.position;
+            if (segment_index % 2 != 0) app.applyViewportRequest(.{ .set_free_camera_pose = .{ .position = .{ start_position[0], start_position[1] + 25, start_position[2] + 35 }, .yaw = 0, .pitch = -std.math.atan2(@as(f32, 25), 35) } });
+            const fixed_camera = app.viewport_controller.free_camera;
+            try ScriptedInput.interference(app.window, true);
+            try app.action_latch.captureFrame(segment.input);
+            var completed: usize = 0;
+            while (completed < segment.ticks) {
+                const elapsed = cadences[rendered_frames % cadences.len];
+                try app.frame_timer.beginFrameWithElapsedSeconds(elapsed);
+                try app.district_streaming.pumpContent(app.districtAuthorityPort(), app.frame_timer.total_frames);
+                while (app.frame_timer.shouldTick()) {
+                    try app.simulateTick(false, .none);
+                    app.frame_timer.recordCompletedTick();
+                    completed += 1;
+                }
+                sub_tick_frames += @intFromBool(app.frame_timer.ticks_this_frame == 0);
+                catchup_frames += @intFromBool(app.frame_timer.ticks_this_frame > 1);
+                const view = try app.simulation.vehicles().view(target);
+                const v = view.state.chassis.velocity.linear;
+                const signed_speed = vehicle_contract.control.forwardSpeed(view.state.chassis);
+                peak_reverse = @max(peak_reverse, -signed_speed);
+                maximum_speed = @max(maximum_speed, @sqrt(v[0] * v[0] + v[2] * v[2]));
+                steering_observed = steering_observed or @abs(view.conditioned_steering) > 0.1;
+                for (view.state.wheels) |wheel| spinning_observed = spinning_observed or @abs(wheel.angular_velocity) > 1;
+                // A driven car must move within a fixed tick. Previously the
+                // predictor replacement returned one identical chassis at every alpha.
+                var early: engine.physics.Pose = undefined;
+                var late: engine.physics.Pose = undefined;
+                for (app.simulation.presentation().vehicles(0.1)) |draw| if (std.meta.eql(draw.entity, controlled)) {
+                    early = draw.chassis_pose;
+                };
+                for (app.simulation.presentation().vehicles(0.9)) |draw| if (std.meta.eql(draw.entity, controlled)) {
+                    late = draw.chassis_pose;
+                };
+                if (@abs(signed_speed) > 1 and !std.meta.eql(early.position, late.position)) interpolation_motion_frames += 1;
+                const frame = try app.renderS5SmokeFrame(app.frame_timer.alpha());
+                if (offscreen) {
+                    try std.testing.expect(c.SDL_GetWindowFlags(app.window) & c.SDL_WINDOW_HIDDEN != 0);
+                    try std.testing.expect(c.SDL_GetKeyboardFocus() != app.window);
+                    try std.testing.expect(c.SDL_GetMouseFocus() != app.window);
+                    try std.testing.expect(app.gpu_renderer.getSwapchainTexture() == null);
+                }
+
+                try std.testing.expectEqual(game_vehicles.initial_fleet.len, frame.vehicle_count);
+                try std.testing.expect(frame.district_count > 0);
+                var presented: engine.physics.Pose = undefined;
+                for (app.simulation.presentation().vehicles(app.frame_timer.alpha())) |draw| if (std.meta.eql(draw.entity, controlled)) {
+                    presented = draw.chassis_pose;
+                };
+                const projection = app.simulation.inspection().vehicleMotionProjection(controlled, app.frame_timer.alpha()).?;
+                const cam = app.viewport_controller.activeCameraMut(&app.game_camera);
+                try std.testing.expectEqual(if (segment_index % 2 == 0) viewport.Mode.character else .free_camera, app.viewport_controller.mode);
+                if (segment_index % 2 != 0) {
+                    try std.testing.expectEqual(fixed_camera.position, cam.position);
+                    try std.testing.expectEqual(fixed_camera.yaw, cam.yaw);
+                    try std.testing.expectEqual(fixed_camera.pitch, cam.pitch);
+                } else {
+                    const forward = cam.getForward();
+                    const delta = zm.f32x4(presented.position[0] - cam.position[0], presented.position[1] + 1 - cam.position[1], presented.position[2] - cam.position[2], 0);
+                    const direction = zm.normalize3(delta);
+                    try std.testing.expect(direction[0] * forward[0] + direction[1] * forward[1] + direction[2] * forward[2] > 0.999);
+                }
+                try std.json.Stringify.value(.{
+                    .frame = rendered_frames,
+                    .tick = app.simulation.inspection().tickIndex(),
+                    .segment = segment_index,
+                    .elapsed_s = elapsed,
+                    .fixed_ticks = app.frame_timer.ticks_this_frame,
+                    .fixed_alpha = app.frame_timer.alpha(),
+                    .snapshot_alpha = projection.alpha,
+                    .input = segment.input,
+                    .applied_input = view.applied_input,
+                    .forward_mps = signed_speed,
+                    .authority = view.state.chassis,
+                    .replicated_position = projection.replicated.position,
+                    .presented = presented,
+                    .camera_mode = app.viewport_controller.mode,
+                    .camera_position = [3]f32{ cam.position[0], cam.position[1], cam.position[2] },
+                }, .{}, &audit_writer.interface);
+                try audit_writer.interface.writeByte('\n');
+                rendered_frames += 1;
+            }
+            try ScriptedInput.interference(app.window, false);
+            const terminal = try app.simulation.vehicles().view(target);
+            const speed = vehicle_contract.control.forwardSpeed(terminal.state.chassis);
+            std.debug.print("VEHICLE_NATIVE_SEGMENT car={s} segment={d} forward_mps={d:.3}\n", .{ car_name, segment_index, speed });
+            switch (segment.terminal) {
+                .moving => {},
+                .stopped => try std.testing.expect(@abs(speed) < 0.15),
+                .forward => try std.testing.expect(speed > 1),
+                .reverse => try std.testing.expect(speed < -1),
+            }
+        }
+        if (offscreen) {
+            const capture_path = try std.fmt.allocPrint(std.testing.allocator, "zig-out/vehicle-motion-offscreen-{s}.ppm", .{car_name});
+            defer std.testing.allocator.free(capture_path);
+            try @import("vehicle_offscreen_capture.zig").write(&app.gpu_renderer, capture_path);
+        }
+        const replay_bytes = try app.simulation.developer().snapshotFlightRecording(std.testing.allocator);
+        defer std.testing.allocator.free(replay_bytes);
+        const replay_path = try std.fmt.allocPrint(std.testing.allocator, "zig-out/vehicle-motion-{s}-{s}.icrp", .{ if (offscreen) "offscreen" else "native", car_name });
+        defer std.testing.allocator.free(replay_path);
+        try std.Io.Dir.cwd().writeFile(std.testing.io, .{ .sub_path = replay_path, .data = replay_bytes });
+        try audit_writer.interface.flush();
+        try std.testing.expect(sub_tick_frames > 0 and catchup_frames > 0);
+        try std.testing.expect(interpolation_motion_frames > 0);
+        try std.testing.expect(peak_reverse > 1);
+        const after = try app.simulation.vehicles().view(target);
+        try std.testing.expect(maximum_speed > 5);
+        try std.testing.expect(steering_observed and spinning_observed);
+        const dx = after.state.chassis.pose.position[0] - initial_position[0];
+        const dz = after.state.chassis.pose.position[2] - initial_position[2];
+        try std.testing.expect(dx * dx + dz * dz > 1);
+        try std.testing.expectEqual(initial_digest, after.definition_digest);
+        try std.testing.expect(try app.vehicle_visuals.?.ready());
+        try app.action_latch.captureFrame(.{ .interact_pressed = true });
+        try app.simulateTick(false, .none);
+        try app.action_latch.captureFrame(.{});
+        for (0..4) |_| try app.simulateTick(false, .none);
+        try std.testing.expect(app.controlled_vehicle_id == null);
+        _ = try app.renderS5SmokeFrame(0.5);
+        // Input isolation must not suppress lifecycle cleanup or an intentional
+        // stop of the automated window.
+        var lifecycle = std.mem.zeroes(c.SDL_Event);
+        lifecycle.type = c.SDL_EVENT_WINDOW_FOCUS_LOST;
+        lifecycle.window.windowID = c.SDL_GetWindowID(app.window);
+        try std.testing.expect(c.SDL_PushEvent(&lifecycle));
+        try std.testing.expect(app.pumpInputEvents());
+        lifecycle.type = c.SDL_EVENT_WINDOW_CLOSE_REQUESTED;
+        try std.testing.expect(c.SDL_PushEvent(&lifecycle));
+        try std.testing.expect(!app.pumpInputEvents());
+        std.debug.print("EA2_DRIVE_PASS presentation={s} sdl_pedal_journey={} car={s} world=industrial timestep_hz=60 frames={d} peak_speed_mps={d:.3} reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true\n", .{ if (offscreen) "offscreen" else "window", !offscreen, car_name, rendered_frames, maximum_speed });
+    }
 }

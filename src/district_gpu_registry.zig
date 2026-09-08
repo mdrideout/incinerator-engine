@@ -5,7 +5,7 @@
 //! fallback until one fence-polled batch publishes the complete scene.
 
 const std = @import("std");
-const engine = @import("incinerator_engine");
+const engine = @import("engine_contracts");
 const mesh_module = @import("mesh.zig");
 const texture_module = @import("texture.zig");
 const sdl = @import("sdl.zig");
@@ -18,12 +18,9 @@ const OwnedTexture = texture_module.OwnedTexture;
 pub const max_scenes: usize = 4;
 pub const max_in_flight_batches: usize = 2;
 pub const max_scenes_per_batch: usize = 4;
-pub const max_meshes_per_scene: usize = 8;
-pub const max_textures_per_scene: usize = 8;
-pub const max_materials_per_scene: usize = 8;
-pub const max_instances_per_scene: usize = 32;
 
 pub const MeshUpload = struct {
+    asset_id: ?engine.assets.AssetId = null,
     vertices: []const VertexPNU,
     indices: []const u32,
     material_index: u16,
@@ -45,8 +42,22 @@ pub const TextureFilter = enum { nearest, linear };
 pub const TextureAddressMode = enum { clamp_to_edge, mirrored_repeat, repeat };
 
 pub const MaterialUpload = struct {
+    asset_id: ?engine.assets.AssetId = null,
     base_color: [4]f32 = .{ 1, 1, 1, 1 },
     base_color_texture: ?u16 = null,
+    metallic: f32 = 0,
+    roughness: f32 = 1,
+    normal_scale: f32 = 1,
+    occlusion_strength: f32 = 1,
+    emissive: [3]f32 = .{ 0, 0, 0 },
+    metallic_roughness_texture: ?u16 = null,
+    normal_texture: ?u16 = null,
+    occlusion_texture: ?u16 = null,
+    emissive_texture: ?u16 = null,
+
+    pub fn surface(self: MaterialUpload) @import("render_contract.zig").SurfaceMaterial {
+        return .{ .base_color = self.base_color, .metallic = self.metallic, .roughness = self.roughness, .normal_scale = self.normal_scale, .occlusion_strength = self.occlusion_strength, .emissive = self.emissive };
+    }
 };
 
 /// Column-major model transform, matching zmath/renderer matrix layout.
@@ -132,6 +143,7 @@ pub const Diagnostics = struct {
 };
 
 const StagedMesh = struct {
+    asset_id: ?engine.assets.AssetId,
     vertices: []VertexPNU,
     indices: []u32,
     material_index: u16,
@@ -165,6 +177,7 @@ const StagedSceneView = struct {
     materials: []const MaterialUpload,
     instances: []const InstanceUpload,
     upload_bytes: u64,
+    gpu_bytes: u64,
 };
 
 const StagedScene = struct {
@@ -174,6 +187,7 @@ const StagedScene = struct {
     instances: []InstanceUpload,
     cpu_bytes: u64,
     upload_bytes: u64,
+    gpu_bytes: u64,
 
     fn initCopy(allocator: std.mem.Allocator, source: SceneUpload) !StagedScene {
         const sizes = try validateAndSize(source);
@@ -187,6 +201,7 @@ const StagedScene = struct {
             errdefer allocator.free(vertices);
             const indices = try allocator.dupe(u32, item.indices);
             meshes[index] = .{
+                .asset_id = item.asset_id,
                 .vertices = vertices,
                 .indices = indices,
                 .material_index = item.material_index,
@@ -224,6 +239,7 @@ const StagedScene = struct {
             .instances = instances,
             .cpu_bytes = sizes.cpu_bytes,
             .upload_bytes = sizes.upload_bytes,
+            .gpu_bytes = sizes.gpu_bytes,
         };
     }
 
@@ -234,6 +250,7 @@ const StagedScene = struct {
             .materials = self.materials,
             .instances = self.instances,
             .upload_bytes = self.upload_bytes,
+            .gpu_bytes = self.gpu_bytes,
         };
     }
 
@@ -251,6 +268,7 @@ const StagedScene = struct {
 const SceneSizes = struct {
     cpu_bytes: u64,
     upload_bytes: u64,
+    gpu_bytes: u64,
 };
 
 fn checkedAdd(total: *u64, value: u64) !void {
@@ -267,16 +285,9 @@ fn validateAndSize(source: SceneUpload) !SceneSizes {
     if (source.meshes.len == 0 or source.materials.len == 0 or source.instances.len == 0) {
         return error.EmptySceneUpload;
     }
-    if (source.meshes.len > max_meshes_per_scene or
-        source.textures.len > max_textures_per_scene or
-        source.materials.len > max_materials_per_scene or
-        source.instances.len > max_instances_per_scene)
-    {
-        return error.SceneResourceCapacityExceeded;
-    }
-
     var cpu_bytes: u64 = 0;
     var upload_bytes: u64 = 0;
+    var mip_bytes: u64 = 0;
     try checkedAdd(&cpu_bytes, try allocationBytes(StagedMesh, source.meshes.len));
     try checkedAdd(&cpu_bytes, try allocationBytes(StagedTexture, source.textures.len));
     try checkedAdd(&cpu_bytes, try allocationBytes(MaterialUpload, source.materials.len));
@@ -306,6 +317,7 @@ fn validateAndSize(source: SceneUpload) !SceneSizes {
         if (item.rgba8.len != expected) return error.InvalidSceneTexture;
         try checkedAdd(&cpu_bytes, expected);
         try checkedAdd(&upload_bytes, expected);
+        try checkedAdd(&mip_bytes, (try texture_module.mipStorageBytes(item.width, item.height)) - expected);
     }
     for (source.materials) |item| {
         for (item.base_color) |value| {
@@ -313,8 +325,11 @@ fn validateAndSize(source: SceneUpload) !SceneSizes {
                 return error.InvalidSceneMaterial;
             }
         }
-        if (item.base_color_texture) |index| {
-            if (index >= source.textures.len) return error.InvalidSceneTexture;
+        try item.surface().validate();
+        for ([_]?u16{ item.base_color_texture, item.metallic_roughness_texture, item.normal_texture, item.occlusion_texture, item.emissive_texture }) |reference| {
+            if (reference) |index| {
+                if (index >= source.textures.len) return error.InvalidSceneTexture;
+            }
         }
     }
     for (source.instances) |item| {
@@ -326,7 +341,7 @@ fn validateAndSize(source: SceneUpload) !SceneSizes {
     if (upload_bytes == 0 or upload_bytes > std.math.maxInt(u32)) {
         return error.SceneUploadTooLarge;
     }
-    return .{ .cpu_bytes = cpu_bytes, .upload_bytes = upload_bytes };
+    return .{ .cpu_bytes = cpu_bytes, .upload_bytes = upload_bytes, .gpu_bytes = try std.math.add(u64, upload_bytes, mip_bytes) };
 }
 
 /// State machine parameterized by a narrow upload backend. Production uses
@@ -348,6 +363,7 @@ pub fn Registry(comptime Backend: type) type {
             slot_index: u8 = 0,
             generation: u64 = 0,
             upload_bytes: u64 = 0,
+            gpu_bytes: u64 = 0,
             discard: bool = false,
         };
 
@@ -447,7 +463,7 @@ pub fn Registry(comptime Backend: type) type {
             if (sizes.cpu_bytes > self.config.max_staged_cpu_bytes or
                 sizes.upload_bytes > self.config.max_submit_bytes_per_pump or
                 sizes.upload_bytes > self.config.max_in_flight_upload_bytes or
-                sizes.upload_bytes > self.config.max_resident_gpu_bytes)
+                sizes.gpu_bytes > self.config.max_resident_gpu_bytes)
             {
                 return error.DistrictSceneExceedsBudget;
             }
@@ -459,15 +475,18 @@ pub fn Registry(comptime Backend: type) type {
             if (projected_staging > self.config.max_staged_cpu_bytes) {
                 return error.DistrictStagingBudgetExceeded;
             }
-            const committed_gpu = std.math.add(
-                u64,
-                self.resident_gpu_bytes,
-                self.in_flight_upload_bytes,
-            ) catch return error.DistrictResidentBudgetExceeded;
-            const with_staged = std.math.add(u64, committed_gpu, self.staged_upload_bytes) catch
-                return error.DistrictResidentBudgetExceeded;
-            const projected = std.math.add(u64, with_staged, sizes.upload_bytes) catch
-                return error.DistrictResidentBudgetExceeded;
+            // Reserve complete mip storage while transfer budgets count only
+            // uploaded level-zero texels. Retiring batches still own resources.
+            var projected = self.resident_gpu_bytes;
+            for (self.slots) |existing| {
+                if (existing.staged) |staged| try checkedAdd(&projected, staged.gpu_bytes);
+            }
+            for (self.batches) |batch| {
+                if (batch.active) for (batch.entries[0..batch.count]) |entry| {
+                    try checkedAdd(&projected, entry.gpu_bytes);
+                };
+            }
+            try checkedAdd(&projected, sizes.gpu_bytes);
             if (projected > self.config.max_resident_gpu_bytes) {
                 return error.DistrictResidentBudgetExceeded;
             }
@@ -678,7 +697,7 @@ pub fn Registry(comptime Backend: type) type {
                     }
                     slot.resident = candidate;
                     slot.state = .resident;
-                    self.resident_gpu_bytes += entry.upload_bytes;
+                    self.resident_gpu_bytes += entry.gpu_bytes;
                     result.published_scenes += 1;
                 }
                 batch.active = false;
@@ -754,6 +773,7 @@ pub fn Registry(comptime Backend: type) type {
                     .slot_index = slot_index,
                     .generation = slot.generation,
                     .upload_bytes = staged.upload_bytes,
+                    .gpu_bytes = staged.gpu_bytes,
                 };
                 batch.candidates[item_index] = candidate;
                 self.staged_cpu_bytes -= staged.cpu_bytes;
@@ -842,12 +862,10 @@ pub const ResidentMesh = struct {
     material_index: u16,
 };
 
-pub const ResidentMaterial = struct {
-    base_color: [4]f32,
-    base_color_texture: ?u16,
-};
+pub const ResidentMaterial = MaterialUpload;
 
 pub const SdlMeshView = struct {
+    asset_id: ?engine.assets.AssetId = null,
     mesh: *const Mesh,
     material_index: u16,
 };
@@ -858,60 +876,60 @@ pub const SdlTextureBinding = struct {
 };
 
 pub const SdlSceneView = struct {
-    mesh_storage: [max_meshes_per_scene]SdlMeshView = undefined,
-    texture_storage: [max_textures_per_scene]SdlTextureBinding = undefined,
-    material_storage: [max_materials_per_scene]ResidentMaterial = undefined,
-    instance_storage: [max_instances_per_scene]InstanceUpload = undefined,
-    mesh_count: u8 = 0,
-    texture_count: u8 = 0,
-    material_count: u8 = 0,
-    instance_count: u8 = 0,
+    mesh_storage: []const SdlMeshView = &.{},
+    texture_storage: []const SdlTextureBinding = &.{},
+    material_storage: []const ResidentMaterial = &.{.{ .base_color_texture = null }},
+    instance_storage: []const InstanceUpload = &.{.{ .mesh_index = 0, .transform = identity_transform }},
+    mesh_count: usize = 0,
+    texture_count: usize = 0,
+    material_count: usize = 1,
+    instance_count: usize = 1,
+    fallback_mesh: [1]SdlMeshView = undefined,
+    fallback_texture: [1]SdlTextureBinding = undefined,
+    is_fallback: bool = false,
 
-    pub fn single(
-        fallback_mesh: *const Mesh,
-        fallback_texture: ?texture_module.Texture,
-    ) SdlSceneView {
-        var result = SdlSceneView{};
-        result.mesh_storage[0] = .{ .mesh = fallback_mesh, .material_index = 0 };
-        result.mesh_count = 1;
+    pub fn single(fallback_mesh: *const Mesh, fallback_texture: ?texture_module.Texture) SdlSceneView {
+        var result = SdlSceneView{ .is_fallback = true, .mesh_count = 1 };
+        result.fallback_mesh[0] = .{ .mesh = fallback_mesh, .material_index = 0 };
         if (fallback_texture) |borrowed| {
-            // Fallback views intentionally rely on the renderer's default
-            // sampler while preserving a complete material/texture binding.
-            result.texture_storage[0] = .{ .texture = borrowed, .sampler = null };
+            result.fallback_texture[0] = .{ .texture = borrowed, .sampler = null };
             result.texture_count = 1;
+            result.material_storage = &.{.{ .base_color_texture = 0 }};
         }
-        result.material_storage[0] = .{
-            .base_color = .{ 1, 1, 1, 1 },
-            .base_color_texture = if (fallback_texture != null) 0 else null,
-        };
-        result.material_count = 1;
-        result.instance_storage[0] = .{
-            .mesh_index = 0,
-            .transform = identity_transform,
-        };
-        result.instance_count = 1;
         return result;
     }
 
     pub fn meshes(self: *const SdlSceneView) []const SdlMeshView {
-        return self.mesh_storage[0..self.mesh_count];
+        return if (self.is_fallback) &self.fallback_mesh else self.mesh_storage;
+    }
+
+    pub fn textures(self: *const SdlSceneView) []const SdlTextureBinding {
+        return if (self.is_fallback) self.fallback_texture[0..self.texture_count] else self.texture_storage;
     }
 
     pub fn materials(self: *const SdlSceneView) []const ResidentMaterial {
-        return self.material_storage[0..self.material_count];
+        return self.material_storage;
     }
 
     pub fn instances(self: *const SdlSceneView) []const InstanceUpload {
-        return self.instance_storage[0..self.instance_count];
+        return self.instance_storage;
     }
 
-    pub fn materialTexture(
-        self: *const SdlSceneView,
-        material_index: u16,
-    ) ?SdlTextureBinding {
+    pub fn materialTexture(self: *const SdlSceneView, material_index: u16) ?SdlTextureBinding {
+        const index = self.material_storage[material_index].base_color_texture orelse return null;
+        return self.textures()[index];
+    }
+
+    pub fn materialTextures(self: *const SdlSceneView, material_index: u16) @import("renderer.zig").MaterialTextures {
         const material = self.material_storage[material_index];
-        const texture_index = material.base_color_texture orelse return null;
-        return self.texture_storage[texture_index];
+        var result = @import("renderer.zig").MaterialTextures{};
+        inline for (.{ "base_color", "metallic_roughness", "normal", "occlusion", "emissive" }) |slot| {
+            if (@field(material, slot ++ "_texture")) |index| {
+                const binding = self.textures()[index];
+                @field(result, slot) = .{ .texture = binding.texture, .sampler = binding.sampler };
+            }
+        }
+        return result;
     }
 
     pub fn materialBaseColor(self: *const SdlSceneView, material_index: u16) [4]f32 {
@@ -920,16 +938,34 @@ pub const SdlSceneView = struct {
 };
 
 const SdlCandidate = struct {
-    meshes: [max_meshes_per_scene]ResidentMesh = undefined,
-    mesh_count: u8 = 0,
-    textures: [max_textures_per_scene]OwnedTexture = undefined,
-    samplers: [max_textures_per_scene]*c.SDL_GPUSampler = undefined,
-    texture_count: u8 = 0,
-    materials: [max_materials_per_scene]ResidentMaterial = undefined,
-    material_count: u8 = 0,
-    instances: [max_instances_per_scene]InstanceUpload = undefined,
-    instance_count: u8 = 0,
-    upload_bytes: u64 = 0,
+    arena: std.heap.ArenaAllocator,
+    meshes: []ResidentMesh,
+    mesh_views: []SdlMeshView,
+    mesh_count: usize = 0,
+    textures: []OwnedTexture,
+    texture_views: []SdlTextureBinding,
+    samplers: []*c.SDL_GPUSampler,
+    texture_count: usize = 0,
+    materials: []ResidentMaterial,
+    material_count: usize = 0,
+    instances: []InstanceUpload,
+    instance_count: usize = 0,
+    upload_bytes: u64,
+    gpu_bytes: u64,
+
+    fn init(backing_allocator: std.mem.Allocator, source: StagedSceneView) !SdlCandidate {
+        var arena = std.heap.ArenaAllocator.init(backing_allocator);
+        errdefer arena.deinit();
+        const allocator = arena.allocator();
+        const meshes = try allocator.alloc(ResidentMesh, source.meshes.len);
+        const mesh_views = try allocator.alloc(SdlMeshView, source.meshes.len);
+        const textures = try allocator.alloc(OwnedTexture, source.textures.len);
+        const texture_views = try allocator.alloc(SdlTextureBinding, source.textures.len);
+        const samplers = try allocator.alloc(*c.SDL_GPUSampler, source.textures.len);
+        const materials = try allocator.alloc(ResidentMaterial, source.materials.len);
+        const instances = try allocator.alloc(InstanceUpload, source.instances.len);
+        return .{ .arena = arena, .meshes = meshes, .mesh_views = mesh_views, .textures = textures, .texture_views = texture_views, .samplers = samplers, .materials = materials, .instances = instances, .upload_bytes = source.upload_bytes, .gpu_bytes = source.gpu_bytes };
+    }
 };
 
 const SdlSubmission = struct {
@@ -950,8 +986,8 @@ const TextureLayout = struct {
 };
 
 const SceneLayout = struct {
-    meshes: [max_meshes_per_scene]MeshLayout = undefined,
-    textures: [max_textures_per_scene]TextureLayout = undefined,
+    meshes: []MeshLayout,
+    textures: []TextureLayout,
 };
 
 pub const SdlBackend = struct {
@@ -960,15 +996,20 @@ pub const SdlBackend = struct {
     pub const ResourceView = SdlSceneView;
 
     device: *c.SDL_GPUDevice,
+    allocator: std.mem.Allocator = std.heap.page_allocator,
 
     pub fn submitBatch(
         self: *SdlBackend,
         items: []const StagedSceneView,
         out: *[max_scenes_per_batch]?Candidate,
     ) !Submission {
-        var layouts: [max_scenes_per_batch]SceneLayout = @splat(.{});
+        var layout_arena = std.heap.ArenaAllocator.init(self.allocator);
+        defer layout_arena.deinit();
+        const layout_allocator = layout_arena.allocator();
+        const layouts = try layout_allocator.alloc(SceneLayout, items.len);
         var total: u32 = 0;
         for (items, 0..) |item, item_index| {
+            layouts[item_index] = .{ .meshes = try layout_allocator.alloc(MeshLayout, item.meshes.len), .textures = try layout_allocator.alloc(TextureLayout, item.textures.len) };
             for (item.meshes, 0..) |source, mesh_index| {
                 const vertex_bytes = try gpuSize(VertexPNU, source.vertices.len);
                 const index_bytes = try gpuSize(u32, source.indices.len);
@@ -1000,7 +1041,7 @@ pub const SdlBackend = struct {
             candidate.* = null;
         };
         for (items, 0..) |item, item_index| {
-            out[item_index] = Candidate{ .upload_bytes = item.upload_bytes };
+            out[item_index] = try Candidate.init(self.allocator, item);
             const candidate = &(out[item_index].?);
             for (item.meshes, 0..) |source, mesh_index| {
                 const layout = layouts[item_index].meshes[mesh_index];
@@ -1026,6 +1067,7 @@ pub const SdlBackend = struct {
                     },
                     .material_index = source.material_index,
                 };
+                candidate.mesh_views[mesh_index] = .{ .asset_id = source.asset_id, .mesh = &candidate.meshes[mesh_index].mesh, .material_index = source.material_index };
                 candidate.mesh_count += 1;
             }
             for (item.textures, 0..) |source, texture_index| {
@@ -1038,7 +1080,7 @@ pub const SdlBackend = struct {
                         .nearest => c.SDL_GPU_FILTER_NEAREST,
                         .linear => c.SDL_GPU_FILTER_LINEAR,
                     },
-                    .mipmap_mode = c.SDL_GPU_SAMPLERMIPMAPMODE_NEAREST,
+                    .mipmap_mode = c.SDL_GPU_SAMPLERMIPMAPMODE_LINEAR,
                     .address_mode_u = sdlAddressMode(source.address_u),
                     .address_mode_v = sdlAddressMode(source.address_v),
                     .address_mode_w = c.SDL_GPU_SAMPLERADDRESSMODE_REPEAT,
@@ -1046,7 +1088,7 @@ pub const SdlBackend = struct {
                     .max_anisotropy = 1,
                     .compare_op = c.SDL_GPU_COMPAREOP_INVALID,
                     .min_lod = 0,
-                    .max_lod = 0,
+                    .max_lod = @floatFromInt(texture_module.mipLevelCount(source.width, source.height) - 1),
                     .enable_anisotropy = false,
                     .enable_compare = false,
                     .padding1 = 0,
@@ -1061,11 +1103,11 @@ pub const SdlBackend = struct {
                         .rgba8_unorm => c.SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM,
                         .rgba8_srgb => c.SDL_GPU_TEXTUREFORMAT_R8G8B8A8_UNORM_SRGB,
                     },
-                    .usage = c.SDL_GPU_TEXTUREUSAGE_SAMPLER,
+                    .usage = c.SDL_GPU_TEXTUREUSAGE_SAMPLER | c.SDL_GPU_TEXTUREUSAGE_COLOR_TARGET,
                     .width = source.width,
                     .height = source.height,
                     .layer_count_or_depth = 1,
-                    .num_levels = 1,
+                    .num_levels = texture_module.mipLevelCount(source.width, source.height),
                     .sample_count = c.SDL_GPU_SAMPLECOUNT_1,
                     .props = 0,
                 }) orelse return error.TextureCreationFailed;
@@ -1078,14 +1120,12 @@ pub const SdlBackend = struct {
                     },
                 };
                 candidate.samplers[texture_index] = gpu_sampler;
+                candidate.texture_views[texture_index] = .{ .texture = candidate.textures[texture_index].borrow(), .sampler = gpu_sampler };
                 candidate.texture_count += 1;
                 sampler_owned = false;
             }
             for (item.materials, 0..) |source, material_index| {
-                candidate.materials[material_index] = .{
-                    .base_color = source.base_color,
-                    .base_color_texture = source.base_color_texture,
-                };
+                candidate.materials[material_index] = source;
                 candidate.material_count += 1;
             }
             for (item.instances, 0..) |source, instance_index| {
@@ -1168,6 +1208,14 @@ pub const SdlBackend = struct {
             }
         }
         c.SDL_EndGPUCopyPass(copy_pass);
+        for (items, 0..) |item, item_index| {
+            const candidate = &(out[item_index] orelse unreachable);
+            for (item.textures, 0..) |source, texture_index| {
+                if (texture_module.mipLevelCount(source.width, source.height) > 1) {
+                    c.SDL_GenerateMipmapsForGPUTexture(command, candidate.textures[texture_index].borrow().getHandle());
+                }
+            }
+        }
         // Submission consumes `command` even when fence acquisition fails.
         // Never attempt cancellation beyond this point.
         const fence = c.SDL_SubmitGPUCommandBufferAndAcquireFence(command) orelse
@@ -1197,40 +1245,16 @@ pub const SdlBackend = struct {
             c.SDL_ReleaseGPUSampler(candidate.textures[texture_index].device, candidate.samplers[texture_index]);
             candidate.textures[texture_index].deinit();
         }
+        candidate.arena.deinit();
         candidate.* = undefined;
     }
 
     pub fn candidateBytes(_: *SdlBackend, candidate: *const Candidate) u64 {
-        return candidate.upload_bytes;
+        return candidate.gpu_bytes;
     }
 
     pub fn view(_: *SdlBackend, candidate: *const Candidate) ResourceView {
-        var result = ResourceView{};
-        for (candidate.meshes[0..candidate.mesh_count], 0..) |*resident, index| {
-            result.mesh_storage[index] = .{
-                .mesh = &resident.mesh,
-                .material_index = resident.material_index,
-            };
-        }
-        result.mesh_count = candidate.mesh_count;
-        for (candidate.textures[0..candidate.texture_count], 0..) |*owned, index| {
-            result.texture_storage[index] = .{
-                .texture = owned.borrow(),
-                .sampler = candidate.samplers[index],
-            };
-        }
-        result.texture_count = candidate.texture_count;
-        @memcpy(
-            result.material_storage[0..candidate.material_count],
-            candidate.materials[0..candidate.material_count],
-        );
-        result.material_count = candidate.material_count;
-        @memcpy(
-            result.instance_storage[0..candidate.instance_count],
-            candidate.instances[0..candidate.instance_count],
-        );
-        result.instance_count = candidate.instance_count;
-        return result;
+        return .{ .mesh_storage = candidate.mesh_views[0..candidate.mesh_count], .texture_storage = candidate.texture_views[0..candidate.texture_count], .material_storage = candidate.materials[0..candidate.material_count], .instance_storage = candidate.instances[0..candidate.instance_count], .mesh_count = candidate.mesh_count, .texture_count = candidate.texture_count, .material_count = candidate.material_count, .instance_count = candidate.instance_count };
     }
 };
 
@@ -1314,7 +1338,7 @@ const FakeBackend = struct {
         self.recorder.submissions += 1;
         for (items, 0..) |item, index| {
             if (self.recorder.omit_last_candidate and index + 1 == items.len) break;
-            out[index] = .{ .id = self.recorder.next_candidate, .bytes = item.upload_bytes };
+            out[index] = .{ .id = self.recorder.next_candidate, .bytes = item.gpu_bytes };
             self.recorder.next_candidate += 1;
         }
         if (self.recorder.fail_after_candidates) return error.InjectedPartialSubmitFailure;
@@ -1352,6 +1376,39 @@ fn testRegistry(recorder: *FakeRecorder) !FakeRegistry {
         0,
         .{},
     );
+}
+
+test "mip chains count rectangular levels and reserve storage throughout residency" {
+    try std.testing.expectEqual(@as(u32, 1), texture_module.mipLevelCount(1, 1));
+    try std.testing.expectEqual(@as(u32, 3), texture_module.mipLevelCount(7, 3));
+    try std.testing.expectEqual(@as(u64, 100), try texture_module.mipStorageBytes(7, 3));
+    try std.testing.expectEqual(@as(u64, 60), try texture_module.mipStorageBytes(1, 8));
+
+    const pixels: [4 * 4 * 4]u8 = @splat(255);
+    const textures = [_]TextureUpload{.{ .width = 4, .height = 4, .rgba8 = &pixels }};
+    var scene = test_scene;
+    scene.textures = &textures;
+    const sizes = try validateAndSize(scene);
+    try std.testing.expectEqual(sizes.upload_bytes + 20, sizes.gpu_bytes);
+    var recorder = FakeRecorder{};
+    var registry = try FakeRegistry.init(std.testing.allocator, .{ .recorder = &recorder }, 0, .{
+        .max_resident_gpu_bytes = sizes.gpu_bytes + sizes.upload_bytes,
+    });
+    defer registry.deinit();
+    const first = try registry.reserve();
+    const second = try registry.reserve();
+    try registry.stage(first, scene);
+    try std.testing.expectError(error.DistrictResidentBudgetExceeded, registry.stage(second, scene));
+    _ = try registry.pump();
+    try std.testing.expectEqual(sizes.upload_bytes, (try registry.stats()).in_flight_upload_bytes);
+    try std.testing.expectError(error.DistrictResidentBudgetExceeded, registry.stage(second, scene));
+    recorder.signaled[0] = true;
+    _ = try registry.pump();
+    try std.testing.expectEqual(sizes.gpu_bytes, (try registry.stats()).resident_gpu_bytes);
+    try std.testing.expectError(error.DistrictResidentBudgetExceeded, registry.stage(second, scene));
+    try registry.cancel(first);
+    try std.testing.expectEqual(@as(u64, 0), (try registry.stats()).resident_gpu_bytes);
+    try registry.stage(second, scene);
 }
 
 fn expectRegistryDrained(stats: Stats) !void {

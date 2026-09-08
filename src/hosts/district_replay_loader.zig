@@ -396,7 +396,7 @@ comptime {
 }
 
 fn testTicket(generation: u64) district_contract.LoadTicket {
-    return .{ .coord = .{ .x = 2, .z = -3 }, .generation = generation };
+    return .{ .coord = .{ .x = 1, .z = 1 }, .generation = generation };
 }
 
 fn testRequest(ticket: district_contract.LoadTicket) district_contract.LoadRequest {

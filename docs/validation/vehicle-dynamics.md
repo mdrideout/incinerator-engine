@@ -1,9 +1,39 @@
 # Vehicle Dynamics Characterization
 
 **Status:** Implemented and automated
-**Date:** 2026-07-19
+**Date:** 2026-07-19 (historical baseline); EA2 update 2026-09-07
 **Product target:** Apple Silicon macOS
 **Physics cohort:** Jolt 5.5 through the pinned JoltC adapter, 120 Hz
+
+## Current EA2 workflow
+
+The [EA2 ledger](ea2-vehicle-authoring.md) supersedes the old shipping tuning and
+comparative pass criteria below. The tire-unit fix, explicit game definitions,
+120 Hz historical rig and fifteen product-60-Hz maneuvers are implemented. Use
+Vehicle Lab/CLI Measure, or `zig-out/bin/incinerator_vehicle_dynamics --definition
+<absolute-definition.icvehicle>` after building. Full reports distinguish incomplete
+conditions, preserve every trace and include prediction correction measurements.
+The tables below remain historical evidence; they are not current defaults.
+
+## Historical EA2 research finding, 2026-09-07
+
+The [EA2 investigation](../design/ea2-vehicle-dynamics-research.md) reproduced
+the results below and identified a unit mismatch: the adapter passes canonical
+radian lateral-curve coordinates to Jolt's degree-based curve. Thus the stated
+3-degree and 20-degree points below describe the intended authored values;
+the current adapter installs approximately 0.05236 and 0.34907 degrees.
+Both reported profiles share that conversion defect. The legacy row is not an
+exact reconstruction of Jolt's original lateral curve.
+
+The existing 60-degree pitch/roll constraint is also an active stabilization
+setting. The small tilt reported here does not prove it engaged, but these
+scenarios do not establish unassisted rollover behavior. The slip columns
+measure chassis sideslip rather than individual tire slip angles.
+
+Preserve this table as pre-correction evidence. EA2-0 corrected the adapter,
+read back the installed curve in a real-Jolt test, and reran the full comparison
+before selecting new vehicle tuning. The original command output and source
+fingerprints are in [research-baseline.json](ea2-vehicle-authoring/research-baseline.json).
 
 ## Purpose
 
@@ -76,4 +106,3 @@ separate future work and rendered human acceptance.
 
 The reusable workflow lives in
 [`skills/incinerator-vehicle-tuning/SKILL.md`](../../skills/incinerator-vehicle-tuning/SKILL.md).
-

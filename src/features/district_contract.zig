@@ -1,6 +1,6 @@
 //! Renderer-, ECS-, and physics-backend-neutral district loading contract.
 //!
-//! The first streaming slice deliberately carries a fixed amount of plain data.
+//! Plain-data capacities come from the composed game's authored scene.
 //! A worker may prepare this data, but only the simulation owner may turn it
 //! into entities or physics bodies.
 
@@ -9,11 +9,11 @@ const engine = @import("engine_contracts");
 
 pub const Pose = engine.Pose;
 
-pub const max_static_boxes: usize = 8;
+pub const max_static_boxes: usize = @import("spatial_options").max_static_boxes;
 pub const decoded_bytes_per_static_box: u32 = 40;
-pub const max_navigation_nodes: usize = 8;
-pub const max_navigation_edges: usize = 16;
-pub const max_navigation_outgoing_edges: usize = 3;
+pub const max_navigation_nodes: usize = @import("spatial_options").max_navigation_nodes;
+pub const max_navigation_edges: usize = @import("spatial_options").max_navigation_edges;
+pub const max_navigation_outgoing_edges: usize = @import("spatial_options").max_navigation_outgoing_edges;
 pub const decoded_bytes_per_navigation_node: u32 = 16;
 pub const decoded_bytes_per_navigation_edge: u32 = 12;
 pub const max_navigation_decoded_bytes: u32 =
@@ -21,7 +21,7 @@ pub const max_navigation_decoded_bytes: u32 =
     max_navigation_edges * decoded_bytes_per_navigation_edge;
 pub const max_decoded_bytes: u32 =
     max_static_boxes * decoded_bytes_per_static_box + max_navigation_decoded_bytes;
-pub const chunk_span: f32 = 16.0;
+pub const chunk_span: f32 = @import("spatial_options").chunk_span;
 pub const chunk_half_span: f32 = chunk_span / 2.0;
 
 pub const ChunkCoord = struct {
@@ -591,19 +591,19 @@ test "load ticket generation is explicit" {
 test "world position ownership uses finite half-open district cells" {
     try std.testing.expectEqualDeep(
         ChunkCoord{ .x = 0, .z = 0 },
-        try chunkCoordForWorldPosition(.{ -8.0, 0, 7.999_999 }),
+        try chunkCoordForWorldPosition(.{ -chunk_half_span, 0, chunk_half_span - 0.001 }),
     );
     try std.testing.expectEqualDeep(
         ChunkCoord{ .x = 1, .z = 0 },
-        try chunkCoordForWorldPosition(.{ 8.0, 100, -8.0 }),
+        try chunkCoordForWorldPosition(.{ chunk_half_span, 100, -chunk_half_span }),
     );
     try std.testing.expectEqualDeep(
         ChunkCoord{ .x = -1, .z = -1 },
-        try chunkCoordForWorldPosition(.{ -8.000_001, -100, -8.000_001 }),
+        try chunkCoordForWorldPosition(.{ -chunk_half_span - 0.001, -100, -chunk_half_span - 0.001 }),
     );
     try std.testing.expectEqualDeep(
         ChunkCoord{ .x = -1, .z = 2 },
-        try chunkCoordForWorldPosition(.{ -24.0, 0, 24.0 }),
+        try chunkCoordForWorldPosition(.{ -3 * chunk_half_span, 0, 3 * chunk_half_span }),
     );
 
     try std.testing.expectError(

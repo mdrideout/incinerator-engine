@@ -9,6 +9,7 @@ pub const contracts = @import("engine_contracts");
 pub const identity = contracts.identity;
 pub const transform = contracts.transform;
 pub const assets = contracts.assets;
+pub const material = contracts.material;
 pub const authoring = contracts.authoring;
 pub const developer_endpoint = contracts.developer_endpoint;
 pub const diagnostic_contracts = contracts.diagnostics;

@@ -1,0 +1,42 @@
+{
+  "audit": {
+    "elapsed_seconds": 0.5897894169902429,
+    "bytes": 66793996,
+    "maximum_rss_bytes": 31293440
+  },
+  "summary": {
+    "elapsed_seconds": 0.37143062497489154,
+    "bytes": 92442,
+    "maximum_rss_bytes": 19496960
+  },
+  "build": {
+    "tire_response": "combined-slip-sliding-v1",
+    "source_cohort": 12349060619409440027,
+    "jolt_revision": "23dadd0e603f1b321142d4c74df07fce85064989",
+    "joltc_revision": "52d8c98df523f449eb3e01b1060a0fde052970d1",
+    "zig_version": "0.16.0",
+    "optimize": "ReleaseSafe",
+    "architecture": "aarch64"
+  },
+  "serial_seconds": 4.53867708297912,
+  "parallel_seconds": 1.6443347500171512,
+  "jobs": 4,
+  "scenarios": 360,
+  "measured_ticks": 111240,
+  "serial_parallel_byte_identical": true,
+  "compact_full_measurements_identical": true,
+  "independent_python_axle_reduction_matches": true,
+  "per_vehicle_compact_bytes": {
+    "494e43494e455241-867ee4c3b011b0fe.json": 514865,
+    "494e43494e455241-38d7f4075c7ac47d.json": 515065,
+    "494e43494e455241-20915108d5f1c706.json": 513424
+  },
+  "debug_serial_seconds": 54.652732666931115,
+  "speedup_debug_serial_to_release_parallel": 33.23698697382699,
+  "trace_to_summary_size_ratio": 722.5503126284589,
+  "invalid_asset_worker_failure_retained": true,
+  "default_jobs": 12,
+  "default_seconds": 0.8940850000362843,
+  "default_parallel_byte_identical": true,
+  "speedup_debug_serial_to_release_default": 61.126998735817246
+}

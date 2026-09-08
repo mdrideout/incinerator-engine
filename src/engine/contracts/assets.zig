@@ -5,6 +5,7 @@
 //! backend resource identifier.
 
 const std = @import("std");
+const material_contract = @import("material.zig");
 
 pub const Digest = [32]u8;
 
@@ -84,6 +85,60 @@ pub const MaterialMetadata = struct {
     base_color: [4]f32,
     base_color_texture: ?AssetId,
     base_color_texcoord: u8,
+    metallic: f32 = 0,
+    roughness: f32 = 1,
+    normal_scale: f32 = 1,
+    occlusion_strength: f32 = 1,
+    emissive: [3]f32 = .{ 0, 0, 0 },
+    metallic_roughness_texture: ?AssetId = null,
+    normal_texture: ?AssetId = null,
+    occlusion_texture: ?AssetId = null,
+    emissive_texture: ?AssetId = null,
+
+    /// Canonical session-value digest, independent of padding and GPU state.
+    pub fn digest(self: MaterialMetadata) Digest {
+        var hash = std.crypto.hash.sha2.Sha256.init(.{});
+        hash.update("incinerator.material.value.v1");
+        for (self.base_color ++ self.emissive ++ [4]f32{ self.metallic, self.roughness, self.normal_scale, self.occlusion_strength }) |value| {
+            var bytes: [4]u8 = undefined;
+            std.mem.writeInt(u32, &bytes, @bitCast(value), .little);
+            hash.update(&bytes);
+        }
+        hash.update(&.{self.base_color_texcoord});
+        for ([_]?AssetId{ self.base_color_texture, self.metallic_roughness_texture, self.normal_texture, self.occlusion_texture, self.emissive_texture }) |id| {
+            hash.update(&.{@intFromBool(id != null)});
+            if (id) |value| {
+                var bytes: [16]u8 = undefined;
+                std.mem.writeInt(u64, bytes[0..8], value.namespace, .little);
+                std.mem.writeInt(u64, bytes[8..16], value.local, .little);
+                hash.update(&bytes);
+            }
+        }
+        var result: Digest = undefined;
+        hash.final(&result);
+        return result;
+    }
+
+    pub fn parameters(self: MaterialMetadata) material_contract.Parameters {
+        return .{ .base_color = self.base_color, .metallic = self.metallic, .roughness = self.roughness, .normal_scale = self.normal_scale, .occlusion_strength = self.occlusion_strength, .emissive = self.emissive };
+    }
+
+    pub fn setParameters(self: *MaterialMetadata, value: material_contract.Parameters) void {
+        self.base_color = value.base_color;
+        self.metallic = value.metallic;
+        self.roughness = value.roughness;
+        self.normal_scale = value.normal_scale;
+        self.occlusion_strength = value.occlusion_strength;
+        self.emissive = value.emissive;
+    }
+
+    pub fn validate(self: MaterialMetadata) !void {
+        try self.parameters().validate();
+        if (self.base_color_texcoord != 0) return error.UnsupportedMaterialTexcoord;
+        for ([_]?AssetId{ self.base_color_texture, self.metallic_roughness_texture, self.normal_texture, self.occlusion_texture, self.emissive_texture }) |id| {
+            if (id) |value| try value.validate();
+        }
+    }
 };
 
 pub const Details = union(enum) {
@@ -123,12 +178,7 @@ pub const Entry = struct {
         switch (self.details) {
             .scene, .mesh => {},
             .material => |material| {
-                for (material.base_color) |component| {
-                    if (!std.math.isFinite(component) or component < 0 or component > 1) {
-                        return error.InvalidMaterialMetadata;
-                    }
-                }
-                if (material.base_color_texture) |texture| try texture.validate();
+                try material.validate();
             },
             .texture => |texture| {
                 if (texture.width == 0 or texture.height == 0) {

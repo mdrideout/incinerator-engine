@@ -1,0 +1,10 @@
+{
+  "courier": {
+    "full_report_sha256": "5173d4491d0456a3d7e2c869fe1f867ea1dd75114abdf4a85db2923df2228134",
+    "repeat_byte_identical": true
+  },
+  "meridian": {
+    "full_report_sha256": "c97c21767907f81098d644a53bdca7d93e367c5db372d7d28c8dd5b3356ba694",
+    "repeat_byte_identical": true
+  }
+}

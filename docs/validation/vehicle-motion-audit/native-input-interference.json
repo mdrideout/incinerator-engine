@@ -1,0 +1,70 @@
+{
+  "run": "/Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T20-46-23.991Z_solo_fd2aab8f",
+  "manifest": {
+    "status": "complete",
+    "dropped_records": 0,
+    "writer_failed": false,
+    "anomaly_count": 0,
+    "replay_status": "not_attached"
+  },
+  "motion_frames": 562,
+  "samples": [
+    {
+      "recorder_sequence": 3728,
+      "presentation_frame": 631,
+      "authority_tick": 774,
+      "camera_mode": "free_camera",
+      "camera_position": [
+        -2.9914886951446533,
+        25.791276931762695,
+        35.28046798706055
+      ],
+      "camera_yaw": 0,
+      "camera_pitch": -0.6202495098114014,
+      "forward_mps": -7.186534404754639
+    },
+    {
+      "recorder_sequence": 4318,
+      "presentation_frame": 712,
+      "authority_tick": 870,
+      "camera_mode": "free_camera",
+      "camera_position": [
+        -2.9914886951446533,
+        25.791276931762695,
+        35.28046798706055
+      ],
+      "camera_yaw": 0.00021093750547152013,
+      "camera_pitch": -0.6202495098114014,
+      "forward_mps": -0.24980539083480835
+    },
+    {
+      "recorder_sequence": 4517,
+      "presentation_frame": 741,
+      "authority_tick": 906,
+      "camera_mode": "free_camera",
+      "camera_position": [
+        -2.9914886951446533,
+        25.791276931762695,
+        35.28046798706055
+      ],
+      "camera_yaw": 0.2644062638282776,
+      "camera_pitch": -0.6336947679519653,
+      "forward_mps": -0.0009058687719516456
+    },
+    {
+      "recorder_sequence": 4522,
+      "presentation_frame": 742,
+      "authority_tick": 907,
+      "camera_mode": "free_camera",
+      "camera_position": [
+        -3.0247275829315186,
+        25.791276931762695,
+        35.27042770385742
+      ],
+      "camera_yaw": 0.2933593988418579,
+      "camera_pitch": -0.6332728862762451,
+      "forward_mps": -0.0013057701289653778
+    }
+  ],
+  "inspection_limit": "No anomaly was flagged before assertion failure; summarizer and strict inspector return MissingAnomalyIndex. No accepted-ingress replay was exported before failure."
+}

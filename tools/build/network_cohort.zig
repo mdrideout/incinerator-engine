@@ -4,7 +4,7 @@ const std = @import("std");
 
 pub fn sourceFingerprint(io: std.Io, allocator: std.mem.Allocator, root: std.Io.Dir) !u64 {
     var hash = std.hash.Wyhash.init(0x494e_4342);
-    for ([_][]const u8{ "src", "shaders", "third_party", "tools/build" }) |path| {
+    for ([_][]const u8{ "src", "game", "shaders", "third_party", "tools/build" }) |path| {
         var dir = try root.openDir(io, path, .{ .iterate = true });
         defer dir.close(io);
         addPart(&hash, path);
@@ -13,7 +13,7 @@ pub fn sourceFingerprint(io: std.Io, allocator: std.mem.Allocator, root: std.Io.
         std.mem.writeInt(u64, &bytes, fingerprint, .little);
         addPart(&hash, &bytes);
     }
-    for ([_][]const u8{ "build.zig", "build.zig.zon", "tools/build_gamenetworking_sockets.sh" }) |path| {
+    for ([_][]const u8{ "build.zig", "build.zig.zon", "tools/build_gamenetworking_sockets.sh", "tools/vehicle_dynamics.zig", "tools/vehicle_motion_audit.zig", "tools/vehicle_motion_summary.zig" }) |path| {
         addPart(&hash, path);
         const bytes = try root.readFileAlloc(io, path, allocator, .unlimited);
         defer allocator.free(bytes);
@@ -56,7 +56,7 @@ fn treeFingerprint(io: std.Io, allocator: std.mem.Allocator, dir: std.Io.Dir) !u
 }
 
 fn isSource(path: []const u8) bool {
-    for ([_][]const u8{ ".zig", ".zon", ".c", ".cpp", ".h", ".hpp", ".m", ".mm", ".vert", ".frag", ".comp", ".glsl", ".metal" }) |extension|
+    for ([_][]const u8{ ".icvehicle", ".icmat", ".glb", ".json", ".py", ".zig", ".zon", ".c", ".cpp", ".h", ".hpp", ".m", ".mm", ".vert", ".frag", ".comp", ".glsl", ".metal" }) |extension|
         if (std.mem.endsWith(u8, path, extension)) return true;
     return false;
 }

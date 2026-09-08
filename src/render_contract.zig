@@ -7,7 +7,7 @@
 const std = @import("std");
 
 pub const mode_name = "sdl_gpu_metal_deterministic";
-pub const visual_schema_version: u16 = 1;
+pub const visual_schema_version: u16 = 2;
 
 pub const SceneLight = struct {
     /// Normalized world-space direction from a surface toward the sun.
@@ -39,8 +39,16 @@ pub const SurfaceMaterial = struct {
     /// Linear additive emission. It is presentation only and emits no light.
     emissive: [3]f32 = .{ 0, 0, 0 },
     lit: bool = true,
+    metallic: f32 = 0,
+    roughness: f32 = 1,
+    normal_scale: f32 = 1,
+    occlusion_strength: f32 = 1,
 
     pub fn validate(self: SurfaceMaterial) !void {
+        for ([_]f32{ self.metallic, self.roughness, self.occlusion_strength }) |value| {
+            if (!std.math.isFinite(value) or value < 0 or value > 1) return error.InvalidSurfaceMaterial;
+        }
+        if (!std.math.isFinite(self.normal_scale) or self.normal_scale < 0) return error.InvalidSurfaceMaterial;
         for (self.base_color ++ self.emissive) |value| {
             if (!std.math.isFinite(value) or value < 0) {
                 return error.InvalidSurfaceMaterial;

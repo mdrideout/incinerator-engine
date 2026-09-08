@@ -343,7 +343,7 @@ comptime {
 }
 
 fn testTicket(generation: u64) contract.LoadTicket {
-    return .{ .coord = .{ .x = 0, .z = -4 }, .generation = generation };
+    return .{ .coord = .{ .x = 0, .z = 0 }, .generation = generation };
 }
 
 fn testRequest(ticket: contract.LoadTicket) contract.LoadRequest {

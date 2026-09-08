@@ -1739,7 +1739,7 @@ const TestCanonicalContent = struct {
         return switch (id.value) {
             1 => .{
                 .id = id,
-                .position = .{ -4, 0, 3 },
+                .position = .{ district_contract.chunk_span / 2 + (-4 - 8), 0, 3 },
                 .arrival_radius = 0.25,
                 .anchors = .{ .{
                     .coord = navigation_primary_coord,
@@ -1749,7 +1749,7 @@ const TestCanonicalContent = struct {
             },
             2 => .{
                 .id = id,
-                .position = .{ 20, 0, 3 },
+                .position = .{ district_contract.chunk_span / 2 + (20 - 8), 0, 3 },
                 .arrival_radius = 0.25,
                 .anchors = .{ .{
                     .coord = navigation_adjacent_coord,
@@ -1808,18 +1808,18 @@ const TestCanonicalContent = struct {
         result.navigation_node_count = 3;
         result.navigation_edge_count = 5;
         result.navigation_nodes[0] = .{
-            .position = .{ -4, 0, 3 },
+            .position = .{ district_contract.chunk_span / 2 + (-4 - 8), 0, 3 },
             .first_edge = 0,
             .edge_count = 1,
             .flags = district_contract.navigation_node_terminal,
         };
         result.navigation_nodes[1] = .{
-            .position = .{ 2, 0, 3 },
+            .position = .{ district_contract.chunk_span / 2 + (2 - 8), 0, 3 },
             .first_edge = 1,
             .edge_count = 2,
         };
         result.navigation_nodes[2] = .{
-            .position = .{ 7, 0, 3 },
+            .position = .{ district_contract.chunk_span / 2 + (7 - 8), 0, 3 },
             .first_edge = 3,
             .edge_count = 2,
         };
@@ -1849,17 +1849,17 @@ const TestCanonicalContent = struct {
         result.navigation_node_count = 3;
         result.navigation_edge_count = 5;
         result.navigation_nodes[0] = .{
-            .position = .{ 9, 0, 3 },
+            .position = .{ district_contract.chunk_span / 2 + (9 - 8), 0, 3 },
             .first_edge = 0,
             .edge_count = 2,
         };
         result.navigation_nodes[1] = .{
-            .position = .{ 14, 0, 3 },
+            .position = .{ district_contract.chunk_span / 2 + (14 - 8), 0, 3 },
             .first_edge = 2,
             .edge_count = 2,
         };
         result.navigation_nodes[2] = .{
-            .position = .{ 20, 0, 3 },
+            .position = .{ district_contract.chunk_span / 2 + (20 - 8), 0, 3 },
             .first_edge = 4,
             .edge_count = 1,
             .flags = district_contract.navigation_node_terminal,
@@ -3021,7 +3021,7 @@ test "navigation access resolves copied route values only for the active generat
         else => return error.ExpectedReadyNavigationNode,
     };
     try std.testing.expectEqualDeep(west_ticket, west.ticket);
-    try std.testing.expectEqualDeep([3]f32{ -4, 0, 3 }, west.node.position);
+    try std.testing.expectEqualDeep([3]f32{ district_contract.chunk_span / 2 - 12, 0, 3 }, west.node.position);
     try std.testing.expect(west.node.terminal());
     const first_edge = switch (navigation.resolveEdge(west_start, 0)) {
         .ready => |value| value,
@@ -3059,7 +3059,7 @@ test "navigation access resolves copied route values only for the active generat
         else => return error.ExpectedReadyCrossDistrictTarget,
     };
     try std.testing.expectEqualDeep(east_ticket, east.ticket);
-    try std.testing.expectEqualDeep([3]f32{ 9, 0, 3 }, east.node.position);
+    try std.testing.expectEqualDeep([3]f32{ district_contract.chunk_span / 2 + 1, 0, 3 }, east.node.position);
 
     try feature.unload(153, east_ticket);
     try runtime.tick();

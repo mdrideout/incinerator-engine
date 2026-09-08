@@ -14,7 +14,7 @@ pub const descriptor = tool_module.Descriptor{
     .purpose = "Explore stable cooked game assets by bundle and kind without mixing them with world instances.",
     .reads = "Immutable cooked asset catalog including dependencies, source format, cook status, and residency.",
     .requests = "Editor-local typed content-asset selection only.",
-    .examples = &.{ "find CargoCratePanels", "filter materials", "inspect sampler metadata" },
+    .examples = &.{ "find Foundry Street / Brick", "filter materials", "inspect sampler metadata" },
     .audit_fields = &.{ "asset_id", "kind", "owner", "revision", "digest", "dependencies", "residency" },
 };
 

@@ -1,0 +1,457 @@
+MP6_ARCHITECTURE_PASS coordinator=generation_safe view=sanitized host=typed_local guest=real_gns dedicated=ticketed presentation=client_owned steamworks=absent
+M6_ARCHITECTURE_PASS ingress=class_reserved cycle=eight_stage publication=double_buffered delivery=leased receipts=cumulative replay=bounded durable=stage_seven
+headless source boundary verified
+test-sandbox-persistence
++- run test w
+[default] (warn): canonical snapshot capture failed: UnexpectedCaptureFailure
+failed command: ./.zig-cache/o/c7921949bd85ebd0e9ab1118eb7e0a3d/test --cache-dir=./.zig-cache --seed=0x90739637 --listen=-
+
+Industrial content cohort 562647506cda1db5f5931c606ad1967bacab4c0f8526f61566d947a3874ed04f
+Industrial catalog sha256 056a04f1a34e1cd1d8e34a6b0929c7fdb4e3095c9f93b976b961f43a06688ea9
+Industrial district[0] sha256 e3f020135101c41892cf37954880ddc30258b436b23ae13db2aada2f15523a09
+Industrial district[1] sha256 fd04641d744e5d29fa20eaa38e18ff0c609cc575e84d8821b31453690bc6fba1
+Industrial district[2] sha256 6e23ab9a48127bbf5511cb913a1d96bd347107965f244ef0ca845cbd2da3051d
+Industrial district[3] sha256 18d5bb60e653762762df27c463feac9d015ed91663e30dda3e003d8fd4398364
+headless logical manifest matches freshly cooked catalog and bundles
+headless final-binary boundary verified
+headless final-binary boundary verified
+headless final-binary boundary verified
+Build Summary: 193/193 steps succeeded; 455/455 tests passed
+test-headless success
++- run test 29 pass (29 total) 48s MaxRSS:351M
+|  +- compile test Debug native success 17s MaxRSS:961M
+|     +- options success
+|     +- options success
+|     +- WriteFile headless-content.json success
+|     +- options success
+|     +- WriteFile joltc.h success
+|     +- compile lib joltc Debug native success 1m MaxRSS:296M
+|     +- compile lib joltc Debug native (reused)
++- run test 11 pass (11 total) 209ms MaxRSS:2M
+|  +- compile test Debug native success 6s MaxRSS:277M
++- run test 7 pass (7 total) 6s MaxRSS:64M
+|  +- compile test Debug native success 9s MaxRSS:610M
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- options (reused)
++- run exe headless_boundary_test success 223ms
+|  +- compile exe headless_boundary_test Debug native success 5s MaxRSS:263M
++- run exe headless_linkage_test success 6s
+|  +- compile exe headless_linkage_test Debug native success 5s MaxRSS:261M
+|  +- compile exe incinerator_headless Debug native success 11s MaxRSS:640M
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile headless-content.json (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 1 pass (1 total) 173ms MaxRSS:2M
+|  +- compile test Debug native success 4s MaxRSS:270M
++- run test 1 pass (1 total) 176ms MaxRSS:2M
+   +- compile test Debug native success 5s MaxRSS:270M
+test-content success
++- run test 24 pass (24 total) 222ms MaxRSS:4M
+   +- compile test Debug native success 5s MaxRSS:367M
+test-content-cooker success
++- run exe content_bundle_verify success 190ms
+|  +- compile exe content_bundle_verify Debug native success 6s MaxRSS:279M
+|  |  +- options (reused)
+|  +- run exe incinerator_content_cooker (s3_fixture.icdb) success 128ms
+|  |  +- compile exe incinerator_content_cooker ReleaseSafe native success 40s MaxRSS:382M
+|  |     +- WriteFile success
+|  |     +- compile lib zmesh ReleaseSafe native success 20s MaxRSS:186M
+|  |     +- compile lib zmesh ReleaseSafe native (reused)
+|  |     +- WriteFile (reused)
+|  |     +- compile lib zmesh ReleaseSafe native (reused)
+|  |     +- compile lib zmesh ReleaseSafe native (reused)
+|  |     +- options cached
+|  |     +- options success
+|  +- run exe incinerator_content_cooker (s3_fixture_repeat.icdb) success 123ms
+|  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  +- run exe incinerator_content_cooker (s6_east.icdb) success 9ms
+|  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  |  +- run exe incinerator_content_cooker (s3_fixture.icdb) (+1 more reused dependencies)
+|  +- run exe incinerator_content_cooker (s6_east_repeat.icdb) success 18ms
+|     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|     +- run exe incinerator_content_cooker (s3_fixture_repeat.icdb) (+1 more reused dependencies)
++- run test 8 pass (8 total) 156ms MaxRSS:9M
+|  +- compile test ReleaseSafe native success 36s MaxRSS:370M
+|     +- WriteFile (reused)
+|     +- compile lib zmesh ReleaseSafe native (reused)
+|     +- compile lib zmesh ReleaseSafe native (reused)
+|     +- WriteFile (reused)
+|     +- compile lib zmesh ReleaseSafe native (reused)
+|     +- compile lib zmesh ReleaseSafe native (reused)
+|     +- options (reused)
+|     +- options (reused)
++- run test 4 pass (4 total) 181ms MaxRSS:1M
+|  +- compile test ReleaseSafe native success 29s MaxRSS:345M
+|     +- options (reused)
++- run exe content_catalog_verify success 340ms
+   +- compile exe content_catalog_verify Debug native success 14s MaxRSS:313M
+   |  +- options (reused)
+   |  +- options (reused)
+   |  +- options (reused)
+   +- run exe incinerator_content_catalog_cooker (industrial_catalog.icat) success 134ms
+   |  +- compile exe incinerator_content_catalog_cooker ReleaseSafe native success 34s MaxRSS:375M
+   |  |  +- options (reused)
+   |  +- run exe incinerator_content_cooker (industrial_0_0.icdb) success 144ms
+   |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+   |  +- run exe incinerator_content_cooker (industrial_1_0.icdb) success 23ms
+   |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+   |  |  +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+   |  +- run exe incinerator_content_cooker (industrial_0_1.icdb) success 90ms
+   |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+   |  |  +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+   |  +- run exe incinerator_content_cooker (industrial_1_1.icdb) success 25ms
+   |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+   |     +- run exe incinerator_content_cooker (industrial_0_1.icdb) (+2 more reused dependencies)
+   |     +- run exe incinerator_content_cooker (industrial_1_0.icdb) (+2 more reused dependencies)
+   +- run exe incinerator_content_catalog_cooker (industrial_catalog_repeat.icat) success 188ms
+   |  +- compile exe incinerator_content_catalog_cooker ReleaseSafe native (+1 more reused dependencies)
+   |  +- run exe incinerator_content_cooker (industrial_0_0_repeat.icdb) success 135ms
+   |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+   |  +- run exe incinerator_content_cooker (industrial_1_0_repeat.icdb) success 30ms
+   |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+   |  |  +- run exe incinerator_content_cooker (industrial_0_0_repeat.icdb) (+1 more reused dependencies)
+   |  +- run exe incinerator_content_cooker (industrial_0_1_repeat.icdb) success 19ms
+   |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+   |  |  +- run exe incinerator_content_cooker (industrial_0_0_repeat.icdb) (+1 more reused dependencies)
+   |  +- run exe incinerator_content_cooker (industrial_1_1_repeat.icdb) success 16ms
+   |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+   |     +- run exe incinerator_content_cooker (industrial_0_1_repeat.icdb) (+2 more reused dependencies)
+   |     +- run exe incinerator_content_cooker (industrial_1_0_repeat.icdb) (+2 more reused dependencies)
+   +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+   +- run exe incinerator_content_cooker (industrial_1_0.icdb) (+2 more reused dependencies)
+   +- run exe incinerator_content_cooker (industrial_0_1.icdb) (+2 more reused dependencies)
+   +- run exe incinerator_content_cooker (industrial_1_1.icdb) (+3 more reused dependencies)
+test-district-content-catalog success
++- run test 2 pass (2 total) 189ms MaxRSS:2M
+   +- compile test Debug native success 6s MaxRSS:296M
+      +- options (reused)
+      +- options (reused)
+      +- options (reused)
+test-replay success
++- run test 20 pass (20 total) 481ms MaxRSS:46M
+   +- compile test Debug native success 13s MaxRSS:493M
+      +- options (reused)
+      +- options (reused)
+      +- options (reused)
+test-navigation-contract success
++- run test 2 pass (2 total) 165ms MaxRSS:2M
+   +- compile test Debug native success 6s MaxRSS:270M
+      +- options (reused)
+test-sandbox-navigation success
++- run test 1 pass (1 total) 192ms MaxRSS:2M
+   +- compile test Debug native success 6s MaxRSS:283M
+      +- options (reused)
+test-npc-feature success
++- run test 31 pass (31 total) 25s MaxRSS:79M
+   +- compile test Debug native success 9s MaxRSS:397M
+      +- options (reused)
+      +- options (reused)
+test-npc-encounter success
++- run test 2 pass (2 total) 228ms MaxRSS:2M
+|  +- compile test Debug native success 4s MaxRSS:275M
++- run test 13 pass (13 total) 321ms MaxRSS:4M
+   +- compile test Debug native success 14s MaxRSS:305M
+      +- options (reused)
+test-population-contract success
++- run test 3 pass (3 total) 186ms MaxRSS:2M
+   +- compile test Debug native success 7s MaxRSS:279M
+      +- options (reused)
+test-vitals-feature success
++- run test 1 pass (1 total) 160ms MaxRSS:2M
+|  +- compile test Debug native success 4s MaxRSS:267M
++- run test 1 pass (1 total) 277ms MaxRSS:4M
+   +- compile test Debug native success 6s MaxRSS:287M
+      +- options (reused)
+test-physics success
++- run test 49 pass (49 total) 1s MaxRSS:58M
+   +- compile test Debug native success 7s MaxRSS:354M
+      +- WriteFile joltc.h (reused)
+      +- compile lib joltc Debug native (reused)
+      +- compile lib joltc Debug native (reused)
+      +- options (reused)
+test-sandbox-value-contracts success
++- run test 1 pass (1 total) 183ms MaxRSS:2M
+   +- compile test Debug native success 6s MaxRSS:275M
+      +- options (reused)
+      +- options (reused)
+test-sandbox-controls success
++- run test 9 pass (9 total) 377ms MaxRSS:2M
+   +- compile test Debug native success 5s MaxRSS:284M
+      +- options (reused)
+test-sandbox-population-catalog success
++- run test 3 pass (3 total) 196ms MaxRSS:2M
+   +- compile test Debug native success 6s MaxRSS:282M
+      +- options (reused)
+test-sandbox-population-placement success
++- run test 1 pass (1 total) 662ms MaxRSS:18M
+   +- compile test Debug native success 6s MaxRSS:322M
+      +- WriteFile joltc.h (reused)
+      +- compile lib joltc Debug native (reused)
+      +- compile lib joltc Debug native (reused)
+      +- options (reused)
+      +- options (reused)
+      +- options (reused)
+test-sandbox-population success
++- run test 9 pass (9 total) 288ms MaxRSS:3M
+   +- compile test Debug native success 14s MaxRSS:307M
+      +- options (reused)
+      +- options (reused)
+test-sandbox-product-population-host success
++- run test 1 pass (1 total) 3s MaxRSS:97M
+   +- compile test Debug native success 14s MaxRSS:657M
+      +- options (reused)
+      +- options (reused)
+      +- options success
+      +- options (reused)
+      +- WriteFile joltc.h (reused)
+      +- compile lib joltc Debug native (reused)
+      +- compile lib joltc Debug native (reused)
+test-sandbox-authoring success
++- run test 15 pass (15 total) 195ms MaxRSS:2M
+   +- compile test Debug native success 13s MaxRSS:298M
+      +- options (reused)
+test-sandbox-interaction success
++- run test 2 pass (2 total) 173ms MaxRSS:2M
+   +- compile test Debug native success 5s MaxRSS:269M
+      +- options (reused)
+test-sandbox-save success
++- run test 10 pass (10 total) 225ms MaxRSS:10M
+   +- compile test Debug native success 4s MaxRSS:279M
+test-save-slots success
++- run test 10 pass (10 total) 414ms MaxRSS:2M
+   +- compile test Debug native success 4s MaxRSS:284M
+test-sandbox-persistence success
++- run test 6 pass (6 total) 227ms MaxRSS:2M
+   +- compile test Debug native success 7s MaxRSS:279M
+test-simulation-snapshot success
++- run test 5 pass (5 total) 285ms MaxRSS:3M
+   +- compile test Debug native success 9s MaxRSS:402M
+      +- options (reused)
+      +- options (reused)
+      +- options (reused)
+test-session-contracts success
++- run test 1 pass (1 total) 177ms MaxRSS:2M
+|  +- compile test Debug native success 3s MaxRSS:272M
++- run test 2 pass (2 total) 306ms MaxRSS:2M
+|  +- compile test Debug native success 4s MaxRSS:266M
++- run test 17 pass (17 total) 198ms MaxRSS:4M
+|  +- compile test Debug native success 12s MaxRSS:374M
+|     +- options (reused)
++- run test 11 pass (11 total) 368ms MaxRSS:2M
+|  +- compile test Debug native success 5s MaxRSS:276M
+|     +- options (reused)
++- run test 3 pass (3 total) 655ms MaxRSS:2M
+|  +- compile test Debug native success 4s MaxRSS:269M
++- run test 1 pass (1 total) 409ms MaxRSS:2M
+|  +- compile test Debug native success 4s MaxRSS:267M
++- run test 2 pass (2 total) 547ms MaxRSS:2M
+|  +- compile test Debug native success 4s MaxRSS:266M
+|     +- options (reused)
++- run test 2 pass (2 total) 252ms MaxRSS:2M
+|  +- compile test Debug native success 6s MaxRSS:271M
++- run test 1 pass (1 total) 169ms MaxRSS:2M
+|  +- compile test Debug native success 4s MaxRSS:264M
++- run test 2 pass (2 total) 202ms MaxRSS:2M
+|  +- compile test Debug native success 5s MaxRSS:277M
+|     +- options (reused)
++- run test 5 pass (5 total) 174ms MaxRSS:2M
+|  +- compile test Debug native success 7s MaxRSS:271M
+|     +- options (reused)
++- run test 3 pass (3 total) 201ms MaxRSS:18M
+|  +- compile test Debug native success 8s MaxRSS:286M
+|     +- options (reused)
++- run test 4 pass (4 total) 522ms MaxRSS:13M
+|  +- compile test Debug native success 5s MaxRSS:275M
+|     +- options (reused)
+|     +- options (reused)
++- run test 13 pass (13 total) 194ms MaxRSS:2M
+|  +- compile test Debug native success 6s MaxRSS:300M
+|     +- options (reused)
++- run test 17 pass (17 total) 167ms MaxRSS:4M
+|  +- compile test Debug native success 6s MaxRSS:310M
+|     +- options (reused)
++- run test 16 pass (16 total) 8s MaxRSS:104M
+|  +- compile test Debug native success 14s MaxRSS:663M
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 55 pass (55 total) 47s MaxRSS:337M
+|  +- compile test Debug native success 14s MaxRSS:699M
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 1 pass (1 total) 288ms MaxRSS:2M
+|  +- compile test Debug native success 5s MaxRSS:269M
+|     +- options (reused)
++- run test 5 pass (5 total) 177ms MaxRSS:2M
+|  +- compile test Debug native success 6s MaxRSS:273M
+|     +- options (reused)
++- run test 2 pass (2 total) 175ms MaxRSS:2M
+   +- compile test Debug native success 7s MaxRSS:281M
+      +- options (reused)
+test-s7-measure success
++- run test 2 pass (2 total) 172ms MaxRSS:2M
+   +- compile test Debug native success 4s MaxRSS:290M
+      +- options (reused)
+      +- WriteFile joltc.h (reused)
+      +- compile lib joltc Debug native (reused)
+      +- compile lib joltc Debug native (reused)
+      +- options (reused)
+      +- options (reused)
+test-s8-measure success
++- run test 3 pass (3 total) 290ms MaxRSS:2M
+   +- compile test Debug native success 4s MaxRSS:285M
+      +- options (reused)
+      +- options (reused)
+      +- WriteFile joltc.h (reused)
+      +- compile lib joltc Debug native (reused)
+      +- compile lib joltc Debug native (reused)
+      +- options (reused)
+test-s11-measure success
++- run test 1 pass (1 total) 209ms MaxRSS:2M
+   +- compile test Debug native success 12s MaxRSS:268M
+      +- options (reused)
+test-m3-soak success
++- run test 4 pass (4 total) 166ms MaxRSS:2M
+   +- compile test Debug native success 6s MaxRSS:310M
+      +- options (reused)
+      +- options (reused)
+      +- WriteFile joltc.h (reused)
+      +- compile lib joltc Debug native (reused)
+      +- compile lib joltc Debug native (reused)
+      +- options (reused)
+test-external-producers success
++- run test (+1 more reused dependencies)
+test-headless-authority success
++- run test (+1 more reused dependencies)
+check-replay success
++- compile exe incinerator_replay Debug native success 9s MaxRSS:579M
+|  +- options (reused)
+|  +- options (reused)
+|  +- WriteFile joltc.h (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- options (reused)
++- run exe headless_linkage_test success 4s
+   +- compile exe headless_linkage_test Debug native (reused)
+   +- compile exe incinerator_replay Debug native (+6 more reused dependencies)
+check-s5-save success
++- compile exe incinerator_save Debug native success 10s MaxRSS:649M
+|  +- options (reused)
+|  +- options (reused)
+|  +- options (reused)
+|  +- WriteFile joltc.h (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- compile lib joltc Debug native (reused)
++- run exe headless_linkage_test success 4s
+   +- compile exe headless_linkage_test Debug native (reused)
+   +- compile exe incinerator_save Debug native (+6 more reused dependencies)
+check-s8-measure success
++- compile exe incinerator_s8_measure Debug native success 9s MaxRSS:280M
+   +- options (reused)
+   +- options (reused)
+   +- WriteFile joltc.h (reused)
+   +- compile lib joltc Debug native (reused)
+   +- compile lib joltc Debug native (reused)
+   +- options (reused)
+check-s11-measure success
++- compile exe incinerator_s11_measure Debug native success 12s MaxRSS:264M
+   +- options (reused)
+check-m3-soak success
++- compile exe incinerator_m3_soak Debug native success 9s MaxRSS:280M
+   +- options (reused)
+   +- options (reused)
+   +- WriteFile joltc.h (reused)
+   +- compile lib joltc Debug native (reused)
+   +- compile lib joltc Debug native (reused)
+   +- options (reused)
+verify-m6-architecture success
++- run bash success 178ms
+verify-mp6-room-architecture success
++- run bash success 333ms
+
+headless source boundary verified
+headless final-binary boundary verified
+headless product allowlist and Mach-O boundary verified
+dependency/replay cohort pins verified
+M3 headless startup, restart, recovery, bounded admission, SIGTERM/SIGINT, and hard-lag lifecycle verified
+Build Summary: 33/33 steps succeeded; 56/56 tests passed
+test success
++- run exe dependency_cohort success 151ms
+|  +- compile exe dependency_cohort ReleaseSafe native success 10s MaxRSS:314M
++- run test 3 pass (3 total) 168ms MaxRSS:1M
+|  +- compile test ReleaseSafe native success 10s MaxRSS:358M
++- run test 29 pass (29 total) 32s MaxRSS:348M
+|  +- compile test Debug native success 12s MaxRSS:952M
+|     +- options cached
+|     +- options cached
+|     +- WriteFile headless-content.json cached
+|     +- options cached
+|     +- WriteFile joltc.h cached
+|     +- compile lib joltc Debug native cached 186ms MaxRSS:34M
+|     +- compile lib joltc Debug native (reused)
++- run test 11 pass (11 total) 18ms MaxRSS:2M
+|  +- compile test Debug native cached 117ms MaxRSS:34M
++- run test 7 pass (7 total) 3s MaxRSS:63M
+|  +- compile test Debug native cached 71ms MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- options (reused)
++- run test 4 pass (4 total) 7ms MaxRSS:2M
+|  +- compile test Debug native cached 65ms MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- options (reused)
++- run test 1 pass (1 total) 19ms MaxRSS:2M
+|  +- compile test Debug native cached 136ms MaxRSS:34M
++- run test 1 pass (1 total) 10ms MaxRSS:2M
+|  +- compile test Debug native cached 131ms MaxRSS:34M
++- verify-headless-product success
+|  +- run exe headless_boundary_test success 71ms
+|  |  +- compile exe headless_boundary_test Debug native cached 123ms MaxRSS:34M
+|  +- run sh success 271ms
+|  |  +- WriteFile bin/incinerator_headless success
+|  |     +- compile exe incinerator_headless Debug native success 8s MaxRSS:645M
+|  |        +- options (reused)
+|  |        +- options (reused)
+|  |        +- WriteFile headless-content.json (reused)
+|  |        +- options (reused)
+|  |        +- WriteFile joltc.h (reused)
+|  |        +- compile lib joltc Debug native (reused)
+|  |        +- compile lib joltc Debug native (reused)
+|  +- run exe headless_linkage_test success 2s
+|     +- compile exe headless_linkage_test Debug native cached 140ms MaxRSS:34M
+|     +- WriteFile bin/incinerator_headless (+1 more reused dependencies)
++- test-m3-lifecycle success
+   +- run sh success 8s
+      +- WriteFile bin/incinerator_headless (+1 more reused dependencies)
+      +- run sh (+1 more reused dependencies)
+test-m3-lifecycle (+1 more reused dependencies)
+
+Filtered source package membership, M5/M6/MP6/S11 boundaries, and extracted execution verified.
+Build Summary: 2/2 steps succeeded
+verify-source-package success
++- run bash success 3m
+

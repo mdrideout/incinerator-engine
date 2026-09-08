@@ -1,0 +1,75 @@
+test-editor-pointer-macos
++- run test w
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+ImGui backend shutdown
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+ImGui backend shutdown
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+ImGui backend shutdown
+failed command: ./.zig-cache/o/fafcba8367b4460437a754e366440f17/test --cache-dir=./.zig-cache --seed=0xa5acf94 --listen=-
+
+Build Summary: 46/46 steps succeeded; 74/74 tests passed
+test-editor-pointer-macos success
++- run test 74 pass (74 total) 1s MaxRSS:110M
+   +- compile test Debug native success 5s MaxRSS:715M
+      +- WriteFile cached
+      +- compile lib incinerator_imgui Debug native cached 90ms MaxRSS:33M
+      +- WriteFile SDL3 cached
+      |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h cached
+      +- compile lib SDL3 Debug native cached 330ms MaxRSS:36M
+      |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+      |  +- configure cmake header include/build_config/SDL_build_config.h.cmake to SDL_build_config.h cached
+      |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+      +- compile lib incinerator_imgui Debug native (reused)
+      +- compile lib SDL3 Debug native (+3 more reused dependencies)
+      +- options cached
+      +- WriteFile triangle.vert.metal cached
+      |  +- run spirv-cross (triangle.vert.metal) cached
+      |  |  +- run glslc (triangle.vert.spv) cached
+      |  +- run spirv-cross (triangle.frag.metal) cached
+      |  |  +- run glslc (triangle.frag.spv) cached
+      |  +- run spirv-cross (model.vert.metal) cached
+      |  |  +- run glslc (model.vert.spv) cached
+      |  +- run spirv-cross (model.frag.metal) cached
+      |  |  +- run glslc (model.frag.spv) cached
+      |  +- run spirv-cross (visibility.frag.metal) cached
+      |  |  +- run glslc (visibility.frag.spv) cached
+      |  +- run spirv-cross (neural_primitive.vert.metal) cached
+      |  |  +- run glslc (neural_primitive.vert.spv) cached
+      |  +- run spirv-cross (neural_primitive.frag.metal) cached
+      |  |  +- run glslc (neural_primitive.frag.spv) cached
+      |  +- run spirv-cross (neural_model.vert.metal) cached
+      |  |  +- run glslc (neural_model.vert.spv) cached
+      |  +- run spirv-cross (neural_model.frag.metal) cached
+      |  |  +- run glslc (neural_model.frag.spv) cached
+      |  +- run spirv-cross (triangle.vert.json) cached
+      |  |  +- run glslc (triangle.vert.spv) (reused)
+      |  +- run spirv-cross (triangle.frag.json) cached
+      |  |  +- run glslc (triangle.frag.spv) (reused)
+      |  +- run spirv-cross (model.vert.json) cached
+      |  |  +- run glslc (model.vert.spv) (reused)
+      |  +- run spirv-cross (model.frag.json) cached
+      |  |  +- run glslc (model.frag.spv) (reused)
+      |  +- run spirv-cross (visibility.frag.json) cached
+      |  |  +- run glslc (visibility.frag.spv) (reused)
+      |  +- run spirv-cross (neural_primitive.vert.json) cached
+      |  |  +- run glslc (neural_primitive.vert.spv) (reused)
+      |  +- run spirv-cross (neural_primitive.frag.json) cached
+      |  |  +- run glslc (neural_primitive.frag.spv) (reused)
+      |  +- run spirv-cross (neural_model.vert.json) cached
+      |  |  +- run glslc (neural_model.vert.spv) (reused)
+      |  +- run spirv-cross (neural_model.frag.json) cached
+      |     +- run glslc (neural_model.frag.spv) (reused)
+      +- options cached
+      +- options success
+      +- options cached
+      +- options cached
+      +- options cached
+      +- options cached
+      +- WriteFile joltc.h cached
+      +- compile lib joltc Debug native cached 159ms MaxRSS:34M
+      +- compile lib joltc Debug native (reused)
+

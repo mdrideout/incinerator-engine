@@ -24,7 +24,7 @@ pub const Scene = struct {
     ground: mesh.Mesh,
     character: mesh.Mesh,
     cube: mesh.Mesh,
-    vehicle_wheel: mesh.Mesh,
+    vehicle_visuals: presentation.vehicle_visuals.Resources,
     camera: camera_module.Camera = .{ .pitch = -0.25 },
     drag_look: camera_module.DragLook = .{},
     vehicle_prediction_enabled: bool = true,
@@ -32,7 +32,7 @@ pub const Scene = struct {
     combat_owner: combat_presentation.Owner = .{},
     last_combat_hud: ?combat_presentation.LocalHud = null,
 
-    pub fn init(window: *presentation.c.SDL_Window) !Scene {
+    pub fn init(io: std.Io, allocator: std.mem.Allocator, window: *presentation.c.SDL_Window, configured_root: ?[]const u8) !Scene {
         var gpu = try renderer.Renderer.init(window);
         errdefer gpu.deinit();
         try gpu.setSceneLight(visual_catalog.scene_light);
@@ -42,19 +42,23 @@ pub const Scene = struct {
         errdefer character.deinit();
         var cube = try primitives.createLitCube(gpu.getDevice());
         errdefer cube.deinit();
-        var vehicle_wheel = try primitives.createLitWheelCylinder(gpu.getDevice());
-        errdefer vehicle_wheel.deinit();
+        const executable_dir = try std.process.executableDirPathAlloc(io, allocator);
+        defer allocator.free(executable_dir);
+        const default_root = try std.fs.path.resolve(allocator, &.{ executable_dir, "../share/incinerator/content" });
+        defer allocator.free(default_root);
+        var vehicle_visuals = try presentation.vehicle_visuals.Resources.init(allocator, io, gpu.getDevice(), try presentation.content.ContentRootPath.parse(configured_root orelse default_root), &@import("game_vehicles").bundle_keys);
+        errdefer vehicle_visuals.deinit();
         return .{
             .gpu = gpu,
             .ground = ground,
             .character = character,
             .cube = cube,
-            .vehicle_wheel = vehicle_wheel,
+            .vehicle_visuals = vehicle_visuals,
         };
     }
 
     pub fn deinit(self: *Scene) void {
-        self.vehicle_wheel.deinit();
+        self.vehicle_visuals.deinit();
         self.cube.deinit();
         self.character.deinit();
         self.ground.deinit();
@@ -259,73 +263,17 @@ pub const Scene = struct {
                 view_projection,
             );
         }
+        try self.vehicle_visuals.pump();
         for (client.world.vehicleSlice()) |entry| {
             const state = self.presentedVehicle(client, entry, now_ns);
-            const scale = zm.scaling(1.8, 0.5, 4.0);
-            const rotation = zm.quatToMat(zm.f32x4(
-                state.rotation[0],
-                state.rotation[1],
-                state.rotation[2],
-                state.rotation[3],
-            ));
-            const translation = zm.translation(
-                state.position[0],
-                state.position[1],
-                state.position[2],
-            );
-            self.gpu.drawMeshWithMaterial(
-                &self.cube,
-                null,
-                visual_catalog.materialTinted(
-                    .painted_metal,
-                    if (state.driver != null)
-                        .{ 0.95, 0.65, 0.10, 1 }
-                    else
-                        .{ 0.25, 0.35, 0.95, 1 },
-                ),
-                zm.mul(zm.mul(scale, rotation), translation),
-                view_projection,
-            );
-            const wheel_layout = replicated_world.default_vehicle_wheel_layout;
-            const wheel_poses = try replicated_world.composeVehicleWheelPoses(
-                state,
-                wheel_layout,
-            );
-            for (wheel_poses) |pose| {
-                const wheel_scale = zm.scaling(
-                    wheel_layout.width,
-                    wheel_layout.radius * 2,
-                    wheel_layout.radius * 2,
-                );
-                const wheel_rotation = zm.quatToMat(zm.f32x4(
-                    pose.rotation[0],
-                    pose.rotation[1],
-                    pose.rotation[2],
-                    pose.rotation[3],
-                ));
-                const wheel_translation = zm.translation(
-                    pose.position[0],
-                    pose.position[1],
-                    pose.position[2],
-                );
-                self.gpu.drawMeshWithMaterial(
-                    &self.vehicle_wheel,
-                    null,
-                    visual_catalog.material(.tire),
-                    zm.mul(zm.mul(wheel_scale, wheel_rotation), wheel_translation),
-                    view_projection,
-                );
-                self.gpu.drawMeshWithMaterial(
-                    &self.cube,
-                    null,
-                    visual_catalog.material(.wheel_marker),
-                    wheelMarkerModel(
-                        wheel_layout.width,
-                        wheel_layout.radius,
-                        pose,
-                    ),
-                    view_projection,
-                );
+            if (try self.vehicle_visuals.resolve(state.definition.visuals.chassis, .{ .position = state.position, .rotation = state.rotation })) |part| {
+                self.gpu.drawMeshWithTextures(part.mesh, part.textures, part.material, part.model, view_projection);
+            }
+            const wheel_poses = try replicated_world.composeVehicleWheelPoses(state, replicated_world.vehicleWheelLayout(state.definition));
+            for (wheel_poses, 0..) |pose, index| {
+                if (try self.vehicle_visuals.resolve(state.definition.visuals.wheels[index], .{ .position = pose.position, .rotation = pose.rotation })) |part| {
+                    self.gpu.drawMeshWithTextures(part.mesh, part.textures, part.material, part.model, view_projection);
+                }
             }
         }
         for (client.world.carryableSlice()) |entry| {

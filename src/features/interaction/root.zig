@@ -1255,9 +1255,9 @@ test "collect carry across half-open boundary and drop commits one identity" {
     try world.init(.{});
     defer world.deinit();
 
-    const id = try spawnTestCarryable(&world, .{ 7.5, 0.5, 0 });
+    const id = try spawnTestCarryable(&world, .{ district_contract.chunk_span / 2 - 0.5, 0.5, 0 });
     try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
-    world.carriers.state.pose.position = .{ 7.0, 0, 0 };
+    world.carriers.state.pose.position = .{ district_contract.chunk_span / 2 - 1, 0, 0 };
     try world.feature.enqueue(.{ .collect = .{
         .transaction_id = 20,
         .carrier_id = test_carrier_id,
@@ -1277,7 +1277,7 @@ test "collect carry across half-open boundary and drop commits one identity" {
 
     // Exactly X=8 belongs to the east half-open cell. The default drop offset
     // changes Z only, so this also exercises canonical boundary ownership.
-    world.carriers.state.pose.position = .{ 8.0, 0, 0 };
+    world.carriers.state.pose.position = .{ district_contract.chunk_span / 2, 0, 0 };
     try world.feature.enqueue(.{ .drop = .{
         .transaction_id = 21,
         .carrier_id = test_carrier_id,
@@ -1364,7 +1364,7 @@ test "drop remains beside a carrier when configured offset crosses a spatial bou
         .carrier_id = test_carrier_id,
         .carryable_id = id,
     } });
-    world.carriers.state.pose.position = .{ 0, 0, -7.75 };
+    world.carriers.state.pose.position = .{ 0, 0, -district_contract.chunk_span / 2 + 0.25 };
     const outcome = try runCommand(&world, .{ .drop = .{
         .transaction_id = 41,
         .carrier_id = test_carrier_id,
@@ -1379,7 +1379,7 @@ test "drop remains beside a carrier when configured offset crosses a spatial bou
         district_contract.ChunkCoord{ .x = 0, .z = -1 },
         outcome.dropped.owner,
     );
-    try std.testing.expect(outcome.dropped.pose.position[2] < -8.0);
+    try std.testing.expect(outcome.dropped.pose.position[2] < -district_contract.chunk_span / 2);
     try std.testing.expectEqual(interaction_contract.CarryMode.empty, world.carriers.state.carry_mode);
     try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
 }
@@ -1395,7 +1395,7 @@ test "drop outside authored districts preserves the item beside its carrier" {
         .carrier_id = test_carrier_id,
         .carryable_id = id,
     } });
-    world.carriers.state.pose.position = .{ 40, 0, 40 };
+    world.carriers.state.pose.position = .{ district_contract.chunk_span * 2.5, 0, district_contract.chunk_span * 2.5 };
     const outcome = try runCommand(&world, .{ .drop = .{
         .transaction_id = 51,
         .carrier_id = test_carrier_id,
@@ -1410,7 +1410,7 @@ test "drop outside authored districts preserves the item beside its carrier" {
         district_contract.ChunkCoord{ .x = 3, .z = 2 },
         outcome.dropped.owner,
     );
-    try std.testing.expectEqualDeep([3]f32{ 40, 0.75, 38.5 }, outcome.dropped.pose.position);
+    try std.testing.expectEqualDeep([3]f32{ district_contract.chunk_span * 2.5, 0.75, district_contract.chunk_span * 2.5 - 1.5 }, outcome.dropped.pose.position);
     try std.testing.expectEqual(interaction_contract.CarryMode.empty, world.carriers.state.carry_mode);
     try std.testing.expectEqual(@as(usize, 1), world.bodies.live_count);
 }

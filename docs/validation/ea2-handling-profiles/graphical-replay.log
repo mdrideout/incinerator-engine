@@ -1,0 +1,53 @@
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+Incident run: /Users/matt/Library/Logs/Incinerator/runs/2026-09-07T23-16-47.222Z_solo_67099ec1
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+   Cmd+Option+I - Flag human-test anomaly
+   F9 / Fn+F9 - Optional anomaly shortcut
+===========================================
+
+DEVELOPER_ENDPOINT lifecycle=available discovery=/Users/matt/Library/Logs/Incinerator/developer/discovery.json
+INCIDENT_GRAPHICAL_REPLAY_BEGIN source=/Users/matt/repos/incinerator-engine/docs/validation/ea2-handling-profiles/graphical-control-fixture samples=15 final_tick=1120
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=12867264
+FPS: 28.6 | Frame time: 33.75ms | Sim ticks: 229 | Ticks/frame: 2
+FPS: 29.3 | Frame time: 33.73ms | Sim ticks: 479 | Ticks/frame: 2
+FPS: 28.3 | Frame time: 34.85ms | Sim ticks: 731 | Ticks/frame: 2
+FPS: 27.7 | Frame time: 40.03ms | Sim ticks: 987 | Ticks/frame: 2
+INCIDENT_GRAPHICAL_REPLAY_COMPLETE source=/Users/matt/repos/incinerator-engine/docs/validation/ea2-handling-profiles/graphical-control-fixture final_tick=1181
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 570
+ Total simulation ticks: 1181
+===========================================

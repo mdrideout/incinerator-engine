@@ -1,0 +1,16 @@
+MOUSE_CAPTURE_ACCEPTANCE_PASS first_click_consumed=true relative=true outside_scene_suppressed=true captured_click=true escape_release=true free_camera=true free_navigation=true free_look_escape=true selection_suppressed=true character_restore=true free_escape_menu=true menu_escape_resume=true menu_absent_escape_safe=true explicit_quit=true failures=0
+Build Summary: 7/7 steps succeeded
+test-mouse-capture-macos success
++- run exe incinerator_mouse_capture_acceptance success 499ms
+   +- compile exe incinerator_mouse_capture_acceptance Debug native success 2s MaxRSS:537M
+      +- WriteFile SDL3 cached
+      |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h cached
+      +- compile lib SDL3 Debug native cached 156ms MaxRSS:35M
+      |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+      |  +- configure cmake header include/build_config/SDL_build_config.h.cmake to SDL_build_config.h cached
+      |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+      +- compile lib SDL3 Debug native (+3 more reused dependencies)
+      +- WriteFile SDL3 (+1 more reused dependencies)
+      +- compile lib SDL3 Debug native (+3 more reused dependencies)
+      +- compile lib SDL3 Debug native (+3 more reused dependencies)
+

@@ -3391,15 +3391,15 @@ fn validReference(reference: navigation.NodeRef) bool {
 
 fn nodePosition(reference: navigation.NodeRef) [3]f32 {
     if (navigation.ChunkCoord.eql(reference.coord, west_coord)) return switch (reference.index) {
-        0 => .{ -4, 0, 3 },
-        1 => .{ 2, 0, 3 },
-        2 => .{ 7, 0, 3 },
+        0 => .{ navigation.chunk_span / 2 + (-4 - 8), 0, 3 },
+        1 => .{ navigation.chunk_span / 2 + (2 - 8), 0, 3 },
+        2 => .{ navigation.chunk_span / 2 + (7 - 8), 0, 3 },
         else => unreachable,
     };
     return switch (reference.index) {
-        0 => .{ 9, 0, 3 },
-        1 => .{ 14, 0, 3 },
-        2 => .{ 20, 0, 3 },
+        0 => .{ navigation.chunk_span / 2 + (9 - 8), 0, 3 },
+        1 => .{ navigation.chunk_span / 2 + (14 - 8), 0, 3 },
+        2 => .{ navigation.chunk_span / 2 + (20 - 8), 0, 3 },
         else => unreachable,
     };
 }
@@ -3960,7 +3960,7 @@ test "NPC waits crosses half-open boundary binds generations and becomes dormant
     var view_value = try world.feature.view(id);
     try std.testing.expectEqual(State.waiting_at_boundary, view_value.state);
     try std.testing.expect(navigation.ChunkCoord.eql(west_coord, view_value.owner));
-    try std.testing.expect(view_value.position[0] < 8);
+    try std.testing.expect(view_value.position[0] < navigation.chunk_span / 2);
     try std.testing.expectEqual(@as(usize, 1), world.controllers.live_count);
 
     const create_calls_before_transfer = world.controllers.create_calls;
@@ -3973,7 +3973,7 @@ test "NPC waits crosses half-open boundary binds generations and becomes dormant
     }
     view_value = try world.feature.view(id);
     try std.testing.expect(navigation.ChunkCoord.eql(east_coord, view_value.owner));
-    try std.testing.expect(view_value.position[0] >= 8);
+    try std.testing.expect(view_value.position[0] >= navigation.chunk_span / 2);
     try std.testing.expect(world.feature.diagnostics().transfers >= 1);
     try std.testing.expectEqual(create_calls_before_transfer, world.controllers.create_calls);
     try std.testing.expectEqual(@as(usize, 1), world.controllers.live_count);
@@ -4011,7 +4011,7 @@ test "externally displaced NPC adopts positional owner and rebases hold intent" 
     // Model a vehicle or other physical body pushing the CharacterVirtual in
     // the opposite direction from its semantic intent. Position owns spatial
     // authority; a hold route is not a collision barrier.
-    try world.controllers.forceOnlyCharacterPosition(.{ 8.1, 0, 3 });
+    try world.controllers.forceOnlyCharacterPosition(.{ navigation.chunk_span / 2 + 0.1, 0, 3 });
     try world.runtime.tick();
 
     const displaced = try world.feature.view(spawned.id);
@@ -4042,8 +4042,8 @@ test "external displacement into unavailable navigation recovers locally" {
         position: [3]f32,
         deactivate_east: bool,
     }{
-        .{ .position = .{ 8.1, 0, 3 }, .deactivate_east = true },
-        .{ .position = .{ 7, 0, 8.1 }, .deactivate_east = false },
+        .{ .position = .{ navigation.chunk_span / 2 + 0.1, 0, 3 }, .deactivate_east = true },
+        .{ .position = .{ navigation.chunk_span / 2 - 1, 0, navigation.chunk_span / 2 + 0.1 }, .deactivate_east = false },
     }) |scenario| {
         var world: TestWorld = undefined;
         try world.init();
@@ -4092,12 +4092,12 @@ test "external displacement without a route recovers locally" {
     // Runtime traversal is closed, but the displaced pose remains physical
     // truth and the semantic destination survives as recoverable blocked
     // intent.
-    try world.controllers.forceOnlyCharacterPosition(.{ 9.1, 0, 3 });
+    try world.controllers.forceOnlyCharacterPosition(.{ navigation.chunk_span / 2 + 1.1, 0, 3 });
     try world.runtime.tick();
     const recovered = try world.feature.view(spawned.id);
     try std.testing.expect(navigation.ChunkCoord.eql(east_coord, recovered.owner));
-    try std.testing.expect(recovered.position[0] <= 9.1);
-    try std.testing.expect(recovered.position[0] > 8.1);
+    try std.testing.expect(recovered.position[0] <= navigation.chunk_span / 2 + 1.1);
+    try std.testing.expect(recovered.position[0] > navigation.chunk_span / 2 + 0.1);
     try std.testing.expectEqual(@as(f32, 0), recovered.position[1]);
     try std.testing.expectEqual(@as(f32, 3), recovered.position[2]);
     try std.testing.expectEqualDeep(
@@ -4126,14 +4126,14 @@ test "blocked displacement recovery suspends and reconstructs locally" {
 
     world.navigation_access.east_active = false;
     world.controllers.reject_relocation = true;
-    try world.controllers.forceOnlyCharacterPosition(.{ 8.1, 0, 3 });
+    try world.controllers.forceOnlyCharacterPosition(.{ navigation.chunk_span / 2 + 0.1, 0, 3 });
     try world.runtime.tick();
 
     var recovered = try world.feature.view(spawned.id);
     try std.testing.expectEqual(State.dormant, recovered.state);
     try std.testing.expect(!recovered.controller_present);
     try std.testing.expect(navigation.ChunkCoord.eql(east_coord, recovered.owner));
-    try std.testing.expectEqualDeep([3]f32{ 8.1, 0, 3 }, recovered.position);
+    try std.testing.expectEqualDeep([3]f32{ navigation.chunk_span / 2 + 0.1, 0, 3 }, recovered.position);
     try std.testing.expectEqual(@as(usize, 0), world.controllers.live_count);
     try std.testing.expect(world.runtime.firstFault() == null);
 
@@ -4389,14 +4389,14 @@ test "compact patrol persistence round trips both interior directions" {
         westNode(1),
         westNode(2),
         .toward_second,
-        .{ 2.25, 0, 3 },
+        .{ navigation.chunk_span / 2 - 5.75, 0, 3 },
     ));
     try expectRecordRoundTrip(patrolRecord(
         2,
         eastNode(1),
         eastNode(0),
         .toward_first,
-        .{ 13.75, 0, 3 },
+        .{ navigation.chunk_span / 2 + 5.75, 0, 3 },
     ));
 }
 
@@ -4405,7 +4405,7 @@ test "restored patrol endpoint waits then selects outbound leg" {
     try world.init();
     defer world.deinit();
     world.navigation_access.east_active = false;
-    const record = patrolRecord(1, westNode(0), null, .toward_first, .{ -4, 0, 3 });
+    const record = patrolRecord(1, westNode(0), null, .toward_first, .{ navigation.chunk_span / 2 + (-4 - 8), 0, 3 });
     try world.feature.restoreRecords(&.{record});
     const edge_calls_before_wait = world.navigation_access.resolve_edge_calls;
     for (0..5) |_| try world.runtime.tick();

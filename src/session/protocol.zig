@@ -5,6 +5,9 @@ const std = @import("std");
 const budgets = @import("session_budgets");
 const identity = @import("session_identity");
 const cohort = @import("network_cohort_options");
+const vehicles = @import("vehicle_contract");
+pub const VehicleDefinition = vehicles.presentation.Definition;
+pub const validationVehicleDefinition = vehicles.presentation.validationFixture;
 
 pub const wire_magic: u32 = 0x494e_434e; // "INCN"
 pub const wire_version: u16 = cohort.protocol_revision;
@@ -278,6 +281,8 @@ pub const VehicleWheelState = struct {
 };
 
 pub const VehicleState = struct {
+    definition: VehicleDefinition,
+    definition_revision: u64 = 0,
     entity: identity.ReplicatedEntityId,
     position: [3]f32,
     rotation: [4]f32,
@@ -1485,6 +1490,7 @@ fn validateProjectionIdentities(value: Snapshot) !void {
         try recordActiveProjectionIdentity(&active, character.entity);
     }
     for (value.vehicleSlice()) |vehicle| {
+        try vehicle.definition.validate();
         try recordActiveProjectionIdentity(&active, vehicle.entity);
     }
     for (value.carryableSlice()) |carryable| {
@@ -1555,6 +1561,7 @@ fn validateSnapshot(value: Snapshot) !void {
         );
     }
     for (value.vehicleSlice()) |vehicle| {
+        try vehicle.definition.validate();
         try vehicle.entity.validate();
         if (vehicle.driver) |driver| try driver.validate();
         try validateFiniteComponents(&vehicle.position);
@@ -2250,7 +2257,67 @@ fn decodeCharacter(decoder: *Decoder) !CharacterState {
     return value;
 }
 
+fn encodeVehicleDefinition(e: *Encoder, v: VehicleDefinition) !void {
+    try e.u64Value(v.archetype.asset.namespace);
+    try e.u64Value(v.archetype.asset.local);
+    try e.u64Value(v.asset_revision);
+    for (v.digest) |b| try e.u8Value(b);
+    for (v.chassis_half_extents) |x| try e.f32Value(x);
+    for (v.attachment_positions) |p| for (p) |x| try e.f32Value(x);
+    try e.f32Value(v.wheel_radius);
+    try e.f32Value(v.wheel_width);
+    for (v.suspension_max_lengths) |x| try e.f32Value(x);
+    try e.f32Value(v.max_steer_radians);
+    try encodeVehicleVisual(e, v.visuals.chassis);
+    for (v.visuals.wheels) |part| try encodeVehicleVisual(e, part);
+    try e.f32Value(v.response.acceleration_mps2);
+    try e.f32Value(v.response.brake_deceleration_mps2);
+    try e.f32Value(v.response.hand_brake_deceleration_mps2);
+    try e.f32Value(v.response.maximum_forward_speed_mps);
+    try e.f32Value(v.response.maximum_reverse_speed_mps);
+    try e.f32Value(v.response.yaw_rate_at_eight_mps);
+}
+fn decodeVehicleDefinition(d: *Decoder) !VehicleDefinition {
+    var v: VehicleDefinition = undefined;
+    v.archetype = .{ .asset = .{ .namespace = try d.u64Value(), .local = try d.u64Value() } };
+    v.asset_revision = try d.u64Value();
+    for (&v.digest) |*b| b.* = try d.u8Value();
+    for (&v.chassis_half_extents) |*x| x.* = try d.f32Value();
+    for (&v.attachment_positions) |*p| for (p) |*x| {
+        x.* = try d.f32Value();
+    };
+    v.wheel_radius = try d.f32Value();
+    v.wheel_width = try d.f32Value();
+    for (&v.suspension_max_lengths) |*x| x.* = try d.f32Value();
+    v.max_steer_radians = try d.f32Value();
+    v.visuals.chassis = try decodeVehicleVisual(d);
+    for (&v.visuals.wheels) |*part| part.* = try decodeVehicleVisual(d);
+    v.response = .{ .acceleration_mps2 = try d.f32Value(), .brake_deceleration_mps2 = try d.f32Value(), .hand_brake_deceleration_mps2 = try d.f32Value(), .maximum_forward_speed_mps = try d.f32Value(), .maximum_reverse_speed_mps = try d.f32Value(), .yaw_rate_at_eight_mps = try d.f32Value() };
+    try v.validate();
+    return v;
+}
+fn encodeVehicleVisual(e: *Encoder, v: vehicles.asset.VisualPart) !void {
+    try e.u64Value(v.mesh.namespace);
+    try e.u64Value(v.mesh.local);
+    try e.u64Value(v.material.namespace);
+    try e.u64Value(v.material.local);
+    for (v.local_pose.position) |x| try e.f32Value(x);
+    for (v.local_pose.rotation) |x| try e.f32Value(x);
+    for (v.scale) |x| try e.f32Value(x);
+}
+fn decodeVehicleVisual(d: *Decoder) !vehicles.asset.VisualPart {
+    var v: vehicles.asset.VisualPart = undefined;
+    v.mesh = .{ .namespace = try d.u64Value(), .local = try d.u64Value() };
+    v.material = .{ .namespace = try d.u64Value(), .local = try d.u64Value() };
+    for (&v.local_pose.position) |*x| x.* = try d.f32Value();
+    for (&v.local_pose.rotation) |*x| x.* = try d.f32Value();
+    for (&v.scale) |*x| x.* = try d.f32Value();
+    return v;
+}
+
 fn encodeVehicle(encoder: *Encoder, value: VehicleState) !void {
+    try encodeVehicleDefinition(encoder, value.definition);
+    try encoder.u64Value(value.definition_revision);
     try encodeReplicatedEntity(encoder, value.entity);
     for (value.position) |component| try encoder.f32Value(component);
     for (value.rotation) |component| try encoder.f32Value(component);
@@ -2268,7 +2335,11 @@ fn encodeVehicle(encoder: *Encoder, value: VehicleState) !void {
 }
 
 fn decodeVehicle(decoder: *Decoder) !VehicleState {
+    const definition = try decodeVehicleDefinition(decoder);
+    const revision = try decoder.u64Value();
     var value = VehicleState{
+        .definition = definition,
+        .definition_revision = revision,
         .entity = try decodeReplicatedEntity(decoder),
         .position = undefined,
         .rotation = undefined,
@@ -2614,6 +2685,7 @@ test "snapshot round trips at the validation ceiling" {
     }
     for (snapshot.vehicles[0..snapshot.vehicle_count], 0..) |*vehicle, index| {
         vehicle.* = .{
+            .definition = validationVehicleDefinition(),
             .entity = .{ .index = @intCast(budgets.max_participants + index + 1), .generation = 1 },
             .position = .{ @floatFromInt(index), 0.5, 1 },
             .rotation = .{ 0, 0, 0, 1 },
@@ -2802,6 +2874,7 @@ test "snapshot validation rejects zero sequence and invalid physical projection"
     snapshot.sequence.value = 1;
     snapshot.vehicle_count = 1;
     snapshot.vehicles[0] = .{
+        .definition = validationVehicleDefinition(),
         .entity = .{ .index = 17, .generation = 1 },
         .position = .{ 0, 1, 0 },
         .rotation = .{ 0, 0, 0, 0 },
@@ -2942,6 +3015,7 @@ test "server validation rejects globally duplicate active projection identities"
     };
     snapshot.vehicle_count = 1;
     snapshot.vehicles[0] = .{
+        .definition = validationVehicleDefinition(),
         .entity = duplicate,
         .position = .{ 0, 1, 0 },
         .rotation = .{ 0, 0, 0, 1 },
@@ -3005,6 +3079,7 @@ test "materialization rejects a delta identity collision with an unchanged lane"
     base.sequence.value = 1;
     base.vehicle_count = 1;
     base.vehicles[0] = .{
+        .definition = validationVehicleDefinition(),
         .entity = entity,
         .position = .{ 0, 1, 0 },
         .rotation = .{ 0, 0, 0, 1 },
@@ -3059,6 +3134,7 @@ test "acknowledged delta materializes updates removals and retained NPC state" {
     current.character_count = 0;
     current.vehicle_count = 1;
     current.vehicles[0] = .{
+        .definition = validationVehicleDefinition(),
         .entity = .{ .index = 20, .generation = 1 },
         .position = .{ 2, 1, 0 },
         .rotation = .{ 0, 0, 0, 1 },

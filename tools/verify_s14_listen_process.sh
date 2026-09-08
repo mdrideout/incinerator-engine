@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-    echo "usage: verify_s14_listen_process.sh <graphical-listen-host> <graphical-guest>" >&2
+if [[ $# -ne 3 ]]; then
+    echo "usage: verify_s14_listen_process.sh <graphical-listen-host> <graphical-guest> <content-root>" >&2
     exit 2
 fi
+
+content_root=$3
 
 host=$1
 guest=$2
@@ -29,7 +31,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$host" --port "$port" --ticket "$ticket" --max-frames 20000 --s14-observer \
+"$host" --content-root "$content_root" --port "$port" --ticket "$ticket" --max-frames 20000 --s14-observer \
     >"$host_log" 2>&1 &
 host_pid=$!
 for _ in {1..240}; do
@@ -43,7 +45,7 @@ done
 grep -q "^MP6_LISTEN_READY endpoint=127.0.0.1:$port " "$host_log"
 test -f "$ticket"
 
-"$guest" --ticket "$ticket" --max-frames 20000 --s14-attacker --s11-listen \
+"$guest" --content-root "$content_root" --ticket "$ticket" --max-frames 20000 --s14-attacker --s11-listen \
     >"$guest_log" 2>&1 &
 guest_pid=$!
 wait "$guest_pid"

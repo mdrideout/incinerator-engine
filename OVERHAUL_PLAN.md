@@ -23,8 +23,10 @@ MCP adapter because local coding agents always have shell access and authorized
 Phase 7 to make the canonical CLI and repository-owned agent skill first-class.
 Its implementation, automated, installed Metal, clean-context agent, and
 comprehensive manual agent review pass, and the product owner accepted it on
-2026-08-30. EA1-A implementation and machine acceptance are a complete
-candidate; product-owner visual/usability review remains before EA1-B.
+2026-08-30. EA1 is implemented. On 2026-09-06 the product owner authorized
+material authoring and complete replacement of the evaluation scene. The
+industrial world and shared UI/CLI material workflow now form the baseline;
+EA2 vehicle archetypes are next.
 
 **Architecture:** Thin kernel + feature-owned vertical slices + capability adapters
 
@@ -508,7 +510,7 @@ logical authority and operational lifecycle:
 | D-026 | Promotion-eligible neural-renderer weights and learned dependencies are title-specific, trained from random initialization on title-owned exact pairs, and reproduced through the engine framework; pretrained models remain comparisons only | Accepted in [ADR-026](docs/adr/026-from-scratch-title-neural-renderer.md), the [north star](docs/design/title-neural-renderer-north-star.md), and its [phase-gated implementation plan](docs/design/title-neural-renderer-implementation-plan.md) | Retained policy if the paused track is explicitly restarted |
 | D-027 | One finite-ammunition handgun is authoritative across solo/listen/dedicated placement; clients submit intent, authority derives current-state semantic/Jolt hits, and vitals owns damage/death | Accepted and implemented in [ADR-027](docs/adr/027-authoritative-ranged-combat.md) and the [S14 validation ledger](docs/validation/s14-ranged-combat.md) | Future weapon slices and measured lag-compensation decision |
 | D-028 | The current sandbox is one exact four-district 2×2 cohort; the composition owns continuous flat support, districts own obstacles/decoration/navigation, and the admitted 32-node graph remains sufficient until measured content proves a navmesh or crowd need | Accepted and implemented in [ADR-028](docs/adr/028-content-rich-four-district-cohort.md), the [phase plan](docs/design/s15-content-rich-district-expansion.md), [evaluation world](docs/design/s15-four-district-evaluation-world.md), [accepted validation](docs/validation/s15-content-rich-district-expansion.md), and [performance baseline](docs/performance/s15-baseline.md) | Complete; establishes EA0-EA5 baseline |
-| D-029 | Reusable runtime capabilities, reusable engine tooling, game runtime/content, and game tooling are separate owners; typed UI and local AI clients share owner-defined authoring transactions; scripting remains evidence-gated | Accepted in [ADR-029](docs/adr/029-engine-game-authoring-boundary.md); EA0, EA0.5, and Phase 7 are accepted; EA1-A has a complete machine candidate in its [validation ledger](docs/validation/ea1-a-practical-textures-and-materials.md) | Complete EA1-A product-owner review, then EA1-B-EA5 and final G1 proof |
+| D-029 | Reusable runtime capabilities, reusable engine tooling, game runtime/content, and game tooling are separate owners; typed UI and local AI clients share owner-defined authoring transactions; scripting remains evidence-gated | Accepted in [ADR-029](docs/adr/029-engine-game-authoring-boundary.md); EA0, EA0.5, and Phase 7 are accepted; EA1-A has a complete machine candidate in its [validation ledger](docs/validation/ea1-a-practical-textures-and-materials.md) | EA1 implemented with the industrial scene; EA2–EA5 and final G1 proof follow |
 
 ### Decision notes
 
@@ -598,7 +600,7 @@ before dependency resolution.
 | EA0 | Engine/game/tooling ownership, asset identity, and typed authoring transaction boundary are executable | Complete and accepted |
 | EA0.5 | Developer-only local typed endpoint and canonical CLI use the same selection, viewport, authoring, persistence, and capture owners as ImGui | Complete and accepted; final human correction unified renderer bounds, ImGui gizmo, and retained hit-region visibility across Character/Free Camera transitions |
 | Editor Phase 7 | Canonical CLI publishes a first-class machine catalog and guided results; a repository-owned skill teaches safe shell-agent workflows without duplicating commands | Complete and accepted by the product owner on 2026-08-30 |
-| EA1 | Practical texture/material import, assignment, authoring, and evidence | EA1-A import/runtime/inspection machine candidate complete; product-owner review pending. EA1-B not started |
+| EA1 | Practical texture/material import, assignment, authoring, and evidence | Implemented: full conventional materials, shared UI/CLI authoring, live binding, durable commit/restart, fresh industrial world |
 | EA2 | Vehicle archetypes, live revisioned tuning, and local AI/developer control | Approved; implementation not started |
 | EA3 | Authored directional sun and point-light capabilities | Approved; implementation not started |
 | EA4 | Game-owned map assets and construction workflow | Approved; implementation not started |
@@ -1899,9 +1901,11 @@ DR1, S14, S15, EA0, and EA0.5 are accepted. The product owner eliminated the
 planned MCP adapter and authorized Phase 7's first-class CLI agent contract in
 the [Editor Interaction and Agent Control Plan](EDITOR_INTERACTION_AND_AGENT_CONTROL_PLAN.md).
 Its machine-readable catalog, guided result envelope, repository skill,
-installed workflow, and product-owner stop review are complete. EA1-A is now
-the active product checkpoint. Its candidate evidence is recorded in the
-[EA1-A validation ledger](docs/validation/ea1-a-practical-textures-and-materials.md);
+installed workflow, and product-owner stop review are complete. EA1 material
+authoring and the fresh industrial scene are now implemented; see the
+[EA1-B validation ledger](docs/validation/ea1-b-material-authoring.md). The
+[EA1-A ledger](docs/validation/ea1-a-practical-textures-and-materials.md) records
+the earlier import milestone;
 the historical CLI evidence remains in the
 [Phase 7 validation ledger](docs/validation/editor-interaction-phase-7-cli-agent-contract.md).
 
@@ -2021,16 +2025,18 @@ older historical “next phase” language.
     Metal shell-agent journey, documentation, Skill validation, and
     product-owner stop review pass. See the
     [validation ledger](docs/validation/editor-interaction-phase-7-cli-agent-contract.md).
-56. [ ] **EA1 — Practical textures and materials.** EA1-A now extends the
-    offline glTF/cooked/GPU proof into real project-owned GLB/glTF plus PNG/JPEG
-    import, deterministic dependency/asset identity, runtime material sampling,
-    Content Browser/Inspector, CLI parity, and native automation. Product-owner
-    EA1-A review remains. EA1-B material response, assignment, Material Lab,
-    revert, durable commit, and final incident acceptance have not started.
-57. [ ] **EA2 — Vehicle archetypes and live developer control.** Add admitted
-    archetype identity, per-archetype tuning/presentation, Vehicle Lab, safe
-    authority-tick reconfiguration, and one process-local CLI/LLM adapter over
-    the same typed transactions and vehicle-dynamics measurements.
+56. [x] **EA1 — Practical textures and materials.** The product owner authorized
+    EA1-B and complete scene replacement on 2026-09-06. Full material inputs,
+    Material Lab, shared revisioned UI/CLI transactions, live mesh assignments,
+    durable commit/restart, and the game-owned industrial neighborhood are
+    implemented. See [EA1-B evidence](docs/validation/ea1-b-material-authoring.md).
+57. [x] **EA2 — Vehicle archetypes and live developer control.** Implemented
+    exact admitted definitions, two game-owned cars, Vehicle Lab/CLI, safe tick
+    edits/rebuilds, isolated measurements, persistence/replay and reliable
+    client admission. See [EA2 evidence](docs/validation/ea2-vehicle-authoring.md).
+    EA2-H implemented: Space handbrake, brake-to-reverse, shared combined-slip
+    response, FWD/RWD/AWD baselines and preset authoring. Engineering gates passed;
+    human driving-feel acceptance is pending. See [EA2-H validation](docs/validation/ea2-handling-profiles.md).
 58. [ ] **EA3 — Authored lighting.** Make the game-owned sun preset editable,
     add stable point lights, Lighting Lab/gizmos, UI/agent transactions,
     persistence, and complete render/incident evidence without adding a render

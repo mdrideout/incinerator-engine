@@ -94,10 +94,10 @@ pub fn main(init: std.process.Init) !void {
         view.lookupCoordinate(.{ .x = 0, .z = 1 }) != northwest_index or
         view.lookupCoordinate(.{ .x = 1, .z = 0 }) != southeast_index or
         view.lookupCoordinate(.{ .x = 0, .z = 0 }) != southwest_index or
-        view.lookupBundleKey("district/s15_world_northeast") != northeast_index or
-        view.lookupBundleKey("district/s15_world_northwest") != northwest_index or
-        view.lookupBundleKey("district/s15_world_southeast") != southeast_index or
-        view.lookupBundleKey("district/s15_world_southwest") != southwest_index)
+        view.lookupBundleKey("district/industrial_1_1") != northeast_index or
+        view.lookupBundleKey("district/industrial_0_1") != northwest_index or
+        view.lookupBundleKey("district/industrial_1_0") != southeast_index or
+        view.lookupBundleKey("district/industrial_0_0") != southwest_index)
     {
         return error.CatalogLookupDiverged;
     }
@@ -138,45 +138,39 @@ pub fn main(init: std.process.Init) !void {
     );
 }
 
-fn verifyEa1ProjectAssets(
-    urban: content.bundle.BundleView,
-    cargo: content.bundle.BundleView,
-) !void {
-    if (urban.source_format != .glb or cargo.source_format != .gltf) {
-        return error.Ea1SourceContainerCoverageMissing;
+fn verifyEa1ProjectAssets(first: content.bundle.BundleView, second: content.bundle.BundleView) !void {
+    for ([_]content.bundle.BundleView{ first, second }) |view| {
+        if (view.source_format != .glb or view.meshes.len <= 8) return error.IndustrialGeometryMissing;
+        for (view.materials) |material| {
+            if (material.base_color_texture == content.bundle.none_index or material.metallic_roughness_texture == content.bundle.none_index or material.normal_texture == content.bundle.none_index or material.occlusion_texture == content.bundle.none_index) return error.IndustrialMaterialMapsMissing;
+            try verifyVisibleTexturedSurface(view, material.base_color_texture);
+        }
+        // Authored shells and logical blockers use exactly the same dimensions.
+        for (view.static_boxes) |box| {
+            var found = false;
+            for (view.meshes) |mesh| {
+                const name = view.name(mesh.name).?;
+                if (!std.mem.endsWith(u8, name, "shell")) continue;
+                const primitive = view.primitives[mesh.first_primitive];
+                var min: [3]f32 = @splat(std.math.inf(f32));
+                var max: [3]f32 = @splat(-std.math.inf(f32));
+                for (view.vertices[primitive.first_vertex..][0..primitive.vertex_count]) |vertex| for (0..3) |axis| {
+                    min[axis] = @min(min[axis], vertex.position[axis]);
+                    max[axis] = @max(max[axis], vertex.position[axis]);
+                };
+                var same = true;
+                for (0..3) |axis| if (min[axis] != box.position[axis] - box.half_extents[axis] or max[axis] != box.position[axis] + box.half_extents[axis]) {
+                    same = false;
+                    break;
+                };
+                if (same) {
+                    found = true;
+                    break;
+                }
+            }
+            if (!found) return error.IndustrialCollisionGeometryMismatch;
+        }
     }
-    if (urban.textures.len != 2 or cargo.textures.len != 2 or
-        urban.materials.len != 4 or cargo.materials.len != 4)
-    {
-        return error.Ea1ProjectAssetShapeDiverged;
-    }
-    const urban_texture = urban.textures[1];
-    const cargo_texture = cargo.textures[1];
-    if (!std.mem.eql(u8, urban.name(urban_texture.name).?, "UrbanBrickFacade") or
-        urban_texture.width != 128 or urban_texture.height != 128 or
-        urban_texture.format != .rgba8_srgb or urban_texture.encoding != .png or
-        urban_texture.sampler.min_filter != .linear or
-        urban_texture.sampler.address_u != .mirrored_repeat)
-    {
-        return error.Ea1UrbanTextureMetadataDiverged;
-    }
-    if (!std.mem.eql(u8, cargo.name(cargo_texture.name).?, "CargoCratePanels") or
-        cargo_texture.width != 128 or cargo_texture.height != 128 or
-        cargo_texture.format != .rgba8_srgb or cargo_texture.encoding != .jpeg or
-        cargo_texture.sampler.min_filter != .nearest or
-        cargo_texture.sampler.address_u != .clamp_to_edge)
-    {
-        return error.Ea1CargoTextureMetadataDiverged;
-    }
-    if (urban.materials[2].base_color_texture != 1 or
-        urban.materials[3].base_color_texture != 1 or
-        cargo.materials[2].base_color_texture != 1 or
-        cargo.materials[3].base_color_texture != 1)
-    {
-        return error.Ea1MaterialTextureRelationshipDiverged;
-    }
-    try verifyVisibleTexturedSurface(urban, 1);
-    try verifyVisibleTexturedSurface(cargo, 1);
 }
 
 fn verifyVisibleTexturedSurface(view: content.bundle.BundleView, texture_index: u32) !void {
@@ -235,13 +229,13 @@ fn verifyHeadlessCohort(
     );
     const cohort_hex = std.fmt.bytesToHex(try cohort.fingerprint(), .lower);
     const catalog_hex = std.fmt.bytesToHex(sha256(catalog_bytes), .lower);
-    std.debug.print("S15 content cohort {s}\nS15 catalog sha256 {s}\n", .{
+    std.debug.print("Industrial content cohort {s}\nIndustrial catalog sha256 {s}\n", .{
         &cohort_hex,
         &catalog_hex,
     });
     for (district_bytes, 0..) |bytes, index| {
         const digest_hex = std.fmt.bytesToHex(sha256(bytes), .lower);
-        std.debug.print("S15 district[{d}] sha256 {s}\n", .{ index, &digest_hex });
+        std.debug.print("Industrial district[{d}] sha256 {s}\n", .{ index, &digest_hex });
     }
     if (value.schema_version != 1 or
         value.catalog_wire_schema != sandbox_recipe.catalog_wire_schema or

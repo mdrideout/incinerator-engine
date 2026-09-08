@@ -38,6 +38,8 @@ pub const PersistentId = engine.PersistentId;
 pub const RejectionReason = crates.RejectionReason;
 pub const VehicleCommandRejected = vehicles.CommandRejected;
 pub const VehicleConfig = vehicles.Config;
+/// Explicit renderer-free validation input, never a product spawn fallback.
+pub const validationVehicleDefinition = vehicles.asset.validationFixture;
 
 pub const district_presentation_policies = sandbox_district_recipe.presentation_policies;
 pub const district_static_box_count: u32 = sandbox_district_recipe.static_box_count;
@@ -47,25 +49,25 @@ pub const navigation_west_coord = sandbox_district_recipe.navigation_west_coord;
 pub const navigation_northwest_coord = sandbox_district_recipe.navigation_northwest_coord;
 pub const navigation_northeast_coord = sandbox_district_recipe.navigation_northeast_coord;
 pub const installed_district_coords = sandbox_district_recipe.installed_coords;
-pub const player_plaza_destination = sandbox_district_recipe.player_plaza;
-pub const depot_forecourt_destination = sandbox_district_recipe.depot_forecourt;
-pub const south_gate_approach_destination = sandbox_district_recipe.south_gate_approach;
-pub const market_terminal_destination = sandbox_district_recipe.market_terminal;
-pub const alley_junction_destination = sandbox_district_recipe.alley_junction;
-pub const transit_yard_destination = sandbox_district_recipe.transit_yard;
+pub const garage_forecourt_destination = sandbox_district_recipe.garage_forecourt;
+pub const foundry_office_destination = sandbox_district_recipe.foundry_office;
+pub const foundry_south_walk_destination = sandbox_district_recipe.foundry_south_walk;
+pub const freight_dispatch_destination = sandbox_district_recipe.freight_dispatch;
+pub const freight_alley_destination = sandbox_district_recipe.freight_alley;
+pub const freight_yard_destination = sandbox_district_recipe.freight_yard;
 
 pub fn destinationName(id: DestinationId) ?[]const u8 {
     return sandbox_district_recipe.destinationName(id);
 }
 pub const npc_capacity = npcs.max_npcs;
-pub const snapshot_schema: u16 = 15;
+pub const snapshot_schema: u16 = 17;
 pub const DistrictPresentationPlan = sandbox_district_recipe.PresentationPlan;
 
 /// Default playable product spawn and the local movement envelope guaranteed
 /// clear before the asynchronous west district is admitted to authority.
-pub const default_character_spawn_position = [3]f32{ -5, 0, 5 };
-pub const default_vehicle_spawn_position = [3]f32{ -1, 2, -3 };
-pub const default_carryable_spawn_position = [3]f32{ -1, 0.5, 6 };
+pub const default_character_spawn_position = sandbox_district_recipe.player_spawn;
+pub const default_vehicle_spawn_position = sandbox_district_recipe.vehicle_spawn;
+pub const default_carryable_spawn_position = sandbox_district_recipe.carryable_spawn;
 pub const default_character_spawn_clearance: f32 = 0.5;
 pub const default_character_initial_traversal: f32 = 1.0;
 
@@ -211,7 +213,7 @@ test "graphical sandbox contracts publish values without mutable authority" {
 
     const config = Config{ .namespace = 42 };
     try std.testing.expectEqual(@as(u64, 42), config.namespace);
-    try std.testing.expectEqual(snapshot_schema, @as(u16, 15));
+    try std.testing.expectEqual(snapshot_schema, @as(u16, 17));
 }
 
 test "default playable spawn and initial traversal clear canonical blockers" {
@@ -222,5 +224,5 @@ test "default playable spawn and initial traversal clear canonical blockers" {
     const staged = try districtPresentationPlan(&west, false);
     const resident = try districtPresentationPlan(&west, true);
     try std.testing.expectEqual(district_blocking_proxy_count, staged.proxy_box_count);
-    try std.testing.expectEqualSlices(u8, staged.proxyBoxIndices(), resident.proxyBoxIndices());
+    try std.testing.expectEqual(@as(u8, 0), resident.proxy_box_count);
 }

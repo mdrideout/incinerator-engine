@@ -5,6 +5,7 @@ const std = @import("std");
 pub const identity = @import("identity.zig");
 pub const transform = @import("transform.zig");
 pub const assets = @import("contracts/assets.zig");
+pub const material = @import("contracts/material.zig");
 pub const authoring = @import("contracts/authoring.zig");
 pub const developer_endpoint = @import("contracts/developer_endpoint.zig");
 pub const diagnostics = @import("contracts/diagnostics.zig");
@@ -21,6 +22,7 @@ test "contract surface remains backend neutral" {
     std.testing.refAllDecls(identity);
     std.testing.refAllDecls(transform);
     std.testing.refAllDecls(assets);
+    std.testing.refAllDecls(material);
     std.testing.refAllDecls(authoring);
     std.testing.refAllDecls(developer_endpoint);
     std.testing.refAllDecls(diagnostics);

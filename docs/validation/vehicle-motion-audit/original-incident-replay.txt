@@ -1,0 +1,22 @@
+replay divergence: tick=5278 category=npc
+error: ReplayDiverged
+/Users/matt/repos/incinerator-engine/tools/s4_replay.zig:285:13: 0x104c977f7 in requireMatchedReplay (incinerator_replay)
+            return error.ReplayDiverged;
+            ^
+/Users/matt/repos/incinerator-engine/tools/s4_replay.zig:219:29: 0x104c9996b in verify (incinerator_replay)
+    const completed_ticks = try requireMatchedReplay(
+                            ^
+/Users/matt/repos/incinerator-engine/tools/s4_replay.zig:135:9: 0x104c9aa23 in main (incinerator_replay)
+        try verify(init, capture_path, args[3], .match_only);
+        ^
+replay-incident
++- run exe incinerator_replay failure
+error: process exited with error code 1
+failed command: ./.zig-cache/o/519471ad07a0a457042841dfda578ab8/incinerator_replay verify-incident /Users/matt/Library/Logs/Incinerator/runs/2026-09-07T19-50-20.255Z_solo_ddadac9e /Users/matt/repos/incinerator-engine/zig-out/share/incinerator/content
+
+Build Summary: 6/8 steps succeeded (1 failed)
+replay-incident transitive failure
++- run exe incinerator_replay failure
+
+error: the following build command failed with exit code 1:
+.zig-cache/o/c2a402746ccb6a162e110674cac4f109/build /opt/homebrew/Cellar/zig/0.16.0_1/bin/zig /opt/homebrew/Cellar/zig/0.16.0_1/lib/zig /Users/matt/repos/incinerator-engine .zig-cache /Users/matt/.cache/zig --seed 0x4afcfb0d -Z4b764e4e4527ee6c replay-incident -- /Users/matt/Library/Logs/Incinerator/runs/2026-09-07T19-50-20.255Z_solo_ddadac9e /Users/matt/repos/incinerator-engine/zig-out/share/incinerator/content

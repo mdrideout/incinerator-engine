@@ -1,8 +1,6 @@
 # ADR-029: Engine, Game, and Authoring Ownership Boundary
 
-**Status:** Accepted; EA0, EA0.5, and Phase 7 accepted; EA1-A implementation and
-machine acceptance candidate complete with product-owner review pending; EA1-B
-through EA5 pending
+**Status:** Accepted; EA0, EA0.5, Phase 7, EA1 and EA2 implemented; EA3–EA5 pending
 
 **Date:** 2026-08-18
 
@@ -113,6 +111,22 @@ directory does not imply protocol-neutral reuse.
 
 ### Assets and maps
 
+On 2026-09-06 the product owner explicitly authorized EA1-B and replacement of
+the entire evaluation scene. That decision supersedes the earlier EA1-A review
+prerequisite and S15 scene-preservation gate. Historical scene measurements are
+not design limits for the industrial neighborhood. See the
+[industrial material slice](../design/ea1-b-industrial-demo.md) and
+[validation](../validation/ea1-b-material-authoring.md).
+
+The engine-owned material library format stores named definitions and explicit
+mesh bindings. The game owns the library instances under `game/industrial`.
+Material Lab and the CLI share `material_authoring.Owner`; a composition adapter
+supplies the explicit game directory for durable commits. Ordinary runtime
+products read the immutable installed library without constructing that owner.
+Geometry regeneration preserves the authored library. Existing material and mesh
+names retain stable asset IDs across recooking.
+
+
 glTF 2.0 remains the canonical source interchange for mesh/material scenes.
 Import and dependency resolution remain offline/editor-only. Runtime products
 consume versioned cooked game content through explicit roots and stable asset
@@ -182,3 +196,12 @@ untrusted-mod or sandboxing need.
 - [ADR-010 diagnostics and replay](010-developer-diagnostics-replay-and-debug-visualization.md)
 - [ADR-011 persistent authoring](011-persistent-authoring-and-durable-save-slots.md)
 - [ADR-028 four-district cohort](028-content-rich-four-district-cohort.md)
+
+## EA2 implementation, 2026-09-07
+
+The [vehicle authoring ledger](../validation/ea2-vehicle-authoring.md) records
+two game-owned archetypes, exact per-instance definitions, authority-owned
+reconfiguration, shared Vehicle Lab/CLI transactions, durable game assets and
+reliable client definition admission. Vehicle visual residency is separate from
+world-district residency. No universal property bus or additional mutation
+authority was introduced. The Context above records the original pre-EA baseline.

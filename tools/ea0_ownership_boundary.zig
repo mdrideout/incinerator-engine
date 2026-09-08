@@ -47,8 +47,22 @@ const classified_sources = [_]ClassifiedSource{
     .{ .path = "src/hosts/sandbox_replay.zig", .owner = .game_runtime_content },
     .{ .path = "src/hosts/sandbox_interaction.zig", .owner = .game_runtime_content },
     .{ .path = "src/features/population/contract.zig", .owner = .game_runtime_content },
-    .{ .path = "src/content/root.zig", .owner = .game_runtime_content },
-    .{ .path = "src/sandbox/district_recipe.zig", .owner = .game_runtime_content },
+    .{ .path = "src/content/root.zig", .owner = .engine_runtime },
+    .{ .path = "src/content/material_library.zig", .owner = .engine_runtime },
+    .{ .path = "src/engine/contracts/material.zig", .owner = .engine_runtime },
+    .{ .path = "src/features/vehicle/contract.zig", .owner = .game_runtime_content },
+    .{ .path = "src/features/vehicle/asset.zig", .owner = .game_runtime_content },
+    .{ .path = "game/vehicles/catalog.zig", .owner = .game_runtime_content },
+    .{ .path = "game/vehicles/handling_profiles.zig", .owner = .game_tooling },
+    .{ .path = "src/hosts/vehicle_authoring_contract.zig", .owner = .game_tooling },
+    .{ .path = "src/hosts/vehicle_authoring.zig", .owner = .game_tooling },
+    .{ .path = "src/hosts/vehicle_developer_host.zig", .owner = .game_tooling, .boundary = .explicit_adapter },
+    .{ .path = "src/editor/tools/vehicle_lab_tool.zig", .owner = .game_tooling },
+    .{ .path = "src/hosts/material_authoring_contract.zig", .owner = .engine_tooling },
+    .{ .path = "src/hosts/material_authoring.zig", .owner = .engine_tooling },
+    .{ .path = "src/hosts/material_developer_host.zig", .owner = .game_tooling, .boundary = .explicit_adapter },
+    .{ .path = "src/editor/tools/material_lab_tool.zig", .owner = .game_tooling },
+    .{ .path = "game/industrial/district_recipe.zig", .owner = .game_runtime_content },
 
     .{ .path = "src/hosts/sandbox_authoring.zig", .owner = .game_tooling },
     .{ .path = "src/hosts/sandbox_developer_protocol.zig", .owner = .game_tooling },
@@ -72,8 +86,15 @@ const NamedOwner = struct {
 };
 
 const named_owners = [_]NamedOwner{
+    .{ .name = "game_vehicles", .owner = .game_runtime_content },
+    .{ .name = "handling_profiles", .owner = .game_tooling },
+    .{ .name = "vehicle_authoring_contract", .owner = .game_tooling },
+    .{ .name = "vehicle_authoring", .owner = .game_tooling },
     .{ .name = "incinerator_engine", .owner = .engine_runtime },
     .{ .name = "engine_contracts", .owner = .engine_runtime },
+    .{ .name = "content", .owner = .engine_runtime },
+    .{ .name = "material_authoring_contract", .owner = .engine_tooling },
+    .{ .name = "material_authoring", .owner = .engine_tooling },
     .{ .name = "session_authority_diagnostics", .owner = .engine_runtime },
     .{ .name = "editor_workspace", .owner = .engine_tooling },
     .{ .name = "developer_controls", .owner = .engine_tooling },
@@ -109,6 +130,7 @@ const external_modules = [_][]const u8{
     "zgui",
     "zmath",
     "simulation_cohort_options",
+    "network_cohort_options",
 };
 
 const forbidden_tooling_imports = [_][]const u8{

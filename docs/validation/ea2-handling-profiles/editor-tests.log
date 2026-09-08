@@ -1,0 +1,958 @@
+headless source boundary verified
+test_coverage_accepts_scoped_fixture_without_opening_test_pixels (tools.neural-rendering.title_renderer.test_contracts.CoverageContracts.test_coverage_accepts_scoped_fixture_without_opening_test_pixels) ... ok
+test_foreign_target_extent_fails_closed (tools.neural-rendering.title_renderer.test_contracts.CoverageContracts.test_foreign_target_extent_fails_closed) ... ok
+test_rf10_trial_bundle_uses_the_active_fixed_working_extent (tools.neural-rendering.title_renderer.test_contracts.CoverageContracts.test_rf10_trial_bundle_uses_the_active_fixed_working_extent) ... ok
+test_rf6_coverage_requires_the_rich_material_families (tools.neural-rendering.title_renderer.test_contracts.CoverageContracts.test_rf6_coverage_requires_the_rich_material_families) ... ok
+test_test_pixels_in_review_fail_closed (tools.neural-rendering.title_renderer.test_contracts.CoverageContracts.test_test_pixels_in_review_fail_closed) ... ok
+test_training_authorization_uses_the_sealed_test_field (tools.neural-rendering.title_renderer.test_contracts.CoverageContracts.test_training_authorization_uses_the_sealed_test_field) ... ok
+
+----------------------------------------------------------------------
+Ran 6 tests in 0.156s
+
+OK
+headless final-binary boundary verified
+dependency/replay cohort pins verified
+M6_ARCHITECTURE_PASS ingress=class_reserved cycle=eight_stage publication=double_buffered delivery=leased receipts=cumulative replay=bounded durable=stage_seven
+test
++- run test w
+[default] (warn): canonical snapshot capture failed: UnexpectedCaptureFailure
+failed command: ./.zig-cache/o/4efdb4d2edcdc6d2b578b7a4b7f8814c/test --cache-dir=./.zig-cache --seed=0x6463c019 --listen=-
+
+EA0_OWNERSHIP_PASS owners=4 manifest=explicit tooling=backend_neutral runtime_content=cooked_only
+MP6_ARCHITECTURE_PASS coordinator=generation_safe view=sanitized host=typed_local guest=real_gns dedicated=ticketed presentation=client_owned steamworks=absent
+M5_ARCHITECTURE_PASS graphical_authority=separate placement_surface=role_scoped player_actions=session_routed admission=shared presentation=replicated_gameplay persistence=owned_quiescent developer_owner=opaque district_streaming=opaque clock_hz=60 value_contracts=backend_free snapshot=authority_free client_closure=authority_free dedicated_closure=visual_free
+test
++- run test w
+Courier compact stop_entry=15.003mps stop_distance=22.615m stop_time=3.000s turn_radius=15.344m turn_slip=4.366deg slalom_excursion=25.764m slalom_yaw_rate=34.316deg_s slalom_slip=6.696deg skid_peak=44.733deg skid_recovery=1.975s rollover_tilt=2.204deg rollover=false
+Meridian road sedan stop_entry=15.013mps stop_distance=25.854m stop_time=3.308s turn_radius=13.238m turn_slip=4.509deg slalom_excursion=29.762m slalom_yaw_rate=35.934deg_s slalom_slip=5.627deg skid_peak=15.489deg skid_recovery=2.283s rollover_tilt=3.011deg rollover=false
+Courier AWD stop_entry=15.015mps stop_distance=22.930m stop_time=3.000s turn_radius=15.657m turn_slip=4.141deg slalom_excursion=26.679m slalom_yaw_rate=34.189deg_s slalom_slip=6.180deg skid_peak=4.152deg skid_recovery=0.992s rollover_tilt=2.227deg rollover=false
+failed command: ./.zig-cache/o/b031c0350fd083fc0772f972d9216606/test --cache-dir=./.zig-cache --seed=0x6463c019 --listen=-
+
+headless final-binary boundary verified
+headless final-binary boundary verified
+product/validation binary boundary verified
+Incinerator install verified (content: canonical district catalog, shader format: msl, GPU driver: metal, editor: true)
+Industrial content cohort 562647506cda1db5f5931c606ad1967bacab4c0f8526f61566d947a3874ed04f
+Industrial catalog sha256 056a04f1a34e1cd1d8e34a6b0929c7fdb4e3095c9f93b976b961f43a06688ea9
+Industrial district[0] sha256 e3f020135101c41892cf37954880ddc30258b436b23ae13db2aada2f15523a09
+Industrial district[1] sha256 fd04641d744e5d29fa20eaa38e18ff0c609cc575e84d8821b31453690bc6fba1
+Industrial district[2] sha256 6e23ab9a48127bbf5511cb913a1d96bd347107965f244ef0ca845cbd2da3051d
+Industrial district[3] sha256 18d5bb60e653762762df27c463feac9d015ed91663e30dda3e003d8fd4398364
+headless logical manifest matches freshly cooked catalog and bundles
+test
++- run test w
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+===========================================
+ Incinerator Engine initialized (s1_smoke composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+===========================================
+
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 0
+ Total simulation ticks: 10
+===========================================
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+===========================================
+
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 0
+ Total simulation ticks: 4
+===========================================
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+Incident run: /Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T23-13-27.109Z_solo_bdd3830a
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+   Cmd+Option+I - Flag human-test anomaly
+   F9 / Fn+F9 - Optional anomaly shortcut
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=12867264
+VEHICLE_PEDALS_SDL_PASS opposite_braking=true reverse=true space_handbrake=true simultaneous_pedals=true release=true focus_loss=true held_space_occupancy=true brake_steering=true
+VEHICLE_NATIVE_SEGMENT car=Courier segment=0 forward_mps=6.238
+VEHICLE_NATIVE_SEGMENT car=Courier segment=1 forward_mps=-0.000
+VEHICLE_NATIVE_SEGMENT car=Courier segment=2 forward_mps=-6.909
+VEHICLE_NATIVE_SEGMENT car=Courier segment=3 forward_mps=0.000
+VEHICLE_NATIVE_SEGMENT car=Courier segment=4 forward_mps=4.193
+VEHICLE_NATIVE_SEGMENT car=Courier segment=5 forward_mps=-7.320
+VEHICLE_NATIVE_SEGMENT car=Courier segment=6 forward_mps=4.721
+VEHICLE_NATIVE_CAPTURE car=Courier path=/Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T23-13-27.109Z_solo_bdd3830a/anomalies/anomaly-0001
+VEHICLE_NATIVE_SEGMENT car=Courier segment=7 forward_mps=6.291
+VEHICLE_NATIVE_SEGMENT car=Courier segment=8 forward_mps=4.995
+VEHICLE_NATIVE_SEGMENT car=Courier segment=9 forward_mps=4.961
+VEHICLE_NATIVE_SEGMENT car=Courier segment=10 forward_mps=-0.000
+EA2_NATIVE_DRIVE_PASS car=Courier world=industrial timestep_hz=60 frames=1375 peak_speed_mps=7.322 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 2434
+ Total simulation ticks: 2775
+===========================================
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+Incident run: /Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T23-14-41.466Z_solo_feed8a9a
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+   Cmd+Option+I - Flag human-test anomaly
+   F9 / Fn+F9 - Optional anomaly shortcut
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=12867264
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=0 forward_mps=6.268
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=1 forward_mps=0.001
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=2 forward_mps=-5.214
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=3 forward_mps=-0.002
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=4 forward_mps=4.147
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=5 forward_mps=-4.663
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=6 forward_mps=4.655
+VEHICLE_NATIVE_CAPTURE car=Meridian path=/Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T23-14-41.466Z_solo_feed8a9a/anomalies/anomaly-0001
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=7 forward_mps=6.683
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=8 forward_mps=5.132
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=9 forward_mps=4.759
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=10 forward_mps=-0.000
+EA2_NATIVE_DRIVE_PASS car=Meridian world=industrial timestep_hz=60 frames=1375 peak_speed_mps=6.694 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 1555
+ Total simulation ticks: 2046
+===========================================
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+Incident run: /Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T23-15-30.680Z_solo_a990b83d
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+   Cmd+Option+I - Flag human-test anomaly
+   F9 / Fn+F9 - Optional anomaly shortcut
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district GPU resident: scenes=1 bytes=12867264
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=0 forward_mps=7.439
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=1 forward_mps=-0.000
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=2 forward_mps=-7.144
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=3 forward_mps=-0.000
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=4 forward_mps=4.961
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=5 forward_mps=-7.031
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=6 forward_mps=5.572
+VEHICLE_NATIVE_CAPTURE car=Courier-AWD path=/Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T23-15-30.680Z_solo_a990b83d/anomalies/anomaly-0001
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=7 forward_mps=6.357
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=8 forward_mps=5.176
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=9 forward_mps=4.684
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=10 forward_mps=-0.000
+EA2_NATIVE_DRIVE_PASS car=Courier-AWD world=industrial timestep_hz=60 frames=1375 peak_speed_mps=7.448 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 1555
+ Total simulation ticks: 1952
+===========================================
+failed command: ./.zig-cache/o/be72854b711698ba307fc4bae08d959e/test --cache-dir=./.zig-cache --seed=0x6463c019 --listen=-
+
+Build Summary: 335/335 steps succeeded; 1313/1313 tests passed
+test success
++- run test 5 pass (5 total) 13ms MaxRSS:3M
+|  +- compile test Debug native cached 88ms MaxRSS:34M
++- test-industrial-world success
+|  +- run test 1 pass (1 total) 12ms MaxRSS:2M
+|     +- compile test Debug native cached 57ms MaxRSS:34M
+|        +- options cached
++- test-material-authoring success
+|  +- run test 2 pass (2 total) 30ms MaxRSS:3M
+|     +- compile test Debug native cached 115ms MaxRSS:34M
+|        +- options cached
++- verify-ea0-ownership success
+|  +- run exe ea0_ownership_boundary success 69ms
+|     +- compile exe ea0_ownership_boundary Debug native cached 97ms MaxRSS:34M
++- run test 5 pass (5 total) 6ms MaxRSS:2M
+|  +- compile test Debug native cached 63ms MaxRSS:34M
++- verify-m5-architecture success
+|  +- run bash success 718ms
++- verify-m6-architecture success
+|  +- run bash success 166ms
++- verify-mp6-room-architecture success
+|  +- run bash success 182ms
++- run exe dependency_cohort success 6ms
+|  +- compile exe dependency_cohort ReleaseSafe native cached 130ms MaxRSS:34M
++- run test 3 pass (3 total) 8ms MaxRSS:1M
+|  +- compile test ReleaseSafe native cached 74ms MaxRSS:34M
++- run test 24 pass (24 total) 101ms MaxRSS:4M
+|  +- compile test Debug native cached 75ms MaxRSS:34M
++- run exe content_bundle_verify success 116ms
+|  +- compile exe content_bundle_verify Debug native cached 89ms MaxRSS:34M
+|  |  +- options (reused)
+|  +- run exe incinerator_content_cooker (s3_fixture.icdb) cached
+|  |  +- compile exe incinerator_content_cooker ReleaseSafe native cached 100ms MaxRSS:34M
+|  |     +- WriteFile cached
+|  |     +- compile lib zmesh ReleaseSafe native cached 75ms MaxRSS:33M
+|  |     +- compile lib zmesh ReleaseSafe native (reused)
+|  |     +- WriteFile (reused)
+|  |     +- compile lib zmesh ReleaseSafe native (reused)
+|  |     +- compile lib zmesh ReleaseSafe native (reused)
+|  |     +- options cached
+|  |     +- options cached
+|  +- run exe incinerator_content_cooker (s3_fixture_repeat.icdb) cached
+|  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  +- run exe incinerator_content_cooker (s6_east.icdb) cached
+|  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  |  +- run exe incinerator_content_cooker (s3_fixture.icdb) (+1 more reused dependencies)
+|  +- run exe incinerator_content_cooker (s6_east_repeat.icdb) cached
+|     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|     +- run exe incinerator_content_cooker (s3_fixture_repeat.icdb) (+1 more reused dependencies)
++- run test 8 pass (8 total) 56ms MaxRSS:9M
+|  +- compile test ReleaseSafe native cached 89ms MaxRSS:34M
+|     +- WriteFile (reused)
+|     +- compile lib zmesh ReleaseSafe native (reused)
+|     +- compile lib zmesh ReleaseSafe native (reused)
+|     +- WriteFile (reused)
+|     +- compile lib zmesh ReleaseSafe native (reused)
+|     +- compile lib zmesh ReleaseSafe native (reused)
+|     +- options (reused)
+|     +- options (reused)
++- run test 4 pass (4 total) 8ms MaxRSS:1M
+|  +- compile test ReleaseSafe native cached 139ms MaxRSS:34M
+|     +- options (reused)
++- run exe content_catalog_verify success 181ms
+|  +- compile exe content_catalog_verify Debug native cached 108ms MaxRSS:34M
+|  |  +- options (reused)
+|  |  +- options cached
+|  |  +- options (reused)
+|  +- run exe incinerator_content_catalog_cooker (industrial_catalog.icat) cached
+|  |  +- compile exe incinerator_content_catalog_cooker ReleaseSafe native cached 98ms MaxRSS:34M
+|  |  |  +- options (reused)
+|  |  +- run exe incinerator_content_cooker (industrial_0_0.icdb) cached
+|  |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  |  +- run exe incinerator_content_cooker (industrial_1_0.icdb) cached
+|  |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  |  |  +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+|  |  +- run exe incinerator_content_cooker (industrial_0_1.icdb) cached
+|  |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  |  |  +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+|  |  +- run exe incinerator_content_cooker (industrial_1_1.icdb) cached
+|  |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  |     +- run exe incinerator_content_cooker (industrial_0_1.icdb) (+2 more reused dependencies)
+|  |     +- run exe incinerator_content_cooker (industrial_1_0.icdb) (+2 more reused dependencies)
+|  +- run exe incinerator_content_catalog_cooker (industrial_catalog_repeat.icat) cached
+|  |  +- compile exe incinerator_content_catalog_cooker ReleaseSafe native (+1 more reused dependencies)
+|  |  +- run exe incinerator_content_cooker (industrial_0_0_repeat.icdb) cached
+|  |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  |  +- run exe incinerator_content_cooker (industrial_1_0_repeat.icdb) cached
+|  |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  |  |  +- run exe incinerator_content_cooker (industrial_0_0_repeat.icdb) (+1 more reused dependencies)
+|  |  +- run exe incinerator_content_cooker (industrial_0_1_repeat.icdb) cached
+|  |  |  +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  |  |  +- run exe incinerator_content_cooker (industrial_0_0_repeat.icdb) (+1 more reused dependencies)
+|  |  +- run exe incinerator_content_cooker (industrial_1_1_repeat.icdb) cached
+|  |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|  |     +- run exe incinerator_content_cooker (industrial_0_1_repeat.icdb) (+2 more reused dependencies)
+|  |     +- run exe incinerator_content_cooker (industrial_1_0_repeat.icdb) (+2 more reused dependencies)
+|  +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+|  +- run exe incinerator_content_cooker (industrial_1_0.icdb) (+2 more reused dependencies)
+|  +- run exe incinerator_content_cooker (industrial_0_1.icdb) (+2 more reused dependencies)
+|  +- run exe incinerator_content_cooker (industrial_1_1.icdb) (+3 more reused dependencies)
++- run test 35 pass (35 total) 3s MaxRSS:28M
+|  +- compile test Debug native cached 149ms MaxRSS:34M
+|     +- options (reused)
++- run test 53 pass (53 total) 12ms MaxRSS:2M
+|  +- compile test Debug native cached 75ms MaxRSS:34M
++- run test 10 pass (10 total) 10ms MaxRSS:3M
+|  +- compile test Debug native cached 66ms MaxRSS:34M
++- run test 4 pass (4 total) 6ms MaxRSS:2M
+|  +- compile test Debug native cached 113ms MaxRSS:34M
++- run test 7 pass (7 total) 93ms MaxRSS:4M
+|  +- compile test Debug native cached 129ms MaxRSS:34M
++- run test 5 pass (5 total) 49ms MaxRSS:4M
+|  +- compile test Debug native cached 88ms MaxRSS:34M
++- run test 8 pass (8 total) 518ms MaxRSS:8M
+|  +- compile test Debug native cached 74ms MaxRSS:34M
++- run test 1 pass (1 total) 6ms MaxRSS:2M
+|  +- compile test Debug native cached 85ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
++- run test 22 pass (22 total) 6s MaxRSS:48M
+|  +- compile test Debug native cached 134ms MaxRSS:34M
+|     +- options (reused)
++- run test 15 pass (15 total) 4s MaxRSS:33M
+|  +- compile test Debug native cached 95ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
++- run test 1 pass (1 total) 7ms MaxRSS:2M
+|  +- compile test Debug native cached 107ms MaxRSS:34M
++- run test 1 pass (1 total) 34ms MaxRSS:4M
+|  +- compile test Debug native cached 114ms MaxRSS:34M
+|     +- options (reused)
++- run test 2 pass (2 total) 6ms MaxRSS:2M
+|  +- compile test Debug native cached 59ms MaxRSS:34M
++- run test success 5ms MaxRSS:2M
+|  +- compile test Debug native cached 85ms MaxRSS:34M
++- run test 5 pass (5 total) 20ms MaxRSS:2M
+|  +- compile test Debug native cached 65ms MaxRSS:34M
++- run test 13 pass (13 total) 115ms MaxRSS:3M
+|  +- compile test Debug native cached 159ms MaxRSS:34M
+|     +- options (reused)
++- run test 2 pass (2 total) 39ms MaxRSS:2M
+|  +- compile test Debug native cached 13ms MaxRSS:34M
+|     +- options (reused)
++- run test 2 pass (2 total) 56ms MaxRSS:2M
+|  +- compile test Debug native cached 123ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
++- run test 21 pass (21 total) 6s MaxRSS:49M
+|  +- compile test Debug native cached 118ms MaxRSS:34M
+|     +- options (reused)
++- run test 3 pass (3 total) 46ms MaxRSS:2M
+|  +- compile test Debug native cached 121ms MaxRSS:34M
+|     +- options (reused)
++- run test 2 pass (2 total) 4ms MaxRSS:2M
+|  +- compile test Debug native cached 112ms MaxRSS:34M
+|     +- options (reused)
++- run test 3 pass (3 total) 21ms MaxRSS:2M
+|  +- compile test Debug native cached 81ms MaxRSS:34M
+|     +- options (reused)
++- run test 1 pass (1 total) 131ms MaxRSS:2M
+|  +- compile test Debug native cached 84ms MaxRSS:34M
+|     +- options (reused)
++- run test 8 pass (8 total) 76ms MaxRSS:3M
+|  +- compile test Debug native cached 73ms MaxRSS:34M
+|     +- options (reused)
++- run test 6 pass (6 total) 220ms MaxRSS:2M
+|  +- compile test Debug native cached 64ms MaxRSS:34M
+|     +- options (reused)
++- run test 21 pass (21 total) 7s MaxRSS:58M
+|  +- compile test Debug native cached 72ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
++- run test 13 pass (13 total) 6s MaxRSS:46M
+|  +- compile test Debug native cached 65ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
++- run test 31 pass (31 total) 9s MaxRSS:79M
+|  +- compile test Debug native cached 112ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
++- run test 3 pass (3 total) 20ms MaxRSS:2M
+|  +- compile test Debug native cached 57ms MaxRSS:34M
+|     +- options (reused)
++- run test 3 pass (3 total) 18ms MaxRSS:2M
+|  +- compile test Debug native cached 100ms MaxRSS:34M
+|     +- options (reused)
++- run test 1 pass (1 total) 276ms MaxRSS:18M
+|  +- compile test Debug native cached 56ms MaxRSS:34M
+|     +- WriteFile joltc.h cached
+|     +- compile lib joltc Debug native cached 124ms MaxRSS:34M
+|     +- compile lib joltc Debug native (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
++- run test 9 pass (9 total) 53ms MaxRSS:3M
+|  +- compile test Debug native cached 103ms MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
++- run test 28 pass (28 total) 51ms MaxRSS:11M
+|  +- compile test Debug native cached 100ms MaxRSS:34M
+|     +- WriteFile SDL3 cached
+|     |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h cached
+|     +- compile lib SDL3 Debug native cached 265ms MaxRSS:35M
+|     |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+|     |  +- configure cmake header include/build_config/SDL_build_config.h.cmake to SDL_build_config.h cached
+|     |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
++- run test 30 pass (30 total) 49ms MaxRSS:11M
+|  +- compile test Debug native cached 79ms MaxRSS:34M
+|     +- WriteFile SDL3 (+1 more reused dependencies)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
++- run test 12 pass (12 total) 24ms MaxRSS:2M
+|  +- compile test Debug native cached 96ms MaxRSS:34M
++- run test 39 pass (39 total) 56ms MaxRSS:11M
+|  +- compile test Debug native cached 137ms MaxRSS:35M
+|     +- WriteFile SDL3 (+1 more reused dependencies)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
++- run test 9 pass (9 total) 40ms MaxRSS:2M
+|  +- compile test Debug native cached 61ms MaxRSS:34M
+|     +- options (reused)
++- run test 1 pass (1 total) 2s MaxRSS:97M
+|  +- compile test Debug native cached 117ms MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
+|     +- options cached
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 3 pass (3 total) 66ms MaxRSS:2M
+|  +- compile test Debug native cached 50ms MaxRSS:34M
+|     +- options (reused)
++- run test 4 pass (4 total) 6ms MaxRSS:2M
+|  +- compile test Debug native cached 137ms MaxRSS:34M
++- run test 2 pass (2 total) 11ms MaxRSS:2M
+|  +- compile test Debug native cached 138ms MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
++- run test 5 pass (5 total) 5ms MaxRSS:2M
+|  +- compile test Debug native cached 90ms MaxRSS:34M
++- run test 4 pass (4 total) 36ms MaxRSS:3M
+|  +- compile test Debug native cached 118ms MaxRSS:34M
+|     +- options (reused)
++- run test 7 pass (7 total) 7ms MaxRSS:2M
+|  +- compile test Debug native cached 93ms MaxRSS:34M
++- run test 2 pass (2 total) 43ms MaxRSS:2M
+|  +- compile test Debug native cached 50ms MaxRSS:34M
++- run test 141 pass (141 total) 96ms MaxRSS:42M
+|  +- compile test Debug native cached 141ms MaxRSS:35M
+|     +- WriteFile cached
+|     +- compile lib incinerator_imgui Debug native cached 60ms MaxRSS:33M
+|     +- WriteFile SDL3 (+1 more reused dependencies)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|     +- compile lib incinerator_imgui Debug native (reused)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|     +- options cached
+|     +- WriteFile triangle.vert.metal cached
+|     |  +- run spirv-cross (triangle.vert.metal) cached
+|     |  |  +- run glslc (triangle.vert.spv) cached
+|     |  +- run spirv-cross (triangle.frag.metal) cached
+|     |  |  +- run glslc (triangle.frag.spv) cached
+|     |  +- run spirv-cross (model.vert.metal) cached
+|     |  |  +- run glslc (model.vert.spv) cached
+|     |  +- run spirv-cross (model.frag.metal) cached
+|     |  |  +- run glslc (model.frag.spv) cached
+|     |  +- run spirv-cross (visibility.frag.metal) cached
+|     |  |  +- run glslc (visibility.frag.spv) cached
+|     |  +- run spirv-cross (neural_primitive.vert.metal) cached
+|     |  |  +- run glslc (neural_primitive.vert.spv) cached
+|     |  +- run spirv-cross (neural_primitive.frag.metal) cached
+|     |  |  +- run glslc (neural_primitive.frag.spv) cached
+|     |  +- run spirv-cross (neural_model.vert.metal) cached
+|     |  |  +- run glslc (neural_model.vert.spv) cached
+|     |  +- run spirv-cross (neural_model.frag.metal) cached
+|     |  |  +- run glslc (neural_model.frag.spv) cached
+|     |  +- run spirv-cross (triangle.vert.json) cached
+|     |  |  +- run glslc (triangle.vert.spv) (reused)
+|     |  +- run spirv-cross (triangle.frag.json) cached
+|     |  |  +- run glslc (triangle.frag.spv) (reused)
+|     |  +- run spirv-cross (model.vert.json) cached
+|     |  |  +- run glslc (model.vert.spv) (reused)
+|     |  +- run spirv-cross (model.frag.json) cached
+|     |  |  +- run glslc (model.frag.spv) (reused)
+|     |  +- run spirv-cross (visibility.frag.json) cached
+|     |  |  +- run glslc (visibility.frag.spv) (reused)
+|     |  +- run spirv-cross (neural_primitive.vert.json) cached
+|     |  |  +- run glslc (neural_primitive.vert.spv) (reused)
+|     |  +- run spirv-cross (neural_primitive.frag.json) cached
+|     |  |  +- run glslc (neural_primitive.frag.spv) (reused)
+|     |  +- run spirv-cross (neural_model.vert.json) cached
+|     |  |  +- run glslc (neural_model.vert.spv) (reused)
+|     |  +- run spirv-cross (neural_model.frag.json) cached
+|     |     +- run glslc (neural_model.frag.spv) (reused)
+|     +- options cached
+|     +- options (reused)
+|     +- options (reused)
+|     +- options cached
+|     +- options (reused)
+|     +- options (reused)
++- run test 15 pass (15 total) 74ms MaxRSS:2M
+|  +- compile test Debug native cached 118ms MaxRSS:34M
+|     +- options (reused)
++- run test (+1 more reused dependencies)
++- run test 3 pass (3 total) 47ms MaxRSS:3M
+|  +- compile test Debug native cached 89ms MaxRSS:34M
++- run test 10 pass (10 total) 17ms MaxRSS:10M
+|  +- compile test Debug native cached 128ms MaxRSS:34M
++- run test 6 pass (6 total) 76ms MaxRSS:2M
+|  +- compile test Debug native cached 65ms MaxRSS:34M
++- run test 10 pass (10 total) 193ms MaxRSS:2M
+|  +- compile test Debug native cached 67ms MaxRSS:34M
++- run test 5 pass (5 total) 31ms MaxRSS:3M
+|  +- compile test Debug native cached 139ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
++- run test 47 pass (47 total) 43s MaxRSS:397M
+|  +- compile test Debug native cached 125ms MaxRSS:35M
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- options (reused)
+|     +- options (reused)
++- run test 1 pass (1 total) 12ms MaxRSS:2M
+|  +- compile test Debug native cached 98ms MaxRSS:34M
++- run test 2 pass (2 total) 6ms MaxRSS:2M
+|  +- compile test Debug native cached 77ms MaxRSS:34M
++- run test 17 pass (17 total) 20ms MaxRSS:4M
+|  +- compile test Debug native cached 131ms MaxRSS:34M
+|     +- options (reused)
++- run test 3 pass (3 total) 14ms MaxRSS:2M
+|  +- compile test Debug native cached 88ms MaxRSS:34M
++- run test 1 pass (1 total) 4ms MaxRSS:2M
+|  +- compile test Debug native cached 100ms MaxRSS:34M
++- run test 2 pass (2 total) 5ms MaxRSS:2M
+|  +- compile test Debug native cached 113ms MaxRSS:34M
+|     +- options (reused)
++- run test 2 pass (2 total) 6ms MaxRSS:2M
+|  +- compile test Debug native cached 109ms MaxRSS:34M
++- run test 1 pass (1 total) 5ms MaxRSS:2M
+|  +- compile test Debug native cached 92ms MaxRSS:34M
++- run test 2 pass (2 total) 18ms MaxRSS:2M
+|  +- compile test Debug native cached 114ms MaxRSS:34M
+|     +- options (reused)
++- run test 5 pass (5 total) 16ms MaxRSS:2M
+|  +- compile test Debug native cached 97ms MaxRSS:34M
+|     +- options (reused)
++- run test 3 pass (3 total) 30ms MaxRSS:18M
+|  +- compile test Debug native cached 103ms MaxRSS:34M
+|     +- options (reused)
++- run test 3 pass (3 total) 6ms MaxRSS:2M
+|  +- compile test Debug native cached 118ms MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 4 pass (4 total) 17ms MaxRSS:13M
+|  +- compile test Debug native cached 75ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
++- run test 13 pass (13 total) 57ms MaxRSS:2M
+|  +- compile test Debug native cached 110ms MaxRSS:34M
+|     +- options (reused)
++- run test 17 pass (17 total) 35ms MaxRSS:4M
+|  +- compile test Debug native cached 105ms MaxRSS:34M
+|     +- options (reused)
++- run test 16 pass (16 total) 6s MaxRSS:105M
+|  +- compile test Debug native cached 123ms MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 55 pass (55 total) 44s MaxRSS:332M
+|  +- compile test Debug native cached 115ms MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 1 pass (1 total) 11ms MaxRSS:2M
+|  +- compile test Debug native cached 103ms MaxRSS:34M
+|     +- options (reused)
++- run test 5 pass (5 total) 14ms MaxRSS:2M
+|  +- compile test Debug native cached 30ms MaxRSS:34M
+|     +- options (reused)
++- run test 2 pass (2 total) 35ms MaxRSS:2M
+|  +- compile test Debug native cached 87ms MaxRSS:34M
+|     +- options (reused)
++- run test 1 pass (1 total) 287ms MaxRSS:18M
+|  +- compile test Debug native cached 143ms MaxRSS:35M
+|     +- run sh (game-networking-sockets) cached
+|     +- run sh (game-networking-sockets) (reused)
++- run test 2 pass (2 total) 12ms MaxRSS:2M
+|  +- compile test Debug native cached 60ms MaxRSS:34M
+|     +- options (reused)
++- run test 20 pass (20 total) 121ms MaxRSS:46M
+|  +- compile test Debug native cached 139ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
++- run test 2 pass (2 total) 14ms MaxRSS:2M
+|  +- compile test Debug native cached 103ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
++- compile exe incinerator_replay Debug native cached 113ms MaxRSS:35M
+|  +- options (reused)
+|  +- options (reused)
+|  +- WriteFile joltc.h (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- options (reused)
++- run exe headless_linkage_test success 2s
+|  +- compile exe headless_linkage_test Debug native cached 116ms MaxRSS:34M
+|  +- compile exe incinerator_replay Debug native (+6 more reused dependencies)
++- compile exe incinerator_save Debug native cached 121ms MaxRSS:35M
+|  +- options (reused)
+|  +- options (reused)
+|  +- options (reused)
+|  +- WriteFile joltc.h (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- compile lib joltc Debug native (reused)
++- run exe headless_linkage_test success 2s
+|  +- compile exe headless_linkage_test Debug native (reused)
+|  +- compile exe incinerator_save Debug native (+6 more reused dependencies)
++- run test 243 pass (243 total) 2m MaxRSS:324M
+|  +- compile test Debug native success 27s MaxRSS:1G
+|     +- WriteFile SDL3 (+1 more reused dependencies)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|     +- WriteFile (reused)
+|     +- compile lib incinerator_imgui Debug native (reused)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|     +- compile lib incinerator_imgui Debug native (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 49 pass (49 total) 1s MaxRSS:60M
+|  +- compile test Debug native cached 125ms MaxRSS:34M
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- options (reused)
++- run test 29 pass (29 total) 36s MaxRSS:349M
+|  +- compile test Debug native cached 176ms MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile headless-content.json cached
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 11 pass (11 total) 20ms MaxRSS:2M
+|  +- compile test Debug native cached 60ms MaxRSS:34M
++- run test 7 pass (7 total) 3s MaxRSS:66M
+|  +- compile test Debug native cached 134ms MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- options (reused)
++- run test 3 pass (3 total) 20ms MaxRSS:2M
+|  +- compile test Debug native cached 114ms MaxRSS:34M
+|     +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+|     +- WriteFile triangle.vert.metal (+18 more reused dependencies)
++- run exe validation_boundary success 915ms
+|  +- compile exe validation_boundary ReleaseSafe native cached 82ms MaxRSS:34M
+|  +- compile exe incinerator_engine Debug native cached 144ms MaxRSS:35M
+|  |  +- shaders cached
+|  |  |  +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+|  |  +- WriteFile SDL3 (+1 more reused dependencies)
+|  |  +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|  |  +- WriteFile (reused)
+|  |  +- compile lib incinerator_imgui Debug native (reused)
+|  |  +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|  |  +- compile lib incinerator_imgui Debug native (reused)
+|  |  +- options (reused)
+|  |  +- options (reused)
+|  |  +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+|  |  +- options (reused)
+|  |  +- options (reused)
+|  |  +- options (reused)
+|  |  +- options (reused)
+|  |  +- options (reused)
+|  |  +- WriteFile joltc.h (reused)
+|  |  +- compile lib joltc Debug native (reused)
+|  |  +- compile lib joltc Debug native (reused)
+|  +- compile exe incinerator_validation Debug native success 15s MaxRSS:1G
+|     +- shaders (+1 more reused dependencies)
+|     +- WriteFile SDL3 (+1 more reused dependencies)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|     +- WriteFile (reused)
+|     +- compile lib incinerator_imgui Debug native (reused)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|     +- compile lib incinerator_imgui Debug native (reused)
+|     +- options cached
+|     +- WriteFile developer_endpoint_disabled.zig cached
+|     +- options (reused)
+|     +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 2 pass (2 total) 13ms MaxRSS:1M
+|  +- compile test ReleaseSafe native cached 96ms MaxRSS:34M
++- verify-installed-validation success
+|  +- run /Users/matt/repos/incinerator-engine/zig-out/libexec/incinerator/incinerator_validation success 663ms
+|     +- install-validation success
+|        +- install cached
+|        |  +- install generated to share/incinerator/content/vehicle/meridian.icdb cached
+|        |  |  +- run exe incinerator_content_cooker (meridian.icdb) cached
+|        |  |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|        |  +- install generated to share/incinerator/content/vehicle/courier.icdb cached
+|        |  |  +- run exe incinerator_content_cooker (courier.icdb) cached
+|        |  |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+|        |  +- install game/vehicles/494e43494e455241-867ee4c3b011b0fe.icvehicle to share/incinerator/content/vehicle/494e43494e455241-867ee4c3b011b0fe.icvehicle cached
+|        |  +- install game/vehicles/494e43494e455241-20915108d5f1c706.icvehicle to share/incinerator/content/vehicle/494e43494e455241-20915108d5f1c706.icvehicle cached
+|        |  +- install game/vehicles/494e43494e455241-38d7f4075c7ac47d.icvehicle to share/incinerator/content/vehicle/494e43494e455241-38d7f4075c7ac47d.icvehicle cached
+|        |  +- install generated to share/incinerator/content/district/industrial_0_0.icdb cached
+|        |  |  +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+|        |  +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_0_0.PROVENANCE.md cached
+|        |  +- install generated to share/incinerator/content/district/industrial_1_0.icdb cached
+|        |  |  +- run exe incinerator_content_cooker (industrial_1_0.icdb) (+2 more reused dependencies)
+|        |  +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_1_0.PROVENANCE.md cached
+|        |  +- install generated to share/incinerator/content/district/industrial_0_1.icdb cached
+|        |  |  +- run exe incinerator_content_cooker (industrial_0_1.icdb) (+2 more reused dependencies)
+|        |  +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_0_1.PROVENANCE.md cached
+|        |  +- install generated to share/incinerator/content/district/industrial_1_1.icdb cached
+|        |  |  +- run exe incinerator_content_cooker (industrial_1_1.icdb) (+3 more reused dependencies)
+|        |  +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_1_1.PROVENANCE.md cached
+|        |  +- install generated to share/incinerator/content/district/catalog.icat cached
+|        |  |  +- run exe incinerator_content_catalog_cooker (industrial_catalog.icat) (+5 more reused dependencies)
+|        |  +- install game/industrial/materials.icmat to share/incinerator/content/materials.icmat cached
+|        |  +- install incinerator_replay cached
+|        |  |  +- compile exe incinerator_replay Debug native (+6 more reused dependencies)
+|        |  +- install incinerator_incident_inspect cached
+|        |  |  +- compile exe incinerator_incident_inspect Debug native cached 61ms MaxRSS:33M
+|        |  +- install incinerator_save cached
+|        |  |  +- compile exe incinerator_save Debug native (+6 more reused dependencies)
+|        |  +- install incinerator_vehicle_dynamics cached
+|        |  |  +- compile exe incinerator_vehicle_dynamics Debug native cached 112ms MaxRSS:34M
+|        |  |     +- options (reused)
+|        |  |     +- options (reused)
+|        |  |     +- WriteFile joltc.h (reused)
+|        |  |     +- compile lib joltc Debug native (reused)
+|        |  |     +- compile lib joltc Debug native (reused)
+|        |  +- install incinerator_engine cached
+|        |  |  +- compile exe incinerator_engine Debug native (+18 more reused dependencies)
+|        |  +- install incinerator-dev cached
+|        |     +- compile exe incinerator-dev Debug native cached 76ms MaxRSS:34M
+|        +- install incinerator_validation success
+|           +- compile exe incinerator_validation Debug native (+19 more reused dependencies)
++- run test 27 pass (27 total) 31ms MaxRSS:11M
+|  +- compile test Debug native cached 143ms MaxRSS:34M
+|     +- WriteFile SDL3 (+1 more reused dependencies)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|     +- compile lib SDL3 Debug native (+3 more reused dependencies)
+|     +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+|     +- options (reused)
++- run exe headless_boundary_test success 70ms
+|  +- compile exe headless_boundary_test Debug native cached 122ms MaxRSS:34M
++- run exe headless_linkage_test success 3s
+|  +- compile exe headless_linkage_test Debug native (reused)
+|  +- compile exe incinerator_headless Debug native cached 96ms MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile headless-content.json (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 1 pass (1 total) 15ms MaxRSS:2M
+|  +- compile test Debug native cached 86ms MaxRSS:34M
++- run test 1 pass (1 total) 6ms MaxRSS:2M
+|  +- compile test Debug native cached 64ms MaxRSS:34M
++- compile exe incinerator_s7_measure Debug native cached 113ms MaxRSS:35M
+|  +- options (reused)
+|  +- WriteFile joltc.h (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- options (reused)
+|  +- options (reused)
++- run test 2 pass (2 total) 21ms MaxRSS:2M
+|  +- compile test Debug native cached 127ms MaxRSS:35M
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- options (reused)
+|     +- options (reused)
++- compile exe incinerator_s8_measure Debug native cached 119ms MaxRSS:34M
+|  +- options (reused)
+|  +- options (reused)
+|  +- WriteFile joltc.h (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- options (reused)
++- run test 3 pass (3 total) 9ms MaxRSS:2M
+|  +- compile test Debug native cached 112ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- options (reused)
++- compile exe incinerator_s11_measure Debug native cached 153ms MaxRSS:34M
+|  +- options (reused)
++- run test 1 pass (1 total) 8ms MaxRSS:2M
+|  +- compile test Debug native cached 99ms MaxRSS:34M
+|     +- options (reused)
++- compile exe incinerator_vehicle_dynamics Debug native (+5 more reused dependencies)
++- run test 4 pass (4 total) 9s MaxRSS:46M
+|  +- compile test Debug native cached 142ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- compile exe incinerator_m3_soak Debug native cached 113ms MaxRSS:34M
+|  +- options (reused)
+|  +- options (reused)
+|  +- WriteFile joltc.h (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- compile lib joltc Debug native (reused)
+|  +- options (reused)
++- run test 4 pass (4 total) 34ms MaxRSS:2M
+|  +- compile test Debug native cached 74ms MaxRSS:34M
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- options (reused)
++- run python3 success 257ms
+

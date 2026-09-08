@@ -1,0 +1,169 @@
+test-vehicle-dynamics
++- run test w
+Courier compact stop_entry=15.003mps stop_distance=22.615m stop_time=3.000s turn_radius=15.344m turn_slip=4.366deg slalom_excursion=25.764m slalom_yaw_rate=34.316deg_s slalom_slip=6.696deg skid_peak=44.733deg skid_recovery=1.975s rollover_tilt=2.204deg rollover=false
+Meridian road sedan stop_entry=15.013mps stop_distance=25.854m stop_time=3.308s turn_radius=13.238m turn_slip=4.509deg slalom_excursion=29.762m slalom_yaw_rate=35.934deg_s slalom_slip=5.627deg skid_peak=15.489deg skid_recovery=2.283s rollover_tilt=3.011deg rollover=false
+Courier AWD stop_entry=15.015mps stop_distance=22.930m stop_time=3.000s turn_radius=15.657m turn_slip=4.141deg slalom_excursion=26.679m slalom_yaw_rate=34.189deg_s slalom_slip=6.180deg skid_peak=4.152deg skid_recovery=0.992s rollover_tilt=2.227deg rollover=false
+failed command: ./.zig-cache/o/b031c0350fd083fc0772f972d9216606/test --cache-dir=./.zig-cache --seed=0xc979be76 --listen=-
+
+Build Summary: 111/111 steps succeeded; 408/408 tests passed
+test-sandbox-controls success
++- run test 9 pass (9 total) 9ms MaxRSS:2M
+   +- compile test Debug native cached 126ms MaxRSS:34M
+      +- options cached
+test-vehicle-feature success
++- run test 21 pass (21 total) 14s MaxRSS:49M
+   +- compile test Debug native cached 134ms MaxRSS:34M
+      +- options (reused)
+test-physics success
++- run test 49 pass (49 total) 2s MaxRSS:63M
+   +- compile test Debug native cached 87ms MaxRSS:34M
+      +- WriteFile joltc.h cached
+      +- compile lib joltc Debug native cached 165ms MaxRSS:34M
+      +- compile lib joltc Debug native (reused)
+      +- options cached
+test-session-contracts success
++- run test 1 pass (1 total) 9ms MaxRSS:2M
+|  +- compile test Debug native cached 78ms MaxRSS:34M
++- run test 2 pass (2 total) 11ms MaxRSS:2M
+|  +- compile test Debug native cached 110ms MaxRSS:34M
++- run test 17 pass (17 total) 171ms MaxRSS:4M
+|  +- compile test Debug native success 10s MaxRSS:375M
+|     +- options success
++- run test 11 pass (11 total) 349ms MaxRSS:2M
+|  +- compile test Debug native success 6s MaxRSS:280M
+|     +- options (reused)
++- run test 3 pass (3 total) 10ms MaxRSS:2M
+|  +- compile test Debug native cached 133ms MaxRSS:34M
++- run test 1 pass (1 total) 8ms MaxRSS:2M
+|  +- compile test Debug native cached 82ms MaxRSS:34M
++- run test 2 pass (2 total) 164ms MaxRSS:2M
+|  +- compile test Debug native success 6s MaxRSS:264M
+|     +- options (reused)
++- run test 2 pass (2 total) 29ms MaxRSS:2M
+|  +- compile test Debug native cached 118ms MaxRSS:34M
++- run test 1 pass (1 total) 8ms MaxRSS:2M
+|  +- compile test Debug native cached 99ms MaxRSS:34M
++- run test 2 pass (2 total) 509ms MaxRSS:2M
+|  +- compile test Debug native success 4s MaxRSS:273M
+|     +- options (reused)
++- run test 5 pass (5 total) 163ms MaxRSS:2M
+|  +- compile test Debug native success 5s MaxRSS:273M
+|     +- options (reused)
++- run test 3 pass (3 total) 28ms MaxRSS:18M
+|  +- compile test Debug native cached 98ms MaxRSS:34M
+|     +- options (reused)
++- run test 4 pass (4 total) 313ms MaxRSS:13M
+|  +- compile test Debug native success 5s MaxRSS:278M
+|     +- options (reused)
+|     +- options (reused)
++- run test 13 pass (13 total) 151ms MaxRSS:2M
+|  +- compile test Debug native success 7s MaxRSS:294M
+|     +- options (reused)
++- run test 17 pass (17 total) 157ms MaxRSS:4M
+|  +- compile test Debug native success 7s MaxRSS:309M
+|     +- options (reused)
++- run test 16 pass (16 total) 11s MaxRSS:104M
+|  +- compile test Debug native cached 10s MaxRSS:35M
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options cached
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 55 pass (55 total) 1m MaxRSS:337M
+|  +- compile test Debug native success 17s MaxRSS:692M
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- options (reused)
+|     +- WriteFile joltc.h (reused)
+|     +- compile lib joltc Debug native (reused)
+|     +- compile lib joltc Debug native (reused)
++- run test 1 pass (1 total) 295ms MaxRSS:2M
+|  +- compile test Debug native success 6s MaxRSS:267M
+|     +- options (reused)
++- run test 5 pass (5 total) 226ms MaxRSS:2M
+|  +- compile test Debug native success 6s MaxRSS:277M
+|     +- options (reused)
++- run test 2 pass (2 total) 365ms MaxRSS:2M
+   +- compile test Debug native success 6s MaxRSS:288M
+      +- options (reused)
+test-vehicle-assets success
++- run test 5 pass (5 total) 22ms MaxRSS:3M
+   +- compile test Debug native cached 109ms MaxRSS:34M
+test-vehicle-authoring success
++- run test 3 pass (3 total) 55ms MaxRSS:3M
+   +- compile test Debug native cached 126ms MaxRSS:34M
+test-vehicle-dynamics success
++- run test 4 pass (4 total) 19s MaxRSS:51M
+   +- compile test Debug native success 8s MaxRSS:345M
+      +- options (reused)
+      +- options (reused)
+      +- WriteFile joltc.h (reused)
+      +- compile lib joltc Debug native (reused)
+      +- compile lib joltc Debug native (reused)
+test-developer-protocol success
++- run test 10 pass (10 total) 17ms MaxRSS:3M
+   +- compile test Debug native cached 125ms MaxRSS:34M
+test-developer-cli-contract success
++- run test 3 pass (3 total) 20ms MaxRSS:2M
+   +- compile test Debug native cached 78ms MaxRSS:34M
+test-sandbox-developer-host success
++- run test 141 pass (141 total) 461ms MaxRSS:42M
+   +- compile test Debug native success 11s MaxRSS:656M
+      +- WriteFile cached
+      +- compile lib incinerator_imgui Debug native cached 77ms MaxRSS:33M
+      +- WriteFile SDL3 cached
+      |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h cached
+      +- compile lib SDL3 Debug native cached 217ms MaxRSS:36M
+      |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+      |  +- configure cmake header include/build_config/SDL_build_config.h.cmake to SDL_build_config.h cached
+      |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+      +- compile lib incinerator_imgui Debug native (reused)
+      +- compile lib SDL3 Debug native (+3 more reused dependencies)
+      +- options cached
+      +- WriteFile triangle.vert.metal cached
+      |  +- run spirv-cross (triangle.vert.metal) cached
+      |  |  +- run glslc (triangle.vert.spv) cached
+      |  +- run spirv-cross (triangle.frag.metal) cached
+      |  |  +- run glslc (triangle.frag.spv) cached
+      |  +- run spirv-cross (model.vert.metal) cached
+      |  |  +- run glslc (model.vert.spv) cached
+      |  +- run spirv-cross (model.frag.metal) cached
+      |  |  +- run glslc (model.frag.spv) cached
+      |  +- run spirv-cross (visibility.frag.metal) cached
+      |  |  +- run glslc (visibility.frag.spv) cached
+      |  +- run spirv-cross (neural_primitive.vert.metal) cached
+      |  |  +- run glslc (neural_primitive.vert.spv) cached
+      |  +- run spirv-cross (neural_primitive.frag.metal) cached
+      |  |  +- run glslc (neural_primitive.frag.spv) cached
+      |  +- run spirv-cross (neural_model.vert.metal) cached
+      |  |  +- run glslc (neural_model.vert.spv) cached
+      |  +- run spirv-cross (neural_model.frag.metal) cached
+      |  |  +- run glslc (neural_model.frag.spv) cached
+      |  +- run spirv-cross (triangle.vert.json) cached
+      |  |  +- run glslc (triangle.vert.spv) (reused)
+      |  +- run spirv-cross (triangle.frag.json) cached
+      |  |  +- run glslc (triangle.frag.spv) (reused)
+      |  +- run spirv-cross (model.vert.json) cached
+      |  |  +- run glslc (model.vert.spv) (reused)
+      |  +- run spirv-cross (model.frag.json) cached
+      |  |  +- run glslc (model.frag.spv) (reused)
+      |  +- run spirv-cross (visibility.frag.json) cached
+      |  |  +- run glslc (visibility.frag.spv) (reused)
+      |  +- run spirv-cross (neural_primitive.vert.json) cached
+      |  |  +- run glslc (neural_primitive.vert.spv) (reused)
+      |  +- run spirv-cross (neural_primitive.frag.json) cached
+      |  |  +- run glslc (neural_primitive.frag.spv) (reused)
+      |  +- run spirv-cross (neural_model.vert.json) cached
+      |  |  +- run glslc (neural_model.vert.spv) (reused)
+      |  +- run spirv-cross (neural_model.frag.json) cached
+      |     +- run glslc (neural_model.frag.spv) (reused)
+      +- options cached
+      +- options (reused)
+      +- options (reused)
+      +- options cached
+      +- options (reused)
+      +- options (reused)
+

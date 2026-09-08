@@ -170,11 +170,11 @@ fn isGateEdge(
     };
     const west = navigation.NodeRef{
         .coord = west_coord,
-        .index = 6,
+        .index = 8,
     };
     const east = navigation.NodeRef{
         .coord = east_coord,
-        .index = 0,
+        .index = 9,
     };
     return (navigation.NodeRef.eql(source, west) and
         navigation.NodeRef.eql(target, east)) or
@@ -359,18 +359,18 @@ test "canonical preflight access validates exact route without runtime authority
     };
     const west_seam = navigation.NodeRef{
         .coord = recipe.navigation_west_coord,
-        .index = 6,
+        .index = 8,
     };
     const east_seam = navigation.NodeRef{
         .coord = recipe.navigation_east_coord,
-        .index = 0,
+        .index = 9,
     };
 
     const start = switch (access.resolveNode(west_start)) {
         .ready => |value| value,
         else => return error.ExpectedCanonicalNode,
     };
-    try std.testing.expectEqualDeep([3]f32{ -5, 0, 5 }, start.node.position);
+    try std.testing.expectEqualDeep([3]f32{ -8, 0, -8 }, start.node.position);
     try std.testing.expectEqual(@as(u64, 1), start.ticket.generation);
     const seam = switch (access.resolveEdge(west_seam, 1)) {
         .ready => |value| value,
@@ -391,11 +391,11 @@ test "canonical preflight access validates exact route without runtime authority
     );
     try std.testing.expect(access.resolveNode(.{
         .coord = recipe.navigation_west_coord,
-        .index = 8,
+        .index = district.max_navigation_nodes,
     }) == .invalid_reference);
     try std.testing.expect(access.resolveEdge(west_start, 2) == .invalid_ordinal);
     try std.testing.expectEqualDeep(
         navigation.ChunkCoord{ .x = 1, .z = 0 },
-        try navigation.ownerForPosition(.{ 8, 0, 3 }),
+        try navigation.ownerForPosition(.{ district.chunk_half_span, 0, 3 }),
     );
 }

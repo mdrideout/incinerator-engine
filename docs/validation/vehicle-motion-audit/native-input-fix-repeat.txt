@@ -1,0 +1,123 @@
+1/2 main.test_0...OK
+2/2 main.test.EA2 native industrial drive uses admitted cooked vehicle and player controls...GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+Incident run: /Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T20-56-36.481Z_solo_ae76aed9
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle brake
+   LEFT SHIFT - Vehicle hand brake
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+   Cmd+Option+I - Flag human-test anomaly
+   F9 / Fn+F9 - Optional anomaly shortcut
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=12867264
+VEHICLE_NATIVE_SEGMENT car=Courier segment=0 forward_mps=5.639
+VEHICLE_NATIVE_SEGMENT car=Courier segment=1 forward_mps=-0.000
+VEHICLE_NATIVE_SEGMENT car=Courier segment=2 forward_mps=-7.154
+VEHICLE_NATIVE_SEGMENT car=Courier segment=3 forward_mps=0.000
+VEHICLE_NATIVE_SEGMENT car=Courier segment=4 forward_mps=3.792
+VEHICLE_NATIVE_SEGMENT car=Courier segment=5 forward_mps=-7.065
+VEHICLE_NATIVE_SEGMENT car=Courier segment=6 forward_mps=4.380
+VEHICLE_NATIVE_CAPTURE car=Courier path=/Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T20-56-36.481Z_solo_ae76aed9/anomalies/anomaly-0001
+VEHICLE_NATIVE_SEGMENT car=Courier segment=7 forward_mps=6.153
+VEHICLE_NATIVE_SEGMENT car=Courier segment=8 forward_mps=5.921
+VEHICLE_NATIVE_SEGMENT car=Courier segment=9 forward_mps=3.651
+VEHICLE_NATIVE_SEGMENT car=Courier segment=10 forward_mps=-0.000
+EA2_NATIVE_DRIVE_PASS car=Courier world=industrial timestep_hz=60 frames=1375 peak_speed_mps=7.189 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 1555
+ Total simulation ticks: 1896
+===========================================
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+Incident run: /Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T20-57-24.141Z_solo_ff26d038
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle brake
+   LEFT SHIFT - Vehicle hand brake
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+   Cmd+Option+I - Flag human-test anomaly
+   F9 / Fn+F9 - Optional anomaly shortcut
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district GPU resident: scenes=1 bytes=12867264
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=0 forward_mps=6.834
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=1 forward_mps=0.001
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=2 forward_mps=-5.660
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=3 forward_mps=-0.001
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=4 forward_mps=4.534
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=5 forward_mps=-5.239
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=6 forward_mps=5.780
+VEHICLE_NATIVE_CAPTURE car=Meridian path=/Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T20-57-24.141Z_solo_ff26d038/anomalies/anomaly-0001
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=7 forward_mps=7.927
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=8 forward_mps=6.405
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=9 forward_mps=5.701
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=10 forward_mps=-0.000
+EA2_NATIVE_DRIVE_PASS car=Meridian world=industrial timestep_hz=60 frames=1375 peak_speed_mps=7.933 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 1555
+ Total simulation ticks: 2046
+===========================================
+OK
+All 2 tests passed.

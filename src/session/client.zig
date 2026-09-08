@@ -93,6 +93,8 @@ fn ResultQueue(comptime T: type, comptime capacity: usize) type {
 }
 
 pub const Client = struct {
+    admitted_vehicle_count: usize = 0,
+    admitted_vehicles: [budgets.max_vehicles]protocol.VehicleState = undefined,
     account: identity.AccountId,
     external_identity: protocol.ExternalIdentity,
     join_authorization: protocol.JoinAuthorization = .{},
@@ -303,6 +305,8 @@ pub const Client = struct {
                         baseline.snapshot,
                         .{ .npcs = baseline.snapshot.npc_update },
                     );
+                    self.admitted_vehicle_count = baseline.snapshot.vehicle_count;
+                    @memcpy(self.admitted_vehicles[0..self.admitted_vehicle_count], baseline.snapshot.vehicleSlice());
                     self.rememberSnapshot(baseline.snapshot);
                     self.active_baseline_id = baseline.baseline_id;
                     self.relevant_district_count = baseline.district_count;
@@ -1088,6 +1092,16 @@ pub const Client = struct {
                 break :blk try protocol.materializeDelta(base, snapshot);
             },
         };
+        for (materialized.vehicleSlice()) |car| {
+            var admitted = false;
+            for (self.admitted_vehicles[0..self.admitted_vehicle_count]) |old| {
+                if (std.meta.eql(car.entity, old.entity) and std.meta.eql(car.definition, old.definition) and car.definition_revision == old.definition_revision) {
+                    admitted = true;
+                    break;
+                }
+            }
+            if (!admitted) return error.VehicleDefinitionNotAdmitted;
+        }
         // Delta materialization intentionally reconstructs a full snapshot for
         // history and future delta bases. Presentation must still honor the
         // independently scheduled lanes from the original wire snapshot.
@@ -1581,6 +1595,7 @@ test "vehicle control follows snapshot ownership and reliable action correlation
     snapshot.sequence.value = 1;
     snapshot.vehicle_count = 1;
     snapshot.vehicles[0] = .{
+        .definition = protocol.validationVehicleDefinition(),
         .entity = .{ .index = 17, .generation = 1 },
         .position = .{ 0, 1, 0 },
         .rotation = .{ 0, 0, 0, 1 },
@@ -1588,7 +1603,10 @@ test "vehicle control follows snapshot ownership and reliable action correlation
         .angular_velocity = .{ 0, 0, 0 },
         .driver = null,
     };
-    try client.receive(.{ .snapshot = snapshot });
+    try std.testing.expectError(error.VehicleDefinitionNotAdmitted, client.receive(.{ .snapshot = snapshot }));
+    snapshot.baseline_id = 1;
+    var admission = protocol.RelevanceBaseline{ .baseline_id = 1, .district_count = 0, .snapshot = snapshot };
+    try client.receive(.{ .relevance_baseline = admission });
     const action = (try client.vehicleAction(.enter, snapshot.vehicles[0].entity)).vehicle_action;
     try client.receive(.{ .vehicle_action_result = .{
         .sequence = action.sequence,
@@ -1611,6 +1629,20 @@ test "vehicle control follows snapshot ownership and reliable action correlation
     )) == .vehicle_input);
     const after_prediction = client.localVehiclePresentation() orelse
         return error.MissingVehiclePrediction;
+    // A changed layout/response cannot enter through the lossy snapshot lane.
+    var changed = snapshot;
+    changed.sequence.value = 3;
+    changed.vehicles[0].definition_revision = 1;
+    changed.vehicles[0].definition.chassis_half_extents[2] = 1.75;
+    changed.vehicles[0].definition.digest[0] = 2;
+    try std.testing.expectError(error.VehicleDefinitionNotAdmitted, client.receive(.{ .snapshot = changed }));
+    try std.testing.expectEqual(@as(f32, 2), client.world.vehicleSlice()[0].current.definition.chassis_half_extents[2]);
+    changed.baseline_id = 2;
+    admission = .{ .baseline_id = 2, .district_count = 0, .snapshot = changed };
+    try client.receive(.{ .relevance_baseline = admission });
+    try std.testing.expectEqual(@as(u16, 0), client.vehicle_prediction.history_count);
+    try std.testing.expectEqual(@as(f32, 1.75), client.world.vehicleSlice()[0].current.definition.chassis_half_extents[2]);
+    snapshot = changed;
     try std.testing.expect(after_prediction.position[2] < before_prediction.position[2]);
     try std.testing.expectError(
         error.CharacterControlUnavailable,
@@ -1621,7 +1653,7 @@ test "vehicle control follows snapshot ownership and reliable action correlation
         client.meleeAction(2),
     );
 
-    snapshot.sequence.value = 3;
+    snapshot.sequence.value = 4;
     snapshot.server_tick = 2;
     snapshot.acknowledged_input.value = 1;
     snapshot.vehicles[0].driver = null;

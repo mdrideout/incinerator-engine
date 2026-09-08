@@ -1,16 +1,16 @@
 # Engine Authoring Foundation
 
-**Status:** Approved roadmap; EA0, EA0.5, and Phase 7 accepted; EA1-A
-implementation and machine acceptance candidate complete on 2026-08-30 with
-product-owner review pending; EA1-B through EA5 not started
+**Status:** EA0, EA0.5, Phase 7, and EA1 implemented; EA2 vehicle authoring implemented; EA3 is next
 
 **Date:** 2026-08-18
 
 **Decision:**
 [ADR-029](../adr/029-engine-game-authoring-boundary.md)
 
-**Prerequisite:**
-[S15 accepted](../validation/s15-content-rich-district-expansion.md)
+**Historical foundation:**
+[S15 accepted](../validation/s15-content-rich-district-expansion.md). Its scene
+was explicitly replaced by the product owner on 2026-09-06; its dimensions and
+layout are no longer product constraints.
 
 ## Outcome
 
@@ -28,11 +28,11 @@ those real consumers.
 
 | Concern | Proven today | Missing practical capability |
 |---|---|---|
-| Textures/materials | Offline glTF cook, embedded PNG decode, UV0, base-color factor/map, explicit sRGB texture upload, generational scene residency | External/GLB dependency workflow, ordinary image sizes, optional and richer material inputs, stable material assets, assignment and authoring |
-| Vehicles | Typed validated tuning, real-Jolt descriptor, persistence/replay, wheel presentation, objective dynamics report | Archetype identity, per-archetype assets/tuning, selection, live revisioned edit, AI client, safe rebuild semantics |
+| Textures/materials | GLB/glTF with PNG/JPEG, five conventional material inputs, correct color/data texture roles, stable game assets, live assignment, shared revisioned UI/CLI authoring, neutral/world preview, durable commit/restart | Further material families when a game requires them; shader graphs and texture compression remain deferred |
+| Vehicles | Two game-owned archetypes, exact admitted definitions, independent axles/drivetrain, Vehicle Lab/CLI, safe revisioned edits/rebuilds, commit/restart, reliable client admission and complete 60 Hz characterization | Further human handling refinement; damage/traffic require their own game work |
 | Lighting | Renderer-neutral directional sun plus ambient value, conventional lit shader, Render Lab evidence | Editable world-owned sun, stable point lights, selection/gizmos, persistence and AI control |
 | Authoring | EA0 stable target identity and transaction envelope; crate-specific selection, typed relocation, revisions, undo/redo, and durable save | Additional owner-specific typed editors; no generic property bag |
-| Maps | Deterministic four-district cook/catalog, streaming, collision/navigation metadata, visual composition | Game-owned map asset, placed-asset workflow, reusable kit, editor placement, deterministic recook |
+| Maps | Fresh game-owned industrial geometry, materials, matching collision/navigation, spawns, deterministic cooking and streaming | Game-owned map asset, placed-asset workflow, reusable kit, editor placement, deterministic recook |
 | Diagnostics | Structured workspace, authored-change evidence, panel metadata, incident timelines/images/replay, semantic draw/gameplay evidence, and an implemented EA0.5 live-control path | Separate engine/game build/content identity and accepted per-feature schemas as later phases add them |
 | Scripting | Zig composition and data contracts | No demonstrated VM requirement; decision deliberately deferred |
 
@@ -141,13 +141,11 @@ and [EA0.5 validation ledger](../validation/ea0-5-local-developer-endpoint-and-c
 
 #### EA1-A — Import and runtime material
 
-Implementation status: candidate complete. The offline importer, project-owned
-PNG/JPEG assets, deterministic GLB/glTF cooks, stable cooked asset catalog,
-runtime sampler/color-space path, Content Browser/Inspector, and CLI parity are
-implemented. Focused tests, editor-on/off aggregates, filtered-source package,
-installed-product, and native Metal gates pass. Product-owner visual/usability
-review remains before EA1-A acceptance or EA1-B authorization. See the
-[EA1-A validation ledger](../validation/ea1-a-practical-textures-and-materials.md).
+Implementation status: implemented. The product owner authorized EA1-B and
+replacement of the prior scene on 2026-09-06. The earlier
+[EA1-A ledger](../validation/ea1-a-practical-textures-and-materials.md) records the
+import milestone; [EA1-B evidence](../validation/ea1-b-material-authoring.md)
+records the current installed game and authoring workflow.
 
 - Admit `.glb` and safely rooted `.gltf` dependencies.
 - Support external and embedded PNG/JPEG source images.
@@ -163,8 +161,10 @@ review remains before EA1-A acceptance or EA1-B authorization. See the
 
 #### EA1-B — Conventional material response and authoring
 
+Implemented with the fresh [industrial demo](ea1-b-industrial-demo.md).
+
 - Add metallic/roughness, normal, occlusion, and emissive inputs as separate
-  typed material capabilities after EA1-A is accepted.
+  typed material capabilities.
 - Add Material Lab selection, inspect, preview, revert, and durable commit.
 - Record selected material/texture identities, dimensions, formats, residency,
   dependencies, and last draw use in diagnostics/incidents.
@@ -182,6 +182,14 @@ KTX2/Basis compression, virtual texturing, bindless materials, shader graphs,
 and hot asset streaming remain evidence-gated follow-ups.
 
 ### EA2 — Vehicle archetypes and live developer control
+
+Authorized on 2026-09-07 with GTA IV-style vehicle dynamics as the driving
+reference. [Research](ea2-vehicle-dynamics-research.md) and the
+[ordered implementation plan](ea2-vehicle-authoring.md) are complete. The
+[implemented workflow and validation](../validation/ea2-vehicle-authoring.md)
+cover per-car definitions, the Lab/CLI, persistence, replay and client admission.
+EA2 corrected the radians/degrees mismatch in the Jolt lateral tire curve and
+established a measured baseline before tuning the authored cars.
 
 - Introduce stable game-owned `VehicleArchetypeId` and a versioned definition
   containing tuning plus chassis/wheel material and visual bindings.
@@ -230,8 +238,9 @@ day/night gameplay authority remain separate measured decisions.
 - Define a versioned map asset containing stable placed-asset identities,
   transforms, layer membership, explicit collision/navigation/streaming
   metadata, light references, and game extension data.
-- Move the current S15 layout out of hard-coded composition arrays only after
-  the new cooked map reproduces its accepted logical and visual behavior.
+- Convert the industrial scene source into the placed-asset workflow. Its
+  geometry, collision, navigation, and population already belong to the game;
+  EA4 adds general map editing and persistence.
 - Add selection, transform gizmos, snapping, duplicate, multi-select, layer
   visibility, save, recook, and dirty/revision state.
 - Add collision, navigation, streaming, support, and light overlays plus
@@ -297,7 +306,8 @@ services, and MMO operations remain later separate programs.
 
 - Stop after every phase for architecture, dead-code, doc-drift, and native
   human review.
-- Preserve the accepted S15 gameplay journey as a regression surface.
+- Validate the current industrial game journey. S15 evidence is historical;
+  the product owner explicitly removed its scene-preservation requirement.
 - Add editor-on/off, headless, save/replay, incident, relocation, and source-
   package evidence proportional to each phase.
 - Measure real content/resource pressure before changing a capacity. Never

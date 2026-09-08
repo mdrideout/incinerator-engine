@@ -4,6 +4,7 @@ const std = @import("std");
 pub const bundle = @import("district_bundle.zig");
 pub const catalog = @import("catalog.zig");
 pub const asset_catalog = @import("asset_catalog.zig");
+pub const material_library = @import("material_library.zig");
 
 pub const max_bundle_key_bytes: usize = 96;
 pub const max_content_root_bytes: usize = 1024;
@@ -1056,4 +1057,8 @@ test "scene worker cancellation after decode starts joins and permits the next g
         }
     }
     try std.testing.expect(ready);
+}
+
+test "material library is part of the cooked content boundary" {
+    std.testing.refAllDecls(material_library);
 }

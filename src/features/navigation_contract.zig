@@ -76,6 +76,7 @@ pub const DestinationResolution = union(enum) {
 /// Canonical finite half-open world ownership rule shared by district and NPC
 /// authority. This is pure value logic; it does not grant residency access.
 pub const ownerForPosition = district.chunkCoordForWorldPosition;
+pub const chunk_span = district.chunk_span;
 
 pub const ResolvedNode = struct {
     ticket: LoadTicket,
@@ -317,7 +318,7 @@ test "navigation access example satisfies the generation-aware value port" {
     comptime assertImplementation(Example);
     try @import("std").testing.expectEqualDeep(
         ChunkCoord{ .x = 1, .z = 0 },
-        try ownerForPosition(.{ 8, 0, 3 }),
+        try ownerForPosition(.{ district.chunk_span / 2, 0, 3 }),
     );
 }
 

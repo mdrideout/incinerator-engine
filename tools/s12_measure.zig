@@ -111,9 +111,9 @@ fn measurePlanner(init: std.process.Init) !PlannerReport {
         .index = 0,
     };
     const destinations = [_]navigation.DestinationId{
-        sandbox_contracts.market_terminal_destination,
-        sandbox_contracts.alley_junction_destination,
-        sandbox_contracts.transit_yard_destination,
+        sandbox_contracts.freight_dispatch_destination,
+        sandbox_contracts.freight_alley_destination,
+        sandbox_contracts.freight_yard_destination,
     };
     var route_digest_accumulator: u64 = 0;
     var searched_nodes: u64 = 0;
@@ -175,12 +175,12 @@ fn measureMovement(init: std.process.Init) !MovementReport {
         .{ .coord = sandbox_contracts.navigation_west_coord, .index = 5 },
     };
     const destinations = [_]navigation.DestinationId{
-        sandbox_contracts.market_terminal_destination,
-        sandbox_contracts.transit_yard_destination,
-        sandbox_contracts.alley_junction_destination,
-        sandbox_contracts.transit_yard_destination,
-        sandbox_contracts.market_terminal_destination,
-        sandbox_contracts.alley_junction_destination,
+        sandbox_contracts.freight_dispatch_destination,
+        sandbox_contracts.freight_yard_destination,
+        sandbox_contracts.freight_alley_destination,
+        sandbox_contracts.freight_yard_destination,
+        sandbox_contracts.freight_dispatch_destination,
+        sandbox_contracts.freight_alley_destination,
     };
     var initial_positions: [movement_npcs][3]f32 = undefined;
     for (starts, 0..) |start, index| {

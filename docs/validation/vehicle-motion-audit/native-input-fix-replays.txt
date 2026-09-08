@@ -1,0 +1,12 @@
+First pass Courier
+verified S4 replay: path=zig-out/vehicle-motion-native-Courier.icrp ticks=1891
+
+First pass Meridian
+verified S4 replay: path=zig-out/vehicle-motion-native-Meridian.icrp ticks=2041
+
+Original-seed repeat Courier
+verified S4 replay: path=zig-out/vehicle-motion-native-Courier.icrp ticks=1891
+
+Original-seed repeat Meridian
+verified S4 replay: path=zig-out/vehicle-motion-native-Meridian.icrp ticks=2041
+

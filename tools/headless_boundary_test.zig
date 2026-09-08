@@ -45,7 +45,7 @@ const root_files = [_][]const u8{
     "src/hosts/sandbox_authoring.zig",
     "src/hosts/sandbox_save.zig",
     "src/hosts/sandbox_navigation.zig",
-    "src/sandbox/district_recipe.zig",
+    "game/industrial/district_recipe.zig",
     "src/adapters/platform/macos_signals.zig",
     "src/adapters/storage/save_slots.zig",
     "tools/s4_replay.zig",

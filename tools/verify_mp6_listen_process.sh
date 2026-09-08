@@ -1,10 +1,12 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-if [[ $# -ne 2 ]]; then
-    echo "usage: verify_mp6_listen_process.sh <graphical-listen-host> <graphical-guest>" >&2
+if [[ $# -ne 3 ]]; then
+    echo "usage: verify_mp6_listen_process.sh <graphical-listen-host> <graphical-guest> <content-root>" >&2
     exit 2
 fi
+
+content_root=$3
 
 host=$1
 guest=$2
@@ -33,7 +35,7 @@ cleanup() {
 }
 trap cleanup EXIT
 
-"$host" \
+"$host" --content-root "$content_root" \
     --port "$port" \
     --ticket "$ticket" \
     --max-frames 4800 \
@@ -54,7 +56,7 @@ done
 grep -q "^MP6_LISTEN_READY endpoint=127.0.0.1:$port host=1 guest=2" "$host_log"
 test -f "$ticket"
 
-"$guest" \
+"$guest" --content-root "$content_root" \
     --connect "127.0.0.1:$port" \
     --account 999 \
     --max-frames 600 >"$rejected_log" 2>&1 &
@@ -64,7 +66,7 @@ rejected_pid=
 grep -q '^MP2_CLIENT_REJECTED reason=unauthorized$' "$rejected_log"
 kill -0 "$host_pid"
 
-"$guest" \
+"$guest" --content-root "$content_root" \
     --ticket "$ticket" \
     --max-frames 4200 \
     --smoke-actions >"$guest_log" 2>&1 &

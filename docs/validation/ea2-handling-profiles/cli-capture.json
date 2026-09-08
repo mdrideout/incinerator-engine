@@ -1,0 +1,31 @@
+{
+  "agent_contract_revision": 5,
+  "operation": "frame.inspect",
+  "terminal": true,
+  "next": [],
+  "response": {
+    "protocol_cohort": 5,
+    "request_id": 1788823274773952000,
+    "schema_id": {
+      "namespace": 1229145174,
+      "local": 5
+    },
+    "run_id": {
+      "started_wall_unix_ms": 1788823044819,
+      "nonce": 1788823044819279000
+    },
+    "outcome": {
+      "success": {
+        "frame_result": {
+          "capture_id": 1,
+          "disposition": "captured",
+          "artifact_path": "/tmp/ea2h/cli-runs/2026-09-07T23-17-24.939Z_solo_74cf452d/anomalies/anomaly-0001",
+          "authority_tick": 13196,
+          "presentation_frame": 6668,
+          "wall_unix_ms": 1788823266400,
+          "detail": null
+        }
+      }
+    }
+  }
+}

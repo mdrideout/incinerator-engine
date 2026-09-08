@@ -312,6 +312,10 @@ pub fn build(b: *std.Build) void {
     const developer_controls_module = graph.developer_controls;
     const developer_diagnostics_module = graph.developer_diagnostics;
     const sandbox_authoring_module = graph.sandbox_authoring;
+    const vehicle_authoring_contract_module = graph.vehicle_authoring_contract;
+    const vehicle_authoring_module = graph.vehicle_authoring;
+    const material_authoring_module = graph.material_authoring;
+    const material_authoring_contract_module = graph.material_authoring_contract;
     const sandbox_save_module = graph.sandbox_save;
     const save_slots_module = graph.save_slots;
     const sandbox_replay_module = graph.sandbox_replay;
@@ -382,12 +386,19 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
     });
+    const host_spatial_options = b.addOptions();
+    host_spatial_options.addOption(f32, "chunk_span", @import("game/industrial/scene.zig").chunk_span);
+    host_spatial_options.addOption(usize, "max_static_boxes", @import("game/industrial/scene.zig").boxes[0].len);
+    host_spatial_options.addOption(usize, "max_navigation_nodes", @import("game/industrial/scene.zig").navigation_positions.len);
+    host_spatial_options.addOption(usize, "max_navigation_edges", @import("game/industrial/scene.zig").navigation_edge_capacity);
+    host_spatial_options.addOption(usize, "max_navigation_outgoing_edges", @import("game/industrial/scene.zig").navigation_degree);
     const district_contract_host_module = b.createModule(.{
         .root_source_file = b.path("src/features/district_contract.zig"),
         .target = b.graph.host,
         .optimize = .ReleaseSafe,
         .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
     });
+    district_contract_host_module.addOptions("spatial_options", host_spatial_options);
     const navigation_contract_host_module = b.createModule(.{
         .root_source_file = b.path("src/features/navigation_contract.zig"),
         .target = b.graph.host,
@@ -398,7 +409,7 @@ pub fn build(b: *std.Build) void {
         }},
     });
     const sandbox_district_recipe_host_module = b.createModule(.{
-        .root_source_file = b.path("src/sandbox/district_recipe.zig"),
+        .root_source_file = b.path("game/industrial/district_recipe.zig"),
         .target = b.graph.host,
         .optimize = .ReleaseSafe,
         .imports = &.{
@@ -466,7 +477,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/hosts/sandbox_developer_protocol.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{.{ .name = "engine_contracts", .module = contracts_module }},
+            .imports = &.{ .{ .name = "engine_contracts", .module = contracts_module }, .{ .name = "vehicle_authoring_contract", .module = vehicle_authoring_contract_module }, .{ .name = "material_authoring_contract", .module = material_authoring_contract_module } },
         },
     );
     const developer_endpoint_client_module = b.addModule(
@@ -664,6 +675,9 @@ pub fn build(b: *std.Build) void {
             // List of modules available for import in source files part of the
             // root module.
             .imports = &.{
+                .{ .name = "engine_contracts", .module = contracts_module },
+                .{ .name = "vehicle_contract", .module = vehicle_contract_module },
+                .{ .name = "game_vehicles", .module = graph.game_vehicles },
                 // Here "incinerator_engine" is the name you will use in your source code to
                 // import this module (e.g. `@import("incinerator_engine")`). The name is
                 // repeated because you are allowed to rename your imports, which
@@ -694,6 +708,9 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
+                .{ .name = "game_vehicles", .module = graph.game_vehicles },
+                .{ .name = "engine_contracts", .module = contracts_module },
+                .{ .name = "vehicle_contract", .module = vehicle_contract_module },
                 .{ .name = "incinerator_engine", .module = mod },
                 .{ .name = "build_options", .module = validation_options.createModule() },
                 .{
@@ -815,7 +832,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    district_gpu_registry_module.addImport("incinerator_engine", mod);
+    district_gpu_registry_module.addImport("engine_contracts", contracts_module);
     district_gpu_registry_module.linkLibrary(sdl_lib);
     const district_scene_adapter_module = b.createModule(.{
         .root_source_file = b.path("src/district_scene_adapter.zig"),
@@ -823,7 +840,7 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
         .imports = &.{
             .{ .name = "content", .module = content_module },
-            .{ .name = "incinerator_engine", .module = mod },
+            .{ .name = "engine_contracts", .module = contracts_module },
         },
     });
     district_scene_adapter_module.linkLibrary(sdl_lib);
@@ -917,19 +934,6 @@ pub fn build(b: *std.Build) void {
     });
     content_cooker.root_module.linkLibrary(host_zmesh.artifact("zmesh"));
 
-    const gltf_to_glb = b.addExecutable(.{
-        .name = "incinerator_gltf_to_glb",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("tools/gltf_to_glb.zig"),
-            .target = b.graph.host,
-            .optimize = .ReleaseSafe,
-        }),
-    });
-    const pack_urban_building = b.addRunArtifact(gltf_to_glb);
-    pack_urban_building.addFileArg(b.path("game/assets/urban_building/urban_building.gltf"));
-    pack_urban_building.addFileArg(b.path("game/assets/urban_building/facade.png"));
-    const urban_building_glb = pack_urban_building.addOutputFileArg("urban_building.glb");
-
     const cooked_fixture = runContentCooker(
         b,
         content_cooker,
@@ -984,142 +988,28 @@ pub fn build(b: *std.Build) void {
             .bundle = cooked_fixture_repeat.output,
         }},
     );
-    const cooked_s15_southwest = runContentCookerSource(
-        b,
-        content_cooker,
-        .{
-            .source = urban_building_glb,
-            .provenance = b.path("game/assets/urban_building/PROVENANCE.md"),
-        },
-        "s15_world_southwest.icdb",
-        "district/s15_world_southwest",
-        0,
-        0,
-        .{ 0, 0, 0 },
-        &.{},
-    );
-    const cooked_s15_southeast = runContentCookerSource(
-        b,
-        content_cooker,
-        .{
-            .source = b.path("game/assets/cargo_crate/cargo_crate.gltf"),
-            .provenance = b.path("game/assets/cargo_crate/PROVENANCE.md"),
-            .dependencies = &.{b.path("game/assets/cargo_crate/panels.jpg")},
-        },
-        "s15_world_southeast.icdb",
-        "district/s15_world_southeast",
-        1,
-        0,
-        .{ 0, 0, 0 },
-        &.{.{
-            .semantic_id = "district.southwest",
-            .bundle = cooked_s15_southwest.output,
-        }},
-    );
-    const cooked_s15_northwest = runContentCooker(
-        b,
-        content_cooker,
-        "fixtures/s12_world_west/district.gltf",
-        "fixtures/s15_world_northwest/PROVENANCE.md",
-        "s15_world_northwest.icdb",
-        "district/s15_world_northwest",
-        0,
-        1,
-        .{ 0, 0, 16 },
-        &.{.{
-            .semantic_id = "district.southwest",
-            .bundle = cooked_s15_southwest.output,
-        }},
-    );
-    const cooked_s15_northeast = runContentCooker(
-        b,
-        content_cooker,
-        "fixtures/s12_world_east/district.gltf",
-        "fixtures/s15_world_northeast/PROVENANCE.md",
-        "s15_world_northeast.icdb",
-        "district/s15_world_northeast",
-        1,
-        1,
-        .{ 0, 0, 16 },
-        &.{
-            .{
-                .semantic_id = "district.northwest",
-                .bundle = cooked_s15_northwest.output,
-            },
-            .{
-                .semantic_id = "district.southeast",
-                .bundle = cooked_s15_southeast.output,
-            },
-        },
-    );
-    const cooked_s15_southwest_repeat = runContentCookerSource(
-        b,
-        content_cooker,
-        .{
-            .source = urban_building_glb,
-            .provenance = b.path("game/assets/urban_building/PROVENANCE.md"),
-        },
-        "s15_world_southwest_repeat.icdb",
-        "district/s15_world_southwest",
-        0,
-        0,
-        .{ 0, 0, 0 },
-        &.{},
-    );
-    const cooked_s15_southeast_repeat = runContentCookerSource(
-        b,
-        content_cooker,
-        .{
-            .source = b.path("game/assets/cargo_crate/cargo_crate.gltf"),
-            .provenance = b.path("game/assets/cargo_crate/PROVENANCE.md"),
-            .dependencies = &.{b.path("game/assets/cargo_crate/panels.jpg")},
-        },
-        "s15_world_southeast_repeat.icdb",
-        "district/s15_world_southeast",
-        1,
-        0,
-        .{ 0, 0, 0 },
-        &.{.{
-            .semantic_id = "district.southwest",
-            .bundle = cooked_s15_southwest_repeat.output,
-        }},
-    );
-    const cooked_s15_northwest_repeat = runContentCooker(
-        b,
-        content_cooker,
-        "fixtures/s12_world_west/district.gltf",
-        "fixtures/s15_world_northwest/PROVENANCE.md",
-        "s15_world_northwest_repeat.icdb",
-        "district/s15_world_northwest",
-        0,
-        1,
-        .{ 0, 0, 16 },
-        &.{.{
-            .semantic_id = "district.southwest",
-            .bundle = cooked_s15_southwest_repeat.output,
-        }},
-    );
-    const cooked_s15_northeast_repeat = runContentCooker(
-        b,
-        content_cooker,
-        "fixtures/s12_world_east/district.gltf",
-        "fixtures/s15_world_northeast/PROVENANCE.md",
-        "s15_world_northeast_repeat.icdb",
-        "district/s15_world_northeast",
-        1,
-        1,
-        .{ 0, 0, 16 },
-        &.{
-            .{
-                .semantic_id = "district.northwest",
-                .bundle = cooked_s15_northwest_repeat.output,
-            },
-            .{
-                .semantic_id = "district.southeast",
-                .bundle = cooked_s15_southeast_repeat.output,
-            },
-        },
-    );
+    const cook_vehicle_meridian = b.addRunArtifact(content_cooker);
+    cook_vehicle_meridian.addFileArg(b.path("game/vehicles/meridian.glb"));
+    cook_vehicle_meridian.addFileArg(b.path("game/vehicles/PROVENANCE.md"));
+    const cooked_vehicle_meridian = cook_vehicle_meridian.addOutputFileArg("meridian.icdb");
+    cook_vehicle_meridian.addArgs(&.{ "vehicle/meridian", "0", "0", "0", "0", "0", "--visual-only" });
+    const install_vehicle_meridian = b.addInstallFile(cooked_vehicle_meridian, "share/incinerator/content/vehicle/meridian.icdb");
+    b.getInstallStep().dependOn(&install_vehicle_meridian.step);
+    const cook_vehicle_courier = b.addRunArtifact(content_cooker);
+    cook_vehicle_courier.addFileArg(b.path("game/vehicles/courier.glb"));
+    cook_vehicle_courier.addFileArg(b.path("game/vehicles/PROVENANCE.md"));
+    const cooked_vehicle_courier = cook_vehicle_courier.addOutputFileArg("courier.icdb");
+    cook_vehicle_courier.addArgs(&.{ "vehicle/courier", "0", "0", "0", "0", "0", "--visual-only" });
+    const install_vehicle_courier = b.addInstallFile(cooked_vehicle_courier, "share/incinerator/content/vehicle/courier.icdb");
+    b.getInstallStep().dependOn(&install_vehicle_courier.step);
+    const cooked_industrial_southwest = runContentCooker(b, content_cooker, "game/industrial/industrial_0_0.glb", "game/industrial/PROVENANCE.md", "industrial_0_0.icdb", "district/industrial_0_0", 0, 0, .{ 0, 0, 0 }, &.{});
+    const cooked_industrial_southeast = runContentCooker(b, content_cooker, "game/industrial/industrial_1_0.glb", "game/industrial/PROVENANCE.md", "industrial_1_0.icdb", "district/industrial_1_0", 1, 0, .{ 0, 0, 0 }, &.{.{ .semantic_id = "district.southwest", .bundle = cooked_industrial_southwest.output }});
+    const cooked_industrial_northwest = runContentCooker(b, content_cooker, "game/industrial/industrial_0_1.glb", "game/industrial/PROVENANCE.md", "industrial_0_1.icdb", "district/industrial_0_1", 0, 1, .{ 0, 0, 0 }, &.{.{ .semantic_id = "district.southwest", .bundle = cooked_industrial_southwest.output }});
+    const cooked_industrial_northeast = runContentCooker(b, content_cooker, "game/industrial/industrial_1_1.glb", "game/industrial/PROVENANCE.md", "industrial_1_1.icdb", "district/industrial_1_1", 1, 1, .{ 0, 0, 0 }, &.{ .{ .semantic_id = "district.northwest", .bundle = cooked_industrial_northwest.output }, .{ .semantic_id = "district.southeast", .bundle = cooked_industrial_southeast.output } });
+    const cooked_industrial_southwest_repeat = runContentCooker(b, content_cooker, "game/industrial/industrial_0_0.glb", "game/industrial/PROVENANCE.md", "industrial_0_0_repeat.icdb", "district/industrial_0_0", 0, 0, .{ 0, 0, 0 }, &.{});
+    const cooked_industrial_southeast_repeat = runContentCooker(b, content_cooker, "game/industrial/industrial_1_0.glb", "game/industrial/PROVENANCE.md", "industrial_1_0_repeat.icdb", "district/industrial_1_0", 1, 0, .{ 0, 0, 0 }, &.{.{ .semantic_id = "district.southwest", .bundle = cooked_industrial_southwest_repeat.output }});
+    const cooked_industrial_northwest_repeat = runContentCooker(b, content_cooker, "game/industrial/industrial_0_1.glb", "game/industrial/PROVENANCE.md", "industrial_0_1_repeat.icdb", "district/industrial_0_1", 0, 1, .{ 0, 0, 0 }, &.{.{ .semantic_id = "district.southwest", .bundle = cooked_industrial_southwest_repeat.output }});
+    const cooked_industrial_northeast_repeat = runContentCooker(b, content_cooker, "game/industrial/industrial_1_1.glb", "game/industrial/PROVENANCE.md", "industrial_1_1_repeat.icdb", "district/industrial_1_1", 1, 1, .{ 0, 0, 0 }, &.{ .{ .semantic_id = "district.northwest", .bundle = cooked_industrial_northwest_repeat.output }, .{ .semantic_id = "district.southeast", .bundle = cooked_industrial_southeast_repeat.output } });
     const content_catalog_cooker = b.addExecutable(.{
         .name = "incinerator_content_catalog_cooker",
         .root_module = b.createModule(.{
@@ -1133,100 +1023,86 @@ pub fn build(b: *std.Build) void {
             },
         }),
     });
-    const cooked_s15_catalog = runContentCatalogCooker(
+    const cooked_industrial_catalog = runContentCatalogCooker(
         b,
         content_catalog_cooker,
-        "fixtures/s15_world_catalog/catalog.txt",
-        "s15_catalog.icat",
+        "game/industrial/catalog.txt",
+        "industrial_catalog.icat",
         &.{
-            cooked_s15_southwest.output,
-            cooked_s15_southeast.output,
-            cooked_s15_northwest.output,
-            cooked_s15_northeast.output,
+            cooked_industrial_southwest.output,
+            cooked_industrial_southeast.output,
+            cooked_industrial_northwest.output,
+            cooked_industrial_northeast.output,
         },
     );
-    const cooked_s15_catalog_repeat = runContentCatalogCooker(
+    const cooked_industrial_catalog_repeat = runContentCatalogCooker(
         b,
         content_catalog_cooker,
-        "fixtures/s15_world_catalog/catalog.txt",
-        "s15_catalog_repeat.icat",
+        "game/industrial/catalog.txt",
+        "industrial_catalog_repeat.icat",
         &.{
-            cooked_s15_southwest_repeat.output,
-            cooked_s15_southeast_repeat.output,
-            cooked_s15_northwest_repeat.output,
-            cooked_s15_northeast_repeat.output,
+            cooked_industrial_southwest_repeat.output,
+            cooked_industrial_southeast_repeat.output,
+            cooked_industrial_northwest_repeat.output,
+            cooked_industrial_northeast_repeat.output,
         },
     );
     const cook_content_step = b.step(
         "cook-content",
-        "Cook the four self-authored S15 districts and declared dependency closure",
+        "Cook the industrial neighborhood and declared dependency closure",
     );
-    cook_content_step.dependOn(cooked_s15_catalog.step);
-    const install_cooked_fixture = b.addInstallFile(
-        cooked_fixture.output,
-        "share/incinerator/content/district/s3_fixture.icdb",
+    cook_content_step.dependOn(cooked_industrial_catalog.step);
+    cook_content_step.dependOn(&cook_vehicle_meridian.step);
+    cook_content_step.dependOn(&cook_vehicle_courier.step);
+    b.getInstallStep().dependOn(&b.addInstallFile(b.path("game/vehicles/494e43494e455241-867ee4c3b011b0fe.icvehicle"), "share/incinerator/content/vehicle/494e43494e455241-867ee4c3b011b0fe.icvehicle").step);
+    b.getInstallStep().dependOn(&b.addInstallFile(b.path("game/vehicles/494e43494e455241-20915108d5f1c706.icvehicle"), "share/incinerator/content/vehicle/494e43494e455241-20915108d5f1c706.icvehicle").step);
+    b.getInstallStep().dependOn(&b.addInstallFile(b.path("game/vehicles/494e43494e455241-38d7f4075c7ac47d.icvehicle"), "share/incinerator/content/vehicle/494e43494e455241-38d7f4075c7ac47d.icvehicle").step);
+    const install_cooked_industrial_southwest = b.addInstallFile(
+        cooked_industrial_southwest.output,
+        "share/incinerator/content/district/industrial_0_0.icdb",
     );
-    const install_fixture_provenance = b.addInstallFile(
-        b.path("fixtures/s3_district/PROVENANCE.md"),
-        "share/incinerator/content/district/s3_fixture.PROVENANCE.md",
+    const install_industrial_southwest_provenance = b.addInstallFile(
+        b.path("game/industrial/PROVENANCE.md"),
+        "share/incinerator/content/district/industrial_0_0.PROVENANCE.md",
     );
-    const install_cooked_east = b.addInstallFile(
-        cooked_east.output,
-        "share/incinerator/content/district/s6_east.icdb",
+    const install_cooked_industrial_southeast = b.addInstallFile(
+        cooked_industrial_southeast.output,
+        "share/incinerator/content/district/industrial_1_0.icdb",
     );
-    const install_cooked_s15_southwest = b.addInstallFile(
-        cooked_s15_southwest.output,
-        "share/incinerator/content/district/s15_world_southwest.icdb",
+    const install_industrial_southeast_provenance = b.addInstallFile(
+        b.path("game/industrial/PROVENANCE.md"),
+        "share/incinerator/content/district/industrial_1_0.PROVENANCE.md",
     );
-    const install_s15_southwest_provenance = b.addInstallFile(
-        b.path("game/assets/urban_building/PROVENANCE.md"),
-        "share/incinerator/content/district/s15_world_southwest.PROVENANCE.md",
+    const install_cooked_industrial_northwest = b.addInstallFile(
+        cooked_industrial_northwest.output,
+        "share/incinerator/content/district/industrial_0_1.icdb",
     );
-    const install_cooked_s15_southeast = b.addInstallFile(
-        cooked_s15_southeast.output,
-        "share/incinerator/content/district/s15_world_southeast.icdb",
+    const install_industrial_northwest_provenance = b.addInstallFile(
+        b.path("game/industrial/PROVENANCE.md"),
+        "share/incinerator/content/district/industrial_0_1.PROVENANCE.md",
     );
-    const install_s15_southeast_provenance = b.addInstallFile(
-        b.path("game/assets/cargo_crate/PROVENANCE.md"),
-        "share/incinerator/content/district/s15_world_southeast.PROVENANCE.md",
+    const install_cooked_industrial_northeast = b.addInstallFile(
+        cooked_industrial_northeast.output,
+        "share/incinerator/content/district/industrial_1_1.icdb",
     );
-    const install_cooked_s15_northwest = b.addInstallFile(
-        cooked_s15_northwest.output,
-        "share/incinerator/content/district/s15_world_northwest.icdb",
-    );
-    const install_s15_northwest_provenance = b.addInstallFile(
-        b.path("fixtures/s15_world_northwest/PROVENANCE.md"),
-        "share/incinerator/content/district/s15_world_northwest.PROVENANCE.md",
-    );
-    const install_cooked_s15_northeast = b.addInstallFile(
-        cooked_s15_northeast.output,
-        "share/incinerator/content/district/s15_world_northeast.icdb",
-    );
-    const install_s15_northeast_provenance = b.addInstallFile(
-        b.path("fixtures/s15_world_northeast/PROVENANCE.md"),
-        "share/incinerator/content/district/s15_world_northeast.PROVENANCE.md",
-    );
-    const install_east_provenance = b.addInstallFile(
-        b.path("fixtures/s6_east/PROVENANCE.md"),
-        "share/incinerator/content/district/s6_east.PROVENANCE.md",
+    const install_industrial_northeast_provenance = b.addInstallFile(
+        b.path("game/industrial/PROVENANCE.md"),
+        "share/incinerator/content/district/industrial_1_1.PROVENANCE.md",
     );
     const install_cooked_catalog = b.addInstallFile(
-        cooked_s15_catalog.output,
+        cooked_industrial_catalog.output,
         "share/incinerator/content/district/catalog.icat",
     );
-    b.getInstallStep().dependOn(&install_cooked_fixture.step);
-    b.getInstallStep().dependOn(&install_fixture_provenance.step);
-    b.getInstallStep().dependOn(&install_cooked_east.step);
-    b.getInstallStep().dependOn(&install_east_provenance.step);
-    b.getInstallStep().dependOn(&install_cooked_s15_southwest.step);
-    b.getInstallStep().dependOn(&install_s15_southwest_provenance.step);
-    b.getInstallStep().dependOn(&install_cooked_s15_southeast.step);
-    b.getInstallStep().dependOn(&install_s15_southeast_provenance.step);
-    b.getInstallStep().dependOn(&install_cooked_s15_northwest.step);
-    b.getInstallStep().dependOn(&install_s15_northwest_provenance.step);
-    b.getInstallStep().dependOn(&install_cooked_s15_northeast.step);
-    b.getInstallStep().dependOn(&install_s15_northeast_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_industrial_southwest.step);
+    b.getInstallStep().dependOn(&install_industrial_southwest_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_industrial_southeast.step);
+    b.getInstallStep().dependOn(&install_industrial_southeast_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_industrial_northwest.step);
+    b.getInstallStep().dependOn(&install_industrial_northwest_provenance.step);
+    b.getInstallStep().dependOn(&install_cooked_industrial_northeast.step);
+    b.getInstallStep().dependOn(&install_industrial_northeast_provenance.step);
     b.getInstallStep().dependOn(&install_cooked_catalog.step);
+    b.getInstallStep().dependOn(&b.addInstallFile(b.path("game/industrial/materials.icmat"), "share/incinerator/content/materials.icmat").step);
 
     const content_tests = b.addTest(.{ .root_module = content_host_module });
     const run_content_tests = b.addRunArtifact(content_tests);
@@ -1235,6 +1111,14 @@ pub fn build(b: *std.Build) void {
         "Run cooked bundle, explicit-root loader, and async worker tests",
     );
     content_test_step.dependOn(&run_content_tests.step);
+    const vehicle_authoring_tests = b.addTest(.{ .root_module = vehicle_authoring_module });
+    const run_vehicle_authoring_tests = b.addRunArtifact(vehicle_authoring_tests);
+    const vehicle_authoring_test_step = b.step("test-vehicle-authoring", "Verify vehicle draft admission, authority outcomes, stale edits and durable failure atomicity");
+    vehicle_authoring_test_step.dependOn(&run_vehicle_authoring_tests.step);
+    const material_authoring_tests = b.addTest(.{ .root_module = material_authoring_module });
+    const run_material_authoring_tests = b.addRunArtifact(material_authoring_tests);
+    const material_authoring_test_step = b.step("test-material-authoring", "Verify material preview, revisioned editing, durable commit, and restart");
+    material_authoring_test_step.dependOn(&run_material_authoring_tests.step);
 
     const content_bundle_verify = b.addExecutable(.{
         .name = "content_bundle_verify",
@@ -1284,12 +1168,12 @@ pub fn build(b: *std.Build) void {
         }),
     });
     const verify_cooked_catalog = b.addRunArtifact(content_catalog_verify);
-    verify_cooked_catalog.addFileArg(cooked_s15_catalog.output);
-    verify_cooked_catalog.addFileArg(cooked_s15_catalog_repeat.output);
-    verify_cooked_catalog.addFileArg(cooked_s15_southwest.output);
-    verify_cooked_catalog.addFileArg(cooked_s15_southeast.output);
-    verify_cooked_catalog.addFileArg(cooked_s15_northwest.output);
-    verify_cooked_catalog.addFileArg(cooked_s15_northeast.output);
+    verify_cooked_catalog.addFileArg(cooked_industrial_catalog.output);
+    verify_cooked_catalog.addFileArg(cooked_industrial_catalog_repeat.output);
+    verify_cooked_catalog.addFileArg(cooked_industrial_southwest.output);
+    verify_cooked_catalog.addFileArg(cooked_industrial_southeast.output);
+    verify_cooked_catalog.addFileArg(cooked_industrial_northwest.output);
+    verify_cooked_catalog.addFileArg(cooked_industrial_northeast.output);
     verify_cooked_catalog.addFileArg(b.path("config/headless-content.json"));
     verify_cooked_catalog.addFileArg(b.path("config/headless.example.json"));
     content_cooker_test_step.dependOn(&verify_cooked_catalog.step);
@@ -1313,8 +1197,12 @@ pub fn build(b: *std.Build) void {
         .{ .custom = "libexec/incinerator" },
         content_relocation_test.out_filename,
     );
+    const install_cooked_east = b.addInstallFile(cooked_east.output, "share/incinerator/test-fixtures/district/s6_east.icdb");
+    const install_east_provenance = b.addInstallFile(b.path("fixtures/s6_east/PROVENANCE.md"), "share/incinerator/test-fixtures/district/s6_east.PROVENANCE.md");
+    const install_cooked_fixture = b.addInstallFile(cooked_fixture.output, "share/incinerator/test-fixtures/district/s3_fixture.icdb");
+    const install_fixture_provenance = b.addInstallFile(b.path("fixtures/s3_district/PROVENANCE.md"), "share/incinerator/test-fixtures/district/s3_fixture.PROVENANCE.md");
     const run_content_relocation = b.addSystemCommand(&.{installed_content_relocation_path});
-    run_content_relocation.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    run_content_relocation.addArg(b.getInstallPath(.prefix, "share/incinerator/test-fixtures"));
     run_content_relocation.setCwd(.{ .cwd_relative = "/tmp" });
     run_content_relocation.step.dependOn(&install_cooked_fixture.step);
     run_content_relocation.step.dependOn(&install_fixture_provenance.step);
@@ -1423,6 +1311,11 @@ pub fn build(b: *std.Build) void {
         developer_visualization_module,
     );
     addClientImport(exe, validation_exe, "sandbox_authoring", sandbox_authoring_module);
+    addClientImport(exe, validation_exe, "material_authoring", material_authoring_module);
+    addClientImport(exe, validation_exe, "vehicle_authoring", vehicle_authoring_module);
+    addClientImport(exe, validation_exe, "vehicle_authoring_contract", vehicle_authoring_contract_module);
+    addClientImport(exe, validation_exe, "network_cohort_options", graph.network_cohort_options);
+    addClientImport(exe, validation_exe, "material_authoring_contract", material_authoring_contract_module);
     addClientImport(exe, validation_exe, "sandbox_replay", sandbox_replay_module);
     const district_content_catalog_module = b.createModule(.{
         .root_source_file = b.path("src/hosts/district_content_catalog.zig"),
@@ -1447,6 +1340,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts_module },
             .{ .name = "incinerator_engine", .module = mod },
             .{ .name = "content", .module = content_module },
             .{ .name = "district_contract", .module = district_contract_module },
@@ -1499,10 +1393,10 @@ pub fn build(b: *std.Build) void {
         b.getInstallPath(.prefix, "share/incinerator/content"),
     );
     run_content_catalog_relocation.setCwd(.{ .cwd_relative = "/tmp" });
-    run_content_catalog_relocation.step.dependOn(&install_cooked_s15_southwest.step);
-    run_content_catalog_relocation.step.dependOn(&install_cooked_s15_southeast.step);
-    run_content_catalog_relocation.step.dependOn(&install_cooked_s15_northwest.step);
-    run_content_catalog_relocation.step.dependOn(&install_cooked_s15_northeast.step);
+    run_content_catalog_relocation.step.dependOn(&install_cooked_industrial_southwest.step);
+    run_content_catalog_relocation.step.dependOn(&install_cooked_industrial_southeast.step);
+    run_content_catalog_relocation.step.dependOn(&install_cooked_industrial_northwest.step);
+    run_content_catalog_relocation.step.dependOn(&install_cooked_industrial_northeast.step);
     run_content_catalog_relocation.step.dependOn(&install_cooked_catalog.step);
     run_content_catalog_relocation.step.dependOn(
         &install_content_catalog_relocation_test.step,
@@ -1565,6 +1459,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
             .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
+            .{ .name = "material_authoring", .module = material_authoring_module },
+            .{ .name = "vehicle_authoring_contract", .module = vehicle_authoring_contract_module },
+            .{ .name = "material_authoring_contract", .module = material_authoring_contract_module },
             .{ .name = "sandbox_interaction", .module = sandbox_interaction_module },
             .{ .name = "population_contract", .module = population_contract_module },
             .{ .name = "editor_workspace", .module = editor_workspace_module },
@@ -1626,6 +1523,9 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "engine_contracts", .module = contracts_module },
+            .{ .name = "content", .module = content_module },
+            .{ .name = "vehicle_contract", .module = graph.vehicle_contract },
             .{ .name = "zmath", .module = zmath.module("root") },
             .{ .name = "shader_assets", .module = shaders.module },
         },
@@ -1637,6 +1537,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "game_vehicles", .module = graph.game_vehicles },
             .{ .name = "zmath", .module = zmath.module("root") },
             .{ .name = "engine_contracts", .module = contracts_module },
             .{ .name = "session_budgets", .module = session_budgets_module },
@@ -1835,6 +1736,9 @@ pub fn build(b: *std.Build) void {
     });
     verify_mp6_process.addFileArg(mp6_server_exe.getEmittedBin());
     verify_mp6_process.addFileArg(mp2_client_exe.getEmittedBin());
+    verify_mp6_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    verify_mp6_process.step.dependOn(&install_vehicle_meridian.step);
+    verify_mp6_process.step.dependOn(&install_vehicle_courier.step);
     const verify_mp6_dedicated_step = b.step(
         "verify-mp6-dedicated",
         "Run the real-GNS two-client graphical MP6 dedicated room proof",
@@ -1847,6 +1751,9 @@ pub fn build(b: *std.Build) void {
     });
     verify_mp6_listen_process.addFileArg(mp6_listen_client_exe.getEmittedBin());
     verify_mp6_listen_process.addFileArg(mp2_client_exe.getEmittedBin());
+    verify_mp6_listen_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    verify_mp6_listen_process.step.dependOn(&install_vehicle_meridian.step);
+    verify_mp6_listen_process.step.dependOn(&install_vehicle_courier.step);
     const verify_mp6_listen_step = b.step(
         "verify-mp6-listen",
         "Run the graphical host-local-link plus real-GNS guest MP6 proof",
@@ -1859,6 +1766,9 @@ pub fn build(b: *std.Build) void {
     });
     verify_s10_listen_process.addFileArg(mp6_listen_client_exe.getEmittedBin());
     verify_s10_listen_process.addFileArg(mp2_client_exe.getEmittedBin());
+    verify_s10_listen_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    verify_s10_listen_process.step.dependOn(&install_vehicle_meridian.step);
+    verify_s10_listen_process.step.dependOn(&install_vehicle_courier.step);
     const verify_s10_listen_step = b.step(
         "verify-s10-listen",
         "Run the two-client graphical listen damage/death/respawn proof",
@@ -1871,6 +1781,9 @@ pub fn build(b: *std.Build) void {
     });
     verify_s10_dedicated_process.addFileArg(mp6_server_exe.getEmittedBin());
     verify_s10_dedicated_process.addFileArg(mp2_client_exe.getEmittedBin());
+    verify_s10_dedicated_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    verify_s10_dedicated_process.step.dependOn(&install_vehicle_meridian.step);
+    verify_s10_dedicated_process.step.dependOn(&install_vehicle_courier.step);
     const verify_s10_dedicated_step = b.step(
         "verify-s10-dedicated",
         "Run the two-client graphical dedicated damage/death/respawn proof",
@@ -1883,6 +1796,9 @@ pub fn build(b: *std.Build) void {
     });
     verify_s11_listen_process.addFileArg(mp6_listen_client_exe.getEmittedBin());
     verify_s11_listen_process.addFileArg(mp2_client_exe.getEmittedBin());
+    verify_s11_listen_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    verify_s11_listen_process.step.dependOn(&install_vehicle_meridian.step);
+    verify_s11_listen_process.step.dependOn(&install_vehicle_courier.step);
     const verify_s11_listen_step = b.step(
         "verify-s11-listen",
         "Run two-client graphical listen NPC damage/death/replacement",
@@ -1895,6 +1811,9 @@ pub fn build(b: *std.Build) void {
     });
     verify_s11_dedicated_process.addFileArg(mp6_server_exe.getEmittedBin());
     verify_s11_dedicated_process.addFileArg(mp2_client_exe.getEmittedBin());
+    verify_s11_dedicated_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    verify_s11_dedicated_process.step.dependOn(&install_vehicle_meridian.step);
+    verify_s11_dedicated_process.step.dependOn(&install_vehicle_courier.step);
     const verify_s11_dedicated_step = b.step(
         "verify-s11-dedicated",
         "Run two-client graphical dedicated NPC damage/death/replacement",
@@ -1907,6 +1826,9 @@ pub fn build(b: *std.Build) void {
     });
     verify_s14_listen_process.addFileArg(mp6_listen_client_exe.getEmittedBin());
     verify_s14_listen_process.addFileArg(mp2_client_exe.getEmittedBin());
+    verify_s14_listen_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    verify_s14_listen_process.step.dependOn(&install_vehicle_meridian.step);
+    verify_s14_listen_process.step.dependOn(&install_vehicle_courier.step);
     const verify_s14_listen_step = b.step(
         "verify-s14-listen",
         "Run two-client graphical listen authoritative-handgun proof",
@@ -1919,6 +1841,9 @@ pub fn build(b: *std.Build) void {
     });
     verify_s14_dedicated_process.addFileArg(mp6_server_exe.getEmittedBin());
     verify_s14_dedicated_process.addFileArg(mp2_client_exe.getEmittedBin());
+    verify_s14_dedicated_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
+    verify_s14_dedicated_process.step.dependOn(&install_vehicle_meridian.step);
+    verify_s14_dedicated_process.step.dependOn(&install_vehicle_courier.step);
     const verify_s14_dedicated_step = b.step(
         "verify-s14-dedicated",
         "Run two-client graphical dedicated authoritative-handgun proof",
@@ -2324,6 +2249,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
             .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
+            .{ .name = "material_authoring", .module = material_authoring_module },
+            .{ .name = "vehicle_authoring_contract", .module = vehicle_authoring_contract_module },
+            .{ .name = "material_authoring_contract", .module = material_authoring_contract_module },
             .{ .name = "developer_diagnostics", .module = developer_diagnostics_module },
             .{ .name = "sandbox_save", .module = sandbox_save_module },
             .{ .name = "save_slots", .module = save_slots_module },
@@ -2695,6 +2623,9 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "interaction_feature", .module = interaction_feature_module },
             .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
+            .{ .name = "material_authoring", .module = material_authoring_module },
+            .{ .name = "vehicle_authoring_contract", .module = vehicle_authoring_contract_module },
+            .{ .name = "material_authoring_contract", .module = material_authoring_contract_module },
             .{ .name = "sandbox_save", .module = sandbox_save_module },
             .{ .name = "save_slots", .module = save_slots_module },
         },
@@ -2839,6 +2770,13 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "game_vehicles", .module = graph.game_vehicles },
+            .{ .name = "replicated_world", .module = graph.replicated_world },
+            .{ .name = "session_budgets", .module = graph.session_budgets },
+            .{ .name = "session_protocol", .module = graph.session_protocol },
+            .{ .name = "vehicle_prediction", .module = graph.vehicle_prediction },
+            .{ .name = "network_cohort_options", .module = graph.network_cohort_options },
+            .{ .name = "simulation_cohort_options", .module = graph.simulation_cohort_options },
             .{ .name = "engine_contracts", .module = contracts_module },
             .{ .name = "jolt_physics", .module = jolt_physics_module },
             .{ .name = "vehicle_contract", .module = vehicle_contract_module },
@@ -2848,12 +2786,24 @@ pub fn build(b: *std.Build) void {
         .name = "incinerator_vehicle_dynamics",
         .root_module = vehicle_dynamics_module,
     });
+    b.installArtifact(vehicle_dynamics_exe);
     const run_vehicle_dynamics = b.addRunArtifact(vehicle_dynamics_exe);
+    if (b.args) |args| run_vehicle_dynamics.addArgs(args);
     const vehicle_dynamics_step = b.step(
         "vehicle-dynamics-report",
         "Measure the legacy and current vehicle handling cohorts on real Jolt",
     );
     vehicle_dynamics_step.dependOn(&run_vehicle_dynamics.step);
+    const motion_batch = b.addSystemCommand(&.{ "python3", b.pathFromRoot("tools/vehicle_motion_batch.py"), "--binary" });
+    motion_batch.addArtifactArg(vehicle_dynamics_exe);
+    if (b.args) |args| motion_batch.addArgs(args);
+    const motion_report_step = b.step("vehicle-motion-report", "Run compact headless vehicle scenarios concurrently (use -Doptimize=ReleaseSafe for tuning)");
+    motion_report_step.dependOn(&motion_batch.step);
+
+    const vehicle_asset_tests = b.addTest(.{ .root_module = vehicle_contract_module });
+    const run_vehicle_asset_tests = b.addRunArtifact(vehicle_asset_tests);
+    const vehicle_asset_test_step = b.step("test-vehicle-assets", "Validate owned versioned vehicle assets and authored drivetrain values");
+    vehicle_asset_test_step.dependOn(&run_vehicle_asset_tests.step);
     const vehicle_dynamics_tests = b.addTest(.{ .root_module = vehicle_dynamics_module });
     const run_vehicle_dynamics_tests = b.addRunArtifact(vehicle_dynamics_tests);
     const vehicle_dynamics_test_step = b.step(
@@ -3811,6 +3761,8 @@ pub fn build(b: *std.Build) void {
         b.getInstallPath(.prefix, "share/incinerator/content"),
     );
 
+    if (editor_enabled) run_cmd.setEnvironmentVariable("INCINERATOR_MATERIAL_ROOT", b.pathFromRoot("game/industrial"));
+
     // This allows the user to pass arguments to the application in the build
     // command itself, like this: `zig build run -- arg1 arg2 etc`
     if (b.args) |args| {
@@ -3959,6 +3911,10 @@ pub fn build(b: *std.Build) void {
         "Run the backend-neutral vehicle feature tests",
     );
     vehicle_feature_test_step.dependOn(&run_vehicle_feature_tests.step);
+
+    const industrial_world_tests = b.addTest(.{ .root_module = sandbox_district_recipe_module });
+    const industrial_world_step = b.step("test-industrial-world", "Verify authored collision and all neighborhood travel routes");
+    industrial_world_step.dependOn(&b.addRunArtifact(industrial_world_tests).step);
 
     const district_contract_tests = b.addTest(.{ .root_module = district_contract_module });
     const run_district_contract_tests = b.addRunArtifact(district_contract_tests);
@@ -4310,6 +4266,10 @@ pub fn build(b: *std.Build) void {
         });
         for (sandbox_developer_host_test_module.import_table.keys(), sandbox_developer_host_test_module.import_table.values()) |name, imported|
             module.addImport(name, imported);
+        module.addImport("material_authoring", material_authoring_module);
+        module.addImport("vehicle_authoring", graph.vehicle_authoring);
+        module.addImport("sandbox_simulation", sandbox_simulation_module);
+        module.addImport("content", content_module);
         module.linkLibrary(library);
         module.linkLibrary(sdl_lib);
         const run = b.addRunArtifact(b.addTest(.{ .root_module = module }));
@@ -4506,9 +4466,18 @@ pub fn build(b: *std.Build) void {
         .root_module = exe.root_module,
     });
 
+    // Share the product dependencies, but keep native test discovery in an
+    // explicit root. Ordinary main-module tests cannot discover window fixtures.
+    const foreground_test_module = b.allocator.create(std.Build.Module) catch @panic("OOM");
+    foreground_test_module.* = exe.root_module.*;
+    foreground_test_module.root_source_file = b.path("src/foreground_acceptance_test.zig");
+    const offscreen_test_module = b.allocator.create(std.Build.Module) catch @panic("OOM");
+    offscreen_test_module.* = exe.root_module.*;
+    offscreen_test_module.root_source_file = b.path("src/vehicle_offscreen_test.zig");
+
     const developer_endpoint_app_tests = b.addTest(.{
         .name = "developer-endpoint-app-tests",
-        .root_module = exe.root_module,
+        .root_module = foreground_test_module,
         .filters = &.{"developer endpoint app boundary"},
     });
     const run_developer_endpoint_app_tests = b.addRunArtifact(
@@ -4516,6 +4485,40 @@ pub fn build(b: *std.Build) void {
     );
     run_developer_endpoint_app_tests.step.dependOn(b.getInstallStep());
     developer_endpoint_test_step.dependOn(&run_developer_endpoint_app_tests.step);
+
+    const vehicle_driving_tests = b.addTest(.{
+        .name = "vehicle-driving-macos-tests",
+        .root_module = foreground_test_module,
+        .filters = &.{"EA2 native"},
+    });
+    const run_vehicle_driving_tests = b.addRunArtifact(vehicle_driving_tests);
+    run_vehicle_driving_tests.step.dependOn(b.getInstallStep());
+    const vehicle_driving_step = b.step("test-vehicle-driving-macos", "Drive authored cars through the native industrial world and cooked presentation");
+    vehicle_driving_step.dependOn(&run_vehicle_driving_tests.step);
+
+    const offscreen_tests = b.addTest(.{
+        .name = "vehicle-offscreen-tests",
+        .root_module = offscreen_test_module,
+        .filters = &.{"EA2 offscreen"},
+    });
+    const run_offscreen_tests = b.addRunArtifact(offscreen_tests);
+    run_offscreen_tests.has_side_effects = true;
+    run_offscreen_tests.step.dependOn(b.getInstallStep());
+    const offscreen_step = b.step("test-vehicle-offscreen", "Drive all authored vehicles through cooked industrial content on Metal without presenting a window");
+    offscreen_step.dependOn(&run_offscreen_tests.step);
+    const compile_background_observer = b.addSystemCommand(&.{ "swiftc", b.pathFromRoot("tools/observe_background_macos.swift"), "-o" });
+    const background_observer = compile_background_observer.addOutputFileArg("observe-background-macos");
+    const observe_offscreen = std.Build.Step.Run.create(b, "observe offscreen desktop focus");
+    observe_offscreen.has_side_effects = true;
+    observe_offscreen.addFileArg(background_observer);
+    observe_offscreen.addArtifactArg(offscreen_tests);
+    observe_offscreen.step.dependOn(b.getInstallStep());
+    const verify_background_step = b.step("verify-vehicle-background-macos", "Run offscreen driving while checking Cocoa activation and visible windows");
+    verify_background_step.dependOn(&observe_offscreen.step);
+
+    const check_foreground_step = b.step("check-foreground-macos", "Compile native app acceptance without opening its windows");
+    check_foreground_step.dependOn(&vehicle_driving_tests.step);
+    check_foreground_step.dependOn(&developer_endpoint_app_tests.step);
 
     // A run step that will run the second test executable.
     const run_exe_tests = b.addRunArtifact(exe_tests);
@@ -4574,6 +4577,9 @@ pub fn build(b: *std.Build) void {
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
     const test_step = b.step("test", "Run tests");
+    test_step.dependOn(&run_vehicle_asset_tests.step);
+    test_step.dependOn(industrial_world_step);
+    test_step.dependOn(material_authoring_test_step);
     test_step.dependOn(verify_ea0_ownership_step);
     test_step.dependOn(&run_ea0_ownership_tests.step);
     test_step.dependOn(verify_m5_architecture_step);
@@ -4633,6 +4639,8 @@ pub fn build(b: *std.Build) void {
     test_step.dependOn(&run_developer_visualization_tests.step);
     test_step.dependOn(&run_sandbox_developer_host_tests.step);
     test_step.dependOn(&run_sandbox_authoring_tests.step);
+    test_step.dependOn(&run_material_authoring_tests.step);
+    test_step.dependOn(&run_vehicle_authoring_tests.step);
     test_step.dependOn(&run_sandbox_save_tests.step);
     test_step.dependOn(&run_sandbox_persistence_tests.step);
     test_step.dependOn(&run_save_slots_tests.step);
@@ -5212,6 +5220,9 @@ fn compileShader(
     const spirv_cross = b.addSystemCommand(&.{tools.spirv_cross});
     spirv_cross.addFileArg(spirv);
     spirv_cross.addArg("--msl");
+    // SDL binds resources by the declared binding number. SPIRV-Cross's
+    // automatic Metal allocation otherwise reorders samplers by first use.
+    spirv_cross.addArg("--msl-decoration-binding");
     spirv_cross.addArg("--output");
     return .{
         .spirv = spirv,

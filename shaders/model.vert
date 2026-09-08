@@ -18,11 +18,13 @@ layout(location = 2) in vec2 in_texcoord;  // Texture coordinates
 // Outputs to fragment shader
 layout(location = 0) out vec3 frag_normal;
 layout(location = 1) out vec2 frag_texcoord;
+layout(location = 2) out vec3 frag_position;
 
 // Uniform buffer (slot 0 in set 1, same convention as triangle.vert)
 layout(set = 1, binding = 0) uniform Uniforms {
     mat4 mvp;  // Model-View-Projection matrix
     mat4 normal_matrix;  // Inverse-transpose model matrix (world space)
+    mat4 model;
 };
 
 void main() {
@@ -33,4 +35,5 @@ void main() {
     // world-space lighting frame. w=0 prevents translation from contributing.
     frag_normal = normalize((normal_matrix * vec4(in_normal, 0.0)).xyz);
     frag_texcoord = in_texcoord;
+    frag_position = (model * vec4(in_position, 1.0)).xyz;
 }

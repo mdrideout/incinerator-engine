@@ -17,6 +17,8 @@
         "build.zig",
         "build.zig.zon",
         "LICENSE",
+        "vehicle_bridge.cpp",
+        "vehicle_bridge.h",
         "README.md",
     },
 }

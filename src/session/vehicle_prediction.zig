@@ -6,19 +6,14 @@
 //! chassis snapshots.
 
 const std = @import("std");
+const vehicle_control = @import("vehicle_contract").control;
 const budgets = @import("session_budgets");
 const identity = @import("session_identity");
 const protocol = @import("session_protocol");
 
 const fixed_delta_seconds: f32 = 1.0 /
     @as(f32, @floatFromInt(budgets.authority_tick_hz));
-const engine_acceleration_mps2: f32 = 10.0;
 const rolling_deceleration_mps2: f32 = 1.25;
-const brake_deceleration_mps2: f32 = 18.0;
-const hand_brake_deceleration_mps2: f32 = 28.0;
-const maximum_forward_speed_mps: f32 = 28.0;
-const maximum_reverse_speed_mps: f32 = 10.0;
-const maximum_yaw_rate_radians: f32 = 1.35;
 const correction_retention_per_tick: f32 = 0.78;
 const correction_episode_ticks: u16 = budgets.authority_tick_hz / 2;
 
@@ -107,6 +102,8 @@ pub const Prediction = struct {
     ) void {
         if (!self.initialized or
             !std.meta.eql(self.predicted.entity, authoritative.entity) or
+            self.predicted.definition_revision != authoritative.definition_revision or
+            !std.meta.eql(self.predicted.definition, authoritative.definition) or
             self.predicted.driver == null or authoritative.driver == null or
             !std.meta.eql(self.predicted.driver.?, authoritative.driver.?))
         {
@@ -285,17 +282,20 @@ fn applyInput(state: *protocol.VehicleState, frame: protocol.VehicleInputFrame) 
     var forward = horizontalForward(state.rotation);
     var speed = state.linear_velocity[0] * forward[0] +
         state.linear_velocity[2] * forward[2];
-    speed += frame.throttle * engine_acceleration_mps2 * fixed_delta_seconds;
+    // This presentation-only predictor has no transmitted gear state. Authority
+    // resolves full horizontal motion and gear; solo draws accepted snapshots.
+    const control = vehicle_control.resolve(.{ .throttle = frame.throttle, .steering = frame.steering, .brake = frame.brake, .hand_brake = frame.hand_brake }, speed, @abs(speed), 0);
+    speed += control.throttle * state.definition.response.acceleration_mps2 * fixed_delta_seconds;
 
     const passive = rolling_deceleration_mps2 +
-        frame.brake * brake_deceleration_mps2 +
-        frame.hand_brake * hand_brake_deceleration_mps2;
+        control.brake * state.definition.response.brake_deceleration_mps2 +
+        frame.hand_brake * state.definition.response.hand_brake_deceleration_mps2;
     speed = moveTowardZero(speed, passive * fixed_delta_seconds);
-    speed = std.math.clamp(speed, -maximum_reverse_speed_mps, maximum_forward_speed_mps);
+    speed = std.math.clamp(speed, -state.definition.response.maximum_reverse_speed_mps, state.definition.response.maximum_forward_speed_mps);
 
     const speed_factor = std.math.clamp(@abs(speed) / 8.0, 0, 1);
     const direction: f32 = if (speed < 0) -1 else 1;
-    const yaw_rate = -frame.steering * maximum_yaw_rate_radians * speed_factor * direction;
+    const yaw_rate = -frame.steering * state.definition.response.yaw_rate_at_eight_mps * speed_factor * direction;
     const yaw_delta = yaw_rate * fixed_delta_seconds;
     const half_yaw = yaw_delta * 0.5;
     state.rotation = normalizedQuaternion(quaternionMultiply(
@@ -377,6 +377,7 @@ fn length(value: [3]f32) f32 {
 
 fn makeState() protocol.VehicleState {
     return .{
+        .definition = protocol.validationVehicleDefinition(),
         .entity = .{ .index = 17, .generation = 1 },
         .position = .{ 0, 1, 0 },
         .rotation = identity_quaternion,

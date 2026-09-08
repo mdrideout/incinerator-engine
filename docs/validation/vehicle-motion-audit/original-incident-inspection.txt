@@ -1,0 +1,8 @@
+WARN live_bundle: manifest is a current partial-in-time snapshot at wall_unix_ms=1788810789203
+  capabilities characters=full_boundary npcs=full_boundary vehicles=full_boundary carryables=full_boundary vehicle_parts=true atomic_note=true navigation_lineage=true population_activity=true deterministic_render_state=true ranged_combat=true
+  anomaly #1 tick=4800 frame=2196 lifecycle=complete updates=4 artifacts=100 failures=0 typed_window=[-15000,5000]ms note="weird car handling and skidding, glitchy feeling"
+INCIDENT_BUNDLE_VALID run=/Users/matt/Library/Logs/Incinerator/runs/2026-09-07T19-50-20.255Z_solo_ddadac9e
+  status=running hardening=none source=d75c8f1eff95ac0207de7e7c7f55a8c9d3a12b78 dirty=true build=0.16.0/Debug
+  records=15767 segments=24 anomalies=1 windows=4 visuals=100 suspicious=0
+  queue=0 high_water=43/1024 durable=13666/13666 bytes=91088023/536870912
+  visual_reserved=57678400/402653184 rejected=0 replay=true handoff=true persisted=true warnings=1

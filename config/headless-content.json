@@ -1,37 +1,37 @@
 {
   "schema_version": 1,
-  "catalog_semantic_id": "incinerator.s15.content-rich-four-district",
+  "catalog_semantic_id": "incinerator.industrial.neighborhood",
   "catalog_wire_schema": 1,
-  "content_cohort_fingerprint": "eb0d4dd0b3f4b7e01d5009e2b888c4f14e61c5cd5197cfdc399a5c3afcae1f6f",
-  "catalog_file_sha256": "116fb4e45ee7fe634de26a88fb78040f8cf8354214ecf5a1c19b4b87a2e7efc6",
+  "content_cohort_fingerprint": "562647506cda1db5f5931c606ad1967bacab4c0f8526f61566d947a3874ed04f",
+  "catalog_file_sha256": "056a04f1a34e1cd1d8e34a6b0929c7fdb4e3095c9f93b976b961f43a06688ea9",
   "districts": [
     {
       "semantic_id": "district.southwest",
       "coord_x": 0,
       "coord_z": 0,
-      "recipe_version": 8,
-      "bundle_file_sha256": "b26ef2bd3da15b02459b2efd8f49aff4abab4b44fdf223715ef5e970f0049da4"
+      "recipe_version": 9,
+      "bundle_file_sha256": "e3f020135101c41892cf37954880ddc30258b436b23ae13db2aada2f15523a09"
     },
     {
       "semantic_id": "district.southeast",
       "coord_x": 1,
       "coord_z": 0,
-      "recipe_version": 8,
-      "bundle_file_sha256": "3ed2d4a5b69f668aadd85a04f4e4bfbea005e1db8bae6e5a407ca913a178de8c"
+      "recipe_version": 9,
+      "bundle_file_sha256": "fd04641d744e5d29fa20eaa38e18ff0c609cc575e84d8821b31453690bc6fba1"
     },
     {
       "semantic_id": "district.northwest",
       "coord_x": 0,
       "coord_z": 1,
-      "recipe_version": 8,
-      "bundle_file_sha256": "472db8122c7f45dfd5ec191c29fb47b3b3f5c803a60b4d9dec42f0645f6ec3ad"
+      "recipe_version": 9,
+      "bundle_file_sha256": "6e23ab9a48127bbf5511cb913a1d96bd347107965f244ef0ca845cbd2da3051d"
     },
     {
       "semantic_id": "district.northeast",
       "coord_x": 1,
       "coord_z": 1,
-      "recipe_version": 8,
-      "bundle_file_sha256": "845baf61116a7424b936a9e2f5154633e65c96dd0aa14f0a19c813e88a2f402a"
+      "recipe_version": 9,
+      "bundle_file_sha256": "18d5bb60e653762762df27c463feac9d015ed91663e30dda3e003d8fd4398364"
     }
   ]
 }

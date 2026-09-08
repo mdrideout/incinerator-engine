@@ -8,22 +8,18 @@
 const std = @import("std");
 const engine = @import("engine_contracts");
 
-pub const protocol_cohort: u16 = 2;
+pub const protocol_cohort: u16 = 5;
+pub const vehicle = @import("vehicle_authoring_contract");
+pub const material = @import("material_authoring_contract");
+pub const MaterialValue = engine.assets.MaterialMetadata;
 pub const framing_version: u16 = 1;
 pub const frame_header_bytes: usize = 32;
 pub const frame_magic = "ICDV".*;
-/// Measured cohort-1 requests top out at 501 bytes and contain no arbitrary
-/// strings or byte blobs. Responses can carry the bounded maximum world
-/// projection: its current worst-case JSON is 736,957 bytes. These declared
-/// directional limits admit those complete shapes while preventing a
-/// peer-controlled u64 length from becoming an unbounded allocation. A larger
-/// legitimate surface requires an explicit protocol-cohort revision. The caps
-/// classify envelopes outside every valid cohort-1 shape; they are therefore
-/// implementation safety boundaries, not part of the canonical shape digest.
-/// Raising a cap without adding a valid shape does not change the protocol;
-/// lowering one below a declared shape's measured maximum is a bug.
-pub const max_request_payload_bytes: usize = 4 * 1024;
-pub const max_response_payload_bytes: usize = 1024 * 1024;
+/// EA2 definitions contain authored-length curves and labels. Payload storage
+/// follows the actual framed size; allocation failure is reported by the local
+/// transport. The former 4 KiB fixture limit cannot represent authored vehicles.
+pub const max_request_payload_bytes: usize = std.math.maxInt(usize);
+pub const max_response_payload_bytes: usize = std.math.maxInt(usize);
 /// The maximum-path, maximum-schema discovery document measures 609 bytes.
 /// Keep its separate file boundary explicit because it is read before a socket
 /// or framed protocol has been admitted.
@@ -47,6 +43,8 @@ pub const editor_control_schema = SchemaId{ .namespace = schema_namespace, .loca
 pub const crate_authoring_schema = SchemaId{ .namespace = schema_namespace, .local = 3 };
 pub const persistence_schema = SchemaId{ .namespace = schema_namespace, .local = 4 };
 pub const measurement_schema = SchemaId{ .namespace = schema_namespace, .local = 5 };
+pub const material_schema = SchemaId{ .namespace = schema_namespace, .local = 6 };
+pub const vehicle_schema = SchemaId{ .namespace = schema_namespace, .local = 7 };
 
 pub const SchemaClass = enum {
     query,
@@ -54,6 +52,8 @@ pub const SchemaClass = enum {
     crate_authoring,
     persistence,
     measurement,
+    material_authoring,
+    vehicle_authoring,
 };
 
 pub const SchemaDescriptor = struct {
@@ -82,7 +82,7 @@ pub const common_wire_shape_signature_v1 =
     "content_asset:AssetId{namespace:u64,local:u64}}|" ++
     "Vec3=f32[3]|Bounds{minimum:Vec3,maximum:Vec3}|" ++
     "Lifecycle{disabled,declared,starting,available,stopping,stopped,failed}|" ++
-    "SchemaClass{query,editor_control,crate_authoring,persistence,measurement}|" ++
+    "SchemaClass{query,editor_control,crate_authoring,persistence,measurement,material_authoring,vehicle_authoring}|" ++
     "Availability{available,unavailable}|" ++
     "WorldSemanticType{crate,local_player,remote_player,npc,vehicle,carryable}|" ++
     "ContentSemanticType{district,scene,mesh,material,texture,vehicle_archetype," ++
@@ -99,14 +99,15 @@ pub const common_wire_shape_signature_v1 =
     "endpoint_stopping,owner_busy,owner_unavailable,target_not_found," ++
     "target_kind_not_supported,internal_error}";
 
-const query_wire_shape_v2 =
+const query_wire_shape_v4 =
+    "material_details=Material@material-authoring.v1|" ++
     "commands{describe:{},schema_list:{},world_list:{},content_list:{}," ++
     "inspect:{target:Target}}|payloads{endpoint_description:{product:string," ++
     "local_only:bool,transport:string,protocol_cohort:u16,framing_version:u16," ++
     "run_id:RunId,schema_digest:sha256,capabilities:[]string}," ++
     "schema_list:[]SchemaDescriptor{id:SchemaId,name:string,version:u16," ++
     "class:SchemaClass,description:string,wire_shape_signature:string}," ++
-    "world_list:[]WorldEntry{target:Target,semantic_type:WorldSemanticType," ++
+    "world_list:[]WorldEntry{target:Target,authoring_target:?Target,semantic_type:WorldSemanticType," ++
     "label:string,selected:bool,position:?Vec3,bounds:?Bounds," ++
     "availability:Availability,current_revision:?u64,inspectable:bool," ++
     "authorable:bool},content_list:[]ContentEntry{asset_id:AssetId," ++
@@ -159,14 +160,38 @@ const measurement_wire_shape_v1 =
     "artifact_path:?string,authority_tick:?u64,presentation_frame:?u64," ++
     "wall_unix_ms:?i64,detail:?string}}";
 
+const material_wire_shape_v1 =
+    "commands{material_inspect:{target:AssetId},material_edit:MaterialRequest}|" ++
+    "MaterialRequest{target:AssetId,expected_revision:u64,action:preview(Material)|preview_assignment(AssetId)|assign(AssetId)|clear_preview|apply(Material)|revert|commit}|" ++
+    "Material{base_color:f32[4],base_color_texture:?AssetId,base_color_texcoord:u8," ++
+    "metallic:f32,roughness:f32,normal_scale:f32,occlusion_strength:f32,emissive:f32[3]," ++
+    "metallic_roughness_texture:?AssetId,normal_texture:?AssetId,occlusion_texture:?AssetId,emissive_texture:?AssetId}|" ++
+    "payloads{material_inspection:union{material:{id:AssetId,label:string,revision:u64,asset_revision:u64,committed:Material,session:Material,preview:?{source:AuthoringSource,value:Material}},binding:{mesh:AssetId,revision:u64,asset_revision:u64,committed:AssetId,session:AssetId,preview:?{source:AuthoringSource,value:AssetId}}}," ++
+    "material_outcome:{transaction_id:u64,source:AuthoringSource,target:AssetId,action:MaterialAction,revision:u64,asset_revision:u64,rejection:?MaterialRejection}}|" ++
+    "MaterialRejection{target_missing,wrong_target_kind,material_missing,stale_revision,invalid_material,texture_missing,texture_color_space,preview_owned_by_another_producer,persistence_unavailable,persistence_failed}";
+
+const vehicle_wire_shape_v2 =
+    "commands{vehicle_assets:{},vehicle_inspect:{target:PersistentId},vehicle_edit:VehicleRequest,vehicle_result:{transaction_id:u64}}|" ++
+    "VehicleRequest{target:PersistentId,expected_revision:u64,expected_asset_revision:u64,action:apply(Definition)|rebuild(Definition)|revert|commit|measure(Definition)|preview(Definition)|clear_preview}|" ++
+    "Definition{version:u32,id:{asset:AssetId},label:string,revision:u64,tuning:VehicleTuningV1,visuals:{chassis:VisualPart,wheels:VisualPart[4]}}|" ++
+    "VisualPart{mesh:AssetId,material:AssetId,local_pose:{position:f32[3],rotation:f32[4]},scale:f32[3]}|" ++
+    "VehicleTuningV1{steering:{rise_per_second:f32,return_per_second:f32,speed_curve:[]{speed_mps:f32,lock_fraction:f32}},chassis_half_extents:f32[3],center_of_mass_offset:f32[3],mass:f32,wheel_attachment_positions:f32[4][3],wheel_radius:f32,wheel_width:f32,suspension_min_length:f32,suspension_max_length:f32,suspension_frequency:f32,suspension_damping:f32,max_steer_radians:f32,max_brake_torque:f32,max_hand_brake_torque:f32,rear_axle:RearAxle,front_anti_roll_stiffness:f32,tire_friction:Tire,powertrain:Powertrain,front_differential_ratio:f32,front_limited_slip_ratio:f32,max_pitch_roll_radians:f32,wheel_collision_max_slope_radians:f32}|" ++
+    "RearAxle{suspension_min_length:f32,suspension_max_length:f32,suspension_frequency:f32,suspension_damping:f32,brake_torque_nm:f32,tire_friction:Tire,anti_roll_stiffness:f32}|" ++
+    "Tire{longitudinal_peak_slip:f32,longitudinal_peak_friction:f32,longitudinal_slide_slip:f32,longitudinal_slide_friction:f32,lateral_peak_angle_radians:f32,lateral_peak_friction:f32,lateral_slide_angle_radians:f32,lateral_slide_friction:f32}|" ++
+    "Powertrain{max_torque_nm:f32,idle_rpm:f32,max_rpm:f32,inertia_kg_m2:f32,angular_damping:f32,torque_curve:[]{rpm_fraction:f32,torque_fraction:f32},forward_gears:[]f32,reverse_gears:[]f32,switch_time_s:f32,clutch_release_s:f32,switch_latency_s:f32,shift_up_rpm:f32,shift_down_rpm:f32,clutch_strength:f32,front_torque_fraction:f32,rear_differential_ratio:f32,rear_limited_slip_ratio:f32,center_limited_slip_ratio:f32}|" ++
+    "payloads{vehicle_assets:[]{id:VehicleArchetypeId,label:string,revision:u64,digest:sha256},vehicle_inspection:{live:VehicleView,committed:Definition,asset_revision:u64,presets:[]{source_id:VehicleArchetypeId,source_label:string,source_revision:u64,source_digest:sha256,candidate:Definition},preview:?{source:AuthoringSource,transaction_id:u64,visuals:{chassis:VisualPart,wheels:VisualPart[4]}}},vehicle_outcome:VehicleResult}|" ++
+    "VehicleResult{transaction_id:u64,source:AuthoringSource,target:PersistentId,action:VehicleAction,disposition:pending|accepted|rejected,revision:u64,asset_revision:u64,definition_digest:sha256,authority_tick:?u64,rejection:?string,artifact_path:?string}|VehicleView{conditioned_steering:f32,id:PersistentId,definition:Definition,definition_digest:sha256,revision:u64,state:VehicleState,input:VehicleInput,driver_id:?PersistentId}|VehicleInput{throttle:f32,steering:f32,brake:f32,hand_brake:f32}|VehicleState{chassis:{pose:{position:f32[3],rotation:f32[4]},velocity:{linear:f32[3],angular:f32[3]}},wheels:WheelState[4],engine_rpm:f32,current_gear:i32,powertrain:{engine_rpm:f32,gear:i32,clutch_friction:f32,switch_time_left_s:f32,clutch_release_left_s:f32,switch_latency_left_s:f32}}|WheelState{pose:{position:f32[3],rotation:f32[4]},angular_velocity:f32,rotation_angle:f32,steer_angle:f32,suspension_length:f32,has_contact:bool,suspension_impulse_ns:f32,longitudinal_impulse_ns:f32,lateral_impulse_ns:f32,longitudinal_slip:f32,lateral_slip_radians:f32}";
+
 const registered_schemas = [_]SchemaDescriptor{
+    .{ .id = vehicle_schema, .name = "incinerator.sandbox.vehicle-authoring.v2", .version = 2, .class = .vehicle_authoring, .description = "Per-instance vehicle inspection, revisioned apply/rebuild/revert, atomic archetype commit and isolated measurement.", .wire_shape_signature = vehicle_wire_shape_v2 },
+    .{ .id = material_schema, .name = "incinerator.demo.material-authoring.v1", .version = 1, .class = .material_authoring, .description = "Typed material inspection, preview, session apply/revert, and durable game asset commit.", .wire_shape_signature = material_wire_shape_v1 },
     .{
         .id = query_schema,
-        .name = "incinerator.sandbox.query.v2",
-        .version = 2,
+        .name = "incinerator.sandbox.query.v4",
+        .version = 4,
         .class = .query,
         .description = "Endpoint, world, content, and stable-target inspection.",
-        .wire_shape_signature = query_wire_shape_v2,
+        .wire_shape_signature = query_wire_shape_v4,
     },
     .{
         .id = editor_control_schema,
@@ -202,15 +227,10 @@ const registered_schemas = [_]SchemaDescriptor{
     },
 };
 
-/// Frozen SHA-256 of the complete cohort-2 canonical wire-shape catalog.
+/// Frozen SHA-256 of the complete cohort-5 canonical wire-shape catalog.
 /// Any intentional wire change must advance the affected schema/cohort and
 /// update this value together with its explicit signature.
-pub const canonical_schema_digest_v2 = engine.assets.Digest{
-    0x62, 0x88, 0xe6, 0x36, 0xd3, 0xaf, 0x35, 0x48,
-    0xfb, 0x3a, 0x0e, 0x53, 0xd4, 0x2a, 0xb0, 0x30,
-    0xc5, 0x9d, 0x82, 0xdc, 0x58, 0x05, 0x77, 0x3d,
-    0xa3, 0x95, 0x0e, 0xfa, 0xea, 0x29, 0x55, 0x76,
-};
+pub const canonical_schema_digest_v5 = engine.assets.Digest{ 0xd4, 0x74, 0x06, 0x60, 0xb5, 0xcd, 0x0a, 0x5d, 0x83, 0x73, 0xc4, 0x4a, 0x2c, 0xab, 0x09, 0x69, 0x40, 0xb9, 0x73, 0xc1, 0xf4, 0x54, 0xd0, 0x1e, 0xeb, 0x61, 0xb5, 0x04, 0x5a, 0x1d, 0x36, 0x7e };
 
 pub fn schemaCatalog() []const SchemaDescriptor {
     return &registered_schemas;
@@ -366,6 +386,7 @@ pub const ContentSemanticType = enum {
 };
 
 pub const WorldEntry = struct {
+    authoring_target: ?Target = null,
     target: Target,
     semantic_type: WorldSemanticType,
     label: []const u8,
@@ -551,6 +572,12 @@ pub const FrameResult = struct {
 pub const Empty = struct {};
 
 pub const Command = union(enum) {
+    vehicle_assets: Empty,
+    vehicle_inspect: struct { target: PersistentId },
+    vehicle_edit: vehicle.Request,
+    vehicle_result: struct { transaction_id: u64 },
+    material_inspect: struct { target: AssetId },
+    material_edit: material.Request,
     describe: Empty,
     schema_list: Empty,
     world_list: Empty,
@@ -587,6 +614,8 @@ pub const Command = union(enum) {
 
     pub fn schemaId(self: Command) SchemaId {
         return switch (self) {
+            .vehicle_assets, .vehicle_inspect, .vehicle_edit, .vehicle_result => vehicle_schema,
+            .material_inspect, .material_edit => material_schema,
             .describe, .schema_list, .world_list, .content_list, .inspect => query_schema,
             .selection_set,
             .selection_clear,
@@ -628,6 +657,22 @@ pub const Request = struct {
             return error.CommandSchemaMismatch;
         }
         switch (self.command) {
+            .vehicle_assets => {},
+            .vehicle_inspect => |value| try value.target.validate(),
+            .vehicle_result => |value| if (value.transaction_id == 0) return error.InvalidTransactionId,
+            .vehicle_edit => |value| {
+                try value.target.validate();
+                if (value.expected_asset_revision == 0) return error.InvalidVehicleAssetRevision;
+                switch (value.action) {
+                    .apply, .rebuild, .measure, .preview => |candidate| try candidate.validate(),
+                    .revert, .commit, .clear_preview => {},
+                }
+            },
+            .material_inspect => |value| try value.target.validate(),
+            .material_edit => |value| {
+                try value.target.validate();
+                if (value.expected_revision == 0) return error.InvalidMaterialRevision;
+            },
             .inspect => |value| try value.target.validate(),
             .selection_set => |value| try value.target.validate(),
             .camera_focus => |value| try value.target.validate(),
@@ -686,6 +731,11 @@ pub const SelectionResult = struct {
 };
 
 pub const Payload = union(enum) {
+    vehicle_assets: []const vehicle.AssetSummary,
+    vehicle_inspection: vehicle.Inspection,
+    vehicle_outcome: vehicle.Result,
+    material_inspection: material.Inspection,
+    material_outcome: material.Outcome,
     endpoint_description: EndpointDescription,
     schema_list: []const SchemaDescriptor,
     world_list: []const WorldEntry,
@@ -703,6 +753,8 @@ pub const Payload = union(enum) {
 
     pub fn schemaId(self: Payload) SchemaId {
         return switch (self) {
+            .vehicle_assets, .vehicle_inspection, .vehicle_outcome => vehicle_schema,
+            .material_inspection, .material_outcome => material_schema,
             .endpoint_description, .schema_list, .world_list, .content_list, .inspection => query_schema,
             .selection, .camera, .camera_mutation => editor_control_schema,
             .authoring_admission, .transaction => crate_authoring_schema,
@@ -762,6 +814,11 @@ pub const Response = struct {
 
 pub fn expectedPayloadTag(command: Command) std.meta.Tag(Payload) {
     return switch (command) {
+        .vehicle_assets => .vehicle_assets,
+        .vehicle_inspect => .vehicle_inspection,
+        .vehicle_edit, .vehicle_result => .vehicle_outcome,
+        .material_inspect => .material_inspection,
+        .material_edit => .material_outcome,
         .describe => .endpoint_description,
         .schema_list => .schema_list,
         .world_list => .world_list,
@@ -961,8 +1018,8 @@ pub fn parseResponse(allocator: std.mem.Allocator, payload: []const u8) !std.jso
 }
 
 test "manual schema catalog has stable classes and digest" {
-    try std.testing.expectEqual(@as(usize, 5), schemaCatalog().len);
-    var seen: [5]bool = @splat(false);
+    try std.testing.expectEqual(@as(usize, 7), schemaCatalog().len);
+    var seen: [7]bool = @splat(false);
     for (schemaCatalog()) |schema| {
         try schema.id.validate();
         try std.testing.expect(schemaIsRegistered(schema.id));
@@ -972,7 +1029,7 @@ test "manual schema catalog has stable classes and digest" {
     for (seen) |present| try std.testing.expect(present);
     const digest = schemaDigest();
     try engine.assets.validateDigest(digest);
-    try std.testing.expectEqualSlices(u8, &canonical_schema_digest_v2, &digest);
+    try std.testing.expectEqualSlices(u8, &canonical_schema_digest_v5, &digest);
 }
 
 test "discovery lifecycle documents require active paths and available digest" {
@@ -1172,46 +1229,15 @@ test "ICDV header is exactly 32 bytes and rejects corruption" {
     try std.testing.expectError(error.UnsupportedFrameFlags, Header.decode(&corrupt_header));
 }
 
-test "framed payload allocation admits directional maxima and rejects one extra byte" {
-    const exact = try std.testing.allocator.alloc(u8, max_response_payload_bytes);
-    defer std.testing.allocator.free(exact);
-    @memset(exact, 'x');
-    var exact_reader = std.Io.Reader.fixed(exact);
-    const exact_header = Header.init(.response, protocol_cohort, 78, exact);
-    const decoded = try readPayloadAlloc(
-        std.testing.allocator,
-        &exact_reader,
-        exact_header,
-    );
+test "framed vehicle values are not constrained by the old four KiB fixture" {
+    const payload = try std.testing.allocator.alloc(u8, 16 * 1024);
+    defer std.testing.allocator.free(payload);
+    @memset(payload, 'x');
+    var reader = std.Io.Reader.fixed(payload);
+    const header = Header.init(.request, protocol_cohort, 78, payload);
+    const decoded = try readPayloadAlloc(std.testing.allocator, &reader, header);
     defer std.testing.allocator.free(decoded);
-    try std.testing.expectEqual(max_response_payload_bytes, decoded.len);
-
-    var empty_reader = std.Io.Reader.fixed("");
-    var oversized_header = exact_header;
-    oversized_header.payload_len = max_response_payload_bytes + 1;
-    try std.testing.expectError(
-        error.FramePayloadTooLarge,
-        readPayloadAlloc(
-            std.testing.allocator,
-            &empty_reader,
-            oversized_header,
-        ),
-    );
-
-    const oversized = try std.testing.allocator.alloc(u8, max_request_payload_bytes + 1);
-    defer std.testing.allocator.free(oversized);
-    var empty_storage: [0]u8 = .{};
-    var empty_writer = std.Io.Writer.fixed(&empty_storage);
-    try std.testing.expectError(
-        error.FramePayloadTooLarge,
-        writeFrame(
-            &empty_writer,
-            .request,
-            protocol_cohort,
-            79,
-            oversized,
-        ),
-    );
+    try std.testing.expectEqualSlices(u8, payload, decoded);
 }
 
 test "stable target parser rejects backend-shaped ambiguity" {

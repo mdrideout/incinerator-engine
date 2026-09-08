@@ -19,8 +19,8 @@ const State = struct {
     carry: bool = false,
     attack: bool = false,
     respawn: bool = false,
-    jump_or_brake: bool = false,
-    hand_brake: bool = false,
+    space_down: bool = false,
+    driving: bool = false,
 };
 
 const Sample = struct {
@@ -78,6 +78,7 @@ pub const Replay = struct {
                     else => return error.InvalidIncidentInputRecord,
                 };
                 if (!stringEquals(object.get("kind"), "semantic_input")) continue;
+                try validateMapping(object.get("input_mapping_version"));
                 const delta = object.get("mouse_delta") orelse return error.InvalidIncidentInputRecord;
                 if (delta != .array or delta.array.items.len != 2) {
                     return error.InvalidIncidentInputRecord;
@@ -94,8 +95,8 @@ pub const Replay = struct {
                         .carry = try boolean(object.get("carry")),
                         .attack = try boolean(object.get("attack")),
                         .respawn = try boolean(object.get("respawn")),
-                        .jump_or_brake = try boolean(object.get("jump_or_brake")),
-                        .hand_brake = try boolean(object.get("hand_brake")),
+                        .space_down = try boolean(object.get("space_down")),
+                        .driving = try boolean(object.get("driving")),
                     },
                     .interact_pressed = try boolean(object.get("interact_pressed")),
                     .carry_pressed = try boolean(object.get("carry_pressed")),
@@ -144,6 +145,7 @@ pub const Replay = struct {
             self.cursor += 1;
         }
         self.last_tick = tick;
+        const pedals = controls.mapPedals(self.current.forward, self.current.backward, self.current.space_down, jump_pressed, self.current.driving);
         return .{
             .move = .{
                 @as(f32, @floatFromInt(@as(i2, @intFromBool(self.current.right)) -
@@ -152,13 +154,13 @@ pub const Replay = struct {
                     @as(i2, @intFromBool(self.current.backward)))),
             },
             .look_delta = mouse_delta,
-            .jump_pressed = jump_pressed,
+            .jump_pressed = pedals.jump_pressed,
             .interact_pressed = interact_pressed,
             .carry_pressed = carry_pressed,
             .melee_pressed = attack_pressed,
             .respawn_pressed = respawn_pressed,
-            .brake = self.current.jump_or_brake,
-            .hand_brake = self.current.hand_brake,
+            .brake = pedals.brake,
+            .hand_brake = pedals.hand_brake,
         };
     }
 
@@ -210,4 +212,30 @@ test "captured action edges survive same-tick state changes" {
     try std.testing.expect(edge.carry_pressed);
     const held = replay.frameForTick(5);
     try std.testing.expect(!held.carry_pressed);
+}
+
+fn validateMapping(value: ?std.json.Value) !void {
+    const version = integer(value) catch return error.IncompatibleIncidentInputMapping;
+    if (version != controls.input_mapping_version) return error.IncompatibleIncidentInputMapping;
+}
+
+test "graphical replay rejects old or missing control mapping" {
+    try std.testing.expectError(error.IncompatibleIncidentInputMapping, validateMapping(null));
+    try std.testing.expectError(error.IncompatibleIncidentInputMapping, validateMapping(.{ .integer = 1 }));
+    try validateMapping(.{ .integer = 2 });
+}
+
+test "graphical replay shares driving pedals and does not jump on held-Space exit" {
+    var samples = [_]Sample{
+        .{ .tick = 1, .sequence = 1, .state = .{ .forward = true, .space_down = true, .driving = true }, .interact_pressed = false, .carry_pressed = false, .attack_pressed = false, .respawn_pressed = false, .jump_pressed = false, .mouse_delta = .{ 0, 0 } },
+        .{ .tick = 2, .sequence = 2, .state = .{ .forward = true, .backward = true, .driving = true }, .interact_pressed = false, .carry_pressed = false, .attack_pressed = false, .respawn_pressed = false, .jump_pressed = false, .mouse_delta = .{ 0, 0 } },
+        .{ .tick = 3, .sequence = 3, .state = .{ .space_down = true }, .interact_pressed = true, .carry_pressed = false, .attack_pressed = false, .respawn_pressed = false, .jump_pressed = false, .mouse_delta = .{ 0, 0 } },
+    };
+    var replay = Replay{ .allocator = std.testing.allocator, .samples = &samples };
+    const drive = replay.frameForTick(1);
+    try std.testing.expect(drive.hand_brake and !drive.brake and !drive.jump_pressed);
+    const both = replay.frameForTick(2);
+    try std.testing.expect(both.brake and !both.hand_brake and both.move[1] == 0);
+    const exited = replay.frameForTick(3);
+    try std.testing.expect(!exited.brake and !exited.hand_brake and !exited.jump_pressed);
 }

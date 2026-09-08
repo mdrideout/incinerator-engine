@@ -24,6 +24,8 @@ const diagnostics_tool = @import("tools/diagnostics_tool.zig");
 const event_log_tool = @import("tools/event_log_tool.zig");
 const gameplay_inspector_tool = @import("tools/gameplay_inspector_tool.zig");
 const world_outliner_tool = @import("tools/world_outliner_tool.zig");
+const vehicle_lab_tool = @import("tools/vehicle_lab_tool.zig");
+const material_lab_tool = @import("tools/material_lab_tool.zig");
 const content_browser_tool = @import("tools/content_browser_tool.zig");
 const navigation_lab_tool = @import("tools/navigation_lab_tool.zig");
 const population_lab_tool = @import("tools/population_lab_tool.zig");
@@ -54,6 +56,8 @@ pub const EventRoute = input.EventRoute;
 const default_tools = [_]Tool{
     Tool.init(stats_tool.descriptor),
     Tool.init(content_browser_tool.descriptor),
+    Tool.init(material_lab_tool.descriptor),
+    Tool.init(vehicle_lab_tool.descriptor),
     Tool.init(camera_tool.descriptor),
     Tool.init(render_tool.descriptor),
     Tool.init(diagnostics_tool.descriptor),
@@ -81,12 +85,14 @@ const panel_menu_order = [_]tool.ToolId{
     .incident_capture,
     .crate_authoring,
     .interaction,
+    .material_lab,
     .navigation_lab,
     .neural_rendering_lab,
     .physics_debug,
     .population_lab,
     .render,
     .stats,
+    .vehicle_lab,
     .world_outliner,
 };
 
@@ -99,6 +105,8 @@ pub const Editor = struct {
     crate_authoring: crate_authoring_tool.State = .{},
     world_outliner: world_outliner_tool.State = .{},
     content_browser: content_browser_tool.State = .{},
+    material_lab: material_lab_tool.State = .{},
+    vehicle_lab: vehicle_lab_tool.State = .{},
     content_selection_controller: content_selection.Controller = .{},
     content_selection_requests: content_selection.Requests = .{},
     inspector_subject: enum { world, content } = .world,
@@ -132,6 +140,7 @@ pub const Editor = struct {
 
     /// Release ImGui while the renderer device and window are still alive.
     pub fn deinit(self: *Editor) void {
+        self.vehicle_lab.deinit();
         self.world_outliner.deinit();
         self.backend.deinit();
         self.* = .{};
@@ -166,6 +175,8 @@ pub const Editor = struct {
             event.type == c.SDL_EVENT_WINDOW_MINIMIZED)
         {
             self.crate_authoring.deactivateGizmo();
+            _ = self.material_lab.cancelControl();
+            _ = self.vehicle_lab.cancelControl();
             self.backend.cancelPointer();
         }
 
@@ -173,7 +184,7 @@ pub const Editor = struct {
         if (event.type == c.SDL_EVENT_KEY_DOWN) {
             if (event.key.scancode == c.SDL_SCANCODE_ESCAPE) {
                 route.system_menu_available = true;
-                if (!event.key.repeat and self.crate_authoring.cancelGizmoDrag()) {
+                if (!event.key.repeat and (self.vehicle_lab.cancelControl() or self.material_lab.cancelControl() or self.crate_authoring.cancelGizmoDrag())) {
                     route.keyboard_reserved = true;
                     return route;
                 }
@@ -287,6 +298,8 @@ pub const Editor = struct {
             self.crate_authoring.deactivateGizmo();
         }
 
+        if (!self.visible or !self.toolById(.vehicle_lab).enabled) self.vehicle_lab.deactivate();
+        if (!self.visible or !self.toolById(.material_lab).enabled) self.material_lab.deactivate(frame.material);
         if (!self.visible) {
             self.scene_rect = null;
             drawProductStatusOverlay(self, &frame);
@@ -322,8 +335,11 @@ pub const Editor = struct {
         )) {
             if (self.content_selection_controller.active != null) {
                 self.inspector_subject = .content;
-                self.toolById(.crate_authoring).enabled = true;
-                self.pending_focus = .crate_authoring;
+                if (self.content_selection_controller.view(frame.content_assets).activeEntry()) |entry| {
+                    const panel: workspace.ToolId = if (entry.kind == .material or entry.kind == .mesh) .material_lab else .crate_authoring;
+                    self.toolById(panel).enabled = true;
+                    self.pending_focus = panel;
+                }
             } else if (self.inspector_subject == .content) {
                 self.inspector_subject = .world;
             }
@@ -396,7 +412,7 @@ pub const Editor = struct {
     /// External editor-control producers query this state instead of mutating
     /// selection or camera state underneath a live pointer gesture.
     pub fn gizmoDragActive(self: *const Editor) bool {
-        return self.crate_authoring.gizmoDragActive();
+        return self.crate_authoring.gizmoDragActive() or self.material_lab.active_start != null or self.vehicle_lab.active_start != null;
     }
 
     pub fn selectContentAsset(
@@ -407,8 +423,9 @@ pub const Editor = struct {
         for (entries) |entry| if (std.meta.eql(entry.id, id)) {
             self.content_selection_controller.active = id;
             self.inspector_subject = .content;
-            self.toolById(.crate_authoring).enabled = true;
-            self.pending_focus = .crate_authoring;
+            const panel: workspace.ToolId = if (entry.kind == .material or entry.kind == .mesh) .material_lab else .crate_authoring;
+            self.toolById(panel).enabled = true;
+            self.pending_focus = panel;
             return true;
         };
         return false;
@@ -435,6 +452,8 @@ pub const Editor = struct {
         render_settings: *renderer_module.RenderSettings,
     ) void {
         switch (id) {
+            .vehicle_lab => vehicle_lab_tool.draw(&self.vehicle_lab, frame.vehicle),
+            .material_lab => material_lab_tool.draw(&self.material_lab, frame.material, self.content_selection_controller.view(frame.content_assets), &self.content_selection_requests),
             .stats => stats_tool.draw(&self.stats, frame.frame_timing),
             .content_browser => content_browser_tool.draw(
                 &self.content_browser,

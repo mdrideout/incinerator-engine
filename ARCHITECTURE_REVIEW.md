@@ -1,12 +1,24 @@
 # Incinerator Engine Architecture Review
 
+**Current authoring update (2026-09-06):** EA1 is implemented. The product owner
+explicitly replaced the S15 evaluation scene with the game-owned industrial
+neighborhood. Reusable material values, library format, GPU evaluation, and
+revisioned authoring owner are engine capabilities. The game owns named
+materials, bindings, geometry, collision, navigation, and population. UI and
+CLI use one owner; ordinary runtime builds read the installed asset library.
+Network protocol 19, district recipe 9, bundle format 4/schema 5, deterministic
+visual schema 2, and developer protocol 3 (six schemas) identify this intentional
+breaking cohort. [EA1-B evidence](docs/validation/ea1-b-material-authoring.md)
+supersedes earlier EA1-A and S15 scene-preservation status below.
+
+
 **Status:** Living assessment; the Apple Silicon macOS gameplay/session
 foundation now includes accepted S12 semantic navigation and S13 authored
 population/activity. DR1 deterministic visual fidelity and S14 authoritative
 ranged combat are accepted across solo, private-listen, and dedicated
 placements. S15 four-district implementation and its automated/native and
-product-owner acceptance are complete under ADR-028. Protocol 18, snapshot
-15, replay 19,
+product-owner acceptance are complete under ADR-028. Protocol 20, snapshot
+16, replay 20,
 incident schema 5, Population Lab, the 12/16/64 separated scale cohorts, and
 automated Metal/product acceptance are current. EA0 is accepted and makes the
 four ADR-029 owners, stable identity, revisioned typed transaction envelope,
@@ -20,13 +32,13 @@ review are complete. Human usability and product-owner acceptance closed on
 Phase 7 to make the canonical CLI and repository-owned agent skill first-class.
 Its implementation, automated, installed Metal, clean-context agent, and
 comprehensive manual agent-review pass; product-owner acceptance is complete.
-EA1-A now has a complete machine acceptance candidate: host-only glTF/GLB plus
-PNG/JPEG import, stable cooked asset identities, renderer-owned texture/sampler
-residency, project-owned textured content, read-only Content Browser/Inspector,
-and CLI parity. Product-owner visual/usability review remains. EA1-B-EA5 retain
-the material-authoring, vehicle-archetype,
-lighting, map, and engine/game separation pressure. No open P0 blocks the next
-phase decision.
+EA1 adds the complete conventional material inputs, a game-owned material library,
+live assignment, neutral/world preview, and shared revisioned Material Lab/CLI
+apply, revert, and commit. The fresh industrial world replaces the evaluation
+scene. EA2 adds exact game-owned vehicle definitions, safe Vehicle Lab/CLI
+authoring, cooked presentation and reliable client admission. EA3–EA5 retain
+authored lighting, general map editing,
+and the separately built game proof. No open P0 blocks the next phase decision.
 The neural-rendering proof
 is retained through RF10 as external technical evidence, but no learned model
 is promoted, installed, or selected. The product owner paused that track
@@ -71,7 +83,7 @@ EA1-A candidate evidence:
 → [`EA0.5 accepted`](docs/validation/ea0-5-local-developer-endpoint-and-canonical-cli.md)
 → `Phase 7 CLI agent contract accepted`
 → [`EA1-A machine candidate; product-owner review pending`](docs/validation/ea1-a-practical-textures-and-materials.md)
-→ `EA1-B-EA5 pending`
+→ [EA1 implemented](docs/validation/ea1-b-material-authoring.md) → [EA2 implemented](docs/validation/ea2-vehicle-authoring.md) → `EA3-EA5 pending`
 
 **Active rendering direction:**
 [`DR1 playable deterministic visual fidelity`](docs/design/dr1-playable-deterministic-visual-fidelity.md)
@@ -300,7 +312,7 @@ claim.
 | A-F026 | Graphical network products rendered no relevant district blockers, ignored mouse-look events, and used one arrival clock for common 20 Hz and NPC 10 Hz projection lanes | P1 | Post-S11 corrective pass | Resolved: bounded relevant-district presentation, shared right-drag/focus-loss policy, and client-owned applied-world clocks per projection lane |
 | A-F027 | Arithmetic participant spawn positions intersected canonical blockers and did not reserve same-cycle choices or account for live fixture placement | P1 | Post-S11 corrective pass | Resolved: one bounded initial/respawn catalog, real Jolt placement queries, continuous materialized-character occupancy through the vitals handoff, driving-aware live-character/NPC scoring, same-cycle reservations, and participant-capacity evidence against the fully settled vehicle plus 64-NPC synthetic fixture |
 | A-F028 | The composition-owned global support body and each streamed district support box remain coplanar physical surfaces | P2 | Before changing support topology, contact behavior, or streaming bootstrap order | Resolved by S15: the composition ground is the sole flat support body and districts own only explicit obstacles; exact physical placement evidence proves one support plus eight obstacle bodies |
-| A-F029 | The first client vehicle layout is a hard-coded single-archetype cohort assumption rather than an admitted catalog identity; wheel unwrap also estimates whole turns from endpoint velocity across gaps | P2 | EA2 or a materially harsher vehicle replication profile | Open: EA2 owns stable archetype identity plus admitted layout/tuning/material digests and live authoring; evaluate authoritative unwrapped phase or a server-tick presentation timeline only if the new cohort exposes a wheel-phase defect |
+| A-F029 | The first client vehicle layout is a hard-coded single-archetype cohort assumption rather than an admitted catalog identity; wheel unwrap also estimates whole turns from endpoint velocity across gaps | P2 | EA2 or a materially harsher vehicle replication profile | EA2 resolves the hardcoded-layout finding with stable archetypes, exact admitted definitions, reliable projection and cooked visual bindings; unwrapped phase/server-tick timeline remains evidence-gated if a wheel-phase defect is observed |
 | A-F030 | Vehicle snapshots still resend raw float wheel state, authority projection is recomputed per relevant participant, and graphical multiplayer acceptance proves lifecycle semantics more strongly than exact draw composition | P2 | Measure the declared four-active-vehicle/64-NPC profile or add another client-visible dynamic feature | Open measured pressure point; retain simple current limits until bandwidth/projection/render-plan evidence justifies change |
 | A-F031 | Accepted S11 combat/life fields reached the solo client but were discarded by `local_solo` draw extraction and the renderer displayed unchanged character/NPC materials | P1 | Post-S11 corrective pass | Resolved: one renderer-neutral, tick-keyed combat presentation owner feeds solo and graphical network scenes with health bars, hit flashes, encounter/death colors, and retained cooldown/respawn/no-safe-spawn HUD markers |
 | A-F032 | Several policies treated the retained hidden CharacterVirtual pose as the player location while driving, and the authority still admitted on-foot melee from or against vehicle occupants | P1 | Post-S11 corrective pass | Resolved: one authority participant-world-position boundary uses the occupied chassis for focus/relevance/spawn safety; replacement visibility does the same through a narrow vehicle read port; client and authority both enforce on-foot-only melee |
@@ -336,7 +348,7 @@ claim.
 | A-F062 | SDL 3.4.14's Metal backend inverted the documented `SDL_QueryGPUFence` result while screenshot, semantic-ID, and physics-debug consumers also fenced a later empty submission instead of the frame containing their work | P0 | DR1-A native evidence | Resolved at the exact platform/submission boundary: one macOS cohort helper inverts only the pinned 3.4.14 result and names upstream removal commit `b340ddcd7b44511f7b49005ba4a91a3c9907f77e`; the renderer acquires and reference-shares the real frame-submission fence. Foreground native runs restore district residency plus 362/362 trail and 31/31 anchor completions with zero misses/failures, and the final full journey repeats zero failures. |
 | A-F063 | The engine had no ranged-combat rule owner, authoritative ray/occlusion boundary, finite-ammunition state, or correlated replay/incident contract; allowing clients to name targets would have broken the shared solo/multiplayer source of truth | P1 | S14 ranged combat | Resolved by ADR-027: one backend-neutral handgun feature owns admission/ammo/deadlines, session authority derives current pose and stable semantic/Jolt hit results, vitals owns damage/death, and clients receive only authoritative results/snapshots/events. Protocol, replay, fault, reconnect, incident, Metal, listen, and dedicated gates cover the boundary without lag-compensation or firearms-framework scope. |
 | A-F064 | Reliable weapon results and unreliable snapshots can cross in transit; the first S14 client projection also treated the latest result as permanent HUD state, masking later reload completion, while the private-listen local adapter did not drain weapon/shot feedback | P1 | S14 graphical acceptance | Resolved: weapon results carry the authority tick, client weapon state advances monotonically across result/snapshot lanes, combat presentation treats results as feedback rather than a second state owner, and private-listen host controls/feedback now match the remote graphical client. Regression tests plus real-GNS listen/dedicated observer journeys prove convergence and publication. |
-| A-F065 | The content path proved deterministic embedded PNG base-color material cooking and GPU residency but required a texture, UV0, one sampler policy, and fixture-sized district limits; it was not yet a practical project asset workflow | P1 | EA1 materials/textures | EA1-A candidate resolves import/runtime pressure with host-only GLB/glTF plus rooted PNG/JPEG dependencies, optional base-color textures, explicit color/sampler state, measured limits, stable game-owned identities, project content, renderer residency, Content Browser/Inspector, CLI parity, source-package proof, and native Metal automation. EA1-B still owns richer material inputs plus preview, assignment, revert, and durable commit; product-owner EA1-A visual review remains first. |
+| A-F065 | The content path proved deterministic embedded PNG base-color material cooking and GPU residency but required a texture, UV0, one sampler policy, and fixture-sized district limits; it was not yet a practical project asset workflow | P1 | EA1 materials/textures | EA1-A candidate resolves import/runtime pressure with host-only GLB/glTF plus rooted PNG/JPEG dependencies, optional base-color textures, explicit color/sampler state, measured limits, stable game-owned identities, project content, renderer residency, Content Browser/Inspector, CLI parity, source-package proof, and native Metal automation. EA1-B implements richer material inputs, neutral/world preview, assignment, revert, and durable commit/restart in the fresh industrial world. |
 | A-F066 | Revisioned authoring and undo/redo existed only for crate relocation; Render Lab settings bypass an owner request, and no discoverable typed process-local path let an LLM inspect/apply/revert validated settings | P1 | EA0.5 foundation, then EA1-EA3 feature owners | EA0 and EA0.5 foundation resolved: stable run/asset/target/transaction/revision/source/scope contracts, typed crate authority transactions, authored-change evidence, executable four-owner classification, owner-safe local discovery/transport, five concrete schemas, and the canonical CLI are implemented. The sandbox-aware protocol/transport/client are truthfully game tooling, while the socket thread owns no mutable product policy. EA1-EA3 must add their own material, vehicle, and lighting owner transactions through the accepted client rather than a generic CVar/property/command system. |
 | A-F067 | The deterministic renderer owns a valid directional sun/ambient contract, but title values are fixed at startup and no stable authored point-light, selection, persistence, gizmo, or incident correlation exists | P2 | EA3 lighting | Open under ADR-029: make the game-owned sun preset and stable point lights editable through typed presentation owners after EA2 proves the shared authoring/control adapter |
 | A-F068 | The accepted four-district map combines deterministic cooked scenes with hard-coded game-specific recipe/composition/population arrays, so ordinary map construction still requires Zig edits and engine/game ownership is not physically provable | P1 | EA4 then EA5/G1 | Open under ADR-029: introduce a versioned game-owned placed-asset map and construction workflow in EA4, reproduce S15 without changing behavior, then prove the separately built game/content boundary in EA5/G1 |

@@ -1,0 +1,524 @@
+{
+  "material-preview": {
+    "agent_contract_revision": 4,
+    "operation": "material.preview",
+    "terminal": true,
+    "next": [
+      {
+        "operation": "material.inspect",
+        "target": {
+          "content_asset": {
+            "namespace": 5282233395077009985,
+            "local": 8145342383860261915
+          }
+        },
+        "transaction_id": null,
+        "save_request_id": null,
+        "capture_id": null
+      }
+    ],
+    "response": {
+      "protocol_cohort": 3,
+      "request_id": 1788740807817293000,
+      "schema_id": {
+        "namespace": 1229145174,
+        "local": 6
+      },
+      "run_id": {
+        "started_wall_unix_ms": 1788739955673,
+        "nonce": 1788739955673967000
+      },
+      "outcome": {
+        "success": {
+          "material_outcome": {
+            "transaction_id": 2,
+            "source": "local_developer_client",
+            "target": {
+              "namespace": 5282233395077009985,
+              "local": 8145342383860261915
+            },
+            "action": "preview",
+            "revision": 1,
+            "asset_revision": 1,
+            "rejection": null
+          }
+        }
+      }
+    }
+  },
+  "material-clear": {
+    "agent_contract_revision": 4,
+    "operation": "material.clear-preview",
+    "terminal": true,
+    "next": [
+      {
+        "operation": "material.inspect",
+        "target": {
+          "content_asset": {
+            "namespace": 5282233395077009985,
+            "local": 8145342383860261915
+          }
+        },
+        "transaction_id": null,
+        "save_request_id": null,
+        "capture_id": null
+      }
+    ],
+    "response": {
+      "protocol_cohort": 3,
+      "request_id": 1788740807896945000,
+      "schema_id": {
+        "namespace": 1229145174,
+        "local": 6
+      },
+      "run_id": {
+        "started_wall_unix_ms": 1788739955673,
+        "nonce": 1788739955673967000
+      },
+      "outcome": {
+        "success": {
+          "material_outcome": {
+            "transaction_id": 3,
+            "source": "local_developer_client",
+            "target": {
+              "namespace": 5282233395077009985,
+              "local": 8145342383860261915
+            },
+            "action": "clear_preview",
+            "revision": 1,
+            "asset_revision": 1,
+            "rejection": null
+          }
+        }
+      }
+    }
+  },
+  "material-apply": {
+    "agent_contract_revision": 4,
+    "operation": "material.apply",
+    "terminal": true,
+    "next": [
+      {
+        "operation": "material.inspect",
+        "target": {
+          "content_asset": {
+            "namespace": 5282233395077009985,
+            "local": 8145342383860261915
+          }
+        },
+        "transaction_id": null,
+        "save_request_id": null,
+        "capture_id": null
+      }
+    ],
+    "response": {
+      "protocol_cohort": 3,
+      "request_id": 1788740807969526000,
+      "schema_id": {
+        "namespace": 1229145174,
+        "local": 6
+      },
+      "run_id": {
+        "started_wall_unix_ms": 1788739955673,
+        "nonce": 1788739955673967000
+      },
+      "outcome": {
+        "success": {
+          "material_outcome": {
+            "transaction_id": 4,
+            "source": "local_developer_client",
+            "target": {
+              "namespace": 5282233395077009985,
+              "local": 8145342383860261915
+            },
+            "action": "apply",
+            "revision": 2,
+            "asset_revision": 1,
+            "rejection": null
+          }
+        }
+      }
+    }
+  },
+  "material-stale": {
+    "agent_contract_revision": 4,
+    "operation": "material.apply",
+    "terminal": true,
+    "next": [
+      {
+        "operation": "material.inspect",
+        "target": {
+          "content_asset": {
+            "namespace": 5282233395077009985,
+            "local": 8145342383860261915
+          }
+        },
+        "transaction_id": null,
+        "save_request_id": null,
+        "capture_id": null
+      }
+    ],
+    "response": {
+      "protocol_cohort": 3,
+      "request_id": 1788740808048288000,
+      "schema_id": {
+        "namespace": 1229145174,
+        "local": 6
+      },
+      "run_id": {
+        "started_wall_unix_ms": 1788739955673,
+        "nonce": 1788739955673967000
+      },
+      "outcome": {
+        "success": {
+          "material_outcome": {
+            "transaction_id": 5,
+            "source": "local_developer_client",
+            "target": {
+              "namespace": 5282233395077009985,
+              "local": 8145342383860261915
+            },
+            "action": "apply",
+            "revision": 2,
+            "asset_revision": 1,
+            "rejection": "stale_revision"
+          }
+        }
+      }
+    }
+  },
+  "material-commit": {
+    "agent_contract_revision": 4,
+    "operation": "material.commit",
+    "terminal": true,
+    "next": [
+      {
+        "operation": "material.inspect",
+        "target": {
+          "content_asset": {
+            "namespace": 5282233395077009985,
+            "local": 8145342383860261915
+          }
+        },
+        "transaction_id": null,
+        "save_request_id": null,
+        "capture_id": null
+      }
+    ],
+    "response": {
+      "protocol_cohort": 3,
+      "request_id": 1788740808081246000,
+      "schema_id": {
+        "namespace": 1229145174,
+        "local": 6
+      },
+      "run_id": {
+        "started_wall_unix_ms": 1788739955673,
+        "nonce": 1788739955673967000
+      },
+      "outcome": {
+        "success": {
+          "material_outcome": {
+            "transaction_id": 6,
+            "source": "local_developer_client",
+            "target": {
+              "namespace": 5282233395077009985,
+              "local": 8145342383860261915
+            },
+            "action": "commit",
+            "revision": 3,
+            "asset_revision": 3,
+            "rejection": null
+          }
+        }
+      }
+    }
+  },
+  "binding-preview": {
+    "agent_contract_revision": 4,
+    "operation": "material.preview-assignment",
+    "terminal": true,
+    "next": [
+      {
+        "operation": "material.inspect",
+        "target": {
+          "content_asset": {
+            "namespace": 5282233395077009985,
+            "local": 15769378242947502020
+          }
+        },
+        "transaction_id": null,
+        "save_request_id": null,
+        "capture_id": null
+      }
+    ],
+    "response": {
+      "protocol_cohort": 3,
+      "request_id": 1788740808204507000,
+      "schema_id": {
+        "namespace": 1229145174,
+        "local": 6
+      },
+      "run_id": {
+        "started_wall_unix_ms": 1788739955673,
+        "nonce": 1788739955673967000
+      },
+      "outcome": {
+        "success": {
+          "material_outcome": {
+            "transaction_id": 7,
+            "source": "local_developer_client",
+            "target": {
+              "namespace": 5282233395077009985,
+              "local": 15769378242947502020
+            },
+            "action": "preview_assignment",
+            "revision": 1,
+            "asset_revision": 1,
+            "rejection": null
+          }
+        }
+      }
+    }
+  },
+  "binding-assign": {
+    "agent_contract_revision": 4,
+    "operation": "material.assign",
+    "terminal": true,
+    "next": [
+      {
+        "operation": "material.inspect",
+        "target": {
+          "content_asset": {
+            "namespace": 5282233395077009985,
+            "local": 15769378242947502020
+          }
+        },
+        "transaction_id": null,
+        "save_request_id": null,
+        "capture_id": null
+      }
+    ],
+    "response": {
+      "protocol_cohort": 3,
+      "request_id": 1788740808280647000,
+      "schema_id": {
+        "namespace": 1229145174,
+        "local": 6
+      },
+      "run_id": {
+        "started_wall_unix_ms": 1788739955673,
+        "nonce": 1788739955673967000
+      },
+      "outcome": {
+        "success": {
+          "material_outcome": {
+            "transaction_id": 8,
+            "source": "local_developer_client",
+            "target": {
+              "namespace": 5282233395077009985,
+              "local": 15769378242947502020
+            },
+            "action": "assign",
+            "revision": 2,
+            "asset_revision": 1,
+            "rejection": null
+          }
+        }
+      }
+    }
+  },
+  "binding-commit": {
+    "agent_contract_revision": 4,
+    "operation": "material.commit",
+    "terminal": true,
+    "next": [
+      {
+        "operation": "material.inspect",
+        "target": {
+          "content_asset": {
+            "namespace": 5282233395077009985,
+            "local": 15769378242947502020
+          }
+        },
+        "transaction_id": null,
+        "save_request_id": null,
+        "capture_id": null
+      }
+    ],
+    "response": {
+      "protocol_cohort": 3,
+      "request_id": 1788740808354119000,
+      "schema_id": {
+        "namespace": 1229145174,
+        "local": 6
+      },
+      "run_id": {
+        "started_wall_unix_ms": 1788739955673,
+        "nonce": 1788739955673967000
+      },
+      "outcome": {
+        "success": {
+          "material_outcome": {
+            "transaction_id": 9,
+            "source": "local_developer_client",
+            "target": {
+              "namespace": 5282233395077009985,
+              "local": 15769378242947502020
+            },
+            "action": "commit",
+            "revision": 3,
+            "asset_revision": 3,
+            "rejection": null
+          }
+        }
+      }
+    }
+  },
+  "restart-material": {
+    "agent_contract_revision": 4,
+    "operation": "material.inspect",
+    "terminal": true,
+    "next": [],
+    "response": {
+      "protocol_cohort": 3,
+      "request_id": 1788741272022831000,
+      "schema_id": {
+        "namespace": 1229145174,
+        "local": 6
+      },
+      "run_id": {
+        "started_wall_unix_ms": 1788741255097,
+        "nonce": 1788741255097526000
+      },
+      "outcome": {
+        "success": {
+          "material_inspection": {
+            "material": {
+              "id": {
+                "namespace": 5282233395077009985,
+                "local": 8145342383860261915
+              },
+              "label": "Foundry Street / Brick",
+              "revision": 3,
+              "asset_revision": 3,
+              "committed": {
+                "base_color": [
+                  0.9200000166893005,
+                  0.8799999952316284,
+                  0.8399999737739563,
+                  1
+                ],
+                "base_color_texture": {
+                  "namespace": 5282233395077009985,
+                  "local": 5602121912563298488
+                },
+                "base_color_texcoord": 0,
+                "metallic": 1,
+                "roughness": 1,
+                "normal_scale": 0.44999998807907104,
+                "occlusion_strength": 0.6000000238418579,
+                "emissive": [
+                  0,
+                  0,
+                  0
+                ],
+                "metallic_roughness_texture": {
+                  "namespace": 5282233395077009985,
+                  "local": 16886351379099574227
+                },
+                "normal_texture": {
+                  "namespace": 5282233395077009985,
+                  "local": 125649605887146288
+                },
+                "occlusion_texture": {
+                  "namespace": 5282233395077009985,
+                  "local": 10238308027974695205
+                },
+                "emissive_texture": null
+              },
+              "session": {
+                "base_color": [
+                  0.9200000166893005,
+                  0.8799999952316284,
+                  0.8399999737739563,
+                  1
+                ],
+                "base_color_texture": {
+                  "namespace": 5282233395077009985,
+                  "local": 5602121912563298488
+                },
+                "base_color_texcoord": 0,
+                "metallic": 1,
+                "roughness": 1,
+                "normal_scale": 0.44999998807907104,
+                "occlusion_strength": 0.6000000238418579,
+                "emissive": [
+                  0,
+                  0,
+                  0
+                ],
+                "metallic_roughness_texture": {
+                  "namespace": 5282233395077009985,
+                  "local": 16886351379099574227
+                },
+                "normal_texture": {
+                  "namespace": 5282233395077009985,
+                  "local": 125649605887146288
+                },
+                "occlusion_texture": {
+                  "namespace": 5282233395077009985,
+                  "local": 10238308027974695205
+                },
+                "emissive_texture": null
+              },
+              "preview": null
+            }
+          }
+        }
+      }
+    }
+  },
+  "restart-binding": {
+    "agent_contract_revision": 4,
+    "operation": "material.inspect",
+    "terminal": true,
+    "next": [],
+    "response": {
+      "protocol_cohort": 3,
+      "request_id": 1788741272083461000,
+      "schema_id": {
+        "namespace": 1229145174,
+        "local": 6
+      },
+      "run_id": {
+        "started_wall_unix_ms": 1788741255097,
+        "nonce": 1788741255097526000
+      },
+      "outcome": {
+        "success": {
+          "material_inspection": {
+            "binding": {
+              "mesh": {
+                "namespace": 5282233395077009985,
+                "local": 15769378242947502020
+              },
+              "revision": 3,
+              "asset_revision": 3,
+              "committed": {
+                "namespace": 5282233395077009985,
+                "local": 11022299784409799198
+              },
+              "session": {
+                "namespace": 5282233395077009985,
+                "local": 11022299784409799198
+              },
+              "preview": null
+            }
+          }
+        }
+      }
+    }
+  },
+  "material_library_sha256": "ae75ab8b23d6b3bf7f2585b5aef76735cc3d239c44ccf38d10ab3343358f8573"
+}

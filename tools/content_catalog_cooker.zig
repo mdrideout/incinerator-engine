@@ -322,12 +322,12 @@ test "catalog cooker rejects complete logical navigation mismatch" {
         validateLogicalScene(view, &build),
     );
     edges[4].cost -= 1;
-    nodes[0].flags = 0;
+    nodes[0].flags ^= content.bundle.navigation_node_terminal;
     try std.testing.expectError(
         error.CookedDistrictLogicalShapeMismatch,
         validateLogicalScene(view, &build),
     );
-    nodes[0].flags = content.bundle.navigation_node_terminal;
+    nodes[0].flags = build.navigation_nodes[0].flags;
     view.navigation_edges = edges[0 .. build.navigation_edge_count - 1];
     try std.testing.expectError(
         error.CookedDistrictLogicalShapeMismatch,
@@ -349,12 +349,8 @@ test "catalog cooker rejects an incomplete or wrong installed route" {
         validateLogicalRoute(installed[0..3]),
     );
 
-    const uninstalled = sandbox_recipe.build(
-        .{ .x = 2, .z = 0 },
-        sandbox_recipe.current_recipe_version,
-    ).ready;
     var wrong = installed;
-    wrong[3] = uninstalled;
+    wrong[3].coord = .{ .x = 2, .z = 0 };
     try std.testing.expectError(
         error.CookedDistrictLogicalRouteMismatch,
         validateLogicalRoute(&wrong),

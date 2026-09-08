@@ -693,11 +693,11 @@ const Harness = struct {
                 try self.requireNpcId(value.id);
                 if (!npc_contract.DestinationId.eql(
                     value.destination,
-                    sandbox_contracts.player_plaza_destination,
+                    sandbox_contracts.garage_forecourt_destination,
                 ) and
                     !npc_contract.DestinationId.eql(
                         value.destination,
-                        sandbox_contracts.market_terminal_destination,
+                        sandbox_contracts.freight_dispatch_destination,
                     ))
                 {
                     return error.InvalidNpcGoalEvent;
@@ -983,8 +983,8 @@ fn spawnPopulation(harness: *Harness) !void {
         .anchor = west_node,
         .hostile_to_players = true,
         .goal = .{ .patrol_between = .{
-            .first = sandbox_contracts.player_plaza_destination,
-            .second = sandbox_contracts.market_terminal_destination,
+            .first = sandbox_contracts.garage_forecourt_destination,
+            .second = sandbox_contracts.freight_dispatch_destination,
         } },
     });
     for (batch.slice()) |command| try harness.world.submitNpc(command);
@@ -1023,8 +1023,8 @@ fn spawnPopulation(harness: *Harness) !void {
         .anchor = west_node,
         .hostile_to_players = true,
         .goal = .{ .patrol_between = .{
-            .first = sandbox_contracts.player_plaza_destination,
-            .second = sandbox_contracts.market_terminal_destination,
+            .first = sandbox_contracts.garage_forecourt_destination,
+            .second = sandbox_contracts.freight_dispatch_destination,
         } },
     } });
     try harness.metrics.observe(harness.world);
@@ -1208,11 +1208,11 @@ fn requireActiveScaleState(
             .patrol_between => |goal| {
                 if (!npc_contract.DestinationId.eql(
                     goal.first,
-                    sandbox_contracts.player_plaza_destination,
+                    sandbox_contracts.garage_forecourt_destination,
                 ) or
                     !npc_contract.DestinationId.eql(
                         goal.second,
-                        sandbox_contracts.market_terminal_destination,
+                        sandbox_contracts.freight_dispatch_destination,
                     ))
                 {
                     return error.S8NpcGoalMismatch;

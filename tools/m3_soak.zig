@@ -807,6 +807,7 @@ fn setupIntegratedSlices(
         .pose = .{ .position = .{ 6, 0.75, 3 } },
     } });
     try authority.world.submitVehicle(.{ .spawn = .{
+        .definition = sandbox_contracts.validationVehicleDefinition(),
         .request_id = 202,
         .chassis = .{ .pose = .{ .position = .{ 20, 2, -5 } } },
     } });
@@ -930,8 +931,8 @@ fn setupIntegratedSlices(
             .anchor = anchor,
             .hostile_to_players = true,
             .goal = if (index == 0) .{ .patrol_between = .{
-                .first = sandbox_contracts.player_plaza_destination,
-                .second = sandbox_contracts.market_terminal_destination,
+                .first = sandbox_contracts.garage_forecourt_destination,
+                .second = sandbox_contracts.freight_dispatch_destination,
             } } else .hold,
         } });
     }

@@ -184,6 +184,7 @@ const Marker = struct {
 };
 
 const Job = union(enum) {
+    vehicle_change: struct { transaction_id: u64, bytes: []u8 },
     line: Line,
     handoff: HandoffJob,
     image: Image,
@@ -359,6 +360,10 @@ const Writer = struct {
                     defer std.heap.page_allocator.free(replay.bytes);
                     self.writeReplay(replay.bytes) catch self.fail();
                 },
+                .vehicle_change => |change| {
+                    defer std.heap.page_allocator.free(change.bytes);
+                    self.writeVehicleChange(change.transaction_id, change.bytes) catch self.fail();
+                },
                 .marker => |marker| self.writeMarkerAndWindows(marker) catch self.fail(),
                 .checkpoint => {
                     self.flushAll() catch self.fail();
@@ -488,6 +493,21 @@ const Writer = struct {
         self.queue.lock();
         self.queue.replay_attached = true;
         self.queue.unlock();
+    }
+
+    fn writeVehicleChange(self: *Writer, transaction_id: u64, bytes: []const u8) !void {
+        try self.ensureBudget(bytes.len);
+        const directory = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/vehicle-authoring", .{self.run_path});
+        defer std.heap.page_allocator.free(directory);
+        try std.Io.Dir.cwd().createDirPath(self.io, directory);
+        const path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/transaction-{d}.json", .{ directory, transaction_id });
+        defer std.heap.page_allocator.free(path);
+        var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, path, .{ .replace = true, .permissions = std.Io.File.Permissions.fromMode(0o600) });
+        defer atomic.deinit(self.io);
+        try atomic.file.writeStreamingAll(self.io, bytes);
+        try atomic.file.sync(self.io);
+        try atomic.replace(self.io);
+        self.noteBytes(.metadata, bytes.len);
     }
 
     fn writeMarkerAndWindows(self: *Writer, marker: Marker) !void {
@@ -795,7 +815,7 @@ const Writer = struct {
         self.queue.unlock();
         var manifest_writer = std.Io.Writer.fixed(&manifest_buffer);
         try manifest_writer.print(
-            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.14\",\"jolt\":\"5.5.0\",\"protocol\":{d},\"replay\":{d},\"snapshot\":{d}}},\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"atomic_note_handoff\":true,\"navigation_lineage\":true,\"population_activity\":true,\"deterministic_render_state\":true,\"ranged_combat\":true,\"authored_changes\":true,\"developer_endpoint_discovery\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
+            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.14\",\"jolt\":\"5.5.0\",\"protocol\":{d},\"replay\":{d},\"snapshot\":{d}}},\"input_mapping_version\":2,\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"vehicle_frame_motion\":true,\"atomic_note_handoff\":true,\"navigation_lineage\":true,\"population_activity\":true,\"deterministic_render_state\":true,\"ranged_combat\":true,\"authored_changes\":true,\"developer_endpoint_discovery\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
             .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), manifest_protocol_cohort, sandbox_replay.schema_cohort, manifest_snapshot_cohort, @tagName(self.hardening_profile), self.write_failure_after_bytes, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, configured_visual_budget, self.budget_bytes - configured_visual_budget, visual_reserved, visual_exhausted, visual_rejections },
         );
         try manifest_writer.print(
@@ -1035,6 +1055,7 @@ pub const Capture = struct {
         }
         // Jobs with owned payloads can remain only if thread creation failed.
         while (self.queue.pop()) |job| switch (job) {
+            .vehicle_change => |change| std.heap.page_allocator.free(change.bytes),
             .image => |image| if (image.pixels) |pixels| std.heap.page_allocator.free(pixels),
             .replay => |replay| std.heap.page_allocator.free(replay.bytes),
             else => {},
@@ -1119,6 +1140,72 @@ pub const Capture = struct {
         evidence: sandbox_authoring.ChangeEvidence,
     ) void {
         self.recordAuthoredChange(evidence, monotonicNowNs(self.io));
+    }
+
+    pub fn observeVehicleChange(self: *Capture, evidence: @import("vehicle_authoring_contract").Evidence, tick: u64, frame: u64) void {
+        const allocator = std.heap.page_allocator;
+        const sequence = self.takeSequence();
+        const now = monotonicNowNs(self.io);
+        const full = std.json.Stringify.valueAlloc(allocator, .{ .schema = 1, .monotonic_ns = now, .authority_tick = tick, .presentation_frame = frame, .evidence = evidence }, .{}) catch {
+            self.noteDropped();
+            return;
+        };
+        var artifact_digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(full, &artifact_digest, .{});
+        if (!self.queue.push(.{ .vehicle_change = .{ .transaction_id = evidence.result.transaction_id, .bytes = full } })) {
+            allocator.free(full);
+            self.noteDropped();
+            return;
+        }
+        const path = std.fmt.allocPrint(allocator, "vehicle-authoring/transaction-{d}.json", .{evidence.result.transaction_id}) catch {
+            self.noteDropped();
+            return;
+        };
+        defer allocator.free(path);
+        const line = std.json.Stringify.valueAlloc(allocator, .{ .schema = incident.schema_version, .kind = "vehicle_change", .recorder_sequence = sequence, .monotonic_ns = now, .authority_tick = tick, .presentation_frame = frame, .run_id = evidence.run_id, .result = evidence.result, .archetype = evidence.before.id, .artifact = path, .artifact_sha256 = artifact_digest }, .{}) catch {
+            self.noteDropped();
+            return;
+        };
+        defer allocator.free(line);
+        _ = self.enqueueLine(.timeline, sequence, line);
+    }
+
+    fn materialEvidenceState(inspection: ?@import("material_authoring_contract").Inspection) ?union(enum) {
+        material: struct { revision: u64, asset_revision: u64, session: engine.assets.MaterialMetadata, presented_digest: [32]u8, committed_digest: [32]u8 },
+        binding: @import("material_authoring_contract").BindingRecord,
+    } {
+        const value = inspection orelse return null;
+        return switch (value) {
+            .material => |record| .{ .material = .{ .revision = record.revision, .asset_revision = record.asset_revision, .session = record.session, .presented_digest = record.presented().digest(), .committed_digest = record.committed.digest() } },
+            .binding => |binding| .{ .binding = binding },
+        };
+    }
+
+    pub fn observeMaterialChange(self: *Capture, evidence: @import("material_authoring_contract").Evidence, tick: u64, frame: u64) void {
+        // The event carries values and stable IDs, including both producers'
+        // independent terminal results. Material labels are JSON escaped.
+        const sequence = self.takeSequence();
+        const bytes = std.json.Stringify.valueAlloc(std.heap.page_allocator, .{
+            .schema = incident.schema_version,
+            .kind = "material_change",
+            .recorder_sequence = sequence,
+            .monotonic_ns = monotonicNowNs(self.io),
+            .authority_tick = tick,
+            .presentation_frame = frame,
+            .request = evidence.request,
+            .outcome = evidence.outcome,
+            .before = materialEvidenceState(evidence.before),
+            .after = materialEvidenceState(evidence.after),
+        }, .{}) catch {
+            self.noteDropped();
+            return;
+        };
+        defer std.heap.page_allocator.free(bytes);
+        if (bytes.len > max_line_bytes) {
+            self.noteDropped();
+            return;
+        }
+        _ = self.enqueueLine(.timeline, sequence, bytes);
     }
 
     fn recordAuthoredChange(
@@ -1480,6 +1567,72 @@ pub const Capture = struct {
         self.recordFormatted(.input, "{{\"schema\":{d},\"kind\":\"developer_shortcut\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"sdl_timestamp_ns\":{d},\"stage\":\"{s}\",\"window_id\":{d},\"event_type\":{d},\"scancode\":{d},\"keycode\":{d},\"raw\":{d},\"modifiers\":{d},\"repeat\":{},\"focused\":{},\"matched\":{},\"anomaly_id\":{?d}}}", .{ incident.schema_version, self.takeSequence(), monotonicNowNs(self.io), candidate.event_monotonic_ns, @tagName(stage), candidate.window_id, candidate.event_type, candidate.scancode, candidate.keycode, candidate.raw, candidate.modifiers, candidate.repeat, candidate.focused, candidate.matched, anomaly_id });
     }
 
+    /// Every submitted controlled-car frame, independent of the 250 ms state
+    /// sampler. Wheel records keep each atomic writer line within its existing
+    /// size contract and correlate by entity, tick, and presentation frame.
+    pub fn observeVehicleMotion(self: *Capture, frame: @import("vehicle_motion.zig").Frame) void {
+        const now = monotonicNowNs(self.io);
+        self.recordValue(.state, .{
+            .schema = incident.schema_version,
+            .kind = "vehicle_motion",
+            .recorder_sequence = self.takeSequence(),
+            .monotonic_ns = now,
+            .authority_tick = frame.authority_tick,
+            .presentation_frame = frame.presentation_frame,
+            .entity = frame.semantic_entity,
+            .persistent_id = frame.persistent_id,
+            .definition_revision = frame.entity.definition_revision,
+            .frame_time_ms = frame.frame_time_ms,
+            .fixed_alpha = frame.fixed_alpha,
+            .snapshot_alpha = frame.snapshot_alpha,
+            .previous_snapshot_tick = frame.previous_snapshot_tick,
+            .snapshot_tick = frame.snapshot_tick,
+            .latest_snapshot_tick = frame.latest_snapshot_tick,
+            .raw_input = frame.raw_input,
+            .applied_input = frame.applied_input,
+            .conditioned_steering = frame.conditioned_steering,
+            .authority = frame.authority.chassis,
+            .replicated_pose = engine.physics.Pose{ .position = frame.entity.position, .rotation = frame.entity.rotation },
+            .predicted_pose = frame.predicted_pose,
+            .presented_pose = frame.presented_pose,
+            .presentation_source = "replicated_interpolation",
+            .forward_mps = frame.forward_mps,
+            .lateral_mps = frame.lateral_mps,
+            .gear = frame.authority.current_gear,
+            .engine_rpm = frame.authority.engine_rpm,
+            .camera_position = frame.camera_position,
+            .camera_yaw = frame.camera_yaw,
+            .camera_pitch = frame.camera_pitch,
+            .camera_mode = frame.camera_mode,
+            .prediction_error_m = frame.prediction_error_m,
+            .prediction_soft_corrections = frame.prediction_soft_corrections,
+            .prediction_hard_corrections = frame.prediction_hard_corrections,
+        });
+        for (frame.authority.wheels, frame.entity.wheels, frame.presented_wheels, 0..) |authority, replicated, presented, index| self.recordValue(.state, .{
+            .schema = incident.schema_version,
+            .kind = "vehicle_wheel_motion",
+            .recorder_sequence = self.takeSequence(),
+            .monotonic_ns = now,
+            .authority_tick = frame.authority_tick,
+            .presentation_frame = frame.presentation_frame,
+            .entity = frame.semantic_entity,
+            .wheel_index = index,
+            .authority = authority,
+            .replicated = replicated,
+            .presented_pose = presented,
+        });
+    }
+
+    fn recordValue(self: *Capture, stream: Stream, value: anytype) void {
+        var buffer: [max_line_bytes]u8 = undefined;
+        var writer = std.Io.Writer.fixed(&buffer);
+        std.json.Stringify.value(value, .{}, &writer) catch {
+            self.noteDropped();
+            return;
+        };
+        _ = self.enqueueLine(stream, self.next_sequence -| 1, writer.buffered());
+    }
+
     pub fn recordNeuralRendering(
         self: *Capture,
         enabled: bool,
@@ -1530,7 +1683,7 @@ pub const Capture = struct {
             writer.writeAll("\n") catch return false;
         }
         writer.print(
-            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; eight human-visible anchors from -5 through +2 seconds when admitted; a product-only flag frame; a continuous product trail over the same visual window; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times. Timeline windows include immutable runtime phase/system/error and authority-cycle fault ownership when the engine retains a fault.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheels under one stable identity. NPC state and navigation transition records include semantic destination, status/reason, exact route lineage, topology revision, physical exclusions, and retry timing. Authored NPC records also include stable population member, role, combat disposition, and activity across actor generations. Firearm records use kind=firearm and correlate action sequence, shooter/target identity and incarnation, disposition, weapon mode, ammunition, deadlines, ray origin, impact position, damage, death, and draw submission. kind=render_state records identify the conventional renderer, visual schema, scene light, product/debug and normal/color draw paths, plus the last stable semantic part/material identity. kind=authored_change records source, scope, stable target, optimistic revisions, typed crate values, outcome/rejection, time correlation, and SHA-256 value digests.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"action\":\"navigation\"|\"navigation_status\":\"(blocked|waiting_for_content|structurally_unreachable)\"|\"navigation_reason\":\"physical_obstruction\"' '{s}/streams'\nrg '\"action\":\"population\"|\"population_member\"|\"population_activity_state\"' '{s}/streams'\nrg '\"kind\":\"firearm\"|\"weapon\":|\"fire_pressed\":true|\"weapon_toggle_pressed\":true|\"reload_pressed\":true' '{s}/streams'\nrg '\"kind\":\"render_state\"|\"render_mode\"|\"last_visual\"' '{s}/streams'\nrg '\"kind\":\"authored_change\"|\"transaction_id\"|\"expected_revision\"' '{s}/streams'\nrg '\"kind\":\"(runtime_fault|authority_cycle_fault)\"' '{s}/streams'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
+            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; eight human-visible anchors from -5 through +2 seconds when admitted; a product-only flag frame; a continuous product trail over the same visual window; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times. Timeline windows include immutable runtime phase/system/error and authority-cycle fault ownership when the engine retains a fault.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheels under one stable identity. NPC state and navigation transition records include semantic destination, status/reason, exact route lineage, topology revision, physical exclusions, and retry timing. Authored NPC records also include stable population member, role, combat disposition, and activity across actor generations. Firearm records use kind=firearm and correlate action sequence, shooter/target identity and incarnation, disposition, weapon mode, ammunition, deadlines, ray origin, impact position, damage, death, and draw submission. kind=render_state records identify the conventional renderer, visual schema, scene light, product/debug and normal/color draw paths, plus the last stable semantic part/material identity. kind=authored_change records source, scope, stable target, optimistic revisions, typed crate values, outcome/rejection, time correlation, and SHA-256 value digests. kind=vehicle_change correlates producer, target, transaction, definition and asset revisions with a complete vehicle-authoring/transaction-N.json artifact and its SHA-256. The artifact owns the exact before and candidate definitions, including all curve and gear values.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"action\":\"navigation\"|\"navigation_status\":\"(blocked|waiting_for_content|structurally_unreachable)\"|\"navigation_reason\":\"physical_obstruction\"' '{s}/streams'\nrg '\"action\":\"population\"|\"population_member\"|\"population_activity_state\"' '{s}/streams'\nrg '\"kind\":\"firearm\"|\"weapon\":|\"fire_pressed\":true|\"weapon_toggle_pressed\":true|\"reload_pressed\":true' '{s}/streams'\nrg '\"kind\":\"render_state\"|\"render_mode\"|\"last_visual\"' '{s}/streams'\nrg '\"kind\":\"authored_change\"|\"transaction_id\"|\"expected_revision\"' '{s}/streams'\nrg '\"kind\":\"(runtime_fault|authority_cycle_fault)\"' '{s}/streams'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
             .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
         ) catch return false;
         const handoff_bytes = buffer[0..writer.end];
@@ -1827,7 +1980,7 @@ pub const Capture = struct {
     ) void {
         self.recordFormatted(
             .state,
-            "{{\"schema\":{d},\"kind\":\"render_state\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"render_mode\":\"{s}\",\"visual_schema\":{d},\"scene_light\":{{\"sun_direction\":[{d},{d},{d}],\"sun_color\":[{d},{d},{d}],\"sun_intensity\":{d},\"ambient_color\":[{d},{d},{d}]}},\"draw_paths\":{{\"lit_product\":{d},\"unlit_product\":{d},\"debug\":{d},\"normal_geometry\":{d},\"color_geometry\":{d}}},\"last_visual\":{{\"semantic\":\"{s}\",\"part\":\"{s}\",\"ordinal\":{d},\"surface\":\"{s}\"}},\"selection\":{{\"object_kind\":\"{s}\",\"identity_kind\":\"{s}\",\"namespace\":{d},\"local\":{d},\"incarnation\":{d}}}}}",
+            "{{\"schema\":{d},\"kind\":\"render_state\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"render_mode\":\"{s}\",\"visual_schema\":{d},\"material_state_sha256\":\"{s}\",\"scene_light\":{{\"sun_direction\":[{d},{d},{d}],\"sun_color\":[{d},{d},{d}],\"sun_intensity\":{d},\"ambient_color\":[{d},{d},{d}]}},\"draw_paths\":{{\"lit_product\":{d},\"unlit_product\":{d},\"debug\":{d},\"normal_geometry\":{d},\"color_geometry\":{d}}},\"last_visual\":{{\"semantic\":\"{s}\",\"part\":\"{s}\",\"ordinal\":{d},\"surface\":\"{s}\"}},\"selection\":{{\"object_kind\":\"{s}\",\"identity_kind\":\"{s}\",\"namespace\":{d},\"local\":{d},\"incarnation\":{d}}}}}",
             .{
                 incident.schema_version,
                 self.takeSequence(),
@@ -1836,6 +1989,7 @@ pub const Capture = struct {
                 gameplay.presentation_frame,
                 view.mode,
                 view.visual_schema,
+                std.fmt.bytesToHex(&view.material_state_digest, .lower),
                 view.scene_light.sun_direction[0],
                 view.scene_light.sun_direction[1],
                 view.scene_light.sun_direction[2],
@@ -1953,7 +2107,7 @@ pub const Capture = struct {
     }
 
     fn recordInput(self: *Capture, view: *const editor_contract.GameplayView, value: incident.InputSample, now: u64) void {
-        self.recordFormatted(.input, "{{\"schema\":{d},\"kind\":\"semantic_input\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"forward\":{},\"backward\":{},\"left\":{},\"right\":{},\"interact\":{},\"carry\":{},\"attack\":{},\"respawn\":{},\"jump_or_brake\":{},\"interact_pressed\":{},\"carry_pressed\":{},\"attack_pressed\":{},\"weapon_toggle_pressed\":{},\"fire_pressed\":{},\"reload_pressed\":{},\"respawn_pressed\":{},\"jump_pressed\":{},\"hand_brake\":{},\"right_mouse\":{},\"mouse_delta\":[{d},{d}],\"keyboard_captured\":{},\"mouse_captured\":{},\"window_minimized\":{}}}", .{ incident.schema_version, self.takeSequence(), now, view.authority_tick, view.presentation_frame, value.move_forward, value.move_backward, value.move_left, value.move_right, value.interact, value.carry, value.attack, value.respawn, value.jump_or_brake, value.interact_pressed, value.carry_pressed, value.attack_pressed, value.weapon_toggle_pressed, value.fire_pressed, value.reload_pressed, value.respawn_pressed, value.jump_pressed, value.hand_brake, value.right_mouse, value.mouse_delta_x, value.mouse_delta_y, value.keyboard_captured, value.mouse_captured, value.window_minimized });
+        self.recordFormatted(.input, "{{\"schema\":{d},\"kind\":\"semantic_input\",\"recorder_sequence\":{d},\"monotonic_ns\":{d},\"authority_tick\":{d},\"presentation_frame\":{d},\"forward\":{},\"backward\":{},\"left\":{},\"right\":{},\"interact\":{},\"carry\":{},\"attack\":{},\"respawn\":{},\"space_down\":{},\"driving\":{},\"input_mapping_version\":2,\"interact_pressed\":{},\"carry_pressed\":{},\"attack_pressed\":{},\"weapon_toggle_pressed\":{},\"fire_pressed\":{},\"reload_pressed\":{},\"respawn_pressed\":{},\"jump_pressed\":{},\"hand_brake\":{},\"service_brake\":{},\"right_mouse\":{},\"mouse_delta\":[{d},{d}],\"keyboard_captured\":{},\"mouse_captured\":{},\"window_minimized\":{}}}", .{ incident.schema_version, self.takeSequence(), now, view.authority_tick, view.presentation_frame, value.move_forward, value.move_backward, value.move_left, value.move_right, value.interact, value.carry, value.attack, value.respawn, value.space_down, value.driving, value.interact_pressed, value.carry_pressed, value.attack_pressed, value.weapon_toggle_pressed, value.fire_pressed, value.reload_pressed, value.respawn_pressed, value.jump_pressed, value.hand_brake, value.service_brake, value.right_mouse, value.mouse_delta_x, value.mouse_delta_y, value.keyboard_captured, value.mouse_captured, value.window_minimized });
     }
 
     fn recordMetrics(self: *Capture, view: *const editor_contract.GameplayView, frame_time_ms: f32, now: u64) void {
@@ -2439,8 +2593,8 @@ test "incident manifest cohorts source the live protocol and snapshot owners" {
         sandbox_host_contracts.snapshot_schema,
         manifest_snapshot_cohort,
     );
-    try std.testing.expectEqual(@as(u16, 18), manifest_protocol_cohort);
-    try std.testing.expectEqual(@as(u16, 15), manifest_snapshot_cohort);
+    try std.testing.expectEqual(@as(u16, 21), manifest_protocol_cohort);
+    try std.testing.expectEqual(@as(u16, 17), manifest_snapshot_cohort);
 }
 
 test "incident manifest serializes validated developer endpoint discovery" {
@@ -2721,4 +2875,87 @@ test "capture creation rejects an unusable root without a compatibility fallback
         error.NotDir,
         Capture.create(std.testing.allocator, std.testing.io, invalid),
     );
+}
+
+test "EA2 vehicle evidence owns full variable definitions and correlates their digest" {
+    const contract = @import("vehicle_authoring_contract");
+    var capture = Capture{ .allocator = std.testing.allocator, .io = std.testing.io, .writer = undefined };
+    const before = contract.vehicle.asset.validationFixture();
+    var candidate = before;
+    var gears = [_]f32{ 4, 3, 2, 1.5, 1, 0.8, 0.6 };
+    candidate.tuning.powertrain.forward_gears = &gears;
+    const expected = try candidate.digest(std.testing.allocator);
+    capture.observeVehicleChange(.{
+        .run_id = .{ .started_wall_unix_ms = 1, .nonce = 2 },
+        .result = .{ .transaction_id = 51, .source = .local_developer_client, .target = .{ .namespace = 1, .local = 3 }, .action = .rebuild, .disposition = .accepted, .revision = 2, .asset_revision = 1, .definition_digest = expected, .authority_tick = 81 },
+        .before = before,
+        .candidate = candidate,
+    }, 81, 102);
+    gears[0] = 9;
+    const artifact = capture.queue.pop().?.vehicle_change;
+    defer std.heap.page_allocator.free(artifact.bytes);
+    const Payload = struct { evidence: contract.Evidence, authority_tick: u64, presentation_frame: u64 };
+    var parsed = try std.json.parseFromSlice(Payload, std.testing.allocator, artifact.bytes, .{ .ignore_unknown_fields = true });
+    defer parsed.deinit();
+    try std.testing.expectEqual(expected, try parsed.value.evidence.candidate.?.digest(std.testing.allocator));
+    try std.testing.expectEqual(@as(u64, 81), parsed.value.authority_tick);
+    try std.testing.expectEqual(@as(u64, 102), parsed.value.presentation_frame);
+    const line = capture.queue.pop().?.line;
+    const Correlation = struct { artifact: []const u8, artifact_sha256: [32]u8 };
+    var correlation = try std.json.parseFromSlice(Correlation, std.testing.allocator, line.slice(), .{ .ignore_unknown_fields = true });
+    defer correlation.deinit();
+    var digest: [32]u8 = undefined;
+    std.crypto.hash.sha2.Sha256.hash(artifact.bytes, &digest, .{});
+    try std.testing.expectEqual(digest, correlation.value.artifact_sha256);
+    try std.testing.expectEqualStrings("vehicle-authoring/transaction-51.json", correlation.value.artifact);
+    try std.testing.expect(capture.queue.pop() == null);
+}
+
+test "vehicle motion keeps chassis and four wheel frames complete and correlated" {
+    var capture = Capture{ .allocator = std.testing.allocator, .io = std.testing.io, .writer = undefined };
+    const wheel = engine.physics.WheelState{ .pose = .{}, .angular_velocity = -32.125, .rotation_angle = 5.12345, .steer_angle = 0.125, .suspension_length = 0.345, .has_contact = true };
+    const frame = @import("vehicle_motion.zig").Frame{
+        .semantic_entity = .{ .namespace = 2, .local = 4294967314, .incarnation = 1 },
+        .authority_tick = 4800,
+        .presentation_frame = 2196,
+        .frame_time_ms = 36.12345,
+        .fixed_alpha = 0.7654,
+        .snapshot_alpha = 0.2551,
+        .previous_snapshot_tick = 4797,
+        .snapshot_tick = 4800,
+        .latest_snapshot_tick = 4800,
+        .entity = .{ .definition = session_protocol.validationVehicleDefinition(), .entity = .{ .index = 18, .generation = 1 }, .position = .{ 53.12345, 0.792345, 1.23456 }, .rotation = .{ 0, 0, 0, 1 }, .linear_velocity = .{ 0, 0, 8 }, .angular_velocity = .{ 0, 0, 0 }, .driver = null },
+        .persistent_id = .{ .namespace = 1, .local = 4 },
+        .raw_input = .{ .throttle = 1 },
+        .applied_input = .{ .brake = 1 },
+        .conditioned_steering = 0.5,
+        .authority = .{ .chassis = .{}, .wheels = .{ wheel, wheel, wheel, wheel }, .engine_rpm = 1234.567, .current_gear = -1 },
+        .predicted_pose = .{},
+        .presented_pose = .{},
+        .presented_wheels = .{ .{}, .{}, .{}, .{} },
+        .camera_position = .{ 1.234567, 2.345678, 3.45678 },
+        .camera_yaw = 1.2345,
+        .camera_pitch = -0.3456,
+        .camera_mode = "character",
+        .forward_mps = -8.1234,
+        .lateral_mps = 0.125,
+        .prediction_error_m = 0.25,
+        .prediction_soft_corrections = 42,
+        .prediction_hard_corrections = 0,
+    };
+    capture.observeVehicleMotion(frame);
+    for (0..5) |index| {
+        const job = capture.queue.pop() orelse return error.MotionRecordMissing;
+        const line = switch (job) {
+            .line => |value| value,
+            else => return error.UnexpectedIncidentJob,
+        };
+        var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, line.slice(), .{});
+        defer parsed.deinit();
+        const object = parsed.value.object;
+        try std.testing.expectEqual(@as(i64, 2196), object.get("presentation_frame").?.integer);
+        try std.testing.expectEqual(@as(i64, 4800), object.get("authority_tick").?.integer);
+        if (index > 0) try std.testing.expectEqual(@as(i64, @intCast(index - 1)), object.get("wheel_index").?.integer);
+    }
+    try std.testing.expect(capture.queue.pop() == null);
 }

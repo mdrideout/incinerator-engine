@@ -1,0 +1,28 @@
+{
+  "captured_date": "2026-09-07",
+  "stage": "EA2 research baseline; before lateral tire curve unit correction",
+  "command": "zig build vehicle-dynamics-report -Deditor=false",
+  "exit_code": 0,
+  "platform": "Darwin arm64",
+  "zig_version": "0.16.0",
+  "git_head": "d75c8f1eff95ac0207de7e7c7f55a8c9d3a12b78",
+  "working_tree": "Includes completed, uncommitted EA1-B work; HEAD alone does not identify this build.",
+  "jolt_revision": "23dadd0e603f1b321142d4c74df07fce85064989",
+  "joltc_revision": "52d8c98df523f449eb3e01b1060a0fde052970d1",
+  "authority_tick_hz": 120,
+  "source_sha256": {
+    "src/features/vehicle/contract.zig": "75cfee7b9ff077a4b963e7d3f603a5b01bd764f61a08b5c23638096214d0b3d0",
+    "src/features/vehicle/root.zig": "b8d72625863a2d7cf014e6bdcb7bbcdde323875e6307edc387ae17af192e6016",
+    "src/engine/contracts/physics.zig": "cfc3b9e8c2c114a56074a94605cc0a1c30964f7104c288c115596c1e2068e9ed",
+    "src/physics.zig": "f95e626440ba46220803282191eb03c765e3bd1d95489ad527611e069af97dfd",
+    "tools/vehicle_dynamics.zig": "2dcbbb4caf7ed31d26e2b2ba42f76c4200adc4126a5aac9f3cbe4f21c9490341",
+    "src/session/vehicle_prediction.zig": "c4c3ae69bf4fdecd959fb5f2144aa05d3d4ee37065131675588d6d59a8cf7c40"
+  },
+  "report": "legacy stop_entry=15.003mps stop_distance=25.320m stop_time=3.258s turn_radius=5.729m turn_slip=23.806deg slalom_excursion=36.213m slalom_yaw_rate=57.718deg_s slalom_slip=15.048deg skid_peak=5.719deg skid_recovery=0.275s rollover_tilt=3.795deg rollover=false\ncurrent stop_entry=15.009mps stop_distance=23.164m stop_time=3.017s turn_radius=6.107m turn_slip=23.573deg slalom_excursion=40.145m slalom_yaw_rate=57.368deg_s slalom_slip=10.671deg skid_peak=5.600deg skid_recovery=0.250s rollover_tilt=2.187deg rollover=false\n",
+  "limitations": [
+    "The current adapter passes canonical radian lateral-curve coordinates to Jolt, whose curve coordinates are degrees.",
+    "The current 60-degree pitch/roll constraint is an active stabilization aid.",
+    "The flat scenarios report chassis sideslip, not individual tire slip angle.",
+    "The legacy/current profiles differ together in COM, suspension, steering, brakes, and tire coefficients. They are coupled profiles, not a causal experiment isolating one variable."
+  ]
+}

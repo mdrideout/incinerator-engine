@@ -9,7 +9,7 @@ const npc = @import("npc_contract");
 const population = @import("population_contract");
 const recipe = @import("sandbox_district_recipe");
 
-pub const catalog_version: u16 = 2;
+pub const catalog_version: u16 = 3;
 pub const ordinary_member_count: usize = 12;
 pub const physical_member_count: usize = 16;
 pub const spawn_separation: f32 = 0.9;
@@ -103,45 +103,45 @@ pub const programs = [_]population.ActivityProgramDefinition{
 };
 
 pub const sites = [_]population.ActivitySiteDefinition{
-    site(1, "Player Plaza", recipe.navigation_west_coord, .{ 1, 2, 0 }, 2),
-    site(2, "Depot Forecourt", recipe.navigation_west_coord, .{ 3, 4, 0 }, 2),
-    site(3, "South Gate Approach", recipe.navigation_west_coord, .{ 5, 6, 0 }, 2),
-    site(4, "North Walk", recipe.navigation_west_coord, .{ 7, 8, 0 }, 2),
-    site(5, "Market Terminal", recipe.navigation_east_coord, .{ 9, 10, 11 }, 3),
-    site(6, "Alley Junction", recipe.navigation_east_coord, .{ 12, 13, 0 }, 2),
-    site(7, "Transit Yard", recipe.navigation_east_coord, .{ 14, 15, 0 }, 2),
-    site(8, "East Court", recipe.navigation_east_coord, .{ 16, 0, 0 }, 1),
-    site(9, "North Plaza", recipe.navigation_northwest_coord, .{ 17, 18, 0 }, 2),
-    site(10, "Civic Court", recipe.navigation_northwest_coord, .{ 19, 20, 0 }, 2),
-    site(11, "Station Concourse", recipe.navigation_northeast_coord, .{ 21, 22, 0 }, 2),
-    site(12, "North Alley", recipe.navigation_northeast_coord, .{ 23, 24, 0 }, 2),
+    site(1, "Garage Forecourt", recipe.navigation_west_coord, .{ 1, 2, 0 }, 2),
+    site(2, "Foundry Office", recipe.navigation_west_coord, .{ 3, 4, 0 }, 2),
+    site(3, "Foundry South Walk", recipe.navigation_west_coord, .{ 5, 6, 0 }, 2),
+    site(4, "Foundry West Walk", recipe.navigation_west_coord, .{ 7, 8, 0 }, 2),
+    site(5, "Freight Dispatch", recipe.navigation_east_coord, .{ 9, 10, 11 }, 3),
+    site(6, "Freight Alley", recipe.navigation_east_coord, .{ 12, 13, 0 }, 2),
+    site(7, "Freight Yard", recipe.navigation_east_coord, .{ 14, 15, 0 }, 2),
+    site(8, "Freight Court", recipe.navigation_east_coord, .{ 16, 0, 0 }, 1),
+    site(9, "Motor Works Entry", recipe.navigation_northwest_coord, .{ 17, 18, 0 }, 2),
+    site(10, "Motor Works Yard", recipe.navigation_northwest_coord, .{ 19, 20, 0 }, 2),
+    site(11, "Warehouse Dispatch", recipe.navigation_northeast_coord, .{ 21, 22, 0 }, 2),
+    site(12, "Warehouse Service Alley", recipe.navigation_northeast_coord, .{ 23, 24, 0 }, 2),
 };
 
 pub const activity_slots = [_]population.ActivitySlotDefinition{
-    activitySlot(1, "plaza-a", 1, 1, .{ -6.5, 0, 6.2 }, 0, .{ .visit = true, .idle = true }),
-    activitySlot(2, "plaza-b", 1, 7, .{ -3.5, 0, 6.2 }, backward_yaw, .{ .visit = true, .idle = true }),
-    activitySlot(3, "depot-a", 2, 2, .{ 4.0, 0, 6.3 }, -half_pi, .{ .commute = true, .visit = true }),
-    activitySlot(4, "depot-b", 2, 8, .{ 5.8, 0, 5.2 }, backward_yaw, .{ .commute = true, .visit = true }),
-    activitySlot(5, "south-a", 3, 3, .{ 3.0, 0, -5.8 }, 0, .{ .visit = true }),
-    activitySlot(6, "south-b", 3, 9, .{ 5.3, 0, -4.8 }, half_pi, .{ .visit = true }),
-    activitySlot(7, "north-a", 4, 10, .{ 2.0, 0, 1.5 }, 0, .{ .commute = true, .idle = true }),
-    activitySlot(8, "north-b", 4, 11, .{ 4.5, 0, 2.5 }, backward_yaw, .{ .commute = true, .idle = true }),
-    activitySlot(9, "market-a", 5, 4, .{ 18.5, 0, 6.3 }, 0, .{ .shop = true, .visit = true }),
-    activitySlot(10, "market-b", 5, 12, .{ 20.5, 0, 6.3 }, backward_yaw, .{ .shop = true, .visit = true }),
-    activitySlot(11, "market-c", 5, 13, .{ 22.5, 0, 5.3 }, backward_yaw, .{ .shop = true, .visit = true }),
-    activitySlot(12, "alley-a", 6, 5, .{ 13.0, 0, -0.8 }, 0, .{ .visit = true, .idle = true }),
-    activitySlot(13, "alley-b", 6, 14, .{ 14.5, 0, 0.6 }, backward_yaw, .{ .visit = true, .idle = true }),
-    activitySlot(14, "transit-a", 7, 6, .{ 19.0, 0, -5.7 }, 0, .{ .commute = true, .visit = true }),
-    activitySlot(15, "transit-b", 7, 15, .{ 21.5, 0, -5.5 }, backward_yaw, .{ .commute = true, .visit = true }),
-    activitySlot(16, "court-a", 8, 16, .{ 12.5, 0, 5.8 }, 0, .{ .idle = true, .visit = true }),
-    activitySlot(17, "north-plaza-a", 9, 17, .{ -6.5, 0, 17.5 }, 0, .{ .visit = true, .idle = true }),
-    activitySlot(18, "north-plaza-b", 9, 18, .{ -4.0, 0, 19.5 }, backward_yaw, .{ .visit = true, .idle = true }),
-    activitySlot(19, "civic-a", 10, 19, .{ 3.5, 0, 20.5 }, 0, .{ .visit = true, .idle = true }),
-    activitySlot(20, "civic-b", 10, 20, .{ 5.8, 0, 19.2 }, backward_yaw, .{ .visit = true, .idle = true }),
-    activitySlot(21, "station-a", 11, 21, .{ 19.5, 0, 17.0 }, 0, .{ .commute = true, .visit = true }),
-    activitySlot(22, "station-b", 11, 22, .{ 21.0, 0, 19.0 }, backward_yaw, .{ .commute = true, .visit = true }),
-    activitySlot(23, "north-alley-a", 12, 23, .{ 13.0, 0, 14.8 }, 0, .{ .shop = true, .visit = true, .idle = true }),
-    activitySlot(24, "north-alley-b", 12, 24, .{ 14.8, 0, 16.5 }, backward_yaw, .{ .shop = true, .visit = true, .idle = true }),
+    activitySlot(1, "plaza-a", 1, 1, recipe.resolveDestination(.{ .value = 1 }).?.position, 0, .{ .visit = true, .idle = true }),
+    activitySlot(2, "plaza-b", 1, 7, recipe.resolveDestination(.{ .value = 7 }).?.position, backward_yaw, .{ .visit = true, .idle = true }),
+    activitySlot(3, "depot-a", 2, 2, recipe.resolveDestination(.{ .value = 2 }).?.position, -half_pi, .{ .commute = true, .visit = true }),
+    activitySlot(4, "depot-b", 2, 8, recipe.resolveDestination(.{ .value = 8 }).?.position, backward_yaw, .{ .commute = true, .visit = true }),
+    activitySlot(5, "south-a", 3, 3, recipe.resolveDestination(.{ .value = 3 }).?.position, 0, .{ .visit = true }),
+    activitySlot(6, "south-b", 3, 9, recipe.resolveDestination(.{ .value = 9 }).?.position, half_pi, .{ .visit = true }),
+    activitySlot(7, "north-a", 4, 10, recipe.resolveDestination(.{ .value = 10 }).?.position, 0, .{ .commute = true, .idle = true }),
+    activitySlot(8, "north-b", 4, 11, recipe.resolveDestination(.{ .value = 11 }).?.position, backward_yaw, .{ .commute = true, .idle = true }),
+    activitySlot(9, "market-a", 5, 4, recipe.resolveDestination(.{ .value = 4 }).?.position, 0, .{ .shop = true, .visit = true }),
+    activitySlot(10, "market-b", 5, 12, recipe.resolveDestination(.{ .value = 12 }).?.position, backward_yaw, .{ .shop = true, .visit = true }),
+    activitySlot(11, "market-c", 5, 13, recipe.resolveDestination(.{ .value = 13 }).?.position, backward_yaw, .{ .shop = true, .visit = true }),
+    activitySlot(12, "alley-a", 6, 5, recipe.resolveDestination(.{ .value = 5 }).?.position, 0, .{ .visit = true, .idle = true }),
+    activitySlot(13, "alley-b", 6, 14, recipe.resolveDestination(.{ .value = 14 }).?.position, backward_yaw, .{ .visit = true, .idle = true }),
+    activitySlot(14, "transit-a", 7, 6, recipe.resolveDestination(.{ .value = 6 }).?.position, 0, .{ .commute = true, .visit = true }),
+    activitySlot(15, "transit-b", 7, 15, recipe.resolveDestination(.{ .value = 15 }).?.position, backward_yaw, .{ .commute = true, .visit = true }),
+    activitySlot(16, "court-a", 8, 16, recipe.resolveDestination(.{ .value = 16 }).?.position, 0, .{ .idle = true, .visit = true }),
+    activitySlot(17, "north-plaza-a", 9, 17, recipe.resolveDestination(.{ .value = 17 }).?.position, 0, .{ .visit = true, .idle = true }),
+    activitySlot(18, "north-plaza-b", 9, 18, recipe.resolveDestination(.{ .value = 18 }).?.position, backward_yaw, .{ .visit = true, .idle = true }),
+    activitySlot(19, "civic-a", 10, 19, recipe.resolveDestination(.{ .value = 19 }).?.position, 0, .{ .visit = true, .idle = true }),
+    activitySlot(20, "civic-b", 10, 20, recipe.resolveDestination(.{ .value = 20 }).?.position, backward_yaw, .{ .visit = true, .idle = true }),
+    activitySlot(21, "station-a", 11, 21, recipe.resolveDestination(.{ .value = 21 }).?.position, 0, .{ .commute = true, .visit = true }),
+    activitySlot(22, "station-b", 11, 22, recipe.resolveDestination(.{ .value = 22 }).?.position, backward_yaw, .{ .commute = true, .visit = true }),
+    activitySlot(23, "north-alley-a", 12, 23, recipe.resolveDestination(.{ .value = 23 }).?.position, 0, .{ .shop = true, .visit = true, .idle = true }),
+    activitySlot(24, "north-alley-b", 12, 24, recipe.resolveDestination(.{ .value = 24 }).?.position, backward_yaw, .{ .shop = true, .visit = true, .idle = true }),
 };
 
 const every_role = population.RoleMask{
@@ -151,42 +151,42 @@ const every_role = population.RoleMask{
 };
 
 pub const spawn_slots = [_]population.SpawnSlotDefinition{
-    spawnSlot(1, "west-01", .{ -6.5, 0, -6.5 }, 0, recipe.navigation_west_coord, 2),
-    spawnSlot(2, "west-02", .{ -4.5, 0, -6.5 }, 0, recipe.navigation_west_coord, 2),
-    spawnSlot(3, "west-03", .{ -2.5, 0, -6.5 }, 0, recipe.navigation_west_coord, 2),
-    spawnSlot(4, "west-04", .{ 2.0, 0, -7.0 }, 0, recipe.navigation_west_coord, 3),
-    spawnSlot(5, "west-05", .{ 4.5, 0, -6.5 }, 0, recipe.navigation_west_coord, 3),
-    spawnSlot(6, "west-06", .{ 6.5, 0, -6.5 }, 0, recipe.navigation_west_coord, 7),
-    spawnSlot(7, "west-07", .{ -6.5, 0, 0.0 }, half_pi, recipe.navigation_west_coord, 1),
-    spawnSlot(8, "west-08", .{ -3.5, 0, 0.0 }, half_pi, recipe.navigation_west_coord, 1),
-    spawnSlot(9, "west-09", .{ 2.5, 0, 0.0 }, -half_pi, recipe.navigation_west_coord, 4),
-    spawnSlot(10, "west-10", .{ 5.5, 0, 0.0 }, -half_pi, recipe.navigation_west_coord, 4),
-    spawnSlot(11, "west-11", .{ -6.5, 0, 2.0 }, half_pi, recipe.navigation_west_coord, 1),
-    spawnSlot(12, "west-12", .{ -3.5, 0, 2.0 }, half_pi, recipe.navigation_west_coord, 1),
-    spawnSlot(13, "east-01", .{ 9.5, 0, 6.5 }, backward_yaw, recipe.navigation_east_coord, 0),
-    spawnSlot(14, "east-02", .{ 11.5, 0, 3.5 }, backward_yaw, recipe.navigation_east_coord, 1),
-    spawnSlot(15, "east-03", .{ 15.0, 0, 6.5 }, backward_yaw, recipe.navigation_east_coord, 1),
-    spawnSlot(16, "east-04", .{ 17.5, 0, 4.5 }, backward_yaw, recipe.navigation_east_coord, 2),
-    spawnSlot(17, "east-05", .{ 21.0, 0, 3.5 }, backward_yaw, recipe.navigation_east_coord, 2),
-    spawnSlot(18, "east-06", .{ 23.0, 0, 6.5 }, backward_yaw, recipe.navigation_east_coord, 2),
-    spawnSlot(19, "east-07", .{ 9.5, 0, 0.0 }, -half_pi, recipe.navigation_east_coord, 0),
-    spawnSlot(20, "east-08", .{ 12.0, 0, 0.0 }, -half_pi, recipe.navigation_east_coord, 7),
-    spawnSlot(21, "east-09", .{ 20.0, 0, 1.5 }, half_pi, recipe.navigation_east_coord, 3),
-    spawnSlot(22, "east-10", .{ 22.5, 0, 1.5 }, half_pi, recipe.navigation_east_coord, 3),
-    spawnSlot(23, "east-11", .{ 10.0, 0, -6.5 }, 0, recipe.navigation_east_coord, 6),
-    spawnSlot(24, "east-12", .{ 13.0, 0, -6.5 }, 0, recipe.navigation_east_coord, 5),
-    spawnSlot(25, "northwest-01", .{ -6.5, 0, 10.0 }, 0, recipe.navigation_northwest_coord, 0),
-    spawnSlot(26, "northwest-02", .{ -3.5, 0, 10.5 }, 0, recipe.navigation_northwest_coord, 0),
-    spawnSlot(27, "northwest-03", .{ 2.0, 0, 22.5 }, backward_yaw, recipe.navigation_northwest_coord, 3),
-    spawnSlot(28, "northwest-04", .{ 6.5, 0, 22.5 }, backward_yaw, recipe.navigation_northwest_coord, 7),
-    spawnSlot(29, "northeast-01", .{ 9.5, 0, 10.0 }, 0, recipe.navigation_northeast_coord, 0),
-    spawnSlot(30, "northeast-02", .{ 12.5, 0, 10.0 }, 0, recipe.navigation_northeast_coord, 1),
-    spawnSlot(31, "northeast-03", .{ 20.0, 0, 23.0 }, backward_yaw, recipe.navigation_northeast_coord, 4),
-    spawnSlot(32, "northeast-04", .{ 22.5, 0, 22.5 }, backward_yaw, recipe.navigation_northeast_coord, 4),
+    spawnSlot(1, "west-01", .{ -26, 0, -7 }, 0, recipe.navigation_west_coord, 0),
+    spawnSlot(2, "west-02", .{ -23, 0, -7 }, 0, recipe.navigation_west_coord, 0),
+    spawnSlot(3, "west-03", .{ -20, 0, -7 }, 0, recipe.navigation_west_coord, 0),
+    spawnSlot(4, "west-04", .{ -17, 0, -7 }, 0, recipe.navigation_west_coord, 0),
+    spawnSlot(5, "west-05", .{ -14, 0, -7 }, 0, recipe.navigation_west_coord, 0),
+    spawnSlot(6, "west-06", .{ -11, 0, -7 }, 0, recipe.navigation_west_coord, 0),
+    spawnSlot(7, "west-07", .{ -8, 0, -7 }, half_pi, recipe.navigation_west_coord, 0),
+    spawnSlot(8, "west-08", .{ -5, 0, -7 }, half_pi, recipe.navigation_west_coord, 0),
+    spawnSlot(9, "west-09", .{ -2, 0, -7 }, -half_pi, recipe.navigation_west_coord, 0),
+    spawnSlot(10, "west-10", .{ 1, 0, -7 }, -half_pi, recipe.navigation_west_coord, 2),
+    spawnSlot(11, "west-11", .{ 4, 0, -7 }, half_pi, recipe.navigation_west_coord, 2),
+    spawnSlot(12, "west-12", .{ 7, 0, -7 }, half_pi, recipe.navigation_west_coord, 2),
+    spawnSlot(13, "east-01", .{ 38, 0, -7 }, backward_yaw, recipe.navigation_east_coord, 0),
+    spawnSlot(14, "east-02", .{ 41, 0, -7 }, backward_yaw, recipe.navigation_east_coord, 0),
+    spawnSlot(15, "east-03", .{ 44, 0, -7 }, backward_yaw, recipe.navigation_east_coord, 0),
+    spawnSlot(16, "east-04", .{ 47, 0, -7 }, backward_yaw, recipe.navigation_east_coord, 0),
+    spawnSlot(17, "east-05", .{ 50, 0, -7 }, backward_yaw, recipe.navigation_east_coord, 0),
+    spawnSlot(18, "east-06", .{ 53, 0, -7 }, backward_yaw, recipe.navigation_east_coord, 0),
+    spawnSlot(19, "east-07", .{ 56, 0, -7 }, -half_pi, recipe.navigation_east_coord, 0),
+    spawnSlot(20, "east-08", .{ 59, 0, -7 }, -half_pi, recipe.navigation_east_coord, 0),
+    spawnSlot(21, "east-09", .{ 62, 0, -7 }, half_pi, recipe.navigation_east_coord, 0),
+    spawnSlot(22, "east-10", .{ 65, 0, -7 }, half_pi, recipe.navigation_east_coord, 2),
+    spawnSlot(23, "east-11", .{ 68, 0, -7 }, 0, recipe.navigation_east_coord, 2),
+    spawnSlot(24, "east-12", .{ 71, 0, -7 }, 0, recipe.navigation_east_coord, 2),
+    spawnSlot(25, "northwest-01", .{ -26, 0, 57 }, 0, recipe.navigation_northwest_coord, 0),
+    spawnSlot(26, "northwest-02", .{ -23, 0, 57 }, 0, recipe.navigation_northwest_coord, 0),
+    spawnSlot(27, "northwest-03", .{ -20, 0, 57 }, backward_yaw, recipe.navigation_northwest_coord, 0),
+    spawnSlot(28, "northwest-04", .{ -17, 0, 57 }, backward_yaw, recipe.navigation_northwest_coord, 0),
+    spawnSlot(29, "northeast-01", .{ 38, 0, 57 }, 0, recipe.navigation_northeast_coord, 0),
+    spawnSlot(30, "northeast-02", .{ 41, 0, 57 }, 0, recipe.navigation_northeast_coord, 0),
+    spawnSlot(31, "northeast-03", .{ 44, 0, 57 }, backward_yaw, recipe.navigation_northeast_coord, 0),
+    spawnSlot(32, "northeast-04", .{ 47, 0, 57 }, backward_yaw, recipe.navigation_northeast_coord, 0),
 };
 
 pub const members = [_]population.PopulationMemberDefinition{
-    member(1, "P01", .resident, 1, 0, .hostile_to_players, 1, .{ 1, 2, 4, 13, 14, 19, 0, 0 }, 6),
+    member(1, "P01", .resident, 1, 0, .passive, 1, .{ 1, 2, 4, 13, 14, 19, 0, 0 }, 6),
     member(2, "P02", .resident, 1, 1, .passive, 4, .{ 4, 5, 7, 15, 16, 20, 0, 0 }, 6),
     member(3, "P03", .resident, 1, 2, .passive, 25, .{ 25, 26, 7, 13, 19, 29, 0, 0 }, 6),
     member(4, "P04", .resident, 2, 0, .passive, 14, .{ 14, 20, 24, 9, 27, 31, 0, 0 }, 6),
@@ -459,7 +459,6 @@ fn validatePrograms() !void {
 fn validateMembers() !void {
     var ordinary_role_counts = [_]u8{ 0, 0, 0 };
     var ordinary_count: u8 = 0;
-    var hostile_count: u8 = 0;
     var initial_slots = [_]bool{false} ** population.max_spawn_slots;
     for (members, 0..) |definition, index| {
         try definition.id.validate();
@@ -516,13 +515,9 @@ fn validateMembers() !void {
             ordinary_count += 1;
             ordinary_role_counts[@intFromEnum(definition.role) - 1] += 1;
         }
-        hostile_count += @intFromBool(
-            definition.combat_disposition == .hostile_to_players,
-        );
     }
     if (ordinary_count != ordinary_member_count or
-        !std.meta.eql(ordinary_role_counts, [3]u8{ 5, 4, 3 }) or
-        hostile_count != 1)
+        !std.meta.eql(ordinary_role_counts, [3]u8{ 5, 4, 3 }))
     {
         return error.InvalidPopulationRosterDistribution;
     }
@@ -692,15 +687,6 @@ test "authored physical placements are unique and balanced across districts" {
     try std.testing.expectEqualSlices(usize, &.{ 3, 3, 3, 3 }, &ordinary_counts);
 }
 
-test "only authored P01 is hostile and identity rank is irrelevant" {
-    var hostile: ?population.PopulationMemberId = null;
-    for (members) |definition| {
-        if (definition.combat_disposition != .hostile_to_players) continue;
-        try std.testing.expect(hostile == null);
-        hostile = definition.id;
-    }
-    try std.testing.expect(population.PopulationMemberId.eql(
-        hostile orelse return error.MissingHostilePopulationMember,
-        .{ .value = 1 },
-    ));
+test "industrial exploration starts with passive civilians" {
+    for (members) |definition| try std.testing.expectEqual(population.CombatDisposition.passive, definition.combat_disposition);
 }

@@ -1,0 +1,127 @@
+{
+  "source": "authored graphical control fixture; not a captured human incident",
+  "run": "/Users/matt/Library/Logs/Incinerator/runs/2026-09-07T23-16-47.222Z_solo_67099ec1",
+  "phases": [
+    {
+      "name": "forward",
+      "samples": 86,
+      "first_tick": 225,
+      "last_tick": 403,
+      "entry_mps": 0.0001527421409264207,
+      "exit_mps": 6.190569877624512,
+      "first_applied": {
+        "throttle": 1,
+        "steering": 0,
+        "brake": 0,
+        "hand_brake": 0
+      },
+      "last_applied": {
+        "throttle": 1,
+        "steering": 0,
+        "brake": 0,
+        "hand_brake": 0
+      }
+    },
+    {
+      "name": "brake_reverse",
+      "samples": 116,
+      "first_tick": 405,
+      "last_tick": 644,
+      "entry_mps": 6.245179176330566,
+      "exit_mps": -6.165956974029541,
+      "first_applied": {
+        "throttle": 0,
+        "steering": 0,
+        "brake": 1,
+        "hand_brake": 0
+      },
+      "last_applied": {
+        "throttle": -1,
+        "steering": 0,
+        "brake": 0,
+        "hand_brake": 0
+      }
+    },
+    {
+      "name": "brake_forward",
+      "samples": 113,
+      "first_tick": 646,
+      "last_tick": 884,
+      "entry_mps": -6.171423435211182,
+      "exit_mps": 5.237384796142578,
+      "first_applied": {
+        "throttle": 0,
+        "steering": 0,
+        "brake": 1,
+        "hand_brake": 0
+      },
+      "last_applied": {
+        "throttle": 1,
+        "steering": 0,
+        "brake": 0,
+        "hand_brake": 0
+      }
+    },
+    {
+      "name": "power_space_steer",
+      "samples": 14,
+      "first_tick": 886,
+      "last_tick": 914,
+      "entry_mps": 5.260001182556152,
+      "exit_mps": 5.093515396118164,
+      "first_applied": {
+        "throttle": 1,
+        "steering": -0.08666666597127914,
+        "brake": 0,
+        "hand_brake": 1
+      },
+      "last_applied": {
+        "throttle": 1,
+        "steering": -0.7126339673995972,
+        "brake": 0,
+        "hand_brake": 1
+      }
+    },
+    {
+      "name": "space_hold",
+      "samples": 7,
+      "first_tick": 916,
+      "last_tick": 929,
+      "entry_mps": 5.086735248565674,
+      "exit_mps": 5.13547420501709,
+      "first_applied": {
+        "throttle": 0,
+        "steering": -0.5793006420135498,
+        "brake": 0,
+        "hand_brake": 1
+      },
+      "last_applied": {
+        "throttle": 0,
+        "steering": 0,
+        "brake": 0,
+        "hand_brake": 1
+      }
+    },
+    {
+      "name": "both_pedals",
+      "samples": 83,
+      "first_tick": 931,
+      "last_tick": 1109,
+      "entry_mps": 5.150894641876221,
+      "exit_mps": -1.8773016563500278e-05,
+      "first_applied": {
+        "throttle": 0,
+        "steering": 0,
+        "brake": 1,
+        "hand_brake": 0
+      },
+      "last_applied": {
+        "throttle": 0,
+        "steering": 0,
+        "brake": 1,
+        "hand_brake": 0
+      }
+    }
+  ],
+  "last_driving_tick": 1111
+}

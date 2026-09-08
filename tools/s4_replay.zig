@@ -430,12 +430,12 @@ fn requireAlteredNpcGoalDivergence(
             .spawn => |*spawn| switch (spawn.goal) {
                 .patrol_between => |*patrol| {
                     if (patrol.second.value !=
-                        sandbox_contracts.market_terminal_destination.value)
+                        sandbox_contracts.freight_dispatch_destination.value)
                     {
                         return error.UnexpectedNpcPatrolGoal;
                     }
                     patrol.second =
-                        sandbox_contracts.transit_yard_destination;
+                        sandbox_contracts.freight_yard_destination;
                 },
                 else => unreachable,
             },
@@ -530,6 +530,7 @@ fn runSmokeScenario(
         .position = .{ 0, 0, 2.5 },
     } });
     try simulation.submitVehicle(.{ .spawn = .{
+        .definition = sandbox_contracts.validationVehicleDefinition(),
         .request_id = Request.vehicle_spawn,
         .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
     } });
@@ -633,8 +634,8 @@ fn runSmokeScenario(
         .anchor = .{ .coord = sandbox_contracts.navigation_west_coord, .index = 0 },
         .hostile_to_players = true,
         .goal = .{ .patrol_between = .{
-            .first = sandbox_contracts.player_plaza_destination,
-            .second = sandbox_contracts.market_terminal_destination,
+            .first = sandbox_contracts.garage_forecourt_destination,
+            .second = sandbox_contracts.freight_dispatch_destination,
         } },
     } });
     try tickAndDrain(simulation, state);
@@ -880,7 +881,7 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
             if (state.vehicle_exited) return error.UnexpectedVehicleOutcome;
             state.vehicle_exited = true;
         },
-        .abandoned => return error.UnexpectedVehicleOutcome,
+        .abandoned, .reconfigured => return error.UnexpectedVehicleOutcome,
         .despawned => |id| {
             if (state.vehicle_id == null or
                 !std.meta.eql(id, state.vehicle_id.?) or
@@ -1083,11 +1084,11 @@ fn drainOutputs(simulation: *sandbox.Simulation, state: *ScenarioState) !void {
             try requireNpcIdentity(state, reached.id);
             const is_west = npc_contract.DestinationId.eql(
                 reached.destination,
-                sandbox_contracts.player_plaza_destination,
+                sandbox_contracts.garage_forecourt_destination,
             );
             const is_east = npc_contract.DestinationId.eql(
                 reached.destination,
-                sandbox_contracts.market_terminal_destination,
+                sandbox_contracts.freight_dispatch_destination,
             );
             if (!is_west and !is_east) return error.UnexpectedNpcEvent;
             state.npc_goal_reached = true;

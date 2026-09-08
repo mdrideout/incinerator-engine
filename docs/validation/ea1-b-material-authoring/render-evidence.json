@@ -1,0 +1,784 @@
+{
+  "run_id": "2026-09-07T01-16-08.040Z_solo_647d3f4b",
+  "captures": {
+    "material-lab": {
+      "capture_id": 1,
+      "disposition": "captured",
+      "artifact_path": "/Users/matt/Library/Logs/Incinerator/runs/2026-09-07T01-16-08.040Z_solo_647d3f4b/anomalies/anomaly-0001",
+      "authority_tick": 372,
+      "presentation_frame": 614,
+      "wall_unix_ms": 1788743774265,
+      "detail": null
+    },
+    "world-before-preview": {
+      "capture_id": 2,
+      "disposition": "captured",
+      "artifact_path": "/Users/matt/Library/Logs/Incinerator/runs/2026-09-07T01-16-08.040Z_solo_647d3f4b/anomalies/anomaly-0002",
+      "authority_tick": 3976,
+      "presentation_frame": 6589,
+      "wall_unix_ms": 1788743834715,
+      "detail": null
+    },
+    "world-preview": {
+      "capture_id": 3,
+      "disposition": "captured",
+      "artifact_path": "/Users/matt/Library/Logs/Incinerator/runs/2026-09-07T01-16-08.040Z_solo_647d3f4b/anomalies/anomaly-0003",
+      "authority_tick": 5831,
+      "presentation_frame": 9677,
+      "wall_unix_ms": 1788743865621,
+      "detail": null
+    },
+    "world": {
+      "capture_id": 4,
+      "disposition": "captured",
+      "artifact_path": "/Users/matt/Library/Logs/Incinerator/runs/2026-09-07T01-16-08.040Z_solo_647d3f4b/anomalies/anomaly-0004",
+      "authority_tick": 6137,
+      "presentation_frame": 10185,
+      "wall_unix_ms": 1788743870715,
+      "detail": null
+    }
+  },
+  "material_changes": [
+    {
+      "bytes": 2881,
+      "record": {
+        "schema": 5,
+        "kind": "material_change",
+        "recorder_sequence": 5849,
+        "monotonic_ns": 947427557139000,
+        "authority_tick": 4278,
+        "presentation_frame": 7091,
+        "request": {
+          "target": {
+            "namespace": 5282233395077009985,
+            "local": 8145342383860261915
+          },
+          "expected_revision": 3,
+          "action": {
+            "preview": {
+              "base_color": [
+                0.4000000059604645,
+                0.6499999761581421,
+                0.8500000238418579,
+                1
+              ],
+              "base_color_texture": {
+                "namespace": 5282233395077009985,
+                "local": 5602121912563298488
+              },
+              "base_color_texcoord": 0,
+              "metallic": 1,
+              "roughness": 1,
+              "normal_scale": 0.44999998807907104,
+              "occlusion_strength": 0.6000000238418579,
+              "emissive": [
+                0,
+                0,
+                0
+              ],
+              "metallic_roughness_texture": {
+                "namespace": 5282233395077009985,
+                "local": 16886351379099574227
+              },
+              "normal_texture": {
+                "namespace": 5282233395077009985,
+                "local": 125649605887146288
+              },
+              "occlusion_texture": {
+                "namespace": 5282233395077009985,
+                "local": 10238308027974695205
+              },
+              "emissive_texture": null
+            }
+          }
+        },
+        "outcome": {
+          "transaction_id": 1,
+          "source": "local_developer_client",
+          "target": {
+            "namespace": 5282233395077009985,
+            "local": 8145342383860261915
+          },
+          "action": "preview",
+          "revision": 3,
+          "asset_revision": 3,
+          "rejection": null
+        },
+        "before": {
+          "material": {
+            "revision": 3,
+            "asset_revision": 3,
+            "session": {
+              "base_color": [
+                0.9200000166893005,
+                0.8799999952316284,
+                0.8399999737739563,
+                1
+              ],
+              "base_color_texture": {
+                "namespace": 5282233395077009985,
+                "local": 5602121912563298488
+              },
+              "base_color_texcoord": 0,
+              "metallic": 1,
+              "roughness": 1,
+              "normal_scale": 0.44999998807907104,
+              "occlusion_strength": 0.6000000238418579,
+              "emissive": [
+                0,
+                0,
+                0
+              ],
+              "metallic_roughness_texture": {
+                "namespace": 5282233395077009985,
+                "local": 16886351379099574227
+              },
+              "normal_texture": {
+                "namespace": 5282233395077009985,
+                "local": 125649605887146288
+              },
+              "occlusion_texture": {
+                "namespace": 5282233395077009985,
+                "local": 10238308027974695205
+              },
+              "emissive_texture": null
+            },
+            "presented_digest": [
+              220,
+              50,
+              163,
+              93,
+              3,
+              44,
+              214,
+              53,
+              61,
+              217,
+              197,
+              85,
+              178,
+              155,
+              162,
+              241,
+              211,
+              34,
+              120,
+              85,
+              133,
+              173,
+              75,
+              253,
+              55,
+              25,
+              98,
+              111,
+              119,
+              82,
+              155,
+              205
+            ],
+            "committed_digest": [
+              220,
+              50,
+              163,
+              93,
+              3,
+              44,
+              214,
+              53,
+              61,
+              217,
+              197,
+              85,
+              178,
+              155,
+              162,
+              241,
+              211,
+              34,
+              120,
+              85,
+              133,
+              173,
+              75,
+              253,
+              55,
+              25,
+              98,
+              111,
+              119,
+              82,
+              155,
+              205
+            ]
+          }
+        },
+        "after": {
+          "material": {
+            "revision": 3,
+            "asset_revision": 3,
+            "session": {
+              "base_color": [
+                0.9200000166893005,
+                0.8799999952316284,
+                0.8399999737739563,
+                1
+              ],
+              "base_color_texture": {
+                "namespace": 5282233395077009985,
+                "local": 5602121912563298488
+              },
+              "base_color_texcoord": 0,
+              "metallic": 1,
+              "roughness": 1,
+              "normal_scale": 0.44999998807907104,
+              "occlusion_strength": 0.6000000238418579,
+              "emissive": [
+                0,
+                0,
+                0
+              ],
+              "metallic_roughness_texture": {
+                "namespace": 5282233395077009985,
+                "local": 16886351379099574227
+              },
+              "normal_texture": {
+                "namespace": 5282233395077009985,
+                "local": 125649605887146288
+              },
+              "occlusion_texture": {
+                "namespace": 5282233395077009985,
+                "local": 10238308027974695205
+              },
+              "emissive_texture": null
+            },
+            "presented_digest": [
+              240,
+              77,
+              253,
+              132,
+              120,
+              229,
+              251,
+              142,
+              131,
+              55,
+              126,
+              30,
+              51,
+              243,
+              238,
+              16,
+              141,
+              67,
+              96,
+              175,
+              149,
+              64,
+              172,
+              7,
+              201,
+              155,
+              54,
+              5,
+              46,
+              94,
+              160,
+              201
+            ],
+            "committed_digest": [
+              220,
+              50,
+              163,
+              93,
+              3,
+              44,
+              214,
+              53,
+              61,
+              217,
+              197,
+              85,
+              178,
+              155,
+              162,
+              241,
+              211,
+              34,
+              120,
+              85,
+              133,
+              173,
+              75,
+              253,
+              55,
+              25,
+              98,
+              111,
+              119,
+              82,
+              155,
+              205
+            ]
+          }
+        }
+      }
+    },
+    {
+      "bytes": 2316,
+      "record": {
+        "schema": 5,
+        "kind": "material_change",
+        "recorder_sequence": 8420,
+        "monotonic_ns": 947458503739125,
+        "authority_tick": 6135,
+        "presentation_frame": 10183,
+        "request": {
+          "target": {
+            "namespace": 5282233395077009985,
+            "local": 8145342383860261915
+          },
+          "expected_revision": 3,
+          "action": {
+            "clear_preview": {}
+          }
+        },
+        "outcome": {
+          "transaction_id": 2,
+          "source": "local_developer_client",
+          "target": {
+            "namespace": 5282233395077009985,
+            "local": 8145342383860261915
+          },
+          "action": "clear_preview",
+          "revision": 3,
+          "asset_revision": 3,
+          "rejection": null
+        },
+        "before": {
+          "material": {
+            "revision": 3,
+            "asset_revision": 3,
+            "session": {
+              "base_color": [
+                0.9200000166893005,
+                0.8799999952316284,
+                0.8399999737739563,
+                1
+              ],
+              "base_color_texture": {
+                "namespace": 5282233395077009985,
+                "local": 5602121912563298488
+              },
+              "base_color_texcoord": 0,
+              "metallic": 1,
+              "roughness": 1,
+              "normal_scale": 0.44999998807907104,
+              "occlusion_strength": 0.6000000238418579,
+              "emissive": [
+                0,
+                0,
+                0
+              ],
+              "metallic_roughness_texture": {
+                "namespace": 5282233395077009985,
+                "local": 16886351379099574227
+              },
+              "normal_texture": {
+                "namespace": 5282233395077009985,
+                "local": 125649605887146288
+              },
+              "occlusion_texture": {
+                "namespace": 5282233395077009985,
+                "local": 10238308027974695205
+              },
+              "emissive_texture": null
+            },
+            "presented_digest": [
+              240,
+              77,
+              253,
+              132,
+              120,
+              229,
+              251,
+              142,
+              131,
+              55,
+              126,
+              30,
+              51,
+              243,
+              238,
+              16,
+              141,
+              67,
+              96,
+              175,
+              149,
+              64,
+              172,
+              7,
+              201,
+              155,
+              54,
+              5,
+              46,
+              94,
+              160,
+              201
+            ],
+            "committed_digest": [
+              220,
+              50,
+              163,
+              93,
+              3,
+              44,
+              214,
+              53,
+              61,
+              217,
+              197,
+              85,
+              178,
+              155,
+              162,
+              241,
+              211,
+              34,
+              120,
+              85,
+              133,
+              173,
+              75,
+              253,
+              55,
+              25,
+              98,
+              111,
+              119,
+              82,
+              155,
+              205
+            ]
+          }
+        },
+        "after": {
+          "material": {
+            "revision": 3,
+            "asset_revision": 3,
+            "session": {
+              "base_color": [
+                0.9200000166893005,
+                0.8799999952316284,
+                0.8399999737739563,
+                1
+              ],
+              "base_color_texture": {
+                "namespace": 5282233395077009985,
+                "local": 5602121912563298488
+              },
+              "base_color_texcoord": 0,
+              "metallic": 1,
+              "roughness": 1,
+              "normal_scale": 0.44999998807907104,
+              "occlusion_strength": 0.6000000238418579,
+              "emissive": [
+                0,
+                0,
+                0
+              ],
+              "metallic_roughness_texture": {
+                "namespace": 5282233395077009985,
+                "local": 16886351379099574227
+              },
+              "normal_texture": {
+                "namespace": 5282233395077009985,
+                "local": 125649605887146288
+              },
+              "occlusion_texture": {
+                "namespace": 5282233395077009985,
+                "local": 10238308027974695205
+              },
+              "emissive_texture": null
+            },
+            "presented_digest": [
+              220,
+              50,
+              163,
+              93,
+              3,
+              44,
+              214,
+              53,
+              61,
+              217,
+              197,
+              85,
+              178,
+              155,
+              162,
+              241,
+              211,
+              34,
+              120,
+              85,
+              133,
+              173,
+              75,
+              253,
+              55,
+              25,
+              98,
+              111,
+              119,
+              82,
+              155,
+              205
+            ],
+            "committed_digest": [
+              220,
+              50,
+              163,
+              93,
+              3,
+              44,
+              214,
+              53,
+              61,
+              217,
+              197,
+              85,
+              178,
+              155,
+              162,
+              241,
+              211,
+              34,
+              120,
+              85,
+              133,
+              173,
+              75,
+              253,
+              55,
+              25,
+              98,
+              111,
+              119,
+              82,
+              155,
+              205
+            ]
+          }
+        }
+      }
+    }
+  ],
+  "render_state_sampling": "First periodic render-state sample at or after each capture frame.",
+  "render_states": {
+    "material-lab": {
+      "schema": 5,
+      "kind": "render_state",
+      "recorder_sequence": 539,
+      "monotonic_ns": 947362075752583,
+      "authority_tick": 372,
+      "presentation_frame": 614,
+      "render_mode": "sdl_gpu_metal_deterministic",
+      "visual_schema": 2,
+      "material_state_sha256": "974affc1e88027edee61aae7ec611519efeb1713b6d5ac911558dd46e71c605d",
+      "scene_light": {
+        "sun_direction": [
+          0.431934,
+          0.863868,
+          0.259161
+        ],
+        "sun_color": [
+          1,
+          0.93,
+          0.82
+        ],
+        "sun_intensity": 0.88,
+        "ambient_color": [
+          0.2,
+          0.24,
+          0.31
+        ]
+      },
+      "draw_paths": {
+        "lit_product": 411,
+        "unlit_product": 26,
+        "debug": 0,
+        "normal_geometry": 437,
+        "color_geometry": 0
+      },
+      "last_visual": {
+        "semantic": "npc",
+        "part": "whole",
+        "ordinal": 5,
+        "surface": "facing_marker"
+      },
+      "selection": {
+        "object_kind": "none",
+        "identity_kind": "none",
+        "namespace": 0,
+        "local": 0,
+        "incarnation": 0
+      }
+    },
+    "world-before-preview": {
+      "schema": 5,
+      "kind": "render_state",
+      "recorder_sequence": 5433,
+      "monotonic_ns": 947422575250750,
+      "authority_tick": 3978,
+      "presentation_frame": 6593,
+      "render_mode": "sdl_gpu_metal_deterministic",
+      "visual_schema": 2,
+      "material_state_sha256": "974affc1e88027edee61aae7ec611519efeb1713b6d5ac911558dd46e71c605d",
+      "scene_light": {
+        "sun_direction": [
+          0.431934,
+          0.863868,
+          0.259161
+        ],
+        "sun_color": [
+          1,
+          0.93,
+          0.82
+        ],
+        "sun_intensity": 0.88,
+        "ambient_color": [
+          0.2,
+          0.24,
+          0.31
+        ]
+      },
+      "draw_paths": {
+        "lit_product": 411,
+        "unlit_product": 26,
+        "debug": 0,
+        "normal_geometry": 437,
+        "color_geometry": 0
+      },
+      "last_visual": {
+        "semantic": "npc",
+        "part": "whole",
+        "ordinal": 5,
+        "surface": "facing_marker"
+      },
+      "selection": {
+        "object_kind": "none",
+        "identity_kind": "none",
+        "namespace": 0,
+        "local": 0,
+        "incarnation": 0
+      }
+    },
+    "world-preview": {
+      "schema": 5,
+      "kind": "render_state",
+      "recorder_sequence": 8022,
+      "monotonic_ns": 947453660803666,
+      "authority_tick": 5844,
+      "presentation_frame": 9699,
+      "render_mode": "sdl_gpu_metal_deterministic",
+      "visual_schema": 2,
+      "material_state_sha256": "55ebca7313581de6a99165fcd2e48821accf52a3deed87810b2f8fe47d849916",
+      "scene_light": {
+        "sun_direction": [
+          0.431934,
+          0.863868,
+          0.259161
+        ],
+        "sun_color": [
+          1,
+          0.93,
+          0.82
+        ],
+        "sun_intensity": 0.88,
+        "ambient_color": [
+          0.2,
+          0.24,
+          0.31
+        ]
+      },
+      "draw_paths": {
+        "lit_product": 411,
+        "unlit_product": 26,
+        "debug": 0,
+        "normal_geometry": 437,
+        "color_geometry": 0
+      },
+      "last_visual": {
+        "semantic": "npc",
+        "part": "whole",
+        "ordinal": 5,
+        "surface": "facing_marker"
+      },
+      "selection": {
+        "object_kind": "none",
+        "identity_kind": "none",
+        "namespace": 0,
+        "local": 0,
+        "incarnation": 0
+      }
+    },
+    "world": {
+      "schema": 5,
+      "kind": "render_state",
+      "recorder_sequence": 8439,
+      "monotonic_ns": 947458723479916,
+      "authority_tick": 6147,
+      "presentation_frame": 10204,
+      "render_mode": "sdl_gpu_metal_deterministic",
+      "visual_schema": 2,
+      "material_state_sha256": "974affc1e88027edee61aae7ec611519efeb1713b6d5ac911558dd46e71c605d",
+      "scene_light": {
+        "sun_direction": [
+          0.431934,
+          0.863868,
+          0.259161
+        ],
+        "sun_color": [
+          1,
+          0.93,
+          0.82
+        ],
+        "sun_intensity": 0.88,
+        "ambient_color": [
+          0.2,
+          0.24,
+          0.31
+        ]
+      },
+      "draw_paths": {
+        "lit_product": 411,
+        "unlit_product": 26,
+        "debug": 0,
+        "normal_geometry": 437,
+        "color_geometry": 0
+      },
+      "last_visual": {
+        "semantic": "npc",
+        "part": "whole",
+        "ordinal": 5,
+        "surface": "facing_marker"
+      },
+      "selection": {
+        "object_kind": "none",
+        "identity_kind": "none",
+        "namespace": 0,
+        "local": 0,
+        "incarnation": 0
+      }
+    }
+  },
+  "assertions": {
+    "preview_changes_frame_material_hash": true,
+    "clear_restores_frame_material_hash": true,
+    "both_material_changes_recorded": true,
+    "saved_asset_unchanged": true
+  }
+}

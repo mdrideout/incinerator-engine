@@ -1,0 +1,7 @@
+  capabilities characters=full_boundary npcs=full_boundary vehicles=full_boundary carryables=full_boundary vehicle_parts=true atomic_note=true navigation_lineage=true population_activity=true deterministic_render_state=true ranged_combat=true
+  anomaly #1 tick=1557 frame=1279 lifecycle=complete updates=2 artifacts=88 failures=0 typed_window=[-15000,5000]ms note=""
+INCIDENT_BUNDLE_VALID run=/Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-runs/2026-09-07T20-54-12.507Z_solo_5583e04b
+  status=complete hardening=none source=d75c8f1eff95ac0207de7e7c7f55a8c9d3a12b78 dirty=true build=0.16.0/Debug
+  records=15082 segments=10 anomalies=1 windows=4 visuals=88 suspicious=0
+  queue=0 high_water=42/1024 durable=10401/10401 bytes=74272609/536870912
+  visual_reserved=53012032/402653184 rejected=0 replay=false handoff=false persisted=false warnings=0

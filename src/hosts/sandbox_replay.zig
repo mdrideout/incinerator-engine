@@ -30,7 +30,7 @@ pub const DigestCategory = replay.Category;
 
 pub const magic = [8]u8{ 'I', 'N', 'C', 'R', 'P', 'L', 'A', 'Y' };
 pub const format_version: u16 = 1;
-pub const schema_cohort: u16 = 19;
+pub const schema_cohort: u16 = 21;
 pub const header_size: usize = 64;
 pub const integrity_size: usize = @sizeOf(Digest);
 pub const max_envelope_bytes: usize = 8 * 1024 * 1024;
@@ -692,6 +692,7 @@ pub const CaptureView = struct {
 };
 
 pub const ParsedCapture = struct {
+    variable_values: std.heap.ArenaAllocator,
     allocator: std.mem.Allocator,
     simulation_cohort: SimulationCohort,
     world: WorldConfig,
@@ -720,6 +721,7 @@ pub const ParsedCapture = struct {
     }
 
     pub fn deinit(self: *ParsedCapture) void {
+        self.variable_values.deinit();
         self.allocator.free(self.tick_digests);
         self.allocator.free(self.district_ingress);
         self.allocator.free(self.commands);
@@ -734,6 +736,7 @@ pub const ParsedCapture = struct {
 /// or tick that the simulation itself accepted.
 pub const Recorder = struct {
     allocator: std.mem.Allocator,
+    retained_definitions: std.ArrayList(vehicles.asset.Owned) = .empty,
     limits: Limits,
     simulation_cohort: SimulationCohort,
     world: WorldConfig,
@@ -818,6 +821,8 @@ pub const Recorder = struct {
     }
 
     pub fn deinit(self: *Recorder) void {
+        for (self.retained_definitions.items) |*definition| definition.deinit();
+        self.retained_definitions.deinit(self.allocator);
         self.tick_digests.deinit(self.allocator);
         self.district_ingress.deinit(self.allocator);
         self.commands.deinit(self.allocator);
@@ -849,7 +854,7 @@ pub const Recorder = struct {
             self.markIncomplete(.bootstrap_capacity);
             return .capture_incomplete;
         }
-        const record = RecordedCommand{ .eligible_tick = 1, .command = command };
+        var record = RecordedCommand{ .eligible_tick = 1, .command = command };
         validateRecordedCommand(record) catch {
             self.markIncomplete(.invalid_record);
             return .capture_incomplete;
@@ -859,6 +864,10 @@ pub const Recorder = struct {
             return .capture_incomplete;
         };
         if (!self.reserveRecordBytes(encoded_size)) return .capture_incomplete;
+        record.command = self.retainVehicleDefinition(record.command) catch {
+            self.markIncomplete(.allocation_failure);
+            return .capture_incomplete;
+        };
         self.bootstrap_commands.appendAssumeCapacity(record);
         return .recorded;
     }
@@ -874,7 +883,7 @@ pub const Recorder = struct {
             self.markIncomplete(.command_capacity);
             return .capture_incomplete;
         }
-        const record = RecordedCommand{ .eligible_tick = eligible_tick, .command = command };
+        var record = RecordedCommand{ .eligible_tick = eligible_tick, .command = command };
         validateRecordedCommand(record) catch {
             self.markIncomplete(.invalid_record);
             return .capture_incomplete;
@@ -894,8 +903,31 @@ pub const Recorder = struct {
             return .capture_incomplete;
         };
         if (!self.reserveRecordBytes(encoded_size)) return .capture_incomplete;
+        record.command = self.retainVehicleDefinition(record.command) catch {
+            self.markIncomplete(.allocation_failure);
+            return .capture_incomplete;
+        };
         self.commands.appendAssumeCapacity(record);
         return .recorded;
+    }
+
+    fn retainVehicleDefinition(self: *Recorder, command: NormalizedCommand) !NormalizedCommand {
+        if (command != .vehicle) return command;
+        const definition = switch (command.vehicle) {
+            .spawn => |spawn| spawn.definition,
+            .reconfigure => |edit| edit.candidate,
+            else => return command,
+        };
+        var owned = try definition.clone(self.allocator);
+        errdefer owned.deinit();
+        try self.retained_definitions.append(self.allocator, owned);
+        var retained = command;
+        switch (retained.vehicle) {
+            .spawn => |*spawn| spawn.definition = owned.value,
+            .reconfigure => |*edit| edit.candidate = owned.value,
+            else => unreachable,
+        }
+        return retained;
     }
 
     pub fn recordDistrictCompletion(
@@ -1347,8 +1379,59 @@ fn encodeCharacterConfig(sink: anytype, value: characters.CharacterConfigV1) !vo
     try sink.writeF32(value.step_up_height);
 }
 
+fn encodeVehicleDefinition(sink: anytype, definition: vehicles.asset.Definition) !void {
+    try sink.writeU32(definition.version);
+    try sink.writeU64(definition.id.asset.namespace);
+    try sink.writeU64(definition.id.asset.local);
+    try sink.writeU64(definition.revision);
+    try sink.writeU32(std.math.cast(u32, definition.label.len) orelse return error.VehicleLabelNotRepresentable);
+    try sink.writeBytes(definition.label);
+    try encodeVehicleTuning(sink, definition.tuning);
+    try encodeVehicleVisual(sink, definition.visuals.chassis);
+    for (definition.visuals.wheels) |wheel| try encodeVehicleVisual(sink, wheel);
+}
+fn encodeVehicleVisual(sink: anytype, visual: vehicles.asset.VisualPart) !void {
+    try sink.writeU64(visual.mesh.namespace);
+    try sink.writeU64(visual.mesh.local);
+    try sink.writeU64(visual.material.namespace);
+    try sink.writeU64(visual.material.local);
+    try encodePose(sink, visual.local_pose);
+    try encodeF32Array(sink, &visual.scale);
+}
+fn decodeVehicleDefinition(reader: *Reader) !vehicles.asset.Definition {
+    const version = try reader.readU32();
+    const id = vehicles.VehicleArchetypeId{ .asset = .{ .namespace = try reader.readU64(), .local = try reader.readU64() } };
+    const revision = try reader.readU64();
+    const label_length = try reader.readU32();
+    if (label_length > reader.bytes.len - reader.cursor) return error.TruncatedReplayPayload;
+    const allocator = reader.variable_allocator orelse return error.VehicleDefinitionAllocatorRequired;
+    const label = try allocator.alloc(u8, label_length);
+    try reader.readBytes(label);
+    const tuning = try decodeVehicleTuning(reader);
+    const chassis = try decodeVehicleVisual(reader);
+    var wheels: [engine.physics.vehicle_wheel_count]vehicles.asset.VisualPart = undefined;
+    for (&wheels) |*wheel| wheel.* = try decodeVehicleVisual(reader);
+    const definition = vehicles.asset.Definition{ .version = version, .id = id, .revision = revision, .label = label, .tuning = tuning, .visuals = .{ .chassis = chassis, .wheels = wheels } };
+    try definition.validate();
+    return definition;
+}
+fn decodeVehicleVisual(reader: *Reader) !vehicles.asset.VisualPart {
+    return .{ .mesh = .{ .namespace = try reader.readU64(), .local = try reader.readU64() }, .material = .{ .namespace = try reader.readU64(), .local = try reader.readU64() }, .local_pose = try decodePose(reader), .scale = try decodeF32Array(reader, 3) };
+}
+
 fn encodeVehicleConfig(sink: anytype, value: vehicles.VehicleConfigV1) !void {
-    const tuning = value.tuning;
+    try sink.writeF32(value.max_entry_distance);
+    try encodeF32Array(sink, &value.exit_offset);
+}
+
+fn encodeVehicleTuning(sink: anytype, tuning: vehicles.VehicleTuningV1) !void {
+    try sink.writeF32(tuning.steering.rise_per_second);
+    try sink.writeF32(tuning.steering.return_per_second);
+    try sink.writeU32(@intCast(tuning.steering.speed_curve.len));
+    for (tuning.steering.speed_curve) |point| {
+        try sink.writeF32(point.speed_mps);
+        try sink.writeF32(point.lock_fraction);
+    }
     try encodeF32Array(sink, &tuning.chassis_half_extents);
     try encodeF32Array(sink, &tuning.center_of_mass_offset);
     try sink.writeF32(tuning.mass);
@@ -1370,12 +1453,87 @@ fn encodeVehicleConfig(sink: anytype, value: vehicles.VehicleConfigV1) !void {
     try sink.writeF32(tuning.tire_friction.lateral_peak_friction);
     try sink.writeF32(tuning.tire_friction.lateral_slide_angle_radians);
     try sink.writeF32(tuning.tire_friction.lateral_slide_friction);
+    try sink.writeF32(tuning.front_anti_roll_stiffness);
+    try sink.writeF32(tuning.rear_axle.suspension_min_length);
+    try sink.writeF32(tuning.rear_axle.suspension_max_length);
+    try sink.writeF32(tuning.rear_axle.suspension_frequency);
+    try sink.writeF32(tuning.rear_axle.suspension_damping);
+    try sink.writeF32(tuning.rear_axle.brake_torque_nm);
+    try sink.writeF32(tuning.rear_axle.anti_roll_stiffness);
+    try sink.writeF32(tuning.rear_axle.tire_friction.longitudinal_peak_slip);
+    try sink.writeF32(tuning.rear_axle.tire_friction.longitudinal_peak_friction);
+    try sink.writeF32(tuning.rear_axle.tire_friction.longitudinal_slide_slip);
+    try sink.writeF32(tuning.rear_axle.tire_friction.longitudinal_slide_friction);
+    try sink.writeF32(tuning.rear_axle.tire_friction.lateral_peak_angle_radians);
+    try sink.writeF32(tuning.rear_axle.tire_friction.lateral_peak_friction);
+    try sink.writeF32(tuning.rear_axle.tire_friction.lateral_slide_angle_radians);
+    try sink.writeF32(tuning.rear_axle.tire_friction.lateral_slide_friction);
+    try encodeVehiclePowertrain(sink, tuning.powertrain);
     try sink.writeF32(tuning.front_differential_ratio);
     try sink.writeF32(tuning.front_limited_slip_ratio);
     try sink.writeF32(tuning.max_pitch_roll_radians);
     try sink.writeF32(tuning.wheel_collision_max_slope_radians);
-    try sink.writeF32(value.max_entry_distance);
-    try encodeF32Array(sink, &value.exit_offset);
+}
+
+fn encodeVehiclePowertrain(sink: anytype, value: engine.physics.VehiclePowertrain) !void {
+    try sink.writeF32(value.max_torque_nm);
+    try sink.writeF32(value.idle_rpm);
+    try sink.writeF32(value.max_rpm);
+    try sink.writeF32(value.inertia_kg_m2);
+    try sink.writeF32(value.angular_damping);
+    try sink.writeF32(value.switch_time_s);
+    try sink.writeF32(value.clutch_release_s);
+    try sink.writeF32(value.switch_latency_s);
+    try sink.writeF32(value.shift_up_rpm);
+    try sink.writeF32(value.shift_down_rpm);
+    try sink.writeF32(value.clutch_strength);
+    try sink.writeF32(value.front_torque_fraction);
+    try sink.writeF32(value.rear_differential_ratio);
+    try sink.writeF32(value.rear_limited_slip_ratio);
+    try sink.writeF32(value.center_limited_slip_ratio);
+    try sink.writeU32(std.math.cast(u32, value.torque_curve.len) orelse return error.VehicleCurveCountNotRepresentable);
+    for (value.torque_curve) |point| {
+        try sink.writeF32(point.rpm_fraction);
+        try sink.writeF32(point.torque_fraction);
+    }
+    for ([_][]const f32{ value.forward_gears, value.reverse_gears }) |gears| {
+        try sink.writeU32(std.math.cast(u32, gears.len) orelse return error.VehicleGearCountNotRepresentable);
+        try encodeF32Array(sink, gears);
+    }
+}
+
+fn decodeVehiclePowertrain(reader: *Reader) !engine.physics.VehiclePowertrain {
+    var value: engine.physics.VehiclePowertrain = .{};
+    value.max_torque_nm = try reader.readF32();
+    value.idle_rpm = try reader.readF32();
+    value.max_rpm = try reader.readF32();
+    value.inertia_kg_m2 = try reader.readF32();
+    value.angular_damping = try reader.readF32();
+    value.switch_time_s = try reader.readF32();
+    value.clutch_release_s = try reader.readF32();
+    value.switch_latency_s = try reader.readF32();
+    value.shift_up_rpm = try reader.readF32();
+    value.shift_down_rpm = try reader.readF32();
+    value.clutch_strength = try reader.readF32();
+    value.front_torque_fraction = try reader.readF32();
+    value.rear_differential_ratio = try reader.readF32();
+    value.rear_limited_slip_ratio = try reader.readF32();
+    value.center_limited_slip_ratio = try reader.readF32();
+    const allocator = reader.variable_allocator orelse return error.VehicleDefinitionAllocatorRequired;
+    const point_count = try reader.readU32();
+    if (point_count > (reader.bytes.len - reader.cursor) / 8) return error.TruncatedReplayPayload;
+    const points = try allocator.alloc(engine.physics.VehicleTorquePoint, point_count);
+    for (points) |*point| point.* = .{ .rpm_fraction = try reader.readF32(), .torque_fraction = try reader.readF32() };
+    value.torque_curve = points;
+    inline for (.{ "forward_gears", "reverse_gears" }) |field| {
+        const count = try reader.readU32();
+        if (count > (reader.bytes.len - reader.cursor) / 4) return error.TruncatedReplayPayload;
+        const gears = try allocator.alloc(f32, count);
+        for (gears) |*ratio| ratio.* = try reader.readF32();
+        @field(value, field) = gears;
+    }
+    try value.validate();
+    return value;
 }
 
 fn encodeContentCohort(sink: anytype, value: ContentCohort) !void {
@@ -1392,6 +1550,7 @@ const CrateCommandTag = enum(u8) { spawn = 1, despawn = 2, impulse = 3, relocate
 const CrateRelocationVelocityTag = enum(u8) { preserve = 1, zero = 2, exact = 3 };
 const CharacterCommandTag = enum(u8) { spawn = 1, actions = 2, despawn = 3 };
 const VehicleCommandTag = enum(u8) {
+    reconfigure = 7,
     spawn = 1,
     enter = 2,
     drive = 3,
@@ -1647,10 +1806,21 @@ fn encodeCharacterCommand(sink: anytype, command: characters.Command) !void {
 
 fn encodeVehicleCommand(sink: anytype, command: vehicles.Command) !void {
     switch (command) {
+        .reconfigure => |edit| {
+            try sink.writeU8(@intFromEnum(VehicleCommandTag.reconfigure));
+            try sink.writeU64(edit.transaction_id);
+            try sink.writeU8(@intFromEnum(edit.source));
+            try encodePersistentId(sink, edit.id);
+            try sink.writeU64(edit.expected_revision);
+            try sink.writeU64(edit.expected_asset_revision);
+            try sink.writeBool(edit.rebuild);
+            try encodeVehicleDefinition(sink, edit.candidate);
+        },
         .spawn => |spawn| {
             try sink.writeU8(@intFromEnum(VehicleCommandTag.spawn));
             try sink.writeU64(spawn.request_id);
             try encodeBodyState(sink, spawn.chassis);
+            try encodeVehicleDefinition(sink, spawn.definition);
         },
         .enter => |enter| {
             try sink.writeU8(@intFromEnum(VehicleCommandTag.enter));
@@ -1900,7 +2070,15 @@ fn validateNormalizedCommand(command: NormalizedCommand) !void {
             .despawn => |despawn| try despawn.id.validate(),
         },
         .vehicle => |value| switch (value) {
-            .spawn => |spawn| try spawn.chassis.validate(),
+            .reconfigure => |edit| {
+                if (edit.transaction_id == 0) return error.InvalidAuthoringTransactionId;
+                try edit.id.validate();
+                try edit.candidate.validate();
+            },
+            .spawn => |spawn| {
+                try spawn.chassis.validate();
+                try spawn.definition.validate();
+            },
             .enter => |enter| {
                 try enter.vehicle_id.validate();
                 try enter.driver_id.validate();
@@ -2255,7 +2433,9 @@ pub fn parseWithLimits(
         return error.ReplayIntegrityMismatch;
     }
 
-    var reader = Reader{ .bytes = bytes[header_size..payload_end] };
+    var variable_values = std.heap.ArenaAllocator.init(allocator);
+    errdefer variable_values.deinit();
+    var reader = Reader{ .bytes = bytes[header_size..payload_end], .variable_allocator = variable_values.allocator() };
     const simulation_cohort = try decodeSimulationCohort(&reader);
     const world = try decodeWorldConfig(&reader);
     const content = try decodeContentCohort(&reader);
@@ -2285,6 +2465,7 @@ pub fn parseWithLimits(
     if (reader.cursor != reader.bytes.len) return error.TrailingReplayPayload;
 
     const result = ParsedCapture{
+        .variable_values = variable_values,
         .allocator = allocator,
         .simulation_cohort = simulation_cohort,
         .world = world,
@@ -2300,6 +2481,7 @@ pub fn parseWithLimits(
 }
 
 const Reader = struct {
+    variable_allocator: ?std.mem.Allocator = null,
     bytes: []const u8,
     cursor: usize = 0,
 
@@ -2490,26 +2672,55 @@ fn decodeCharacterConfig(reader: *Reader) !characters.CharacterConfigV1 {
 }
 
 fn decodeVehicleConfig(reader: *Reader) !vehicles.VehicleConfigV1 {
+    return .{ .max_entry_distance = try reader.readF32(), .exit_offset = try decodeF32Array(reader, 3) };
+}
+
+fn decodeVehicleTuning(reader: *Reader) !vehicles.VehicleTuningV1 {
+    const rise = try reader.readF32();
+    const return_rate = try reader.readF32();
+    const count = try reader.readU32();
+    if (count == 0 or count > (reader.bytes.len - reader.cursor) / 8) return error.InvalidVehicleSteeringCurve;
+    const allocator = reader.variable_allocator orelse return error.MissingVariableValueAllocator;
+    const points = try allocator.alloc(vehicles.steering.SpeedPoint, count);
+    for (points) |*point| point.* = .{ .speed_mps = try reader.readF32(), .lock_fraction = try reader.readF32() };
     var wheel_positions: [engine.physics.vehicle_wheel_count][3]f32 = undefined;
     const chassis_half_extents = try decodeF32Array(reader, 3);
     const center_of_mass_offset = try decodeF32Array(reader, 3);
     const mass = try reader.readF32();
     for (&wheel_positions) |*position| position.* = try decodeF32Array(reader, 3);
     return .{
-        .tuning = .{
-            .chassis_half_extents = chassis_half_extents,
-            .center_of_mass_offset = center_of_mass_offset,
-            .mass = mass,
-            .wheel_attachment_positions = wheel_positions,
-            .wheel_radius = try reader.readF32(),
-            .wheel_width = try reader.readF32(),
+        .steering = .{ .rise_per_second = rise, .return_per_second = return_rate, .speed_curve = points },
+        .chassis_half_extents = chassis_half_extents,
+        .center_of_mass_offset = center_of_mass_offset,
+        .mass = mass,
+        .wheel_attachment_positions = wheel_positions,
+        .wheel_radius = try reader.readF32(),
+        .wheel_width = try reader.readF32(),
+        .suspension_min_length = try reader.readF32(),
+        .suspension_max_length = try reader.readF32(),
+        .suspension_frequency = try reader.readF32(),
+        .suspension_damping = try reader.readF32(),
+        .max_steer_radians = try reader.readF32(),
+        .max_brake_torque = try reader.readF32(),
+        .max_hand_brake_torque = try reader.readF32(),
+        .tire_friction = .{
+            .longitudinal_peak_slip = try reader.readF32(),
+            .longitudinal_peak_friction = try reader.readF32(),
+            .longitudinal_slide_slip = try reader.readF32(),
+            .longitudinal_slide_friction = try reader.readF32(),
+            .lateral_peak_angle_radians = try reader.readF32(),
+            .lateral_peak_friction = try reader.readF32(),
+            .lateral_slide_angle_radians = try reader.readF32(),
+            .lateral_slide_friction = try reader.readF32(),
+        },
+        .front_anti_roll_stiffness = try reader.readF32(),
+        .rear_axle = .{
             .suspension_min_length = try reader.readF32(),
             .suspension_max_length = try reader.readF32(),
             .suspension_frequency = try reader.readF32(),
             .suspension_damping = try reader.readF32(),
-            .max_steer_radians = try reader.readF32(),
-            .max_brake_torque = try reader.readF32(),
-            .max_hand_brake_torque = try reader.readF32(),
+            .brake_torque_nm = try reader.readF32(),
+            .anti_roll_stiffness = try reader.readF32(),
             .tire_friction = .{
                 .longitudinal_peak_slip = try reader.readF32(),
                 .longitudinal_peak_friction = try reader.readF32(),
@@ -2520,13 +2731,12 @@ fn decodeVehicleConfig(reader: *Reader) !vehicles.VehicleConfigV1 {
                 .lateral_slide_angle_radians = try reader.readF32(),
                 .lateral_slide_friction = try reader.readF32(),
             },
-            .front_differential_ratio = try reader.readF32(),
-            .front_limited_slip_ratio = try reader.readF32(),
-            .max_pitch_roll_radians = try reader.readF32(),
-            .wheel_collision_max_slope_radians = try reader.readF32(),
         },
-        .max_entry_distance = try reader.readF32(),
-        .exit_offset = try decodeF32Array(reader, 3),
+        .powertrain = try decodeVehiclePowertrain(reader),
+        .front_differential_ratio = try reader.readF32(),
+        .front_limited_slip_ratio = try reader.readF32(),
+        .max_pitch_roll_radians = try reader.readF32(),
+        .wheel_collision_max_slope_radians = try reader.readF32(),
     };
 }
 
@@ -2847,9 +3057,19 @@ fn decodeVehicleCommand(reader: *Reader) !vehicles.Command {
     const tag = std.enums.fromInt(VehicleCommandTag, try reader.readU8()) orelse
         return error.InvalidVehicleCommandTag;
     return switch (tag) {
+        .reconfigure => .{ .reconfigure = .{
+            .transaction_id = try reader.readU64(),
+            .source = std.enums.fromInt(engine.authoring.Source, try reader.readU8()) orelse return error.InvalidAuthoringSource,
+            .id = try decodePersistentId(reader),
+            .expected_revision = try reader.readU64(),
+            .expected_asset_revision = try reader.readU64(),
+            .rebuild = try reader.readBool(),
+            .candidate = try decodeVehicleDefinition(reader),
+        } },
         .spawn => .{ .spawn = .{
             .request_id = try reader.readU64(),
             .chassis = try decodeBodyState(reader),
+            .definition = try decodeVehicleDefinition(reader),
         } },
         .enter => .{ .enter = .{
             .vehicle_id = try decodePersistentId(reader),
@@ -3128,7 +3348,7 @@ const TestCapture = struct {
     world: WorldConfig,
     content: ContentCohort,
     bootstrap: [6]RecordedCommand,
-    commands: [19]RecordedCommand,
+    commands: [20]RecordedCommand,
     ingress: [3]DistrictCompletionIngress,
     digests: [4]TickDigests,
 
@@ -3191,7 +3411,7 @@ fn testCapture() !TestCapture {
     const first_id = engine.PersistentId{ .namespace = 77, .local = 1 };
     const second_id = engine.PersistentId{ .namespace = 77, .local = 2 };
     const third_id = engine.PersistentId{ .namespace = 77, .local = 3 };
-    const coord = district_contract.ChunkCoord{ .x = -3, .z = 9 };
+    const coord = district_contract.ChunkCoord{ .x = 1, .z = 1 };
     const ticket = district_contract.LoadTicket{ .coord = coord, .generation = 4 };
     const build = switch (sandbox_recipe.build(
         coord,
@@ -3201,6 +3421,8 @@ fn testCapture() !TestCapture {
         .failed => unreachable,
     };
 
+    var handling = vehicles.asset.validationFixture();
+    handling.tuning.powertrain.center_limited_slip_ratio = 3;
     return .{
         .world = try testWorldConfig(),
         .content = try testContentCohort(),
@@ -3243,6 +3465,7 @@ fn testCapture() !TestCapture {
                 .despawn = .{ .id = first_id },
             } } },
             .{ .eligible_tick = 2, .command = .{ .vehicle = .{ .spawn = .{
+                .definition = handling,
                 .request_id = 4,
                 .chassis = .{ .pose = .{ .position = .{ 0, 2, 0 } } },
             } } } },
@@ -3258,6 +3481,15 @@ fn testCapture() !TestCapture {
             .{ .eligible_tick = 2, .command = .{ .vehicle = .{ .exit = .{
                 .vehicle_id = second_id,
                 .driver_id = first_id,
+            } } } },
+            .{ .eligible_tick = 2, .command = .{ .vehicle = .{ .reconfigure = .{
+                .transaction_id = 73,
+                .source = .local_developer_client,
+                .id = second_id,
+                .expected_revision = 4,
+                .expected_asset_revision = 1,
+                .candidate = vehicles.asset.validationFixture(),
+                .rebuild = true,
             } } } },
             .{ .eligible_tick = 3, .command = .{ .vehicle = .{
                 .despawn = .{ .id = second_id },
@@ -3317,14 +3549,14 @@ fn testCapture() !TestCapture {
             .{ .eligible_tick = 4, .command = .{ .npc = .{ .set_goal = .{
                 .request_id = 13,
                 .id = third_id,
-                .goal = .{ .navigate_to = sandbox_recipe.market_terminal },
+                .goal = .{ .navigate_to = sandbox_recipe.freight_dispatch },
             } } } },
             .{ .eligible_tick = 4, .command = .{ .npc = .{ .set_goal = .{
                 .request_id = 14,
                 .id = third_id,
                 .goal = .{ .patrol_between = .{
-                    .first = sandbox_recipe.player_plaza,
-                    .second = sandbox_recipe.market_terminal,
+                    .first = sandbox_recipe.garage_forecourt,
+                    .second = sandbox_recipe.freight_dispatch,
                 } },
             } } } },
             .{ .eligible_tick = 4, .command = .{ .npc = .{ .despawn = .{
@@ -3361,7 +3593,7 @@ fn testCapture() !TestCapture {
 
 fn expectCaptureEqual(expected: CaptureView, actual: CaptureView) !void {
     try std.testing.expect(std.meta.eql(expected.simulation_cohort, actual.simulation_cohort));
-    try std.testing.expect(std.meta.eql(expected.world, actual.world));
+    try std.testing.expectEqualDeep(expected.world, actual.world);
     try std.testing.expect(std.meta.eql(expected.content, actual.content));
     try std.testing.expectEqual(expected.incomplete_reason, actual.incomplete_reason);
     try std.testing.expectEqual(expected.bootstrap_commands.len, actual.bootstrap_commands.len);
@@ -3369,13 +3601,13 @@ fn expectCaptureEqual(expected: CaptureView, actual: CaptureView) !void {
     try std.testing.expectEqual(expected.district_ingress.len, actual.district_ingress.len);
     try std.testing.expectEqual(expected.tick_digests.len, actual.tick_digests.len);
     for (expected.bootstrap_commands, actual.bootstrap_commands) |lhs, rhs| {
-        try std.testing.expect(std.meta.eql(lhs, rhs));
+        try std.testing.expectEqualDeep(lhs, rhs);
     }
     for (expected.commands, actual.commands) |lhs, rhs| {
-        try std.testing.expect(std.meta.eql(lhs, rhs));
+        try std.testing.expectEqualDeep(lhs, rhs);
     }
     for (expected.district_ingress, actual.district_ingress) |lhs, rhs| {
-        try std.testing.expect(std.meta.eql(lhs, rhs));
+        try std.testing.expectEqualDeep(lhs, rhs);
     }
     for (expected.tick_digests, actual.tick_digests) |lhs, rhs| {
         try std.testing.expectEqual(lhs, rhs);
@@ -3391,7 +3623,7 @@ fn refreshIntegrity(bytes: []u8) void {
 
 test "current simulation cohort pins the exact Jolt worker and capacity configuration" {
     try current_simulation_cohort.validate();
-    try std.testing.expectEqual(@as(u16, 19), current_simulation_cohort.replay_schema);
+    try std.testing.expectEqual(@as(u16, 21), current_simulation_cohort.replay_schema);
     try std.testing.expectEqual(@as(u16, 5), current_simulation_cohort.engine_schedule_cohort);
     try std.testing.expectEqual(
         sandbox_host_contracts.snapshot_schema,
@@ -3543,14 +3775,14 @@ test "NPC command codec covers every command goal and validates while decoding" 
         NormalizedCommand.fromNpc(.{ .set_goal = .{
             .request_id = 102,
             .id = id,
-            .goal = .{ .navigate_to = sandbox_recipe.market_terminal },
+            .goal = .{ .navigate_to = sandbox_recipe.freight_dispatch },
         } }),
         NormalizedCommand.fromNpc(.{ .set_goal = .{
             .request_id = 103,
             .id = id,
             .goal = .{ .patrol_between = .{
-                .first = sandbox_recipe.player_plaza,
-                .second = sandbox_recipe.market_terminal,
+                .first = sandbox_recipe.garage_forecourt,
+                .second = sandbox_recipe.freight_dispatch,
             } },
         } }),
         NormalizedCommand.fromNpc(.{ .despawn = .{
@@ -3647,8 +3879,8 @@ test "NPC command codec covers every command goal and validates while decoding" 
         .request_id = 105,
         .id = id,
         .goal = .{ .patrol_between = .{
-            .first = sandbox_recipe.player_plaza,
-            .second = sandbox_recipe.player_plaza,
+            .first = sandbox_recipe.garage_forecourt,
+            .second = sandbox_recipe.garage_forecourt,
         } },
     } });
     var patrol_storage: [128]u8 = undefined;
@@ -3749,12 +3981,12 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     try std.testing.expect(!@hasField(WorldConfig, "assets"));
     var world_v7_sizer = SizeSink{};
     try encodeWorldConfig(&world_v7_sizer, world);
-    try std.testing.expectEqual(@as(usize, 435), world_v7_sizer.size);
+    try std.testing.expectEqual(@as(usize, 275), world_v7_sizer.size);
     try std.testing.expectEqual(@as(usize, 296), encodedTickDigestsSize());
     var world_v8_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
         &world_v8_expected,
-        "9ca3e224c65c7b3e7a054e4a2b54f3dbd0d2ce413cfa46482ac515993493cc06",
+        "b1aab511b2b23fe7c51d49d880235e86f5674a5de7ede8da51e7a3b6f4a8bf88",
     );
     try std.testing.expectEqual(world_v8_expected, try world.fingerprint());
 
@@ -3826,15 +4058,15 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     const same = try testContentCohort();
     try std.testing.expectEqual(try content.fingerprint(), try same.fingerprint());
 
-    // Recipe V8 installs the exact S15 four-district graph and destination
+    // Recipe V9 installs the industrial neighborhood graph and destination
     // cohort, intentionally advancing renderer-free construction.
-    var recipe_v8_expected: Digest = undefined;
+    var recipe_v9_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
-        &recipe_v8_expected,
-        "046213f89cf004f1be5fdc800107c2d3a407b98534b68b26c90afd15f9cb1b34",
+        &recipe_v9_expected,
+        "83b47bba6b00b0d9f0d3a988da688a2a996dc63b33bf55d9ce3e3453f37593c9",
     );
-    const recipe_v8_actual = try content.fingerprint();
-    try std.testing.expectEqualSlices(u8, &recipe_v8_expected, &recipe_v8_actual);
+    const recipe_v9_actual = try content.fingerprint();
+    try std.testing.expectEqualSlices(u8, &recipe_v9_expected, &recipe_v9_actual);
 
     const catalog = try ContentCohort.init(
         "district/catalog",
@@ -3846,7 +4078,7 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     );
     try catalog.validate();
     const catalog_fingerprint = try catalog.fingerprint();
-    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v8_actual));
+    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v9_actual));
 
     var catalog_fixture = try testCapture();
     catalog_fixture.content = catalog;
@@ -4005,7 +4237,7 @@ test "replay cursor preserves commands-before-ingress order and finds exact dive
     try std.testing.expectEqual(@as(usize, 0), tick_one.commands.len);
     try std.testing.expectEqual(@as(usize, 0), tick_one.district_ingress.len);
     const tick_two = cursor.next() orelse return error.MissingReplayTick;
-    try std.testing.expectEqual(@as(usize, 5), tick_two.commands.len);
+    try std.testing.expectEqual(@as(usize, 6), tick_two.commands.len);
     try std.testing.expectEqual(@as(usize, 1), tick_two.district_ingress.len);
     const tick_three = cursor.next() orelse return error.MissingReplayTick;
     try std.testing.expectEqual(@as(usize, 5), tick_three.commands.len);
@@ -4070,7 +4302,7 @@ test "bounded recorder keeps immutable first incomplete reason and serializes pa
         .character = .{ .spawn = .{ .request_id = 2, .position = .{ 0, 0, 0 } } },
     }));
     try std.testing.expectEqual(RecordResult.capture_incomplete, recorder.recordCommand(2, .{
-        .vehicle = .{ .spawn = .{ .request_id = 3 } },
+        .vehicle = .{ .spawn = .{ .definition = vehicles.asset.validationFixture(), .request_id = 3 } },
     }));
     try std.testing.expectEqual(@as(?IncompleteReason, .command_capacity), recorder.incompleteReason());
     recorder.markIncomplete(.authority_failed);
@@ -4319,17 +4551,17 @@ test "parser rejects unordered command records and trailing payload" {
         fixture.world,
         fixture.content,
     );
-    var seventh_command_offset = header_size + fixed_payload_size;
+    var eighth_command_offset = header_size + fixed_payload_size;
     for (fixture.bootstrap) |record| {
-        seventh_command_offset += try encodedRecordedCommandSize(record);
+        eighth_command_offset += try encodedRecordedCommandSize(record);
     }
-    for (fixture.commands[0..6]) |record| {
-        seventh_command_offset += try encodedRecordedCommandSize(record);
+    for (fixture.commands[0..7]) |record| {
+        eighth_command_offset += try encodedRecordedCommandSize(record);
     }
 
     const unordered = try std.testing.allocator.dupe(u8, canonical);
     defer std.testing.allocator.free(unordered);
-    putU64(unordered, seventh_command_offset, 2);
+    putU64(unordered, eighth_command_offset, 2);
     refreshIntegrity(unordered);
     try std.testing.expectError(
         error.UnorderedCommands,
@@ -4364,7 +4596,7 @@ test "complete capture validation rejects missing digests out-of-range records a
     try std.testing.expectError(error.RecordBeyondFinalTick, beyond.validate(.{}));
 
     var unordered_commands = fixture.commands;
-    unordered_commands[6].eligible_tick = 2;
+    unordered_commands[7].eligible_tick = 2;
     var unordered = fixture.view();
     unordered.commands = &unordered_commands;
     try std.testing.expectError(error.UnorderedCommands, unordered.validate(.{}));

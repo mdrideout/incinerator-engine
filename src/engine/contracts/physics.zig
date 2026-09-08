@@ -250,6 +250,9 @@ pub fn canonicalVehicleWheelRotation(angle: f32) !f32 {
 /// Engine-neutral construction data for one conventional four-wheel car.
 /// Jolt settings, constraints, collision testers, and body identifiers never
 /// cross this boundary.
+/// Pure-slip curves; the adapter couples both axes smoothly using their
+/// authored sliding-slip coordinates. Physics source cohort owns this model.
+pub const vehicle_tire_response = "combined-slip-sliding-v1";
 pub const VehicleTireFriction = struct {
     longitudinal_peak_slip: f32 = 0.06,
     longitudinal_peak_friction: f32 = 1.4,
@@ -278,8 +281,133 @@ pub const VehicleTireFriction = struct {
     }
 };
 
+/// Normalized torque coordinates use RPM / maximum RPM, matching the pinned
+/// backend evaluation (including the idle portion of the curve).
+pub const VehicleTorquePoint = struct { rpm_fraction: f32, torque_fraction: f32 };
+
+pub const VehiclePowertrain = struct {
+    max_torque_nm: f32 = 500,
+    idle_rpm: f32 = 1000,
+    max_rpm: f32 = 6000,
+    inertia_kg_m2: f32 = 0.5,
+    angular_damping: f32 = 0.2,
+    torque_curve: []const VehicleTorquePoint = &.{
+        .{ .rpm_fraction = 0, .torque_fraction = 0.8 },
+        .{ .rpm_fraction = 0.66, .torque_fraction = 1 },
+        .{ .rpm_fraction = 1, .torque_fraction = 0.8 },
+    },
+    forward_gears: []const f32 = &.{ 2.66, 1.78, 1.3, 1, 0.74 },
+    reverse_gears: []const f32 = &.{-2.9},
+    switch_time_s: f32 = 0.5,
+    clutch_release_s: f32 = 0.3,
+    switch_latency_s: f32 = 0.5,
+    shift_up_rpm: f32 = 4000,
+    shift_down_rpm: f32 = 2000,
+    clutch_strength: f32 = 10,
+    /// Zero is rear drive; one is front drive. Both axles use explicit ratios.
+    front_torque_fraction: f32 = 1,
+    rear_differential_ratio: f32 = 3.42,
+    rear_limited_slip_ratio: f32 = 1.4,
+    /// Max/min axle speed ratio for center torque transfer; f32 max is open.
+    center_limited_slip_ratio: f32 = 1.4,
+
+    /// Callers that retain a definition own these authored-length arrays.
+    pub fn clone(self: VehiclePowertrain, allocator: std.mem.Allocator) !VehiclePowertrain {
+        var result = self;
+        result.torque_curve = try allocator.dupe(VehicleTorquePoint, self.torque_curve);
+        errdefer allocator.free(result.torque_curve);
+        result.forward_gears = try allocator.dupe(f32, self.forward_gears);
+        errdefer allocator.free(result.forward_gears);
+        result.reverse_gears = try allocator.dupe(f32, self.reverse_gears);
+        return result;
+    }
+
+    pub fn deinit(self: *VehiclePowertrain, allocator: std.mem.Allocator) void {
+        allocator.free(self.reverse_gears);
+        allocator.free(self.forward_gears);
+        allocator.free(self.torque_curve);
+        self.* = undefined;
+    }
+
+    pub fn validate(self: VehiclePowertrain) !void {
+        if (!positiveFinite(self.max_torque_nm) or !positiveFinite(self.idle_rpm) or
+            !positiveFinite(self.max_rpm) or self.max_rpm <= self.idle_rpm or
+            !positiveFinite(self.inertia_kg_m2) or !nonNegativeFinite(self.angular_damping) or
+            !nonNegativeFinite(self.switch_time_s) or !nonNegativeFinite(self.clutch_release_s) or
+            !nonNegativeFinite(self.switch_latency_s) or !positiveFinite(self.clutch_strength) or
+            !std.math.isFinite(self.shift_down_rpm) or !std.math.isFinite(self.shift_up_rpm) or
+            self.shift_down_rpm < self.idle_rpm or self.shift_up_rpm <= self.shift_down_rpm or
+            self.shift_up_rpm > self.max_rpm or !nonNegativeFinite(self.front_torque_fraction) or
+            self.front_torque_fraction > 1 or !positiveFinite(self.rear_differential_ratio) or
+            !std.math.isFinite(self.rear_limited_slip_ratio) or self.rear_limited_slip_ratio <= 1 or
+            !std.math.isFinite(self.center_limited_slip_ratio) or self.center_limited_slip_ratio <= 1)
+            return error.InvalidVehiclePowertrain;
+        if (self.forward_gears.len == 0 or self.reverse_gears.len == 0) return error.InvalidVehicleGears;
+        for (self.forward_gears, 0..) |ratio, i| {
+            if (!positiveFinite(ratio) or (i > 0 and ratio >= self.forward_gears[i - 1])) return error.InvalidVehicleGears;
+        }
+        for (self.reverse_gears, 0..) |ratio, i| {
+            if (!std.math.isFinite(ratio) or ratio >= 0 or (i > 0 and ratio <= self.reverse_gears[i - 1])) return error.InvalidVehicleGears;
+        }
+        if (self.torque_curve.len < 2) return error.InvalidVehicleTorqueCurve;
+        for (self.torque_curve, 0..) |point, i| {
+            if (!nonNegativeFinite(point.rpm_fraction) or point.rpm_fraction > 1 or
+                !nonNegativeFinite(point.torque_fraction) or
+                (i > 0 and point.rpm_fraction <= self.torque_curve[i - 1].rpm_fraction))
+                return error.InvalidVehicleTorqueCurve;
+        }
+        if (self.torque_curve[0].rpm_fraction != 0 or self.torque_curve[self.torque_curve.len - 1].rpm_fraction != 1)
+            return error.InvalidVehicleTorqueCurve;
+    }
+};
+
+/// Logical drivetrain motion. Contact and tire solver caches are excluded.
+pub const VehiclePowertrainState = struct {
+    engine_rpm: f32 = 1000,
+    gear: i32 = 0,
+    clutch_friction: f32 = 1,
+    switch_time_left_s: f32 = 0,
+    clutch_release_left_s: f32 = 0,
+    switch_latency_left_s: f32 = 0,
+
+    pub fn validate(self: VehiclePowertrainState) !void {
+        if (!nonNegativeFinite(self.engine_rpm) or !nonNegativeFinite(self.clutch_friction) or
+            self.clutch_friction > 1 or !nonNegativeFinite(self.switch_time_left_s) or
+            !nonNegativeFinite(self.clutch_release_left_s) or !nonNegativeFinite(self.switch_latency_left_s))
+            return error.InvalidVehiclePowertrainState;
+    }
+
+    pub fn validateFor(self: VehiclePowertrainState, settings: VehiclePowertrain) !void {
+        try self.validate();
+        if (self.engine_rpm < settings.idle_rpm or self.engine_rpm > settings.max_rpm or
+            @as(i64, self.gear) > settings.forward_gears.len or -@as(i64, self.gear) > settings.reverse_gears.len)
+            return error.IncompatibleVehiclePowertrainState;
+    }
+};
+
+/// Rear axle construction values. The established flat fields describe the
+/// front axle; naming is explicit at the authoring boundary.
+pub const VehicleRearAxle = struct {
+    suspension_min_length: f32 = 0.2,
+    suspension_max_length: f32 = 0.5,
+    suspension_frequency: f32 = 1.8,
+    suspension_damping: f32 = 0.7,
+    brake_torque_nm: f32 = 2200,
+    tire_friction: VehicleTireFriction = .{},
+    anti_roll_stiffness: f32 = 0,
+
+    pub fn validate(self: VehicleRearAxle) !void {
+        if (!nonNegativeFinite(self.suspension_min_length) or !positiveFinite(self.suspension_max_length) or
+            self.suspension_max_length <= self.suspension_min_length or !positiveFinite(self.suspension_frequency) or
+            !nonNegativeFinite(self.suspension_damping) or !nonNegativeFinite(self.brake_torque_nm) or
+            !nonNegativeFinite(self.anti_roll_stiffness)) return error.InvalidVehicleRearAxle;
+        try self.tire_friction.validate();
+    }
+};
+
 pub const VehicleDesc = struct {
     chassis: BodyState = .{},
+    initial_powertrain: ?VehiclePowertrainState = null,
     chassis_half_extents: [3]f32 = .{ 0.9, 0.25, 2.0 },
     center_of_mass_offset: [3]f32 = .{ 0, -0.25, 0 },
     mass: f32 = 1_500,
@@ -301,9 +429,10 @@ pub const VehicleDesc = struct {
     max_steer_radians: f32 = std.math.degreesToRadians(30.0),
     max_brake_torque: f32 = 1_500,
     max_hand_brake_torque: f32 = 4_000,
+    rear_axle: VehicleRearAxle = .{ .suspension_frequency = 1.5, .suspension_damping = 0.5, .brake_torque_nm = 1500 },
+    front_anti_roll_stiffness: f32 = 0,
     tire_friction: VehicleTireFriction = .{},
-    /// S2 deliberately supports one front-wheel-drive profile rather than a
-    /// generic drivetrain graph. These values remain authoritative config.
+    powertrain: VehiclePowertrain = .{},
     front_differential_ratio: f32 = 3.42,
     front_limited_slip_ratio: f32 = 1.4,
     max_pitch_roll_radians: f32 = std.math.degreesToRadians(60.0),
@@ -359,6 +488,10 @@ pub const VehicleDesc = struct {
             return error.InvalidVehicleBrakeTorque;
         }
         try self.tire_friction.validate();
+        try self.rear_axle.validate();
+        if (!nonNegativeFinite(self.front_anti_roll_stiffness)) return error.InvalidVehicleAntiRollBar;
+        try self.powertrain.validate();
+        if (self.initial_powertrain) |state| try state.validateFor(self.powertrain);
         if (!positiveFinite(self.front_differential_ratio) or
             !std.math.isFinite(self.front_limited_slip_ratio) or
             self.front_limited_slip_ratio <= 1)
@@ -387,6 +520,25 @@ pub const VehicleDesc = struct {
             dynamics.* = try dynamics.normalized();
         }
         return result;
+    }
+};
+
+/// The adapter can update these coefficients through public mutable runtime
+/// APIs without rebuilding wheels, contacts, drivetrain topology or the body.
+pub const VehicleLiveSettings = struct {
+    max_torque_nm: f32,
+    idle_rpm: f32,
+    max_rpm: f32,
+    inertia_kg_m2: f32,
+    angular_damping: f32,
+    max_pitch_roll_radians: f32,
+
+    pub fn validate(self: VehicleLiveSettings) !void {
+        if (!positiveFinite(self.max_torque_nm) or !positiveFinite(self.idle_rpm) or
+            !positiveFinite(self.max_rpm) or self.max_rpm <= self.idle_rpm or
+            !positiveFinite(self.inertia_kg_m2) or !nonNegativeFinite(self.angular_damping) or
+            !positiveFinite(self.max_pitch_roll_radians) or self.max_pitch_roll_radians > std.math.pi)
+            return error.InvalidVehicleLiveSettings;
     }
 };
 
@@ -424,6 +576,13 @@ pub const WheelState = struct {
     steer_angle: f32,
     suspension_length: f32,
     has_contact: bool,
+    /// Contact-valid values from the solver; divide impulses by the tick
+    /// duration for an estimated average force, never by render delta.
+    suspension_impulse_ns: f32 = 0,
+    longitudinal_impulse_ns: f32 = 0,
+    lateral_impulse_ns: f32 = 0,
+    longitudinal_slip: f32 = 0,
+    lateral_slip_radians: f32 = 0,
 
     pub fn validate(self: WheelState) !void {
         try self.pose.validate();
@@ -447,9 +606,11 @@ pub const VehicleState = struct {
     wheels: [vehicle_wheel_count]WheelState,
     engine_rpm: f32,
     current_gear: i32,
+    powertrain: VehiclePowertrainState = .{},
 
     pub fn validate(self: VehicleState) !void {
         try self.chassis.validate();
+        try self.powertrain.validate();
         for (self.wheels) |wheel| try wheel.validate();
         if (!std.math.isFinite(self.engine_rpm) or self.engine_rpm < 0) {
             return error.InvalidVehicleEngineState;
@@ -613,6 +774,8 @@ pub fn assertVehicleImplementation(comptime Vehicles: type) void {
             .{ *Vehicles, VehicleDesc },
             Vehicles.Handle,
         );
+        assertFallibleMethod(Vehicles, "setVehicleLiveSettings", .{ *Vehicles, Vehicles.Handle, VehicleLiveSettings }, void);
+        assertFallibleMethod(Vehicles, "rebuildVehicle", .{ *Vehicles, Vehicles.Handle, VehicleDesc }, Vehicles.Handle);
         assertFallibleMethod(
             Vehicles,
             "destroyVehicle",
@@ -927,6 +1090,10 @@ test "vehicle contract validates fixed wheel ordering input and adapter" {
         pub fn createVehicle(_: *@This(), _: VehicleDesc) !Handle {
             return .car;
         }
+        pub fn setVehicleLiveSettings(_: *@This(), _: Handle, _: VehicleLiveSettings) !void {}
+        pub fn rebuildVehicle(_: *@This(), _: Handle, _: VehicleDesc) !Handle {
+            return .car;
+        }
         pub fn destroyVehicle(_: *@This(), _: Handle) !void {}
         pub fn setVehicleInput(_: *@This(), _: Handle, _: VehicleInput) !void {}
         pub fn vehicleState(_: *@This(), _: Handle) !VehicleState {
@@ -1024,4 +1191,11 @@ test "vehicle contract validates fixed wheel ordering input and adapter" {
         try canonicalVehicleWheelRotation(std.math.tau * 8 + 0.75),
         0.00001,
     );
+}
+
+test "center differential coupling is finite and greater than unity" {
+    for ([_]f32{ 1, 0, std.math.nan(f32), std.math.inf(f32) }) |ratio| {
+        try std.testing.expectError(error.InvalidVehiclePowertrain, (VehiclePowertrain{ .center_limited_slip_ratio = ratio }).validate());
+    }
+    try (VehiclePowertrain{ .center_limited_slip_ratio = std.math.floatMax(f32) }).validate();
 }

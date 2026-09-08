@@ -252,7 +252,7 @@ fn writeSmoke(init: std.process.Init, raw_save_root: []const u8, raw_content_roo
     try world.submitNpc(.{ .set_goal = .{
         .request_id = 31,
         .id = npc_id,
-        .goal = .{ .navigate_to = sandbox_contracts.market_terminal_destination },
+        .goal = .{ .navigate_to = sandbox_contracts.freight_dispatch_destination },
     } });
     try world.tick();
     try drainNpcOutputs(&world, &npc_evidence);
@@ -675,7 +675,7 @@ fn drainNpcOutputs(world: *sandbox.Simulation, evidence: *NpcEvidence) !void {
         .goal_set => |set| {
             const id = evidence.id orelse return error.UnexpectedNpcOutcome;
             const expected_goal = npc_contract.Goal{
-                .navigate_to = sandbox_contracts.market_terminal_destination,
+                .navigate_to = sandbox_contracts.freight_dispatch_destination,
             };
             if (set.request_id != 31 or
                 !std.meta.eql(set.id, id) or
@@ -771,7 +771,7 @@ fn verifyCompactNpcSnapshot(
                 else => return error.UnexpectedNpcSnapshotRecord,
             };
             const next = record.route.next orelse return error.UnexpectedNpcSnapshotRecord;
-            if (!std.meta.eql(target, sandbox_contracts.market_terminal_destination) or
+            if (!std.meta.eql(target, sandbox_contracts.freight_dispatch_destination) or
                 !sandbox_contracts.ChunkCoord.eql(next.coord, sandbox_contracts.navigation_east_coord) or
                 next.index != 0)
             {

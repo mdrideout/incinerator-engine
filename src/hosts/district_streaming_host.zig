@@ -638,8 +638,8 @@ const State = struct {
             .{
                 self.slots[slot_index].coord.x,
                 self.slots[slot_index].coord.z,
-                upload_plan.mesh_count,
-                upload_plan.texture_count,
+                upload_plan.upload.meshes.len,
+                upload_plan.upload.textures.len,
                 staged_stats.staged_cpu_bytes,
             },
         );
@@ -664,7 +664,8 @@ const State = struct {
             .content_ready => |value| value.scene,
             else => return error.DistrictPendingSceneStateMismatch,
         };
-        var upload_plan = try district_scene_adapter.build(pending.view());
+        var upload_plan = try district_scene_adapter.build(self.allocator, pending.view());
+        defer upload_plan.deinit();
         if (!try self.stageUpload(
             authority,
             frame_index,
@@ -1429,6 +1430,15 @@ pub const Owner = opaque {
             }
         }
         const asset = target orelse return null;
+        return self.textureByAssetId(asset.id);
+    }
+
+    pub fn textureByAssetId(self: *Owner, id: engine.assets.AssetId) !?district_gpu_registry.SdlTextureBinding {
+        const state = ownerState(self);
+        const admitted = if (state.catalog) |*value| value else return null;
+        const asset = for (admitted.assets.entries) |*entry| {
+            if (entry.kind == .texture and std.meta.eql(entry.id, id)) break entry;
+        } else return null;
         var texture_ordinal: u16 = 0;
         for (admitted.assets.entries) |candidate| {
             if (!std.mem.eql(u8, candidate.bundle_key, asset.bundle_key)) continue;
@@ -1838,7 +1848,8 @@ test "adjacent visual prefetch enters before authority residency" {
         .load_margin = east.authority_load_margin,
         .unload_margin = east.authority_unload_margin,
     });
-    const west_center = sandbox_recipe.presentation_policies[west_slot_index].center_xz;
+    const west_center = [2]f32{ east.center_xz[0] - east.half_extent_xz[0] -
+        (east.prefetch_load_margin + east.authority_load_margin) / 2, east.center_xz[1] };
     try std.testing.expectEqual(
         district_presentation.ProximityAction.enter,
         try prefetch.observe(west_center),

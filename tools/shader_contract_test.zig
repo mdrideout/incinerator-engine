@@ -64,17 +64,17 @@ test "SDL GPU shader interfaces and resources match the renderer contract" {
             .reflection = reflections.model_vertex,
             .stage = "vert",
             .input_locations = &.{ 0, 1, 2 },
-            .output_locations = &.{ 0, 1 },
-            .ubos = &.{.{ .set = 1, .binding = 0, .block_size = 128 }},
+            .output_locations = &.{ 0, 1, 2 },
+            .ubos = &.{.{ .set = 1, .binding = 0, .block_size = 192 }},
         },
         .{
             .source = "model.frag",
             .reflection = reflections.model_fragment,
             .stage = "frag",
-            .input_locations = &.{ 0, 1 },
+            .input_locations = &.{ 0, 1, 2 },
             .output_locations = &.{0},
-            .textures = &.{.{ .set = 2, .binding = 0 }},
-            .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 96 }},
+            .textures = &.{ .{ .set = 2, .binding = 0 }, .{ .set = 2, .binding = 1 }, .{ .set = 2, .binding = 2 }, .{ .set = 2, .binding = 3 }, .{ .set = 2, .binding = 4 } },
+            .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 128 }},
         },
         .{
             .source = "visibility.frag",
@@ -132,6 +132,18 @@ test "selected backend artifacts have the expected container and entry point" {
     try std.testing.expect(std.mem.indexOf(u8, shader_assets.neural_primitive_fragment, "fragment main0") != null);
     try std.testing.expect(std.mem.indexOf(u8, shader_assets.neural_model_vertex, "vertex main0") != null);
     try std.testing.expect(std.mem.indexOf(u8, shader_assets.neural_model_fragment, "fragment main0") != null);
+}
+
+test "generated Metal material sampler slots preserve the SDL binding ABI" {
+    for ([_][]const u8{
+        "base_color_texture [[texture(0)]]",
+        "metallic_roughness_texture [[texture(1)]]",
+        "normal_texture [[texture(2)]]",
+        "occlusion_texture [[texture(3)]]",
+        "emissive_texture [[texture(4)]]",
+        "base_color_textureSmplr [[sampler(0)]]",
+        "normal_textureSmplr [[sampler(2)]]",
+    }) |declaration| try std.testing.expect(std.mem.indexOf(u8, shader_assets.model_fragment, declaration) != null);
 }
 
 fn validateContract(contract: Contract) !void {

@@ -9,3 +9,6 @@ pub const camera = @import("camera.zig");
 pub const visual_catalog = @import("sandbox_visual_catalog.zig");
 
 pub const c = sdl.c;
+
+pub const vehicle_visuals = @import("vehicle_visual_resources.zig");
+pub const content = @import("content");

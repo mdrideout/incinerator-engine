@@ -1,0 +1,16 @@
+Source log: /tmp/vehicle-background-tests-final.log
+Build Summary: 338/338 steps succeeded; 1311/1311 tests passed
+Source log: /tmp/vehicle-background-noeditor.log
+Build Summary: 330/330 steps succeeded; 1205/1207 tests passed (2 skipped)
+Source log: /tmp/vehicle-offscreen-final.log
+EA2_DRIVE_PASS presentation=offscreen sdl_pedal_journey=false car=Courier world=industrial timestep_hz=60 frames=1375 peak_speed_mps=7.302 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+EA2_DRIVE_PASS presentation=offscreen sdl_pedal_journey=false car=Meridian world=industrial timestep_hz=60 frames=1375 peak_speed_mps=6.694 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+EA2_DRIVE_PASS presentation=offscreen sdl_pedal_journey=false car=Courier-AWD world=industrial timestep_hz=60 frames=1375 peak_speed_mps=7.448 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+All 2 tests passed.
+Frontmost before: ChatGPT pid=67224
+Frontmost after: ChatGPT pid=67224
+Background violations: []; command status: 0
+Build Summary: 89/89 steps succeeded
+verified S4 replay: path=/Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-offscreen-Courier.icrp ticks=1891
+verified S4 replay: path=/Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-offscreen-Meridian.icrp ticks=2041
+verified S4 replay: path=/Users/matt/repos/incinerator-engine/zig-out/vehicle-motion-offscreen-Courier-AWD.icrp ticks=1947
