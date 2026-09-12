@@ -1,0 +1,335 @@
+1/2 vehicle_offscreen_test.test.EA2 offscreen industrial vehicle motion and rendering...GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=12867264
+VEHICLE_NATIVE_SEGMENT car=Courier segment=0 forward_mps=6.291
+VEHICLE_NATIVE_SEGMENT car=Courier segment=1 forward_mps=0.000
+VEHICLE_NATIVE_SEGMENT car=Courier segment=2 forward_mps=-7.225
+VEHICLE_NATIVE_SEGMENT car=Courier segment=3 forward_mps=-0.000
+VEHICLE_NATIVE_SEGMENT car=Courier segment=4 forward_mps=4.243
+VEHICLE_NATIVE_SEGMENT car=Courier segment=5 forward_mps=-7.231
+VEHICLE_NATIVE_SEGMENT car=Courier segment=6 forward_mps=4.728
+VEHICLE_NATIVE_SEGMENT car=Courier segment=7 forward_mps=6.448
+VEHICLE_NATIVE_SEGMENT car=Courier segment=8 forward_mps=5.144
+VEHICLE_NATIVE_SEGMENT car=Courier segment=9 forward_mps=4.915
+VEHICLE_NATIVE_SEGMENT car=Courier segment=10 forward_mps=0.000
+EA2_DRIVE_PASS presentation=offscreen sdl_pedal_journey=false car=Courier world=industrial timestep_hz=60 frames=1375 peak_speed_mps=7.255 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 1555
+ Total simulation ticks: 1896
+===========================================
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=12867264
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=0 forward_mps=6.286
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=1 forward_mps=0.001
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=2 forward_mps=-5.219
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=3 forward_mps=-0.001
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=4 forward_mps=4.255
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=5 forward_mps=-4.555
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=6 forward_mps=4.681
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=7 forward_mps=6.688
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=8 forward_mps=5.155
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=9 forward_mps=4.748
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=10 forward_mps=0.000
+EA2_DRIVE_PASS presentation=offscreen sdl_pedal_journey=false car=Meridian world=industrial timestep_hz=60 frames=1375 peak_speed_mps=6.699 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 1555
+ Total simulation ticks: 2046
+===========================================
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=12867264
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=0 forward_mps=7.322
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=1 forward_mps=0.000
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=2 forward_mps=-6.792
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=3 forward_mps=-0.001
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=4 forward_mps=4.792
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=5 forward_mps=-6.782
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=6 forward_mps=4.796
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=7 forward_mps=5.767
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=8 forward_mps=4.261
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=9 forward_mps=4.274
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=10 forward_mps=-0.000
+EA2_DRIVE_PASS presentation=offscreen sdl_pedal_journey=false car=Courier-AWD world=industrial timestep_hz=60 frames=1375 peak_speed_mps=7.346 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 1555
+ Total simulation ticks: 1952
+===========================================
+OK
+2/2 main.test_0...OK
+All 2 tests passed.
+Frontmost before: ChatGPT pid=67224
+Frontmost after: ChatGPT pid=67224
+Background violations: []; command status: 0
+Build Summary: 91/91 steps succeeded
+verify-vehicle-background-macos success
++- observe offscreen desktop focus success 19s
+   +- run swiftc (observe-background-macos) cached
+   +- compile test vehicle-offscreen-tests ReleaseSafe native success 59s MaxRSS:1G
+   |  +- WriteFile SDL3 cached
+   |  |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h cached
+   |  +- compile lib SDL3 ReleaseSafe native cached 187ms MaxRSS:35M
+   |  |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+   |  |  +- configure cmake header include/build_config/SDL_build_config.h.cmake to SDL_build_config.h cached
+   |  |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+   |  +- WriteFile cached
+   |  +- compile lib incinerator_imgui ReleaseSafe native cached 52ms MaxRSS:33M
+   |  +- compile lib SDL3 ReleaseSafe native (+3 more reused dependencies)
+   |  +- compile lib incinerator_imgui ReleaseSafe native (reused)
+   |  +- options success
+   |  +- options cached
+   |  +- WriteFile triangle.vert.metal cached
+   |  |  +- run spirv-cross (triangle.vert.metal) cached
+   |  |  |  +- run glslc (triangle.vert.spv) cached
+   |  |  +- run spirv-cross (triangle.frag.metal) cached
+   |  |  |  +- run glslc (triangle.frag.spv) cached
+   |  |  +- run spirv-cross (model.vert.metal) cached
+   |  |  |  +- run glslc (model.vert.spv) cached
+   |  |  +- run spirv-cross (model.frag.metal) cached
+   |  |  |  +- run glslc (model.frag.spv) cached
+   |  |  +- run spirv-cross (visibility.frag.metal) cached
+   |  |  |  +- run glslc (visibility.frag.spv) cached
+   |  |  +- run spirv-cross (neural_primitive.vert.metal) cached
+   |  |  |  +- run glslc (neural_primitive.vert.spv) cached
+   |  |  +- run spirv-cross (neural_primitive.frag.metal) cached
+   |  |  |  +- run glslc (neural_primitive.frag.spv) cached
+   |  |  +- run spirv-cross (neural_model.vert.metal) cached
+   |  |  |  +- run glslc (neural_model.vert.spv) cached
+   |  |  +- run spirv-cross (neural_model.frag.metal) cached
+   |  |  |  +- run glslc (neural_model.frag.spv) cached
+   |  |  +- run spirv-cross (triangle.vert.json) cached
+   |  |  |  +- run glslc (triangle.vert.spv) (reused)
+   |  |  +- run spirv-cross (triangle.frag.json) cached
+   |  |  |  +- run glslc (triangle.frag.spv) (reused)
+   |  |  +- run spirv-cross (model.vert.json) cached
+   |  |  |  +- run glslc (model.vert.spv) (reused)
+   |  |  +- run spirv-cross (model.frag.json) cached
+   |  |  |  +- run glslc (model.frag.spv) (reused)
+   |  |  +- run spirv-cross (visibility.frag.json) cached
+   |  |  |  +- run glslc (visibility.frag.spv) (reused)
+   |  |  +- run spirv-cross (neural_primitive.vert.json) cached
+   |  |  |  +- run glslc (neural_primitive.vert.spv) (reused)
+   |  |  +- run spirv-cross (neural_primitive.frag.json) cached
+   |  |  |  +- run glslc (neural_primitive.frag.spv) (reused)
+   |  |  +- run spirv-cross (neural_model.vert.json) cached
+   |  |  |  +- run glslc (neural_model.vert.spv) (reused)
+   |  |  +- run spirv-cross (neural_model.frag.json) cached
+   |  |     +- run glslc (neural_model.frag.spv) (reused)
+   |  +- options cached
+   |  +- options cached
+   |  +- options cached
+   |  +- options cached
+   |  +- options cached
+   |  +- WriteFile joltc.h cached
+   |  +- compile lib joltc ReleaseSafe native cached 81ms MaxRSS:34M
+   |  +- compile lib joltc ReleaseSafe native (reused)
+   +- install success
+      +- install generated to share/incinerator/content/vehicle/meridian.icdb success
+      |  +- run exe incinerator_content_cooker (meridian.icdb) success 29ms
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native cached 53ms MaxRSS:34M
+      |        +- WriteFile cached
+      |        +- compile lib zmesh ReleaseSafe native cached 51ms MaxRSS:33M
+      |        +- compile lib zmesh ReleaseSafe native (reused)
+      |        +- WriteFile (reused)
+      |        +- compile lib zmesh ReleaseSafe native (reused)
+      |        +- compile lib zmesh ReleaseSafe native (reused)
+      |        +- options cached
+      |        +- options cached
+      +- install generated to share/incinerator/content/vehicle/courier.icdb success
+      |  +- run exe incinerator_content_cooker (courier.icdb) success 9ms
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/vehicle/courier-awd.icdb success
+      |  +- run exe incinerator_content_cooker (courier-awd.icdb) success 8ms
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install game/vehicles/494e43494e455241-867ee4c3b011b0fe.icvehicle to share/incinerator/content/vehicle/494e43494e455241-867ee4c3b011b0fe.icvehicle success
+      +- install game/vehicles/494e43494e455241-20915108d5f1c706.icvehicle to share/incinerator/content/vehicle/494e43494e455241-20915108d5f1c706.icvehicle success
+      +- install game/vehicles/494e43494e455241-38d7f4075c7ac47d.icvehicle to share/incinerator/content/vehicle/494e43494e455241-38d7f4075c7ac47d.icvehicle success
+      +- install generated to share/incinerator/content/district/industrial_0_0.icdb cached
+      |  +- run exe incinerator_content_cooker (industrial_0_0.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_0_0.PROVENANCE.md cached
+      +- install generated to share/incinerator/content/district/industrial_1_0.icdb cached
+      |  +- run exe incinerator_content_cooker (industrial_1_0.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+      +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_1_0.PROVENANCE.md cached
+      +- install generated to share/incinerator/content/district/industrial_0_1.icdb cached
+      |  +- run exe incinerator_content_cooker (industrial_0_1.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+      +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_0_1.PROVENANCE.md cached
+      +- install generated to share/incinerator/content/district/industrial_1_1.icdb cached
+      |  +- run exe incinerator_content_cooker (industrial_1_1.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_1.icdb) (+2 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_1_0.icdb) (+2 more reused dependencies)
+      +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_1_1.PROVENANCE.md cached
+      +- install generated to share/incinerator/content/district/catalog.icat cached
+      |  +- run exe incinerator_content_catalog_cooker (industrial_catalog.icat) cached
+      |     +- compile exe incinerator_content_catalog_cooker ReleaseSafe native cached 54ms MaxRSS:34M
+      |     |  +- options (reused)
+      |     +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_1_0.icdb) (+2 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_1.icdb) (+2 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_1_1.icdb) (+3 more reused dependencies)
+      +- install game/industrial/materials.icmat to share/incinerator/content/materials.icmat cached
+      +- install incinerator_replay cached
+      |  +- compile exe incinerator_replay ReleaseSafe native cached 54ms MaxRSS:35M
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- WriteFile joltc.h (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      |     +- options (reused)
+      +- install incinerator_incident_inspect cached
+      |  +- compile exe incinerator_incident_inspect ReleaseSafe native cached 61ms MaxRSS:34M
+      +- install incinerator_save cached
+      |  +- compile exe incinerator_save ReleaseSafe native cached 65ms MaxRSS:35M
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- WriteFile joltc.h (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      +- install incinerator_vehicle_dynamics success
+      |  +- compile exe incinerator_vehicle_dynamics ReleaseSafe native success 13s MaxRSS:449M
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- WriteFile joltc.h (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      +- install incinerator_engine success
+      |  +- compile exe incinerator_engine ReleaseSafe native success 1m MaxRSS:1G
+      |     +- shaders cached
+      |     |  +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+      |     +- WriteFile SDL3 (+1 more reused dependencies)
+      |     +- compile lib SDL3 ReleaseSafe native (+3 more reused dependencies)
+      |     +- WriteFile (reused)
+      |     +- compile lib incinerator_imgui ReleaseSafe native (reused)
+      |     +- compile lib SDL3 ReleaseSafe native (+3 more reused dependencies)
+      |     +- compile lib incinerator_imgui ReleaseSafe native (reused)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- WriteFile joltc.h (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      +- install incinerator-dev cached
+         +- compile exe incinerator-dev ReleaseSafe native cached 61ms MaxRSS:34M
+

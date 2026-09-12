@@ -15,7 +15,8 @@ const Mesh = mesh_module.Mesh;
 const VertexPNU = mesh_module.VertexPNU;
 const OwnedTexture = texture_module.OwnedTexture;
 
-pub const max_scenes: usize = 4;
+// Twenty authored districts now participate in visual residency. Byte budgets remain explicit.
+pub const max_scenes: usize = 20;
 pub const max_in_flight_batches: usize = 2;
 pub const max_scenes_per_batch: usize = 4;
 
@@ -76,7 +77,7 @@ pub const SceneUpload = struct {
 pub const Config = struct {
     max_staged_cpu_bytes: u64 = 16 * 1024 * 1024,
     max_in_flight_upload_bytes: u64 = 16 * 1024 * 1024,
-    max_resident_gpu_bytes: u64 = 32 * 1024 * 1024,
+    max_resident_gpu_bytes: u64 = 64 * 1024 * 1024,
     max_submit_bytes_per_pump: u64 = 8 * 1024 * 1024,
 
     pub fn validate(self: Config) !void {
@@ -1758,7 +1759,7 @@ test "budget and fixed scene capacity produce explicit backpressure" {
     );
 }
 
-test "fixed registry capacity rejects a fifth live generation" {
+test "registry capacity rejects a live generation beyond its scene slots" {
     var recorder = FakeRecorder{};
     var registry = try testRegistry(&recorder);
     defer registry.deinit();

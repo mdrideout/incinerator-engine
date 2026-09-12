@@ -1,0 +1,105 @@
+{
+  "schema": 1,
+  "success": true,
+  "jobs": 12,
+  "binary": "/Users/matt/repos/incinerator-engine/.zig-cache/o/9d616b6ac932bde40e237e2192626ae5/incinerator_vehicle_dynamics",
+  "elapsed_seconds": 1.3500179999973625,
+  "workers": [
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-20915108d5f1c706.icvehicle",
+      "heading": 0,
+      "returncode": 0,
+      "elapsed_seconds": 1.3143065839540213,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-20915108d5f1c706-0.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-20915108d5f1c706-0.log"
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-20915108d5f1c706.icvehicle",
+      "heading": 90,
+      "returncode": 0,
+      "elapsed_seconds": 1.3249173338990659,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-20915108d5f1c706-90.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-20915108d5f1c706-90.log"
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-20915108d5f1c706.icvehicle",
+      "heading": 180,
+      "returncode": 0,
+      "elapsed_seconds": 1.2807224170537665,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-20915108d5f1c706-180.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-20915108d5f1c706-180.log"
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-20915108d5f1c706.icvehicle",
+      "heading": 270,
+      "returncode": 0,
+      "elapsed_seconds": 1.3262408329173923,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-20915108d5f1c706-270.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-20915108d5f1c706-270.log"
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-38d7f4075c7ac47d.icvehicle",
+      "heading": 0,
+      "returncode": 0,
+      "elapsed_seconds": 1.1963456670055166,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-38d7f4075c7ac47d-0.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-38d7f4075c7ac47d-0.log"
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-38d7f4075c7ac47d.icvehicle",
+      "heading": 90,
+      "returncode": 0,
+      "elapsed_seconds": 1.217961375019513,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-38d7f4075c7ac47d-90.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-38d7f4075c7ac47d-90.log"
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-38d7f4075c7ac47d.icvehicle",
+      "heading": 180,
+      "returncode": 0,
+      "elapsed_seconds": 1.2577671249164268,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-38d7f4075c7ac47d-180.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-38d7f4075c7ac47d-180.log"
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-38d7f4075c7ac47d.icvehicle",
+      "heading": 270,
+      "returncode": 0,
+      "elapsed_seconds": 1.2660242919810116,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-38d7f4075c7ac47d-270.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-38d7f4075c7ac47d-270.log"
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-867ee4c3b011b0fe.icvehicle",
+      "heading": 0,
+      "returncode": 0,
+      "elapsed_seconds": 1.3013130830368027,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-867ee4c3b011b0fe-0.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-867ee4c3b011b0fe-0.log"
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-867ee4c3b011b0fe.icvehicle",
+      "heading": 90,
+      "returncode": 0,
+      "elapsed_seconds": 1.235390166984871,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-867ee4c3b011b0fe-90.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-867ee4c3b011b0fe-90.log"
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-867ee4c3b011b0fe.icvehicle",
+      "heading": 180,
+      "returncode": 0,
+      "elapsed_seconds": 1.1357119170716032,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-867ee4c3b011b0fe-180.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-867ee4c3b011b0fe-180.log"
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-867ee4c3b011b0fe.icvehicle",
+      "heading": 270,
+      "returncode": 0,
+      "elapsed_seconds": 1.2664356249151751,
+      "report": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-867ee4c3b011b0fe-270.json",
+      "log": "/tmp/vehicle-responsive/final-motion/parts/494e43494e455241-867ee4c3b011b0fe-270.log"
+    }
+  ]
+}

@@ -20,12 +20,15 @@ pub fn resolve(input: engine.physics.VehicleInput, forward_mps: f32, horizontal_
         result.throttle = 0;
         result.brake = @max(input.brake, @abs(input.throttle));
     }
+    // Handbrake demand takes priority over propulsion. Preserve analog demand
+    // and opposite-pedal service braking; releasing it restores the raw pedal.
+    result.throttle *= 1 - input.hand_brake;
     return result;
 }
 
 test "opposite pedal brakes in both directions and only engages drive at standstill" {
     for ([_]f32{ -1, 1 }) |direction| {
-        const raw = engine.physics.VehicleInput{ .throttle = -direction, .steering = 0.5, .hand_brake = 1 };
+        const raw = engine.physics.VehicleInput{ .throttle = -direction, .steering = 0.5 };
         const braking = resolve(raw, direction * 8, 8, @intFromFloat(direction));
         try std.testing.expectEqual(@as(f32, 0), braking.throttle);
         try std.testing.expectEqual(@as(f32, 1), braking.brake);
@@ -44,5 +47,17 @@ test "direction change waits for sideways motion to stop before shifting" {
         const braking = resolve(demand, 0, 6, gear);
         try std.testing.expect(braking.throttle == 0 and braking.brake == 1);
         try std.testing.expectEqualDeep(demand, resolve(demand, 0, 0.05, gear));
+    }
+}
+
+test "handbrake suppresses propulsion in either gear and releases immediately" {
+    for ([_]f32{ -1, 1 }) |direction| {
+        const gear: i32 = @intFromFloat(direction);
+        try std.testing.expectEqual(@as(f32, 0), resolve(.{ .throttle = direction, .hand_brake = 1 }, direction * 8, 8, gear).throttle);
+        try std.testing.expectEqual(direction * 0.5, resolve(.{ .throttle = direction, .hand_brake = 0.5 }, direction * 8, 8, gear).throttle);
+        try std.testing.expectEqual(direction, resolve(.{ .throttle = direction }, direction * 8, 8, gear).throttle);
+        const braking = resolve(.{ .throttle = -direction, .hand_brake = 1 }, direction * 8, 8, gear);
+        try std.testing.expectEqual(@as(f32, 1), braking.brake);
+        try std.testing.expectEqual(@as(f32, 1), braking.hand_brake);
     }
 }

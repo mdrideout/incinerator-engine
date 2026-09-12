@@ -1,0 +1,1067 @@
+{
+  "schema": 1,
+  "build": {
+    "tire_response": "combined-slip-sliding-v1",
+    "source_cohort": 12012028534066410874,
+    "jolt_revision": "23dadd0e603f1b321142d4c74df07fce85064989",
+    "joltc_revision": "52d8c98df523f449eb3e01b1060a0fde052970d1",
+    "zig_version": "0.16.0",
+    "optimize": "ReleaseSafe",
+    "architecture": "aarch64"
+  },
+  "definition": {
+    "version": 2,
+    "id": {
+      "asset": {
+        "namespace": 5282233395077009985,
+        "local": 2346745979227719430
+      }
+    },
+    "label": "Courier sedan",
+    "revision": 8,
+    "tuning": {
+      "steering": {
+        "rise_per_second": 5.5,
+        "return_per_second": 8,
+        "speed_curve": [
+          {
+            "speed_mps": 0,
+            "lock_fraction": 1
+          },
+          {
+            "speed_mps": 8,
+            "lock_fraction": 0.550000011920929
+          },
+          {
+            "speed_mps": 18,
+            "lock_fraction": 0.47999998927116394
+          },
+          {
+            "speed_mps": 30,
+            "lock_fraction": 0.3199999928474426
+          }
+        ]
+      },
+      "chassis_half_extents": [
+        0.8299999833106995,
+        0.6499999761581421,
+        1.9199999570846558
+      ],
+      "center_of_mass_offset": [
+        0,
+        -0.44999998807907104,
+        -0.15000000596046448
+      ],
+      "mass": 1120,
+      "wheel_attachment_positions": [
+        [
+          -0.7200000286102295,
+          -0.17000000178813934,
+          -1.2400000095367432
+        ],
+        [
+          0.7200000286102295,
+          -0.17000000178813934,
+          -1.2400000095367432
+        ],
+        [
+          -0.7200000286102295,
+          -0.17000000178813934,
+          1.2400000095367432
+        ],
+        [
+          0.7200000286102295,
+          -0.17000000178813934,
+          1.2400000095367432
+        ]
+      ],
+      "wheel_radius": 0.28999999165534973,
+      "wheel_width": 0.1850000023841858,
+      "suspension_min_length": 0.14000000059604645,
+      "suspension_max_length": 0.4399999976158142,
+      "suspension_frequency": 1.350000023841858,
+      "suspension_damping": 0.7200000286102295,
+      "max_steer_radians": 0.5585053563117981,
+      "max_brake_torque": 1700,
+      "max_hand_brake_torque": 4000,
+      "rear_axle": {
+        "suspension_min_length": 0.14000000059604645,
+        "suspension_max_length": 0.4399999976158142,
+        "suspension_frequency": 1.4500000476837158,
+        "suspension_damping": 0.7200000286102295,
+        "brake_torque_nm": 600,
+        "tire_friction": {
+          "longitudinal_peak_slip": 0.05999999865889549,
+          "longitudinal_peak_friction": 12.59999942779541,
+          "longitudinal_slide_slip": 0.6000000238418579,
+          "longitudinal_slide_friction": 11.970000267028809,
+          "lateral_peak_angle_radians": 0.06981316953897476,
+          "lateral_peak_friction": 14.434200286865234,
+          "lateral_slide_angle_radians": 0.3490658402442932,
+          "lateral_slide_friction": 11.54736042022705
+        },
+        "anti_roll_stiffness": 300
+      },
+      "front_anti_roll_stiffness": 400,
+      "tire_friction": {
+        "longitudinal_peak_slip": 0.05999999865889549,
+        "longitudinal_peak_friction": 4.900000095367432,
+        "longitudinal_slide_slip": 0.3499999940395355,
+        "longitudinal_slide_friction": 4.025000095367432,
+        "lateral_peak_angle_radians": 0.06981316953897476,
+        "lateral_peak_friction": 12.247200012207031,
+        "lateral_slide_angle_radians": 0.3490658402442932,
+        "lateral_slide_friction": 9.797760009765625
+      },
+      "powertrain": {
+        "max_torque_nm": 560,
+        "idle_rpm": 800,
+        "max_rpm": 6000,
+        "inertia_kg_m2": 0.3499999940395355,
+        "angular_damping": 0.20000000298023224,
+        "torque_curve": [
+          {
+            "rpm_fraction": 0,
+            "torque_fraction": 0.20000000298023224
+          },
+          {
+            "rpm_fraction": 0.5,
+            "torque_fraction": 0.3499999940395355
+          },
+          {
+            "rpm_fraction": 0.800000011920929,
+            "torque_fraction": 1
+          },
+          {
+            "rpm_fraction": 1,
+            "torque_fraction": 0.7200000286102295
+          }
+        ],
+        "forward_gears": [
+          3.200000047683716,
+          2,
+          1.3799999952316284,
+          1,
+          0.7799999713897705
+        ],
+        "reverse_gears": [
+          -4
+        ],
+        "switch_time_s": 0.30000001192092896,
+        "clutch_release_s": 0.18000000715255737,
+        "switch_latency_s": 0.5,
+        "shift_up_rpm": 5100,
+        "shift_down_rpm": 1800,
+        "clutch_strength": 10,
+        "front_torque_fraction": 1,
+        "rear_differential_ratio": 3.7300000190734863,
+        "rear_limited_slip_ratio": 1.399999976158142,
+        "center_limited_slip_ratio": 1.399999976158142
+      },
+      "front_differential_ratio": 3.4200000762939453,
+      "front_limited_slip_ratio": 1.399999976158142,
+      "max_pitch_roll_radians": 3.1415927410125732,
+      "wheel_collision_max_slope_radians": 1.0471975803375244
+    },
+    "visuals": {
+      "chassis": {
+        "mesh": {
+          "namespace": 5282233395077009985,
+          "local": 9193263696161710883
+        },
+        "material": {
+          "namespace": 5282233395077009985,
+          "local": 2740942240368028446
+        },
+        "local_pose": {
+          "position": [
+            0,
+            -0.18000000715255737,
+            0
+          ],
+          "rotation": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        "scale": [
+          1,
+          1,
+          1
+        ]
+      },
+      "wheels": [
+        {
+          "mesh": {
+            "namespace": 5282233395077009985,
+            "local": 11653646415283126671
+          },
+          "material": {
+            "namespace": 5282233395077009985,
+            "local": 9433346811235843760
+          },
+          "local_pose": {
+            "position": [
+              0,
+              0,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "scale": [
+            0.1850000023841858,
+            0.5799999833106995,
+            0.5799999833106995
+          ]
+        },
+        {
+          "mesh": {
+            "namespace": 5282233395077009985,
+            "local": 11653646415283126671
+          },
+          "material": {
+            "namespace": 5282233395077009985,
+            "local": 9433346811235843760
+          },
+          "local_pose": {
+            "position": [
+              0,
+              0,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "scale": [
+            0.1850000023841858,
+            0.5799999833106995,
+            0.5799999833106995
+          ]
+        },
+        {
+          "mesh": {
+            "namespace": 5282233395077009985,
+            "local": 11653646415283126671
+          },
+          "material": {
+            "namespace": 5282233395077009985,
+            "local": 9433346811235843760
+          },
+          "local_pose": {
+            "position": [
+              0,
+              0,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "scale": [
+            0.1850000023841858,
+            0.5799999833106995,
+            0.5799999833106995
+          ]
+        },
+        {
+          "mesh": {
+            "namespace": 5282233395077009985,
+            "local": 11653646415283126671
+          },
+          "material": {
+            "namespace": 5282233395077009985,
+            "local": 9433346811235843760
+          },
+          "local_pose": {
+            "position": [
+              0,
+              0,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "scale": [
+            0.1850000023841858,
+            0.5799999833106995,
+            0.5799999833106995
+          ]
+        }
+      ]
+    }
+  },
+  "definition_digest": [
+    190,
+    232,
+    104,
+    206,
+    243,
+    246,
+    5,
+    235,
+    128,
+    197,
+    88,
+    154,
+    88,
+    145,
+    38,
+    137,
+    148,
+    139,
+    6,
+    92,
+    58,
+    33,
+    242,
+    121,
+    20,
+    229,
+    235,
+    178,
+    251,
+    143,
+    243,
+    117
+  ],
+  "timestep_s": 0.01666666753590107,
+  "surface_friction": 0.20000000298023224,
+  "held_seconds": 8,
+  "release_seconds": 3,
+  "stop_speed_mps": 0.25,
+  "stop_dwell_seconds": 0.25,
+  "results": [
+    {
+      "requested_entry_mps": 0,
+      "entry_mps": 0,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": 0,
+      "stopping_time_s": 0.01666666753590107,
+      "stopping_distance_m": 0.000001163233605439018,
+      "held_distance_m": 0.0002650373207870871,
+      "held_final_speed_mps": 0.000027010426492779516,
+      "held_peak_speed_mps": 0.00009826265159063041,
+      "held_peak_sideslip_deg": 0,
+      "held_peak_yaw_rate_deg_s": 0.00861114077270031,
+      "held_yaw_travel_deg": 0.000143560188007541,
+      "recovery_peak_sideslip_deg": 0.0032282094471156597,
+      "released_final_speed_mps": 2.805269718170166
+    },
+    {
+      "requested_entry_mps": 0,
+      "entry_mps": 0,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": 1,
+      "stopping_time_s": 0.01666666753590107,
+      "stopping_distance_m": 0.000001163233605439018,
+      "held_distance_m": 0.0002650373207870871,
+      "held_final_speed_mps": 0.000027010426492779516,
+      "held_peak_speed_mps": 0.00009826265159063041,
+      "held_peak_sideslip_deg": 0,
+      "held_peak_yaw_rate_deg_s": 0.00861114077270031,
+      "held_yaw_travel_deg": 0.000143560188007541,
+      "recovery_peak_sideslip_deg": 0.0032282094471156597,
+      "released_final_speed_mps": 2.805269718170166
+    },
+    {
+      "requested_entry_mps": 0,
+      "entry_mps": 0,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": 0,
+      "stopping_time_s": 0.01666666753590107,
+      "stopping_distance_m": 0.0000010668729828466894,
+      "held_distance_m": 0.00003165150701534003,
+      "held_final_speed_mps": 0.000004178396466159029,
+      "held_peak_speed_mps": 0.00008385229739360511,
+      "held_peak_sideslip_deg": 0,
+      "held_peak_yaw_rate_deg_s": 0.008028576150536537,
+      "held_yaw_travel_deg": 0.00013360702723730356,
+      "recovery_peak_sideslip_deg": 0.017922522500157356,
+      "released_final_speed_mps": 2.8020060062408447
+    },
+    {
+      "requested_entry_mps": 0,
+      "entry_mps": 0,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": 1,
+      "stopping_time_s": 0.01666666753590107,
+      "stopping_distance_m": 0.0000010668729828466894,
+      "held_distance_m": 0.00003165150701534003,
+      "held_final_speed_mps": 0.000004178396466159029,
+      "held_peak_speed_mps": 0.00008385229739360511,
+      "held_peak_sideslip_deg": 0,
+      "held_peak_yaw_rate_deg_s": 0.008028576150536537,
+      "held_yaw_travel_deg": 0.00013360702723730356,
+      "recovery_peak_sideslip_deg": 0.017922522500157356,
+      "released_final_speed_mps": 2.8020060062408447
+    },
+    {
+      "requested_entry_mps": 0,
+      "entry_mps": 0,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": 0,
+      "stopping_time_s": 0.01666666753590107,
+      "stopping_distance_m": 0.0000011852529269162915,
+      "held_distance_m": 0.00026461860397830606,
+      "held_final_speed_mps": 0.000026887939384323545,
+      "held_peak_speed_mps": 0.00008646424976177514,
+      "held_peak_sideslip_deg": 0,
+      "held_peak_yaw_rate_deg_s": 0.0074233985505998135,
+      "held_yaw_travel_deg": 0.0001232769136549905,
+      "recovery_peak_sideslip_deg": 0.0025075485464185476,
+      "released_final_speed_mps": 2.804957866668701
+    },
+    {
+      "requested_entry_mps": 0,
+      "entry_mps": 0,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": 1,
+      "stopping_time_s": 0.01666666753590107,
+      "stopping_distance_m": 0.0000011852529269162915,
+      "held_distance_m": 0.00026461860397830606,
+      "held_final_speed_mps": 0.000026887939384323545,
+      "held_peak_speed_mps": 0.00008646424976177514,
+      "held_peak_sideslip_deg": 0,
+      "held_peak_yaw_rate_deg_s": 0.0074233985505998135,
+      "held_yaw_travel_deg": 0.0001232769136549905,
+      "recovery_peak_sideslip_deg": 0.0025075485464185476,
+      "released_final_speed_mps": 2.804957866668701
+    },
+    {
+      "requested_entry_mps": 2,
+      "entry_mps": 2.0285329818725586,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": 0,
+      "stopping_time_s": 0.36666667461395264,
+      "stopping_distance_m": 0.410653293132782,
+      "held_distance_m": 0.4220265746116638,
+      "held_final_speed_mps": 0.000022372913008439355,
+      "held_peak_speed_mps": 2.0681450366973877,
+      "held_peak_sideslip_deg": 9.95122241973877,
+      "held_peak_yaw_rate_deg_s": 9.82650089263916,
+      "held_yaw_travel_deg": 1.9703444242477417,
+      "recovery_peak_sideslip_deg": 0.0024313258472830057,
+      "released_final_speed_mps": 2.805122137069702
+    },
+    {
+      "requested_entry_mps": 2,
+      "entry_mps": 2.0285329818725586,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": 1,
+      "stopping_time_s": 0.36666667461395264,
+      "stopping_distance_m": 0.410653293132782,
+      "held_distance_m": 0.4220265746116638,
+      "held_final_speed_mps": 0.000022372913008439355,
+      "held_peak_speed_mps": 2.0681450366973877,
+      "held_peak_sideslip_deg": 9.95122241973877,
+      "held_peak_yaw_rate_deg_s": 9.82650089263916,
+      "held_yaw_travel_deg": 1.9703444242477417,
+      "recovery_peak_sideslip_deg": 0.0024313258472830057,
+      "released_final_speed_mps": 2.805122137069702
+    },
+    {
+      "requested_entry_mps": 2,
+      "entry_mps": 2.0285329818725586,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": 0,
+      "stopping_time_s": 0.36666667461395264,
+      "stopping_distance_m": 0.41515296697616577,
+      "held_distance_m": 0.4259710907936096,
+      "held_final_speed_mps": 0.000020900897652609274,
+      "held_peak_speed_mps": 2.070279598236084,
+      "held_peak_sideslip_deg": 0.0014556667301803827,
+      "held_peak_yaw_rate_deg_s": 0.1309412568807602,
+      "held_yaw_travel_deg": 0.008322494104504585,
+      "recovery_peak_sideslip_deg": 0.009736386127769947,
+      "released_final_speed_mps": 2.802436113357544
+    },
+    {
+      "requested_entry_mps": 2,
+      "entry_mps": 2.0285329818725586,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": 1,
+      "stopping_time_s": 0.36666667461395264,
+      "stopping_distance_m": 0.41515296697616577,
+      "held_distance_m": 0.4259710907936096,
+      "held_final_speed_mps": 0.000020900897652609274,
+      "held_peak_speed_mps": 2.070279598236084,
+      "held_peak_sideslip_deg": 0.0014556667301803827,
+      "held_peak_yaw_rate_deg_s": 0.1309412568807602,
+      "held_yaw_travel_deg": 0.008322494104504585,
+      "recovery_peak_sideslip_deg": 0.009736386127769947,
+      "released_final_speed_mps": 2.802436113357544
+    },
+    {
+      "requested_entry_mps": 2,
+      "entry_mps": 2.0285329818725586,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": 0,
+      "stopping_time_s": 0.36666667461395264,
+      "stopping_distance_m": 0.410707950592041,
+      "held_distance_m": 0.4223608374595642,
+      "held_final_speed_mps": 0.000059042678913101554,
+      "held_peak_speed_mps": 2.0681445598602295,
+      "held_peak_sideslip_deg": 9.951467514038086,
+      "held_peak_yaw_rate_deg_s": 9.827447891235352,
+      "held_yaw_travel_deg": 1.9730194807052612,
+      "recovery_peak_sideslip_deg": 0.0018413751386106014,
+      "released_final_speed_mps": 2.8025293350219727
+    },
+    {
+      "requested_entry_mps": 2,
+      "entry_mps": 2.0285329818725586,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": 1,
+      "stopping_time_s": 0.36666667461395264,
+      "stopping_distance_m": 0.410707950592041,
+      "held_distance_m": 0.4223608374595642,
+      "held_final_speed_mps": 0.000059042678913101554,
+      "held_peak_speed_mps": 2.0681445598602295,
+      "held_peak_sideslip_deg": 9.951467514038086,
+      "held_peak_yaw_rate_deg_s": 9.827447891235352,
+      "held_yaw_travel_deg": 1.9730194807052612,
+      "recovery_peak_sideslip_deg": 0.0018413751386106014,
+      "released_final_speed_mps": 2.8025293350219727
+    },
+    {
+      "requested_entry_mps": 4,
+      "entry_mps": 4.025238037109375,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": 0,
+      "stopping_time_s": 0.8166667222976685,
+      "stopping_distance_m": 1.8630571365356445,
+      "held_distance_m": 1.8779925107955933,
+      "held_final_speed_mps": 0.00035469664726406336,
+      "held_peak_speed_mps": 4.063857555389404,
+      "held_peak_sideslip_deg": 9.523568153381348,
+      "held_peak_yaw_rate_deg_s": 19.56464385986328,
+      "held_yaw_travel_deg": 9.432177543640137,
+      "recovery_peak_sideslip_deg": 0.010411396622657776,
+      "released_final_speed_mps": 2.803636074066162
+    },
+    {
+      "requested_entry_mps": 4,
+      "entry_mps": 4.025238037109375,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": 1,
+      "stopping_time_s": 0.8166667222976685,
+      "stopping_distance_m": 1.8630571365356445,
+      "held_distance_m": 1.8779925107955933,
+      "held_final_speed_mps": 0.00035469664726406336,
+      "held_peak_speed_mps": 4.063857555389404,
+      "held_peak_sideslip_deg": 9.523568153381348,
+      "held_peak_yaw_rate_deg_s": 19.56464385986328,
+      "held_yaw_travel_deg": 9.432177543640137,
+      "recovery_peak_sideslip_deg": 0.010411396622657776,
+      "released_final_speed_mps": 2.803636074066162
+    },
+    {
+      "requested_entry_mps": 4,
+      "entry_mps": 4.025238037109375,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": 0,
+      "stopping_time_s": 0.8166667222976685,
+      "stopping_distance_m": 1.9144384860992432,
+      "held_distance_m": 1.9292900562286377,
+      "held_final_speed_mps": 0.00022880516189616174,
+      "held_peak_speed_mps": 4.067926406860352,
+      "held_peak_sideslip_deg": 0.07497195899486542,
+      "held_peak_yaw_rate_deg_s": 1.2500344514846802,
+      "held_yaw_travel_deg": 0.07907822728157043,
+      "recovery_peak_sideslip_deg": 0.0013365141348913312,
+      "released_final_speed_mps": 2.802480936050415
+    },
+    {
+      "requested_entry_mps": 4,
+      "entry_mps": 4.025238037109375,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": 1,
+      "stopping_time_s": 0.8166667222976685,
+      "stopping_distance_m": 1.9144384860992432,
+      "held_distance_m": 1.9292900562286377,
+      "held_final_speed_mps": 0.00022880516189616174,
+      "held_peak_speed_mps": 4.067926406860352,
+      "held_peak_sideslip_deg": 0.07497195899486542,
+      "held_peak_yaw_rate_deg_s": 1.2500344514846802,
+      "held_yaw_travel_deg": 0.07907822728157043,
+      "recovery_peak_sideslip_deg": 0.0013365141348913312,
+      "released_final_speed_mps": 2.802480936050415
+    },
+    {
+      "requested_entry_mps": 4,
+      "entry_mps": 4.025238037109375,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": 0,
+      "stopping_time_s": 0.8166667222976685,
+      "stopping_distance_m": 1.8731971979141235,
+      "held_distance_m": 1.8870346546173096,
+      "held_final_speed_mps": 0.00021402226411737502,
+      "held_peak_speed_mps": 4.063885688781738,
+      "held_peak_sideslip_deg": 9.527501106262207,
+      "held_peak_yaw_rate_deg_s": 19.61708641052246,
+      "held_yaw_travel_deg": 9.469158172607422,
+      "recovery_peak_sideslip_deg": 0.001793439732864499,
+      "released_final_speed_mps": 2.8033714294433594
+    },
+    {
+      "requested_entry_mps": 4,
+      "entry_mps": 4.025238037109375,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": 1,
+      "stopping_time_s": 0.8166667222976685,
+      "stopping_distance_m": 1.8731971979141235,
+      "held_distance_m": 1.8870346546173096,
+      "held_final_speed_mps": 0.00021402226411737502,
+      "held_peak_speed_mps": 4.063885688781738,
+      "held_peak_sideslip_deg": 9.527501106262207,
+      "held_peak_yaw_rate_deg_s": 19.61708641052246,
+      "held_yaw_travel_deg": 9.469158172607422,
+      "recovery_peak_sideslip_deg": 0.001793439732864499,
+      "released_final_speed_mps": 2.8033714294433594
+    },
+    {
+      "requested_entry_mps": 8,
+      "entry_mps": 8.06124210357666,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": 0,
+      "stopping_time_s": 2.0333335399627686,
+      "stopping_distance_m": 10.051429748535156,
+      "held_distance_m": 10.065561294555664,
+      "held_final_speed_mps": 0.00038862338988110423,
+      "held_peak_speed_mps": 8.095586776733398,
+      "held_peak_sideslip_deg": 9.484818458557129,
+      "held_peak_yaw_rate_deg_s": 28.686016082763672,
+      "held_yaw_travel_deg": 39.568058013916016,
+      "recovery_peak_sideslip_deg": 0.002936653094366193,
+      "released_final_speed_mps": 2.8037071228027344
+    },
+    {
+      "requested_entry_mps": 8,
+      "entry_mps": 8.06124210357666,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": 1,
+      "stopping_time_s": 2.0333335399627686,
+      "stopping_distance_m": 10.051429748535156,
+      "held_distance_m": 10.065561294555664,
+      "held_final_speed_mps": 0.00038862338988110423,
+      "held_peak_speed_mps": 8.095586776733398,
+      "held_peak_sideslip_deg": 9.484818458557129,
+      "held_peak_yaw_rate_deg_s": 28.686016082763672,
+      "held_yaw_travel_deg": 39.568058013916016,
+      "recovery_peak_sideslip_deg": 0.002936653094366193,
+      "released_final_speed_mps": 2.8037071228027344
+    },
+    {
+      "requested_entry_mps": 8,
+      "entry_mps": 8.06124210357666,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": 0,
+      "stopping_time_s": 2.0333335399627686,
+      "stopping_distance_m": 10.188786506652832,
+      "held_distance_m": 10.200663566589355,
+      "held_final_speed_mps": 0.000060561509599210694,
+      "held_peak_speed_mps": 8.097987174987793,
+      "held_peak_sideslip_deg": 0.012963001616299152,
+      "held_peak_yaw_rate_deg_s": 0.1360977292060852,
+      "held_yaw_travel_deg": 0.03854311257600784,
+      "recovery_peak_sideslip_deg": 0.0007654725341126323,
+      "released_final_speed_mps": 2.802464723587036
+    },
+    {
+      "requested_entry_mps": 8,
+      "entry_mps": 8.06124210357666,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": 1,
+      "stopping_time_s": 2.0333335399627686,
+      "stopping_distance_m": 10.188786506652832,
+      "held_distance_m": 10.200663566589355,
+      "held_final_speed_mps": 0.000060561509599210694,
+      "held_peak_speed_mps": 8.097987174987793,
+      "held_peak_sideslip_deg": 0.012963001616299152,
+      "held_peak_yaw_rate_deg_s": 0.1360977292060852,
+      "held_yaw_travel_deg": 0.03854311257600784,
+      "recovery_peak_sideslip_deg": 0.0007654725341126323,
+      "released_final_speed_mps": 2.802464723587036
+    },
+    {
+      "requested_entry_mps": 8,
+      "entry_mps": 8.06124210357666,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": 0,
+      "stopping_time_s": 2.0333335399627686,
+      "stopping_distance_m": 10.050283432006836,
+      "held_distance_m": 10.063714027404785,
+      "held_final_speed_mps": 0.0002700929471757263,
+      "held_peak_speed_mps": 8.095588684082031,
+      "held_peak_sideslip_deg": 9.472195625305176,
+      "held_peak_yaw_rate_deg_s": 28.685834884643555,
+      "held_yaw_travel_deg": 39.49811553955078,
+      "recovery_peak_sideslip_deg": 0.003376420820131898,
+      "released_final_speed_mps": 2.8034181594848633
+    },
+    {
+      "requested_entry_mps": 8,
+      "entry_mps": 8.06124210357666,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": 1,
+      "stopping_time_s": 2.0333335399627686,
+      "stopping_distance_m": 10.050283432006836,
+      "held_distance_m": 10.063714027404785,
+      "held_final_speed_mps": 0.0002700929471757263,
+      "held_peak_speed_mps": 8.095588684082031,
+      "held_peak_sideslip_deg": 9.472195625305176,
+      "held_peak_yaw_rate_deg_s": 28.685834884643555,
+      "held_yaw_travel_deg": 39.49811553955078,
+      "recovery_peak_sideslip_deg": 0.003376420820131898,
+      "released_final_speed_mps": 2.8034181594848633
+    },
+    {
+      "requested_entry_mps": -2,
+      "entry_mps": 2.0253570079803467,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": 0,
+      "stopping_time_s": 0.3333333432674408,
+      "stopping_distance_m": 0.4085964262485504,
+      "held_distance_m": 0.4233379065990448,
+      "held_final_speed_mps": 0.0003342434065416455,
+      "held_peak_speed_mps": 2.014573335647583,
+      "held_peak_sideslip_deg": 10.652421951293945,
+      "held_peak_yaw_rate_deg_s": 9.798369407653809,
+      "held_yaw_travel_deg": 2.0125715732574463,
+      "recovery_peak_sideslip_deg": 0.0019534132443368435,
+      "released_final_speed_mps": 2.581080675125122
+    },
+    {
+      "requested_entry_mps": -2,
+      "entry_mps": 2.0253570079803467,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": -1,
+      "stopping_time_s": 0.3333333432674408,
+      "stopping_distance_m": 0.4085964262485504,
+      "held_distance_m": 0.4233379065990448,
+      "held_final_speed_mps": 0.0003342434065416455,
+      "held_peak_speed_mps": 2.014573335647583,
+      "held_peak_sideslip_deg": 10.652421951293945,
+      "held_peak_yaw_rate_deg_s": 9.798369407653809,
+      "held_yaw_travel_deg": 2.0125715732574463,
+      "recovery_peak_sideslip_deg": 0.0019534132443368435,
+      "released_final_speed_mps": 2.581080675125122
+    },
+    {
+      "requested_entry_mps": -2,
+      "entry_mps": 2.0253570079803467,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": 0,
+      "stopping_time_s": 0.3333333432674408,
+      "stopping_distance_m": 0.41826331615448,
+      "held_distance_m": 0.43034398555755615,
+      "held_final_speed_mps": 0.00009964373748516664,
+      "held_peak_speed_mps": 2.021965265274048,
+      "held_peak_sideslip_deg": 0.003449093084782362,
+      "held_peak_yaw_rate_deg_s": 0.751581609249115,
+      "held_yaw_travel_deg": 0.024741007015109062,
+      "recovery_peak_sideslip_deg": 0.02433563396334648,
+      "released_final_speed_mps": 2.5800044536590576
+    },
+    {
+      "requested_entry_mps": -2,
+      "entry_mps": 2.0253570079803467,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": -1,
+      "stopping_time_s": 0.3333333432674408,
+      "stopping_distance_m": 0.41826331615448,
+      "held_distance_m": 0.43034398555755615,
+      "held_final_speed_mps": 0.00009964373748516664,
+      "held_peak_speed_mps": 2.021965265274048,
+      "held_peak_sideslip_deg": 0.003449093084782362,
+      "held_peak_yaw_rate_deg_s": 0.751581609249115,
+      "held_yaw_travel_deg": 0.024741007015109062,
+      "recovery_peak_sideslip_deg": 0.02433563396334648,
+      "released_final_speed_mps": 2.5800044536590576
+    },
+    {
+      "requested_entry_mps": -2,
+      "entry_mps": 2.0253570079803467,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": 0,
+      "stopping_time_s": 0.3333333432674408,
+      "stopping_distance_m": 0.4110637307167053,
+      "held_distance_m": 0.4240293800830841,
+      "held_final_speed_mps": 0.00009092356776818633,
+      "held_peak_speed_mps": 2.0145645141601562,
+      "held_peak_sideslip_deg": 10.423659324645996,
+      "held_peak_yaw_rate_deg_s": 9.79448413848877,
+      "held_yaw_travel_deg": 2.0289969444274902,
+      "recovery_peak_sideslip_deg": 0.017608970403671265,
+      "released_final_speed_mps": 2.580347776412964
+    },
+    {
+      "requested_entry_mps": -2,
+      "entry_mps": 2.0253570079803467,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": -1,
+      "stopping_time_s": 0.3333333432674408,
+      "stopping_distance_m": 0.4110637307167053,
+      "held_distance_m": 0.4240293800830841,
+      "held_final_speed_mps": 0.00009092356776818633,
+      "held_peak_speed_mps": 2.0145645141601562,
+      "held_peak_sideslip_deg": 10.423659324645996,
+      "held_peak_yaw_rate_deg_s": 9.79448413848877,
+      "held_yaw_travel_deg": 2.0289969444274902,
+      "recovery_peak_sideslip_deg": 0.017608970403671265,
+      "released_final_speed_mps": 2.580347776412964
+    },
+    {
+      "requested_entry_mps": -4,
+      "entry_mps": 4.052795886993408,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": 0,
+      "stopping_time_s": 0.7500000596046448,
+      "stopping_distance_m": 1.7607029676437378,
+      "held_distance_m": 1.775077223777771,
+      "held_final_speed_mps": 0.00017683746409602463,
+      "held_peak_speed_mps": 4.10553503036499,
+      "held_peak_sideslip_deg": 9.565710067749023,
+      "held_peak_yaw_rate_deg_s": 19.856687545776367,
+      "held_yaw_travel_deg": 9.253682136535645,
+      "recovery_peak_sideslip_deg": 0.006701814476400614,
+      "released_final_speed_mps": 2.5806779861450195
+    },
+    {
+      "requested_entry_mps": -4,
+      "entry_mps": 4.052795886993408,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": -1,
+      "stopping_time_s": 0.7500000596046448,
+      "stopping_distance_m": 1.7607029676437378,
+      "held_distance_m": 1.775077223777771,
+      "held_final_speed_mps": 0.00017683746409602463,
+      "held_peak_speed_mps": 4.10553503036499,
+      "held_peak_sideslip_deg": 9.565710067749023,
+      "held_peak_yaw_rate_deg_s": 19.856687545776367,
+      "held_yaw_travel_deg": 9.253682136535645,
+      "recovery_peak_sideslip_deg": 0.006701814476400614,
+      "released_final_speed_mps": 2.5806779861450195
+    },
+    {
+      "requested_entry_mps": -4,
+      "entry_mps": 4.052795886993408,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": 0,
+      "stopping_time_s": 0.7333333492279053,
+      "stopping_distance_m": 1.7870508432388306,
+      "held_distance_m": 1.8023747205734253,
+      "held_final_speed_mps": 0.00021560741879511625,
+      "held_peak_speed_mps": 4.1104960441589355,
+      "held_peak_sideslip_deg": 0.13786816596984863,
+      "held_peak_yaw_rate_deg_s": 0.8587709069252014,
+      "held_yaw_travel_deg": 0.12643350660800934,
+      "recovery_peak_sideslip_deg": 0.0008527790778316557,
+      "released_final_speed_mps": 2.57915997505188
+    },
+    {
+      "requested_entry_mps": -4,
+      "entry_mps": 4.052795886993408,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": -1,
+      "stopping_time_s": 0.7333333492279053,
+      "stopping_distance_m": 1.7870508432388306,
+      "held_distance_m": 1.8023747205734253,
+      "held_final_speed_mps": 0.00021560741879511625,
+      "held_peak_speed_mps": 4.1104960441589355,
+      "held_peak_sideslip_deg": 0.13786816596984863,
+      "held_peak_yaw_rate_deg_s": 0.8587709069252014,
+      "held_yaw_travel_deg": 0.12643350660800934,
+      "recovery_peak_sideslip_deg": 0.0008527790778316557,
+      "released_final_speed_mps": 2.57915997505188
+    },
+    {
+      "requested_entry_mps": -4,
+      "entry_mps": 4.052795886993408,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": 0,
+      "stopping_time_s": 0.7500000596046448,
+      "stopping_distance_m": 1.7563233375549316,
+      "held_distance_m": 1.7711983919143677,
+      "held_final_speed_mps": 0.00029666186310350895,
+      "held_peak_speed_mps": 4.108165264129639,
+      "held_peak_sideslip_deg": 9.581459999084473,
+      "held_peak_yaw_rate_deg_s": 19.397327423095703,
+      "held_yaw_travel_deg": 9.234271049499512,
+      "recovery_peak_sideslip_deg": 0.0007676523528061807,
+      "released_final_speed_mps": 2.581002712249756
+    },
+    {
+      "requested_entry_mps": -4,
+      "entry_mps": 4.052795886993408,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": -1,
+      "stopping_time_s": 0.7500000596046448,
+      "stopping_distance_m": 1.7563233375549316,
+      "held_distance_m": 1.7711983919143677,
+      "held_final_speed_mps": 0.00029666186310350895,
+      "held_peak_speed_mps": 4.108165264129639,
+      "held_peak_sideslip_deg": 9.581459999084473,
+      "held_peak_yaw_rate_deg_s": 19.397327423095703,
+      "held_yaw_travel_deg": 9.234271049499512,
+      "recovery_peak_sideslip_deg": 0.0007676523528061807,
+      "released_final_speed_mps": 2.581002712249756
+    },
+    {
+      "requested_entry_mps": -8,
+      "entry_mps": 8.066643714904785,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": 0,
+      "stopping_time_s": 1.6666667461395264,
+      "stopping_distance_m": 8.223410606384277,
+      "held_distance_m": 8.240104675292969,
+      "held_final_speed_mps": 0.0000676534982630983,
+      "held_peak_speed_mps": 8.127398490905762,
+      "held_peak_sideslip_deg": 9.31740951538086,
+      "held_peak_yaw_rate_deg_s": 30.00461769104004,
+      "held_yaw_travel_deg": 35.448543548583984,
+      "recovery_peak_sideslip_deg": 0.00015338152297772467,
+      "released_final_speed_mps": 2.5803518295288086
+    },
+    {
+      "requested_entry_mps": -8,
+      "entry_mps": 8.066643714904785,
+      "entry_reached": true,
+      "steering": -0.5,
+      "throttle": -1,
+      "stopping_time_s": 1.6666667461395264,
+      "stopping_distance_m": 8.223410606384277,
+      "held_distance_m": 8.240104675292969,
+      "held_final_speed_mps": 0.0000676534982630983,
+      "held_peak_speed_mps": 8.127398490905762,
+      "held_peak_sideslip_deg": 9.31740951538086,
+      "held_peak_yaw_rate_deg_s": 30.00461769104004,
+      "held_yaw_travel_deg": 35.448543548583984,
+      "recovery_peak_sideslip_deg": 0.00015338152297772467,
+      "released_final_speed_mps": 2.5803518295288086
+    },
+    {
+      "requested_entry_mps": -8,
+      "entry_mps": 8.066643714904785,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": 0,
+      "stopping_time_s": 1.6500000953674316,
+      "stopping_distance_m": 8.112105369567871,
+      "held_distance_m": 8.126755714416504,
+      "held_final_speed_mps": 0.000060182635934324935,
+      "held_peak_speed_mps": 8.132170677185059,
+      "held_peak_sideslip_deg": 0.01800808310508728,
+      "held_peak_yaw_rate_deg_s": 0.5547796487808228,
+      "held_yaw_travel_deg": 0.05818075314164162,
+      "recovery_peak_sideslip_deg": 0.0004393841663841158,
+      "released_final_speed_mps": 2.5791735649108887
+    },
+    {
+      "requested_entry_mps": -8,
+      "entry_mps": 8.066643714904785,
+      "entry_reached": true,
+      "steering": 0,
+      "throttle": -1,
+      "stopping_time_s": 1.6500000953674316,
+      "stopping_distance_m": 8.112105369567871,
+      "held_distance_m": 8.126755714416504,
+      "held_final_speed_mps": 0.000060182635934324935,
+      "held_peak_speed_mps": 8.132170677185059,
+      "held_peak_sideslip_deg": 0.01800808310508728,
+      "held_peak_yaw_rate_deg_s": 0.5547796487808228,
+      "held_yaw_travel_deg": 0.05818075314164162,
+      "recovery_peak_sideslip_deg": 0.0004393841663841158,
+      "released_final_speed_mps": 2.5791735649108887
+    },
+    {
+      "requested_entry_mps": -8,
+      "entry_mps": 8.066643714904785,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": 0,
+      "stopping_time_s": 1.6666667461395264,
+      "stopping_distance_m": 8.310835838317871,
+      "held_distance_m": 8.329361915588379,
+      "held_final_speed_mps": 0.0004601763794198632,
+      "held_peak_speed_mps": 8.127452850341797,
+      "held_peak_sideslip_deg": 9.332040786743164,
+      "held_peak_yaw_rate_deg_s": 29.96605110168457,
+      "held_yaw_travel_deg": 35.612483978271484,
+      "recovery_peak_sideslip_deg": 0.002775062806904316,
+      "released_final_speed_mps": 2.5814268589019775
+    },
+    {
+      "requested_entry_mps": -8,
+      "entry_mps": 8.066643714904785,
+      "entry_reached": true,
+      "steering": 0.5,
+      "throttle": -1,
+      "stopping_time_s": 1.6666667461395264,
+      "stopping_distance_m": 8.310835838317871,
+      "held_distance_m": 8.329361915588379,
+      "held_final_speed_mps": 0.0004601763794198632,
+      "held_peak_speed_mps": 8.127452850341797,
+      "held_peak_sideslip_deg": 9.332040786743164,
+      "held_peak_yaw_rate_deg_s": 29.96605110168457,
+      "held_yaw_travel_deg": 35.612483978271484,
+      "recovery_peak_sideslip_deg": 0.002775062806904316,
+      "released_final_speed_mps": 2.5814268589019775
+    }
+  ]
+}

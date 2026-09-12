@@ -58,12 +58,16 @@ pub const Scenario = struct {
         return initWithHeading(allocator, tuning, timestep_s, 0);
     }
     pub fn initWithHeading(allocator: std.mem.Allocator, tuning: vehicle_contract.VehicleTuning, timestep_s: f32, heading: f32) !Scenario {
+        return initSurface(allocator, tuning, timestep_s, heading, 0.2, 500);
+    }
+    pub fn initSurface(allocator: std.mem.Allocator, tuning: vehicle_contract.VehicleTuning, timestep_s: f32, heading: f32, friction: f32, half_span: f32) !Scenario {
         const physics = try allocator.create(jolt.Physics);
         errdefer allocator.destroy(physics);
         physics.* = try jolt.Physics.init();
         errdefer physics.deinit();
-        const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ 500, 1, 500 });
+        const ground = try physics.createStaticBox(.{ 0, -1, 0 }, .{ half_span, 1, half_span });
         errdefer _ = physics.removeBody(ground);
+        try physics.setBodyFriction(ground, friction);
         var vehicles = physics.vehicles();
         const vehicle = try vehicles.createVehicle(tuning.physicsDescriptor(
             .{ .pose = .{ .position = .{ 0, 2, 0 }, .rotation = .{ 0, @sin(heading / 2), 0, @cos(heading / 2) } } },
@@ -516,8 +520,11 @@ pub fn main(init: std.process.Init) !void {
     const allocator = init.gpa;
     const args = try init.minimal.args.toSlice(init.arena.allocator());
     if (args.len != 1) {
+        const handbrake_audit = std.mem.eql(u8, args[1], "--handbrake-audit");
+        const speed_audit = std.mem.eql(u8, args[1], "--speed-audit");
+        const steering_audit = std.mem.eql(u8, args[1], "--steering-audit");
         const motion = std.mem.eql(u8, args[1], "--motion-audit") or std.mem.eql(u8, args[1], "--motion-summary");
-        if ((args.len != 3 and !(motion and args.len == 5)) or (!motion and !std.mem.eql(u8, args[1], "--definition"))) return error.ExpectedVehicleDefinitionPath;
+        if ((args.len != 3 and !(motion and args.len == 5)) or (!motion and !steering_audit and !speed_audit and !handbrake_audit and !std.mem.eql(u8, args[1], "--definition"))) return error.ExpectedVehicleDefinitionPath;
         var heading: ?u16 = null;
         if (args.len == 5) {
             if (!std.mem.eql(u8, args[3], "--heading")) return error.ExpectedHeading;
@@ -529,6 +536,9 @@ pub fn main(init: std.process.Init) !void {
         defer allocator.free(bytes);
         var candidate = try vehicle_contract.asset.decode(allocator, bytes);
         defer candidate.deinit();
+        if (handbrake_audit) return @import("vehicle_handbrake_audit.zig").run(init, candidate.value);
+        if (speed_audit) return @import("vehicle_speed_audit.zig").run(init, candidate.value);
+        if (steering_audit) return @import("vehicle_steering_audit.zig").run(init, candidate.value);
         if (motion) return @import("vehicle_motion_audit.zig").run(init, candidate.value, std.mem.eql(u8, args[1], "--motion-audit"), heading);
         const tuning = try candidate.value.tuning.toTuning();
         const metrics = try measure(allocator, tuning);
@@ -626,4 +636,16 @@ test "compact motion reports preserve full-trace measurements" {
     var definition = try @import("game_vehicles").embeddedSedan(std.testing.allocator);
     defer definition.deinit();
     try @import("vehicle_motion_audit.zig").verifySummary(std.testing.allocator, definition.value);
+}
+
+test "matched-entry SUV experiment distinguishes low-friction road from higher grip" {
+    try @import("vehicle_steering_audit.zig").verifySurfaceExperiment(std.testing.allocator);
+}
+
+test "fleet reaches twice its measured prior speed and brakes from highway speed" {
+    try @import("vehicle_speed_audit.zig").verifyFleet(std.testing.allocator);
+}
+
+test "low-speed handbrake stops stay composed with either pedal direction and recover" {
+    try @import("vehicle_handbrake_audit.zig").verifyFleet(std.testing.allocator);
 }

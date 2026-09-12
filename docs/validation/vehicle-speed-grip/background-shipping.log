@@ -1,0 +1,653 @@
+1/3 vehicle_offscreen_test.test.EA2 offscreen industrial vehicle motion and rendering...GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (0,-1) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=12867264
+Cooked district (0,-2) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=16030272
+Cooked district (0,-3) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=19193280
+Cooked district (0,-4) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=22356288
+Cooked district GPU resident: scenes=1 bytes=25519296
+VEHICLE_NATIVE_SEGMENT car=Courier segment=0 forward_mps=9.953
+VEHICLE_NATIVE_SEGMENT car=Courier segment=1 forward_mps=0.000
+VEHICLE_NATIVE_SEGMENT car=Courier segment=2 forward_mps=-12.651
+VEHICLE_NATIVE_SEGMENT car=Courier segment=3 forward_mps=-0.000
+VEHICLE_NATIVE_SEGMENT car=Courier segment=4 forward_mps=6.480
+VEHICLE_NATIVE_SEGMENT car=Courier segment=5 forward_mps=-7.089
+VEHICLE_NATIVE_SEGMENT car=Courier segment=6 forward_mps=9.849
+VEHICLE_NATIVE_SEGMENT car=Courier segment=7 forward_mps=13.466
+VEHICLE_NATIVE_SEGMENT car=Courier segment=8 forward_mps=11.347
+VEHICLE_NATIVE_SEGMENT car=Courier segment=9 forward_mps=11.639
+Cooked district (0,-5) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=28682304
+VEHICLE_NATIVE_SEGMENT car=Courier segment=10 forward_mps=0.000
+EA2_DRIVE_PASS presentation=offscreen sdl_pedal_journey=false car=Courier world=industrial timestep_hz=60 frames=1375 peak_speed_mps=13.473 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 1556
+ Total simulation ticks: 2054
+===========================================
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (0,-1) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=12867264
+Cooked district (0,-2) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=16030272
+Cooked district (0,-3) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=19193280
+Cooked district (0,-4) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=22356288
+Cooked district GPU resident: scenes=1 bytes=25519296
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=0 forward_mps=6.573
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=1 forward_mps=0.000
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=2 forward_mps=-9.643
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=3 forward_mps=-0.000
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=4 forward_mps=4.482
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=5 forward_mps=-12.071
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=6 forward_mps=4.386
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=7 forward_mps=5.378
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=8 forward_mps=2.120
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=9 forward_mps=2.839
+VEHICLE_NATIVE_SEGMENT car=Meridian segment=10 forward_mps=0.000
+EA2_DRIVE_PASS presentation=offscreen sdl_pedal_journey=false car=Meridian world=industrial timestep_hz=60 frames=1375 peak_speed_mps=12.076 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 1555
+ Total simulation ticks: 2093
+===========================================
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (0,-1) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=12867264
+Cooked district (0,-2) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=16030272
+Cooked district (0,-3) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=19193280
+Cooked district (0,-4) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=22356288
+Cooked district GPU resident: scenes=1 bytes=25519296
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=0 forward_mps=14.494
+Cooked district (0,-5) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=28682304
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=1 forward_mps=0.001
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=2 forward_mps=-14.630
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=3 forward_mps=-0.000
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=4 forward_mps=8.798
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=5 forward_mps=-12.617
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=6 forward_mps=8.245
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=7 forward_mps=12.755
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=8 forward_mps=10.906
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=9 forward_mps=9.613
+Cooked district (0,-5) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=28682304
+VEHICLE_NATIVE_SEGMENT car=Courier-AWD segment=10 forward_mps=0.000
+EA2_DRIVE_PASS presentation=offscreen sdl_pedal_journey=false car=Courier-AWD world=industrial timestep_hz=60 frames=1375 peak_speed_mps=14.929 reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 1555
+ Total simulation ticks: 2895
+===========================================
+OK
+2/3 vehicle_offscreen_test.test.EA2 offscreen fleet accelerates down streamed test road and brakes...GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (0,-1) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=12867264
+Cooked district (0,-2) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=16030272
+Cooked district (0,-3) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=19193280
+Cooked district (0,-4) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=22356288
+Cooked district GPU resident: scenes=1 bytes=25519296
+Cooked district (0,-5) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=28682304
+Cooked district (0,-6) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31845312
+Cooked district (0,-7) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=35008320
+Cooked district (0,-8) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=38171328
+Cooked district (0,-9) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=34900704
+Cooked district (0,-10) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-11) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-12) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=28467072
+Cooked district (0,-13) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-14) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+VEHICLE_ROAD_PASS car=Courier peak_mps=44.43 furthest_z=-661.84 streamed=true stopped=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 2580
+ Total simulation ticks: 2786
+===========================================
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (0,-1) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=12867264
+Cooked district (0,-2) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=16030272
+Cooked district (0,-3) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=19193280
+Cooked district (0,-4) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=22356288
+Cooked district GPU resident: scenes=1 bytes=25519296
+Cooked district (0,-5) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=28682304
+Cooked district (0,-6) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31845312
+Cooked district (0,-7) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=35008320
+Cooked district (0,-8) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=38171328
+Cooked district (0,-9) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=34900704
+Cooked district (0,-10) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-11) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-12) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-13) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-14) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+VEHICLE_ROAD_PASS car=Meridian peak_mps=45.83 furthest_z=-667.66 streamed=true stopped=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 2580
+ Total simulation ticks: 2826
+===========================================
+GPU Device created: metal
+Renderer initialized (swapchain format 12, depth format 60)
+ImGui SDL3 GPU backend initialized
+Editor initialized with 17 tools
+===========================================
+ Incinerator Engine initialized (sandbox composition)
+ Window: 1600x900
+ Tick rate: 60 Hz (16.667 ms)
+===========================================
+ Controls:
+   Click scene (Character) - Capture mouse for continuous look
+   ESC - Cancel active interaction / release capture / system menu
+   WASD - Move character / drive vehicle
+   E - Enter / exit vehicle
+   F - Collect/drop carryable (Character) / frame selection (Free Camera)
+   Q - Authoritative melee
+   1 - Equip / holster handgun
+   Left-click - Fire equipped handgun (Character) / select object (Free Camera)
+   R - Tactical reload / respawn after death
+   SPACE - Jump / vehicle hand brake
+   S - Service brake until stopped, then reverse
+   Right-click + drag (Character) - Turn/look without capture
+   RMB+WASD / Q/E / Shift / wheel (Free Camera) - Fly and adjust speed
+   F1 - Toggle editor UI
+   F2 - Toggle ImGui demo
+   F3 - Toggle Character / Free Camera viewport mode
+===========================================
+
+VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true
+Cooked district (1,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=3216816
+Cooked district (0,1) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=6433632
+Cooked district (1,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district GPU resident: scenes=1 bytes=9650448
+Cooked district (0,0) staged: primitives=78 textures=36 cpu_bytes=2442672
+Cooked district (0,-1) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=12867264
+Cooked district (0,-2) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=16030272
+Cooked district (0,-3) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=19193280
+Cooked district (0,-4) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=22356288
+Cooked district GPU resident: scenes=1 bytes=25519296
+Cooked district (0,-5) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=28682304
+Cooked district (0,-6) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31845312
+Cooked district (0,-7) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=35008320
+Cooked district (0,-8) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=38171328
+Cooked district (0,-9) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=34900704
+Cooked district (0,-10) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-11) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-12) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-13) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-14) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=28467072
+Cooked district (0,-15) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+Cooked district (0,-16) staged: primitives=19 textures=36 cpu_bytes=2381076
+Cooked district GPU resident: scenes=1 bytes=31630080
+VEHICLE_ROAD_PASS car=Courier-AWD peak_mps=46.92 furthest_z=-764.63 streamed=true stopped=true
+ImGui backend shutdown
+
+===========================================
+ Incinerator Engine shutdown
+ Total frames: 2580
+ Total simulation ticks: 3628
+===========================================
+OK
+3/3 main.test_0...OK
+All 3 tests passed.
+Frontmost before: Finder pid=616
+Frontmost after: Finder pid=616
+Background violations: []; command status: 0
+Build Summary: 123/123 steps succeeded
+verify-vehicle-background-macos success
++- observe offscreen desktop focus success 59s
+   +- run swiftc (observe-background-macos) cached
+   +- compile test vehicle-offscreen-tests ReleaseSafe native success 53s MaxRSS:1G
+   |  +- WriteFile SDL3 cached
+   |  |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h cached
+   |  +- compile lib SDL3 ReleaseSafe native cached 214ms MaxRSS:36M
+   |  |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+   |  |  +- configure cmake header include/build_config/SDL_build_config.h.cmake to SDL_build_config.h cached
+   |  |  +- configure cmake header include/build_config/SDL_revision.h.cmake to SDL3/SDL_revision.h (reused)
+   |  +- WriteFile cached
+   |  +- compile lib incinerator_imgui ReleaseSafe native cached 53ms MaxRSS:33M
+   |  +- compile lib SDL3 ReleaseSafe native (+3 more reused dependencies)
+   |  +- compile lib incinerator_imgui ReleaseSafe native (reused)
+   |  +- options success
+   |  +- options cached
+   |  +- WriteFile triangle.vert.metal cached
+   |  |  +- run spirv-cross (triangle.vert.metal) cached
+   |  |  |  +- run glslc (triangle.vert.spv) cached
+   |  |  +- run spirv-cross (triangle.frag.metal) cached
+   |  |  |  +- run glslc (triangle.frag.spv) cached
+   |  |  +- run spirv-cross (model.vert.metal) cached
+   |  |  |  +- run glslc (model.vert.spv) cached
+   |  |  +- run spirv-cross (model.frag.metal) cached
+   |  |  |  +- run glslc (model.frag.spv) cached
+   |  |  +- run spirv-cross (visibility.frag.metal) cached
+   |  |  |  +- run glslc (visibility.frag.spv) cached
+   |  |  +- run spirv-cross (neural_primitive.vert.metal) cached
+   |  |  |  +- run glslc (neural_primitive.vert.spv) cached
+   |  |  +- run spirv-cross (neural_primitive.frag.metal) cached
+   |  |  |  +- run glslc (neural_primitive.frag.spv) cached
+   |  |  +- run spirv-cross (neural_model.vert.metal) cached
+   |  |  |  +- run glslc (neural_model.vert.spv) cached
+   |  |  +- run spirv-cross (neural_model.frag.metal) cached
+   |  |  |  +- run glslc (neural_model.frag.spv) cached
+   |  |  +- run spirv-cross (triangle.vert.json) cached
+   |  |  |  +- run glslc (triangle.vert.spv) (reused)
+   |  |  +- run spirv-cross (triangle.frag.json) cached
+   |  |  |  +- run glslc (triangle.frag.spv) (reused)
+   |  |  +- run spirv-cross (model.vert.json) cached
+   |  |  |  +- run glslc (model.vert.spv) (reused)
+   |  |  +- run spirv-cross (model.frag.json) cached
+   |  |  |  +- run glslc (model.frag.spv) (reused)
+   |  |  +- run spirv-cross (visibility.frag.json) cached
+   |  |  |  +- run glslc (visibility.frag.spv) (reused)
+   |  |  +- run spirv-cross (neural_primitive.vert.json) cached
+   |  |  |  +- run glslc (neural_primitive.vert.spv) (reused)
+   |  |  +- run spirv-cross (neural_primitive.frag.json) cached
+   |  |  |  +- run glslc (neural_primitive.frag.spv) (reused)
+   |  |  +- run spirv-cross (neural_model.vert.json) cached
+   |  |  |  +- run glslc (neural_model.vert.spv) (reused)
+   |  |  +- run spirv-cross (neural_model.frag.json) cached
+   |  |     +- run glslc (neural_model.frag.spv) (reused)
+   |  +- options cached
+   |  +- options cached
+   |  +- options cached
+   |  +- options cached
+   |  +- options cached
+   |  +- WriteFile joltc.h cached
+   |  +- compile lib joltc ReleaseSafe native cached 79ms MaxRSS:34M
+   |  +- compile lib joltc ReleaseSafe native (reused)
+   +- install success
+      +- install generated to share/incinerator/content/vehicle/meridian.icdb success
+      |  +- run exe incinerator_content_cooker (meridian.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native cached 118ms MaxRSS:34M
+      |        +- WriteFile cached
+      |        +- compile lib zmesh ReleaseSafe native cached 82ms MaxRSS:33M
+      |        +- compile lib zmesh ReleaseSafe native (reused)
+      |        +- WriteFile (reused)
+      |        +- compile lib zmesh ReleaseSafe native (reused)
+      |        +- compile lib zmesh ReleaseSafe native (reused)
+      |        +- options cached
+      |        +- options cached
+      +- install generated to share/incinerator/content/vehicle/courier.icdb success
+      |  +- run exe incinerator_content_cooker (courier.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/vehicle/courier-awd.icdb success
+      |  +- run exe incinerator_content_cooker (courier-awd.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-1.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-1.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-2.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-2.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-3.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-3.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-4.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-4.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-5.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-5.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-6.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-6.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-7.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-7.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-8.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-8.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-9.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-9.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-10.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-10.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-11.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-11.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-12.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-12.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-13.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-13.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-14.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-14.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-15.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-15.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install generated to share/incinerator/content/district/industrial_0_-16.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_-16.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install game/vehicles/494e43494e455241-867ee4c3b011b0fe.icvehicle to share/incinerator/content/vehicle/494e43494e455241-867ee4c3b011b0fe.icvehicle success
+      +- install game/vehicles/494e43494e455241-20915108d5f1c706.icvehicle to share/incinerator/content/vehicle/494e43494e455241-20915108d5f1c706.icvehicle success
+      +- install game/vehicles/494e43494e455241-38d7f4075c7ac47d.icvehicle to share/incinerator/content/vehicle/494e43494e455241-38d7f4075c7ac47d.icvehicle success
+      +- install generated to share/incinerator/content/district/industrial_0_0.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_0.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_0_0.PROVENANCE.md cached
+      +- install generated to share/incinerator/content/district/industrial_1_0.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_1_0.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+      +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_1_0.PROVENANCE.md cached
+      +- install generated to share/incinerator/content/district/industrial_0_1.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_0_1.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+      +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_0_1.PROVENANCE.md cached
+      +- install generated to share/incinerator/content/district/industrial_1_1.icdb success
+      |  +- run exe incinerator_content_cooker (industrial_1_1.icdb) cached
+      |     +- compile exe incinerator_content_cooker ReleaseSafe native (+8 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_1.icdb) (+2 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_1_0.icdb) (+2 more reused dependencies)
+      +- install game/industrial/PROVENANCE.md to share/incinerator/content/district/industrial_1_1.PROVENANCE.md cached
+      +- install generated to share/incinerator/content/district/catalog.icat success
+      |  +- run exe incinerator_content_catalog_cooker (industrial_catalog.icat) cached
+      |     +- compile exe incinerator_content_catalog_cooker ReleaseSafe native cached 97ms MaxRSS:34M
+      |     |  +- options (reused)
+      |     +- run exe incinerator_content_cooker (industrial_0_0.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_1_0.icdb) (+2 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_1.icdb) (+2 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_1_1.icdb) (+3 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-1.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-2.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-3.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-4.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-5.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-6.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-7.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-8.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-9.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-10.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-11.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-12.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-13.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-14.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-15.icdb) (+1 more reused dependencies)
+      |     +- run exe incinerator_content_cooker (industrial_0_-16.icdb) (+1 more reused dependencies)
+      +- install game/industrial/materials.icmat to share/incinerator/content/materials.icmat cached
+      +- install incinerator_replay success
+      |  +- compile exe incinerator_replay ReleaseSafe native cached 67ms MaxRSS:34M
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- WriteFile joltc.h (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      |     +- options (reused)
+      +- install incinerator_incident_inspect success
+      |  +- compile exe incinerator_incident_inspect ReleaseSafe native cached 99ms MaxRSS:34M
+      +- install incinerator_save success
+      |  +- compile exe incinerator_save ReleaseSafe native cached 80ms MaxRSS:34M
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- WriteFile joltc.h (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      +- install incinerator_vehicle_dynamics success
+      |  +- compile exe incinerator_vehicle_dynamics ReleaseSafe native success 16s MaxRSS:678M
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- WriteFile joltc.h (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      +- install incinerator_engine success
+      |  +- compile exe incinerator_engine ReleaseSafe native success 58s MaxRSS:1G
+      |     +- shaders cached
+      |     |  +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+      |     +- WriteFile SDL3 (+1 more reused dependencies)
+      |     +- compile lib SDL3 ReleaseSafe native (+3 more reused dependencies)
+      |     +- WriteFile (reused)
+      |     +- compile lib incinerator_imgui ReleaseSafe native (reused)
+      |     +- compile lib SDL3 ReleaseSafe native (+3 more reused dependencies)
+      |     +- compile lib incinerator_imgui ReleaseSafe native (reused)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- WriteFile triangle.vert.metal (+18 more reused dependencies)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- options (reused)
+      |     +- WriteFile joltc.h (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      |     +- compile lib joltc ReleaseSafe native (reused)
+      +- install incinerator-dev success
+         +- compile exe incinerator-dev ReleaseSafe native cached 114ms MaxRSS:34M
+

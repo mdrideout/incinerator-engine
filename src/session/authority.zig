@@ -4406,7 +4406,7 @@ const AuthorityCore = struct {
                     }
                     self.active_districts[district_index] = true;
                     const next_index = district_index + 1;
-                    if (next_index < sandbox_district_recipe.installed_coords.len) {
+                    if (next_index < sandbox_district_recipe.fixture_coords.len) {
                         try self.simulation.submitDistrict(.{ .request_load = .{
                             .request_id = districtBootstrapRequestId(next_index),
                             .coord = districtBootstrapCoord(next_index),
@@ -7992,12 +7992,12 @@ fn districtBootstrapRequestId(index: usize) u64 {
 fn decodeDistrictBootstrapRequestId(value: u64) ?usize {
     if (value & 0xffff_ffff_ffff_ff00 != 0x4d50_3600_0000_0000) return null;
     const raw: u8 = @truncate(value);
-    if (raw == 0 or raw > sandbox_district_recipe.installed_coords.len) return null;
+    if (raw == 0 or raw > sandbox_district_recipe.fixture_coords.len) return null;
     return raw - 1;
 }
 
 fn districtBootstrapCoord(index: usize) district_contract.ChunkCoord {
-    return sandbox_district_recipe.installed_coords[index];
+    return sandbox_district_recipe.fixture_coords[index];
 }
 
 fn carryableSpawnRequestId(index: usize, generation: u16) u64 {

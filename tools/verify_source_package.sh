@@ -127,6 +127,8 @@ grep -Fxq 'game/vehicles/494e43494e455241-867ee4c3b011b0fe.icvehicle' "$tmp/pack
 grep -Fxq 'game/vehicles/494e43494e455241-20915108d5f1c706.icvehicle' "$tmp/package-files"
 grep -Fxq 'game/vehicles/meridian.glb' "$tmp/package-files"
 grep -Fxq 'game/vehicles/courier.glb' "$tmp/package-files"
+grep -Fxq 'game/vehicles/courier-awd.glb' "$tmp/package-files"
+grep -Fxq 'game/vehicles/494e43494e455241-38d7f4075c7ac47d.icvehicle' "$tmp/package-files"
 grep -Fxq 'third_party/joltc-zig/vehicle_bridge.cpp' "$tmp/package-files"
 grep -Fxq 'third_party/joltc-zig/vehicle_bridge.h' "$tmp/package-files"
 grep -Fxq 'docs/validation/ea2-vehicle-authoring.md' "$tmp/package-files"

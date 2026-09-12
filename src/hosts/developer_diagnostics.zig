@@ -13,7 +13,7 @@ const authority_diagnostics = @import("session_authority_diagnostics");
 /// after simulation execution remain visible to the same text, JSON, and UI
 /// consumers as runtime-system faults.
 pub const schema_version: u16 = 5;
-pub const district_stream_slot_count: usize = 4;
+pub const district_stream_slot_count: usize = 20;
 
 pub const ContentWorkerStage = enum {
     idle,
@@ -805,7 +805,7 @@ test "one typed snapshot feeds compact text and structured JSON" {
         },
         .authority_session = null,
         .content_worker = null,
-        .district_streams = DistrictStreams.init(.{
+        .district_streams = DistrictStreams.init([_]DistrictStreamSlot{
             .{
                 .coord = .{ .x = 0, .z = 0 },
                 .state = .active,
@@ -825,7 +825,7 @@ test "one typed snapshot feeds compact text and structured JSON" {
             },
             .{ .coord = .{ .x = 0, .z = 1 }, .state = .idle, .desired_inside = false },
             .{ .coord = .{ .x = 1, .z = 1 }, .state = .idle, .desired_inside = false },
-        }),
+        } ++ [_]DistrictStreamSlot{.{ .coord = .{ .x = 0, .z = -1 }, .state = .idle, .desired_inside = false }} ** (district_stream_slot_count - 4)),
         .gpu = null,
         .host_time = .{
             .paused = false,
@@ -860,7 +860,7 @@ test "one typed snapshot feeds compact text and structured JSON" {
     try std.testing.expect(std.mem.indexOf(
         u8,
         text_value,
-        "district_streams=4 desired=2 transitioning=1 active=1",
+        "district_streams=20 desired=2 transitioning=1 active=1",
     ) != null);
     try std.testing.expect(std.mem.indexOf(
         u8,

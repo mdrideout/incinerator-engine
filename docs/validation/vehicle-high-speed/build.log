@@ -1,0 +1,2 @@
+legacy stop_entry=15.003mps stop_distance=25.320m stop_time=3.258s turn_radius=66.247m turn_slip=0.571deg slalom_excursion=9.826m slalom_yaw_rate=12.270deg_s slalom_slip=2.449deg skid_peak=10.003deg skid_recovery=0.433s rollover_tilt=1.492deg rollover=false
+current stop_entry=15.009mps stop_distance=23.164m stop_time=3.017s turn_radius=59.251m turn_slip=0.538deg slalom_excursion=10.886m slalom_yaw_rate=12.884deg_s slalom_slip=2.386deg skid_peak=11.638deg skid_recovery=0.458s rollover_tilt=0.961deg rollover=false

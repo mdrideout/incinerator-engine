@@ -15,9 +15,11 @@ Curve plots and full saved/admitted/candidate values use the actual definition.
 - **Preview** changes compatible visuals only; inspection identifies its owner.
 - **Measure** runs the immutable candidate in a separate renderer-free process.
   Its terminal result links the complete report and validates definition/build digests.
-- **Apply** admits presentation or supported live settings at the authority tick.
-- **Rebuild** explicitly reconstructs immutable physical settings. Collision,
-  occupied layout, shifting and incompatible powertrain states reject atomically.
+- **Apply** automatically selects a live update or physics reconstruction at
+  the authority tick. Collision, occupied layout, shifting and incompatible
+  powertrain states still reject atomically. The separate Lab Rebuild button
+  was removed; typed backend/CLI operations remain explicit. See
+  [single Apply validation](vehicle-single-apply.md).
 - **Revert** admits the saved definition through those same transition checks.
 - **Commit** atomically saves the admitted selected car as a new archetype revision.
   Existing sibling cars retain their admitted definitions.

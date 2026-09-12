@@ -667,7 +667,7 @@ test "authored physical placements are unique and balanced across districts" {
         }
         if (!found) return error.UnknownSpawnSlotDistrict;
     }
-    try std.testing.expectEqualSlices(usize, &.{ 12, 12, 4, 4 }, &counts);
+    try std.testing.expectEqualSlices(usize, &([_]usize{ 12, 12, 4, 4 } ++ [_]usize{0} ** 16), &counts);
 
     var unique_initial = [_]bool{false} ** population.max_spawn_slots;
     var ordinary_counts = [_]usize{0} ** recipe.installed_coords.len;
@@ -684,7 +684,7 @@ test "authored physical placements are unique and balanced across districts" {
             }
         }
     }
-    try std.testing.expectEqualSlices(usize, &.{ 3, 3, 3, 3 }, &ordinary_counts);
+    try std.testing.expectEqualSlices(usize, &([_]usize{ 3, 3, 3, 3 } ++ [_]usize{0} ** 16), &ordinary_counts);
 }
 
 test "industrial exploration starts with passive civilians" {

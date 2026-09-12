@@ -13,8 +13,8 @@ pub const max_vehicles: usize = 4;
 pub const product_vehicles: usize = 1;
 pub const max_carryables: usize = 4;
 pub const product_carryables: usize = 1;
-pub const max_relevant_districts_per_client: usize = 4;
-pub const product_relevant_districts_per_client: usize = 4;
+pub const max_relevant_districts_per_client: usize = 20;
+pub const product_relevant_districts_per_client: usize = 20;
 pub const max_npcs: usize = 64;
 /// The ordinary authored sandbox roster. The 64-NPC ceiling remains an
 /// explicit synthetic logic/transaction pressure profile.

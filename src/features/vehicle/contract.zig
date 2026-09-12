@@ -585,4 +585,5 @@ test "vehicle contract retains canonical value validation" {
 
 test {
     _ = asset;
+    _ = control;
 }

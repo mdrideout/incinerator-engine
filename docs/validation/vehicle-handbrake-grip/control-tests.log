@@ -1,0 +1,5 @@
+Build Summary: 3/3 steps succeeded; 8/8 tests passed
+test-vehicle-assets success
++- run test 8 pass (8 total) 169ms MaxRSS:3M
+   +- compile test Debug native success 2s MaxRSS:346M
+

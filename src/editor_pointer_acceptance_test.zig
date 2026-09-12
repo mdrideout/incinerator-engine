@@ -361,7 +361,7 @@ const VehicleJourney = struct {
     }
 };
 
-test "Vehicle Lab native drag cancel rebuild apply revert and durable restart use the real feature" {
+test "Vehicle Lab native single Apply selects rebuild or live update with cancel revert and durable restart" {
     if (!c.SDL_Init(c.SDL_INIT_VIDEO)) return error.SDLInitFailed;
     defer c.SDL_Quit();
     const window = c.SDL_CreateWindow("Incinerator Vehicle Lab Acceptance", 720, 720, 0) orelse return error.WindowFailed;
@@ -423,7 +423,10 @@ test "Vehicle Lab native drag cancel rebuild apply revert and durable restart us
         const candidate = editor.vehicle_lab.draft.?.value.tuning.mass;
         try std.testing.expect(candidate != initial);
         try std.testing.expectEqual(initial, (try simulation.vehicle(target)).definition.tuning.mass);
-        try journey.control(&input_owner, .rebuild, 0, false);
+        const revision_before_apply = (try simulation.vehicle(target)).revision;
+        try journey.control(&input_owner, .apply, 0, false);
+        try std.testing.expectEqual(revision_before_apply + 1, (try simulation.vehicle(target)).revision);
+        try std.testing.expectEqual(.rebuild, owner.result(owner.last_ui_result.?, .ui).?.action);
         try std.testing.expectEqual(candidate, (try simulation.vehicle(target)).definition.tuning.mass);
         try journey.control(&input_owner, .mass, -25, true);
         try std.testing.expectEqual(candidate, editor.vehicle_lab.draft.?.value.tuning.mass);
@@ -433,6 +436,7 @@ test "Vehicle Lab native drag cancel rebuild apply revert and durable restart us
     editor.vehicle_lab.draft.?.value.tuning.powertrain.max_torque_nm = 550;
     editor.vehicle_lab.dirty = true;
     try journey.control(&input_owner, .apply, 0, false);
+    try std.testing.expectEqual(.apply, owner.result(owner.last_ui_result.?, .ui).?.action);
     try std.testing.expectEqual(@as(f32, 550), (try simulation.vehicle(target)).definition.tuning.powertrain.max_torque_nm);
     try journey.control(&input_owner, .commit, 0, false);
     var restarted = try vehicle_contract.vehicle.asset.read(std.testing.allocator, std.testing.io, temporary.dir, definition.id);

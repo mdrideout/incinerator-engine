@@ -1628,6 +1628,14 @@ pub const Physics = struct {
         return try self.createBox(position, half_extents, .static);
     }
 
+    /// Explicit adapter-level surface experiment; ordinary creation retains its material.
+    pub fn setBodyFriction(self: *Physics, id: BodyId, friction: f32) !void {
+        self.assertOwnerThread();
+        if (!std.math.isFinite(friction) or friction < 0) return error.InvalidFriction;
+        try self.validateBody(id);
+        c.JPH_BodyInterface_SetFriction(self.body_interface, id.toJolt(), friction);
+    }
+
     pub fn createDynamicBox(
         self: *Physics,
         position: [3]f32,

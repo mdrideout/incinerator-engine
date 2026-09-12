@@ -1,0 +1,31 @@
+test-vehicle-dynamics
++- run test w
+Courier sedan stop_entry=15.006mps stop_distance=22.200m stop_time=2.958s turn_radius=15.369m turn_slip=4.352deg slalom_excursion=26.279m slalom_yaw_rate=34.491deg_s slalom_slip=6.653deg skid_peak=45.958deg skid_recovery=1.975s rollover_tilt=2.067deg rollover=false
+Meridian coupe stop_entry=15.001mps stop_distance=26.406m stop_time=3.275s turn_radius=13.261m turn_slip=4.475deg slalom_excursion=28.433m slalom_yaw_rate=35.518deg_s slalom_slip=5.470deg skid_peak=14.256deg skid_recovery=2.167s rollover_tilt=2.843deg rollover=false
+Courier AWD SUV stop_entry=15.005mps stop_distance=25.715m stop_time=3.292s turn_radius=17.974m turn_slip=3.929deg slalom_excursion=24.905m slalom_yaw_rate=31.299deg_s slalom_slip=6.205deg skid_peak=21.546deg skid_recovery=2.608s rollover_tilt=1.948deg rollover=false
+failed command: ./.zig-cache/o/a4ab69d973d54e9be661ddd856124292/test --cache-dir=./.zig-cache --seed=0x519ac27c --listen=-
+
+Build Summary: 17/17 steps succeeded; 80/80 tests passed
+test-vehicle-dynamics success
++- run test 5 pass (5 total) 842ms MaxRSS:36M
+   +- compile test ReleaseSafe native success 13s MaxRSS:516M
+      +- options success
+      +- options cached
+      +- WriteFile joltc.h cached
+      +- compile lib joltc ReleaseSafe native cached 95ms MaxRSS:34M
+      +- compile lib joltc ReleaseSafe native (reused)
+test-vehicle-assets success
++- run test 5 pass (5 total) 5ms MaxRSS:1M
+   +- compile test ReleaseSafe native cached 74ms MaxRSS:34M
+test-vehicle-feature success
++- run test 21 pass (21 total) 215ms MaxRSS:8M
+   +- compile test ReleaseSafe native success 23s MaxRSS:565M
+      +- options cached
+test-physics success
++- run test 49 pass (49 total) 224ms MaxRSS:36M
+   +- compile test ReleaseSafe native success 11s MaxRSS:424M
+      +- WriteFile joltc.h (reused)
+      +- compile lib joltc ReleaseSafe native (reused)
+      +- compile lib joltc ReleaseSafe native (reused)
+      +- options (reused)
+

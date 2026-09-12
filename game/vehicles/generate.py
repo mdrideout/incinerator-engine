@@ -54,34 +54,63 @@ def box(faces,center,size,band):
             p=list(center);p[axis]+=size[axis]*sign/2;p[u]+=size[u]*a/2;p[v]+=size[v]*b/2;verts.append(p)
         faces.append((verts,band))
 
+# Each silhouette owns its cabin, doors and trim; physics owns wheel placement.
+STYLES = {
+    'meridian': dict(kind='coupe', color=(47,99,151), roof=.69, cabin_front=-.32, cabin_rear=.43, roof_front=-.08, roof_rear=.19, pillar=.16, doors=(-.04,)),
+    'courier': dict(kind='sedan', color=(176,80,39), roof=.80, cabin_front=-.38, cabin_rear=.54, roof_front=-.20, roof_rear=.34, pillar=.01, doors=(-.10,.34)),
+    'courier-awd': dict(kind='suv', color=(64,112,77), roof=1.01, cabin_front=-.40, cabin_rear=.89, roof_front=-.26, roof_rear=.82, pillar=.04, doors=(-.09,.35)),
+}
+
+def cabin_side(faces, side, w, l, bottom_y, top_y, z0, z1, band):
+    # Side glass lies on the tapered cabin plane. Paint strips divide panes.
+    verts=[(side*w*.94,bottom_y,z0*l),(side*w*.94,bottom_y,z1*l),
+           (side*w*.78,top_y,z1*l),(side*w*.78,top_y,z0*l)]
+    if side > 0: verts.reverse()
+    faces.append((verts,band))
+
 def generate():
-    for name,color in [('meridian',(49,83,103)),('courier',(148,66,37))]:
-        d=json.loads((ROOT/(name+'.json')).read_text());t=d['tuning'];w,h,l=t['chassis_half_extents'];scene=Scene(color);f=[]
-        box(f,(0,-.05,0),(2*w,.50,2*l),0)
-        box(f,(0,.23,-l*.61),(2*w*.96,.15,l*.7),0)
-        box(f,(0,.22,l*.75),(2*w*.96,.13,l*.44),0)
-        # Sloped cabin: windshield and rear window are textured geometry.
-        bottom=[(-w*.94,.20,-l*.34),(w*.94,.20,-l*.34),(w*.94,.20,l*.52),(-w*.94,.20,l*.52)]
-        top=[(-w*.76,.83,-l*.14),(w*.76,.83,-l*.14),(w*.76,.83,l*.32),(-w*.76,.83,l*.32)]
+    for name,style in STYLES.items():
+        d=json.loads((ROOT/(name+'.json')).read_text());t=d['tuning'];w,h,l=t['chassis_half_extents'];scene=Scene(style['color']);f=[]
+        suv=style['kind']=='suv';coupe=style['kind']=='coupe'
+        bottom_y=-.47 if suv else -.30
+        belt=.25 if suv else .20
+        box(f,(0,(bottom_y+belt)/2,0),(2*w,belt-bottom_y,2*l),0)
+        # Long hood + separate trunk on coupe/sedan; tall enclosed cargo body on SUV.
+        box(f,(0,belt+.04,-l*.65),(w*1.92,.12,l*.67),0)
+        if not suv:box(f,(0,belt+.025,l*.76),(w*1.92,.10,l*.43),0)
+        front,rear=style['cabin_front'],style['cabin_rear'];rf,rr=style['roof_front'],style['roof_rear'];roof=style['roof']
+        bottom=[(-w*.94,belt,front*l),(w*.94,belt,front*l),(w*.94,belt,rear*l),(-w*.94,belt,rear*l)]
+        top=[(-w*.78,roof,rf*l),(w*.78,roof,rf*l),(w*.78,roof,rr*l),(-w*.78,roof,rr*l)]
         f.append(([top[0],top[3],top[2],top[1]],0))
-        for a,b in [(0,1),(1,2),(2,3),(3,0)]:f.append(([bottom[a],bottom[b],top[b],top[a]],1))
+        for a,b in [(0,1),(1,2),(2,3),(3,0)]:f.append(([top[a],top[b],bottom[b],bottom[a]],1))
         for side in [-1,1]:
-            box(f,(side*w*.85,.5,l*.12),(.035,.63,.075),0)
-            box(f,(side*(w+.07),.32,-l*.27),(.17,.12,.24),0)
-            for z in [-l*.05,l*.30]:box(f,(side*(w+.009),.08,z),(.025,.045,.16),3)
-            box(f,(side*(w+.004),-.13,0),(.018,.065,l*1.85),2)
-        for z in [-l-.015,l+.015]:box(f,(0,-.16,z),(w*1.98,.15,.095),2)
+            # Pillars and seams distinguish two long coupe doors from four sedan/SUV doors.
+            pillar=style['pillar']
+            cabin_side(f,side,w*1.002,l,belt,roof,pillar-.018,pillar+.018,0)
+            if suv:cabin_side(f,side,w*1.002,l,belt,roof,.53,.57,0)
+            for z in style['doors']:
+                box(f,(side*(w+.01),belt-.10,z*l),(.025,.045,.17),3)
+                seam=z+.075
+                box(f,(side*(w+.006),(bottom_y+belt)/2,seam*l),(.012,belt-bottom_y-.035,.013),2)
+            box(f,(side*(w+.07),belt+.10,front*l),(.17,.12,.24),0)
+            box(f,(side*(w+.009),bottom_y+.055,0),(.025,.085,l*1.85),2)
+            if suv:
+                box(f,(side*w*.70,roof+.045,.27*l),(.045,.09,1.86),2)
+                box(f,(side*(w+.035),bottom_y+.07,.1),(.13,.10,l*1.45),2)
+        for z in [-l-.015,l+.015]:box(f,(0,bottom_y+.10,z),(w*1.98,.20 if suv else .14,.095),2)
         for x in [-w*.65,w*.65]:
-            box(f,(x,.055,-l-.025),(.43,.17,.03),4)
-            box(f,(x,.055,l+.025),(.4,.16,.03),5)
-        box(f,(0,-.01,-l-.045),(.61,.21,.03),2)
+            box(f,(x,belt-.10,-l-.025),(.43,.17,.03),4)
+            box(f,(x,belt-.10,l+.025),(.19 if suv else .40,.32 if suv else .14,.03),5)
+        box(f,(0,belt-.15,-l-.045),(.61,.22,.03),2)
+        # Semantic design metadata is retained in the authored source GLB.
+        scene.g['asset']['extras']=dict(body_style=style['kind'],door_count=2 if coupe else 4,archetype=name)
         scene.mesh('Body',f,0)
         # Canonical wheel mesh has width=1 and diameter=1; definition supplies scaling.
         f=[];segments=24
         for i in range(segments):
             a=2*math.pi*i/segments;b=2*math.pi*(i+1)/segments
             ring=lambda x,r,ang:(x,math.cos(ang)*r,math.sin(ang)*r)
-            f.append(([ring(-.5,.5,a),ring(.5,.5,a),ring(.5,.5,b),ring(-.5,.5,b)],7))
+            f.append(([ring(-.5,.5,b),ring(.5,.5,b),ring(.5,.5,a),ring(-.5,.5,a)],7))
             for side in [-1,1]:
                 verts=[ring(side*.5,.5,a),ring(side*.5,.5,b),ring(side*.505,.30,b),ring(side*.505,.30,a)]
                 if side<0:verts.reverse()

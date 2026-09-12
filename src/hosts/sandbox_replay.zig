@@ -4063,7 +4063,7 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     var recipe_v9_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
         &recipe_v9_expected,
-        "83b47bba6b00b0d9f0d3a988da688a2a996dc63b33bf55d9ce3e3453f37593c9",
+        "f1db70e20f058e12db0ac5aa496e0de6a00645edebb8cf62b77f095533e47451",
     );
     const recipe_v9_actual = try content.fingerprint();
     try std.testing.expectEqualSlices(u8, &recipe_v9_expected, &recipe_v9_actual);

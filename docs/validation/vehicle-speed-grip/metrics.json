@@ -1,0 +1,1082 @@
+[
+  {
+    "definition": {
+      "version": 2,
+      "id": {
+        "asset": {
+          "namespace": 5282233395077009985,
+          "local": 2346745979227719430
+        }
+      },
+      "label": "Courier sedan",
+      "revision": 7,
+      "tuning": {
+        "steering": {
+          "rise_per_second": 5.5,
+          "return_per_second": 8,
+          "speed_curve": [
+            {
+              "speed_mps": 0,
+              "lock_fraction": 1
+            },
+            {
+              "speed_mps": 8,
+              "lock_fraction": 0.550000011920929
+            },
+            {
+              "speed_mps": 18,
+              "lock_fraction": 0.47999998927116394
+            },
+            {
+              "speed_mps": 30,
+              "lock_fraction": 0.3199999928474426
+            }
+          ]
+        },
+        "chassis_half_extents": [
+          0.8299999833106995,
+          0.6499999761581421,
+          1.9199999570846558
+        ],
+        "center_of_mass_offset": [
+          0,
+          -0.3499999940395355,
+          -0.15000000596046448
+        ],
+        "mass": 1120,
+        "wheel_attachment_positions": [
+          [
+            -0.7200000286102295,
+            -0.17000000178813934,
+            -1.2400000095367432
+          ],
+          [
+            0.7200000286102295,
+            -0.17000000178813934,
+            -1.2400000095367432
+          ],
+          [
+            -0.7200000286102295,
+            -0.17000000178813934,
+            1.2400000095367432
+          ],
+          [
+            0.7200000286102295,
+            -0.17000000178813934,
+            1.2400000095367432
+          ]
+        ],
+        "wheel_radius": 0.28999999165534973,
+        "wheel_width": 0.1850000023841858,
+        "suspension_min_length": 0.14000000059604645,
+        "suspension_max_length": 0.4399999976158142,
+        "suspension_frequency": 1.350000023841858,
+        "suspension_damping": 0.7200000286102295,
+        "max_steer_radians": 0.5585053563117981,
+        "max_brake_torque": 1700,
+        "max_hand_brake_torque": 4000,
+        "rear_axle": {
+          "suspension_min_length": 0.14000000059604645,
+          "suspension_max_length": 0.4399999976158142,
+          "suspension_frequency": 1.4500000476837158,
+          "suspension_damping": 0.7200000286102295,
+          "brake_torque_nm": 600,
+          "tire_friction": {
+            "longitudinal_peak_slip": 0.05999999865889549,
+            "longitudinal_peak_friction": 4.199999809265137,
+            "longitudinal_slide_slip": 0.4000000059604645,
+            "longitudinal_slide_friction": 3.450000047683716,
+            "lateral_peak_angle_radians": 0.06981316953897476,
+            "lateral_peak_friction": 10.023750305175781,
+            "lateral_slide_angle_radians": 0.3490658402442932,
+            "lateral_slide_friction": 8.019000053405762
+          },
+          "anti_roll_stiffness": 300
+        },
+        "front_anti_roll_stiffness": 400,
+        "tire_friction": {
+          "longitudinal_peak_slip": 0.05999999865889549,
+          "longitudinal_peak_friction": 4.900000095367432,
+          "longitudinal_slide_slip": 0.3499999940395355,
+          "longitudinal_slide_friction": 4.025000095367432,
+          "lateral_peak_angle_radians": 0.06981316953897476,
+          "lateral_peak_friction": 8.505000114440918,
+          "lateral_slide_angle_radians": 0.3490658402442932,
+          "lateral_slide_friction": 6.803999900817871
+        },
+        "powertrain": {
+          "max_torque_nm": 560,
+          "idle_rpm": 800,
+          "max_rpm": 6000,
+          "inertia_kg_m2": 0.3499999940395355,
+          "angular_damping": 0.20000000298023224,
+          "torque_curve": [
+            {
+              "rpm_fraction": 0,
+              "torque_fraction": 0.20000000298023224
+            },
+            {
+              "rpm_fraction": 0.5,
+              "torque_fraction": 0.3499999940395355
+            },
+            {
+              "rpm_fraction": 0.800000011920929,
+              "torque_fraction": 1
+            },
+            {
+              "rpm_fraction": 1,
+              "torque_fraction": 0.7200000286102295
+            }
+          ],
+          "forward_gears": [
+            3.200000047683716,
+            2,
+            1.3799999952316284,
+            1,
+            0.7799999713897705
+          ],
+          "reverse_gears": [
+            -4
+          ],
+          "switch_time_s": 0.30000001192092896,
+          "clutch_release_s": 0.18000000715255737,
+          "switch_latency_s": 0.5,
+          "shift_up_rpm": 5100,
+          "shift_down_rpm": 1800,
+          "clutch_strength": 10,
+          "front_torque_fraction": 1,
+          "rear_differential_ratio": 3.7300000190734863,
+          "rear_limited_slip_ratio": 1.399999976158142,
+          "center_limited_slip_ratio": 1.399999976158142
+        },
+        "front_differential_ratio": 3.4200000762939453,
+        "front_limited_slip_ratio": 1.399999976158142,
+        "max_pitch_roll_radians": 3.1415927410125732,
+        "wheel_collision_max_slope_radians": 1.0471975803375244
+      },
+      "visuals": {
+        "chassis": {
+          "mesh": {
+            "namespace": 5282233395077009985,
+            "local": 9193263696161710883
+          },
+          "material": {
+            "namespace": 5282233395077009985,
+            "local": 2740942240368028446
+          },
+          "local_pose": {
+            "position": [
+              0,
+              -0.18000000715255737,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "wheels": [
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 11653646415283126671
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 9433346811235843760
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.1850000023841858,
+              0.5799999833106995,
+              0.5799999833106995
+            ]
+          },
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 11653646415283126671
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 9433346811235843760
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.1850000023841858,
+              0.5799999833106995,
+              0.5799999833106995
+            ]
+          },
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 11653646415283126671
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 9433346811235843760
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.1850000023841858,
+              0.5799999833106995,
+              0.5799999833106995
+            ]
+          },
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 11653646415283126671
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 9433346811235843760
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.1850000023841858,
+              0.5799999833106995,
+              0.5799999833106995
+            ]
+          }
+        ]
+      }
+    },
+    "definition_digest": [
+      250,
+      71,
+      44,
+      80,
+      31,
+      88,
+      98,
+      133,
+      62,
+      58,
+      19,
+      78,
+      186,
+      99,
+      167,
+      130,
+      38,
+      17,
+      17,
+      36,
+      48,
+      2,
+      103,
+      239,
+      105,
+      247,
+      186,
+      136,
+      142,
+      243,
+      36,
+      122
+    ],
+    "build": {
+      "tire_response": "combined-slip-sliding-v1",
+      "source_cohort": 5319209238713280587,
+      "jolt_revision": "23dadd0e603f1b321142d4c74df07fce85064989",
+      "joltc_revision": "52d8c98df523f449eb3e01b1060a0fde052970d1",
+      "zig_version": "0.16.0",
+      "optimize": "ReleaseSafe",
+      "architecture": "aarch64"
+    },
+    "metrics": {
+      "stopping_status": "complete",
+      "skid_status": "complete",
+      "stopping_entry_speed_mps": 15.014571189880371,
+      "stopping_distance_m": 14.506823539733887,
+      "stopping_time_s": 1.9166667461395264,
+      "steady_turn_radius_m": 18.19038200378418,
+      "steady_turn_mean_slip_deg": 3.3428738117218018,
+      "slalom_lateral_excursion_m": 46.344905853271484,
+      "slalom_peak_yaw_rate_deg_s": 59.77082824707031,
+      "slalom_peak_slip_deg": 6.772177219390869,
+      "skid_peak_slip_deg": 89.68478393554688,
+      "skid_recovery_s": 1.783333420753479,
+      "rollover_max_tilt_deg": 3.4338760375976562,
+      "rollover_occurred": false
+    }
+  },
+  {
+    "definition": {
+      "version": 2,
+      "id": {
+        "asset": {
+          "namespace": 5282233395077009985,
+          "local": 4096010698570253437
+        }
+      },
+      "label": "Courier AWD SUV",
+      "revision": 6,
+      "tuning": {
+        "steering": {
+          "rise_per_second": 4.5,
+          "return_per_second": 8,
+          "speed_curve": [
+            {
+              "speed_mps": 0,
+              "lock_fraction": 1
+            },
+            {
+              "speed_mps": 8,
+              "lock_fraction": 0.550000011920929
+            },
+            {
+              "speed_mps": 18,
+              "lock_fraction": 0.47999998927116394
+            },
+            {
+              "speed_mps": 30,
+              "lock_fraction": 0.3199999928474426
+            }
+          ]
+        },
+        "chassis_half_extents": [
+          0.9399999976158142,
+          0.8500000238418579,
+          2.200000047683716
+        ],
+        "center_of_mass_offset": [
+          0,
+          -0.44999998807907104,
+          -0.15000000596046448
+        ],
+        "mass": 1520,
+        "wheel_attachment_positions": [
+          [
+            -0.8299999833106995,
+            -0.3199999928474426,
+            -1.3600000143051147
+          ],
+          [
+            0.8299999833106995,
+            -0.3199999928474426,
+            -1.3600000143051147
+          ],
+          [
+            -0.8299999833106995,
+            -0.3199999928474426,
+            1.3600000143051147
+          ],
+          [
+            0.8299999833106995,
+            -0.3199999928474426,
+            1.3600000143051147
+          ]
+        ],
+        "wheel_radius": 0.3499999940395355,
+        "wheel_width": 0.24500000476837158,
+        "suspension_min_length": 0.14000000059604645,
+        "suspension_max_length": 0.4399999976158142,
+        "suspension_frequency": 1.350000023841858,
+        "suspension_damping": 0.7200000286102295,
+        "max_steer_radians": 0.5585053563117981,
+        "max_brake_torque": 1700,
+        "max_hand_brake_torque": 4000,
+        "rear_axle": {
+          "suspension_min_length": 0.14000000059604645,
+          "suspension_max_length": 0.4399999976158142,
+          "suspension_frequency": 1.4500000476837158,
+          "suspension_damping": 0.7200000286102295,
+          "brake_torque_nm": 600,
+          "tire_friction": {
+            "longitudinal_peak_slip": 0.05999999865889549,
+            "longitudinal_peak_friction": 4.199999809265137,
+            "longitudinal_slide_slip": 0.11999999731779099,
+            "longitudinal_slide_friction": 3.450000047683716,
+            "lateral_peak_angle_radians": 0.06981316953897476,
+            "lateral_peak_friction": 10.023750305175781,
+            "lateral_slide_angle_radians": 0.3490658402442932,
+            "lateral_slide_friction": 8.019000053405762
+          },
+          "anti_roll_stiffness": 300
+        },
+        "front_anti_roll_stiffness": 400,
+        "tire_friction": {
+          "longitudinal_peak_slip": 0.05999999865889549,
+          "longitudinal_peak_friction": 7,
+          "longitudinal_slide_slip": 0.3499999940395355,
+          "longitudinal_slide_friction": 5.75,
+          "lateral_peak_angle_radians": 0.06981316953897476,
+          "lateral_peak_friction": 8.505000114440918,
+          "lateral_slide_angle_radians": 0.3490658402442932,
+          "lateral_slide_friction": 6.803999900817871
+        },
+        "powertrain": {
+          "max_torque_nm": 665,
+          "idle_rpm": 800,
+          "max_rpm": 6000,
+          "inertia_kg_m2": 0.3499999940395355,
+          "angular_damping": 0.20000000298023224,
+          "torque_curve": [
+            {
+              "rpm_fraction": 0,
+              "torque_fraction": 0.20000000298023224
+            },
+            {
+              "rpm_fraction": 0.3499999940395355,
+              "torque_fraction": 0.44999998807907104
+            },
+            {
+              "rpm_fraction": 0.6499999761581421,
+              "torque_fraction": 1
+            },
+            {
+              "rpm_fraction": 1,
+              "torque_fraction": 0.7200000286102295
+            }
+          ],
+          "forward_gears": [
+            3.200000047683716,
+            2,
+            1.3799999952316284,
+            1,
+            0.7799999713897705
+          ],
+          "reverse_gears": [
+            -2.9000000953674316
+          ],
+          "switch_time_s": 0.30000001192092896,
+          "clutch_release_s": 0.18000000715255737,
+          "switch_latency_s": 0.5,
+          "shift_up_rpm": 5100,
+          "shift_down_rpm": 1800,
+          "clutch_strength": 10,
+          "front_torque_fraction": 0.699999988079071,
+          "rear_differential_ratio": 3.7300000190734863,
+          "rear_limited_slip_ratio": 1.399999976158142,
+          "center_limited_slip_ratio": 340282346638528860000000000000000000000
+        },
+        "front_differential_ratio": 3.4200000762939453,
+        "front_limited_slip_ratio": 1.399999976158142,
+        "max_pitch_roll_radians": 3.1415927410125732,
+        "wheel_collision_max_slope_radians": 1.0471975803375244
+      },
+      "visuals": {
+        "chassis": {
+          "mesh": {
+            "namespace": 5282233395077009985,
+            "local": 12868560286852540933
+          },
+          "material": {
+            "namespace": 5282233395077009985,
+            "local": 2146302510730041105
+          },
+          "local_pose": {
+            "position": [
+              0,
+              -0.18000000715255737,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "wheels": [
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 609220203963833705
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 14108802647798616411
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.24500000476837158,
+              0.699999988079071,
+              0.699999988079071
+            ]
+          },
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 609220203963833705
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 14108802647798616411
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.24500000476837158,
+              0.699999988079071,
+              0.699999988079071
+            ]
+          },
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 609220203963833705
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 14108802647798616411
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.24500000476837158,
+              0.699999988079071,
+              0.699999988079071
+            ]
+          },
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 609220203963833705
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 14108802647798616411
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.24500000476837158,
+              0.699999988079071,
+              0.699999988079071
+            ]
+          }
+        ]
+      }
+    },
+    "definition_digest": [
+      209,
+      169,
+      10,
+      186,
+      184,
+      198,
+      103,
+      143,
+      158,
+      115,
+      91,
+      95,
+      165,
+      229,
+      248,
+      183,
+      212,
+      146,
+      39,
+      206,
+      235,
+      25,
+      253,
+      3,
+      133,
+      110,
+      46,
+      211,
+      80,
+      149,
+      36,
+      59
+    ],
+    "build": {
+      "tire_response": "combined-slip-sliding-v1",
+      "source_cohort": 5319209238713280587,
+      "jolt_revision": "23dadd0e603f1b321142d4c74df07fce85064989",
+      "joltc_revision": "52d8c98df523f449eb3e01b1060a0fde052970d1",
+      "zig_version": "0.16.0",
+      "optimize": "ReleaseSafe",
+      "architecture": "aarch64"
+    },
+    "metrics": {
+      "stopping_status": "complete",
+      "skid_status": "complete",
+      "stopping_entry_speed_mps": 15.030500411987305,
+      "stopping_distance_m": 16.40824317932129,
+      "stopping_time_s": 1.9750001430511475,
+      "steady_turn_radius_m": 23.156843185424805,
+      "steady_turn_mean_slip_deg": 1.6195509433746338,
+      "slalom_lateral_excursion_m": 67.2758560180664,
+      "slalom_peak_yaw_rate_deg_s": 53.448001861572266,
+      "slalom_peak_slip_deg": 5.767177581787109,
+      "skid_peak_slip_deg": 89.95867156982422,
+      "skid_recovery_s": 1.9166667461395264,
+      "rollover_max_tilt_deg": 2.7982733249664307,
+      "rollover_occurred": false
+    }
+  },
+  {
+    "definition": {
+      "version": 2,
+      "id": {
+        "asset": {
+          "namespace": 5282233395077009985,
+          "local": 9691434977271591166
+        }
+      },
+      "label": "Meridian coupe",
+      "revision": 7,
+      "tuning": {
+        "steering": {
+          "rise_per_second": 5.5,
+          "return_per_second": 8,
+          "speed_curve": [
+            {
+              "speed_mps": 0,
+              "lock_fraction": 1
+            },
+            {
+              "speed_mps": 8,
+              "lock_fraction": 0.800000011920929
+            },
+            {
+              "speed_mps": 18,
+              "lock_fraction": 0.47999998927116394
+            },
+            {
+              "speed_mps": 30,
+              "lock_fraction": 0.3199999928474426
+            }
+          ]
+        },
+        "chassis_half_extents": [
+          0.9100000262260437,
+          0.6499999761581421,
+          2.299999952316284
+        ],
+        "center_of_mass_offset": [
+          0,
+          -0.3499999940395355,
+          -0.11999999731779099
+        ],
+        "mass": 1580,
+        "wheel_attachment_positions": [
+          [
+            -0.7799999713897705,
+            -0.17000000178813934,
+            -1.4249999523162842
+          ],
+          [
+            0.7799999713897705,
+            -0.17000000178813934,
+            -1.4249999523162842
+          ],
+          [
+            -0.7799999713897705,
+            -0.17000000178813934,
+            1.4249999523162842
+          ],
+          [
+            0.7799999713897705,
+            -0.17000000178813934,
+            1.4249999523162842
+          ]
+        ],
+        "wheel_radius": 0.3199999928474426,
+        "wheel_width": 0.20499999821186066,
+        "suspension_min_length": 0.14000000059604645,
+        "suspension_max_length": 0.47999998927116394,
+        "suspension_frequency": 1.149999976158142,
+        "suspension_damping": 0.7200000286102295,
+        "max_steer_radians": 0.5585053563117981,
+        "max_brake_torque": 2300,
+        "max_hand_brake_torque": 4000,
+        "rear_axle": {
+          "suspension_min_length": 0.14000000059604645,
+          "suspension_max_length": 0.47999998927116394,
+          "suspension_frequency": 1.2000000476837158,
+          "suspension_damping": 0.7200000286102295,
+          "brake_torque_nm": 600,
+          "tire_friction": {
+            "longitudinal_peak_slip": 0.05999999865889549,
+            "longitudinal_peak_friction": 7,
+            "longitudinal_slide_slip": 0.5,
+            "longitudinal_slide_friction": 5.75,
+            "lateral_peak_angle_radians": 0.10471975803375244,
+            "lateral_peak_friction": 7.289999961853027,
+            "lateral_slide_angle_radians": 0.3490658402442932,
+            "lateral_slide_friction": 5.831999778747559
+          },
+          "anti_roll_stiffness": 150
+        },
+        "front_anti_roll_stiffness": 200,
+        "tire_friction": {
+          "longitudinal_peak_slip": 0.05999999865889549,
+          "longitudinal_peak_friction": 7,
+          "longitudinal_slide_slip": 0.20000000298023224,
+          "longitudinal_slide_friction": 5.75,
+          "lateral_peak_angle_radians": 0.06981316953897476,
+          "lateral_peak_friction": 5.670000076293945,
+          "lateral_slide_angle_radians": 0.3490658402442932,
+          "lateral_slide_friction": 4.5360002517700195
+        },
+        "powertrain": {
+          "max_torque_nm": 736,
+          "idle_rpm": 800,
+          "max_rpm": 6000,
+          "inertia_kg_m2": 0.550000011920929,
+          "angular_damping": 0.20000000298023224,
+          "torque_curve": [
+            {
+              "rpm_fraction": 0,
+              "torque_fraction": 0.20000000298023224
+            },
+            {
+              "rpm_fraction": 0.3499999940395355,
+              "torque_fraction": 0.3499999940395355
+            },
+            {
+              "rpm_fraction": 0.6499999761581421,
+              "torque_fraction": 1
+            },
+            {
+              "rpm_fraction": 1,
+              "torque_fraction": 0.7200000286102295
+            }
+          ],
+          "forward_gears": [
+            1.899999976158142,
+            1.25,
+            1,
+            0.8999999761581421,
+            0.7799999713897705
+          ],
+          "reverse_gears": [
+            -2.9000000953674316
+          ],
+          "switch_time_s": 0.30000001192092896,
+          "clutch_release_s": 0.18000000715255737,
+          "switch_latency_s": 0.5,
+          "shift_up_rpm": 5100,
+          "shift_down_rpm": 1800,
+          "clutch_strength": 10,
+          "front_torque_fraction": 0,
+          "rear_differential_ratio": 3.7300000190734863,
+          "rear_limited_slip_ratio": 1.399999976158142,
+          "center_limited_slip_ratio": 1.399999976158142
+        },
+        "front_differential_ratio": 3.4200000762939453,
+        "front_limited_slip_ratio": 1.399999976158142,
+        "max_pitch_roll_radians": 3.1415927410125732,
+        "wheel_collision_max_slope_radians": 1.0471975803375244
+      },
+      "visuals": {
+        "chassis": {
+          "mesh": {
+            "namespace": 5282233395077009985,
+            "local": 12236234399850656880
+          },
+          "material": {
+            "namespace": 5282233395077009985,
+            "local": 14412612223572593668
+          },
+          "local_pose": {
+            "position": [
+              0,
+              -0.18000000715255737,
+              0
+            ],
+            "rotation": [
+              0,
+              0,
+              0,
+              1
+            ]
+          },
+          "scale": [
+            1,
+            1,
+            1
+          ]
+        },
+        "wheels": [
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 4482960334023180827
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 5532391024758015636
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.20499999821186066,
+              0.6399999856948853,
+              0.6399999856948853
+            ]
+          },
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 4482960334023180827
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 5532391024758015636
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.20499999821186066,
+              0.6399999856948853,
+              0.6399999856948853
+            ]
+          },
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 4482960334023180827
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 5532391024758015636
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.20499999821186066,
+              0.6399999856948853,
+              0.6399999856948853
+            ]
+          },
+          {
+            "mesh": {
+              "namespace": 5282233395077009985,
+              "local": 4482960334023180827
+            },
+            "material": {
+              "namespace": 5282233395077009985,
+              "local": 5532391024758015636
+            },
+            "local_pose": {
+              "position": [
+                0,
+                0,
+                0
+              ],
+              "rotation": [
+                0,
+                0,
+                0,
+                1
+              ]
+            },
+            "scale": [
+              0.20499999821186066,
+              0.6399999856948853,
+              0.6399999856948853
+            ]
+          }
+        ]
+      }
+    },
+    "definition_digest": [
+      22,
+      94,
+      182,
+      8,
+      219,
+      61,
+      23,
+      241,
+      75,
+      132,
+      86,
+      179,
+      20,
+      30,
+      229,
+      28,
+      96,
+      201,
+      111,
+      134,
+      47,
+      233,
+      48,
+      80,
+      103,
+      69,
+      54,
+      167,
+      150,
+      60,
+      104,
+      109
+    ],
+    "build": {
+      "tire_response": "combined-slip-sliding-v1",
+      "source_cohort": 5319209238713280587,
+      "jolt_revision": "23dadd0e603f1b321142d4c74df07fce85064989",
+      "joltc_revision": "52d8c98df523f449eb3e01b1060a0fde052970d1",
+      "zig_version": "0.16.0",
+      "optimize": "ReleaseSafe",
+      "architecture": "aarch64"
+    },
+    "metrics": {
+      "stopping_status": "complete",
+      "skid_status": "complete",
+      "stopping_entry_speed_mps": 15.018033027648926,
+      "stopping_distance_m": 14.123581886291504,
+      "stopping_time_s": 1.6916667222976685,
+      "steady_turn_radius_m": 12.730376243591309,
+      "steady_turn_mean_slip_deg": 6.482760429382324,
+      "slalom_lateral_excursion_m": 25.923255920410156,
+      "slalom_peak_yaw_rate_deg_s": 50.25291061401367,
+      "slalom_peak_slip_deg": 9.684783935546875,
+      "skid_peak_slip_deg": 89.68616485595703,
+      "skid_recovery_s": 1.9000000953674316,
+      "rollover_max_tilt_deg": 4.176123142242432,
+      "rollover_occurred": false
+    }
+  }
+]

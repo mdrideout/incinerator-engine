@@ -25,7 +25,103 @@ pub const boxes = .{
         .{ .position = .{ 44, 4.0, 82 }, .half_extents = .{ 10.0, 4.0, 7.0 } },
         .{ .position = .{ 84, 3.0, 84 }, .half_extents = .{ 9.0, 3.0, 10.0 } },
     },
+    .{
+        .{ .position = .{ -28, 0.5, -88 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -88 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -40 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -40 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -152 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -152 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -104 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -104 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -216 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -216 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -168 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -168 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -280 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -280 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -232 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -232 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -344 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -344 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -296 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -296 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -408 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -408 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -360 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -360 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -472 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -472 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -424 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -424 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -536 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -536 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -488 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -488 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -600 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -600 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -552 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -552 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -664 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -664 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -616 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -616 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -728 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -728 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -680 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -680 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -792 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -792 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -744 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -744 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -856 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -856 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -808 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -808 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -920 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -920 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -872 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -872 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -984 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -984 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -936 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -936 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
+    .{
+        .{ .position = .{ -28, 0.5, -1048 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -1048 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ -28, 0.5, -1000 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+        .{ .position = .{ 28, 0.5, -1000 }, .half_extents = .{ 0.5, 0.5, 0.5 } },
+    },
 };
 pub const navigation_positions = [_][2]f32{ .{ -8, -8 }, .{ 0, -8 }, .{ 8, -8 }, .{ 8, 0 }, .{ 8, 8 }, .{ 0, 8 }, .{ -8, 8 }, .{ -8, 0 }, .{ 31, 8 }, .{ -31, 8 }, .{ 8, 31 }, .{ 8, -31 } };
-pub const navigation_edge_capacity: usize = 26;
+pub const navigation_edge_capacity: usize = 27;
 pub const navigation_degree: usize = 3;

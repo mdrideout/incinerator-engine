@@ -12,11 +12,11 @@ pub const descriptor = tool.Descriptor{
     .default_region = .right,
     .purpose = "Author, measure, drive and commit a selected vehicle archetype.",
     .reads = "Admitted and saved definitions, revision lineage, live wheel and powertrain telemetry, and correlated results.",
-    .requests = "Typed apply, explicit rebuild, revert, atomic archetype commit and isolated candidate measurement.",
+    .requests = "Apply automatically selects live update or physics reconstruction, plus revert, atomic archetype commit and isolated candidate measurement.",
     .examples = &.{ "adjust sedan roll", "measure a torque curve", "commit a road car" },
     .audit_fields = &.{ "archetype_id", "definition_digest", "instance_revision", "asset_revision", "transaction_id", "authority_tick" },
 };
-pub const AcceptanceItem = enum { torque, apply, rebuild, revert, commit, measure, mass, preset };
+pub const AcceptanceItem = enum { torque, apply, revert, commit, measure, mass, preset };
 pub var acceptance_rects: if (@import("builtin").is_test) [std.meta.fields(AcceptanceItem).len][2][2]f32 else void = if (@import("builtin").is_test) @splat(@splat(@splat(0))) else {};
 fn observe(item: AcceptanceItem) void {
     if (comptime @import("builtin").is_test) acceptance_rects[@intFromEnum(item)] = .{ zgui.getItemRectMin(), zgui.getItemRectMax() };
@@ -93,6 +93,12 @@ pub const State = struct {
             self.error_text = @errorName(err);
         };
     }
+    pub fn applyDraft(self: *State, input: contract.Input) void {
+        const inspection = input.inspection orelse return;
+        const draft = &(self.draft orelse return).value;
+        const effect = vehicle.reconfigurationEffect(inspection.live.definition.tuning, draft.tuning);
+        self.submit(input, if (effect == .rebuild) .{ .rebuild = draft.* } else .{ .apply = draft.* });
+    }
     fn scalar(self: *State, label: [:0]const u8, value: *f32) void {
         const before = value.*;
         const was_dirty = self.dirty;
@@ -165,6 +171,11 @@ pub fn draw(state: *State, maybe_input: ?contract.Input) void {
     if (state.revision != inspection.live.revision or state.asset_revision != inspection.asset_revision) zgui.textWrapped("This draft is stale. Discard it to inspect the current revision.", .{});
     if (input.result) |result| {
         zgui.text("{s}: {s} (transaction {d})", .{ @tagName(result.action), @tagName(result.disposition), result.transaction_id });
+        if (result.disposition == .accepted) switch (result.action) {
+            .apply => zgui.textDisabled("Applied without rebuilding physics.", .{}),
+            .rebuild => zgui.textDisabled("Applied by rebuilding vehicle physics.", .{}),
+            else => {},
+        };
         if (result.artifact_path) |path| zgui.textWrapped("Report: {s}", .{path});
     }
     if (state.error_text) |err| zgui.textColored(.{ 1, 0.55, 0.25, 1 }, "{s}", .{err});
@@ -175,16 +186,18 @@ pub fn draw(state: *State, maybe_input: ?contract.Input) void {
         zgui.textColored(.{ 1, 0.55, 0.25, 1 }, "Draft: {s}", .{@errorName(err)});
     };
     const effect = vehicle.reconfigurationEffect(inspection.live.definition.tuning, tuning.*);
-    zgui.textDisabled("Change requires: {s}", .{@tagName(effect)});
+    zgui.textDisabled("Apply will: {s}", .{switch (effect) {
+        .rebuild => "rebuild vehicle physics",
+        .live => "update handling live",
+        .presentation => "update presentation",
+    }});
     zgui.beginDisabled(.{ .disabled = !valid or state.pending != null });
     if (zgui.button("Measure Candidate", .{})) state.submit(input, .{ .measure = draft.* });
     observe(.measure);
     zgui.sameLine(.{});
-    if (zgui.button("Apply", .{})) state.submit(input, .{ .apply = draft.* });
+    if (zgui.button("Apply", .{})) state.applyDraft(input);
     observe(.apply);
-    zgui.sameLine(.{});
-    if (zgui.button("Rebuild", .{})) state.submit(input, .{ .rebuild = draft.* });
-    observe(.rebuild);
+
     if (zgui.button("Preview Visuals", .{})) state.submit(input, .{ .preview = draft.* });
     zgui.sameLine(.{});
     if (zgui.button("Clear Preview", .{})) state.submit(input, .clear_preview);

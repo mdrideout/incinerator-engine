@@ -7,7 +7,7 @@
 const std = @import("std");
 const navigation = @import("navigation_contract");
 
-pub const max_search_nodes: usize = navigation.max_route_nodes;
+pub const max_search_nodes: usize = navigation.max_search_nodes;
 
 pub const RoutePlan = struct {
     nodes: [navigation.max_route_nodes]navigation.NodeRef =

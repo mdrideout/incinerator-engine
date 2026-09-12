@@ -59,12 +59,12 @@ fn read(init: std.process.Init, path: []const u8) ![]u8 {
     );
 }
 
-fn verifyCommon(scene: content.bundle.BundleView) !void {
+fn verifyCommon(scene: content.bundle.BundleView, coord: district.ChunkCoord) !void {
     if (std.mem.allEqual(u8, &scene.source_digest, 0)) return error.MissingSourceDigest;
     if (scene.nodes.len != 2 or scene.meshes.len != 1 or scene.primitives.len != 1 or
         scene.materials.len != 1 or scene.textures.len != 1 or scene.vertices.len != 3 or
         scene.indices.len != 3 or scene.static_boxes.len != sandbox_recipe.static_box_count or
-        scene.navigation_nodes.len != 12 or scene.navigation_edges.len != 26)
+        scene.navigation_nodes.len != 12 or scene.navigation_edges.len != sandbox_recipe.build(coord, sandbox_recipe.current_recipe_version).ready.navigation_edge_count)
     {
         return error.InvalidFixtureCounts;
     }
@@ -78,7 +78,7 @@ fn verifyCommon(scene: content.bundle.BundleView) !void {
 }
 
 fn verifyWest(scene: content.bundle.BundleView) !void {
-    try verifyCommon(scene);
+    try verifyCommon(scene, .{ .x = 0, .z = 0 });
     if (!std.mem.eql(u8, scene.name(scene.bundle_name).?, "district/s3_fixture")) return error.InvalidBundleName;
     if (!std.mem.eql(u8, scene.name(scene.nodes[0].name).?, "LeftInstance") or
         !std.mem.eql(u8, scene.name(scene.nodes[1].name).?, "RightInstance")) return error.NodeNamesWereNotPreserved;
@@ -95,7 +95,7 @@ fn verifyWest(scene: content.bundle.BundleView) !void {
 }
 
 fn verifyEast(scene: content.bundle.BundleView) !void {
-    try verifyCommon(scene);
+    try verifyCommon(scene, .{ .x = 1, .z = 0 });
     if (!std.mem.eql(u8, scene.name(scene.bundle_name).?, "district/s6_east")) {
         return error.InvalidBundleName;
     }

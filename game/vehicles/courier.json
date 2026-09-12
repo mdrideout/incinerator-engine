@@ -6,12 +6,12 @@
       "local": 2346745979227719430
     }
   },
-  "label": "Courier compact",
-  "revision": 2,
+  "label": "Courier sedan",
+  "revision": 8,
   "tuning": {
     "steering": {
-      "rise_per_second": 2.5999999046325684,
-      "return_per_second": 4,
+      "rise_per_second": 5.5,
+      "return_per_second": 8,
       "speed_curve": [
         {
           "speed_mps": 0,
@@ -38,7 +38,7 @@
     ],
     "center_of_mass_offset": [
       0,
-      -0.18000000715255737,
+      -0.44999999999999996,
       -0.15
     ],
     "mass": 1120,
@@ -69,7 +69,7 @@
     "suspension_min_length": 0.14000000059604645,
     "suspension_max_length": 0.4399999976158142,
     "suspension_frequency": 1.350000023841858,
-    "suspension_damping": 0.6200000047683716,
+    "suspension_damping": 0.72,
     "max_steer_radians": 0.5585053563117981,
     "max_brake_torque": 1700,
     "max_hand_brake_torque": 4000,
@@ -77,33 +77,33 @@
       "suspension_min_length": 0.14000000059604645,
       "suspension_max_length": 0.4399999976158142,
       "suspension_frequency": 1.4500000476837158,
-      "suspension_damping": 0.6200000047683716,
-      "brake_torque_nm": 300,
+      "suspension_damping": 0.72,
+      "brake_torque_nm": 600,
       "tire_friction": {
         "longitudinal_peak_slip": 0.05999999865889549,
-        "longitudinal_peak_friction": 1.399999976158142,
-        "longitudinal_slide_slip": 0.4,
-        "longitudinal_slide_friction": 1.149999976158142,
+        "longitudinal_peak_friction": 12.599999785423279,
+        "longitudinal_slide_slip": 0.6,
+        "longitudinal_slide_friction": 11.969999796152115,
         "lateral_peak_angle_radians": 0.06981316953897476,
-        "lateral_peak_friction": 1.65,
+        "lateral_peak_friction": 14.434200000000002,
         "lateral_slide_angle_radians": 0.3490658402442932,
-        "lateral_slide_friction": 1.32
+        "lateral_slide_friction": 11.54736
       },
       "anti_roll_stiffness": 300
     },
     "front_anti_roll_stiffness": 400,
     "tire_friction": {
       "longitudinal_peak_slip": 0.05999999865889549,
-      "longitudinal_peak_friction": 1.399999976158142,
-      "longitudinal_slide_slip": 0.20000000298023224,
-      "longitudinal_slide_friction": 1.149999976158142,
+      "longitudinal_peak_friction": 4.899999916553497,
+      "longitudinal_slide_slip": 0.35,
+      "longitudinal_slide_friction": 4.024999916553497,
       "lateral_peak_angle_radians": 0.06981316953897476,
-      "lateral_peak_friction": 1.399999976158142,
+      "lateral_peak_friction": 12.247199791431427,
       "lateral_slide_angle_radians": 0.3490658402442932,
-      "lateral_slide_friction": 1.1200000047683716
+      "lateral_slide_friction": 9.797760041713715
     },
     "powertrain": {
-      "max_torque_nm": 140,
+      "max_torque_nm": 560,
       "idle_rpm": 800,
       "max_rpm": 6000,
       "inertia_kg_m2": 0.3499999940395355,
@@ -111,19 +111,19 @@
       "torque_curve": [
         {
           "rpm_fraction": 0,
-          "torque_fraction": 0.699999988079071
+          "torque_fraction": 0.2
         },
         {
-          "rpm_fraction": 0.3499999940395355,
-          "torque_fraction": 0.9300000071525574
+          "rpm_fraction": 0.5,
+          "torque_fraction": 0.35
         },
         {
-          "rpm_fraction": 0.6499999761581421,
+          "rpm_fraction": 0.8,
           "torque_fraction": 1
         },
         {
           "rpm_fraction": 1,
-          "torque_fraction": 0.7200000286102295
+          "torque_fraction": 0.72
         }
       ],
       "forward_gears": [
@@ -134,10 +134,10 @@
         0.7799999713897705
       ],
       "reverse_gears": [
-        -2.9000000953674316
+        -4
       ],
-      "switch_time_s": 0.5,
-      "clutch_release_s": 0.30000001192092896,
+      "switch_time_s": 0.3,
+      "clutch_release_s": 0.18,
       "switch_latency_s": 0.5,
       "shift_up_rpm": 5100,
       "shift_down_rpm": 1800,

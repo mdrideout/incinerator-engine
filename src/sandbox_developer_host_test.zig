@@ -86,3 +86,36 @@ test "editor Escape acceptance routes gizmo menu and explicit quit" {
         return error.SkipZigTest;
     }
 }
+
+test "Vehicle Lab single Apply queues one revisioned live or reconstruction request" {
+    if (!build_options.editor_enabled) return;
+    const lab = @import("editor/tools/vehicle_lab_tool.zig");
+    const contract = @import("vehicle_authoring_contract");
+    const definition = contract.vehicle.asset.validationFixture();
+    var live = std.mem.zeroes(contract.vehicle.VehicleView);
+    live.definition = definition;
+    live.id = .{ .namespace = 77, .local = 1 };
+    live.revision = 7;
+    var state = lab.State{};
+    defer state.deinit();
+    const inspection = contract.Inspection{ .live = live, .committed = definition, .asset_revision = definition.revision };
+    try state.synchronize(std.testing.allocator, inspection, null);
+    var requests = contract.Requests{ .allocator = std.testing.allocator };
+    defer requests.deinit();
+    const input_value = contract.Input{ .allocator = std.testing.allocator, .inspection = inspection, .result = null, .requests = &requests };
+    state.draft.?.value.tuning.steering.rise_per_second += 1;
+    state.applyDraft(input_value);
+    try std.testing.expectEqual(@as(usize, 1), requests.pending.items.len);
+    try std.testing.expectEqual(.apply, std.meta.activeTag(requests.pending.items[0].value.action));
+    try std.testing.expectEqual(live.revision, requests.pending.items[0].value.expected_revision);
+    requests.clear();
+    state.draft.?.value.tuning.max_steer_radians *= 1.1;
+    state.applyDraft(input_value);
+    try std.testing.expectEqual(@as(usize, 1), requests.pending.items.len);
+    const request = requests.pending.items[0].value;
+    try std.testing.expectEqual(.rebuild, std.meta.activeTag(request.action));
+    try std.testing.expectEqualDeep(live.id, request.target);
+    try std.testing.expectEqual(live.revision, request.expected_revision);
+    try std.testing.expectEqual(definition.revision, request.expected_asset_revision);
+    try std.testing.expectEqual(state.draft.?.value.tuning.max_steer_radians, request.action.rebuild.tuning.max_steer_radians);
+}

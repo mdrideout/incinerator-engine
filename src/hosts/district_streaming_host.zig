@@ -1069,29 +1069,37 @@ const State = struct {
                         engine.diagnostic_contracts.codes.district_stream_logical_unloaded,
                         unloaded.id,
                     );
-                    self.recordTransition(
-                        authority,
-                        frame_index,
-                        slot_index,
-                        .warning,
-                        .rendering,
-                        engine.diagnostic_contracts.codes.district_stream_gpu_release_requested,
-                        null,
-                    );
                     const draws = try authority.presentation();
                     for (draws) |draw| {
                         if (district_contract.LoadTicket.eql(draw.ticket, unloaded.ticket)) {
                             return error.DistrictPresentationStillExtracted;
                         }
                     }
-                    try slot.presentation.presentationAbsent(0);
                     if (authority.state(slot.coord) != null) {
                         return error.DistrictLogicalStateMismatch;
                     }
-                    slot.state = .{ .draining = .{
-                        .scene = unloading.bound.scene,
-                        .content_generation = unloading.bound.content_generation,
-                    } };
+                    if (slot.prefetch_proximity.inside) {
+                        try slot.presentation.retainAfterPresentationAbsent(0);
+                        slot.state = .{ .prefetched = .{
+                            .scene = unloading.bound.scene,
+                            .generation = unloading.bound.content_generation,
+                        } };
+                    } else {
+                        try slot.presentation.presentationAbsent(0);
+                        self.recordTransition(
+                            authority,
+                            frame_index,
+                            slot_index,
+                            .warning,
+                            .rendering,
+                            engine.diagnostic_contracts.codes.district_stream_gpu_release_requested,
+                            null,
+                        );
+                        slot.state = .{ .draining = .{
+                            .scene = unloading.bound.scene,
+                            .content_generation = unloading.bound.content_generation,
+                        } };
+                    }
                 },
                 .cancellation_requested => |requested| {
                     const slot_index = self.slotIndexForTicket(requested.ticket) orelse
@@ -1907,18 +1915,11 @@ test "catalog admission requires each fixed stream coordinate exactly once" {
     const northwest = sandbox_recipe.presentation_policies[2].coord;
     const northeast = sandbox_recipe.presentation_policies[3].coord;
 
-    try validateCatalogEntries(&[_]Entry{
-        .{ .coord = west },
-        .{ .coord = east },
-        .{ .coord = northwest },
-        .{ .coord = northeast },
-    });
-    try validateCatalogEntries(&[_]Entry{
-        .{ .coord = northeast },
-        .{ .coord = northwest },
-        .{ .coord = east },
-        .{ .coord = west },
-    });
+    var entries: [slot_count]Entry = undefined;
+    for (sandbox_recipe.presentation_policies, &entries) |policy, *entry| entry.* = .{ .coord = policy.coord };
+    try validateCatalogEntries(&entries);
+    std.mem.reverse(Entry, &entries);
+    try validateCatalogEntries(&entries);
     try std.testing.expectError(
         error.DistrictCatalogSlotMismatch,
         validateCatalogEntries(&[_]Entry{.{ .coord = west }}),

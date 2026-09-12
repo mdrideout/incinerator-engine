@@ -185,6 +185,7 @@ pub fn verifyHandling(backing: std.mem.Allocator, definition: vehicle.asset.Defi
         try std.testing.expect(result.wheel_position_error_m < 0.001 and result.wheel_axis_error < 0.001);
     }
     try std.testing.expect(coast.peak_sideslip_deg < 10);
+    try std.testing.expect(power.peak_sideslip_deg < 10);
     try std.testing.expect(service.peak_sideslip_deg < 10);
     try std.testing.expect(handbrake.peak_sideslip_deg > coast.peak_sideslip_deg);
     try std.testing.expect(straight.samples[59].forward_mps < straight.entry_forward_mps);
@@ -197,8 +198,8 @@ pub fn verifyHandling(backing: std.mem.Allocator, definition: vehicle.asset.Defi
         };
     }
     try std.testing.expect(rear_locked > 0);
-    // A RWD power slide must be distinguishable from its stable coast baseline.
-    if (definition.tuning.powertrain.front_torque_fraction == 0) try std.testing.expect(power.peak_sideslip_deg > coast.peak_sideslip_deg);
+    // High-grip road tuning may remain composed under power at 8 m/s, including
+    // RWD. Intentional handbrake breakaway remains required above.
 }
 
 /// The compact accumulator must observe exactly the same ticks as a full trace.

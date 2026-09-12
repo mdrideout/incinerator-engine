@@ -28,11 +28,11 @@ test "game archetypes have distinct admitted dimensions and drivetrain" {
     try std.testing.expectEqual(@as(f32, 1), compact.value.tuning.powertrain.front_torque_fraction);
 }
 
-pub const bundle_keys = [_][]const u8{ "vehicle/meridian", "vehicle/courier" };
+pub const bundle_keys = [_][]const u8{ "vehicle/meridian", "vehicle/courier", "vehicle/courier-awd" };
 pub const initial_fleet = [_]struct { id: asset.VehicleArchetypeId, position: [3]f32 }{
-    .{ .id = meridian_id, .position = .{ 2, 1, 3 } },
-    .{ .id = courier_id, .position = .{ -3, 1, 3 } },
-    .{ .id = courier_awd_id, .position = .{ -6, 1, -4 } },
+    .{ .id = meridian_id, .position = .{ 4, 1, -8 } },
+    .{ .id = courier_id, .position = .{ 0, 1, -8 } },
+    .{ .id = courier_awd_id, .position = .{ -4, 1, -8 } },
 };
 pub fn readCompact(allocator: std.mem.Allocator, io: std.Io, content_directory: std.Io.Dir) !asset.Owned {
     var directory = try content_directory.openDir(io, "vehicle", .{});
@@ -53,4 +53,23 @@ test "three game handling baselines have independent durable identity" {
     try std.testing.expect(!std.meta.eql(courier_id, awd.value.id));
     try std.testing.expect(awd.value.tuning.powertrain.front_torque_fraction > 0 and awd.value.tuning.powertrain.front_torque_fraction < 1);
     try std.testing.expectEqual(std.math.floatMax(f32), awd.value.tuning.powertrain.center_limited_slip_ratio);
+}
+
+test "coupe sedan and SUV have distinct body dependencies and admitted dimensions" {
+    var coupe = try asset.decode(std.testing.allocator, meridian_bytes);
+    defer coupe.deinit();
+    var sedan = try asset.decode(std.testing.allocator, courier_bytes);
+    defer sedan.deinit();
+    var suv = try asset.decode(std.testing.allocator, courier_awd_bytes);
+    defer suv.deinit();
+    try std.testing.expectEqualStrings("Meridian coupe", coupe.value.label);
+    try std.testing.expectEqualStrings("Courier sedan", sedan.value.label);
+    try std.testing.expectEqualStrings("Courier AWD SUV", suv.value.label);
+    try std.testing.expect(!std.meta.eql(sedan.value.visuals.chassis.mesh, suv.value.visuals.chassis.mesh));
+    try std.testing.expect(suv.value.tuning.chassis_half_extents[1] > sedan.value.tuning.chassis_half_extents[1]);
+    try std.testing.expect(suv.value.tuning.wheel_radius > sedan.value.tuning.wheel_radius);
+    for (suv.value.visuals.wheels) |wheel| {
+        try std.testing.expectApproxEqAbs(suv.value.tuning.wheel_radius * 2, wheel.scale[1], 0.0001);
+        try std.testing.expectApproxEqAbs(suv.value.tuning.wheel_width, wheel.scale[0], 0.0001);
+    }
 }

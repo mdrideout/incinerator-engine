@@ -1002,6 +1002,14 @@ pub fn build(b: *std.Build) void {
     cook_vehicle_courier.addArgs(&.{ "vehicle/courier", "0", "0", "0", "0", "0", "--visual-only" });
     const install_vehicle_courier = b.addInstallFile(cooked_vehicle_courier, "share/incinerator/content/vehicle/courier.icdb");
     b.getInstallStep().dependOn(&install_vehicle_courier.step);
+    const cook_vehicle_suv = b.addRunArtifact(content_cooker);
+    cook_vehicle_suv.addFileArg(b.path("game/vehicles/courier-awd.glb"));
+    cook_vehicle_suv.addFileArg(b.path("game/vehicles/PROVENANCE.md"));
+    const cooked_vehicle_suv = cook_vehicle_suv.addOutputFileArg("courier-awd.icdb");
+    cook_vehicle_suv.addArgs(&.{ "vehicle/courier-awd", "0", "0", "0", "0", "0", "--visual-only" });
+    const install_vehicle_suv = b.addInstallFile(cooked_vehicle_suv, "share/incinerator/content/vehicle/courier-awd.icdb");
+    b.getInstallStep().dependOn(&install_vehicle_suv.step);
+
     const cooked_industrial_southwest = runContentCooker(b, content_cooker, "game/industrial/industrial_0_0.glb", "game/industrial/PROVENANCE.md", "industrial_0_0.icdb", "district/industrial_0_0", 0, 0, .{ 0, 0, 0 }, &.{});
     const cooked_industrial_southeast = runContentCooker(b, content_cooker, "game/industrial/industrial_1_0.glb", "game/industrial/PROVENANCE.md", "industrial_1_0.icdb", "district/industrial_1_0", 1, 0, .{ 0, 0, 0 }, &.{.{ .semantic_id = "district.southwest", .bundle = cooked_industrial_southwest.output }});
     const cooked_industrial_northwest = runContentCooker(b, content_cooker, "game/industrial/industrial_0_1.glb", "game/industrial/PROVENANCE.md", "industrial_0_1.icdb", "district/industrial_0_1", 0, 1, .{ 0, 0, 0 }, &.{.{ .semantic_id = "district.southwest", .bundle = cooked_industrial_southwest.output }});
@@ -1010,6 +1018,18 @@ pub fn build(b: *std.Build) void {
     const cooked_industrial_southeast_repeat = runContentCooker(b, content_cooker, "game/industrial/industrial_1_0.glb", "game/industrial/PROVENANCE.md", "industrial_1_0_repeat.icdb", "district/industrial_1_0", 1, 0, .{ 0, 0, 0 }, &.{.{ .semantic_id = "district.southwest", .bundle = cooked_industrial_southwest_repeat.output }});
     const cooked_industrial_northwest_repeat = runContentCooker(b, content_cooker, "game/industrial/industrial_0_1.glb", "game/industrial/PROVENANCE.md", "industrial_0_1_repeat.icdb", "district/industrial_0_1", 0, 1, .{ 0, 0, 0 }, &.{.{ .semantic_id = "district.southwest", .bundle = cooked_industrial_southwest_repeat.output }});
     const cooked_industrial_northeast_repeat = runContentCooker(b, content_cooker, "game/industrial/industrial_1_1.glb", "game/industrial/PROVENANCE.md", "industrial_1_1_repeat.icdb", "district/industrial_1_1", 1, 1, .{ 0, 0, 0 }, &.{ .{ .semantic_id = "district.northwest", .bundle = cooked_industrial_northwest_repeat.output }, .{ .semantic_id = "district.southeast", .bundle = cooked_industrial_southeast_repeat.output } });
+    var test_road_outputs: [16]std.Build.LazyPath = undefined;
+    var test_road_repeat_outputs: [16]std.Build.LazyPath = undefined;
+    for (1..17) |cell| {
+        const z: i32 = -@as(i32, @intCast(cell));
+        const source = b.fmt("game/industrial/industrial_0_{d}.glb", .{z});
+        const key = b.fmt("district/industrial_0_{d}", .{z});
+        const cooked = runContentCooker(b, content_cooker, source, "game/industrial/PROVENANCE.md", b.fmt("industrial_0_{d}.icdb", .{z}), key, 0, z, .{ 0, 0, 0 }, &.{});
+        const repeated = runContentCooker(b, content_cooker, source, "game/industrial/PROVENANCE.md", b.fmt("industrial_0_{d}_repeat.icdb", .{z}), key, 0, z, .{ 0, 0, 0 }, &.{});
+        test_road_outputs[cell - 1] = cooked.output;
+        test_road_repeat_outputs[cell - 1] = repeated.output;
+        b.getInstallStep().dependOn(&b.addInstallFile(cooked.output, b.fmt("share/incinerator/content/{s}.icdb", .{key})).step);
+    }
     const content_catalog_cooker = b.addExecutable(.{
         .name = "incinerator_content_catalog_cooker",
         .root_module = b.createModule(.{
@@ -1028,24 +1048,24 @@ pub fn build(b: *std.Build) void {
         content_catalog_cooker,
         "game/industrial/catalog.txt",
         "industrial_catalog.icat",
-        &.{
+        &([_]std.Build.LazyPath{
             cooked_industrial_southwest.output,
             cooked_industrial_southeast.output,
             cooked_industrial_northwest.output,
             cooked_industrial_northeast.output,
-        },
+        } ++ test_road_outputs),
     );
     const cooked_industrial_catalog_repeat = runContentCatalogCooker(
         b,
         content_catalog_cooker,
         "game/industrial/catalog.txt",
         "industrial_catalog_repeat.icat",
-        &.{
+        &([_]std.Build.LazyPath{
             cooked_industrial_southwest_repeat.output,
             cooked_industrial_southeast_repeat.output,
             cooked_industrial_northwest_repeat.output,
             cooked_industrial_northeast_repeat.output,
-        },
+        } ++ test_road_repeat_outputs),
     );
     const cook_content_step = b.step(
         "cook-content",
@@ -1176,6 +1196,7 @@ pub fn build(b: *std.Build) void {
     verify_cooked_catalog.addFileArg(cooked_industrial_northeast.output);
     verify_cooked_catalog.addFileArg(b.path("config/headless-content.json"));
     verify_cooked_catalog.addFileArg(b.path("config/headless.example.json"));
+    for (test_road_outputs) |output| verify_cooked_catalog.addFileArg(output);
     content_cooker_test_step.dependOn(&verify_cooked_catalog.step);
 
     const content_relocation_test = b.addExecutable(.{
@@ -1739,6 +1760,7 @@ pub fn build(b: *std.Build) void {
     verify_mp6_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
     verify_mp6_process.step.dependOn(&install_vehicle_meridian.step);
     verify_mp6_process.step.dependOn(&install_vehicle_courier.step);
+    verify_mp6_process.step.dependOn(&install_vehicle_suv.step);
     const verify_mp6_dedicated_step = b.step(
         "verify-mp6-dedicated",
         "Run the real-GNS two-client graphical MP6 dedicated room proof",
@@ -1754,6 +1776,7 @@ pub fn build(b: *std.Build) void {
     verify_mp6_listen_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
     verify_mp6_listen_process.step.dependOn(&install_vehicle_meridian.step);
     verify_mp6_listen_process.step.dependOn(&install_vehicle_courier.step);
+    verify_mp6_listen_process.step.dependOn(&install_vehicle_suv.step);
     const verify_mp6_listen_step = b.step(
         "verify-mp6-listen",
         "Run the graphical host-local-link plus real-GNS guest MP6 proof",
@@ -1769,6 +1792,7 @@ pub fn build(b: *std.Build) void {
     verify_s10_listen_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
     verify_s10_listen_process.step.dependOn(&install_vehicle_meridian.step);
     verify_s10_listen_process.step.dependOn(&install_vehicle_courier.step);
+    verify_s10_listen_process.step.dependOn(&install_vehicle_suv.step);
     const verify_s10_listen_step = b.step(
         "verify-s10-listen",
         "Run the two-client graphical listen damage/death/respawn proof",
@@ -1784,6 +1808,7 @@ pub fn build(b: *std.Build) void {
     verify_s10_dedicated_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
     verify_s10_dedicated_process.step.dependOn(&install_vehicle_meridian.step);
     verify_s10_dedicated_process.step.dependOn(&install_vehicle_courier.step);
+    verify_s10_dedicated_process.step.dependOn(&install_vehicle_suv.step);
     const verify_s10_dedicated_step = b.step(
         "verify-s10-dedicated",
         "Run the two-client graphical dedicated damage/death/respawn proof",
@@ -1799,6 +1824,7 @@ pub fn build(b: *std.Build) void {
     verify_s11_listen_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
     verify_s11_listen_process.step.dependOn(&install_vehicle_meridian.step);
     verify_s11_listen_process.step.dependOn(&install_vehicle_courier.step);
+    verify_s11_listen_process.step.dependOn(&install_vehicle_suv.step);
     const verify_s11_listen_step = b.step(
         "verify-s11-listen",
         "Run two-client graphical listen NPC damage/death/replacement",
@@ -1814,6 +1840,7 @@ pub fn build(b: *std.Build) void {
     verify_s11_dedicated_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
     verify_s11_dedicated_process.step.dependOn(&install_vehicle_meridian.step);
     verify_s11_dedicated_process.step.dependOn(&install_vehicle_courier.step);
+    verify_s11_dedicated_process.step.dependOn(&install_vehicle_suv.step);
     const verify_s11_dedicated_step = b.step(
         "verify-s11-dedicated",
         "Run two-client graphical dedicated NPC damage/death/replacement",
@@ -1829,6 +1856,7 @@ pub fn build(b: *std.Build) void {
     verify_s14_listen_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
     verify_s14_listen_process.step.dependOn(&install_vehicle_meridian.step);
     verify_s14_listen_process.step.dependOn(&install_vehicle_courier.step);
+    verify_s14_listen_process.step.dependOn(&install_vehicle_suv.step);
     const verify_s14_listen_step = b.step(
         "verify-s14-listen",
         "Run two-client graphical listen authoritative-handgun proof",
@@ -1844,6 +1872,7 @@ pub fn build(b: *std.Build) void {
     verify_s14_dedicated_process.addArg(b.getInstallPath(.prefix, "share/incinerator/content"));
     verify_s14_dedicated_process.step.dependOn(&install_vehicle_meridian.step);
     verify_s14_dedicated_process.step.dependOn(&install_vehicle_courier.step);
+    verify_s14_dedicated_process.step.dependOn(&install_vehicle_suv.step);
     const verify_s14_dedicated_step = b.step(
         "verify-s14-dedicated",
         "Run two-client graphical dedicated authoritative-handgun proof",
@@ -2799,6 +2828,11 @@ pub fn build(b: *std.Build) void {
     if (b.args) |args| motion_batch.addArgs(args);
     const motion_report_step = b.step("vehicle-motion-report", "Run compact headless vehicle scenarios concurrently (use -Doptimize=ReleaseSafe for tuning)");
     motion_report_step.dependOn(&motion_batch.step);
+
+    const steering_batch = b.addSystemCommand(&.{ "python3", b.pathFromRoot("tools/vehicle_steering_report.py"), "--binary" });
+    steering_batch.addArtifactArg(vehicle_dynamics_exe);
+    if (b.args) |args| steering_batch.addArgs(args);
+    b.step("vehicle-steering-report", "Measure matched speed, steering, throttle and surface friction without a window").dependOn(&steering_batch.step);
 
     const vehicle_asset_tests = b.addTest(.{ .root_module = vehicle_contract_module });
     const run_vehicle_asset_tests = b.addRunArtifact(vehicle_asset_tests);

@@ -13,7 +13,7 @@ pub fn sourceFingerprint(io: std.Io, allocator: std.mem.Allocator, root: std.Io.
         std.mem.writeInt(u64, &bytes, fingerprint, .little);
         addPart(&hash, &bytes);
     }
-    for ([_][]const u8{ "build.zig", "build.zig.zon", "tools/build_gamenetworking_sockets.sh", "tools/vehicle_dynamics.zig", "tools/vehicle_motion_audit.zig", "tools/vehicle_motion_summary.zig" }) |path| {
+    for ([_][]const u8{ "build.zig", "build.zig.zon", "tools/build_gamenetworking_sockets.sh", "tools/vehicle_dynamics.zig", "tools/vehicle_motion_audit.zig", "tools/vehicle_motion_summary.zig", "tools/vehicle_handbrake_audit.zig", "tools/vehicle_speed_audit.zig", "tools/vehicle_steering_audit.zig" }) |path| {
         addPart(&hash, path);
         const bytes = try root.readFileAlloc(io, path, allocator, .unlimited);
         defer allocator.free(bytes);

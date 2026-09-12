@@ -1,0 +1,23 @@
+{
+  "source_cohort": 12012028534066410874,
+  "full_tests": {
+    "passed": 1319,
+    "total": 1319,
+    "build_steps": 385
+  },
+  "motion_scenarios": 360,
+  "handbrake_scenarios": 126,
+  "native_build_steps": 123,
+  "native_mixed_cadence_drives": 3,
+  "native_long_road_drives": 3,
+  "desktop_focus_violations": [],
+  "replays": {
+    "vehicle-motion-offscreen-Courier": 2049,
+    "vehicle-motion-offscreen-Meridian": 2088,
+    "vehicle-motion-offscreen-Courier-AWD": 2839,
+    "vehicle-road-Courier": 2786,
+    "vehicle-road-Meridian": 2826,
+    "vehicle-road-Courier-AWD": 3577
+  },
+  "subjective_human_drive": false
+}

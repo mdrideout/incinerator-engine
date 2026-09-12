@@ -23,7 +23,7 @@ const HeadlessManifest = struct {
 
 pub fn main(init: std.process.Init) !void {
     const args = try init.minimal.args.toSlice(init.arena.allocator());
-    if (args.len != 9) {
+    if (args.len != 9 + sandbox_recipe.installed_coords.len - 4) {
         return error.ExpectedCatalogPairBundlesAndHeadlessManifests;
     }
     const allocator = init.gpa;
@@ -128,11 +128,15 @@ pub fn main(init: std.process.Init) !void {
     {
         return error.CatalogAffectedClosureDiverged;
     }
+    var all_district_bytes: [sandbox_recipe.installed_coords.len][]const u8 = undefined;
+    @memcpy(all_district_bytes[0..4], &[_][]const u8{ southwest_bytes, southeast_bytes, northwest_bytes, northeast_bytes });
+    for (args[9..], 4..) |path, index| all_district_bytes[index] = try read(init, path, (content.bundle.Limits{}).max_file_bytes);
+    defer for (all_district_bytes[4..]) |bytes| allocator.free(bytes);
     try verifyHeadlessCohort(
         init,
         catalog.identity(),
         catalog_bytes,
-        .{ southwest_bytes, southeast_bytes, northwest_bytes, northeast_bytes },
+        all_district_bytes,
         args[7],
         args[8],
     );
@@ -276,6 +280,11 @@ fn verifyHeadlessCohort(
         sha256(district_bytes[3]),
     );
 
+    for (district_bytes[4..], 1..) |bytes, cell| {
+        const name = try std.fmt.allocPrint(init.gpa, "district.testroad{d:0>2}", .{cell});
+        defer init.gpa.free(name);
+        try expectDistrictDigest(value.districts[cell + 3], name, .{ .x = 0, .z = -@as(i32, @intCast(cell)) }, sha256(bytes));
+    }
     const config_bytes = try read(init, config_path, 64 * 1024);
     defer init.gpa.free(config_bytes);
     var config = try std.json.parseFromSlice(std.json.Value, init.gpa, config_bytes, .{});

@@ -259,6 +259,17 @@ pub fn Coordinator(comptime Registry: type, comptime Ticket: type) type {
             self.state = .idle;
         }
 
+        /// Keep decoration after logical extraction ends. The same reserved
+        /// generation can later bind a fresh authority ticket without a GPU gap.
+        pub fn retainAfterPresentationAbsent(self: *Self, extracted_draw_count: usize) !void {
+            const pending = switch (self.state) {
+                .release_pending => |value| value,
+                else => return error.DistrictPresentationReleaseNotPending,
+            };
+            if (extracted_draw_count != 0) return error.DistrictPresentationStillExtracted;
+            self.state = .{ .reserved = pending.scene };
+        }
+
         /// Shutdown seam used after simulation teardown has removed every
         /// logical draw. Pending GPU work remains the registry's responsibility.
         pub fn releaseAfterSimulationTeardown(self: *Self) !void {
@@ -827,4 +838,27 @@ test "proximity tick script is cadence invariant at 240 and 80 render Hz" {
         .exit,
     };
     try std.testing.expectEqualSlices(ProximityAction, &expected, &at_240);
+}
+
+test "decoration survives logical departure and binds a fresh ticket without GPU recycling" {
+    var registry = FakeRegistry{};
+    var coordinator = TestCoordinator.init(&registry);
+    const old = TestTicket{ .generation = 1 };
+    const next = TestTicket{ .generation = 2 };
+    const scene = try coordinator.beginRequest();
+    try registry.makeResident(scene);
+    try coordinator.loadAdmitted(scene, old);
+    try coordinator.logicalActivated(old);
+    try coordinator.logicalUnloaded(old);
+    try std.testing.expectError(error.DistrictPresentationStillExtracted, coordinator.retainAfterPresentationAbsent(1));
+    try coordinator.retainAfterPresentationAbsent(0);
+    try std.testing.expectEqual(@as(usize, 0), registry.release_count);
+    try std.testing.expectEqual(FakeRegistry.Resolution.resident, try registry.resolve(scene));
+    try coordinator.loadAdmitted(scene, next);
+    try coordinator.logicalActivated(next);
+    try std.testing.expectError(error.StaleDistrictTicket, coordinator.resolve(old, scene));
+    try std.testing.expectEqual(FakeRegistry.Resolution.resident, try coordinator.resolve(next, scene));
+    try coordinator.logicalUnloaded(next);
+    try coordinator.presentationAbsent(0);
+    try std.testing.expectEqual(@as(usize, 1), registry.release_count);
 }

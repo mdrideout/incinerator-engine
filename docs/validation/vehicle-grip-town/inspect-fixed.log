@@ -1,0 +1,9 @@
+  capabilities characters=full_boundary npcs=full_boundary vehicles=full_boundary carryables=full_boundary vehicle_parts=true atomic_note=true navigation_lineage=true population_activity=true deterministic_render_state=true ranged_combat=true
+  anomaly #1 tick=4764 frame=9516 lifecycle=complete updates=3 artifacts=106 failures=0 typed_window=[-15000,5000]ms note="rendering of town disappeared"
+    diagnostic 0x00090024 district_stream_gpu_release_requested count=1
+    diagnostic 0x00090025 district_stream_gpu_drained count=1
+INCIDENT_BUNDLE_VALID run=/Users/matt/Library/Logs/Incinerator/runs/2026-09-08T14-02-37.197Z_solo_1d885add
+  status=complete hardening=none source=e68adfab3468f8ac77fa69e9f13b555bc12214a1 dirty=true build=0.16.0/ReleaseSafe
+  records=106260 segments=46 anomalies=1 windows=4 visuals=106 suspicious=0
+  queue=0 high_water=97/1024 durable=93547/93547 bytes=213231443/536870912
+  visual_reserved=60011584/402653184 rejected=0 replay=true handoff=true persisted=true warnings=0

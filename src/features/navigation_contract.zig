@@ -14,6 +14,8 @@ pub const LoadTicket = district.LoadTicket;
 pub const ChunkCoord = district.ChunkCoord;
 pub const max_destination_anchors: usize = 2;
 pub const max_route_nodes: usize = 4 * district.max_navigation_nodes;
+// Search breadth covers the expanded test-road topology; existing NPC routes stay local.
+pub const max_search_nodes: usize = 20 * district.max_navigation_nodes;
 pub const max_route_edges: usize = max_route_nodes - 1;
 
 /// Stable game-content identity. A destination survives route invalidation,

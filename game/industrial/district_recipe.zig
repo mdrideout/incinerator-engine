@@ -9,14 +9,14 @@ const district = @import("district_contract");
 const navigation = @import("navigation_contract");
 const scene = @import("scene.zig");
 
-pub const current_recipe_version: u32 = 9;
+pub const current_recipe_version: u32 = 10;
 pub const catalog_semantic_id = "incinerator.industrial.neighborhood";
 pub const catalog_wire_schema: u16 = 1;
 pub const player_spawn = [3]f32{ -8, 0, 4 };
 pub const vehicle_spawn = [3]f32{ 2, 1, 3 };
 pub const carryable_spawn = [3]f32{ -8, 0.5, 6 };
-pub const ground_center = [3]f32{ 32, -1, 32 };
-pub const ground_half_extents = [3]f32{ 64, 1, 64 };
+pub const ground_center = [3]f32{ 32, -1, -480 };
+pub const ground_half_extents = [3]f32{ 64, 1, 576 };
 pub const gate_positions = [2][3]f32{ .{ 32, 1, 72 }, .{ 32, 1, 8 } };
 pub const static_box_count: u8 = scene.boxes[0].len;
 pub const blocking_proxy_count: u8 = static_box_count;
@@ -29,7 +29,26 @@ pub const installed_coords = [_]district.ChunkCoord{
     navigation_east_coord,
     navigation_northwest_coord,
     navigation_northeast_coord,
+    .{ .x = 0, .z = -1 },
+    .{ .x = 0, .z = -2 },
+    .{ .x = 0, .z = -3 },
+    .{ .x = 0, .z = -4 },
+    .{ .x = 0, .z = -5 },
+    .{ .x = 0, .z = -6 },
+    .{ .x = 0, .z = -7 },
+    .{ .x = 0, .z = -8 },
+    .{ .x = 0, .z = -9 },
+    .{ .x = 0, .z = -10 },
+    .{ .x = 0, .z = -11 },
+    .{ .x = 0, .z = -12 },
+    .{ .x = 0, .z = -13 },
+    .{ .x = 0, .z = -14 },
+    .{ .x = 0, .z = -15 },
+    .{ .x = 0, .z = -16 },
 };
+
+/// The isolated multiplayer fixture retains the original neighborhood.
+pub const fixture_coords = installed_coords[0..4];
 
 pub const garage_forecourt = navigation.DestinationId{ .value = 1 };
 pub const foundry_office = navigation.DestinationId{ .value = 2 };
@@ -287,8 +306,8 @@ pub const presentation_policies = [_]PresentationPolicy{
         // The sandbox has one adjacent district in either direction. Warm
         // that visual content from the neighboring district center while
         // retaining the existing narrow logical/collision boundary.
-        .prefetch_load_margin = 24,
-        .prefetch_unload_margin = 28,
+        .prefetch_load_margin = 4 * scene.chunk_span,
+        .prefetch_unload_margin = 4 * scene.chunk_span + 4,
         .authority_load_margin = 4,
         .authority_unload_margin = 8,
     },
@@ -296,8 +315,8 @@ pub const presentation_policies = [_]PresentationPolicy{
         .coord = navigation_east_coord,
         .center_xz = .{ district.chunk_span, 0 },
         .half_extent_xz = .{ district.chunk_half_span, district.chunk_half_span },
-        .prefetch_load_margin = 24,
-        .prefetch_unload_margin = 28,
+        .prefetch_load_margin = 4 * scene.chunk_span,
+        .prefetch_unload_margin = 4 * scene.chunk_span + 4,
         .authority_load_margin = 4,
         .authority_unload_margin = 8,
     },
@@ -305,8 +324,8 @@ pub const presentation_policies = [_]PresentationPolicy{
         .coord = navigation_northwest_coord,
         .center_xz = .{ 0, district.chunk_span },
         .half_extent_xz = .{ district.chunk_half_span, district.chunk_half_span },
-        .prefetch_load_margin = 24,
-        .prefetch_unload_margin = 28,
+        .prefetch_load_margin = 4 * scene.chunk_span,
+        .prefetch_unload_margin = 4 * scene.chunk_span + 4,
         .authority_load_margin = 4,
         .authority_unload_margin = 8,
     },
@@ -314,11 +333,28 @@ pub const presentation_policies = [_]PresentationPolicy{
         .coord = navigation_northeast_coord,
         .center_xz = .{ district.chunk_span, district.chunk_span },
         .half_extent_xz = .{ district.chunk_half_span, district.chunk_half_span },
-        .prefetch_load_margin = 24,
-        .prefetch_unload_margin = 28,
+        .prefetch_load_margin = 4 * scene.chunk_span,
+        .prefetch_unload_margin = 4 * scene.chunk_span + 4,
         .authority_load_margin = 4,
         .authority_unload_margin = 8,
     },
+    // Look four road cells ahead; the former 24 m margin showed an apparent road end.
+    .{ .coord = .{ .x = 0, .z = -1 }, .center_xz = .{ 0, -64 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -2 }, .center_xz = .{ 0, -128 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -3 }, .center_xz = .{ 0, -192 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -4 }, .center_xz = .{ 0, -256 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -5 }, .center_xz = .{ 0, -320 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -6 }, .center_xz = .{ 0, -384 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -7 }, .center_xz = .{ 0, -448 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -8 }, .center_xz = .{ 0, -512 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -9 }, .center_xz = .{ 0, -576 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -10 }, .center_xz = .{ 0, -640 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -11 }, .center_xz = .{ 0, -704 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -12 }, .center_xz = .{ 0, -768 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -13 }, .center_xz = .{ 0, -832 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -14 }, .center_xz = .{ 0, -896 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -15 }, .center_xz = .{ 0, -960 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
+    .{ .coord = .{ .x = 0, .z = -16 }, .center_xz = .{ 0, -1024 }, .half_extent_xz = .{ 32, 32 }, .prefetch_load_margin = 4 * scene.chunk_span, .prefetch_unload_margin = 4 * scene.chunk_span + 4, .authority_load_margin = 4, .authority_unload_margin = 8 },
 };
 
 /// Product presentation responsibility for each canonical static box.

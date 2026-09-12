@@ -2571,7 +2571,7 @@ const App = struct {
                 .stream_content = streams_districts,
                 .admit_catalog = needs_catalog,
                 .content_root = content_root,
-                .pin_route_resident = profile == .sandbox,
+                .pin_route_resident = false,
             },
         );
         errdefer district_streaming.abortInit();
@@ -14506,7 +14506,34 @@ test "all engine module tests are discovered" {
 }
 
 pub fn acceptVehicleDriving(comptime offscreen: bool) !void {
+    return acceptVehicleDrivingScenario(offscreen, false);
+}
+pub fn acceptVehicleHighSpeedRoad() !void {
+    return acceptVehicleDrivingScenario(true, true);
+}
+fn acceptVehicleDrivingScenario(comptime offscreen: bool, comptime high_speed_road: bool) !void {
     const ScriptedInput = struct {
+        fn snapshot(app: *App) ![]u8 {
+            while (true) {
+                return app.simulation.developer().snapshotFlightRecording(std.testing.allocator) catch |err| switch (err) {
+                    error.CommandsPendingAtReplaySnapshot => {
+                        // Streaming may enqueue the next authority operation after a tick.
+                        // Drain through normal simulation/render ownership before capturing.
+                        try app.frame_timer.beginFrameWithElapsedSeconds(timing.TICK_DURATION);
+                        try app.action_latch.captureFrame(.{ .brake = true });
+                        try app.district_streaming.pumpContent(app.districtAuthorityPort(), app.frame_timer.total_frames);
+                        while (app.frame_timer.shouldTick()) {
+                            try app.simulateTick(false, .none);
+                            app.frame_timer.recordCompletedTick();
+                        }
+                        _ = try app.renderS5SmokeFrame(app.frame_timer.alpha());
+                        continue;
+                    },
+                    else => return err,
+                };
+            }
+        }
+
         fn queueKey(window: *c.SDL_Window, scancode: c.SDL_Scancode, down: bool) !void {
             var event = std.mem.zeroes(c.SDL_Event);
             event.type = if (down) c.SDL_EVENT_KEY_DOWN else c.SDL_EVENT_KEY_UP;
@@ -14588,7 +14615,6 @@ pub fn acceptVehicleDriving(comptime offscreen: bool) !void {
     const runs_root = try std.fmt.allocPrint(std.testing.allocator, "{s}/zig-out/vehicle-motion-runs", .{root_buffer[0..root_len]});
     defer std.testing.allocator.free(runs_root);
     for ([_]usize{ 1, 0, 2 }) |fleet_index| {
-        const sedan = fleet_index == 0;
         const car_name: []const u8 = switch (fleet_index) {
             0 => "Meridian",
             1 => "Courier",
@@ -14606,8 +14632,8 @@ pub fn acceptVehicleDriving(comptime offscreen: bool) !void {
         c.SDL_FilterEvents(ScriptedInput.filter, null);
         std.debug.print("VEHICLE_NATIVE_INPUT scripted_controls=true physical_controls=false window_close=true\n", .{});
         app.game_camera.yaw = 0;
-        // The product spawn is five metres west of the compact. Walk to its door
-        // through the same fixed-tick input latch used by SDL gameplay input.
+        // Walk from the product spawn to the authored lineup through the same
+        // fixed-tick input latch used by SDL gameplay input.
         for (0..180) |_| {
             try app.frame_timer.beginFrameWithElapsedSeconds(timing.TICK_DURATION);
             try app.district_streaming.pumpContent(app.districtAuthorityPort(), app.frame_timer.total_frames);
@@ -14619,21 +14645,18 @@ pub fn acceptVehicleDriving(comptime offscreen: bool) !void {
         }
         const world_frame = try app.renderS5SmokeFrame(app.frame_timer.alpha());
         try std.testing.expect(world_frame.district_count > 0);
-        if (fleet_index == 2) {
-            try app.action_latch.captureFrame(.{ .move = .{ 0, 1 } });
-            for (0..90) |_| try app.simulateTick(false, .none);
-            try app.action_latch.captureFrame(.{ .move = .{ 1, 0 } });
-            for (0..6) |_| try app.simulateTick(false, .none);
-        } else if (sedan) {
-            try app.action_latch.captureFrame(.{ .move = .{ 0, -1 } });
-            for (0..40) |_| try app.simulateTick(false, .none);
-            try app.action_latch.captureFrame(.{ .move = .{ 1, 0 } });
-            for (0..120) |_| try app.simulateTick(false, .none);
-            try app.action_latch.captureFrame(.{ .move = .{ 0, 1 } });
-            for (0..30) |_| try app.simulateTick(false, .none);
-        } else {
-            try app.action_latch.captureFrame(.{ .move = .{ 1, 0 } });
-            for (0..40) |_| try app.simulateTick(false, .none);
+        const parking = game_vehicles.initial_fleet[fleet_index].position;
+        // Approach behind the lineup, then the selected driver's door. Follow
+        // authored spawn positions rather than a fixed number of walking ticks.
+        for ([_][2]f32{ .{ -8, -4 }, .{ parking[0] - 1.7, -4 }, .{ parking[0] - 1.7, parking[2] } }) |waypoint| {
+            while (true) {
+                const position = (try app.simulation.characters().view(app.initial_character_id.?)).position;
+                const dx = waypoint[0] - position[0];
+                const dz = waypoint[1] - position[2];
+                if (@abs(dx) < 0.12 and @abs(dz) < 0.12) break;
+                try app.action_latch.captureFrame(.{ .move = .{ std.math.clamp(dx * 4, -1, 1), std.math.clamp(-dz * 4, -1, 1) } });
+                try app.simulateTick(false, .none);
+            }
         }
         try app.action_latch.captureFrame(.{ .interact_pressed = true });
         try app.simulateTick(false, .none);
@@ -14707,6 +14730,81 @@ pub fn acceptVehicleDriving(comptime offscreen: bool) !void {
         }
         const initial = try app.simulation.vehicles().view(target);
         try std.testing.expectEqual(game_vehicles.initial_fleet[fleet_index].id, initial.definition.id);
+        if (high_speed_road) {
+            const path = try std.fmt.allocPrint(std.testing.allocator, "zig-out/vehicle-road-{s}.ndjson", .{car_name});
+            defer std.testing.allocator.free(path);
+            var file = try std.Io.Dir.cwd().createFile(std.testing.io, path, .{});
+            defer file.close(std.testing.io);
+            var buffer: [4096]u8 = undefined;
+            var writer = file.writer(std.testing.io, &buffer);
+            var peak_speed: f32 = 0;
+            var furthest_z = initial.state.chassis.pose.position[2];
+            var town_departure_observed = false;
+            // Twenty seconds of acceleration and a twenty-second braking observation.
+            // Faster cars need stopping room before the kilometre road ends.
+            // Every tick uses product control admission and streamed road content.
+            for (0..2400) |tick| {
+                try app.frame_timer.beginFrameWithElapsedSeconds(timing.TICK_DURATION);
+                try app.action_latch.captureFrame(if (tick < 1200) .{ .move = .{ 0, 1 } } else .{ .brake = true });
+                try app.district_streaming.pumpContent(app.districtAuthorityPort(), app.frame_timer.total_frames);
+                while (app.frame_timer.shouldTick()) {
+                    try app.simulateTick(false, .none);
+                    app.frame_timer.recordCompletedTick();
+                }
+                const car = try app.simulation.vehicles().view(target);
+                const speed = vehicle_contract.control.forwardSpeed(car.state.chassis);
+                peak_speed = @max(peak_speed, speed);
+                furthest_z = @min(furthest_z, car.state.chassis.pose.position[2]);
+                const frame = try app.renderS5SmokeFrame(app.frame_timer.alpha());
+                try std.testing.expect(frame.district_count > 0);
+                const z = car.state.chassis.pose.position[2];
+                // Reproduce the reported disappearance while leaving town and
+                // looking back from the first road district. Collision residency
+                // may end; nearby authored decoration must remain drawable.
+                if (z < -45 and z > -90) {
+                    for (@import("sandbox_district_recipe").fixture_coords) |coord| {
+                        const slot = app.district_streaming.slotIndexForCoord(coord).?;
+                        try std.testing.expect((try app.district_streaming.prefetchedVisual(slot)) != null);
+                    }
+                    if (!town_departure_observed and z < -70) {
+                        town_departure_observed = true;
+                        const yaw = app.game_camera.yaw;
+                        app.game_camera.yaw = std.math.pi;
+                        _ = try app.renderS5SmokeFrame(app.frame_timer.alpha());
+                        const town_image = try std.fmt.allocPrint(std.testing.allocator, "zig-out/vehicle-town-{s}.ppm", .{car_name});
+                        defer std.testing.allocator.free(town_image);
+                        try @import("vehicle_offscreen_capture.zig").write(&app.gpu_renderer, town_image);
+                        app.game_camera.yaw = yaw;
+                    }
+                }
+                try std.json.Stringify.value(.{ .tick = tick, .speed_mps = speed, .position = car.state.chassis.pose.position, .district_draws = frame.district_count }, .{}, &writer.interface);
+                try writer.interface.writeByte('\n');
+            }
+            try writer.interface.flush();
+            try std.testing.expect(town_departure_observed);
+            try std.testing.expect(peak_speed > 35);
+            try std.testing.expect(furthest_z < -300);
+            try std.testing.expect(furthest_z > -1000);
+            const final_car = try app.simulation.vehicles().view(target);
+            const road_coord = try district_contract.chunkCoordForWorldPosition(final_car.state.chassis.pose.position);
+            try std.testing.expect(road_coord.z < -4);
+            const road_slot = app.district_streaming.slotIndexForCoord(road_coord) orelse return error.TestRoadDistrictMissing;
+            try std.testing.expect(try app.district_streaming.slotResident(road_slot));
+            const road_image = try std.fmt.allocPrint(std.testing.allocator, "zig-out/vehicle-road-{s}.ppm", .{car_name});
+            defer std.testing.allocator.free(road_image);
+            try @import("vehicle_offscreen_capture.zig").write(&app.gpu_renderer, road_image);
+
+            try std.testing.expect(@abs(vehicle_contract.control.forwardSpeed(final_car.state.chassis)) < 0.25);
+            const replay = try ScriptedInput.snapshot(&app);
+            defer std.testing.allocator.free(replay);
+            const replay_path = try std.fmt.allocPrint(std.testing.allocator, "zig-out/vehicle-road-{s}.icrp", .{car_name});
+            defer std.testing.allocator.free(replay_path);
+            var replay_file = try std.Io.Dir.cwd().createFile(std.testing.io, replay_path, .{});
+            defer replay_file.close(std.testing.io);
+            try replay_file.writeStreamingAll(std.testing.io, replay);
+            std.debug.print("VEHICLE_ROAD_PASS car={s} peak_mps={d:.2} furthest_z={d:.2} streamed=true stopped=true\n", .{ car_name, peak_speed, furthest_z });
+            continue;
+        }
         const initial_position = initial.state.chassis.pose.position;
         const initial_digest = initial.definition_digest;
         var maximum_speed: f32 = 0;
@@ -14843,8 +14941,20 @@ pub fn acceptVehicleDriving(comptime offscreen: bool) !void {
             const capture_path = try std.fmt.allocPrint(std.testing.allocator, "zig-out/vehicle-motion-offscreen-{s}.ppm", .{car_name});
             defer std.testing.allocator.free(capture_path);
             try @import("vehicle_offscreen_capture.zig").write(&app.gpu_renderer, capture_path);
+            // A consistent closer view makes authored body style and wheel fit reviewable.
+            const car_pose = (try app.simulation.vehicles().view(target)).state.chassis.pose;
+            app.applyViewportRequest(.{ .set_mode = .free_camera });
+            app.applyViewportRequest(.{ .set_free_camera_pose = .{
+                .position = .{ car_pose.position[0] + 6, car_pose.position[1] + 2.6, car_pose.position[2] - 5 },
+                .yaw = -std.math.atan2(@as(f32, 6), -5),
+                .pitch = -std.math.atan2(@as(f32, 2.6), @sqrt(@as(f32, 61))),
+            } });
+            _ = try app.renderS5SmokeFrame(app.frame_timer.alpha());
+            const portrait_path = try std.fmt.allocPrint(std.testing.allocator, "zig-out/vehicle-motion-offscreen-{s}-front-quarter.ppm", .{car_name});
+            defer std.testing.allocator.free(portrait_path);
+            try @import("vehicle_offscreen_capture.zig").write(&app.gpu_renderer, portrait_path);
         }
-        const replay_bytes = try app.simulation.developer().snapshotFlightRecording(std.testing.allocator);
+        const replay_bytes = try ScriptedInput.snapshot(&app);
         defer std.testing.allocator.free(replay_bytes);
         const replay_path = try std.fmt.allocPrint(std.testing.allocator, "zig-out/vehicle-motion-{s}-{s}.icrp", .{ if (offscreen) "offscreen" else "native", car_name });
         defer std.testing.allocator.free(replay_path);

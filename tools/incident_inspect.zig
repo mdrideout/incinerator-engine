@@ -4,7 +4,9 @@ const std = @import("std");
 
 const schema_version: u16 = 5;
 const maximum_manifest_bytes = 64 * 1024;
-const maximum_segment_bytes = 8 * 1024 * 1024;
+// Materialized windows span several stream segments; vehicle wheel telemetry
+// in a real 20-second window exceeds the former 8 MiB limit.
+const maximum_segment_bytes = std.math.maxInt(usize);
 const maximum_anomalies = 64;
 
 const EvidenceCapabilities = struct {

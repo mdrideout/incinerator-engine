@@ -1,0 +1,24 @@
+{
+  "success": true,
+  "elapsed_seconds": 8.44722683285363,
+  "results": [
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-20915108d5f1c706.icvehicle",
+      "returncode": 0,
+      "rows": 216,
+      "entries_reached": 216
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-38d7f4075c7ac47d.icvehicle",
+      "returncode": 0,
+      "rows": 216,
+      "entries_reached": 180
+    },
+    {
+      "definition": "/Users/matt/repos/incinerator-engine/game/vehicles/494e43494e455241-867ee4c3b011b0fe.icvehicle",
+      "returncode": 0,
+      "rows": 216,
+      "entries_reached": 180
+    }
+  ]
+}
