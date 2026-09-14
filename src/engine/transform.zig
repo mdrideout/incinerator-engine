@@ -83,6 +83,24 @@ pub const Pose = struct {
     }
 };
 
+/// Compose a local mount with the exact presented rigid parent pose.
+pub fn compose(parent_raw: Pose, local_raw: Pose) !Pose {
+    const parent = try parent_raw.normalized();
+    const local = try local_raw.normalized();
+    const offset = rotateVector(parent.rotation, local.position);
+    const a = parent.rotation;
+    const b = local.rotation;
+    return (Pose{
+        .position = .{ parent.position[0] + offset[0], parent.position[1] + offset[1], parent.position[2] + offset[2] },
+        .rotation = .{
+            a[3] * b[0] + a[0] * b[3] + a[1] * b[2] - a[2] * b[1],
+            a[3] * b[1] - a[0] * b[2] + a[1] * b[3] + a[2] * b[0],
+            a[3] * b[2] + a[0] * b[1] - a[1] * b[0] + a[2] * b[3],
+            a[3] * b[3] - a[0] * b[0] - a[1] * b[1] - a[2] * b[2],
+        },
+    }).normalized();
+}
+
 pub fn validateFiniteVector(values: anytype) !void {
     for (values) |value| {
         if (!std.math.isFinite(value)) return error.NonFiniteTransform;
@@ -250,7 +268,7 @@ test "semantic facing basis agrees with quaternion rotation" {
     for (cases) |case| {
         const forward = try forwardFromFacingYaw(case.yaw);
         const rotation = try rotationFromFacingYaw(case.yaw);
-        const rotated_forward = rotateVectorForTest(rotation, .{ 0, 0, -1 });
+        const rotated_forward = rotateVector(rotation, .{ 0, 0, -1 });
         for (forward, rotated_forward, case.forward) |semantic, rotated, expected| {
             try std.testing.expectApproxEqAbs(expected, semantic, 0.00001);
             try std.testing.expectApproxEqAbs(expected, rotated, 0.00001);
@@ -309,7 +327,7 @@ test "semantic facing interpolation takes the shortest wrapped arc" {
     );
 }
 
-fn rotateVectorForTest(rotation: Quaternion, value: Vec3) Vec3 {
+pub fn rotateVector(rotation: Quaternion, value: Vec3) Vec3 {
     const axis = Vec3{ rotation[0], rotation[1], rotation[2] };
     const twice_cross = Vec3{
         2 * (axis[1] * value[2] - axis[2] * value[1]),

@@ -53,6 +53,9 @@ const material_preview = @import("material_preview.zig");
 const vehicle_developer_host = @import("hosts/vehicle_developer_host.zig");
 const vehicle_authoring_contract = @import("vehicle_authoring_contract");
 const vehicle_visual_resources = @import("vehicle_visual_resources.zig");
+const lighting_composition = @import("hosts/lighting_composition.zig");
+const lighting_developer_host = @import("hosts/lighting_developer_host.zig");
+const lighting_authoring_contract = @import("lighting_authoring_contract");
 const material_developer_host = @import("hosts/material_developer_host.zig");
 const material_authoring = @import("material_authoring");
 const sandbox_controls = @import("sandbox_controls.zig");
@@ -2162,6 +2165,7 @@ const IncidentJourneyProgress = struct {
 };
 
 const ValidationAppState = if (build_options.validation_mode or builtin.is_test) struct {
+    ea3_block_window: bool = false,
     profile: BootstrapProfile = .sandbox,
     s4_physics_debug_evidence: S4PhysicsDebugEvidence = .{},
     s2_smoke: S2SmokeProgress = .{},
@@ -2215,6 +2219,7 @@ const developer_endpoint_capabilities = [_][]const u8{
     "viewport-camera",
     "crate-authoring",
     "material-authoring",
+    "lighting-authoring",
     "world-save",
     "correlated-frame-capture",
 };
@@ -2319,6 +2324,11 @@ const App = struct {
     authoring_run_id: engine.authoring.RunId,
     vehicle_host: ?vehicle_developer_host.Host = null,
     vehicle_visuals: ?vehicle_visual_resources.Resources = null,
+    lighting_replay: ?@import("hosts/lighting_replay.zig").Replay = null,
+    replayed_lighting: ?content.lighting_library.Library = null,
+    lighting_frame: lighting_composition.Frame = .{ .allocator = std.heap.page_allocator },
+    lighting_host: ?lighting_developer_host.Host = null,
+    runtime_lighting: ?std.json.Parsed(content.lighting_library.Library) = null,
     material_host: ?material_developer_host.Host = null,
     material_preview_target: ?material_preview.Preview = null,
     runtime_materials: ?std.json.Parsed(content.material_library.Library) = null,
@@ -2593,6 +2603,18 @@ const App = struct {
             var stream_owner = district_streaming;
             try runtime_materials.?.value.validateCatalog(try stream_owner.contentAssets());
         }
+        var runtime_lighting: ?std.json.Parsed(content.lighting_library.Library) = null;
+        errdefer if (runtime_lighting) |*library| library.deinit();
+        var lighting_host: ?lighting_developer_host.Host = null;
+        errdefer if (lighting_host) |*host| host.deinit();
+        if (profile == .sandbox) {
+            var directory = try std.Io.Dir.openDirAbsolute(io, content_root.?.bytes(), .{});
+            defer directory.close(io);
+            runtime_lighting = try content.lighting_library.read(std.heap.page_allocator, io, directory);
+            try runtime_lighting.?.value.validateCatalog(std.heap.page_allocator, &.{ vehicle_visuals.?.catalog.view(), try district_streaming.contentAssets() });
+            try runtime_lighting.?.value.validateVehicleMounts(&game_vehicles.lighting_mount_ids);
+            if (comptime build_options.editor_enabled or build_options.developer_endpoint_enabled) lighting_host = try lighting_developer_host.Host.init(io, std.heap.page_allocator, content_root.?, vehicle_visuals.?.catalog.view(), try district_streaming.contentAssets(), &game_vehicles.lighting_mount_ids);
+        }
         var material_host: ?material_developer_host.Host = null;
         if (comptime build_options.editor_enabled) {
             if (profile == .sandbox) {
@@ -2797,6 +2819,8 @@ const App = struct {
             .district_streaming = district_streaming,
             .vehicle_host = vehicle_host,
             .vehicle_visuals = vehicle_visuals,
+            .lighting_host = lighting_host,
+            .runtime_lighting = runtime_lighting,
             .material_host = material_host,
             .runtime_materials = runtime_materials,
             .district_focus_override = null,
@@ -2855,6 +2879,9 @@ const App = struct {
         if (self.material_preview_target) |*preview| preview.deinit();
         if (self.vehicle_host) |*host| host.deinit();
         if (self.vehicle_visuals) |*resources| resources.deinit();
+        self.lighting_frame.deinit();
+        if (self.lighting_host) |*host| host.deinit();
+        if (self.runtime_lighting) |*library| library.deinit();
         if (self.material_host) |*host| host.deinit();
         if (self.runtime_materials) |*library| library.deinit();
         self.district_streaming.deinitAfterAuthority();
@@ -3116,6 +3143,16 @@ const App = struct {
         self: *App,
         run_path: []const u8,
     ) !void {
+        self.lighting_replay = try @import("hosts/lighting_replay.zig").Replay.load(std.heap.page_allocator, self.io, run_path);
+        defer {
+            self.lighting_replay.?.deinit();
+            self.lighting_replay = null;
+            self.replayed_lighting = null;
+        }
+        if (self.lighting_host) |*host| host.deinit();
+        self.lighting_host = null;
+        // The captured initial state is authoritative for this presentation.
+        self.replayed_lighting = self.lighting_replay.?.samples.items[0].asset.value;
         var replay = try incident_input_replay.Replay.load(
             self.io,
             std.heap.page_allocator,
@@ -6591,6 +6628,13 @@ const App = struct {
     /// transport worker never receives App, SDL, simulation, editor, storage,
     /// renderer, or incident-owner access.
     fn pumpDeveloperEndpoint(self: *App) void {
+        defer if (self.lighting_host) |*host| {
+            for (host.evidence.items) |evidence| self.developer.recordLightingChange(evidence, self.simulation.inspection().tickIndex(), self.frame_timer.total_frames);
+            host.evidence.clearRetainingCapacity();
+        };
+        if (self.lighting_host) |*host| host.pump() catch |err| {
+            std.log.err("Lighting authoring request failed: {s}", .{@errorName(err)});
+        };
         if (self.vehicle_host) |*host| {
             host.pump();
             for (host.requests.pending.items) |pending| _ = self.executeVehicleRequest(.ui, pending.value) catch |err| {
@@ -6681,6 +6725,19 @@ const App = struct {
                 host.pump();
                 const result = host.owner.result(command.transaction_id, .local_developer_client) orelse return self.respondDeveloperFailure(endpoint, request, .target_not_found, "Vehicle transaction was not admitted by this producer");
                 try self.respondDeveloperSuccess(endpoint, request, .{ .vehicle_outcome = result });
+            },
+            .lighting_list => {
+                const host = if (self.lighting_host) |*value| value else return self.respondDeveloperFailure(endpoint, request, .owner_unavailable, "Lighting authoring is unavailable");
+                try self.respondDeveloperSuccess(endpoint, request, .{ .lighting_list = host.view() });
+            },
+            .lighting_inspect => |command| {
+                const host = if (self.lighting_host) |*value| value else return self.respondDeveloperFailure(endpoint, request, .owner_unavailable, "Lighting authoring is unavailable");
+                const record = host.owner.inspect(command.target) orelse return self.respondDeveloperFailure(endpoint, request, .target_not_found, "Lighting asset was not found");
+                try self.respondDeveloperSuccess(endpoint, request, .{ .lighting_inspection = record });
+            },
+            .lighting_edit => |command| {
+                const host = if (self.lighting_host) |*value| value else return self.respondDeveloperFailure(endpoint, request, .owner_unavailable, "Lighting authoring is unavailable");
+                try self.respondDeveloperSuccess(endpoint, request, .{ .lighting_outcome = try host.execute(.local_developer_client, command) });
             },
             .material_inspect => |command| {
                 const host = if (self.material_host) |*value| value else return self.respondDeveloperFailure(endpoint, request, .owner_unavailable, "Material authoring is unavailable in this composition");
@@ -6867,6 +6924,7 @@ const App = struct {
                 .mesh => .mesh,
                 .material => .material,
                 .texture => .texture,
+                .lighting => .lighting,
             },
             .label = asset.label,
             .owner = asset.owner,
@@ -6881,7 +6939,7 @@ const App = struct {
             .last_use_frame = asset.last_use_frame,
             .details = asset.details,
             .inspectable = true,
-            .authorable = asset.kind == .material or asset.kind == .mesh,
+            .authorable = asset.kind == .material or asset.kind == .mesh or asset.kind == .lighting,
         };
     }
 
@@ -8778,6 +8836,20 @@ const App = struct {
                 .{ draw.radius, draw.half_height + draw.radius, draw.radius },
             ),
         });
+        const lighting_catalog = if (self.lighting_host != null) try self.district_streaming.contentAssets() else &.{};
+        if (self.lighting_host) |*host| for (self.lighting_frame.resolved.items) |resolved| {
+            if (resolved.parent != null) continue;
+            if (resolved.surface) |surface| {
+                var resident = false;
+                for (lighting_catalog) |entry| if (std.meta.eql(entry.id, surface.mesh) and entry.residency == .resident) {
+                    resident = true;
+                    break;
+                };
+                if (!resident) continue;
+            }
+            const record = host.owner.find(resolved.asset) orelse continue;
+            try self.appendSelectionEntry(.{ .id = .{ .content_asset = resolved.asset }, .label = record.label, .kind = .content_asset, .owner = .game_runtime, .inspectable = true, .authorable = true, .world_bounds = try editor_selection.Bounds.init(resolved.emitter.pose.position, .{ 0.2, 0.2, 0.2 }) });
+        };
         editor_selection.sortEntries(self.selection_entries.items);
         const had_selection = self.selection_controller.active != null;
         self.selection_controller.reconcile(self.selection_entries.items);
@@ -10355,7 +10427,69 @@ const App = struct {
 
     fn contentAssets(self: *App) ![]const engine.assets.Entry {
         const catalog = try self.district_streaming.contentAssets();
-        return if (self.material_host) |*host| host.contentAssets(catalog) else catalog;
+        const materials = if (self.material_host) |*host| host.contentAssets(catalog) else catalog;
+        return if (self.lighting_host) |*host| try host.contentAssets(materials) else materials;
+    }
+
+    fn lightingEnvironment(self: *const App) ?@import("engine_contracts").lighting.Environment {
+        if (self.replayed_lighting) |library| return library.find(library.active_environment).?.value.environment;
+        if (self.lighting_host) |*host| return host.owner.find(host.owner.active_environment).?.presented().environment;
+        if (self.runtime_lighting) |library| return library.value.find(library.value.active_environment).?.value.environment;
+        return null;
+    }
+
+    fn prepareLightingEnvironment(self: *App) ![4]f32 {
+        if (self.lighting_replay) |*replay| if (replay.at(self.simulation.inspection().tickIndex(), self.frame_timer.total_frames)) |library| {
+            self.replayed_lighting = library;
+        };
+        self.lighting_frame.begin();
+        try self.appendLighting(null);
+        const environment = self.lightingEnvironment() orelse return renderer.Colors.CORNFLOWER_BLUE;
+        try self.gpu_renderer.setEnvironment(environment);
+        return .{ environment.background[0], environment.background[1], environment.background[2], 1 };
+    }
+
+    fn appendLighting(self: *App, parent: ?lighting_composition.Parent) !void {
+        const environment = self.lightingEnvironment() orelse return;
+        if (self.replayed_lighting) |library| {
+            for (library.definitions) |definition| if (definition.value == .fixture) try self.lighting_frame.add(definition.id, definition.revision, definition.value.fixture, environment, parent);
+            return;
+        }
+        if (self.lighting_host) |*host| {
+            for (host.owner.records) |record| if (record.presented() == .fixture) try self.lighting_frame.add(record.id, record.revision, record.presented().fixture, environment, parent);
+        } else if (self.runtime_lighting) |library| {
+            for (library.value.definitions) |definition| if (definition.value == .fixture) try self.lighting_frame.add(definition.id, definition.revision, definition.value.fixture, environment, parent);
+        }
+    }
+
+    fn finishLighting(self: *App, view_projection: zm.Mat) !void {
+        if (self.vehicle_visuals) |*resources| for (self.lighting_frame.resolved.items) |resolved| {
+            const visual = resolved.visual orelse continue;
+            if (try resources.resolve(.{ .mesh = visual.binding.mesh, .material = visual.binding.material, .local_pose = .{}, .scale = visual.binding.scale }, visual.pose)) |part| {
+                var material = part.material;
+                material.lit = false;
+                material.casts_shadows = false;
+                for (0..3) |axis| material.emissive[axis] *= visual.binding.emissive_scale * visual.color[axis];
+                self.gpu_renderer.drawMeshWithTextures(part.mesh, part.textures, material, part.model, view_projection);
+            }
+        };
+        self.lighting_frame.finish();
+        try self.gpu_renderer.lights.set(self.lighting_frame.emitters.items);
+    }
+
+    fn recordLightingFrame(self: *App) !void {
+        const initial = self.runtime_lighting orelse return;
+        var library = initial.value;
+        var definitions: ?[]content.lighting_library.Definition = null;
+        defer if (definitions) |items| std.heap.page_allocator.free(items);
+        if (self.lighting_host) |*host| {
+            definitions = try std.heap.page_allocator.alloc(content.lighting_library.Definition, host.owner.records.len);
+            for (host.owner.records, definitions.?) |record, *definition| definition.* = .{ .id = record.id, .label = record.label, .revision = record.revision, .value = record.presented() };
+            library = .{ .definitions = definitions.?, .revision = host.owner.library_revision, .active_environment = host.owner.active_environment };
+        }
+        if (self.replayed_lighting) |replayed| library = replayed;
+        const shadows = &self.gpu_renderer.lights.shadows.?;
+        self.developer.recordLighting(library, self.lighting_frame.resolved.items, self.simulation.inspection().tickIndex(), self.frame_timer.total_frames, shadows.views.items.len, shadows.caster_draws);
     }
 
     fn presentedMaterial(self: *const App, id: engine.assets.AssetId) ?engine.assets.MaterialMetadata {
@@ -10429,6 +10563,11 @@ const App = struct {
                 self.material_frame_hash.update(&identity_bytes);
                 self.material_frame_hash.update(&value.digest());
                 self.material_frame_draws += 1;
+            };
+            if (resident_mesh.asset_id) |mesh_id| if (self.lighting_frame.surfaceScale(mesh_id)) |scale| {
+                for (&surface.emissive) |*value| value.* *= scale;
+                // Thin luminous faces do not self-occlude their adjacent emitter.
+                surface.casts_shadows = false;
             };
             try self.drawPresentationMaterial(
                 .{
@@ -10619,7 +10758,7 @@ const App = struct {
         try self.applyNeuralEvaluationResize();
 
         // Begin the frame (clears screen)
-        switch (try self.gpu_renderer.beginFrame(renderer.Colors.CORNFLOWER_BLUE)) {
+        switch (try self.gpu_renderer.beginFrame(try self.prepareLightingEnvironment())) {
             .ready => {},
             .unavailable => {
                 // Wait briefly without removing the next event from SDL's
@@ -10977,6 +11116,7 @@ const App = struct {
         // InteractionFeature owns semantic identity and pose extraction; this
         // host supplies only a reusable cube mesh and frame submission.
         for (carryable_draws) |draw| {
+            try self.appendLighting(.{ .kind = .carryable, .index = draw.entity.index, .incarnation = draw.entity.generation, .pose = draw.pose });
             const scale = zm.scaling(
                 draw.half_extents[0] * 2,
                 draw.half_extents[1] * 2,
@@ -11017,6 +11157,7 @@ const App = struct {
                     }
                 };
                 if (try resources.resolve(bindings.chassis, draw.chassis_pose)) |part| {
+                    try self.appendLighting(.{ .kind = .vehicle, .index = draw.entity.index, .incarnation = draw.entity.generation, .asset = draw.definition.archetype.asset, .pose = draw.chassis_pose });
                     try self.drawPresentationMaterial(replicatedNeuralIdentity(draw.entity, .vehicle, .vehicle_chassis), part.mesh, part.textures, .painted_metal, part.material, part.model, view_proj);
                     scene_draw_calls +|= 1;
                 }
@@ -11340,7 +11481,12 @@ const App = struct {
         // 1. End the scene render pass
         // 2. Let editor do its thing (copy pass + its own render pass)
         // 3. Submit everything together
-        self.gpu_renderer.endRenderPass();
+        if (builtin.is_test) if (self.validation.ea3_block_window) {
+            self.gpu_renderer.drawMeshWithMaterial(&self.block_mesh, null, .{ .base_color = .{ 0.2, 0.2, 0.2, 1 } }, zm.mul(zm.scaling(8, 2, 0.15), zm.translation(-20, 2, -10.65)), view_proj);
+        };
+        try self.finishLighting(view_proj);
+        try self.gpu_renderer.endRenderPass();
+        try self.recordLightingFrame();
         try self.renderMaterialPreview();
         if (self.neural_inputs) |*inputs| try inputs.render(&self.gpu_renderer);
         self.developer.prepareIncidentProductFrame(
@@ -12381,6 +12527,7 @@ const App = struct {
                     .requests = &self.selection_requests,
                 },
                 .content_assets = try self.contentAssets(),
+                .lighting = if (self.lighting_host) |*host| host.input() else null,
                 .material = if (self.material_host) |*host| host.input() else null,
                 .vehicle = try self.vehicleEditorInput(selection_view),
                 .frame_timer = &self.frame_timer,
@@ -12454,7 +12601,7 @@ const App = struct {
                 return false;
             },
         }
-        self.gpu_renderer.endRenderPass();
+        try self.gpu_renderer.endRenderPass();
         const gameplay_view = editor_contract.GameplayView{
             .authority_tick = self.simulation.inspection().tickIndex(),
             .presentation_frame = self.frame_timer.total_frames,
@@ -12670,6 +12817,15 @@ fn productMain(init: std.process.Init, args: anytype) !void {
             project.persistence_available = true;
             if (app.material_host) |*host| host.deinit();
             app.material_host = project;
+        }
+    }
+    if (comptime build_options.editor_enabled) {
+        if (init.environ_map.get("INCINERATOR_LIGHTING_ROOT")) |root| {
+            var project = try lighting_developer_host.Host.init(init.io, std.heap.page_allocator, try content.ContentRootPath.parse(root), app.vehicle_visuals.?.catalog.view(), try app.district_streaming.contentAssets(), &game_vehicles.lighting_mount_ids);
+            project.persistence_available = true;
+            project.installed_root = app.lighting_host.?.root;
+            if (app.lighting_host) |*host| host.deinit();
+            app.lighting_host = project;
         }
     }
     app.developer.configureEditor(editor_startup);
@@ -14989,4 +15145,319 @@ fn acceptVehicleDrivingScenario(comptime offscreen: bool, comptime high_speed_ro
         try std.testing.expect(!app.pumpInputEvents());
         std.debug.print("EA2_DRIVE_PASS presentation={s} sdl_pedal_journey={} car={s} world=industrial timestep_hz=60 frames={d} peak_speed_mps={d:.3} reverse=true direction_transitions=true cadence=30/60/144/irregular cameras=fixed/chase interpolation=true steer=true wheel_spin=true brake=true handbrake=true exit=true cooked_visuals=true input_isolation=true lifecycle=true\n", .{ if (offscreen) "offscreen" else "window", !offscreen, car_name, rendered_frames, maximum_speed });
     }
+}
+
+/// Installed title integration on a hidden Metal target. Uses the same product
+/// frame assembly and camera requests as normal rendering, without pumping input.
+pub fn acceptLightingWorld() !void {
+    const runs = try std.fs.path.resolve(std.testing.allocator, &.{ build_options.installed_content_root, "../../../lighting-runs" });
+    defer std.testing.allocator.free(runs);
+    var app = try App.initWithOptions(std.testing.io, .sandbox, try content.ContentRootPath.parse(build_options.installed_content_root), null, false, false, null, runs, .none, null, true);
+    var app_live = true;
+    defer if (app_live) app.deinit();
+    try std.testing.expect(c.SDL_GetWindowFlags(app.window) & c.SDL_WINDOW_HIDDEN != 0);
+    app.applyViewportRequest(.{ .set_mode = .free_camera });
+    app.applyViewportRequest(.{ .set_free_camera_pose = .{ .position = .{ -20, 3, 4 }, .yaw = 0, .pitch = -0.06 } });
+    for (0..60) |_| {
+        try app.frame_timer.beginFrameWithElapsedSeconds(timing.TICK_DURATION);
+        try app.district_streaming.pumpContent(app.districtAuthorityPort(), app.frame_timer.total_frames);
+        while (app.frame_timer.shouldTick()) {
+            try app.simulateTick(false, .none);
+            app.frame_timer.recordCompletedTick();
+        }
+        _ = try app.render(app.frame_timer.alpha());
+    }
+    const host = &app.lighting_host.?;
+    const before = snapshot: while (true) {
+        break :snapshot app.simulation.developer().snapshotFlightRecording(std.testing.allocator) catch |err| switch (err) {
+            error.CommandsPendingAtReplaySnapshot => {
+                try app.simulateTick(false, .none);
+                continue;
+            },
+            else => return err,
+        };
+    };
+    defer std.testing.allocator.free(before);
+    for (host.owner.records) |preset| {
+        if (preset.session != .environment) continue;
+        const outcome = try host.execute(.local_developer_client, .{ .target = preset.id, .expected_revision = preset.revision, .action = .activate });
+        try std.testing.expect(outcome.rejection == null);
+        app.pumpDeveloperEndpoint();
+        if (!c.SDL_WaitForGPUIdle(app.gpu_renderer.device)) return error.LightingPerformanceFenceFailed;
+        var samples: [60]f64 = undefined;
+        var elapsed_ms: f64 = 0;
+        for (&samples) |*sample| {
+            const start = std.Io.Clock.awake.now(std.testing.io);
+            try app.frame_timer.beginFrameWithElapsedSeconds(0);
+            _ = try app.render(0.5);
+            if (!c.SDL_WaitForGPUIdle(app.gpu_renderer.device)) return error.LightingPerformanceFenceFailed;
+            sample.* = @as(f64, @floatFromInt(start.durationTo(std.Io.Clock.awake.now(std.testing.io)).toNanoseconds())) / 1_000_000;
+            elapsed_ms += sample.*;
+        }
+        std.mem.sort(f64, &samples, {}, std.sort.asc(f64));
+        const path = try std.fmt.allocPrint(std.testing.allocator, "zig-out/ea3-street-{s}.ppm", .{preset.label});
+        defer std.testing.allocator.free(path);
+        try @import("vehicle_offscreen_capture.zig").write(&app.gpu_renderer, path);
+        const shadow = &app.gpu_renderer.lights.shadows.?;
+        const hdr = &app.gpu_renderer.hdr.targets;
+        var hdr_bytes: u64 = @as(u64, hdr.scene.width) * hdr.scene.height * 8;
+        for (hdr.bloom.items) |level| hdr_bytes += @as(u64, level.width) * level.height * 8;
+        std.debug.print("EA3_WORLD preset={s} completed_ms_per_frame={d:.2} p50_ms={d:.2} p95_ms={d:.2} samples=60 lights={d} shadow_views={d} caster_draws={d} color_draws={d} shadow_bytes={d} hdr_bloom_bytes={d}\n", .{ preset.label, elapsed_ms / samples.len, samples[30], samples[57], app.gpu_renderer.lights.records.items.len, shadow.views.items.len, shadow.caster_draws, app.gpu_renderer.commands.items.len, @as(u64, shadow.resolution) * shadow.resolution * shadow.layers * 4, hdr_bytes });
+    }
+    const night = (host.owner.find(host.owner.active_environment) orelse return error.NativeActiveLightingLost).*;
+    var edited = night.session;
+    edited.environment.display.bloom_strength = 0.035;
+    try std.testing.expect((try host.execute(.local_developer_client, .{ .target = night.id, .expected_revision = night.revision, .action = .{ .apply = edited } })).rejection == null);
+    app.pumpDeveloperEndpoint();
+    try app.frame_timer.beginFrameWithElapsedSeconds(0);
+    _ = try app.render(0.5);
+    const recorded_tick = app.simulation.inspection().tickIndex();
+    const recorded_frame = app.frame_timer.total_frames;
+    const after = try app.simulation.developer().snapshotFlightRecording(std.testing.allocator);
+    defer std.testing.allocator.free(after);
+    try std.testing.expectEqualSlices(u8, before, after);
+    var mounted: usize = 0;
+    for (app.lighting_frame.resolved.items) |resolved| if (resolved.parent != null) {
+        mounted += 1;
+    };
+    try std.testing.expect(mounted >= 6);
+    try std.testing.expect(c.SDL_GetKeyboardFocus() != app.window);
+    var static_surfaces: usize = 0;
+    for (app.lighting_frame.resolved.items) |resolved| if (resolved.surface != null) {
+        try std.testing.expect(resolved.surface_submitted);
+        static_surfaces += 1;
+    };
+    try std.testing.expect(static_surfaces >= 10);
+    var selectable_fixtures: usize = 0;
+    for (app.selection_entries.items) |entry| if (entry.id == .content_asset and host.owner.find(entry.id.content_asset) != null) {
+        selectable_fixtures += 1;
+    };
+    try std.testing.expect(selectable_fixtures >= static_surfaces);
+    // Wider views exercise retained static fixtures and all three moving rigs.
+    for ([_]struct { name: []const u8, position: [3]f32, yaw: f32, pitch: f32 }{
+        .{ .name = "neighborhood", .position = .{ -38, 16, 34 }, .yaw = 0.6, .pitch = -0.32 },
+        .{ .name = "headlights", .position = .{ 0, 6, -32 }, .yaw = std.math.pi, .pitch = -0.18 },
+    }) |view| {
+        app.applyViewportRequest(.{ .set_free_camera_pose = .{ .position = view.position, .yaw = view.yaw, .pitch = view.pitch } });
+        try app.frame_timer.beginFrameWithElapsedSeconds(0);
+        _ = try app.render(0.5);
+        const path = try std.fmt.allocPrint(std.testing.allocator, "zig-out/ea3-{s}.ppm", .{view.name});
+        defer std.testing.allocator.free(path);
+        try @import("vehicle_offscreen_capture.zig").write(&app.gpu_renderer, path);
+    }
+    app.applyViewportRequest(.{ .set_free_camera_pose = .{ .position = .{ -20, 3, 4 }, .yaw = 0, .pitch = -0.06 } });
+    // Isolate the two real overhead emitters. Filling the actual opening must
+    // extinguish exterior direct spill while preserving their interior light.
+    for (host.owner.records) |record| {
+        var candidate = record.session;
+        if (candidate == .fixture) {
+            candidate.fixture.light.enabled = std.mem.indexOf(u8, record.label, "Shop overhead") != null;
+        } else if (std.meta.eql(record.id, host.owner.active_environment)) {
+            candidate.environment.sun.intensity = 0;
+            candidate.environment.ambient = .{ 0, 0, 0 };
+            candidate.environment.background = .{ 0, 0, 0 };
+            candidate.environment.display.bloom_strength = 0;
+        } else continue;
+        try std.testing.expect((try host.execute(.local_developer_client, .{ .target = record.id, .expected_revision = record.revision, .action = .{ .apply = candidate } })).rejection == null);
+    }
+    app.pumpDeveloperEndpoint();
+    var open_energy: f64 = 0;
+    for ([_]bool{ false, true }) |blocked| {
+        app.validation.ea3_block_window = blocked;
+        try app.frame_timer.beginFrameWithElapsedSeconds(0);
+        _ = try app.render(0.5);
+        const extent = app.gpu_renderer.getProductSceneExtent();
+        const raw = try @import("lighting_render_test.zig").pixels(&app.gpu_renderer, app.gpu_renderer.hdr.targets.scene.texture, extent.width, extent.height, 8);
+        defer std.testing.allocator.free(raw);
+        var exterior_energy: f64 = 0;
+        for (extent.height * 2 / 3..extent.height) |y| for (0..extent.width) |x| {
+            const value: f16 = @bitCast(std.mem.readInt(u16, raw[(y * extent.width + x) * 8 ..][0..2], .little));
+            exterior_energy += @as(f64, @floatCast(value));
+        };
+        if (!blocked) {
+            open_energy = exterior_energy;
+            try std.testing.expect(open_energy > 1);
+        } else {
+            std.debug.print("EA3_WINDOW open_energy={d:.3} blocked_energy={d:.3}\n", .{ open_energy, exterior_energy });
+            try std.testing.expect(exterior_energy < open_energy * 0.1);
+        }
+    }
+    app.validation.ea3_block_window = false;
+    // Drive the installed sedan through normal player admission. Compare each
+    // headlight parent with the exact fractional-tick chassis submitted in color.
+    for (host.owner.records) |record| try std.testing.expect((try host.execute(.local_developer_client, .{ .target = record.id, .expected_revision = record.revision, .action = .revert })).rejection == null);
+    app.pumpDeveloperEndpoint();
+    app.applyViewportRequest(.{ .set_mode = .character });
+    app.game_camera.yaw = 0;
+    for ([_][2]f32{ .{ -8, -4 }, .{ -1.7, -4 }, .{ -1.7, -8 } }) |waypoint| {
+        while (true) {
+            const position = (try app.simulation.characters().view(app.initial_character_id.?)).position;
+            const dx = waypoint[0] - position[0];
+            const dz = waypoint[1] - position[2];
+            if (@abs(dx) < 0.12 and @abs(dz) < 0.12) break;
+            try app.action_latch.captureFrame(.{ .move = .{ std.math.clamp(dx * 4, -1, 1), std.math.clamp(-dz * 4, -1, 1) } });
+            try app.simulateTick(false, .none);
+        }
+    }
+    try app.action_latch.captureFrame(.{ .interact_pressed = true });
+    try app.simulateTick(false, .none);
+    try app.action_latch.captureFrame(.{});
+    for (0..4) |_| try app.simulateTick(false, .none);
+    const controlled = app.controlled_vehicle_id orelse return error.LightingDriveEnterFailed;
+    const vehicle_id = app.simulation.inspection().persistentId(controlled) orelse return error.LightingDriveIdentityMissing;
+    const drive_start = (try app.simulation.vehicles().view(vehicle_id)).state.chassis.pose.position;
+    var attachment_checks: usize = 0;
+    for (0..360) |tick| {
+        try app.frame_timer.beginFrameWithElapsedSeconds(timing.TICK_DURATION);
+        try app.action_latch.captureFrame(.{ .move = .{ if (tick >= 240 and tick < 300) 0.2 else 0, 1 } });
+        try app.district_streaming.pumpContent(app.districtAuthorityPort(), app.frame_timer.total_frames);
+        while (app.frame_timer.shouldTick()) {
+            try app.simulateTick(false, .none);
+            app.frame_timer.recordCompletedTick();
+        }
+        if (tick % 6 != 0) continue;
+        const alpha: f32 = if (tick % 12 == 0) 0.25 else 0.75;
+        _ = try app.render(alpha);
+        const draws = app.simulation.presentation().vehicles(alpha);
+        for (app.lighting_frame.resolved.items) |resolved| {
+            const parent = resolved.parent orelse continue;
+            if (parent.kind != .vehicle) continue;
+            for (draws) |draw| if (draw.entity.index == parent.index and draw.entity.generation == parent.incarnation) {
+                try std.testing.expectEqualDeep(draw.chassis_pose, parent.pose);
+                const expected = try engine.transform.compose(draw.chassis_pose, host.owner.find(resolved.asset).?.session.fixture.pose);
+                try std.testing.expectEqualDeep(expected, resolved.emitter.pose);
+                attachment_checks += 1;
+            };
+        }
+    }
+    const drive_end = (try app.simulation.vehicles().view(vehicle_id)).state.chassis.pose.position;
+    try std.testing.expect(@abs(drive_end[2] - drive_start[2]) > 10);
+    try std.testing.expect(attachment_checks >= 360);
+    try @import("vehicle_offscreen_capture.zig").write(&app.gpu_renderer, "zig-out/ea3-driving-night.ppm");
+    std.debug.print("EA3_DRIVING interpolated_attachment_checks={d} forward_metres={d:.2} focus_stolen={}\n", .{ attachment_checks, drive_start[2] - drive_end[2], c.SDL_GetKeyboardFocus() == app.window });
+    while (true) {
+        const recording = app.simulation.developer().snapshotFlightRecording(std.testing.allocator) catch |err| switch (err) {
+            error.CommandsPendingAtReplaySnapshot => {
+                try app.simulateTick(false, .none);
+                continue;
+            },
+            else => return err,
+        };
+        std.testing.allocator.free(recording);
+        break;
+    }
+    try std.testing.expect(app.developer.requestIncidentHandoffWithReplayForAcceptance(app.developerAuthorityPort()));
+    const run_path = try std.testing.allocator.dupe(u8, app.developer.incidentRunPath() orelse return error.LightingWorldTestRequiresIncidentCapture);
+    defer std.testing.allocator.free(run_path);
+    app.deinit();
+    app_live = false;
+    var evidence_directory = try std.Io.Dir.openDirAbsolute(std.testing.io, run_path, .{});
+    defer evidence_directory.close(std.testing.io);
+    const health_bytes = try evidence_directory.readFileAlloc(std.testing.io, "manifest.json", std.testing.allocator, .unlimited);
+    defer std.testing.allocator.free(health_bytes);
+    var health = try std.json.parseFromSlice(struct { dropped_records: u64, writer_failed: bool }, std.testing.allocator, health_bytes, .{ .ignore_unknown_fields = true });
+    defer health.deinit();
+    try std.testing.expectEqual(@as(u64, 0), health.value.dropped_records);
+    try std.testing.expect(!health.value.writer_failed);
+    const streams_path = try std.fs.path.join(std.testing.allocator, &.{ run_path, "streams" });
+    defer std.testing.allocator.free(streams_path);
+    var streams = try std.Io.Dir.openDirAbsolute(std.testing.io, streams_path, .{ .iterate = true });
+    defer streams.close(std.testing.io);
+    var entries = streams.iterate();
+    var changes_captured = false;
+    while (try entries.next(std.testing.io)) |entry| {
+        if (!std.mem.startsWith(u8, entry.name, "timeline-")) continue;
+        const bytes = try streams.readFileAlloc(std.testing.io, entry.name, std.testing.allocator, .unlimited);
+        defer std.testing.allocator.free(bytes);
+        changes_captured = changes_captured or std.mem.indexOf(u8, bytes, "\"kind\":\"lighting_change\"") != null;
+    }
+    try std.testing.expect(changes_captured);
+    var reconstruction = try @import("hosts/lighting_replay.zig").Replay.load(std.testing.allocator, std.testing.io, run_path);
+    defer reconstruction.deinit();
+    try std.testing.expect(reconstruction.samples.items.len >= 4);
+    const restored = reconstruction.at(recorded_tick, recorded_frame) orelse return error.LightingReplayMissing;
+    const restored_definition = restored.find(restored.active_environment) orelse return error.NativeRestoredLightingLost;
+    try std.testing.expectEqualDeep(edited, restored_definition.value);
+    std.debug.print("EA3_REPLAY snapshots={d} exact_live_edit=true authority_unchanged=true\n", .{reconstruction.samples.items.len});
+}
+
+pub fn acceptLightingEditorInput() !void {
+    try std.testing.expect(c.SDL_SetHint(c.SDL_HINT_MAC_BACKGROUND_APP, "1"));
+    try std.testing.expect(c.SDL_SetHint(c.SDL_HINT_WINDOW_ACTIVATE_WHEN_SHOWN, "0"));
+    try std.testing.expect(c.SDL_Init(c.SDL_INIT_VIDEO));
+    defer c.SDL_Quit();
+    const window = c.SDL_CreateWindow("Lighting input acceptance", 256, 256, c.SDL_WINDOW_HIDDEN) orelse return error.WindowFailed;
+    defer c.SDL_DestroyWindow(window);
+    var gpu = try renderer.Renderer.initOffscreen(window, 256, 256);
+    defer gpu.deinit();
+    var editor = @import("editor/editor.zig").Editor.init(window, gpu.device, gpu.getSwapchainFormat());
+    defer editor.deinit();
+    editor.setViewportMode(.free_camera);
+    for (&editor.tools) |*registered| if (registered.descriptor.id == .lighting_lab) {
+        registered.enabled = true;
+    };
+    editor.lighting_lab.target = .{ .namespace = 1, .local = 2 };
+    editor.lighting_lab.draft = .{ .fixture = .{ .light = .{ .kind = .spot }, .pose = .{ .position = .{ 2, 3, 4 } } } };
+    editor.lighting_lab.active_start = .{ .draft = editor.lighting_lab.draft, .dirty = true };
+    editor.lighting_lab.draft.fixture.pose.position[0] = 9;
+    editor.lighting_lab.handles[0] = .{ .minimum = .{ 100, 100 }, .maximum = .{ 124, 124 } };
+    var event = std.mem.zeroes(c.SDL_Event);
+    event.type = c.SDL_EVENT_MOUSE_BUTTON_DOWN;
+    event.button.windowID = c.SDL_GetWindowID(window);
+    event.button.button = c.SDL_BUTTON_LEFT;
+    event.button.x = 112;
+    event.button.y = 112;
+    try std.testing.expectEqual(@as(c_int, 1), c.SDL_PeepEvents(&event, 1, c.SDL_ADDEVENT, 0, 0));
+    var received = std.mem.zeroes(c.SDL_Event);
+    try std.testing.expectEqual(@as(c_int, 1), c.SDL_PeepEvents(&received, 1, c.SDL_GETEVENT, c.SDL_EVENT_MOUSE_BUTTON_DOWN, c.SDL_EVENT_MOUSE_BUTTON_DOWN));
+    try std.testing.expect(editor.processEvent(&received).mouse_reserved);
+    event = std.mem.zeroes(c.SDL_Event);
+    event.type = c.SDL_EVENT_KEY_DOWN;
+    event.key.windowID = c.SDL_GetWindowID(window);
+    event.key.scancode = c.SDL_SCANCODE_ESCAPE;
+    try std.testing.expectEqual(@as(c_int, 1), c.SDL_PeepEvents(&event, 1, c.SDL_ADDEVENT, 0, 0));
+    try std.testing.expectEqual(@as(c_int, 1), c.SDL_PeepEvents(&received, 1, c.SDL_GETEVENT, c.SDL_EVENT_KEY_DOWN, c.SDL_EVENT_KEY_DOWN));
+    try std.testing.expect(editor.processEvent(&received).keyboard_reserved);
+    try std.testing.expectEqual(@as(f32, 2), editor.lighting_lab.draft.fixture.pose.position[0]);
+    try std.testing.expect(!editor.systemMenuOpen());
+    event.type = c.SDL_EVENT_WINDOW_FOCUS_LOST;
+    _ = editor.processEvent(&event);
+    try std.testing.expect(!editor.lighting_lab.claimsPointer(.{ 112, 112 }));
+    try std.testing.expect(c.SDL_GetKeyboardFocus() != window);
+    std.debug.print("EA3_INPUT native_queue=true handle_owner=lighting escape_restores=true focus_cleanup=true focus_stolen=false\n", .{});
+}
+
+/// Manual/native CLI acceptance host: isolated assets, hidden Metal and the
+/// ordinary endpoint. A successful durable lighting commit ends this fixture.
+pub fn acceptLightingCLIHost() !void {
+    var temporary = std.testing.tmpDir(.{});
+    defer temporary.cleanup();
+    var path_buffer: [std.fs.max_path_bytes]u8 = undefined;
+    const path_len = try temporary.dir.realPath(std.testing.io, &path_buffer);
+    const path = path_buffer[0..path_len];
+    var app = try App.initWithOptions(std.testing.io, .sandbox, try content.ContentRootPath.parse(build_options.installed_content_root), null, false, false, null, path, .none, null, true);
+    defer app.deinit();
+    try content.lighting_library.write(std.testing.allocator, std.testing.io, temporary.dir, app.runtime_lighting.?.value);
+    var project = try lighting_developer_host.Host.init(std.testing.io, std.heap.page_allocator, try content.ContentRootPath.parse(path), app.vehicle_visuals.?.catalog.view(), try app.district_streaming.contentAssets(), &game_vehicles.lighting_mount_ids);
+    project.persistence_available = true;
+    project.installed_root = app.lighting_host.?.root;
+    app.lighting_host.?.deinit();
+    app.lighting_host = project;
+    const initial_revision = project.owner.library_revision;
+    try app.startDeveloperEndpoint(path);
+    while (app.lighting_host.?.owner.library_revision == initial_revision) {
+        app.pumpDeveloperEndpoint();
+        try app.frame_timer.beginFrameWithElapsedSeconds(timing.TICK_DURATION);
+        try app.district_streaming.pumpContent(app.districtAuthorityPort(), app.frame_timer.total_frames);
+        while (app.frame_timer.shouldTick()) {
+            try app.simulateTick(false, .none);
+            app.frame_timer.recordCompletedTick();
+        }
+        _ = try app.render(0.5);
+    }
+    var saved = try content.lighting_library.read(std.testing.allocator, std.testing.io, temporary.dir);
+    defer saved.deinit();
+    try std.testing.expectEqual(app.lighting_host.?.owner.library_revision, saved.value.revision);
+    for (saved.value.definitions) |definition| try std.testing.expectEqualDeep(definition.value, app.lighting_host.?.owner.find(definition.id).?.committed);
+    std.debug.print("EA3_CLI durable_commit=true isolated_assets=true focus_stolen=false\n", .{});
 }

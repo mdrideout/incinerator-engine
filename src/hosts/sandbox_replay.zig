@@ -4058,15 +4058,15 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     const same = try testContentCohort();
     try std.testing.expectEqual(try content.fingerprint(), try same.fingerprint());
 
-    // Recipe V9 installs the industrial neighborhood graph and destination
-    // cohort, intentionally advancing renderer-free construction.
-    var recipe_v9_expected: Digest = undefined;
+    // Recipe V11 opens the shop and installs solid fixture geometry,
+    // intentionally advancing renderer-free construction.
+    var recipe_v11_expected: Digest = undefined;
     _ = try std.fmt.hexToBytes(
-        &recipe_v9_expected,
-        "f1db70e20f058e12db0ac5aa496e0de6a00645edebb8cf62b77f095533e47451",
+        &recipe_v11_expected,
+        "09a418f2ce19731e86de1194735bab136f4299bb377e1e9c12a55c59a10f5a32",
     );
-    const recipe_v9_actual = try content.fingerprint();
-    try std.testing.expectEqualSlices(u8, &recipe_v9_expected, &recipe_v9_actual);
+    const recipe_v11_actual = try content.fingerprint();
+    try std.testing.expectEqualSlices(u8, &recipe_v11_expected, &recipe_v11_actual);
 
     const catalog = try ContentCohort.init(
         "district/catalog",
@@ -4078,7 +4078,7 @@ test "world and content cohorts are renderer-free canonical construction inputs"
     );
     try catalog.validate();
     const catalog_fingerprint = try catalog.fingerprint();
-    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v9_actual));
+    try std.testing.expect(!std.mem.eql(u8, &catalog_fingerprint, &recipe_v11_actual));
 
     var catalog_fixture = try testCapture();
     catalog_fixture.content = catalog;
@@ -4139,8 +4139,11 @@ test "district ingress codec preserves bounded navigation and rejects hostile co
     };
     try west.validate();
 
-    var storage: [1024]u8 = undefined;
-    var sink = ByteSink{ .bytes = &storage };
+    var size = SizeSink{};
+    try encodeDistrictBuild(&size, west);
+    const storage = try std.testing.allocator.alloc(u8, size.size);
+    defer std.testing.allocator.free(storage);
+    var sink = ByteSink{ .bytes = storage };
     try encodeDistrictBuild(&sink, west);
     var reader = Reader{ .bytes = storage[0..sink.cursor] };
     const decoded = try decodeDistrictBuild(&reader);

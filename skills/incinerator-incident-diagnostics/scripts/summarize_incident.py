@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Validate and summarize an Incinerator schema-5 incident bundle."""
+"""Validate and summarize an Incinerator schema-6 incident bundle."""
 
 from __future__ import annotations
 
 import argparse
+import hashlib
+import struct
 import json
 from pathlib import Path
 import sys
 
-SCHEMA = 5
+SCHEMA = 6
 TERMINAL = {"complete", "partial"}
 HUMAN_ANCHORS = {
     -5000: "human_m5000ms",
@@ -216,6 +218,21 @@ def main() -> int:
         for record in records:
             kind = str(record["kind"])
             kinds[kind] = kinds.get(kind, 0) + 1
+            if kind == "lighting_library":
+                if record.get("lighting_schema") != 1:
+                    raise ValueError("unsupported lighting evidence")
+                digest = bytes(record["sha256"])
+                if len(digest) != 32:
+                    raise ValueError("invalid lighting asset digest")
+                asset = root / "lighting-assets" / (digest.hex() + ".iclight")
+                payload = asset.read_bytes()
+                if hashlib.sha256(payload).digest() != digest:
+                    raise ValueError(f"lighting asset digest mismatch: {asset}")
+                if (len(payload) < 52 or payload[:8] != b"ICLIGHTS" or
+                    struct.unpack_from("<IQ", payload, 8) != (1, len(payload) - 52) or
+                    hashlib.sha256(payload[52:]).digest() != payload[20:52]):
+                    raise ValueError(f"invalid captured lighting library: {asset}")
+
 
     print(f"run: {root}")
     print(
@@ -236,11 +253,15 @@ def main() -> int:
     if not isinstance(capabilities, dict):
         raise ValueError("invalid evidence capability matrix")
     if capabilities.get("navigation_lineage") is not True:
-        raise ValueError("schema-5 evidence lacks exact navigation lineage")
+        raise ValueError("schema-6 evidence lacks exact navigation lineage")
     if capabilities.get("population_activity") is not True:
-        raise ValueError("schema-5 evidence lacks authored population activity")
+        raise ValueError("schema-6 evidence lacks authored population activity")
     if capabilities.get("deterministic_render_state") is not True:
-        raise ValueError("schema-5 evidence lacks deterministic render state")
+        raise ValueError("schema-6 evidence lacks deterministic render state")
+    if (capabilities.get("authored_lighting") is not True or
+        capabilities.get("lighting_schema") != 1 or
+        capabilities.get("lighting_asset_reconstruction") is not True):
+        raise ValueError("schema-6 evidence lacks authored lighting reconstruction")
     print("capabilities: " + json.dumps(capabilities, sort_keys=True))
     print("streams: " + ", ".join(f"{name}={count}" for name, count in stream_counts.items()))
     print("record kinds: " + ", ".join(f"{name}={count}" for name, count in sorted(kinds.items())))

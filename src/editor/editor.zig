@@ -25,6 +25,7 @@ const event_log_tool = @import("tools/event_log_tool.zig");
 const gameplay_inspector_tool = @import("tools/gameplay_inspector_tool.zig");
 const world_outliner_tool = @import("tools/world_outliner_tool.zig");
 const vehicle_lab_tool = @import("tools/vehicle_lab_tool.zig");
+const lighting_lab_tool = @import("tools/lighting_lab_tool.zig");
 const material_lab_tool = @import("tools/material_lab_tool.zig");
 const content_browser_tool = @import("tools/content_browser_tool.zig");
 const navigation_lab_tool = @import("tools/navigation_lab_tool.zig");
@@ -56,6 +57,7 @@ pub const EventRoute = input.EventRoute;
 const default_tools = [_]Tool{
     Tool.init(stats_tool.descriptor),
     Tool.init(content_browser_tool.descriptor),
+    Tool.init(lighting_lab_tool.descriptor),
     Tool.init(material_lab_tool.descriptor),
     Tool.init(vehicle_lab_tool.descriptor),
     Tool.init(camera_tool.descriptor),
@@ -85,6 +87,7 @@ const panel_menu_order = [_]tool.ToolId{
     .incident_capture,
     .crate_authoring,
     .interaction,
+    .lighting_lab,
     .material_lab,
     .navigation_lab,
     .neural_rendering_lab,
@@ -105,6 +108,7 @@ pub const Editor = struct {
     crate_authoring: crate_authoring_tool.State = .{},
     world_outliner: world_outliner_tool.State = .{},
     content_browser: content_browser_tool.State = .{},
+    lighting_lab: lighting_lab_tool.State = .{},
     material_lab: material_lab_tool.State = .{},
     vehicle_lab: vehicle_lab_tool.State = .{},
     content_selection_controller: content_selection.Controller = .{},
@@ -175,6 +179,8 @@ pub const Editor = struct {
             event.type == c.SDL_EVENT_WINDOW_MINIMIZED)
         {
             self.crate_authoring.deactivateGizmo();
+            self.lighting_lab.deactivateGizmo();
+            _ = self.lighting_lab.cancelControl();
             _ = self.material_lab.cancelControl();
             _ = self.vehicle_lab.cancelControl();
             self.backend.cancelPointer();
@@ -184,7 +190,7 @@ pub const Editor = struct {
         if (event.type == c.SDL_EVENT_KEY_DOWN) {
             if (event.key.scancode == c.SDL_SCANCODE_ESCAPE) {
                 route.system_menu_available = true;
-                if (!event.key.repeat and (self.vehicle_lab.cancelControl() or self.material_lab.cancelControl() or self.crate_authoring.cancelGizmoDrag())) {
+                if (!event.key.repeat and (self.lighting_lab.cancelControl() or self.vehicle_lab.cancelControl() or self.material_lab.cancelControl() or self.crate_authoring.cancelGizmoDrag())) {
                     route.keyboard_reserved = true;
                     return route;
                 }
@@ -204,7 +210,10 @@ pub const Editor = struct {
             if (event.key.scancode == c.SDL_SCANCODE_F1) {
                 if (!event.key.repeat) {
                     self.visible = !self.visible;
-                    if (!self.visible) self.crate_authoring.deactivateGizmo();
+                    if (!self.visible) {
+                        self.crate_authoring.deactivateGizmo();
+                        self.lighting_lab.deactivateGizmo();
+                    }
                 }
                 route.keyboard_reserved = true;
                 return route;
@@ -235,8 +244,7 @@ pub const Editor = struct {
         ) and
             event.type == c.SDL_EVENT_MOUSE_BUTTON_DOWN and
             event.button.button == c.SDL_BUTTON_LEFT and
-            self.toolById(.crate_authoring).enabled and
-            self.crate_authoring.claimsGizmoPointer(.{ event.button.x, event.button.y }))
+            ((self.toolById(.crate_authoring).enabled and self.crate_authoring.claimsGizmoPointer(.{ event.button.x, event.button.y })) or (self.toolById(.lighting_lab).enabled and self.lighting_lab.claimsPointer(.{ event.button.x, event.button.y }))))
         {
             // Backend capture reflects the previous completed ImGui frame and
             // can lag a cursor move plus click delivered in one event pump.
@@ -288,6 +296,16 @@ pub const Editor = struct {
         );
         self.setViewportMode(frame.viewport.view.mode);
         self.observeSelection(frame.selection.view);
+        if (frame.selection.view.activeEntry()) |selected_world| if (selected_world.id == .content_asset) {
+            for (frame.content_assets) |asset| if (asset.kind == .lighting and std.meta.eql(asset.id, selected_world.id.content_asset)) {
+                if (self.content_selection_controller.active == null or !std.meta.eql(self.content_selection_controller.active.?, asset.id)) {
+                    self.content_selection_controller.active = asset.id;
+                    self.toolById(.lighting_lab).enabled = true;
+                    self.pending_focus = .lighting_lab;
+                }
+                break;
+            };
+        };
         const world_affordances_visible = viewport.editorWorldAffordancesVisible(
             self.visible,
             self.viewport_mode,
@@ -296,9 +314,12 @@ pub const Editor = struct {
             !self.toolById(.crate_authoring).enabled)
         {
             self.crate_authoring.deactivateGizmo();
+            self.lighting_lab.deactivateGizmo();
         }
 
+        if (!world_affordances_visible or !self.toolById(.lighting_lab).enabled) self.lighting_lab.deactivateGizmo();
         if (!self.visible or !self.toolById(.vehicle_lab).enabled) self.vehicle_lab.deactivate();
+        if (!self.visible or !self.toolById(.lighting_lab).enabled) self.lighting_lab.deactivate(frame.lighting);
         if (!self.visible or !self.toolById(.material_lab).enabled) self.material_lab.deactivate(frame.material);
         if (!self.visible) {
             self.scene_rect = null;
@@ -336,7 +357,7 @@ pub const Editor = struct {
             if (self.content_selection_controller.active != null) {
                 self.inspector_subject = .content;
                 if (self.content_selection_controller.view(frame.content_assets).activeEntry()) |entry| {
-                    const panel: workspace.ToolId = if (entry.kind == .material or entry.kind == .mesh) .material_lab else .crate_authoring;
+                    const panel: workspace.ToolId = if (entry.kind == .lighting) .lighting_lab else if (entry.kind == .material or entry.kind == .mesh) .material_lab else .crate_authoring;
                     self.toolById(panel).enabled = true;
                     self.pending_focus = panel;
                 }
@@ -358,6 +379,7 @@ pub const Editor = struct {
                 },
             );
         }
+        if (world_affordances_visible and self.toolById(.lighting_lab).enabled) if (self.scene_rect) |scene| lighting_lab_tool.drawGizmo(&self.lighting_lab, frame.lighting, frame.camera.*, scene, .{ @floatFromInt(window_size.width), @floatFromInt(window_size.height) });
         if (self.show_workspace_guide) self.drawWorkspaceGuide();
         if (self.show_demo_window) zgui.showDemoWindow(&self.show_demo_window);
         self.drawSystemMenu();
@@ -395,7 +417,10 @@ pub const Editor = struct {
     }
 
     pub fn setViewportMode(self: *Editor, mode: viewport.Mode) void {
-        if (self.viewport_mode != mode) self.crate_authoring.deactivateGizmo();
+        if (self.viewport_mode != mode) {
+            self.crate_authoring.deactivateGizmo();
+            self.lighting_lab.deactivateGizmo();
+        }
         self.viewport_mode = mode;
     }
 
@@ -412,7 +437,7 @@ pub const Editor = struct {
     /// External editor-control producers query this state instead of mutating
     /// selection or camera state underneath a live pointer gesture.
     pub fn gizmoDragActive(self: *const Editor) bool {
-        return self.crate_authoring.gizmoDragActive() or self.material_lab.active_start != null or self.vehicle_lab.active_start != null;
+        return self.lighting_lab.active_start != null or self.crate_authoring.gizmoDragActive() or self.material_lab.active_start != null or self.vehicle_lab.active_start != null;
     }
 
     pub fn selectContentAsset(
@@ -423,7 +448,7 @@ pub const Editor = struct {
         for (entries) |entry| if (std.meta.eql(entry.id, id)) {
             self.content_selection_controller.active = id;
             self.inspector_subject = .content;
-            const panel: workspace.ToolId = if (entry.kind == .material or entry.kind == .mesh) .material_lab else .crate_authoring;
+            const panel: workspace.ToolId = if (entry.kind == .lighting) .lighting_lab else if (entry.kind == .material or entry.kind == .mesh) .material_lab else .crate_authoring;
             self.toolById(panel).enabled = true;
             self.pending_focus = panel;
             return true;
@@ -453,6 +478,7 @@ pub const Editor = struct {
     ) void {
         switch (id) {
             .vehicle_lab => vehicle_lab_tool.draw(&self.vehicle_lab, frame.vehicle),
+            .lighting_lab => lighting_lab_tool.draw(&self.lighting_lab, frame.lighting, self.content_selection_controller.view(frame.content_assets), &self.content_selection_requests),
             .material_lab => material_lab_tool.draw(&self.material_lab, frame.material, self.content_selection_controller.view(frame.content_assets), &self.content_selection_requests),
             .stats => stats_tool.draw(&self.stats, frame.frame_timing),
             .content_browser => content_browser_tool.draw(
@@ -1424,4 +1450,35 @@ test "editor Escape acceptance system menu Quit emits one explicit lifecycle req
     try std.testing.expect(!editor.systemMenuOpen());
     try std.testing.expect(editor.takeQuitRequested());
     try std.testing.expect(!editor.takeQuitRequested());
+}
+
+test "lighting gizmo Escape restores draft and claims only visible handles" {
+    var editor = Editor{};
+    editor.setViewportMode(.free_camera);
+    editor.toolById(.lighting_lab).enabled = true;
+    editor.lighting_lab.target = .{ .namespace = 1, .local = 2 };
+    editor.lighting_lab.draft = .{ .fixture = .{ .light = .{ .kind = .spot }, .pose = .{ .position = .{ 2, 3, 4 } } } };
+    editor.lighting_lab.dirty = true;
+    editor.lighting_lab.active_start = .{ .draft = editor.lighting_lab.draft, .dirty = true };
+    editor.lighting_lab.draft.fixture.pose.position[0] = 9;
+    editor.lighting_lab.preview_active = true;
+    editor.lighting_lab.handles[0] = .{ .minimum = .{ 200, 200 }, .maximum = .{ 224, 224 } };
+    var event = std.mem.zeroes(c.SDL_Event);
+    event.type = c.SDL_EVENT_MOUSE_BUTTON_DOWN;
+    event.button.button = c.SDL_BUTTON_LEFT;
+    event.button.x = 210;
+    event.button.y = 210;
+    try std.testing.expect(editor.processEvent(&event).mouse_reserved);
+    event.button.x = 100;
+    try std.testing.expect(!editor.processEvent(&event).mouse_reserved);
+    event.type = c.SDL_EVENT_KEY_DOWN;
+    event.key.scancode = c.SDL_SCANCODE_ESCAPE;
+    try std.testing.expect(editor.processEvent(&event).keyboard_reserved);
+    try std.testing.expectEqual(@as(f32, 2), editor.lighting_lab.draft.fixture.pose.position[0]);
+    try std.testing.expect(editor.lighting_lab.dirty);
+    try std.testing.expect(editor.lighting_lab.preview_changed);
+    try std.testing.expect(editor.lighting_lab.cancelled_until_release);
+    try std.testing.expect(!editor.system_menu_open);
+    editor.setViewportMode(.character);
+    try std.testing.expect(!editor.lighting_lab.claimsPointer(.{ 210, 210 }));
 }

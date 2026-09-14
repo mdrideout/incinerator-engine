@@ -314,6 +314,8 @@ pub fn build(b: *std.Build) void {
     const sandbox_authoring_module = graph.sandbox_authoring;
     const vehicle_authoring_contract_module = graph.vehicle_authoring_contract;
     const vehicle_authoring_module = graph.vehicle_authoring;
+    const lighting_authoring_module = graph.lighting_authoring;
+    const lighting_authoring_contract_module = graph.lighting_authoring_contract;
     const material_authoring_module = graph.material_authoring;
     const material_authoring_contract_module = graph.material_authoring_contract;
     const sandbox_save_module = graph.sandbox_save;
@@ -388,7 +390,7 @@ pub fn build(b: *std.Build) void {
     });
     const host_spatial_options = b.addOptions();
     host_spatial_options.addOption(f32, "chunk_span", @import("game/industrial/scene.zig").chunk_span);
-    host_spatial_options.addOption(usize, "max_static_boxes", @import("game/industrial/scene.zig").boxes[0].len);
+    host_spatial_options.addOption(usize, "max_static_boxes", @import("game/industrial/scene.zig").max_static_box_count);
     host_spatial_options.addOption(usize, "max_navigation_nodes", @import("game/industrial/scene.zig").navigation_positions.len);
     host_spatial_options.addOption(usize, "max_navigation_edges", @import("game/industrial/scene.zig").navigation_edge_capacity);
     host_spatial_options.addOption(usize, "max_navigation_outgoing_edges", @import("game/industrial/scene.zig").navigation_degree);
@@ -477,7 +479,7 @@ pub fn build(b: *std.Build) void {
             .root_source_file = b.path("src/hosts/sandbox_developer_protocol.zig"),
             .target = target,
             .optimize = optimize,
-            .imports = &.{ .{ .name = "engine_contracts", .module = contracts_module }, .{ .name = "vehicle_authoring_contract", .module = vehicle_authoring_contract_module }, .{ .name = "material_authoring_contract", .module = material_authoring_contract_module } },
+            .imports = &.{ .{ .name = "engine_contracts", .module = contracts_module }, .{ .name = "vehicle_authoring_contract", .module = vehicle_authoring_contract_module }, .{ .name = "lighting_authoring_contract", .module = lighting_authoring_contract_module }, .{ .name = "material_authoring_contract", .module = material_authoring_contract_module } },
         },
     );
     const developer_endpoint_client_module = b.addModule(
@@ -1122,6 +1124,7 @@ pub fn build(b: *std.Build) void {
     b.getInstallStep().dependOn(&install_cooked_industrial_northeast.step);
     b.getInstallStep().dependOn(&install_industrial_northeast_provenance.step);
     b.getInstallStep().dependOn(&install_cooked_catalog.step);
+    b.getInstallStep().dependOn(&b.addInstallFile(b.path("game/industrial/lighting.iclight"), "share/incinerator/content/lighting.iclight").step);
     b.getInstallStep().dependOn(&b.addInstallFile(b.path("game/industrial/materials.icmat"), "share/incinerator/content/materials.icmat").step);
 
     const content_tests = b.addTest(.{ .root_module = content_host_module });
@@ -1135,6 +1138,18 @@ pub fn build(b: *std.Build) void {
     const run_vehicle_authoring_tests = b.addRunArtifact(vehicle_authoring_tests);
     const vehicle_authoring_test_step = b.step("test-vehicle-authoring", "Verify vehicle draft admission, authority outcomes, stale edits and durable failure atomicity");
     vehicle_authoring_test_step.dependOn(&run_vehicle_authoring_tests.step);
+    const lighting_composition_tests = b.addTest(.{ .root_module = b.createModule(.{
+        .root_source_file = b.path("src/hosts/lighting_composition.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "engine_contracts", .module = contracts_module }, .{ .name = "content", .module = content_module } },
+    }) });
+    const run_lighting_composition_tests = b.addRunArtifact(lighting_composition_tests);
+    const lighting_authoring_tests = b.addTest(.{ .root_module = lighting_authoring_module });
+    const run_lighting_authoring_tests = b.addRunArtifact(lighting_authoring_tests);
+    const lighting_authoring_test_step = b.step("test-lighting-authoring", "Verify presentation lighting transactions, persistence, and undo/redo");
+    lighting_authoring_test_step.dependOn(&run_lighting_authoring_tests.step);
+    lighting_authoring_test_step.dependOn(&run_lighting_composition_tests.step);
     const material_authoring_tests = b.addTest(.{ .root_module = material_authoring_module });
     const run_material_authoring_tests = b.addRunArtifact(material_authoring_tests);
     const material_authoring_test_step = b.step("test-material-authoring", "Verify material preview, revisioned editing, durable commit, and restart");
@@ -1332,6 +1347,8 @@ pub fn build(b: *std.Build) void {
         developer_visualization_module,
     );
     addClientImport(exe, validation_exe, "sandbox_authoring", sandbox_authoring_module);
+    addClientImport(exe, validation_exe, "lighting_authoring", lighting_authoring_module);
+    addClientImport(exe, validation_exe, "lighting_authoring_contract", lighting_authoring_contract_module);
     addClientImport(exe, validation_exe, "material_authoring", material_authoring_module);
     addClientImport(exe, validation_exe, "vehicle_authoring", vehicle_authoring_module);
     addClientImport(exe, validation_exe, "vehicle_authoring_contract", vehicle_authoring_contract_module);
@@ -1394,6 +1411,8 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
             .imports = &.{
+                .{ .name = "game_vehicles", .module = graph.game_vehicles },
+                .{ .name = "sandbox_district_recipe", .module = sandbox_district_recipe_module },
                 .{ .name = "content", .module = content_module },
                 .{ .name = "district_content_catalog", .module = district_content_catalog_module },
             },
@@ -1466,6 +1485,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
         .imports = &.{
+            .{ .name = "content", .module = content_module },
             .{ .name = "build_options", .module = options.createModule() },
             .{ .name = "incinerator_engine", .module = mod },
             .{ .name = "engine_contracts", .module = contracts_module },
@@ -1480,8 +1500,10 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
             .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
+            .{ .name = "lighting_authoring", .module = lighting_authoring_module },
             .{ .name = "material_authoring", .module = material_authoring_module },
             .{ .name = "vehicle_authoring_contract", .module = vehicle_authoring_contract_module },
+            .{ .name = "lighting_authoring_contract", .module = lighting_authoring_contract_module },
             .{ .name = "material_authoring_contract", .module = material_authoring_contract_module },
             .{ .name = "sandbox_interaction", .module = sandbox_interaction_module },
             .{ .name = "population_contract", .module = population_contract_module },
@@ -1510,6 +1532,19 @@ pub fn build(b: *std.Build) void {
     const run_shader_contract_tests = b.addRunArtifact(shader_contract_tests);
     const shader_test_step = b.step("test-shaders", "Validate SDL GPU shader contracts");
     shader_test_step.dependOn(&run_shader_contract_tests.step);
+
+    const lighting_render_module = b.createModule(.{
+        .root_source_file = b.path("src/lighting_render_test.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "engine_contracts", .module = contracts_module }, .{ .name = "zmath", .module = zmath.module("root") }, .{ .name = "shader_assets", .module = shaders.module } },
+    });
+    lighting_render_module.linkLibrary(sdl_lib);
+    const lighting_render_tests = b.addTest(.{ .name = "lighting-render-tests", .root_module = lighting_render_module });
+    const run_lighting_render_tests = b.addRunArtifact(lighting_render_tests);
+    run_lighting_render_tests.has_side_effects = true;
+    const lighting_render_step = b.step("test-lighting-render", "Verify HDR, lights and shadows with hidden Metal rendering");
+    lighting_render_step.dependOn(&run_lighting_render_tests.step);
 
     const physics_debug_gpu_tests = b.addTest(.{
         .root_module = physics_debug_gpu_module,
@@ -2278,8 +2313,10 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sandbox_diagnostics_contract", .module = sandbox_diagnostics_contract_module },
             .{ .name = "sandbox_replay", .module = sandbox_replay_module },
             .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
+            .{ .name = "lighting_authoring", .module = lighting_authoring_module },
             .{ .name = "material_authoring", .module = material_authoring_module },
             .{ .name = "vehicle_authoring_contract", .module = vehicle_authoring_contract_module },
+            .{ .name = "lighting_authoring_contract", .module = lighting_authoring_contract_module },
             .{ .name = "material_authoring_contract", .module = material_authoring_contract_module },
             .{ .name = "developer_diagnostics", .module = developer_diagnostics_module },
             .{ .name = "sandbox_save", .module = sandbox_save_module },
@@ -2652,8 +2689,10 @@ pub fn build(b: *std.Build) void {
             .{ .name = "sandbox_host_contracts", .module = sandbox_host_contracts_module },
             .{ .name = "interaction_feature", .module = interaction_feature_module },
             .{ .name = "sandbox_authoring", .module = sandbox_authoring_module },
+            .{ .name = "lighting_authoring", .module = lighting_authoring_module },
             .{ .name = "material_authoring", .module = material_authoring_module },
             .{ .name = "vehicle_authoring_contract", .module = vehicle_authoring_contract_module },
+            .{ .name = "lighting_authoring_contract", .module = lighting_authoring_contract_module },
             .{ .name = "material_authoring_contract", .module = material_authoring_contract_module },
             .{ .name = "sandbox_save", .module = sandbox_save_module },
             .{ .name = "save_slots", .module = save_slots_module },
@@ -4300,6 +4339,8 @@ pub fn build(b: *std.Build) void {
         });
         for (sandbox_developer_host_test_module.import_table.keys(), sandbox_developer_host_test_module.import_table.values()) |name, imported|
             module.addImport(name, imported);
+        module.addImport("lighting_authoring", lighting_authoring_module);
+        module.addImport("lighting_authoring_contract", lighting_authoring_contract_module);
         module.addImport("material_authoring", material_authoring_module);
         module.addImport("vehicle_authoring", graph.vehicle_authoring);
         module.addImport("sandbox_simulation", sandbox_simulation_module);
@@ -4509,6 +4550,33 @@ pub fn build(b: *std.Build) void {
     offscreen_test_module.* = exe.root_module.*;
     offscreen_test_module.root_source_file = b.path("src/vehicle_offscreen_test.zig");
 
+    const lighting_world_module = b.allocator.create(std.Build.Module) catch @panic("OOM");
+    lighting_world_module.* = exe.root_module.*;
+    lighting_world_module.root_source_file = b.path("src/lighting_world_test.zig");
+    const lighting_cli_module = b.allocator.create(std.Build.Module) catch @panic("OOM");
+    lighting_cli_module.* = exe.root_module.*;
+    lighting_cli_module.root_source_file = b.path("src/lighting_cli_test.zig");
+    const lighting_cli_tests = b.addTest(.{ .name = "lighting-cli-host", .root_module = lighting_cli_module, .filters = &.{"EA3 CLI host"} });
+    const run_lighting_cli = b.addRunArtifact(lighting_cli_tests);
+    run_lighting_cli.has_side_effects = true;
+    run_lighting_cli.step.dependOn(b.getInstallStep());
+    const lighting_cli_step = b.step("run-lighting-cli-acceptance", "Start an isolated hidden EA3 host; use incinerator-dev to edit and commit lighting to complete it");
+    lighting_cli_step.dependOn(&run_lighting_cli.step);
+    const verify_lighting_cli = b.addSystemCommand(&.{ "python3", b.pathFromRoot("tools/verify_ea3_cli.py") });
+    verify_lighting_cli.addFileArg(lighting_cli_tests.getEmittedBin());
+    verify_lighting_cli.addFileArg(incinerator_dev_exe.getEmittedBin());
+    verify_lighting_cli.setCwd(b.path("."));
+    verify_lighting_cli.step.dependOn(b.getInstallStep());
+    const lighting_cli_test_step = b.step("test-lighting-cli", "Verify lighting authoring through the real CLI on an isolated hidden host");
+    lighting_cli_test_step.dependOn(&verify_lighting_cli.step);
+
+    const lighting_world_tests = b.addTest(.{ .name = "lighting-world-tests", .root_module = lighting_world_module, .filters = &.{"EA3 installed"} });
+    const run_lighting_world = b.addRunArtifact(lighting_world_tests);
+    run_lighting_world.has_side_effects = true;
+    run_lighting_world.step.dependOn(b.getInstallStep());
+    const lighting_world_step = b.step("test-lighting-world", "Verify installed EA3 street and attachment rendering on hidden Metal");
+    lighting_world_step.dependOn(&run_lighting_world.step);
+
     const developer_endpoint_app_tests = b.addTest(.{
         .name = "developer-endpoint-app-tests",
         .root_module = foreground_test_module,
@@ -4610,9 +4678,21 @@ pub fn build(b: *std.Build) void {
     // A top level step for running all tests. dependOn can be called multiple
     // times and since the two run steps do not depend on one another, this will
     // make the two of them run in parallel.
+    const verify_ea3 = b.step("verify-ea3", "Run EA3 lighting contracts, authoring, shader ABI, and hidden Metal acceptance");
+    verify_ea3.dependOn(lighting_authoring_test_step);
+    verify_ea3.dependOn(lighting_render_step);
+    verify_ea3.dependOn(lighting_world_step);
+    verify_ea3.dependOn(lighting_cli_test_step);
+    verify_ea3.dependOn(shader_test_step);
+    verify_ea3.dependOn(developer_protocol_test_step);
+    verify_ea3.dependOn(developer_cli_contract_test_step);
+    verify_ea3.dependOn(verify_ea0_ownership_step);
+    verify_ea3.dependOn(verify_m5_architecture_step);
+
     const test_step = b.step("test", "Run tests");
     test_step.dependOn(&run_vehicle_asset_tests.step);
     test_step.dependOn(industrial_world_step);
+    test_step.dependOn(lighting_authoring_test_step);
     test_step.dependOn(material_authoring_test_step);
     test_step.dependOn(verify_ea0_ownership_step);
     test_step.dependOn(&run_ea0_ownership_tests.step);
@@ -5117,6 +5197,13 @@ fn buildShaders(
     const triangle_fragment = compileShader(b, tools, "shaders/triangle.frag", "triangle.frag");
     const model_vertex = compileShader(b, tools, "shaders/model.vert", "model.vert");
     const model_fragment = compileShader(b, tools, "shaders/model.frag", "model.frag");
+    const shadow_vertex = compileShader(b, tools, "shaders/shadow.vert", "shadow.vert");
+    const shadow_fragment = compileShader(b, tools, "shaders/shadow.frag", "shadow.frag");
+    const primitive_vertex = compileShader(b, tools, "shaders/primitive.vert", "primitive.vert");
+    const primitive_fragment = compileShader(b, tools, "shaders/primitive.frag", "primitive.frag");
+    const fullscreen_vertex = compileShader(b, tools, "shaders/fullscreen.vert", "fullscreen.vert");
+    const display_fragment = compileShader(b, tools, "shaders/display.frag", "display.frag");
+    const bloom_fragment = compileShader(b, tools, "shaders/bloom.frag", "bloom.frag");
     const visibility_fragment = compileShader(
         b,
         tools,
@@ -5148,7 +5235,21 @@ fn buildShaders(
         "neural_model.frag",
     );
 
+    _ = generated.addCopyFile(shadow_vertex.target, "shadow.vert.metal");
+    _ = generated.addCopyFile(shadow_fragment.target, "shadow.frag.metal");
+    _ = generated.addCopyFile(reflectShader(b, tools, shadow_vertex.spirv, "shadow.vert"), "shadow.vert.json");
+    _ = generated.addCopyFile(reflectShader(b, tools, shadow_fragment.spirv, "shadow.frag"), "shadow.frag.json");
+    _ = generated.addCopyFile(primitive_vertex.target, "primitive.vert.metal");
+    _ = generated.addCopyFile(primitive_fragment.target, "primitive.frag.metal");
+    _ = generated.addCopyFile(reflectShader(b, tools, primitive_vertex.spirv, "primitive.vert"), "primitive.vert.json");
+    _ = generated.addCopyFile(reflectShader(b, tools, primitive_fragment.spirv, "primitive.frag"), "primitive.frag.json");
     const extension = format.fileExtension();
+    _ = generated.addCopyFile(fullscreen_vertex.target, "fullscreen.vert.metal");
+    _ = generated.addCopyFile(display_fragment.target, "display.frag.metal");
+    _ = generated.addCopyFile(bloom_fragment.target, "bloom.frag.metal");
+    _ = generated.addCopyFile(reflectShader(b, tools, fullscreen_vertex.spirv, "fullscreen.vert"), "fullscreen.vert.json");
+    _ = generated.addCopyFile(reflectShader(b, tools, display_fragment.spirv, "display.frag"), "display.frag.json");
+    _ = generated.addCopyFile(reflectShader(b, tools, bloom_fragment.spirv, "bloom.frag"), "bloom.frag.json");
     _ = generated.addCopyFile(triangle_vertex.target, b.fmt("triangle.vert.{s}", .{extension}));
     _ = generated.addCopyFile(triangle_fragment.target, b.fmt("triangle.frag.{s}", .{extension}));
     _ = generated.addCopyFile(model_vertex.target, b.fmt("model.vert.{s}", .{extension}));
@@ -5180,6 +5281,13 @@ fn buildShaders(
         \\pub const format: Format = .{s};
         \\pub const entrypoint = "{s}";
         \\pub const driver = "{s}";
+        \\pub const shadow_vertex = @embedFile("shadow.vert.metal");
+        \\pub const shadow_fragment = @embedFile("shadow.frag.metal");
+        \\pub const primitive_vertex = @embedFile("primitive.vert.metal");
+        \\pub const primitive_fragment = @embedFile("primitive.frag.metal");
+        \\pub const fullscreen_vertex = @embedFile("fullscreen.vert.metal");
+        \\pub const display_fragment = @embedFile("display.frag.metal");
+        \\pub const bloom_fragment = @embedFile("bloom.frag.metal");
         \\pub const triangle_vertex = @embedFile("triangle.vert.{s}");
         \\pub const triangle_fragment = @embedFile("triangle.frag.{s}");
         \\pub const model_vertex = @embedFile("model.vert.{s}");
@@ -5206,6 +5314,13 @@ fn buildShaders(
     }));
 
     const reflection_source = generated.add("shader_reflections.zig",
+        \\pub const shadow_vertex = @embedFile("shadow.vert.json");
+        \\pub const shadow_fragment = @embedFile("shadow.frag.json");
+        \\pub const primitive_vertex = @embedFile("primitive.vert.json");
+        \\pub const primitive_fragment = @embedFile("primitive.frag.json");
+        \\pub const fullscreen_vertex = @embedFile("fullscreen.vert.json");
+        \\pub const display_fragment = @embedFile("display.frag.json");
+        \\pub const bloom_fragment = @embedFile("bloom.frag.json");
         \\pub const triangle_vertex = @embedFile("triangle.vert.json");
         \\pub const triangle_fragment = @embedFile("triangle.frag.json");
         \\pub const model_vertex = @embedFile("model.vert.json");
@@ -5248,6 +5363,8 @@ fn compileShader(
 ) CompiledShader {
     const glslc = b.addSystemCommand(&.{tools.glslc});
     glslc.addFileArg(b.path(source_path));
+    glslc.addArgs(&.{ "-MD", "-MF" });
+    _ = glslc.addDepFileOutputArg(b.fmt("{s}.d", .{output_name}));
     glslc.addArg("-o");
     const spirv = glslc.addOutputFileArg(b.fmt("{s}.spv", .{output_name}));
 

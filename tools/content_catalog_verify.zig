@@ -149,12 +149,11 @@ fn verifyEa1ProjectAssets(first: content.bundle.BundleView, second: content.bund
             if (material.base_color_texture == content.bundle.none_index or material.metallic_roughness_texture == content.bundle.none_index or material.normal_texture == content.bundle.none_index or material.occlusion_texture == content.bundle.none_index) return error.IndustrialMaterialMapsMissing;
             try verifyVisibleTexturedSurface(view, material.base_color_texture);
         }
-        // Authored shells and logical blockers use exactly the same dimensions.
+        // Every logical blocker matches a cooked solid: shells, shop walls,
+        // window frames and lamp poles. Float rounding is bounded to 20 micrometres.
         for (view.static_boxes) |box| {
             var found = false;
             for (view.meshes) |mesh| {
-                const name = view.name(mesh.name).?;
-                if (!std.mem.endsWith(u8, name, "shell")) continue;
                 const primitive = view.primitives[mesh.first_primitive];
                 var min: [3]f32 = @splat(std.math.inf(f32));
                 var max: [3]f32 = @splat(-std.math.inf(f32));
@@ -163,7 +162,7 @@ fn verifyEa1ProjectAssets(first: content.bundle.BundleView, second: content.bund
                     max[axis] = @max(max[axis], vertex.position[axis]);
                 };
                 var same = true;
-                for (0..3) |axis| if (min[axis] != box.position[axis] - box.half_extents[axis] or max[axis] != box.position[axis] + box.half_extents[axis]) {
+                for (0..3) |axis| if (@abs(min[axis] - (box.position[axis] - box.half_extents[axis])) > 0.00002 or @abs(max[axis] - (box.position[axis] + box.half_extents[axis])) > 0.00002) {
                     same = false;
                     break;
                 };
@@ -198,7 +197,9 @@ fn verifyVisibleTexturedSurface(view: content.bundle.BundleView, texture_index: 
                 maximum[axis] = @max(maximum[axis], vertex.texcoord[axis]);
             }
         }
-        if (maximum[0] - minimum[0] < 0.5 or maximum[1] - minimum[1] < 0.5) {
+        // Small lamp faces retain physical-scale UVs. Degeneracy means zero
+        // extent, not an invented minimum of half a texture repetition.
+        if (maximum[0] <= minimum[0] or maximum[1] <= minimum[1]) {
             return error.Ea1ProjectTextureHasDegenerateUvs;
         }
     }

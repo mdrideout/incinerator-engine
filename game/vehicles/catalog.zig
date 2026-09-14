@@ -28,6 +28,7 @@ test "game archetypes have distinct admitted dimensions and drivetrain" {
     try std.testing.expectEqual(@as(f32, 1), compact.value.tuning.powertrain.front_torque_fraction);
 }
 
+pub const lighting_mount_ids = [_]@TypeOf(meridian_id.asset){ meridian_id.asset, courier_id.asset, courier_awd_id.asset };
 pub const bundle_keys = [_][]const u8{ "vehicle/meridian", "vehicle/courier", "vehicle/courier-awd" };
 pub const initial_fleet = [_]struct { id: asset.VehicleArchetypeId, position: [3]f32 }{
     .{ .id = meridian_id, .position = .{ 4, 1, -8 } },

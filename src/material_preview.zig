@@ -12,6 +12,7 @@ pub const Preview = struct {
     depth: *c.SDL_GPUTexture,
     binding: c.SDL_GPUTextureSamplerBinding,
     extent: u32,
+    hdr: renderer.hdr_renderer.Targets,
 
     pub fn init(gpu: *renderer.Renderer, extent: u32) !Preview {
         if (extent == 0) return error.InvalidPreviewExtent;
@@ -35,10 +36,12 @@ pub const Preview = struct {
             .layer_count_or_depth = 1,
             .num_levels = 1,
         })) orelse return error.MaterialPreviewDepthFailed;
-        return .{ .device = device, .color = color, .depth = depth, .extent = extent, .binding = .{ .texture = color, .sampler = gpu.getDefaultSampler() } };
+        errdefer c.SDL_ReleaseGPUTexture(device, depth);
+        return .{ .device = device, .color = color, .depth = depth, .extent = extent, .hdr = try renderer.hdr_renderer.Targets.init(device, extent, extent), .binding = .{ .texture = color, .sampler = gpu.getDefaultSampler() } };
     }
 
     pub fn deinit(self: *Preview) void {
+        self.hdr.deinit(self.device);
         c.SDL_ReleaseGPUTexture(self.device, self.depth);
         c.SDL_ReleaseGPUTexture(self.device, self.color);
         self.* = undefined;
@@ -48,7 +51,7 @@ pub const Preview = struct {
         if (gpu.current_render_pass != null) return error.MaterialPreviewInsideScenePass;
         const cmd = gpu.current_cmd orelse return error.MaterialPreviewWithoutFrame;
         const color = std.mem.zeroInit(c.SDL_GPUColorTargetInfo, .{
-            .texture = self.color,
+            .texture = self.hdr.scene.texture,
             .clear_color = .{ .r = 0.18, .g = 0.18, .b = 0.18, .a = 1 },
             .load_op = c.SDL_GPU_LOADOP_CLEAR,
             .store_op = c.SDL_GPU_STOREOP_STORE,
@@ -62,15 +65,18 @@ pub const Preview = struct {
             .stencil_store_op = c.SDL_GPU_STOREOP_DONT_CARE,
         });
         const pass = c.SDL_BeginGPURenderPass(cmd, &color, 1, &depth) orelse return error.MaterialPreviewPassFailed;
-        defer c.SDL_EndGPURenderPass(pass);
         // This borrowed draw context does not own or destroy renderer resources.
         // Its camera, light and statistics belong exclusively to the preview.
         var context = gpu.*;
         context.current_render_pass = pass;
         context.camera_position = .{ 2.4, 1.7, 3.4 };
-        try context.setSceneLight(.{ .sun_direction = .{ 0.5773503, 0.5773503, 0.5773503 }, .sun_color = .{ 1, 1, 1 }, .sun_intensity = 2.2, .ambient_color = .{ 0.22, 0.22, 0.22 } });
+        context.display_settings = .{ .exposure = 1, .bloom_strength = 0 };
+        context.neutral_preview = true;
+        context.setSceneLight(.{ .sun_direction = .{ 0.5773503, 0.5773503, 0.5773503 }, .sun_color = .{ 1, 1, 1 }, .sun_intensity = 2.2, .ambient_color = .{ 0.22, 0.22, 0.22 } }) catch unreachable;
         const view = zm.lookAtRh(zm.f32x4(2.4, 1.7, 3.4, 1), zm.f32x4(0, 0, 0, 1), zm.f32x4(0, 1, 0, 0));
         const projection = zm.perspectiveFovRh(std.math.pi / 4.0, 1, 0.1, 20);
-        context.drawMeshWithTextures(shape, textures, material, zm.scaling(2, 2, 2), zm.mul(view, projection));
+        context.drawImmediate(shape, textures, material, zm.scaling(2, 2, 2), zm.mul(view, projection));
+        c.SDL_EndGPURenderPass(pass);
+        try gpu.hdr.resolve(cmd, &self.hdr, self.color, context.display_settings);
     }
 };

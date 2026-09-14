@@ -12,3 +12,5 @@ pub const c = sdl.c;
 
 pub const vehicle_visuals = @import("vehicle_visual_resources.zig");
 pub const content = @import("content");
+
+pub const lighting_composition = @import("hosts/lighting_composition.zig");

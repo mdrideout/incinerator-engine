@@ -1,8 +1,8 @@
-//! SDL/GPU-free schema-5 validator and concise incident-bundle index.
+//! SDL/GPU-free schema-6 validator and concise incident-bundle index.
 
 const std = @import("std");
 
-const schema_version: u16 = 5;
+const schema_version: u16 = 6;
 const maximum_manifest_bytes = 64 * 1024;
 // Materialized windows span several stream segments; vehicle wheel telemetry
 // in a real 20-second window exceeds the former 8 MiB limit.
@@ -20,6 +20,9 @@ const EvidenceCapabilities = struct {
     population_activity: bool,
     deterministic_render_state: bool = false,
     ranged_combat: bool = false,
+    authored_lighting: bool,
+    lighting_schema: u32,
+    lighting_asset_reconstruction: bool,
 };
 
 const Manifest = struct {
@@ -346,7 +349,8 @@ fn inspect(init: std.process.Init, run_path: []const u8) !void {
         !capabilities.navigation_lineage or
         !capabilities.population_activity or
         !capabilities.deterministic_render_state or
-        !capabilities.ranged_combat)
+        !capabilities.ranged_combat or
+        !capabilities.authored_lighting or capabilities.lighting_schema != 1 or !capabilities.lighting_asset_reconstruction)
     {
         return error.InvalidEvidenceCapabilities;
     }

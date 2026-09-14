@@ -1062,6 +1062,7 @@ pub const SdlBackend = struct {
                         .vertex_buffer = vertex_buffer,
                         .vertex_count = @intCast(source.vertices.len),
                         .vertex_format = .pos_normal_uv,
+                        .bounds = mesh_module.Bounds.fromVertices(source.vertices),
                         .device = self.device,
                         .index_buffer = index_buffer,
                         .index_count = @intCast(source.indices.len),

@@ -8,7 +8,7 @@
 const std = @import("std");
 const protocol = @import("sandbox_developer_protocol");
 
-pub const agent_contract_revision: u16 = 5;
+pub const agent_contract_revision: u16 = 6;
 
 pub const Effect = enum {
     read_only,
@@ -81,6 +81,7 @@ pub const Catalog = struct {
     invariants: []const []const u8,
     operations: []const OperationDescriptor,
     vehicle_fields: []const protocol.vehicle.Field,
+    lighting_fields: []const protocol.lighting.Field,
 };
 
 pub const SuggestedOperation = struct {
@@ -182,6 +183,12 @@ const invariants = [_][]const u8{
     "Selection and camera operations affect editor presentation; crate edits affect session authority; save is durable persistence.",
 };
 
+const lighting_revision_parameters = [_]ParameterDescriptor{
+    .{ .name = "target", .flag = "--target", .kind = .target, .source_operation = "lighting.list", .description = "Lighting asset discovered in this run." },
+    .{ .name = "expected_revision", .flag = "--expected-revision", .kind = .unsigned_integer, .source_operation = "lighting.inspect", .description = "Exact current lighting session revision." },
+};
+const lighting_value_parameters = lighting_revision_parameters ++ [_]ParameterDescriptor{.{ .name = "value", .flag = "--value", .kind = .json_object, .source_operation = "lighting.inspect", .description = "Complete tagged environment or fixture value copied from inspection; linear color, lux/candela, metres and radians." }};
+
 const material_revision_parameters = [_]ParameterDescriptor{
     .{ .name = "target", .flag = "--target", .kind = .target, .source_operation = "content.list", .description = "Material asset or mesh binding discovered in this run." },
     .{ .name = "expected_revision", .flag = "--expected-revision", .kind = .unsigned_integer, .source_operation = "material.inspect", .description = "Exact current material or mesh-binding session revision." },
@@ -220,6 +227,16 @@ const operations = [_]OperationDescriptor{
     .{ .id = "vehicle.measure", .command = &.{ "vehicle", "measure" }, .summary = "Measure an immutable candidate in a separate matching headless process.", .endpoint_schema = protocol.vehicle_schema, .effect = .evidence_capture, .completion = .admitted_then_poll, .availability = .live_editor_endpoint, .parameters = &vehicle_value_parameters, .poll_operation = "vehicle.result", .terminal_follow_up = &.{"vehicle.inspect"}, .example_argv = &.{ "vehicle", "measure", "--target", "persistent-entity:1:1", "--expected-revision", "0", "--expected-asset-revision", "1", "--value", vehicle_example_value } },
     .{ .id = "vehicle.preview", .command = &.{ "vehicle", "preview" }, .summary = "Preview only candidate visual bindings at the selected instance revision.", .endpoint_schema = protocol.vehicle_schema, .effect = .editor_presentation, .completion = .admitted_then_poll, .availability = .live_editor_endpoint, .parameters = &vehicle_value_parameters, .poll_operation = "vehicle.result", .terminal_follow_up = &.{"vehicle.inspect"}, .example_argv = &.{ "vehicle", "preview", "--target", "persistent-entity:1:1", "--expected-revision", "0", "--expected-asset-revision", "1", "--value", vehicle_example_value } },
     .{ .id = "vehicle.clear-preview", .command = &.{ "vehicle", "clear-preview" }, .summary = "Clear the disposable vehicle visual preview.", .endpoint_schema = protocol.vehicle_schema, .effect = .editor_presentation, .completion = .admitted_then_poll, .availability = .live_editor_endpoint, .parameters = &vehicle_revision_parameters, .poll_operation = "vehicle.result", .terminal_follow_up = &.{"vehicle.inspect"}, .example_argv = &.{ "vehicle", "clear-preview", "--target", "persistent-entity:1:1", "--expected-revision", "0", "--expected-asset-revision", "1" } },
+    .{ .id = "lighting.list", .command = &.{ "lighting", "list" }, .summary = "List lighting assets, effective preset and authoring availability.", .endpoint_schema = protocol.lighting_schema, .effect = .read_only, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &.{}, .terminal_follow_up = &.{"lighting.inspect"}, .preconditions = &.{"Discover targets with lighting.list; inspect before editing."}, .rejections = &.{ "target_missing", "stale_revision", "invalid_value", "wrong_value_kind", "preview_owned_by_another_producer", "persistence_unavailable", "persistence_failed", "nothing_to_undo", "nothing_to_redo" }, .example_argv = &.{ "lighting", "list" } },
+    .{ .id = "lighting.inspect", .command = &.{ "lighting", "inspect" }, .summary = "Inspect saved, session and producer-owned preview values.", .endpoint_schema = protocol.lighting_schema, .effect = .read_only, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &target_parameter, .terminal_follow_up = &.{"lighting.inspect"}, .preconditions = &.{"Discover targets with lighting.list; inspect before editing."}, .rejections = &.{ "target_missing", "stale_revision", "invalid_value", "wrong_value_kind", "preview_owned_by_another_producer", "persistence_unavailable", "persistence_failed", "nothing_to_undo", "nothing_to_redo" }, .example_argv = &.{ "lighting", "inspect", "--target", "content-asset:1:1" } },
+    .{ .id = "lighting.preview", .command = &.{ "lighting", "preview" }, .summary = "Preview a complete lighting value.", .endpoint_schema = protocol.lighting_schema, .effect = .editor_presentation, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &lighting_value_parameters, .terminal_follow_up = &.{"lighting.inspect"}, .preconditions = &.{"Discover targets with lighting.list; inspect before editing."}, .rejections = &.{ "target_missing", "stale_revision", "invalid_value", "wrong_value_kind", "preview_owned_by_another_producer", "persistence_unavailable", "persistence_failed", "nothing_to_undo", "nothing_to_redo" }, .example_argv = &.{ "lighting", "preview", "--target", "content-asset:1:1", "--expected-revision", "1", "--value", "{\"environment\":{}}" } },
+    .{ .id = "lighting.clear-preview", .command = &.{ "lighting", "clear-preview" }, .summary = "Discard this producer lighting preview.", .endpoint_schema = protocol.lighting_schema, .effect = .editor_presentation, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &lighting_revision_parameters, .terminal_follow_up = &.{"lighting.inspect"}, .preconditions = &.{"Discover targets with lighting.list; inspect before editing."}, .rejections = &.{ "target_missing", "stale_revision", "invalid_value", "wrong_value_kind", "preview_owned_by_another_producer", "persistence_unavailable", "persistence_failed", "nothing_to_undo", "nothing_to_redo" }, .example_argv = &.{ "lighting", "clear-preview", "--target", "content-asset:1:1", "--expected-revision", "1" } },
+    .{ .id = "lighting.apply", .command = &.{ "lighting", "apply" }, .summary = "Apply one validated lighting value at the presentation boundary.", .endpoint_schema = protocol.lighting_schema, .effect = .editor_presentation, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &lighting_value_parameters, .terminal_follow_up = &.{"lighting.inspect"}, .preconditions = &.{"Discover targets with lighting.list; inspect before editing."}, .rejections = &.{ "target_missing", "stale_revision", "invalid_value", "wrong_value_kind", "preview_owned_by_another_producer", "persistence_unavailable", "persistence_failed", "nothing_to_undo", "nothing_to_redo" }, .example_argv = &.{ "lighting", "apply", "--target", "content-asset:1:1", "--expected-revision", "1", "--value", "{\"environment\":{}}" } },
+    .{ .id = "lighting.revert", .command = &.{ "lighting", "revert" }, .summary = "Restore the committed lighting asset in this session.", .endpoint_schema = protocol.lighting_schema, .effect = .editor_presentation, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &lighting_revision_parameters, .terminal_follow_up = &.{"lighting.inspect"}, .preconditions = &.{"Discover targets with lighting.list; inspect before editing."}, .rejections = &.{ "target_missing", "stale_revision", "invalid_value", "wrong_value_kind", "preview_owned_by_another_producer", "persistence_unavailable", "persistence_failed", "nothing_to_undo", "nothing_to_redo" }, .example_argv = &.{ "lighting", "revert", "--target", "content-asset:1:1", "--expected-revision", "1" } },
+    .{ .id = "lighting.undo", .command = &.{ "lighting", "undo" }, .summary = "Undo the last committed session edit for this target.", .endpoint_schema = protocol.lighting_schema, .effect = .editor_presentation, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &lighting_revision_parameters, .terminal_follow_up = &.{"lighting.inspect"}, .preconditions = &.{"Discover targets with lighting.list; inspect before editing."}, .rejections = &.{ "target_missing", "stale_revision", "invalid_value", "wrong_value_kind", "preview_owned_by_another_producer", "persistence_unavailable", "persistence_failed", "nothing_to_undo", "nothing_to_redo" }, .example_argv = &.{ "lighting", "undo", "--target", "content-asset:1:1", "--expected-revision", "1" } },
+    .{ .id = "lighting.redo", .command = &.{ "lighting", "redo" }, .summary = "Redo the last undone session edit for this target.", .endpoint_schema = protocol.lighting_schema, .effect = .editor_presentation, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &lighting_revision_parameters, .terminal_follow_up = &.{"lighting.inspect"}, .preconditions = &.{"Discover targets with lighting.list; inspect before editing."}, .rejections = &.{ "target_missing", "stale_revision", "invalid_value", "wrong_value_kind", "preview_owned_by_another_producer", "persistence_unavailable", "persistence_failed", "nothing_to_undo", "nothing_to_redo" }, .example_argv = &.{ "lighting", "redo", "--target", "content-asset:1:1", "--expected-revision", "1" } },
+    .{ .id = "lighting.activate", .command = &.{ "lighting", "activate" }, .summary = "Activate an authored environment preset.", .endpoint_schema = protocol.lighting_schema, .effect = .editor_presentation, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &lighting_revision_parameters, .terminal_follow_up = &.{"lighting.inspect"}, .preconditions = &.{"Discover targets with lighting.list; inspect before editing."}, .rejections = &.{ "target_missing", "stale_revision", "invalid_value", "wrong_value_kind", "preview_owned_by_another_producer", "persistence_unavailable", "persistence_failed", "nothing_to_undo", "nothing_to_redo" }, .example_argv = &.{ "lighting", "activate", "--target", "content-asset:1:1", "--expected-revision", "1" } },
+    .{ .id = "lighting.commit", .command = &.{ "lighting", "commit" }, .summary = "Atomically save this lighting target and the active preset.", .endpoint_schema = protocol.lighting_schema, .effect = .durable_persistence, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &lighting_revision_parameters, .terminal_follow_up = &.{"lighting.inspect"}, .preconditions = &.{"Discover targets with lighting.list; inspect before editing."}, .rejections = &.{ "target_missing", "stale_revision", "invalid_value", "wrong_value_kind", "preview_owned_by_another_producer", "persistence_unavailable", "persistence_failed", "nothing_to_undo", "nothing_to_redo" }, .example_argv = &.{ "lighting", "commit", "--target", "content-asset:1:1", "--expected-revision", "1" } },
     .{ .id = "material.assign", .command = &.{ "material", "assign" }, .summary = "Apply a material assignment to a mesh in the session.", .endpoint_schema = protocol.material_schema, .effect = .editor_presentation, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &material_assignment_parameters, .terminal_follow_up = &.{"material.inspect"}, .preconditions = &.{"Discover mesh and material IDs with content.list; inspect mesh binding revision."}, .rejections = &.{ "target_missing", "wrong_target_kind", "material_missing", "stale_revision", "preview_owned_by_another_producer" }, .example_argv = &.{ "material", "assign", "--target", "content-asset:1:1", "--expected-revision", "1", "--material", "content-asset:1:2" } },
     .{ .id = "material.preview-assignment", .command = &.{ "material", "preview-assignment" }, .summary = "Preview a material on a mesh without changing its session assignment.", .endpoint_schema = protocol.material_schema, .effect = .editor_presentation, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &material_assignment_parameters, .terminal_follow_up = &.{"material.inspect"}, .preconditions = &.{"Discover mesh and material IDs with content.list; inspect mesh binding revision."}, .rejections = &.{ "target_missing", "wrong_target_kind", "material_missing", "stale_revision", "preview_owned_by_another_producer" }, .example_argv = &.{ "material", "preview-assignment", "--target", "content-asset:1:1", "--expected-revision", "1", "--material", "content-asset:1:2" } },
     .{ .id = "material.inspect", .command = &.{ "material", "inspect" }, .summary = "Inspect committed, session, and preview material values and their revisions.", .endpoint_schema = protocol.material_schema, .effect = .read_only, .completion = .synchronous, .availability = .live_editor_endpoint, .parameters = &target_parameter, .terminal_follow_up = &.{"material.inspect"}, .preconditions = &.{"Discover material identity through content.list; inspect before a revisioned edit."}, .rejections = &.{ "target_missing", "wrong_target_kind", "material_missing", "stale_revision", "invalid_material", "texture_missing", "texture_color_space", "preview_owned_by_another_producer", "persistence_unavailable", "persistence_failed" }, .example_argv = &.{ "material", "inspect", "--target", "content-asset:1:1" } },
@@ -517,6 +534,7 @@ pub fn catalog() Catalog {
         .invariants = &invariants,
         .operations = &operations,
         .vehicle_fields = &protocol.vehicle.fields,
+        .lighting_fields = &protocol.lighting.fields,
     };
 }
 
@@ -538,6 +556,11 @@ pub fn catalogDigest() [32]u8 {
         hashString(&hasher, @tagName(field.group));
         hashString(&hasher, field.unit);
         hashString(&hasher, @tagName(field.effect));
+        hashString(&hasher, field.description);
+    }
+    for (protocol.lighting.fields) |field| {
+        hashString(&hasher, field.path);
+        hashString(&hasher, field.unit);
         hashString(&hasher, field.description);
     }
     for (operations) |operation| {
@@ -610,6 +633,18 @@ pub fn descriptorForCommand(command: protocol.Command) *const OperationDescripto
             .preview => "vehicle.preview",
             .clear_preview => "vehicle.clear-preview",
         },
+        .lighting_list => "lighting.list",
+        .lighting_inspect => "lighting.inspect",
+        .lighting_edit => |value| switch (value.action) {
+            .preview => "lighting.preview",
+            .clear_preview => "lighting.clear-preview",
+            .apply => "lighting.apply",
+            .revert => "lighting.revert",
+            .undo => "lighting.undo",
+            .redo => "lighting.redo",
+            .activate => "lighting.activate",
+            .commit => "lighting.commit",
+        },
         .material_inspect => "material.inspect",
         .material_edit => |value| switch (value.action) {
             .preview => "material.preview",
@@ -660,6 +695,10 @@ pub fn responseGuidance(
             .vehicle_outcome => |value| {
                 next_buffer[0] = if (value.disposition == .pending) .{ .operation = "vehicle.result", .transaction_id = value.transaction_id } else .{ .operation = "vehicle.inspect", .target = .{ .persistent_entity = value.target } };
                 return .{ .terminal = value.disposition != .pending, .next = next_buffer[0..1] };
+            },
+            .lighting_outcome => |value| {
+                next_buffer[0] = .{ .operation = "lighting.inspect", .target = .{ .content_asset = value.target } };
+                return .{ .terminal = true, .next = next_buffer[0..1] };
             },
             .material_outcome => |value| {
                 next_buffer[0] = .{ .operation = "material.inspect", .target = .{ .content_asset = value.target } };
@@ -721,7 +760,7 @@ pub fn responseGuidance(
 }
 
 test "agent catalog is complete, unique, and separate from the wire digest" {
-    try std.testing.expectEqual(@as(usize, 3 + std.meta.fields(protocol.Command).len + 6 + 6), operations.len);
+    try std.testing.expectEqual(@as(usize, 3 + std.meta.fields(protocol.Command).len + std.meta.fields(protocol.vehicle.Action).len - 1 + std.meta.fields(protocol.material.Action).len - 1 + std.meta.fields(protocol.lighting.Action).len - 1), operations.len);
     for (operations, 0..) |operation, index| {
         try std.testing.expect(operation.id.len != 0);
         try std.testing.expect(operation.command.len != 0);

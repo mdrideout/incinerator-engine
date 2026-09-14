@@ -233,6 +233,7 @@ pub const FrameInput = struct {
     viewport: editor_contract.ViewportInput,
     selection: editor_contract.SelectionInput,
     content_assets: []const engine.assets.Entry,
+    lighting: ?@import("lighting_authoring_contract").Input = null,
     material: ?@import("material_authoring_contract").Input = null,
     vehicle: ?@import("vehicle_authoring_contract").Input = null,
     frame_timer: *const timing.FrameTimer,
@@ -864,6 +865,15 @@ pub const Owner = opaque {
     ) void {
         const capture = ownerState(self).incident orelse return;
         capture.observeAuthoredChange(evidence);
+    }
+
+    pub fn recordLightingChange(self: *Owner, evidence: @import("lighting_authoring_contract").Evidence, tick: u64, frame: u64) void {
+        const capture = ownerState(self).incident orelse return;
+        capture.observeLightingChange(evidence, tick, frame);
+    }
+    pub fn recordLighting(self: *Owner, library: @import("content").lighting_library.Library, resolved: []const @import("lighting_composition.zig").Resolved, tick: u64, frame: u64, shadow_views: usize, caster_draws: u64) void {
+        const capture = ownerState(self).incident orelse return;
+        capture.observeLighting(library, resolved, tick, frame, shadow_views, caster_draws);
     }
 
     pub fn recordMaterialChange(self: *Owner, evidence: @import("material_authoring_contract").Evidence, tick: u64, frame: u64) void {
@@ -1595,6 +1605,7 @@ pub const Owner = opaque {
             .viewport = frame.viewport,
             .selection = frame.selection,
             .content_assets = frame.content_assets,
+            .lighting = frame.lighting,
             .material = frame.material,
             .vehicle = frame.vehicle,
             .frame_timing = &frame_timing_view,

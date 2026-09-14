@@ -4781,7 +4781,7 @@ test "cold restore derives blocked destination state from retained gates" {
     try std.testing.expect(!gates.north_open);
     try std.testing.expect(!gates.south_open);
     try std.testing.expectEqual(
-        @as(u32, sandbox_district_recipe.static_box_count) * 2 + 2,
+        (try expectedResidentDistrictBodyCount(&restored)) + 2,
         restored.bodyCount(),
     );
     const blocked = try restored.npc(npc_id);
@@ -4814,7 +4814,7 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
             navigation_east_coord,
         );
         try std.testing.expectEqual(
-            @as(u32, sandbox_district_recipe.static_box_count) * 2,
+            (try expectedResidentDistrictBodyCount(&simulation)),
             simulation.bodyCount(),
         );
 
@@ -4836,7 +4836,7 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
         try std.testing.expectEqual(@as(usize, 1), simulation.npcCount());
         try std.testing.expectEqual(@as(u32, 1), simulation.diagnostics().npc.controller_count);
         try std.testing.expectEqual(
-            @as(u32, sandbox_district_recipe.static_box_count) * 2,
+            (try expectedResidentDistrictBodyCount(&simulation)),
             simulation.bodyCount(),
         );
         try std.testing.expectEqual(@as(usize, 1), (try simulation.npcPresentation(0)).len);
@@ -4859,7 +4859,7 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
         }
         try std.testing.expect(observed_waiting);
         try std.testing.expectEqual(
-            @as(u32, sandbox_district_recipe.static_box_count),
+            (try expectedResidentDistrictBodyCount(&simulation)),
             simulation.bodyCount(),
         );
         try std.testing.expectEqual(@as(u32, 1), simulation.diagnostics().npc.controller_count);
@@ -4890,7 +4890,7 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
         }
         try std.testing.expect(observed_transfer);
         try std.testing.expectEqual(
-            @as(u32, sandbox_district_recipe.static_box_count) * 2,
+            (try expectedResidentDistrictBodyCount(&simulation)),
             simulation.bodyCount(),
         );
         try std.testing.expectEqual(@as(u32, 1), simulation.diagnostics().npc.controller_count);
@@ -4904,7 +4904,7 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
         try std.testing.expect(!dormant.controller_present);
         try std.testing.expectEqual(@as(u32, 0), simulation.diagnostics().npc.controller_count);
         try std.testing.expectEqual(
-            @as(u32, sandbox_district_recipe.static_box_count),
+            (try expectedResidentDistrictBodyCount(&simulation)),
             simulation.bodyCount(),
         );
 
@@ -4919,7 +4919,7 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
         try std.testing.expect(resumed.controller_present);
         try std.testing.expectEqual(@as(u32, 1), simulation.diagnostics().npc.controller_count);
         try std.testing.expectEqual(
-            @as(u32, sandbox_district_recipe.static_box_count) * 2,
+            (try expectedResidentDistrictBodyCount(&simulation)),
             simulation.bodyCount(),
         );
         saved = try simulation.save(allocator);
@@ -4934,7 +4934,7 @@ test "real Jolt NPC patrol waits crosses generations suspends and restores once"
     try std.testing.expectEqual(@as(usize, 1), restored.npcCount());
     try std.testing.expectEqual(@as(usize, 3), restored.entityCount());
     try std.testing.expectEqual(
-        @as(u32, sandbox_district_recipe.static_box_count) * 2,
+        (try expectedResidentDistrictBodyCount(&restored)),
         restored.bodyCount(),
     );
     try std.testing.expectEqual(@as(u32, 1), restored.diagnostics().npc.controller_count);
@@ -5206,9 +5206,13 @@ test "completed-tick encounter authority chases and damages through vitals" {
         return error.CharacterVitalsMissing;
     try std.testing.expect(player_vitals.current_health < player_vitals.maximum_health);
 
-    var debug_lines: [256]engine.physics_debug.Line = undefined;
-    var debug_triangles: [1]engine.physics_debug.Triangle = undefined;
-    var debug_storage = engine.physics_debug.Storage.init(&debug_lines, &debug_triangles);
+    var counting_storage = engine.physics_debug.Storage.init(&.{}, &.{});
+    const counted = try simulation.extractPhysicsDebug(.{ .shapes = false, .bounds = true, .contacts = false, .centers_of_mass = false, .velocities = false }, &counting_storage);
+    var line_count: usize = 0;
+    for (counted.category_stats) |stats| line_count += @intCast(stats.lines.attempted);
+    const debug_lines = try allocator.alloc(engine.physics_debug.Line, line_count);
+    defer allocator.free(debug_lines);
+    var debug_storage = engine.physics_debug.Storage.init(debug_lines, &.{});
     const debug_batch = try simulation.extractPhysicsDebug(.{
         .shapes = false,
         .bounds = true,
@@ -5815,4 +5819,16 @@ test "EA2 reconfiguration owns variable definitions across real physics save and
     const divergent = try replayCapture(allocator, parsed.view(), content);
     try std.testing.expect(divergent == .divergent);
     try std.testing.expectEqual(@as(u64, 2), divergent.divergent.tick_index);
+}
+
+fn expectedResidentDistrictBodyCount(world: *Simulation) !u32 {
+    var total: u32 = 0;
+    for (try world.districtPresentation()) |draw| {
+        const build = @import("sandbox_district_recipe").build(draw.build.coord, @import("sandbox_district_recipe").current_recipe_version);
+        total += switch (build) {
+            .ready => |value| value.static_box_count,
+            .failed => return error.TestDistrictRecipeUnavailable,
+        };
+    }
+    return total;
 }

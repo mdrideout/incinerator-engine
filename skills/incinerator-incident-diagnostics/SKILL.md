@@ -1,6 +1,6 @@
 ---
 name: incinerator-incident-diagnostics
-description: Inspect and diagnose schema-5 Incinerator Engine human-test incident folders containing live manifests, authoritative ranged-combat evidence, deterministic render state, stable authored-population and navigation lineage, anomaly lifecycle events, materialized NDJSON windows, trailing images, semantic-ID evidence, shortcut delivery records, and accepted-ingress replay captures. Use when a tester supplies an incident folder or LLM handoff, flags a visual/gameplay/firearm/render/population/navigation/input anomaly, asks what happened near a timestamp, or asks to reproduce and verify a repair.
+description: Inspect and diagnose schema-6 Incinerator Engine human-test incident folders containing live manifests, authoritative ranged-combat evidence, deterministic render state, stable authored-population and navigation lineage, anomaly lifecycle events, materialized NDJSON windows, trailing images, semantic-ID evidence, shortcut delivery records, and accepted-ingress replay captures. Use when a tester supplies an incident folder or LLM handoff, flags a visual/gameplay/firearm/render/population/navigation/input anomaly, asks what happened near a timestamp, or asks to reproduce and verify a repair.
 ---
 
 # Incinerator Incident Diagnostics
@@ -95,6 +95,13 @@ For deterministic visual anomalies, search `kind="render_state"` and correlate
 `color_geometry=0` is expected for ordinary product solids; debug geometry may
 use the exact unlit color path. Render state explains the selected contract,
 not whether the resulting image is perceptually correct.
+For lighting, correlate `lighting_frame` and `light_instance` with
+`lighting_library` and `lighting_change`. Check the effective emitter pose,
+parent generation, surface residency, exposure, shadow views and emission
+binding. `lighting-assets/<sha256>.iclight` preserves the exact presented
+library (including previews). Verify its digest before reconstruction. Authority
+replay cannot establish lighting correctness; current meshes/materials and
+frame cadence still constrain graphical reproduction.
 For ranged combat, search `kind="firearm"` by actor identity and action
 sequence. Reconstruct one chain: semantic `weapon_toggle_pressed`,
 `fire_pressed`, or `reload_pressed`; client submission; terminal authoritative

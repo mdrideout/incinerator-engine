@@ -63,7 +63,7 @@ fn verifyCommon(scene: content.bundle.BundleView, coord: district.ChunkCoord) !v
     if (std.mem.allEqual(u8, &scene.source_digest, 0)) return error.MissingSourceDigest;
     if (scene.nodes.len != 2 or scene.meshes.len != 1 or scene.primitives.len != 1 or
         scene.materials.len != 1 or scene.textures.len != 1 or scene.vertices.len != 3 or
-        scene.indices.len != 3 or scene.static_boxes.len != sandbox_recipe.static_box_count or
+        scene.indices.len != 3 or scene.static_boxes.len != sandbox_recipe.build(coord, sandbox_recipe.current_recipe_version).ready.boxes().len or
         scene.navigation_nodes.len != 12 or scene.navigation_edges.len != sandbox_recipe.build(coord, sandbox_recipe.current_recipe_version).ready.navigation_edge_count)
     {
         return error.InvalidFixtureCounts;

@@ -4,6 +4,7 @@ const std = @import("std");
 pub const bundle = @import("district_bundle.zig");
 pub const catalog = @import("catalog.zig");
 pub const asset_catalog = @import("asset_catalog.zig");
+pub const lighting_library = @import("lighting_library.zig");
 pub const material_library = @import("material_library.zig");
 
 pub const max_bundle_key_bytes: usize = 96;
@@ -227,6 +228,29 @@ pub const ContentRoot = struct {
             },
             .failed => |failure| .{ .failed = .{ .validation = failure } },
         };
+    }
+
+    /// Read-only asset dependencies from the exact installed district catalog.
+    /// Clients can validate visual content without importing authority admission.
+    pub fn loadAssetCatalog(self: *const ContentRoot, io: std.Io, allocator: std.mem.Allocator) !asset_catalog.OwnedCatalog {
+        var installed = switch (try self.loadCatalog(io, allocator, .{})) {
+            .loaded => |value| value,
+            .failed => return error.InstalledCatalogUnavailable,
+        };
+        defer installed.deinit();
+        var builder = asset_catalog.Builder.init(allocator);
+        defer builder.deinit();
+        for (installed.view().entries) |entry| {
+            var scene = switch (try self.load(io, allocator, try BundleKey.parse(entry.bundle_key), .{})) {
+                .scene => |value| value,
+                .failed => return error.InstalledBundleUnavailable,
+            };
+            defer scene.deinit();
+            const expected = ExpectedBundleIdentity{ .format_version = entry.bundle.format_version, .schema_cohort = entry.bundle.schema_cohort, .source_digest = entry.bundle.source_digest, .integrity_digest = entry.bundle.integrity_digest };
+            if (expected.mismatch(scene.bundleIdentity()) != null) return error.InstalledBundleIdentityMismatch;
+            try builder.appendBundle(entry.semantic_id, &scene);
+        }
+        return builder.finish();
     }
 
     /// Load the one canonical district catalog from its fixed installed path.

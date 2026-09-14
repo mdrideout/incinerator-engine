@@ -1,6 +1,6 @@
 # Engine Authoring Foundation
 
-**Status:** EA0, EA0.5, Phase 7, and EA1 implemented; EA2 vehicle authoring implemented; EA3 is next
+**Status:** EA0, EA0.5, Phase 7, and EA1 implemented; EA2 vehicle authoring implemented; EA3 authored lighting implemented; EA4/EA5 pending
 
 **Date:** 2026-08-18
 
@@ -29,8 +29,8 @@ those real consumers.
 | Concern | Proven today | Missing practical capability |
 |---|---|---|
 | Textures/materials | GLB/glTF with PNG/JPEG, five conventional material inputs, correct color/data texture roles, stable game assets, live assignment, shared revisioned UI/CLI authoring, neutral/world preview, durable commit/restart | Further material families when a game requires them; shader graphs and texture compression remain deferred |
-| Vehicles | Two game-owned archetypes, exact admitted definitions, independent axles/drivetrain, Vehicle Lab/CLI, safe revisioned edits/rebuilds, commit/restart, reliable client admission and complete 60 Hz characterization | Further human handling refinement; damage/traffic require their own game work |
-| Lighting | Renderer-neutral directional sun plus ambient value, conventional lit shader, Render Lab evidence | Editable world-owned sun, stable point lights, selection/gizmos, persistence and AI control |
+| Vehicles | Three game-owned FWD/RWD/AWD archetypes, exact admitted definitions, independent axles/drivetrain, Vehicle Lab/CLI, safe revisioned edits/rebuilds, commit/restart, reliable client admission and complete 60 Hz characterization | Further human handling refinement; damage/traffic require their own game work |
+| Lighting | Renderer-neutral directional sun plus ambient value, conventional lit shader, Render Lab evidence | Authored sun/point/spot fixtures, attachments, HDR/display response, direct shadows, selection/gizmos, persistence and AI control |
 | Authoring | EA0 stable target identity and transaction envelope; crate-specific selection, typed relocation, revisions, undo/redo, and durable save | Additional owner-specific typed editors; no generic property bag |
 | Maps | Fresh game-owned industrial geometry, materials, matching collision/navigation, spawns, deterministic cooking and streaming | Game-owned map asset, placed-asset workflow, reusable kit, editor placement, deterministic recook |
 | Diagnostics | Structured workspace, authored-change evidence, panel metadata, incident timelines/images/replay, semantic draw/gameplay evidence, and an implemented EA0.5 live-control path | Separate engine/game build/content identity and accepted per-feature schemas as later phases add them |
@@ -43,7 +43,7 @@ those real consumers.
 | Assets | Stable IDs, cooked formats, residency | Import/cook/validate | Source assets and manifests | Palettes and semantic inspectors |
 | Materials | Renderer-neutral values and GPU binding | Material inspection/edit requests | Material definitions and texture files | Title previews and conventions |
 | Vehicles | Physics capability and typed reconfiguration | Vehicle Lab/control adapter | Archetypes, tuning and visual bindings | Title tuning presets/tests |
-| Lights | Directional/point-light contracts and evaluation | Lighting Lab/gizmos | Presets, placements and time policy | Title lighting workflows |
+| Lights | Directional/point/spot contracts and evaluation | Lighting Lab/gizmos | Presets, placements and time policy | Title lighting workflows |
 | Maps | Placement/collision/navigation/streaming primitives | Selection, transform, save/cook | Ground, roads, buildings and layouts | Map kit and title validation |
 | Diagnostics | Generic IDs, lifecycle, revisions, timing, outcomes | Workspace and local query/control | Semantic names and expected rules | Custom panels/evidence projections |
 
@@ -213,25 +213,40 @@ or invalid edits reject identically, replay/save identity remains exact, an
 agent can change-test-measure-revert without private code knowledge, and all
 solo/listen/dedicated authority placements agree.
 
-### EA3 — Authored sun and point lighting
+### EA3 — Authored lighting and fixture examples
 
-- Retain one renderer-neutral directional sun/environment light and make its
-  game-owned preset editable.
-- Add stable, placed point-light identities with position, color, intensity,
-  range, enabled state, and explicit presentation-only ownership.
-- Add Lighting Lab, selection, light gizmos/contribution overlay, preview,
-  revisioned commit, undo/redo, and the same developer-control path.
-- Include complete selected/global light state and draw correlation in incident
-  evidence.
-- Validate one daytime preset and one deliberately different evening/local-
-  light scene on the native Metal product.
+On 2026-09-13 the product owner expanded the brief to include lamp posts,
+street lights, neon, illuminated store signs, an overhead-lit shop visible
+through its window, vehicle headlights and additional varied fixtures.
+The [source-reviewed EA3 plan](ea3-authored-lighting.md) supplies the concrete
+sequence, ownership decisions and acceptance matrix. EA3 now implements those
+paths; see the [validation and running guide](../validation/ea3-authored-lighting.md).
 
-Acceptance: UI and agent clients can select, change, verify, persist, and revert
-sun/point-light state; editor-disabled rendering consumes only cooked game
-content; lighting cannot affect gameplay authority.
+- Make game-owned sun/environment presets editable and persistent.
+- Add stable point and spot emitters, fixture/member identity and local poses,
+  including attachments to the same interpolated vehicle/carryable presentation.
+- Distinguish surface emission, direct illumination and bloom. The renderer uses
+  linear HDR, manual exposure and tone mapping for bright fixtures.
+- Add Lighting Lab, bounded selection/gizmos, preview, revisioned apply,
+  undo/redo, commit and the same typed developer-control path.
+- Basic direct shadows and a real shop opening/interior let walls, window
+  frames and vehicles block illumination.
+  This explicitly revisits the old blanket shadow deferral; it does not
+  authorize a speculative shadow framework or general render graph.
+- Record effective light/parent/material/display state and draw correlation;
+  distinguish presentation reconstruction from authority replay.
+- Validate the complete fixture street in day/evening/night, including moving
+  headlights, streaming, hidden Metal rendering and installed content.
 
-Shadows, cascades, clustered/deferred lighting, image-based lighting, fog, and
-day/night gameplay authority remain separate measured decisions.
+Acceptance: a human and agent can inspect, change, verify, revert and persist
+all named lighting examples; editor-disabled rendering consumes installed game
+assets; presentation lighting does not affect gameplay authority. Exact units,
+frame/color/shadow integration, verification and measured optimization gates
+are defined in the detailed plan.
+
+Global illumination, volumetric fog, advanced glass, automatic exposure and
+full day/night gameplay remain separate decisions. Cascades, area lights and
+clustered lighting require evidence from the actual EA3 scene.
 
 ### EA4 — Game-owned map and construction workflow
 

@@ -19,6 +19,7 @@ pub const Kind = enum(u8) {
     mesh,
     material,
     texture,
+    lighting,
 };
 
 pub const Owner = enum(u8) {
@@ -29,6 +30,7 @@ pub const Owner = enum(u8) {
 pub const SourceFormat = enum(u8) {
     gltf,
     glb,
+    authored,
 };
 
 pub const CookStatus = enum(u8) {
@@ -146,6 +148,7 @@ pub const Details = union(enum) {
     mesh,
     material: MaterialMetadata,
     texture: TextureMetadata,
+    lighting,
 };
 
 /// Immutable cooked-content projection shared by editor UI and developer
@@ -176,7 +179,7 @@ pub const Entry = struct {
         }
         for (self.dependencies) |dependency| try dependency.validate();
         switch (self.details) {
-            .scene, .mesh => {},
+            .scene, .mesh, .lighting => {},
             .material => |material| {
                 try material.validate();
             },

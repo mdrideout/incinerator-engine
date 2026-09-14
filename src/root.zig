@@ -58,3 +58,5 @@ test "public engine surface remains coherent" {
     std.testing.refAllDecls(gameplay_trace);
     std.testing.refAllDecls(runtime);
 }
+
+pub const lighting = @import("engine_contracts").lighting;

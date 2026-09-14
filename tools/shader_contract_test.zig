@@ -23,6 +23,7 @@ const Reflection = struct {
     outputs: []const InterfaceVariable = &.{},
     textures: []const Resource = &.{},
     ubos: []const Resource = &.{},
+    ssbos: []const Resource = &.{},
 };
 
 const ExpectedResource = struct {
@@ -39,10 +40,19 @@ const Contract = struct {
     output_locations: []const u32,
     textures: []const ExpectedResource = &.{},
     ubos: []const ExpectedResource = &.{},
+    ssbos: []const ExpectedResource = &.{},
 };
 
 test "SDL GPU shader interfaces and resources match the renderer contract" {
     const contracts = [_]Contract{
+        .{ .source = "shadow.vert", .reflection = reflections.shadow_vertex, .stage = "vert", .input_locations = &.{0}, .output_locations = &.{}, .ubos = &.{.{ .set = 1, .binding = 0, .block_size = 64 }} },
+        .{ .source = "shadow.frag", .reflection = reflections.shadow_fragment, .stage = "frag", .input_locations = &.{}, .output_locations = &.{} },
+        .{ .source = "primitive.vert", .reflection = reflections.primitive_vertex, .stage = "vert", .input_locations = &.{ 0, 1 }, .output_locations = &.{ 0, 1, 2, 3 }, .ubos = &.{.{ .set = 1, .binding = 0, .block_size = 192 }} },
+        .{ .source = "primitive.frag", .reflection = reflections.primitive_fragment, .stage = "frag", .input_locations = &.{ 0, 1, 2, 3 }, .output_locations = &.{0}, .textures = &.{ .{ .set = 2, .binding = 0 }, .{ .set = 2, .binding = 1 }, .{ .set = 2, .binding = 2 }, .{ .set = 2, .binding = 3 }, .{ .set = 2, .binding = 4 }, .{ .set = 2, .binding = 5 } }, .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 144 }}, .ssbos = &.{ .{ .set = 4, .binding = 1 }, .{ .set = 4, .binding = 2 } } },
+
+        .{ .source = "fullscreen.vert", .reflection = reflections.fullscreen_vertex, .stage = "vert", .input_locations = &.{}, .output_locations = &.{0} },
+        .{ .source = "display.frag", .reflection = reflections.display_fragment, .stage = "frag", .input_locations = &.{0}, .output_locations = &.{0}, .textures = &.{ .{ .set = 2, .binding = 0 }, .{ .set = 2, .binding = 1 } }, .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 16 }} },
+        .{ .source = "bloom.frag", .reflection = reflections.bloom_fragment, .stage = "frag", .input_locations = &.{0}, .output_locations = &.{0}, .textures = &.{.{ .set = 2, .binding = 0 }}, .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 16 }} },
         .{
             .source = "triangle.vert",
             .reflection = reflections.triangle_vertex,
@@ -73,8 +83,9 @@ test "SDL GPU shader interfaces and resources match the renderer contract" {
             .stage = "frag",
             .input_locations = &.{ 0, 1, 2 },
             .output_locations = &.{0},
-            .textures = &.{ .{ .set = 2, .binding = 0 }, .{ .set = 2, .binding = 1 }, .{ .set = 2, .binding = 2 }, .{ .set = 2, .binding = 3 }, .{ .set = 2, .binding = 4 } },
-            .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 128 }},
+            .textures = &.{ .{ .set = 2, .binding = 0 }, .{ .set = 2, .binding = 1 }, .{ .set = 2, .binding = 2 }, .{ .set = 2, .binding = 3 }, .{ .set = 2, .binding = 4 }, .{ .set = 2, .binding = 5 } },
+            .ubos = &.{.{ .set = 3, .binding = 0, .block_size = 144 }},
+            .ssbos = &.{ .{ .set = 4, .binding = 1 }, .{ .set = 4, .binding = 2 } },
         },
         .{
             .source = "visibility.frag",
@@ -136,6 +147,11 @@ test "selected backend artifacts have the expected container and entry point" {
 
 test "generated Metal material sampler slots preserve the SDL binding ABI" {
     for ([_][]const u8{
+        "light_buffer [[buffer(1)]]",
+        "shadow_buffer [[buffer(2)]]",
+        "shadow_maps [[texture(5)]]",
+        "shadow_mapsSmplr [[sampler(5)]]",
+        "settings [[buffer(0)]]",
         "base_color_texture [[texture(0)]]",
         "metallic_roughness_texture [[texture(1)]]",
         "normal_texture [[texture(2)]]",
@@ -171,6 +187,7 @@ fn validateContract(contract: Contract) !void {
     try expectLocations(contract.source, "output", reflection.outputs, contract.output_locations);
     try expectResources(contract.source, "texture", reflection.textures, contract.textures);
     try expectResources(contract.source, "uniform buffer", reflection.ubos, contract.ubos);
+    try expectResources(contract.source, "storage buffer", reflection.ssbos, contract.ssbos);
 }
 
 fn expectLocations(
@@ -237,6 +254,20 @@ fn expectResources(
                 wanted.binding,
             });
             return error.MissingResource;
+        }
+    }
+}
+
+test "indexed light and shadow tables have explicit std140 array strides" {
+    for ([_][]const u8{ reflections.model_fragment, reflections.primitive_fragment }) |reflection| {
+        var parsed = try std.json.parseFromSlice(std.json.Value, std.testing.allocator, reflection, .{});
+        defer parsed.deinit();
+        const root = parsed.value.object;
+        for (root.get("ssbos").?.array.items) |buffer| {
+            const name = buffer.object.get("name").?.string;
+            const definition = root.get("types").?.object.get(buffer.object.get("type").?.string).?;
+            const member = definition.object.get("members").?.array.items[0];
+            try std.testing.expectEqual(@as(i64, if (std.mem.eql(u8, name, "LightBuffer")) 64 else 80), member.object.get("array_stride").?.integer);
         }
     }
 }

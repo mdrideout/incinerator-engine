@@ -7,7 +7,7 @@
 const std = @import("std");
 
 pub const mode_name = "sdl_gpu_metal_deterministic";
-pub const visual_schema_version: u16 = 2;
+pub const visual_schema_version: u16 = 3;
 
 pub const SceneLight = struct {
     /// Normalized world-space direction from a surface toward the sun.
@@ -39,6 +39,11 @@ pub const SurfaceMaterial = struct {
     /// Linear additive emission. It is presentation only and emits no light.
     emissive: [3]f32 = .{ 0, 0, 0 },
     lit: bool = true,
+    /// Fixed display colors for product HUD geometry; excluded from lighting,
+    /// exposure, bloom and shadow casting. Authored surfaces remain scene-linear.
+    display_space: bool = false,
+    /// Presentation rigs can exclude luminous lens surfaces from occlusion.
+    casts_shadows: bool = true,
     metallic: f32 = 0,
     roughness: f32 = 1,
     normal_scale: f32 = 1,

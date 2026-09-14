@@ -14,6 +14,7 @@ const replicated_world = @import("replicated_world");
 const sandbox_district_recipe = @import("sandbox_district_recipe");
 const presentation = @import("mp2_presentation");
 const renderer = presentation.renderer;
+const lighting_composition = presentation.lighting_composition;
 const primitives = presentation.primitives;
 const mesh = presentation.mesh;
 const camera_module = presentation.camera;
@@ -25,6 +26,8 @@ pub const Scene = struct {
     character: mesh.Mesh,
     cube: mesh.Mesh,
     vehicle_visuals: presentation.vehicle_visuals.Resources,
+    lighting: std.json.Parsed(presentation.content.lighting_library.Library),
+    lighting_frame: lighting_composition.Frame,
     camera: camera_module.Camera = .{ .pitch = -0.25 },
     drag_look: camera_module.DragLook = .{},
     vehicle_prediction_enabled: bool = true,
@@ -48,7 +51,19 @@ pub const Scene = struct {
         defer allocator.free(default_root);
         var vehicle_visuals = try presentation.vehicle_visuals.Resources.init(allocator, io, gpu.getDevice(), try presentation.content.ContentRootPath.parse(configured_root orelse default_root), &@import("game_vehicles").bundle_keys);
         errdefer vehicle_visuals.deinit();
+        var lighting_directory = try std.Io.Dir.openDirAbsolute(io, configured_root orelse default_root, .{});
+        defer lighting_directory.close(io);
+        const lighting = try presentation.content.lighting_library.read(allocator, io, lighting_directory);
+        errdefer lighting.deinit();
+        var root = try presentation.content.ContentRoot.open(io, try presentation.content.ContentRootPath.parse(configured_root orelse default_root));
+        defer root.deinit(io);
+        var world_assets = try root.loadAssetCatalog(io, allocator);
+        defer world_assets.deinit();
+        try lighting.value.validateCatalog(allocator, &.{ world_assets.view(), vehicle_visuals.catalog.view() });
+        try lighting.value.validateVehicleMounts(&@import("game_vehicles").lighting_mount_ids);
         return .{
+            .lighting = lighting,
+            .lighting_frame = .{ .allocator = allocator },
             .gpu = gpu,
             .ground = ground,
             .character = character,
@@ -58,6 +73,8 @@ pub const Scene = struct {
     }
 
     pub fn deinit(self: *Scene) void {
+        self.lighting_frame.deinit();
+        self.lighting.deinit();
         self.vehicle_visuals.deinit();
         self.cube.deinit();
         self.character.deinit();
@@ -108,7 +125,11 @@ pub const Scene = struct {
         client: *const session_client.Client,
         now_ns: u64,
     ) !void {
-        switch (try self.gpu.beginFrame(renderer.Colors.CORNFLOWER_BLUE)) {
+        const environment = self.lighting.value.find(self.lighting.value.active_environment).?.value.environment;
+        self.lighting_frame.begin();
+        try self.appendLighting(null);
+        try self.gpu.setEnvironment(environment);
+        switch (try self.gpu.beginFrame(.{ environment.background[0], environment.background[1], environment.background[2], 1 })) {
             .unavailable => return,
             .ready => {},
         }
@@ -131,6 +152,7 @@ pub const Scene = struct {
             }, 7);
             break;
         }
+        self.gpu.camera_position = .{ self.camera.position[0], self.camera.position[1], self.camera.position[2] };
         const view_projection = self.camera.getViewProjectionMatrix(aspect);
         self.last_combat_hud = self.localCombatHud(client);
         self.gpu.drawMeshWithMaterial(
@@ -267,6 +289,7 @@ pub const Scene = struct {
         for (client.world.vehicleSlice()) |entry| {
             const state = self.presentedVehicle(client, entry, now_ns);
             if (try self.vehicle_visuals.resolve(state.definition.visuals.chassis, .{ .position = state.position, .rotation = state.rotation })) |part| {
+                try self.appendLighting(.{ .kind = .vehicle, .index = state.entity.index, .incarnation = state.entity.generation, .asset = state.definition.archetype.asset, .pose = .{ .position = state.position, .rotation = state.rotation } });
                 self.gpu.drawMeshWithTextures(part.mesh, part.textures, part.material, part.model, view_projection);
             }
             const wheel_poses = try replicated_world.composeVehicleWheelPoses(state, replicated_world.vehicleWheelLayout(state.definition));
@@ -278,6 +301,7 @@ pub const Scene = struct {
         }
         for (client.world.carryableSlice()) |entry| {
             const state = self.presentedCarryable(entry, now_ns);
+            try self.appendLighting(.{ .kind = .carryable, .index = state.entity.index, .incarnation = state.entity.generation, .pose = .{ .position = state.position, .rotation = state.rotation } });
             const scale = zm.scaling(
                 state.half_extents[0] * 2,
                 state.half_extents[1] * 2,
@@ -320,8 +344,27 @@ pub const Scene = struct {
                 view_projection,
             );
         }
-        self.gpu.endRenderPass();
+        for (self.lighting_frame.resolved.items) |resolved| {
+            const visual = resolved.visual orelse continue;
+            if (try self.vehicle_visuals.resolve(.{ .mesh = visual.binding.mesh, .material = visual.binding.material, .local_pose = .{}, .scale = visual.binding.scale }, visual.pose)) |part| {
+                var material = part.material;
+                material.lit = false;
+                material.casts_shadows = false;
+                for (0..3) |axis| material.emissive[axis] *= visual.binding.emissive_scale * visual.color[axis];
+                self.gpu.drawMeshWithTextures(part.mesh, part.textures, material, part.model, view_projection);
+            }
+        }
+        // This client still presents logical district proxies. Surface-bound
+        // emitters contribute only when their real cooked surface is submitted.
+        self.lighting_frame.finish();
+        try self.gpu.lights.set(self.lighting_frame.emitters.items);
+        try self.gpu.endRenderPass();
         try self.gpu.submitFrame();
+    }
+
+    fn appendLighting(self: *Scene, parent: ?lighting_composition.Parent) !void {
+        const environment = self.lighting.value.find(self.lighting.value.active_environment).?.value.environment;
+        for (self.lighting.value.definitions) |definition| if (definition.value == .fixture) try self.lighting_frame.add(definition.id, definition.revision, definition.value.fixture, environment, parent);
     }
 
     fn drawFacingMarker(

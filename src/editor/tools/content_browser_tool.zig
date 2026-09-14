@@ -108,6 +108,7 @@ pub fn draw(state: *State, ctx: *const content_selection.View, requests: *conten
                 .mesh => "Mesh",
                 .material => "Material",
                 .texture => "Texture",
+                .lighting => "Lighting",
             }, .{ .selected = selected })) {
                 requests.submit(.{ .select = entry.id });
             }

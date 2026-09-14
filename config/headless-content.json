@@ -2,147 +2,147 @@
   "schema_version": 1,
   "catalog_semantic_id": "incinerator.industrial.neighborhood",
   "catalog_wire_schema": 1,
-  "content_cohort_fingerprint": "426192e422a78a11eaad25e239b1efd848df8f88dcf52cad5afa182163fa5c78",
-  "catalog_file_sha256": "ac7e9bf10c28fb48fd1d412425a989dbf5432d84a18d76271b2f6ebfa040d6db",
+  "content_cohort_fingerprint": "75b8977de2bf061e9454d87f5a200a3ed3a378ba16e7ab3326cc59cb24a77d52",
+  "catalog_file_sha256": "9ecc3a6c7a613784b6224bd88435e429321ca06c292643b514312ca9d9d965e7",
   "districts": [
     {
       "semantic_id": "district.southwest",
       "coord_x": 0,
       "coord_z": 0,
-      "recipe_version": 10,
-      "bundle_file_sha256": "d40074ff5b3777a34a0ea3e02090319ab8b55705a085d6f505bce05e611ad4cb"
+      "recipe_version": 11,
+      "bundle_file_sha256": "598c51ee6bb47185c5f6b7383b061caa449b7226b5c5a56b075da6c78b25c9e6"
     },
     {
       "semantic_id": "district.southeast",
       "coord_x": 1,
       "coord_z": 0,
-      "recipe_version": 10,
-      "bundle_file_sha256": "1f2ab47daf2949da4ccb3c1a8f9d401ee32997a5115eb702789bebe04a2d3c72"
+      "recipe_version": 11,
+      "bundle_file_sha256": "99eb0eb49e9d3b3ba610f8aca4a55cdf7f0dfde3e582d0d91c048f182729e44c"
     },
     {
       "semantic_id": "district.northwest",
       "coord_x": 0,
       "coord_z": 1,
-      "recipe_version": 10,
-      "bundle_file_sha256": "cd41887470d8d73d6ce6ed9b406f498dd8798f7cccbc33a660fe241a39152ed3"
+      "recipe_version": 11,
+      "bundle_file_sha256": "e53cd7c98f242e6fd427440471de995c3d6a7c10b5df2929a8a01c2ea884f2ac"
     },
     {
       "semantic_id": "district.northeast",
       "coord_x": 1,
       "coord_z": 1,
-      "recipe_version": 10,
-      "bundle_file_sha256": "852d111d7e3527d046739ca5e4bf86b707c45abce6bd4591ad3b201e801b495c"
+      "recipe_version": 11,
+      "bundle_file_sha256": "ee9789f93532691d6c7616d868d3a012e4a212a920ae05388803f72ec7a05b9a"
     },
     {
       "semantic_id": "district.testroad01",
       "coord_x": 0,
       "coord_z": -1,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "67e6e90f393efcfb4e88d209c57b8c357e82e060dda1751e2a379e31f393bc70"
     },
     {
       "semantic_id": "district.testroad02",
       "coord_x": 0,
       "coord_z": -2,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "d74bc7f39c7b8e55fe48588f0beb36c06fa326c783c5087f059a25b9135c2db4"
     },
     {
       "semantic_id": "district.testroad03",
       "coord_x": 0,
       "coord_z": -3,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "f6aab9ed9b542e840f929d4952598a7bc6d04ec051058477fd92896164a6b356"
     },
     {
       "semantic_id": "district.testroad04",
       "coord_x": 0,
       "coord_z": -4,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "17e54d9a7abb5fe37d6bad2ecf1032a10408a52f54282c3b13562a1539a90af5"
     },
     {
       "semantic_id": "district.testroad05",
       "coord_x": 0,
       "coord_z": -5,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "1722938f63f311808269000504633831c2ce2dab34d23703328ee51d2c97d789"
     },
     {
       "semantic_id": "district.testroad06",
       "coord_x": 0,
       "coord_z": -6,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "60fd7e944c2eaca1b2ef575f536baa9ae47e338675224cb5098f0fe55f82664e"
     },
     {
       "semantic_id": "district.testroad07",
       "coord_x": 0,
       "coord_z": -7,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "06007db4588346faa46724c848465f0c953032b2c8b3dc13175793eeddf99723"
     },
     {
       "semantic_id": "district.testroad08",
       "coord_x": 0,
       "coord_z": -8,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "78fc5a36513f6968ece5d7b511322d49b65825722a0290605697085e2fed00e4"
     },
     {
       "semantic_id": "district.testroad09",
       "coord_x": 0,
       "coord_z": -9,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "4cb5817dab098c501f473bbf9227335fb7b30de0042a627b191a0a728e262030"
     },
     {
       "semantic_id": "district.testroad10",
       "coord_x": 0,
       "coord_z": -10,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "aa2c400ca018e1aba603b45f7080cdb12af0be7b31130f7b7af7bef0c6ce8430"
     },
     {
       "semantic_id": "district.testroad11",
       "coord_x": 0,
       "coord_z": -11,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "d214c74537516e56b5288cac0e5080e0ebfcbef71fbae0062e3ff1e88b5a198d"
     },
     {
       "semantic_id": "district.testroad12",
       "coord_x": 0,
       "coord_z": -12,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "0901fd0b3a289207da7d1b4c2a634f52db530814ac60e643c35818426bb1ecbe"
     },
     {
       "semantic_id": "district.testroad13",
       "coord_x": 0,
       "coord_z": -13,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "a43e26482310f466a09d60486e5c651d4e9b97ebc50dfd28f08d1bccd910cb08"
     },
     {
       "semantic_id": "district.testroad14",
       "coord_x": 0,
       "coord_z": -14,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "30c2260953631371abcf41df713ee80c4217d93562ff166a2ec53a349c0431ba"
     },
     {
       "semantic_id": "district.testroad15",
       "coord_x": 0,
       "coord_z": -15,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "a00d622e3f7fbcc5ddf26b4d939ef7a14a538d0dad6eff4b709dd50fb65e00e6"
     },
     {
       "semantic_id": "district.testroad16",
       "coord_x": 0,
       "coord_z": -16,
-      "recipe_version": 10,
+      "recipe_version": 11,
       "bundle_file_sha256": "a811ad48ddc3a33249192fca654be883fe1e7edb78af3ca9ca6e58fb2059caf1"
     }
   ]

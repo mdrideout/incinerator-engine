@@ -9,7 +9,7 @@ const district = @import("district_contract");
 const navigation = @import("navigation_contract");
 const scene = @import("scene.zig");
 
-pub const current_recipe_version: u32 = 10;
+pub const current_recipe_version: u32 = 11;
 pub const catalog_semantic_id = "incinerator.industrial.neighborhood";
 pub const catalog_wire_schema: u16 = 1;
 pub const player_spawn = [3]f32{ -8, 0, 4 };
@@ -18,7 +18,7 @@ pub const carryable_spawn = [3]f32{ -8, 0.5, 6 };
 pub const ground_center = [3]f32{ 32, -1, -480 };
 pub const ground_half_extents = [3]f32{ 64, 1, 576 };
 pub const gate_positions = [2][3]f32{ .{ 32, 1, 72 }, .{ 32, 1, 8 } };
-pub const static_box_count: u8 = scene.boxes[0].len;
+pub const static_box_count: u8 = scene.max_static_box_count;
 pub const blocking_proxy_count: u8 = static_box_count;
 pub const navigation_west_coord = district.ChunkCoord{ .x = 0, .z = 0 };
 pub const navigation_east_coord = district.ChunkCoord{ .x = 1, .z = 0 };
@@ -511,6 +511,7 @@ pub fn build(coord: district.ChunkCoord, recipe_version: u32) district.Procedura
     var found = false;
     inline for (installed_coords, 0..) |installed, index| {
         if (district.ChunkCoord.eql(coord, installed)) {
+            result.static_box_count = scene.boxes[index].len;
             inline for (scene.boxes[index], 0..) |box, box_index| {
                 result.static_boxes[box_index] = .{ .pose = .{ .position = box.position }, .half_extents = box.half_extents };
             }

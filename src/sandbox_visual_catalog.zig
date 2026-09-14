@@ -59,7 +59,7 @@ pub fn material(surface: Surface) render_contract.SurfaceMaterial {
             .base_color = .{ 0.95, 0.38, 0.06, 1 },
             .emissive = .{ 0.05, 0.01, 0 },
         },
-        .health_marker => .{ .base_color = .{ 1, 1, 1, 1 }, .lit = false },
+        .health_marker => .{ .base_color = .{ 1, 1, 1, 1 }, .lit = false, .display_space = true },
         .painted_metal => .{ .base_color = .{ 0.10, 0.42, 0.72, 1 } },
         .glass => .{ .base_color = .{ 0.12, 0.34, 0.48, 1 } },
         .emissive => .{

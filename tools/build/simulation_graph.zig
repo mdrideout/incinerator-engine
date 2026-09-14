@@ -84,6 +84,8 @@ pub const Graph = struct {
     developer_controls: *std.Build.Module,
     developer_diagnostics: *std.Build.Module,
     sandbox_authoring: *std.Build.Module,
+    lighting_authoring: *std.Build.Module,
+    lighting_authoring_contract: *std.Build.Module,
     material_authoring: *std.Build.Module,
     material_authoring_contract: *std.Build.Module,
     sandbox_save: *std.Build.Module,
@@ -355,7 +357,7 @@ pub fn create(
     });
     const spatial_options = b.addOptions();
     spatial_options.addOption(f32, "chunk_span", @import("../../game/industrial/scene.zig").chunk_span);
-    spatial_options.addOption(usize, "max_static_boxes", @import("../../game/industrial/scene.zig").boxes[0].len);
+    spatial_options.addOption(usize, "max_static_boxes", @import("../../game/industrial/scene.zig").max_static_box_count);
     spatial_options.addOption(usize, "max_navigation_nodes", @import("../../game/industrial/scene.zig").navigation_positions.len);
     spatial_options.addOption(usize, "max_navigation_edges", @import("../../game/industrial/scene.zig").navigation_edge_capacity);
     spatial_options.addOption(usize, "max_navigation_outgoing_edges", @import("../../game/industrial/scene.zig").navigation_degree);
@@ -647,6 +649,18 @@ pub fn create(
             .{ .name = "developer_controls", .module = developer_controls },
             .{ .name = "session_authority_diagnostics", .module = session_authority_diagnostics },
         },
+    });
+    const lighting_authoring_contract = b.createModule(.{
+        .root_source_file = b.path("src/hosts/lighting_authoring_contract.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "engine_contracts", .module = contracts }, .{ .name = "content", .module = content } },
+    });
+    const lighting_authoring = b.createModule(.{
+        .root_source_file = b.path("src/hosts/lighting_authoring.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{ .{ .name = "engine_contracts", .module = contracts }, .{ .name = "lighting_authoring_contract", .module = lighting_authoring_contract } },
     });
     const material_authoring_contract = b.createModule(.{
         .root_source_file = b.path("src/hosts/material_authoring_contract.zig"),
@@ -1048,6 +1062,8 @@ pub fn create(
         .developer_controls = developer_controls,
         .developer_diagnostics = developer_diagnostics,
         .sandbox_authoring = sandbox_authoring,
+        .lighting_authoring = lighting_authoring,
+        .lighting_authoring_contract = lighting_authoring_contract,
         .material_authoring = material_authoring,
         .material_authoring_contract = material_authoring_contract,
         .sandbox_save = sandbox_save,

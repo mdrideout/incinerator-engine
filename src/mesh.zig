@@ -67,6 +67,21 @@ pub const VertexPNU = extern struct {
     texcoord: [2]f32, // u, v (texture coordinates, 0-1 range)
 };
 
+pub const Bounds = struct {
+    min: [3]f32,
+    max: [3]f32,
+
+    pub fn fromVertices(vertices: anytype) Bounds {
+        std.debug.assert(vertices.len > 0);
+        var bounds = Bounds{ .min = vertices[0].position, .max = vertices[0].position };
+        for (vertices) |vertex| for (0..3) |axis| {
+            bounds.min[axis] = @min(bounds.min[axis], vertex.position[axis]);
+            bounds.max[axis] = @max(bounds.max[axis], vertex.position[axis]);
+        };
+        return bounds;
+    }
+};
+
 /// Identifies which vertex format a mesh uses.
 /// The renderer needs this to bind the correct pipeline.
 pub const VertexFormat = enum {
@@ -96,6 +111,7 @@ pub const Mesh = struct {
     vertex_buffer: *c.SDL_GPUBuffer,
     vertex_count: u32,
     vertex_format: VertexFormat, // Which vertex layout this mesh uses
+    bounds: Bounds,
     device: *c.SDL_GPUDevice, // Needed for cleanup
 
     // Index buffer (optional - null for non-indexed meshes like primitives)
@@ -185,6 +201,7 @@ pub const Mesh = struct {
             .vertex_buffer = vertex_buffer,
             .vertex_count = @intCast(vertices.len),
             .vertex_format = .pos_color, // Vertex = position + color
+            .bounds = Bounds.fromVertices(vertices),
             .device = device,
         };
     }
@@ -262,6 +279,7 @@ pub const Mesh = struct {
             .vertex_buffer = vertex_buffer,
             .vertex_count = @intCast(vertices.len),
             .vertex_format = .pos_normal_uv,
+            .bounds = Bounds.fromVertices(vertices),
             .device = device,
         };
     }

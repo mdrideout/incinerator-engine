@@ -8,8 +8,9 @@
 const std = @import("std");
 const engine = @import("engine_contracts");
 
-pub const protocol_cohort: u16 = 5;
+pub const protocol_cohort: u16 = 6;
 pub const vehicle = @import("vehicle_authoring_contract");
+pub const lighting = @import("lighting_authoring_contract");
 pub const material = @import("material_authoring_contract");
 pub const MaterialValue = engine.assets.MaterialMetadata;
 pub const framing_version: u16 = 1;
@@ -44,6 +45,7 @@ pub const crate_authoring_schema = SchemaId{ .namespace = schema_namespace, .loc
 pub const persistence_schema = SchemaId{ .namespace = schema_namespace, .local = 4 };
 pub const measurement_schema = SchemaId{ .namespace = schema_namespace, .local = 5 };
 pub const material_schema = SchemaId{ .namespace = schema_namespace, .local = 6 };
+pub const lighting_schema = SchemaId{ .namespace = schema_namespace, .local = 8 };
 pub const vehicle_schema = SchemaId{ .namespace = schema_namespace, .local = 7 };
 
 pub const SchemaClass = enum {
@@ -52,6 +54,7 @@ pub const SchemaClass = enum {
     crate_authoring,
     persistence,
     measurement,
+    lighting_authoring,
     material_authoring,
     vehicle_authoring,
 };
@@ -65,7 +68,7 @@ pub const SchemaDescriptor = struct {
     wire_shape_signature: []const u8,
 };
 
-pub const common_wire_shape_signature_v1 =
+pub const common_wire_shape_signature_v2 =
     "ICDV/1|frame{magic=ICDV,version:u16be,kind:u8,flags:u8,cohort:u16be," ++
     "reserved:u16be,request_id:u64be,payload_len:u64be,crc32:u32be}|" ++
     "FrameKind{request=1,response=2}|" ++
@@ -82,10 +85,10 @@ pub const common_wire_shape_signature_v1 =
     "content_asset:AssetId{namespace:u64,local:u64}}|" ++
     "Vec3=f32[3]|Bounds{minimum:Vec3,maximum:Vec3}|" ++
     "Lifecycle{disabled,declared,starting,available,stopping,stopped,failed}|" ++
-    "SchemaClass{query,editor_control,crate_authoring,persistence,measurement,material_authoring,vehicle_authoring}|" ++
+    "SchemaClass{query,editor_control,crate_authoring,persistence,measurement,lighting_authoring,material_authoring,vehicle_authoring}|" ++
     "Availability{available,unavailable}|" ++
     "WorldSemanticType{crate,local_player,remote_player,npc,vehicle,carryable}|" ++
-    "ContentSemanticType{district,scene,mesh,material,texture,vehicle_archetype," ++
+    "ContentSemanticType{district,scene,mesh,material,texture,lighting,vehicle_archetype," ++
     "lighting_preset,map}|AuthoringSource{ui,local_developer_client," ++
     "scripted_validation}|EditScope{preview,session,asset_commit}|" ++
     "AuthoringDisposition{pending,accepted,rejected}|RejectionKind{" ++
@@ -99,8 +102,8 @@ pub const common_wire_shape_signature_v1 =
     "endpoint_stopping,owner_busy,owner_unavailable,target_not_found," ++
     "target_kind_not_supported,internal_error}";
 
-const query_wire_shape_v4 =
-    "material_details=Material@material-authoring.v1|" ++
+const query_wire_shape_v5 =
+    "material_details=Material@material-authoring.v1|AssetOwner{engine,game}|SourceFormat{gltf,glb,authored}|AssetDetails{scene,mesh,material:Material,texture:TextureMetadata,lighting}|" ++
     "commands{describe:{},schema_list:{},world_list:{},content_list:{}," ++
     "inspect:{target:Target}}|payloads{endpoint_description:{product:string," ++
     "local_only:bool,transport:string,protocol_cohort:u16,framing_version:u16," ++
@@ -182,16 +185,28 @@ const vehicle_wire_shape_v2 =
     "payloads{vehicle_assets:[]{id:VehicleArchetypeId,label:string,revision:u64,digest:sha256},vehicle_inspection:{live:VehicleView,committed:Definition,asset_revision:u64,presets:[]{source_id:VehicleArchetypeId,source_label:string,source_revision:u64,source_digest:sha256,candidate:Definition},preview:?{source:AuthoringSource,transaction_id:u64,visuals:{chassis:VisualPart,wheels:VisualPart[4]}}},vehicle_outcome:VehicleResult}|" ++
     "VehicleResult{transaction_id:u64,source:AuthoringSource,target:PersistentId,action:VehicleAction,disposition:pending|accepted|rejected,revision:u64,asset_revision:u64,definition_digest:sha256,authority_tick:?u64,rejection:?string,artifact_path:?string}|VehicleView{conditioned_steering:f32,id:PersistentId,definition:Definition,definition_digest:sha256,revision:u64,state:VehicleState,input:VehicleInput,driver_id:?PersistentId}|VehicleInput{throttle:f32,steering:f32,brake:f32,hand_brake:f32}|VehicleState{chassis:{pose:{position:f32[3],rotation:f32[4]},velocity:{linear:f32[3],angular:f32[3]}},wheels:WheelState[4],engine_rpm:f32,current_gear:i32,powertrain:{engine_rpm:f32,gear:i32,clutch_friction:f32,switch_time_left_s:f32,clutch_release_left_s:f32,switch_latency_left_s:f32}}|WheelState{pose:{position:f32[3],rotation:f32[4]},angular_velocity:f32,rotation_angle:f32,steer_angle:f32,suspension_length:f32,has_contact:bool,suspension_impulse_ns:f32,longitudinal_impulse_ns:f32,lateral_impulse_ns:f32,longitudinal_slip:f32,lateral_slip_radians:f32}";
 
+const lighting_wire_shape_v1 =
+    "commands{lighting_list:{},lighting_inspect:{target:AssetId},lighting_edit:{target:AssetId,expected_revision:u64,action:preview(Value)|clear_preview|apply(Value)|revert|undo|redo|commit|activate}}|" ++
+    "Value{environment:Environment|fixture:{light:Light,pose:Pose,mount:world|vehicle_asset(AssetId)|carryable,follows_night:bool,visual:?Visual,surface:?Surface}}|" ++
+    "Visual{mesh:AssetId,material:AssetId,local_pose:Pose,scale:f32[3],emissive_scale:f32}|Surface{mesh:AssetId,emissive_scale:f32}|" ++
+    "Light{kind:directional|point|spot,color:f32[3],intensity:f32,enabled:bool,range:?f32,inner_angle:f32,outer_angle:f32,source_radius:f32,casts_shadows:bool}|" ++
+    "Environment{sun:Light,sun_direction:f32[3],ambient:f32[3],background:f32[3],display:{exposure:f32,bloom_strength:f32,bloom_threshold:f32,bloom_radius:f32},headlights_enabled:bool,artificial_lights_enabled:bool,shadow_resolution:u32,shadow_bias:f32}|" ++
+    "Pose{position:f32[3],rotation:f32[4]}|Record{id:AssetId,label:string,revision:u64,asset_revision:u64,committed:Value,session:Value,preview:?{source:AuthoringSource,value:Value}}|" ++
+    "payloads{lighting_list:{records:[]Record,active_environment:AssetId,library_revision:u64,last_ui_outcome:?Outcome,persistence_available:bool,installed_root:?string,project_root:?string},lighting_inspection:Record,lighting_outcome:Outcome}|" ++
+    "Outcome{transaction_id:u64,source:AuthoringSource,target:AssetId,action:LightingAction,revision:u64,asset_revision:u64,library_revision:u64,rejection:?LightingRejection}|" ++
+    "LightingRejection{target_missing,stale_revision,invalid_value,wrong_value_kind,preview_owned_by_another_producer,persistence_unavailable,persistence_failed,nothing_to_undo,nothing_to_redo}";
+
 const registered_schemas = [_]SchemaDescriptor{
+    .{ .id = lighting_schema, .name = "incinerator.demo.lighting-authoring.v1", .version = 1, .class = .lighting_authoring, .description = "Presentation lighting presets, fixture previews, history and durable assets.", .wire_shape_signature = lighting_wire_shape_v1 },
     .{ .id = vehicle_schema, .name = "incinerator.sandbox.vehicle-authoring.v2", .version = 2, .class = .vehicle_authoring, .description = "Per-instance vehicle inspection, revisioned apply/rebuild/revert, atomic archetype commit and isolated measurement.", .wire_shape_signature = vehicle_wire_shape_v2 },
     .{ .id = material_schema, .name = "incinerator.demo.material-authoring.v1", .version = 1, .class = .material_authoring, .description = "Typed material inspection, preview, session apply/revert, and durable game asset commit.", .wire_shape_signature = material_wire_shape_v1 },
     .{
         .id = query_schema,
-        .name = "incinerator.sandbox.query.v4",
-        .version = 4,
+        .name = "incinerator.sandbox.query.v5",
+        .version = 5,
         .class = .query,
         .description = "Endpoint, world, content, and stable-target inspection.",
-        .wire_shape_signature = query_wire_shape_v4,
+        .wire_shape_signature = query_wire_shape_v5,
     },
     .{
         .id = editor_control_schema,
@@ -227,10 +242,10 @@ const registered_schemas = [_]SchemaDescriptor{
     },
 };
 
-/// Frozen SHA-256 of the complete cohort-5 canonical wire-shape catalog.
+/// Frozen SHA-256 of the complete cohort-6 canonical wire-shape catalog.
 /// Any intentional wire change must advance the affected schema/cohort and
 /// update this value together with its explicit signature.
-pub const canonical_schema_digest_v5 = engine.assets.Digest{ 0xd4, 0x74, 0x06, 0x60, 0xb5, 0xcd, 0x0a, 0x5d, 0x83, 0x73, 0xc4, 0x4a, 0x2c, 0xab, 0x09, 0x69, 0x40, 0xb9, 0x73, 0xc1, 0xf4, 0x54, 0xd0, 0x1e, 0xeb, 0x61, 0xb5, 0x04, 0x5a, 0x1d, 0x36, 0x7e };
+pub const canonical_schema_digest_v6 = engine.assets.Digest{ 0xd4, 0xf3, 0x6c, 0xcb, 0x9f, 0x29, 0x88, 0xbc, 0x96, 0x0a, 0x02, 0x67, 0xee, 0xb5, 0x49, 0x77, 0xb6, 0x9c, 0x65, 0xc0, 0xaf, 0x54, 0x82, 0x7d, 0x8d, 0x8d, 0x06, 0xa6, 0x16, 0xa9, 0x3d, 0xdf };
 
 pub fn schemaCatalog() []const SchemaDescriptor {
     return &registered_schemas;
@@ -240,7 +255,7 @@ pub fn schemaCatalog() []const SchemaDescriptor {
 /// are part of the cohort contract; field reflection is intentionally absent.
 pub fn schemaDigest() engine.assets.Digest {
     var hasher = std.crypto.hash.sha2.Sha256.init(.{});
-    hasher.update(common_wire_shape_signature_v1);
+    hasher.update(common_wire_shape_signature_v2);
     hasher.update(&.{0xfe});
     for (registered_schemas) |schema| {
         var numbers: [10]u8 = undefined;
@@ -380,6 +395,7 @@ pub const ContentSemanticType = enum {
     mesh,
     material,
     texture,
+    lighting,
     vehicle_archetype,
     lighting_preset,
     map,
@@ -576,6 +592,9 @@ pub const Command = union(enum) {
     vehicle_inspect: struct { target: PersistentId },
     vehicle_edit: vehicle.Request,
     vehicle_result: struct { transaction_id: u64 },
+    lighting_list: Empty,
+    lighting_inspect: struct { target: AssetId },
+    lighting_edit: lighting.Request,
     material_inspect: struct { target: AssetId },
     material_edit: material.Request,
     describe: Empty,
@@ -615,6 +634,7 @@ pub const Command = union(enum) {
     pub fn schemaId(self: Command) SchemaId {
         return switch (self) {
             .vehicle_assets, .vehicle_inspect, .vehicle_edit, .vehicle_result => vehicle_schema,
+            .lighting_list, .lighting_inspect, .lighting_edit => lighting_schema,
             .material_inspect, .material_edit => material_schema,
             .describe, .schema_list, .world_list, .content_list, .inspect => query_schema,
             .selection_set,
@@ -667,6 +687,12 @@ pub const Request = struct {
                     .apply, .rebuild, .measure, .preview => |candidate| try candidate.validate(),
                     .revert, .commit, .clear_preview => {},
                 }
+            },
+            .lighting_list => {},
+            .lighting_inspect => |value| try value.target.validate(),
+            .lighting_edit => |value| {
+                try value.target.validate();
+                if (value.expected_revision == 0) return error.InvalidLightingRevision;
             },
             .material_inspect => |value| try value.target.validate(),
             .material_edit => |value| {
@@ -734,6 +760,9 @@ pub const Payload = union(enum) {
     vehicle_assets: []const vehicle.AssetSummary,
     vehicle_inspection: vehicle.Inspection,
     vehicle_outcome: vehicle.Result,
+    lighting_list: lighting.View,
+    lighting_inspection: lighting.Record,
+    lighting_outcome: lighting.Outcome,
     material_inspection: material.Inspection,
     material_outcome: material.Outcome,
     endpoint_description: EndpointDescription,
@@ -754,6 +783,7 @@ pub const Payload = union(enum) {
     pub fn schemaId(self: Payload) SchemaId {
         return switch (self) {
             .vehicle_assets, .vehicle_inspection, .vehicle_outcome => vehicle_schema,
+            .lighting_list, .lighting_inspection, .lighting_outcome => lighting_schema,
             .material_inspection, .material_outcome => material_schema,
             .endpoint_description, .schema_list, .world_list, .content_list, .inspection => query_schema,
             .selection, .camera, .camera_mutation => editor_control_schema,
@@ -817,6 +847,9 @@ pub fn expectedPayloadTag(command: Command) std.meta.Tag(Payload) {
         .vehicle_assets => .vehicle_assets,
         .vehicle_inspect => .vehicle_inspection,
         .vehicle_edit, .vehicle_result => .vehicle_outcome,
+        .lighting_list => .lighting_list,
+        .lighting_inspect => .lighting_inspection,
+        .lighting_edit => .lighting_outcome,
         .material_inspect => .material_inspection,
         .material_edit => .material_outcome,
         .describe => .endpoint_description,
@@ -1018,8 +1051,8 @@ pub fn parseResponse(allocator: std.mem.Allocator, payload: []const u8) !std.jso
 }
 
 test "manual schema catalog has stable classes and digest" {
-    try std.testing.expectEqual(@as(usize, 7), schemaCatalog().len);
-    var seen: [7]bool = @splat(false);
+    try std.testing.expectEqual(@as(usize, 8), schemaCatalog().len);
+    var seen: [std.meta.tags(SchemaClass).len]bool = @splat(false);
     for (schemaCatalog()) |schema| {
         try schema.id.validate();
         try std.testing.expect(schemaIsRegistered(schema.id));
@@ -1029,7 +1062,7 @@ test "manual schema catalog has stable classes and digest" {
     for (seen) |present| try std.testing.expect(present);
     const digest = schemaDigest();
     try engine.assets.validateDigest(digest);
-    try std.testing.expectEqualSlices(u8, &canonical_schema_digest_v5, &digest);
+    try std.testing.expectEqualSlices(u8, &canonical_schema_digest_v6, &digest);
 }
 
 test "discovery lifecycle documents require active paths and available digest" {

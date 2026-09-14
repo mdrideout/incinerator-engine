@@ -44,6 +44,8 @@ const sdl = @import("sdl.zig");
 const mesh_module = @import("mesh.zig");
 const texture_module = @import("texture.zig");
 const render_contract = @import("render_contract.zig");
+pub const hdr_renderer = @import("hdr_renderer.zig");
+pub const lighting_gpu = @import("lighting_gpu.zig");
 
 const c = sdl.c;
 const Mesh = mesh_module.Mesh;
@@ -79,7 +81,7 @@ pub const FragmentSettings = extern struct {
     use_texture: f32, // 1.0 = use texture, 0.0 = use white
     lit: f32, // 1.0 = scene light, 0.0 = exact unlit material
     texture_mask: u32 = 0,
-    _padding: f32 = 0,
+    exposure: f32 = 1,
     base_color: [4]f32 = .{ 1, 1, 1, 1 },
     emissive: [4]f32 = .{ 0, 0, 0, 0 },
     sun_direction: [4]f32,
@@ -87,6 +89,7 @@ pub const FragmentSettings = extern struct {
     ambient_color: [4]f32,
     response: [4]f32,
     camera_position: [4]f32,
+    lighting: [4]u32 = .{ 0, 0, 0, 0 },
 };
 
 /// Material tint for authored vertex-color primitives. White preserves the
@@ -97,7 +100,7 @@ pub const PrimitiveFragmentSettings = extern struct {
 };
 
 comptime {
-    std.debug.assert(@sizeOf(FragmentSettings) == 128);
+    std.debug.assert(@sizeOf(FragmentSettings) == 144);
     std.debug.assert(@sizeOf(PrimitiveFragmentSettings) == 16);
 }
 
@@ -112,6 +115,18 @@ pub const MaterialTextures = struct {
     normal: ?TextureBinding = null,
     occlusion: ?TextureBinding = null,
     emissive: ?TextureBinding = null,
+};
+
+pub const ProductDraw = struct {
+    mesh: Mesh,
+    textures: MaterialTextures,
+    material: SurfaceMaterial,
+    model: zm.Mat,
+    view_projection: zm.Mat,
+};
+const DrawCommand = union(enum) {
+    product: ProductDraw,
+    debug: struct { buffer: *c.SDL_GPUBuffer, count: u32, mvp: zm.Mat, triangles: bool },
 };
 
 pub const SceneLight = render_contract.SceneLight;
@@ -363,6 +378,9 @@ pub const Renderer = struct {
     pipeline_pos_color: *c.SDL_GPUGraphicsPipeline, // For primitives (Vertex)
     pipeline_pos_normal_uv: *c.SDL_GPUGraphicsPipeline, // For loaded models (VertexPNU)
     pipeline_pos_normal_uv_wireframe: *c.SDL_GPUGraphicsPipeline, // For models in wireframe mode
+    pipeline_display_color: *c.SDL_GPUGraphicsPipeline,
+    pipeline_display_normal: *c.SDL_GPUGraphicsPipeline,
+    display_overlay_context: bool = false,
     physics_debug_pipelines: ?PhysicsDebugPipelines,
 
     // Runtime render settings (wireframe, textures, etc.)
@@ -373,6 +391,10 @@ pub const Renderer = struct {
     // Depth buffer for proper 3D rendering (closer pixels occlude farther ones)
     depth_target: DepthTarget,
     scene_target: SceneTarget,
+    hdr: hdr_renderer.Owner,
+    lights: lighting_gpu.Owner,
+    neutral_preview: bool = false,
+    display_settings: hdr_renderer.Display = .{},
 
     // Texture sampling resources
     default_sampler: *c.SDL_GPUSampler,
@@ -389,6 +411,11 @@ pub const Renderer = struct {
     scene_extent_mode: SceneExtentMode = .drawable,
     submission_fence_requested: bool = false,
     last_submission_fence: ?*SubmissionFence = null,
+    commands: std.ArrayList(DrawCommand) = .empty,
+    /// Deferred command recording reports allocation/validation failure at finish.
+    frame_error: ?anyerror = null,
+    frame_recording: bool = false,
+    clear_color: [4]f32 = .{ 0, 0, 0, 1 },
 
     /// Initialize the GPU renderer for a window.
     /// This creates the GPU device and graphics pipeline.
@@ -477,23 +504,31 @@ pub const Renderer = struct {
             return error.DepthFormatUnavailable;
         };
 
+        var hdr = try hdr_renderer.Owner.init(device, swapchain_format, neural_experiment_scene_width, neural_experiment_scene_height);
+        errdefer hdr.deinit();
+
         // Create graphics pipelines for different vertex formats
         // Pipeline 1: pos_color for primitives (triangle, cube, etc.)
         const pipeline_pos_color = try createPipelinePosColor(
             device,
-            swapchain_format,
+            hdr_renderer.format,
             depth_format,
             false,
         );
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_color);
 
         // Pipeline 2: pos_normal_uv for loaded 3D models (GLB files)
-        const pipeline_pos_normal_uv = try createPipelinePosNormalUv(device, swapchain_format, depth_format, false);
+        const pipeline_pos_normal_uv = try createPipelinePosNormalUv(device, hdr_renderer.format, depth_format, false);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_normal_uv);
 
         // Pipeline 3: pos_normal_uv wireframe variant for debug visualization
-        const pipeline_pos_normal_uv_wireframe = try createPipelinePosNormalUv(device, swapchain_format, depth_format, true);
+        const pipeline_pos_normal_uv_wireframe = try createPipelinePosNormalUv(device, hdr_renderer.format, depth_format, true);
         errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_pos_normal_uv_wireframe);
+
+        const pipeline_display_color = try createPipelinePosColor(device, swapchain_format, depth_format, false);
+        errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_display_color);
+        const pipeline_display_normal = try createPipelinePosNormalUv(device, swapchain_format, depth_format, false);
+        errdefer c.SDL_ReleaseGPUGraphicsPipeline(device, pipeline_display_normal);
 
         // Physics-debug presentation is an optional paired capability. A
         // shader/pipeline failure removes evidence only; it cannot prevent the
@@ -580,6 +615,10 @@ pub const Renderer = struct {
             .offscreen_extent = offscreen_extent,
             .swapchain_format = swapchain_format,
             .depth_format = depth_format,
+            .hdr = hdr,
+            .lights = .{ .device = device },
+            .pipeline_display_color = pipeline_display_color,
+            .pipeline_display_normal = pipeline_display_normal,
             .pipeline_pos_color = pipeline_pos_color,
             .pipeline_pos_normal_uv = pipeline_pos_normal_uv,
             .pipeline_pos_normal_uv_wireframe = pipeline_pos_normal_uv_wireframe,
@@ -604,15 +643,27 @@ pub const Renderer = struct {
         self.drainForExternalTeardown();
 
         self.placeholder_texture.deinit();
+        self.hdr.deinit();
+        self.lights.deinit();
+        self.commands.deinit(std.heap.page_allocator);
         c.SDL_ReleaseGPUSampler(self.device, self.default_sampler);
         c.SDL_ReleaseGPUTexture(self.device, self.scene_target.texture);
         c.SDL_ReleaseGPUTexture(self.device, self.depth_target.texture);
+        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_display_color);
+        c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_display_normal);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_color);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv);
         c.SDL_ReleaseGPUGraphicsPipeline(self.device, self.pipeline_pos_normal_uv_wireframe);
         if (self.physics_debug_pipelines) |pipelines| pipelines.deinit(self.device);
         if (self.offscreen_extent == null) c.SDL_ReleaseWindowFromGPUDevice(self.device, self.window);
         c.SDL_DestroyGPUDevice(self.device);
+    }
+
+    pub fn setEnvironment(self: *Renderer, environment: @import("engine_contracts").lighting.Environment) !void {
+        try environment.validate();
+        self.display_settings = environment.display;
+        self.lights.environment = environment;
+        try self.setSceneLight(.{ .sun_direction = .{ -environment.sun_direction[0], -environment.sun_direction[1], -environment.sun_direction[2] }, .sun_color = environment.sun.color, .sun_intensity = if (environment.sun.enabled) environment.sun.intensity else 0, .ambient_color = environment.ambient });
     }
 
     pub fn setSceneLight(self: *Renderer, light: SceneLight) !void {
@@ -635,7 +686,7 @@ pub const Renderer = struct {
     pub fn drainForExternalTeardown(self: *Renderer) void {
         // A ready frame owns a non-cancellable swapchain acquisition. Submit it
         // before any external buffer/texture owner can be released.
-        self.endRenderPass();
+        self.endRenderPass() catch |err| std.debug.print("Frame resolve during teardown: {s}\n", .{@errorName(err)});
         if (self.current_cmd) |cmd| {
             if (!c.SDL_SubmitGPUCommandBuffer(cmd)) {
                 std.debug.print("SDL_SubmitGPUCommandBuffer failed during renderer teardown: {s}\n", .{c.SDL_GetError()});
@@ -693,6 +744,7 @@ pub const Renderer = struct {
     }
 
     fn ensureSceneExtent(self: *Renderer, extent: SceneExtent) !void {
+        try self.hdr.ensureExtent(extent.width, extent.height);
         if (self.scene_target.width == extent.width and
             self.scene_target.height == extent.height and
             self.depth_target.width == extent.width and
@@ -783,60 +835,14 @@ pub const Renderer = struct {
             return err;
         };
 
-        // Step 3: Render product color offscreen. The final drawable is
-        // reserved for the resolved scene plus conventional UI/diagnostics.
-        const color_target = c.SDL_GPUColorTargetInfo{
-            .texture = self.scene_target.texture,
-            .mip_level = 0,
-            .layer_or_depth_plane = 0,
-            .clear_color = c.SDL_FColor{
-                .r = clear_color[0],
-                .g = clear_color[1],
-                .b = clear_color[2],
-                .a = clear_color[3],
-            },
-            .load_op = c.SDL_GPU_LOADOP_CLEAR,
-            .store_op = c.SDL_GPU_STOREOP_STORE,
-            .resolve_texture = null,
-            .resolve_mip_level = 0,
-            .resolve_layer = 0,
-            .cycle = false,
-            .cycle_resolve_texture = false,
-            .padding1 = 0,
-            .padding2 = 0,
-        };
-
-        // Step 5: Set up depth target (for depth testing)
-        const depth_target = c.SDL_GPUDepthStencilTargetInfo{
-            .texture = self.depth_target.texture,
-            .clear_depth = 1.0, // Clear to far plane (max depth)
-            .load_op = c.SDL_GPU_LOADOP_CLEAR,
-            .store_op = c.SDL_GPU_STOREOP_DONT_CARE, // Don't need to preserve after frame
-            .stencil_load_op = c.SDL_GPU_LOADOP_DONT_CARE,
-            .stencil_store_op = c.SDL_GPU_STOREOP_DONT_CARE,
-            .cycle = false,
-            .clear_stencil = 0,
-            .mip_level = 0,
-            .layer = 0,
-        };
-
-        // Step 6: Begin render pass with both color and depth targets
-        const render_pass = c.SDL_BeginGPURenderPass(
-            cmd,
-            &color_target,
-            1,
-            &depth_target, // Now passing depth target!
-        ) orelse {
-            std.debug.print("SDL_BeginGPURenderPass failed: {s}\n", .{c.SDL_GetError()});
-            try retireAcquiredSwapchain(cmd);
-            return error.RenderPassBeginFailed;
-        };
-
-        // Note: Pipeline is bound per-draw in drawMesh() based on mesh vertex format
+        self.commands.clearRetainingCapacity();
+        self.frame_error = null;
+        self.frame_recording = true;
+        self.clear_color = clear_color;
 
         // Store frame state
         self.current_cmd = cmd;
-        self.current_render_pass = render_pass;
+        self.current_render_pass = null;
         self.current_swapchain = acquired_swapchain; // Store for editor overlay
         self.current_swapchain_width = swapchain_width;
         self.current_swapchain_height = swapchain_height;
@@ -906,6 +912,30 @@ pub const Renderer = struct {
         model: zm.Mat,
         view_projection: zm.Mat,
     ) void {
+        if (!self.frame_recording) {
+            self.frame_error = error.DrawOutsideSceneRecording;
+            return;
+        }
+        self.commands.append(std.heap.page_allocator, .{ .product = .{
+            .mesh = m.*,
+            .textures = textures,
+            .material = material,
+            .model = model,
+            .view_projection = view_projection,
+        } }) catch |err| {
+            self.frame_error = err;
+        };
+    }
+
+    /// Borrowed immediate context for the neutral material preview and frame replay.
+    pub fn drawImmediate(
+        self: *Renderer,
+        m: *const Mesh,
+        textures: MaterialTextures,
+        material: SurfaceMaterial,
+        model: zm.Mat,
+        view_projection: zm.Mat,
+    ) void {
         const render_pass = self.current_render_pass orelse {
             std.debug.print("drawMesh called outside of an active render pass\n", .{});
             return;
@@ -921,8 +951,8 @@ pub const Renderer = struct {
         // bind the one that matches the mesh's vertex data.
         // Wireframe mode uses a variant pipeline with FILLMODE_LINE.
         const pipeline = switch (m.vertex_format) {
-            .pos_color => self.pipeline_pos_color,
-            .pos_normal_uv => if (self.render_settings.wireframe_mode)
+            .pos_color => if (self.display_overlay_context) self.pipeline_display_color else self.pipeline_pos_color,
+            .pos_normal_uv => if (self.display_overlay_context) self.pipeline_display_normal else if (self.render_settings.wireframe_mode)
                 self.pipeline_pos_normal_uv_wireframe
             else
                 self.pipeline_pos_normal_uv,
@@ -935,86 +965,65 @@ pub const Renderer = struct {
         // under rotation and non-uniform scale.
         // =====================================================================
         const mvp = zm.mul(model, view_projection);
-        switch (m.vertex_format) {
-            .pos_color => {
-                const uniforms = Uniforms{ .mvp = zm.matToArr(mvp) };
-                c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(Uniforms));
-            },
-            .pos_normal_uv => {
-                const uniforms = ModelUniforms{
-                    .mvp = zm.matToArr(mvp),
-                    .normal_matrix = zm.matToArr(normalMatrix(model)),
-                    .model = zm.matToArr(model),
-                };
-                c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(ModelUniforms));
-            },
-        }
+        const uniforms = ModelUniforms{
+            .mvp = zm.matToArr(mvp),
+            .normal_matrix = zm.matToArr(normalMatrix(model)),
+            .model = zm.matToArr(model),
+        };
+        c.SDL_PushGPUVertexUniformData(cmd, 0, &uniforms, @sizeOf(ModelUniforms));
 
         // =====================================================================
         // Step 3: Bind texture, sampler, and push fragment settings
         // =====================================================================
-        switch (m.vertex_format) {
-            .pos_color => {
-                const frag_settings = PrimitiveFragmentSettings{
-                    .base_color = material.base_color,
-                };
-                c.SDL_PushGPUFragmentUniformData(
-                    cmd,
-                    0,
-                    &frag_settings,
-                    @sizeOf(PrimitiveFragmentSettings),
-                );
-            },
-            .pos_normal_uv => {
-                const slots = [_]?TextureBinding{ textures.base_color, textures.metallic_roughness, textures.normal, textures.occlusion, textures.emissive };
-                var bindings: [5]c.SDL_GPUTextureSamplerBinding = undefined;
-                var texture_mask: u32 = 0;
-                for (slots, 0..) |slot, index| {
-                    bindings[index] = .{
-                        .texture = if (slot) |binding| binding.texture.getHandle() else self.placeholder_texture.borrow().getHandle(),
-                        .sampler = if (slot) |binding| binding.sampler orelse self.default_sampler else self.default_sampler,
-                    };
-                    if (slot != null) texture_mask |= @as(u32, 1) << @intCast(index);
-                }
-                c.SDL_BindGPUFragmentSamplers(render_pass, 0, &bindings, bindings.len);
-
-                // Push fragment settings (texture toggle)
-                const frag_settings = FragmentSettings{
-                    .use_texture = if (self.render_settings.show_textures) 1.0 else 0.0,
-                    .lit = if (material.lit) 1.0 else 0.0,
-                    .texture_mask = texture_mask,
-                    .response = .{ material.metallic, material.roughness, material.normal_scale, material.occlusion_strength },
-                    .camera_position = .{ self.camera_position[0], self.camera_position[1], self.camera_position[2], 1 },
-                    .base_color = material.base_color,
-                    .emissive = .{
-                        material.emissive[0],
-                        material.emissive[1],
-                        material.emissive[2],
-                        0,
-                    },
-                    .sun_direction = .{
-                        self.scene_light.sun_direction[0],
-                        self.scene_light.sun_direction[1],
-                        self.scene_light.sun_direction[2],
-                        0,
-                    },
-                    .sun_color_intensity = .{
-                        self.scene_light.sun_color[0],
-                        self.scene_light.sun_color[1],
-                        self.scene_light.sun_color[2],
-                        self.scene_light.sun_intensity,
-                    },
-                    .ambient_color = .{
-                        self.scene_light.ambient_color[0],
-                        self.scene_light.ambient_color[1],
-                        self.scene_light.ambient_color[2],
-                        0,
-                    },
-                };
-                c.SDL_PushGPUFragmentUniformData(cmd, 0, &frag_settings, @sizeOf(FragmentSettings));
-            },
+        const slots = [_]?TextureBinding{ textures.base_color, textures.metallic_roughness, textures.normal, textures.occlusion, textures.emissive };
+        var bindings: [5]c.SDL_GPUTextureSamplerBinding = undefined;
+        var texture_mask: u32 = 0;
+        for (slots, 0..) |slot, index| {
+            bindings[index] = .{
+                .texture = if (slot) |binding| binding.texture.getHandle() else self.placeholder_texture.borrow().getHandle(),
+                .sampler = if (slot) |binding| binding.sampler orelse self.default_sampler else self.default_sampler,
+            };
+            if (slot != null) texture_mask |= @as(u32, 1) << @intCast(index);
         }
+        c.SDL_BindGPUFragmentSamplers(render_pass, 0, &bindings, bindings.len);
+        self.lights.bind(render_pass);
 
+        // Push fragment settings (texture toggle)
+        const frag_settings = FragmentSettings{
+            .exposure = self.display_settings.exposure,
+            .lighting = .{ if (self.neutral_preview or self.display_overlay_context) 0 else @intCast(self.lights.records.items.len), @intFromBool(self.display_overlay_context), 0, 0 },
+            .use_texture = if (self.render_settings.show_textures) 1.0 else 0.0,
+            .lit = if (material.lit) 1.0 else 0.0,
+            .texture_mask = texture_mask,
+            .response = .{ material.metallic, material.roughness, material.normal_scale, material.occlusion_strength },
+            .camera_position = .{ self.camera_position[0], self.camera_position[1], self.camera_position[2], 1 },
+            .base_color = material.base_color,
+            .emissive = .{
+                material.emissive[0],
+                material.emissive[1],
+                material.emissive[2],
+                0,
+            },
+            .sun_direction = .{
+                self.scene_light.sun_direction[0],
+                self.scene_light.sun_direction[1],
+                self.scene_light.sun_direction[2],
+                0,
+            },
+            .sun_color_intensity = .{
+                self.scene_light.sun_color[0],
+                self.scene_light.sun_color[1],
+                self.scene_light.sun_color[2],
+                if (self.lights.environment != null and !self.neutral_preview) 0 else self.scene_light.sun_intensity,
+            },
+            .ambient_color = .{
+                self.scene_light.ambient_color[0],
+                self.scene_light.ambient_color[1],
+                self.scene_light.ambient_color[2],
+                0,
+            },
+        };
+        c.SDL_PushGPUFragmentUniformData(cmd, 0, &frag_settings, @sizeOf(FragmentSettings));
         // =====================================================================
         // Step 4: Bind vertex buffer
         // =====================================================================
@@ -1061,6 +1070,12 @@ pub const Renderer = struct {
     /// vertex_count: Number of vertices (must be even - each pair forms a line)
     /// mvp: Model-View-Projection matrix for transforming vertices
     pub fn drawLines(self: *Renderer, vertex_buffer: *c.SDL_GPUBuffer, vertex_count: u32, mvp: zm.Mat) void {
+        if (self.frame_recording) {
+            self.commands.append(std.heap.page_allocator, .{ .debug = .{ .buffer = vertex_buffer, .count = vertex_count, .mvp = mvp, .triangles = false } }) catch |err| {
+                self.frame_error = err;
+            };
+            return;
+        }
         const render_pass = self.current_render_pass orelse {
             std.debug.print("drawLines called outside of an active render pass\n", .{});
             return;
@@ -1102,6 +1117,12 @@ pub const Renderer = struct {
     /// vertex_count: Number of vertices (must be multiple of 3)
     /// mvp: Model-View-Projection matrix for transforming vertices
     pub fn drawDebugTriangles(self: *Renderer, vertex_buffer: *c.SDL_GPUBuffer, vertex_count: u32, mvp: zm.Mat) void {
+        if (self.frame_recording) {
+            self.commands.append(std.heap.page_allocator, .{ .debug = .{ .buffer = vertex_buffer, .count = vertex_count, .mvp = mvp, .triangles = true } }) catch |err| {
+                self.frame_error = err;
+            };
+            return;
+        }
         const render_pass = self.current_render_pass orelse {
             std.debug.print("drawDebugTriangles called outside of an active render pass\n", .{});
             return;
@@ -1136,13 +1157,67 @@ pub const Renderer = struct {
         self.frame_stats.debug_draws +|= 1;
     }
 
+    fn openScenePass(self: *Renderer) !void {
+        const cmd = self.current_cmd orelse return error.NoFrameInProgress;
+        const color = std.mem.zeroInit(c.SDL_GPUColorTargetInfo, .{
+            .texture = self.hdr.targets.scene.texture,
+            .clear_color = c.SDL_FColor{ .r = self.clear_color[0] * self.display_settings.exposure, .g = self.clear_color[1] * self.display_settings.exposure, .b = self.clear_color[2] * self.display_settings.exposure, .a = 1 },
+            .load_op = c.SDL_GPU_LOADOP_CLEAR,
+            .store_op = c.SDL_GPU_STOREOP_STORE,
+        });
+        const depth = std.mem.zeroInit(c.SDL_GPUDepthStencilTargetInfo, .{
+            .texture = self.depth_target.texture,
+            .clear_depth = 1,
+            .load_op = c.SDL_GPU_LOADOP_CLEAR,
+            .store_op = c.SDL_GPU_STOREOP_STORE,
+            .stencil_load_op = c.SDL_GPU_LOADOP_DONT_CARE,
+            .stencil_store_op = c.SDL_GPU_STOREOP_DONT_CARE,
+        });
+        self.current_render_pass = c.SDL_BeginGPURenderPass(cmd, &color, 1, &depth) orelse return error.RenderPassBeginFailed;
+    }
+
+    fn renderDisplayOverlays(self: *Renderer) !void {
+        var has_overlay = false;
+        for (self.commands.items) |command| if (command == .debug or (command == .product and command.product.material.display_space)) {
+            has_overlay = true;
+            break;
+        };
+        if (!has_overlay) return;
+        const color = std.mem.zeroInit(c.SDL_GPUColorTargetInfo, .{ .texture = self.scene_target.texture, .load_op = c.SDL_GPU_LOADOP_LOAD, .store_op = c.SDL_GPU_STOREOP_STORE });
+        const depth = std.mem.zeroInit(c.SDL_GPUDepthStencilTargetInfo, .{ .texture = self.depth_target.texture, .load_op = c.SDL_GPU_LOADOP_LOAD, .store_op = c.SDL_GPU_STOREOP_DONT_CARE, .stencil_load_op = c.SDL_GPU_LOADOP_DONT_CARE, .stencil_store_op = c.SDL_GPU_STOREOP_DONT_CARE });
+        const pass = c.SDL_BeginGPURenderPass(self.current_cmd.?, &color, 1, &depth) orelse return error.DisplayOverlayPassFailed;
+        self.current_render_pass = pass;
+        self.display_overlay_context = true;
+        defer {
+            c.SDL_EndGPURenderPass(pass);
+            self.current_render_pass = null;
+            self.display_overlay_context = false;
+        }
+        for (self.commands.items) |*command| switch (command.*) {
+            .product => |*draw| if (draw.material.display_space) self.drawImmediate(&draw.mesh, draw.textures, draw.material, draw.model, draw.view_projection),
+            .debug => |draw| if (draw.triangles) self.drawDebugTriangles(draw.buffer, draw.count, draw.mvp) else self.drawLines(draw.buffer, draw.count, draw.mvp),
+        };
+    }
+
     /// End just the render pass (without submitting).
     /// Use this when you need to do GPU work between the scene render pass
     /// and frame submission (e.g., ImGui rendering needs a copy pass first).
-    pub fn endRenderPass(self: *Renderer) void {
+    pub fn endRenderPass(self: *Renderer) !void {
+        if (self.frame_recording) {
+            self.frame_recording = false;
+            if (self.frame_error) |err| return err;
+            try self.lights.prepare(self.current_cmd.?, self.commands.items);
+            try self.openScenePass();
+            for (self.commands.items) |*command| switch (command.*) {
+                .product => |*draw| if (!draw.material.display_space) self.drawImmediate(&draw.mesh, draw.textures, draw.material, draw.model, draw.view_projection),
+                .debug => {},
+            };
+        }
         if (self.current_render_pass) |render_pass| {
             c.SDL_EndGPURenderPass(render_pass);
             self.current_render_pass = null;
+            try self.hdr.resolve(self.current_cmd.?, &self.hdr.targets, self.scene_target.texture, self.display_settings);
+            try self.renderDisplayOverlays();
             const swapchain = self.current_swapchain orelse return;
             const source = self.presentation_override orelse PresentationOverride{
                 .texture = self.scene_target.texture,
@@ -1191,6 +1266,7 @@ pub const Renderer = struct {
     pub fn submitFrame(self: *Renderer) !void {
         const cmd = self.current_cmd orelse return error.NoFrameInProgress;
         if (self.current_render_pass != null) return error.RenderPassStillActive;
+        if (self.frame_recording) return error.SceneNotResolved;
 
         defer {
             self.current_cmd = null;
@@ -1373,7 +1449,7 @@ fn createPipelinePosColor(
     depth_format: c.SDL_GPUTextureFormat,
     debug_overlay: bool,
 ) !*c.SDL_GPUGraphicsPipeline {
-    const shaders = getTriangleShaderCode();
+    const shaders = if (debug_overlay) getTriangleShaderCode() else ShaderCode{ .vertex = shader_assets.primitive_vertex, .fragment = shader_assets.primitive_fragment, .format = embeddedShaderFormat(), .entrypoint = shader_assets.entrypoint };
 
     // Create vertex shader
     // NOTE: num_uniform_buffers = 1 tells SDL_GPU we have a uniform buffer at binding 0
@@ -1401,9 +1477,9 @@ fn createPipelinePosColor(
         .entrypoint = shaders.entrypoint,
         .format = shaders.format,
         .stage = c.SDL_GPU_SHADERSTAGE_FRAGMENT,
-        .num_samplers = 0,
+        .num_samplers = if (debug_overlay) 0 else 6,
         .num_storage_textures = 0,
-        .num_storage_buffers = 0,
+        .num_storage_buffers = if (debug_overlay) 0 else 2,
         .num_uniform_buffers = 1,
         .props = 0,
     }) orelse {
@@ -1559,9 +1635,9 @@ fn createPipelinePosNormalUv(
         .entrypoint = shaders.entrypoint,
         .format = shaders.format,
         .stage = c.SDL_GPU_SHADERSTAGE_FRAGMENT,
-        .num_samplers = 5, // Typed conventional material texture slots
+        .num_samplers = 6, // Five material maps and one indexed shadow array
         .num_storage_textures = 0,
-        .num_storage_buffers = 0,
+        .num_storage_buffers = 2,
         .num_uniform_buffers = 1, // FragmentSettings uniform buffer
         .props = 0,
     }) orelse {

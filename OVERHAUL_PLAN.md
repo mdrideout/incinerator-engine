@@ -602,7 +602,7 @@ before dependency resolution.
 | Editor Phase 7 | Canonical CLI publishes a first-class machine catalog and guided results; a repository-owned skill teaches safe shell-agent workflows without duplicating commands | Complete and accepted by the product owner on 2026-08-30 |
 | EA1 | Practical texture/material import, assignment, authoring, and evidence | Implemented: full conventional materials, shared UI/CLI authoring, live binding, durable commit/restart, fresh industrial world |
 | EA2 | Vehicle archetypes, live revisioned tuning, and local AI/developer control | Approved; implementation not started |
-| EA3 | Authored directional sun and point-light capabilities | Approved; implementation not started |
+| EA3 | Authored sun/local lights and diverse industrial fixtures | Implemented: HDR/shadows, complete fixture street, shared authoring, installed assets and lighting reconstruction; [validation](docs/validation/ea3-authored-lighting.md) |
 | EA4 | Game-owned map assets and construction workflow | Approved; implementation not started |
 | EA5 / G1 | A separately built game consumes explicit engine/runtime and engine-tooling boundaries | Approved; implementation not started |
 | NR0 | A paired deterministic scene produces an evaluated title model, explicit promotion, installed macOS inference, truthful fallback, diagnostics, and measured evidence | NR0-A through NR0-D accepted; NR-0001/2 unpromoted, NR-0003 comparison-only; no model selected. ADR-026 requires the next candidate lineage to start from random initialization. |
@@ -2037,10 +2037,13 @@ older historical “next phase” language.
     EA2-H implemented: Space handbrake, brake-to-reverse, shared combined-slip
     response, FWD/RWD/AWD baselines and preset authoring. Engineering gates passed;
     human driving-feel acceptance is pending. See [EA2-H validation](docs/validation/ea2-handling-profiles.md).
-58. [ ] **EA3 — Authored lighting.** Make the game-owned sun preset editable,
-    add stable point lights, Lighting Lab/gizmos, UI/agent transactions,
-    persistence, and complete render/incident evidence without adding a render
-    graph or speculative shadow framework.
+58. [x] **EA3 — Authored lighting.** Day/dusk/night presets, point/spot fixtures,
+    neon/store/service signs, a real lit shop opening, exact presented vehicle
+    headlights and a carryable lamp. HDR/exposure/bloom and direct shadows share
+    immutable product draws. Lighting Lab and the CLI share preview/apply/history/
+    commit; installed runtime assets and incident lighting reconstruction work.
+    See [EA3 implementation and validation](docs/validation/ea3-authored-lighting.md).
+    Human lighting/art tuning remains a review step, not a missing runtime path.
 59. [ ] **EA4 — Game-owned map authoring.** Replace hard-coded layout editing
     with a versioned placed-asset map, reusable engine selection/transform/
     collision/navigation/streaming tools, a game-owned urban construction kit,

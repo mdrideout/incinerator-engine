@@ -185,7 +185,9 @@ const Marker = struct {
 
 const Job = union(enum) {
     vehicle_change: struct { transaction_id: u64, bytes: []u8 },
+    lighting_asset: struct { digest: [32]u8, bytes: []u8 },
     line: Line,
+    owned_line: struct { stream: Stream, sequence: u64, bytes: []u8 },
     handoff: HandoffJob,
     image: Image,
     replay: Replay,
@@ -322,8 +324,17 @@ const Writer = struct {
     },
     last_flush_ns: u64 = 0,
 
+    fn initialize(self: *Writer) !void {
+        // Even a successful unflagged run has an empty, valid anomaly index.
+        // Readers must distinguish zero anomalies from missing evidence.
+        const anomalies = self.streamFile(.anomalies);
+        _ = try self.ensureStreamFile(anomalies, 0);
+        errdefer anomalies.close(self.io);
+        try self.writeManifest("running");
+    }
+
     fn run(self: *Writer) void {
-        self.writeManifest("running") catch {
+        self.initialize() catch {
             self.fail();
             self.queue.lock();
             self.queue.stopped = true;
@@ -345,6 +356,10 @@ const Writer = struct {
             };
             switch (job) {
                 .line => |line| self.writeLine(line) catch self.fail(),
+                .owned_line => |line| {
+                    defer std.heap.page_allocator.free(line.bytes);
+                    self.writeSerializedLine(line.stream, line.sequence, line.bytes) catch self.fail();
+                },
                 .handoff => |handoff| {
                     defer std.heap.page_allocator.free(handoff.bytes);
                     self.flushAll() catch self.fail();
@@ -359,6 +374,10 @@ const Writer = struct {
                 .replay => |replay| {
                     defer std.heap.page_allocator.free(replay.bytes);
                     self.writeReplay(replay.bytes) catch self.fail();
+                },
+                .lighting_asset => |asset| {
+                    defer std.heap.page_allocator.free(asset.bytes);
+                    self.writeLightingAsset(asset.digest, asset.bytes) catch self.fail();
                 },
                 .vehicle_change => |change| {
                     defer std.heap.page_allocator.free(change.bytes);
@@ -440,19 +459,20 @@ const Writer = struct {
     }
 
     fn writeLine(self: *Writer, line: Line) !void {
-        try self.ensureBudget(line.len + 1);
-        const stream = self.streamFile(line.stream);
-        const file = try self.ensureStreamFile(stream, line.len + 1);
-        try file.writeStreamingAll(self.io, line.slice());
+        try self.writeSerializedLine(line.stream, line.sequence, line.slice());
+    }
+
+    fn writeSerializedLine(self: *Writer, kind: Stream, sequence: u64, bytes: []const u8) !void {
+        try self.ensureBudget(bytes.len + 1);
+        const stream = self.streamFile(kind);
+        const file = try self.ensureStreamFile(stream, bytes.len + 1);
+        try file.writeStreamingAll(self.io, bytes);
         try file.writeStreamingAll(self.io, "\n");
-        stream.bytes += line.len + 1;
+        stream.bytes += bytes.len + 1;
         self.queue.lock();
-        self.queue.last_written_sequence = @max(
-            self.queue.last_written_sequence,
-            line.sequence,
-        );
+        self.queue.last_written_sequence = @max(self.queue.last_written_sequence, sequence);
         self.queue.unlock();
-        self.noteBytes(.stream, line.len + 1);
+        self.noteBytes(.stream, bytes.len + 1);
     }
 
     fn writeHandoff(self: *Writer, bytes: []const u8) !void {
@@ -493,6 +513,21 @@ const Writer = struct {
         self.queue.lock();
         self.queue.replay_attached = true;
         self.queue.unlock();
+    }
+
+    fn writeLightingAsset(self: *Writer, digest: [32]u8, bytes: []const u8) !void {
+        try self.ensureBudget(bytes.len);
+        const directory = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/lighting-assets", .{self.run_path});
+        defer std.heap.page_allocator.free(directory);
+        try std.Io.Dir.cwd().createDirPath(self.io, directory);
+        const path = try std.fmt.allocPrint(std.heap.page_allocator, "{s}/{s}.iclight", .{ directory, std.fmt.bytesToHex(&digest, .lower) });
+        defer std.heap.page_allocator.free(path);
+        var atomic = try std.Io.Dir.cwd().createFileAtomic(self.io, path, .{ .replace = true });
+        defer atomic.deinit(self.io);
+        try atomic.file.writeStreamingAll(self.io, bytes);
+        try atomic.file.sync(self.io);
+        try atomic.replace(self.io);
+        self.noteBytes(.metadata, bytes.len);
     }
 
     fn writeVehicleChange(self: *Writer, transaction_id: u64, bytes: []const u8) !void {
@@ -616,7 +651,7 @@ const Writer = struct {
                 self.io,
                 source_path,
                 std.heap.page_allocator,
-                .limited(stream_rotation_bytes + max_line_bytes),
+                .unlimited,
             );
             defer std.heap.page_allocator.free(bytes);
             var lines = std.mem.splitScalar(u8, bytes, '\n');
@@ -815,7 +850,7 @@ const Writer = struct {
         self.queue.unlock();
         var manifest_writer = std.Io.Writer.fixed(&manifest_buffer);
         try manifest_writer.print(
-            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.14\",\"jolt\":\"5.5.0\",\"protocol\":{d},\"replay\":{d},\"snapshot\":{d}}},\"input_mapping_version\":2,\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"vehicle_frame_motion\":true,\"atomic_note_handoff\":true,\"navigation_lineage\":true,\"population_activity\":true,\"deterministic_render_state\":true,\"ranged_combat\":true,\"authored_changes\":true,\"developer_endpoint_discovery\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
+            "{{\"schema\":{d},\"kind\":\"incinerator_incident_run\",\"status\":\"{s}\",\"platform\":\"macos-aarch64\",\"topology\":\"solo\",\"source_revision\":\"{s}\",\"source_dirty\":{},\"source_dirty_fingerprint\":\"{s}\",\"zig_version\":\"{s}\",\"optimize\":\"{s}\",\"cohorts\":{{\"sdl\":\"3.4.14\",\"jolt\":\"5.5.0\",\"protocol\":{d},\"replay\":{d},\"snapshot\":{d}}},\"input_mapping_version\":2,\"evidence_capabilities\":{{\"characters\":\"full_boundary\",\"npcs\":\"full_boundary\",\"vehicles\":\"full_boundary\",\"carryables\":\"full_boundary\",\"semantic_vehicle_parts\":true,\"vehicle_frame_motion\":true,\"atomic_note_handoff\":true,\"navigation_lineage\":true,\"population_activity\":true,\"deterministic_render_state\":true,\"authored_lighting\":true,\"lighting_schema\":1,\"lighting_asset_reconstruction\":true,\"ranged_combat\":true,\"authored_changes\":true,\"developer_endpoint_discovery\":true}},\"hardening_profile\":\"{s}\",\"hardening_write_failure_after_bytes\":{?d},\"started_wall_unix_ms\":{d},\"updated_wall_unix_ms\":{d},\"updated_monotonic_ns\":{d},\"stream_rotation_bytes\":{d},\"run_budget_bytes\":{d},\"visual_budget_bytes\":{d},\"non_visual_reserve_bytes\":{d},\"visual_bytes_reserved\":{d},\"visual_budget_exhausted\":{},\"visual_budget_rejections\":{d},",
             .{ incident.schema_version, status, build_options.source_revision, build_options.source_dirty, build_options.source_dirty_fingerprint, builtin.zig_version_string, @tagName(builtin.mode), manifest_protocol_cohort, sandbox_replay.schema_cohort, manifest_snapshot_cohort, @tagName(self.hardening_profile), self.write_failure_after_bytes, self.started_wall_unix_ms, @divFloor(wallNowNs(self.io), std.time.ns_per_ms), monotonicNowNs(self.io), stream_rotation_bytes, self.budget_bytes, configured_visual_budget, self.budget_bytes - configured_visual_budget, visual_reserved, visual_exhausted, visual_rejections },
         );
         try manifest_writer.print(
@@ -896,6 +931,7 @@ const AuthoredChangeKey = struct {
 };
 
 pub const Capture = struct {
+    last_lighting_digest: ?[32]u8 = null,
     allocator: std.mem.Allocator,
     io: std.Io,
     queue: Queue = .{},
@@ -1055,7 +1091,9 @@ pub const Capture = struct {
         }
         // Jobs with owned payloads can remain only if thread creation failed.
         while (self.queue.pop()) |job| switch (job) {
+            .owned_line => |line| std.heap.page_allocator.free(line.bytes),
             .vehicle_change => |change| std.heap.page_allocator.free(change.bytes),
+            .lighting_asset => |asset| std.heap.page_allocator.free(asset.bytes),
             .image => |image| if (image.pixels) |pixels| std.heap.page_allocator.free(pixels),
             .replay => |replay| std.heap.page_allocator.free(replay.bytes),
             else => {},
@@ -1179,6 +1217,54 @@ pub const Capture = struct {
             .material => |record| .{ .material = .{ .revision = record.revision, .asset_revision = record.asset_revision, .session = record.session, .presented_digest = record.presented().digest(), .committed_digest = record.committed.digest() } },
             .binding => |binding| .{ .binding = binding },
         };
+    }
+
+    pub fn observeLightingChange(self: *Capture, evidence: @import("lighting_authoring_contract").Evidence, tick: u64, frame: u64) void {
+        self.lightingLine(.timeline, .{ .schema = incident.schema_version, .lighting_schema = 1, .kind = "lighting_change", .recorder_sequence = self.takeSequence(), .monotonic_ns = monotonicNowNs(self.io), .authority_tick = tick, .presentation_frame = frame, .evidence = evidence });
+    }
+    pub fn observeLighting(self: *Capture, library: @import("content").lighting_library.Library, resolved: []const @import("lighting_composition.zig").Resolved, tick: u64, frame: u64, shadow_views: usize, caster_draws: u64) void {
+        const bytes = @import("content").lighting_library.encode(std.heap.page_allocator, library) catch {
+            self.noteDropped();
+            return;
+        };
+        var owned = true;
+        defer if (owned) std.heap.page_allocator.free(bytes);
+        var digest: [32]u8 = undefined;
+        std.crypto.hash.sha2.Sha256.hash(bytes, &digest, .{});
+        const now = monotonicNowNs(self.io);
+        if (self.last_lighting_digest == null or !std.mem.eql(u8, &self.last_lighting_digest.?, &digest)) {
+            if (!self.queue.push(.{ .lighting_asset = .{ .digest = digest, .bytes = bytes } })) {
+                self.noteDropped();
+                return;
+            }
+            owned = false;
+            self.lightingLine(.timeline, .{ .schema = incident.schema_version, .lighting_schema = 1, .kind = "lighting_library", .recorder_sequence = self.takeSequence(), .monotonic_ns = now, .authority_tick = tick, .presentation_frame = frame, .sha256 = digest });
+            self.last_lighting_digest = digest;
+        }
+        const environment = library.find(library.active_environment).?.value.environment;
+        self.lightingLine(.state, .{ .schema = incident.schema_version, .lighting_schema = 1, .kind = "lighting_frame", .recorder_sequence = self.takeSequence(), .monotonic_ns = now, .authority_tick = tick, .presentation_frame = frame, .library_sha256 = digest, .active_environment = library.active_environment, .environment = environment, .tone_operator = "reinhard_srgb", .exposure_convention = "preexposed_once", .shadow_views = shadow_views, .caster_draws = caster_draws });
+        for (resolved) |instance| self.lightingLine(.state, .{ .schema = incident.schema_version, .lighting_schema = 1, .kind = "light_instance", .recorder_sequence = self.takeSequence(), .monotonic_ns = now, .authority_tick = tick, .presentation_frame = frame, .resolved = instance, .inclusion = if (instance.surface != null and !instance.surface_submitted) "visual_content_absent" else if (!instance.emitter.light.enabled) "disabled" else "contributing_visual_frame" });
+    }
+    fn lightingLine(self: *Capture, stream: Stream, value: anytype) void {
+        const bytes = std.json.Stringify.valueAlloc(std.heap.page_allocator, value, .{}) catch {
+            self.noteDropped();
+            return;
+        };
+        if (bytes.len <= max_line_bytes) {
+            defer std.heap.page_allocator.free(bytes);
+            _ = self.enqueueLine(stream, value.recorder_sequence, bytes);
+            return;
+        }
+        // Complete fixture before/candidate/after values exceed the historical
+        // inline slot size. Transfer the exact allocation to the writer; never
+        // truncate an authored value or enlarge every fixed telemetry slot.
+        if (!self.queue.push(.{ .owned_line = .{ .stream = stream, .sequence = value.recorder_sequence, .bytes = bytes } })) {
+            std.heap.page_allocator.free(bytes);
+            return;
+        }
+        self.queue.lock();
+        self.queue.last_admitted_sequence = @max(self.queue.last_admitted_sequence, value.recorder_sequence);
+        self.queue.unlock();
     }
 
     pub fn observeMaterialChange(self: *Capture, evidence: @import("material_authoring_contract").Evidence, tick: u64, frame: u64) void {
@@ -1683,7 +1769,7 @@ pub const Capture = struct {
             writer.writeAll("\n") catch return false;
         }
         writer.print(
-            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; eight human-visible anchors from -5 through +2 seconds when admitted; a product-only flag frame; a continuous product trail over the same visual window; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times. Timeline windows include immutable runtime phase/system/error and authority-cycle fault ownership when the engine retains a fault.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheels under one stable identity. NPC state and navigation transition records include semantic destination, status/reason, exact route lineage, topology revision, physical exclusions, and retry timing. Authored NPC records also include stable population member, role, combat disposition, and activity across actor generations. Firearm records use kind=firearm and correlate action sequence, shooter/target identity and incarnation, disposition, weapon mode, ammunition, deadlines, ray origin, impact position, damage, death, and draw submission. kind=render_state records identify the conventional renderer, visual schema, scene light, product/debug and normal/color draw paths, plus the last stable semantic part/material identity. kind=authored_change records source, scope, stable target, optimistic revisions, typed crate values, outcome/rejection, time correlation, and SHA-256 value digests. kind=vehicle_change correlates producer, target, transaction, definition and asset revisions with a complete vehicle-authoring/transaction-N.json artifact and its SHA-256. The artifact owns the exact before and candidate definitions, including all curve and gear values.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"action\":\"navigation\"|\"navigation_status\":\"(blocked|waiting_for_content|structurally_unreachable)\"|\"navigation_reason\":\"physical_obstruction\"' '{s}/streams'\nrg '\"action\":\"population\"|\"population_member\"|\"population_activity_state\"' '{s}/streams'\nrg '\"kind\":\"firearm\"|\"weapon\":|\"fire_pressed\":true|\"weapon_toggle_pressed\":true|\"reload_pressed\":true' '{s}/streams'\nrg '\"kind\":\"render_state\"|\"render_mode\"|\"last_visual\"' '{s}/streams'\nrg '\"kind\":\"authored_change\"|\"transaction_id\"|\"expected_revision\"' '{s}/streams'\nrg '\"kind\":\"(runtime_fault|authority_cycle_fault)\"' '{s}/streams'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
+            "\nEach evidence directory contains marker.json; materialized timeline, state, input, and metrics windows; visual-index.ndjson; eight human-visible anchors from -5 through +2 seconds when admitted; a product-only flag frame; a continuous product trail over the same visual window; and semantic-ID evidence when available. Filenames describe requested anchors; visual-index.ndjson records actual capture times. Timeline windows include immutable runtime phase/system/error and authority-cycle fault ownership when the engine retains a fault.\n\nStart with:\n- manifest.json (current atomic health/build snapshot and evidence capability matrix)\n- anomalies.ndjson (reduce event separately from lifecycle_status)\n- anomalies/anomaly-NNNN/marker.json\n- anomalies/anomaly-NNNN/visual-index.ndjson\n- anomalies/anomaly-NNNN/*-window.ndjson\n- replay/accepted-ingress.icrp\n\nVehicle and carryable entity-state records include persistent/replicated identity, authority-to-draw membership, typed bounded-world interest, baseline/snapshot sequence, districts, distance, and tombstones. Vehicle semantic-ID evidence groups chassis and wheels under one stable identity. NPC state and navigation transition records include semantic destination, status/reason, exact route lineage, topology revision, physical exclusions, and retry timing. Authored NPC records also include stable population member, role, combat disposition, and activity across actor generations. Firearm records use kind=firearm and correlate action sequence, shooter/target identity and incarnation, disposition, weapon mode, ammunition, deadlines, ray origin, impact position, damage, death, and draw submission. kind=render_state records identify the conventional renderer, visual schema, scene light, product/debug and normal/color draw paths, plus the last stable semantic part/material identity. kind=authored_change records source, scope, stable target, optimistic revisions, typed crate values, outcome/rejection, time correlation, and SHA-256 value digests. kind=vehicle_change correlates producer, target, transaction, definition and asset revisions with a complete vehicle-authoring/transaction-N.json artifact and its SHA-256. The artifact owns the exact before and candidate definitions, including all curve and gear values. Lighting evidence uses lighting_schema=1: lighting_change contains typed before/request/after outcomes; lighting_library references immutable SHA-256 lighting-assets/*.iclight; lighting_frame and light_instance retain effective exposure, shadows, emission, parent pose and contribution reasons.\n\nSearch examples:\n```sh\nrg '\"removal_reason\":\"(relevance|replication_removed|authority_removed|presentation_removed)\"|\"relevance_reason\"' '{s}'\nrg '\"action\":\"navigation\"|\"navigation_status\":\"(blocked|waiting_for_content|structurally_unreachable)\"|\"navigation_reason\":\"physical_obstruction\"' '{s}/streams'\nrg '\"action\":\"population\"|\"population_member\"|\"population_activity_state\"' '{s}/streams'\nrg '\"kind\":\"firearm\"|\"weapon\":|\"fire_pressed\":true|\"weapon_toggle_pressed\":true|\"reload_pressed\":true' '{s}/streams'\nrg '\"kind\":\"render_state\"|\"render_mode\"|\"last_visual\"' '{s}/streams'\nrg '\"kind\":\"authored_change\"|\"transaction_id\"|\"expected_revision\"' '{s}/streams'\nrg '\"kind\":\"(runtime_fault|authority_cycle_fault)\"' '{s}/streams'\nrg '\"kind\":\"developer_shortcut\"|\"stage\":\"(received|matched|queued|applied)\"' '{s}/streams'\n```\n\nVerification from the repository root:\n```sh\nzig build inspect-incident -- '{s}'\nzig build incident-visual-report -- '{s}' <new-output-folder-outside-the-run>\nzig build replay-incident -- '{s}' <absolute-installed-content-root>\nzig build run -- --replay-incident='{s}'\n```\n\nThe replay content root must be absolute; from the repository root use \"$PWD/zig-out/share/incinerator/content\". Semantic replay proves accepted-ingress logical digests for the recorded cohort. Graphical re-execution is best effort for SDL, Metal, worker, and presentation timing. Preserve this original folder.\n",
             .{ self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath(), self.runPath() },
         ) catch return false;
         const handoff_bytes = buffer[0..writer.end];
@@ -2587,7 +2673,7 @@ test "Retina human anchors have a bounded stored extent" {
 }
 
 test "incident manifest cohorts source the live protocol and snapshot owners" {
-    try std.testing.expectEqual(@as(u16, 5), incident.schema_version);
+    try std.testing.expectEqual(@as(u16, 6), incident.schema_version);
     try std.testing.expectEqual(session_protocol.wire_version, manifest_protocol_cohort);
     try std.testing.expectEqual(
         sandbox_host_contracts.snapshot_schema,

@@ -1,7 +1,7 @@
-# Incident bundle schema 5
+# Incident bundle schema 6
 
 All paths are relative to the run folder. Every NDJSON line is one complete
-schema-5 JSON object. The inspector rejects earlier schemas; there is no
+schema-6 JSON object. The inspector rejects earlier schemas; there is no
 fallback.
 
 ## Manifest and health
@@ -26,7 +26,7 @@ the visual lane is full, new images are rejected and counted while typed
 streams, markers, notes, replay, and handoff persistence retain a 128 MiB
 reserve. `handoff_persisted=false` means clipboard text may still be available
 in the running process but `LLM_HANDOFF.md` is not yet durable.
-These fields are required in schema 5; a partial field set is invalid.
+These fields are required in schema 6; a partial field set is invalid.
 
 `hardening_profile=none` is an ordinary run. The five developer-only IC5-G
 profiles deliberately finalize the run as `partial`:
@@ -140,7 +140,7 @@ owner districts, observer position, distance squared, and encounter fact.
 `full_world` is the deliberate current sandbox policy: every NPC in the
 bounded evaluation cohort is published regardless of distance. The bounded
 reasons remain available for a future explicitly selected scale policy.
-Schema-5 NPC records also retain destination ID/name, navigation status and
+Schema-6 NPC records also retain destination ID/name, navigation status and
 reason, last plan trigger/result, route/topology revision, route digest,
 cost/length/active prefix/index, replan count, optional arrival tick, temporary
 physical-exclusion count, and retry tick. `waiting_for_content` means durable
@@ -193,7 +193,7 @@ is also retained in the authority ingress journal and its stable fingerprint.
 - `presentation_frame`: rendered submission order.
 - source correlation/sequence: causal order within that owner.
 
-## Vehicle frame motion (additive schema-5 capability)
+## Vehicle frame motion (additive schema-6 capability)
 
 When `evidence_capabilities.vehicle_frame_motion=true`, `vehicle_motion` and
 `vehicle_wheel_motion` in state streams/window derivatives capture every
@@ -234,6 +234,27 @@ the authoritative tick, not inferred from a raw keyboard flag.
 
 Graphical re-execution rejects missing/old mapping versions. Do not reinterpret
 old Space/service-brake recordings. Current vehicle definitions use ICVEHDEF 2,
-network protocol 21, snapshot 17, replay schema 21 and developer protocol 5.
+network protocol 21, snapshot 17, replay schema 21 and developer protocol 6.
 `powertrain.center_limited_slip_ratio` is explicit; finite f32 maximum means
-open center coupling. Existing incident schema 5 is retained.
+open center coupling. EA3 advances incident evidence to schema 6.
+
+## EA3 authored lighting (incident 6, lighting 1)
+
+The capability matrix declares `authored_lighting`, `lighting_schema=1` and
+`lighting_asset_reconstruction`. `lighting_library` timeline events reference
+SHA-256-addressed `lighting-assets/*.iclight` snapshots. Each file has the
+ICLIGHTS v1 header, payload length and independent SHA-256 payload checksum.
+`lighting_change` retains typed before/request/outcome/after state, source,
+transaction and revisions. Full lighting edits use owned variable-length
+records when they exceed the historical 4 KiB inline slot; they are not
+truncated to that telemetry slot size. `lighting_frame` retains the active environment,
+manual exposure, `reinhard_srgb` tone operator, `preexposed_once` convention,
+shadow view count and caster submissions. `light_instance.resolved` retains
+asset/member identity, revision, parent incarnation and exact presented pose,
+emitter, mounted visual and emission binding. Inclusion is explicit:
+`visual_content_absent`, `disabled` or `contributing_visual_frame`.
+
+Replay loads the recorded lighting library at the recorded tick/frame; it
+never substitutes the current library for missing lighting evidence. This
+reconstructs lighting state, not arbitrary historical meshes/materials or GPU
+timing. Keep the original matching installed content and source cohort.

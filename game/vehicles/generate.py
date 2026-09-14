@@ -117,5 +117,11 @@ def generate():
                 f.append((verts,7));v=[(side*.51,0,0),ring(side*.51,.30,a),ring(side*.51,.30,b)]
                 if side<0:v.reverse()
                 f.append((v,3 if i%4<2 else 2))
-        scene.mesh('Wheel',f,1);scene.save(ROOT/(name+'.glb'))
+        scene.mesh('Wheel',f,1)
+        # EA3 reusable unit lens mesh/material; the lighting rig owns pose,
+        # scale and emission strength, independently from the handling asset.
+        scene.g['materials'].append(dict(name='Headlight Lens',pbrMetallicRoughness=dict(baseColorFactor=[0,0,0,1],metallicFactor=0,roughnessFactor=.35),emissiveFactor=[1,1,1]))
+        lens=[];box(lens,(0,0,0),(1,1,1),4)
+        scene.mesh('HeadlightLens',lens,2)
+        scene.save(ROOT/(name+'.glb'))
 if __name__=='__main__':generate()

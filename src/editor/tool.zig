@@ -564,6 +564,7 @@ pub const FrameInput = struct {
     viewport: ViewportInput,
     selection: SelectionInput,
     content_assets: []const engine.assets.Entry,
+    lighting: ?@import("lighting_authoring_contract").Input = null,
     material: ?@import("material_authoring_contract").Input = null,
     vehicle: ?@import("vehicle_authoring_contract").Input = null,
     frame_timing: *const FrameTimingView,

@@ -160,6 +160,7 @@ fn outcomeDisposition(outcome: protocol.ResponseOutcome) ExitDisposition {
         .failure => .operation_failed,
         .success => |payload| switch (payload) {
             .vehicle_outcome => |value| if (value.disposition == .rejected) .operation_failed else .success,
+            .lighting_outcome => |value| if (value.rejection == null) .success else .operation_failed,
             .material_outcome => |value| if (value.rejection == null) .success else .operation_failed,
             .authoring_admission => |value| if (value.admitted)
                 .success
@@ -376,6 +377,25 @@ fn parseInvocation(
                     break :action @unionInit(protocol.vehicle.Action, verb, candidate_owner.?.value);
                 } else @unionInit(protocol.vehicle.Action, if (std.mem.eql(u8, verb, "clear-preview")) "clear_preview" else verb, {});
                 break :command .{ .vehicle_edit = .{ .target = target.persistent_entity, .expected_revision = revision, .expected_asset_revision = asset_revision, .action = action } };
+            }
+        }
+        if (parser.prefix(&.{ "lighting", "list" })) break :command .{ .lighting_list = .{} };
+        if (parser.prefix(&.{ "lighting", "inspect" })) {
+            const target = try parseTarget(try parser.option("--target"));
+            if (target != .content_asset) return error.LightingAssetTargetRequired;
+            break :command .{ .lighting_inspect = .{ .target = target.content_asset } };
+        }
+        inline for (.{ "preview", "clear-preview", "apply", "revert", "undo", "redo", "commit", "activate" }) |verb| {
+            if (parser.prefix(&.{ "lighting", verb })) {
+                const target = try parseTarget(try parser.option("--target"));
+                if (target != .content_asset) return error.LightingAssetTargetRequired;
+                const revision = try parseNonzeroU64(try parser.option("--expected-revision"));
+                const action: protocol.lighting.Action = if (comptime std.mem.eql(u8, verb, "preview") or std.mem.eql(u8, verb, "apply")) action: {
+                    var parsed = try std.json.parseFromSlice(protocol.lighting.Value, allocator, try parser.option("--value"), .{});
+                    defer parsed.deinit();
+                    break :action @unionInit(protocol.lighting.Action, verb, parsed.value);
+                } else @unionInit(protocol.lighting.Action, if (std.mem.eql(u8, verb, "clear-preview")) "clear_preview" else verb, {});
+                break :command .{ .lighting_edit = .{ .target = target.content_asset, .expected_revision = revision, .action = action } };
             }
         }
         if (parser.prefix(&.{ "material", "inspect" })) {

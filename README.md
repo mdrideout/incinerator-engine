@@ -172,11 +172,15 @@ authoring journey. The product owner authorized the next material phase and a
 fresh scene on 2026-09-06. See the
 [EA1-B validation ledger](docs/validation/ea1-b-material-authoring.md) for the
 current cohort and native authoring evidence. [EA2 vehicle authoring](docs/validation/ea2-vehicle-authoring.md)
-now provides the Meridian sedan and Courier compact, Vehicle Lab/CLI, isolated
+now provides the Meridian coupe, Courier sedan and AWD SUV, Vehicle Lab/CLI, isolated
 measurements, safe edits/rebuilds and exact commit/restart. Set
 `INCINERATOR_VEHICLE_ROOT="$PWD/game/vehicles"` when launching the editor to
-author the canonical project assets. Lighting, general map authoring and
-separate game packaging follow in EA3–EA5.
+author the canonical project assets. [EA3 lighting](docs/validation/ea3-authored-lighting.md)
+now adds day/dusk/night presets, shadowed lamps, neon/store signs, a real lit shop
+opening and moving headlights, with shared Lighting Lab/CLI authoring.
+Set `INCINERATOR_LIGHTING_ROOT="$PWD/game/industrial"` to enable Commit Asset.
+Run `zig build verify-ea3 -Deditor=true` for the hidden native/CLI checks.
+General map authoring and separate game packaging follow in EA4–EA5.
 The combined-tree
 [deterministic-rendering resumption audit](docs/validation/deterministic-rendering-resumption.md)
 passes and records the correction that restored the ordinary product from an
@@ -684,7 +688,7 @@ cooldown, death, respawn, rejected-action, incident, and mouse-capture feedback.
 A dead player remains visible in red until respawn, rather than disappearing as
 an implicit representation of authority teardown.
 
-Every Debug product run records a bounded schema-5 diagnostic bundle under
+Every Debug product run records a bounded schema-6 diagnostic bundle under
 `~/Library/Logs/Incinerator/runs`. Press Command+Option+I near an anomaly (or
 use F9/Fn+F9 when macOS actually delivers it), then open **Panels → Incident
 Capture**, add a note, and click **Save note + Copy for LLM**. The note is
